@@ -145,6 +145,8 @@ export interface Agent {
   /** A Buddy that reads every project its person reads (buddies.ts; Dee, 10-31): the main Buddy of a Swarm Buddy chat, or a
    *  plain session there. It has no project and writes nowhere but its own chat. A project session has its project instead. */
   buddyScope?: 'swarm'
+  /** A Regular agent (agent.new, task #4116): in no project but its active task's (projects.ts agentProjectId). */
+  regular?: true
   /** A Buddy that reads one project and writes into it (Dee, 10-31): a project session, or the one Buddy's session in an older
    *  project chat. Its host never widens its reads beyond its folder (cli buddyGuard wide mode), which could hold another
    *  project's clone. */

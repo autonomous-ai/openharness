@@ -66,7 +66,7 @@ import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged }
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, setTimeZone, statusSchema, type AvatarUpload } from './profile.js'
 import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './tidy.js'
 import { namedDefault } from './catalog.js'
-import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, onTeamAccount, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
+import { BUILT_IN_ROLE_DEFAULTS, NO_PROJECT, agentProjectId, audienceOf, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, onTeamAccount, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { recordClosing, sessionClosed } from './closedAgents.js'
 import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
@@ -3685,6 +3685,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         ...(isSwarmBuddyChat(group) ? start.request.buddySession?.projectId ? { projectId: start.request.buddySession.projectId } : {}
           : state.projects ? { projectId: groupProject(state, group).id } : {}),
         ...(start.request.buddyScope ? { buddyScope: start.request.buddyScope } : {}),
+        ...(start.request.regular ? { regular: true as const } : {}),
         ...(start.request.buddyNarrow ? { buddyNarrow: true as const } : {}),
         machineOwnerId: start.machineOwnerId, contributorId: start.contributorId, membershipGeneration: start.membershipGeneration,
         hostGrant: start.hostGrant, name: start.request.name, configuration: command.configuration, configurationVersion: operationId,
@@ -3819,9 +3820,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const target = agent(state, command.agentId)
       // A Buddy is its owner's to stop (buddies.ts), and a Swarm-wide one has no project to look up.
       if (isBuddy(target)) fail('BUDDY_NOT_RELEASED', 'A Buddy is stopped by its owner, or by turning Buddies off, never released.')
-      const project = projectOf(state, agentProjectId(state, target))
+      // A Regular agent between tasks is in no project: its person, or the Swarm's owner, releases it (task #4116).
+      if (agentProjectId(state, target) === NO_PROJECT && !(actor.kind === 'person' && [state.ownerId, target.contributorId].includes(actor.userId))) {
+        fail('FORBIDDEN', 'Only its person or the tab owner can release this agent.', 403)
+      }
+      const project = agentProjectId(state, target) === NO_PROJECT ? undefined : projectOf(state, agentProjectId(state, target))
       const isOwner = actor.kind === 'person' && [state.ownerId, target.contributorId].includes(actor.userId)
-      if (!projectAgent(state, actor, project.id) && !isOwner) fail('FORBIDDEN', 'Only an agent of this project, the contributor or tab owner can release a worker.', 403)
+      if (project && !projectAgent(state, actor, project.id) && !isOwner) fail('FORBIDDEN', 'Only an agent of this project, the contributor or tab owner can release a worker.', 403)
       protectLead(state, target.id, actor)
       // Only its own active work holds a decision back, not the active work of a task it sits in.
       if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id)) fail('WORK_ACTIVE', 'Finish active work before releasing this worker.')
@@ -3830,7 +3835,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A session a person shared by hand is its host's to close on a stop: of the other agents, only the coordinator releases
       // it. Any agent of the project releases one the Swarm started, which alone records its session (security review L5;
       // tidy.ts reads the same mark).
-      if (actor.kind === 'agent' && actor.agentId !== target.id && !target.startedSession && ledProject(state, actor.agentId)?.id !== project.id) {
+      if (actor.kind === 'agent' && actor.agentId !== target.id && !target.startedSession && ledProject(state, actor.agentId)?.id !== project?.id) {
         fail('COORDINATOR_REQUIRED', 'A person added this session, so of its project\'s agents only the coordinator releases it.', 403)
       }
       // Any other agent is kept or stopped on request, finished work or not, whatever its role (project instructions, phase 4):

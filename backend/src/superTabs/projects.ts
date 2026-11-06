@@ -189,6 +189,11 @@ export function startProject(state: SuperTabState, request: Pick<AgentStartReque
 export function agentProjectId(state: SuperTabState, target: Agent): string {
   // A Swarm-wide Buddy has no project (Dee, 10-31): never the project 'lead' by default, so it matches none.
   if (isSwarmBuddy(target)) return NO_PROJECT
+  // A Regular agent (task #4116: "the task decides where it works") is its active task's project's while it works, else none.
+  if (target.regular) {
+    const work = state.conversations.find(c => c.assignment?.agentId === target.id && activeWork(c))
+    return work ? groupProject(state, work).id : NO_PROJECT
+  }
   return target.projectId ?? state.conversations.find(c => c.agentIds.includes(target.id))?.projectId ?? 'lead'
 }
 /** The project id of an agent in no project: no project has it, so a comparison with one is false and projectOf refuses it. */
@@ -415,6 +420,13 @@ export function audienceOf(state: SuperTabState, project: SwarmProject, personId
 export function canReadAgent(state: SuperTabState, actor: Actor, target: Agent): boolean {
   // A Swarm-wide Buddy belongs to no project and writes only in its person's chat: its person reads it, and so does it.
   if (isSwarmBuddy(target)) return actor.kind === 'person' ? actor.userId === target.buddyOf!.personId : actor.agentId === target.id
+  // An idle Regular agent (task #4116): its person, itself, and the PM of a project its person reads, which may give it a task.
+  if (target.regular && agentProjectId(state, target) === NO_PROJECT) {
+    if (actor.kind === 'person') return actor.userId === target.contributorId
+    if (actor.agentId === target.id) return true
+    const led = ledProject(state, actor.agentId)
+    return !!led && personReadsProject(state, target.contributorId, led)
+  }
   return canReadProject(state, actor, projectOf(state, agentProjectId(state, target)))
 }
 
@@ -593,8 +605,17 @@ export function readAgent(state: SuperTabState, actor: Actor, agentId: string): 
 
 /** A terminal contains its session's entire history. Joining another project's
  * chat must never expose that history to a different audience. */
+/** Whether person [personId] reads [project]: a Regular agent of theirs works only where they could read it themselves. */
+function personReadsProject(state: SuperTabState, personId: string, project: SwarmProject): boolean {
+  const member = state.people.find(p => p.id === personId)
+  return !!member && canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)
+}
+
 export function sameProject(state: SuperTabState, group: Conversation, target: Agent): void {
-  if (agentProjectId(state, target) !== groupProject(state, group).id) {
+  const project = groupProject(state, group)
+  // An idle Regular agent takes its task's project, if its person reads it (task #4116); a busy one stays in its task's.
+  if (target.regular && agentProjectId(state, target) === NO_PROJECT && personReadsProject(state, target.contributorId, project)) return
+  if (agentProjectId(state, target) !== project.id) {
     fail('PROJECT_SESSION', 'Start a separate agent for another project. This terminal belongs to its original project.')
   }
 }

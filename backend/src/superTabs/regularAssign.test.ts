@@ -37,6 +37,7 @@ function swarm() {
   const startId = made.result.startId as string
   run({ type: 'agent.startDispatch', startId }, mate, own('mate'))
   const ada = run({ type: 'agent.started', startId, harnessId: 'h-ada', configuration: config }, mate, own('mate')).result.agentId as string
+  run({ type: 'agent.startSettled', startId, warning: null } as Command, mate, own('mate'))
   /** A project of the owner's, [visibility], with its PM and one task. */
   const project = (name: string, visibility: 'public' | 'private') => {
     const created = run({ type: 'project.create', name, visibility, brief: '' }).result as { projectId: string; conversationId: string }
