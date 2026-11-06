@@ -10,6 +10,7 @@
 import { fileURLToPath } from 'node:url'
 import { quoteHookCommand } from '../engines/kit/notifyHooks.js'
 import { managedNodePath } from './nodeRuntime.js'
+import type { SessionHook } from '../engines/facets/hooks.js'
 
 /** Seconds an engine waits for the hook: lsof, read only for a worktree's removal, is given 5 of them. */
 const TIMEOUT = 30
@@ -52,4 +53,10 @@ export function codexShellGuardArgs(platform: NodeJS.Platform = process.platform
   const { matcher, timeout } = CODEX_SHELL_GUARD
   const command = CODEX_SHELL_GUARD.command(platform, argv)
   return ['-c', `hooks.PreToolUse=[{matcher=${JSON.stringify(matcher)},hooks=[{type="command",command=${JSON.stringify(command)},timeout=${timeout}}]}]`]
+}
+
+/** The guard as Codex records it as reviewed (engines/kit/hookReview.ts): its key, its event's name in the hash, its hook. */
+export function codexShellGuardSessionHook(platform: NodeJS.Platform = process.platform): SessionHook {
+  const { key, matcher, timeout } = CODEX_SHELL_GUARD
+  return { key, label: 'pre_tool_use', matcher, command: CODEX_SHELL_GUARD.command(platform), timeout }
 }

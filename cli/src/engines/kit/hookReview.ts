@@ -17,7 +17,8 @@
 import { parse as parseToml } from 'smol-toml'
 import { createHash } from 'node:crypto'
 import { basename, join } from 'node:path'
-import type { HookReviewRecord, SessionHook } from '../facets/hooks.js'
+import type { HookReviewRecord, SessionHook, SessionHookName } from '../facets/hooks.js'
+import { codexShellGuardSessionHook } from '../../lib/agentShellGuard.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation, type HookPreparationAttempt } from './nativeHookFiles.js'
 import { isMessagesBlock } from './messagesHook.js'
 import { isOurs, type HookBlock, type Settings } from './notifyHooks.js'
@@ -51,9 +52,12 @@ export function sessionHookHash(hook: SessionHook): string {
   return identityHash({ event_name: hook.label, matcher: hook.matcher, hooks: [{ type: 'command', command: hook.command, timeout: Math.max(1, hook.timeout), async: false }] })
 }
 
+/** Each session hook a contract names, built for the platform it launches on. */
+const sessionHook: Record<SessionHookName, (platform: NodeJS.Platform) => SessionHook> = { 'shell-guard': codexShellGuardSessionHook }
+
 /** The records the session flags' hooks Harness gives need, as this machine launches them: key → hash. */
 export function sessionReviewRecords(record: HookReviewRecord, platform: NodeJS.Platform = process.platform): Map<string, string> {
-  return new Map((record.sessionHooks?.(platform) ?? []).map((hook) => [hook.key, sessionHookHash(hook)]))
+  return new Map((record.sessionHooks ?? []).map((name) => sessionHook[name](platform)).map((hook) => [hook.key, sessionHookHash(hook)]))
 }
 
 /** The records Harness's own blocks in `settings` need: key → hash. */
