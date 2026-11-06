@@ -7,7 +7,7 @@ On the round dial's Lead face (a Swarm project's face), change only these, keep 
 1. Switch between the PM and the Buddy with a **PM | Buddy** pair at the bottom (as in his reference: the bell pill above a
    two-part pill), instead of swiping up and down.
 2. Notices open **only by tapping the bell**; pulling down no longer opens them.
-3. In a Swarm, tapping the **project name** opens a picker with two choices only, **Personal | Team** (mockup option B: one
+3. In a Swarm, holding the **recap** (first: tapping the project name; changed 2026-11-06) opens a picker with two choices only, **Personal | Team** (mockup option B: one
    pill, the current half filled).
 4. In a Swarm, the bell and its page hold **only what needs you**.
 5. The "PM" line under the project name goes.
@@ -69,8 +69,10 @@ unread), so it often does the wrong one. After this change a vertical swipe on t
 
 - The Swarm list (`/api/super-tabs/list`) marks the reader's own Personal Swarm: `personal: true` on its row only.
 - The cards service copies it to the card (`SwarmCard.personal`), and the `supertab` frame carries `"personal": true` for it.
-- On a Swarm face, tapping the project name opens the picker **when the dial holds the reader's Personal card and at least one
-  other card**; otherwise the name keeps today's behaviour (PANES).
+- On a Swarm face, **holding the recap** (650 ms on its card, or on its lines on a skin with no card) opens the picker **when
+  the dial holds the reader's Personal card and at least one other card**; otherwise the hold opens the tabs, as a hold anywhere
+  else on the face does. Tapping the project name always opens the project list (PANES). (Diego, 2026-11-06: changed from a tap
+  on the name.)
 - The picker is its own screen: black glass, the word "Swarm" on the top arc, and one pill centred (200 × 44 px at y 211,
   same style as the PM | Buddy pair) with "Personal" and "Team". The half of the Swarm on the face is filled.
 - Tapping the other half switches Swarm: Personal opens the Personal card; Team opens the last non-Personal card that was on
