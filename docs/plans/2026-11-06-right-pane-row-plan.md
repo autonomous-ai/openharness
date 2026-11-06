@@ -6,8 +6,8 @@ with an unread mark; hover shows the title and a close ×; + starts a new Buddy;
 rest. Clicking a card on the Board adds its chat to the row and opens it below; the Board never changes. The selected
 conversation fills the pane below the row. Open card chats are kept per person across restarts.
 
-**Architecture:** Builds on main once #3820 (the Buddies list, PR #3386), #3863 (fixed layout, PR #3399) and #3864
-(Buddy ⋮ menu, PR #3398) are in. The row replaces #3820's `SuperTabBuddyList` in `_boardChat` (`view.dart`); a new
+**Architecture:** Per River’s updated direction, build on #3820 (PR #3386) now, then merge main once
+#3386, #3399 (fixed layout) and #3398 (Buddy menu) land. The row replaces #3820's `SuperTabBuddyList` in `_boardChat` (`view.dart`); a new
 `right_pane_row.dart` draws it from two lists: the reader's Buddies (`SuperTabController.buddies()`, default first) and
 the open card chats, a small per-reader list kept in the local store (`LocalKeyValueStore`, key per account and Swarm).
 Selecting an avatar selects that conversation (`c.select`); the pane below is the existing chat. #3864's Buddy ⋮ menu
@@ -76,3 +76,23 @@ This plan is written and carried out by its Engineer, test first; there is no ex
 ### 5. Pictures
 
 - [ ] Light and dark screenshots of the row with Buddies, card chats, an unread mark and +N.
+
+## Execution details (updated handoff)
+
+The Engineer implements this plan task by task using test-driven development.
+
+- Tasks 1 and 3 Files: create `desktop/lib/super_tabs/right_pane_row.dart`; modify
+  `desktop/lib/super_tabs/buddy_list.dart` to expose the selected Buddy menu; tests in
+  `desktop/test/super_tab_right_pane_row_test.dart`. Interface: `SuperTabRightPaneRow(controller, storage, app)`;
+  controller supplies Buddies, selected chat and unread state; row selects via `controller.select`.
+- Tasks 2 and 4 Files: `right_pane_row.dart`, `view.dart`, and the same widget test. Interface:
+  row listens for selected conversations, remembers eligible non-Buddy chats using `LocalKeyValueStore`,
+  and keeps a bounded, scoped ordered list. No new backend contract.
+- Task 5 Files: same widget test, capture helpers in `test/support/capture.dart`.
+- For every task: commit tests, run the named widget test and observe the expected failure; implement,
+  rerun affected tests, commit and push. Capture the row in light and dark and match each acceptance item
+  to its test in the PR.
+- Before implementation, the row mockup in the task conversation is:
+  `[Buddy] [Buddy] | [card•] [card] … [+N] [+]` with selected Buddy options below it and chat filling the rest.
+- Store failure is visible as a compact persistence error while the in-memory chats remain usable; serialized
+  writes preserve close/open ordering and a slow initial read cannot overwrite chats opened meanwhile.
