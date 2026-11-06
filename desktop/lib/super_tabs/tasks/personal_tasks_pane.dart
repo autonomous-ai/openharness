@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../state/harness_activity.dart';
 import '../../shared/theme/app_icons.dart';
+import '../../shared/theme/app_theme.dart';
 import '../../widgets/harness_activity_mark.dart';
 import '../../widgets/desktop_chrome.dart';
 import '../controller.dart';
@@ -153,7 +154,10 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 12, 8),
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppDesktop.groupGap,
+                vertical: AppDesktop.controlGap,
+              ),
               child: Row(
                 children: [
                   const Expanded(
@@ -197,7 +201,9 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
             ),
             if (_error != null)
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppDesktop.groupGap,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -218,7 +224,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
               ),
             if (!supported)
               Padding(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(AppDesktop.groupGap),
                 child: Text(
                   c.accessRevoked
                       ? 'Tasks are unavailable.'
@@ -263,8 +269,8 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                                 },
                                 child: Padding(
                                   padding: const EdgeInsets.symmetric(
-                                    horizontal: 16,
-                                    vertical: 10,
+                                    horizontal: AppDesktop.groupGap,
+                                    vertical: AppDesktop.controlGap,
                                   ),
                                   child: Column(
                                     children: [
@@ -274,15 +280,19 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                                             child: Container(
                                               padding:
                                                   const EdgeInsets.symmetric(
-                                                    horizontal: 5,
-                                                    vertical: 2,
+                                                    horizontal:
+                                                        AppDesktop.badgeInset,
+                                                    vertical:
+                                                        AppDesktop.listRowGap,
                                                   ),
                                               decoration: BoxDecoration(
                                                 color: Theme.of(context)
                                                     .colorScheme
                                                     .surfaceContainerHighest,
                                                 borderRadius:
-                                                    BorderRadius.circular(4),
+                                                    BorderRadius.circular(
+                                                      AppDesktop.rowRadius,
+                                                    ),
                                               ),
                                               child: Text(
                                                 project,
@@ -353,10 +363,10 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                               if (_expanded == task.id && pending)
                                 Padding(
                                   padding: const EdgeInsets.fromLTRB(
-                                    16,
+                                    AppDesktop.groupGap,
                                     0,
-                                    12,
-                                    8,
+                                    AppDesktop.groupGap,
+                                    AppDesktop.controlGap,
                                   ),
                                   child: Column(
                                     children: [
