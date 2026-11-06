@@ -190,8 +190,15 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
       ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}), ...(machineSuspended ? { machineSuspended } : {}), ...(leads[pool.machineId] ? { lead: leads[pool.machineId] } : {}) }] as const
   }
   const pulse = pulses(state, visible, actor, isBuddyReader(state, actor))
+  // The next release times the settle recorded (releases.ts), for the projects this reader sees: the release list itself stays
+  // the server's (task #3827).
+  const releaseTimes = Object.fromEntries(visible.projects?.flatMap(seen => {
+    const nextAt = state.projects?.find(p => p.id === seen.id)?.releases?.nextAt
+    return nextAt ? [[seen.id, nextAt] as const] : []
+  }) ?? [])
   return {
     ...(pulse ? { pulse } : {}),
+    ...(Object.keys(releaseTimes).length ? { releaseTimes } : {}),
     agents: Object.fromEntries(visible.agents.map(seen => [seen.id, { downSince: seen.downSince ?? null, limitedUntil: seen.limitedUntil ?? null,
       workDecision: seen.workDecision === 'awaiting' && state.agents.find(a => a.id === seen.id)!.workDecision !== 'awaiting' ? 'awaiting' as const : null,
       roleId: seen.roleId ?? null,
