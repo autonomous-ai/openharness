@@ -4,7 +4,7 @@
 
 **Goal:** Recover lost work, nudge stalled workers and decide idle worker retention without waiting for the PM.
 
-**Architecture:** Extend dispatch eligibility and the existing 2-hour nudge/3-hour return clocks beyond crew. Continue using transactional work.assign and its account/access checks. Include the prior attempt's result and pushed PR ref in reassignment. Restore host-confirmed idle stops for non-crew Engineers; keep Reviewers/Testers and standing crew.
+**Architecture:** Extend dispatch eligibility and the existing 2-hour nudge/3-hour return clocks beyond crew. Continue using transactional work.assign and its account/access checks. Point to the prior attempt’s attributed status and include its pushed PR ref in reassignment. Restore host-confirmed idle stops for non-crew Engineers; keep Reviewers/Testers and standing crew.
 
 **Tech Stack:** TypeScript, Vitest; existing state records and backend worker.
 
@@ -20,7 +20,7 @@
 ## Review Focus
 
 - A lost task cannot return immediately to its failed agent, including through a stale pin.
-- Reassignment must carry the latest available pushed PR ref, revision and prior result; no invented branch when none is recorded.
+- Reassignment must carry the latest available pushed PR ref and revision, with a pointer to the attributed prior status; no invented branch when none is recorded.
 - Every non-crew worker gets the same clocks; work waiting on a person or an open step gets neither a nudge nor a timeout from those clocks.
 - Idle stops preserve the host's dirty-folder refusal path; Reviewer/Tester and crew retention must not change account access.
 - Existing background worker applies decisions while the PM is hung; its notices tell the PM what happened.
@@ -31,7 +31,7 @@
 
 **Interfaces:** Keep `freeCrew`, `candidatesFor`, `dispatchPlan` signatures; extend eligibility to ordinary project workers using roleNameOf and known task area. Add a test-local scenario invoking real work.assign to check the delivered handoff.
 
-- [x] Write tests: non-crew Engineer takes lost work; unavailable/failed workers, other projects, stopping agents and protected roles are excluded; stale pins cannot hand it back; assignment includes prior result, PR URL/ref and watched head.
+- [x] Write tests: non-crew Engineer takes lost work; unavailable/failed workers, other projects, stopping agents and protected roles are excluded; stale pins cannot hand it back; assignment points to the prior status and includes PR URL/ref and watched head.
 - [x] Commit tests and run `npm test -- src/superTabs/dispatch.test.ts`; observe missing dispatch/handoff failures.
 - [x] Broaden dispatch eligibility, preserve existing work.assign checks, and append recovery context only for reassigned lost work.
 - [x] Run dispatch tests and commit the passing implementation.
@@ -79,3 +79,12 @@ The store uses its existing delta loads and capped dispatch attempts; no new pol
 ## Final review scope
 
 Although the brief requests one review, project instructions require two independent security reviews for cleanup or anything deleting data. Automatic idle stops reach the existing host worktree cleanup path, so two independent security reads must verify dirty-folder refusal, stop identity, PM/Buddy protection, paused projects and account boundaries before merge. They also review all acceptance cases; a separate third general review is unnecessary.
+
+
+## Review fixes
+
+- [x] Ordinary Engineers receive only lost tasks with a recorded lost attempt or tasks pinned to them. New tasks remain with standing crew lanes and the PM’s route. Test 2c58b2b84 fails before c030d0825 fixes it; existing lost-step eligibility remains unchanged.
+- [x] Never copy an earlier agent’s free-text result into a system-authored recovery brief. Reference its attributed status in the task conversation; retain verified PR references. Tests 4f8f0debe fail before the fix.
+- [x] Re-run directly affected dispatch/command/candidate tests and dispatch integration; request confirmation of the revised head from the same two reviewers.
+
+- [x] Reproduce CI’s five host-form failures with the focused integration group. Refresh only its unrelated running-task fixture’s progress timestamp; 19 host-form tests pass, preserving real 3-hour timeout behavior.
