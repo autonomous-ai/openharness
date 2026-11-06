@@ -184,6 +184,47 @@ describe('Simple task lifecycle', () => {
     expect(stepsOf(f.state, task.id)).toEqual(before)
   })
 
+  it('simplifies existing Full tasks immediately without changing their stored history', () => {
+    const f = fixture(), project = f.create('full'), old = f.task(project)
+    const before = structuredClone(f.group(old.id))
+    f.set(project, 'simple')
+    expect(f.group(old.id)).toEqual(before)
+    old.status('review', ['desktop/lib/a.dart'])
+    expect(stepsOf(f.state, old.id)).toEqual([])
+  })
+
+  it('preserves dormant legacy tasks when switching back to Full without loading them', () => {
+    const f = fixture(), project = f.create('full'), old = f.task(project)
+    delete (f.group(old.id) as { process?: string }).process
+    const dormant = structuredClone(f.group(old.id))
+    f.state.conversations = f.state.conversations.filter(g => g.id !== old.id)
+    f.set(project, 'simple')
+    f.set(project, 'full')
+    f.state.conversations.push(dormant)
+    f.reload()
+    old.status('review', ['desktop/lib/a.dart'])
+    expect(stepsOf(f.state, old.id)).toEqual([])
+    const fresh = f.task(project)
+    fresh.status('review', ['desktop/lib/a.dart'])
+    expect(stepsOf(f.state, fresh.id).map(s => s.step)).toEqual(['Review', 'Test'])
+  })
+
+  it('keeps the old tasks Simple across repeated switches, and a repeated Full save does not change newer work', () => {
+    const f = fixture(), project = f.create('full'), first = f.task(project)
+    f.set(project, 'simple'); f.set(project, 'full')
+    const second = f.task(project)
+    f.set(project, 'simple'); f.set(project, 'full')
+    const newest = f.task(project)
+    f.set(project, 'full')
+    f.reload()
+    for (const task of [first, second]) {
+      task.status('review', ['desktop/lib/a.dart'])
+      expect(stepsOf(f.state, task.id)).toEqual([])
+    }
+    newest.status('review', ['desktop/lib/a.dart'])
+    expect(stepsOf(f.state, newest.id).map(s => s.step)).toEqual(['Review', 'Test'])
+  })
+
   it('guards a Ready decision against a concurrent process change', () => {
     const f = fixture(), project = f.create('simple'), task = f.task(project)
     const before = structuredClone(f.state)
