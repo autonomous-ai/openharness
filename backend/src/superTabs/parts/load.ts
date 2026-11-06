@@ -326,6 +326,25 @@ export async function loadDormant(tx: Transaction, tabId: string,
   return [...same, ...older].map(row => toPart<GroupData>('group', rawGroupRow(row)))
 }
 
+export const FEED_PAGE = 50
+/** Most ids one feed read names: the person and their newest own agents. The index serves an `$in` of up to 200 as points. */
+export const FEED_IDS = 200
+
+/** The conversations naming any of `ids` in their feed column (read/feedIds.ts), newest activity first, then by key, at most
+ *  FEED_PAGE, each with its stored activity time for the next cursor. A later page reads as loadDormant's do: the rest of its
+ *  cursor's moment by key, then what is older, each bounded by the `feed` index. */
+export async function loadFeed(tx: Transaction, tabId: string, ids: string[], before?: { lastActivityAt: number; key: string }):
+  Promise<Array<{ part: Part<GroupData>; activityAt: number }>> {
+  if (!ids.length) return []
+  const read = async (match: Where, limit: number) => limit <= 0 ? [] : groupsBy(tx, 'feed', [
+    { $match: { tabId, deleted: false, feedIds: { $in: ids.slice(0, FEED_IDS) }, ...match } as Prisma.InputJsonValue },
+    { $sort: { lastActivityAt: -1, key: -1 } }, { $limit: limit }])
+  const at = before && { $date: new Date(before.lastActivityAt).toISOString() }
+  const same = before ? await read({ lastActivityAt: at, key: { $lt: before.key } }, FEED_PAGE) : []
+  const older = await read(at ? { lastActivityAt: { $lt: at } } : {}, FEED_PAGE - same.length)
+  return [...same, ...older].map(row => ({ part: toPart<GroupData>('group', rawGroupRow(row)), activityAt: ms(row.lastActivityAt) }))
+}
+
 /** The newest data change of each Swarm, over all its parts (design section 3.7). A touch does not count.
  *  One `$group` with `$max` per part kind, run by Mongo itself: Prisma's groupBy here can panic its engine on Mongo, which
  *  then fails every later query of the process (as groupBy on SuperTabDecision did, 2026-10-27). */
