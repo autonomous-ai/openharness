@@ -106,6 +106,18 @@ describe('a project\'s rules record', () => {
     expect(await currentRules(db, tab, 'lead')).toEqual({ revision: 1, rules: rules('10:00') })
   })
 
+  it('normalizes legacy stored dispatch policy and keeps new empty lanes explicit', async () => {
+    const { tab } = await swarm()
+    await run(tab, set(0, rules('10:00')))
+    const { dispatch: _unused, ...legacy } = rules('10:00')
+    await db.superTabProjectRules.updateMany({ where: { tabId: tab }, data: { rules: { ...legacy, lanes: [] } } })
+    expect((await currentRules(db, tab, 'lead')).rules.lanes.map(l => l.name)).toEqual(['backend', 'CLI', 'Desktop', 'mobile', 'docs'])
+    const loaded = (await get(owner, tab)).json().data
+    expect(loaded.rules.dispatch).toEqual({ everyMs: 30_000, maxHanded: 3, nudgeAfterMs: 7_200_000, returnAfterMs: 10_800_000 })
+    await run(tab, set(1, { ...rules('10:00'), lanes: [] }))
+    expect((await currentRules(db, tab, 'lead')).rules.lanes).toEqual([])
+  })
+
   it('keeps one of two saves on the same revision, refusing the other', async () => {
     const { tab } = await swarm()
     const outcomes = await Promise.allSettled([run(tab, set(0, rules('10:00'))), run(tab, set(0, rules('11:00')), peer)])
