@@ -1766,13 +1766,12 @@ class ConversationServer {
                 )['priority'] =
             command['priority'];
         revision++;
-      } else if (command['type'] == 'work.pause' ||
-          command['type'] == 'work.resume') {
+      } else if (command['type'] == 'work.pause') {
         // As #3819 keeps it: the task's `paused` while paused, absent otherwise.
         final task = (state['conversations'] as List)
             .cast<Map<String, dynamic>>()
             .firstWhere((g) => g['id'] == command['conversationId']);
-        if (command['type'] == 'work.pause') {
+        if (command['paused'] == true) {
           task['paused'] = {
             'by': Zone.current[_reader] as String? ?? 'owner',
             'at': DateTime.now().millisecondsSinceEpoch,

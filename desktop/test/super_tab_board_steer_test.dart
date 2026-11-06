@@ -127,15 +127,18 @@ void main() {
     await tester.tap(_key('super-task-pause'));
     await _settle(tester);
     expect(_commands(server, 'work.pause'), [
-      {'type': 'work.pause', 'conversationId': 'offline'},
+      {'type': 'work.pause', 'conversationId': 'offline', 'paused': true},
     ]);
     expect(_key('super-task-resume'), findsOneWidget);
     expect(_key('super-task-pause'), findsNothing);
     await tester.tap(_key('super-task-resume'));
     await _settle(tester);
-    expect(_commands(server, 'work.resume'), [
-      {'type': 'work.resume', 'conversationId': 'offline'},
-    ]);
+    // One command both ways (#3819): `work.resume` is the command that resumes lost work.
+    expect(_commands(server, 'work.pause').last, {
+      'type': 'work.pause',
+      'conversationId': 'offline',
+      'paused': false,
+    });
     expect(_key('super-task-pause'), findsOneWidget);
     await end(tester, c);
   });
