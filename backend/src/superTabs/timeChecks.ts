@@ -33,9 +33,9 @@ export async function owedAsk(db: Pick<PrismaClient, 'superTabDelivery'>, tabId:
 
 /** A Swarm with no conversation active this long has no work for the checks: its stalls were told long ago. */
 export const TIME_CHECK_QUIET_MS = 7 * 24 * 3_600_000
-/** The most Swarms a pass checks, the most recently active first (ENGINEERING.md 4: no read grows without a bound). */
+/** The most Swarms a pass checks, the most recently active first (AGENTS.md standard 4: no read grows without a bound). */
 export const TIME_CHECK_SWARMS = 200
-/** A Swarm whose groups show no activity since its last check is checked again only this often (ENGINEERING.md 4: a timer that
+/** A Swarm whose groups show no activity since its last check is checked again only this often (AGENTS.md standard 4: a timer that
  *  wakes while nothing changed is a defect). Its stalls (30 minutes) and idle agents (15) are still told within minutes of
  *  falling due; a lost task's machine reports run the loss checks every 30 s anyway (liveness.ts sweepLiveness). */
 export const QUIET_CHECK_MS = 5 * 60_000

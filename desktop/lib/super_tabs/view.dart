@@ -4517,7 +4517,12 @@ class _SuperTabViewState extends State<SuperTabView>
       },
       references: _references,
       onOpenGroup: (id) {
-        setState(() => _showPullRequests = _showTasks = false);
+        setState(() {
+          _showPullRequests = _showTasks = false;
+          // From a page's card (Threads), the chat comes forward: changing
+          // only the chat behind the page left the link looking dead (#3751).
+          _page = null;
+        });
         c.select(id);
         c.selectTerminal(id, null);
       },
