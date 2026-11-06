@@ -90,6 +90,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   final _taskFocus = FocusNode(debugLabel: 'New harness task');
   final _headerMachineMenu = MenuController();
   final _headerMachineFocus = FocusNode(debugLabel: 'New harness computer');
+  final _kindMenu = MenuController();
+  final _kindFocus = FocusNode(debugLabel: 'New agent Member or Lead');
+  final _kindAnchor = GlobalKey();
   final _leadRowFocus = <String, FocusNode>{};
   final _headerMachineAnchor = GlobalKey();
   bool get _desktopStartEnabled =>
@@ -234,6 +237,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     _taskText.dispose();
     _taskFocus.dispose();
     _headerMachineFocus.dispose();
+    _kindFocus.dispose();
     for (final node in _leadRowFocus.values) {
       node.dispose();
     }
@@ -310,7 +314,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusScheduled = false;
       if (!mounted) return;
-      if (_headerMachineMenu.isOpen) return;
+      if (_headerMachineMenu.isOpen || _kindMenu.isOpen) return;
       if (_picking) {
         _inputFocus.requestFocus();
       } else if (widget.desktop) {
@@ -337,8 +341,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   /// Escape and Close remain the explicit ways to discard an unfinished task.
   void dismissFromOutside() {
     if (widget.desktop) {
-      if (_headerMachineMenu.isOpen) {
+      if (_headerMachineMenu.isOpen || _kindMenu.isOpen) {
         _headerMachineMenu.close();
+        _kindMenu.close();
       } else if (_picking && !box.locked) {
         _closeDesktopChooser();
       }
@@ -356,6 +361,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
 
   void _closeDesktopChooser({bool? next}) {
     _headerMachineMenu.close();
+    _kindMenu.close();
     _folderAction = null;
     box.setQuery('');
     box.focusField(NewHarnessField.launch);
@@ -1087,8 +1093,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   }
 
   void _cancel() {
-    if (widget.desktop && _headerMachineMenu.isOpen) {
+    if (widget.desktop && (_headerMachineMenu.isOpen || _kindMenu.isOpen)) {
       _headerMachineMenu.close();
+      _kindMenu.close();
       return;
     }
     if (widget.desktop && !_picking) {
@@ -1148,6 +1155,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
 
   void _openCreationRow(_Row row) {
     _headerMachineMenu.close();
+    _kindMenu.close();
     _folderAction = null;
     // A direct shortcut enters the top-level chooser, even when another
     // chooser currently owns a nested project or specialized-agent prompt.
@@ -2017,6 +2025,33 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                               projectName
                         : projectName,
                     capsule: true,
+                  ),
+                ),
+              ),
+            if (box.agentKind case final kind?)
+              _desktopField(
+                order: 3.5,
+                finger: phone,
+                anchor: _kindAnchor,
+                child: _desktopKindMenu(
+                  child: DesktopPill(
+                    key: const ValueKey('new-harness-field-agent-kind'),
+                    focusNode: _kindFocus,
+                    label: kind == 'lead' ? 'Lead' : 'Member',
+                    semanticLabel:
+                        'Starts as, ${kind == 'lead' ? 'Lead' : 'Member'}',
+                    icon: kind == 'lead' ? AppIcons.crown : AppIcons.user,
+                    menu: true,
+                    capsule: true,
+                    tooltip: 'Start as Lead or Member',
+                    textSize: 13,
+                    surfaceColor: DesktopChrome.surface,
+                    onPressed:
+                        box.locked || box.integration?.agentKindLocked == true
+                        ? null
+                        : () => _kindMenu.isOpen
+                              ? _kindMenu.close()
+                              : _kindMenu.open(),
                   ),
                 ),
               ),
@@ -3805,6 +3840,41 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   }
 
   // Computer selection belongs to the header, independently of repo search.
+  /// Member or Lead (task #4196): the one choice + New agent adds to Cmd-N.
+  Widget _desktopKindMenu({required Widget child}) {
+    final locked = box.locked || box.integration?.agentKindLocked == true;
+    return AppDropdown(
+      controller: _kindMenu,
+      childFocusNode: _kindFocus,
+      width: _machineMenuWidth,
+      onOpen: () => setState(() {}),
+      onClose: () {
+        if (!mounted) return;
+        setState(() {});
+        _chooserOrigin = _kindFocus;
+        _restoreChoiceFocus = true;
+        _chooserTraversal = null;
+        _focusEditor();
+      },
+      children: [
+        for (final (kind, label, detail, icon) in [
+          ('member', 'Member', 'Works with you in its own chat', AppIcons.user),
+          ('lead', 'Lead', 'Names and starts a project', AppIcons.crown),
+        ])
+          AppMenuItem(
+            key: ValueKey('new-harness-agent-kind-$kind'),
+            autofocus: kind == box.agentKind,
+            selected: kind == box.agentKind,
+            icon: icon,
+            label: label,
+            detail: detail,
+            onPressed: locked ? null : () => box.setAgentKind(kind),
+          ),
+      ],
+      child: child,
+    );
+  }
+
   Widget _desktopMachineAnchor({required Widget child}) => AppDropdown(
     controller: _headerMachineMenu,
     childFocusNode: _headerMachineFocus,

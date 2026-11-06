@@ -45,6 +45,8 @@ class HarnessLaunchIntegration {
     this.checkRepositoryOwner,
     this.createRepository,
     this.checkRepositoryAgain,
+    this.agentKind,
+    this.ownMachinesOnly = false,
   });
   final String creationId, actionLabel;
   String? swarmRole;
@@ -67,6 +69,17 @@ class HarnessLaunchIntegration {
   final String? forcedPermissionMode;
   String? projectVisibility;
   bool projectVisibilityLocked;
+
+  /// + New agent in a Swarm (task #4196): whether it starts as a `lead`, which
+  /// names and starts a project, or a `member`. Null shows no such choice.
+  String? agentKind;
+
+  /// Set once the choice's first request is sent: it cannot change after.
+  bool agentKindLocked = false;
+
+  /// Only the person's own computers, never a shared, guest or Team one: an
+  /// agent they start runs in their own account.
+  final bool ownMachinesOnly;
 
   /// A new project in a Swarm: the Swarm's machines its Product Manager may
   /// start on, best first. The form then shows only the task, repo and
