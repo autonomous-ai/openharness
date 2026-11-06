@@ -133,8 +133,13 @@ export function createAgentRestarter({
    * neither, and before anything is signalled. The sessionId to resume comes from the registry's
    * live-synced field, not from the original launch argv (the user may have resumed/switched sessions
    * from inside the engine's own terminal since launch).
+   *
+   * [launchArgs] are the owner's new launch words: the relaunch is built with them as its source and the row keeps them
+   * only once the engine is back, so any refusal or failure before that leaves the flags that last worked. Another ask
+   * with other words is refused while this one runs (`restartJobs.run`'s variant), so the row is never left with words
+   * a different launch used.
    */
-  const restartAgentHandler: RestartAgentHandler = (agentId) => restartJobs.run(registry.resolve(agentId)?.agentId ?? agentId, async (operationCurrent) => {
+  const restartAgentHandler: RestartAgentHandler = (agentId, launchArgs) => restartJobs.run(registry.resolve(agentId)?.agentId ?? agentId, async (operationCurrent) => {
     if (purgeBusy(agentId) || stopJobs.has(agentId) || pinnedControls.has(agentId)) return { ok: false, error: 'AGENT_BUSY' }
     // A pane a stopped move left may still run this conversation's engine: neither a swap nor a held launch starts
     // another beside it (core/main.ts, `removeOrphanMovePanes`).
@@ -223,7 +228,7 @@ export function createAgentRestarter({
     // half, and an agent moved here by a retarget has nothing in the session env at all), or its
     // Codex profile. Refused before anything is killed, so a restart that cannot honour the grid
     // leaves the running process alone.
-    const built = await relaunchOverrides(session, session, current, native)
+    const built = await relaunchOverrides(session, launchArgs ? { ...session, launchArgs } : session, current, native)
     if (!current()) return changed
     if (!built.ok) return built
 
@@ -245,6 +250,8 @@ export function createAgentRestarter({
       // A refused relaunch (Windows: a batch-file engine cmd.exe would misread) stopped nothing: its own code.
       if (!outcome.ok) return { ok: false, error: outcome.error ?? 'RESTART_FAILED', detail: outcome.detail }
       refreshGridWebSearch(session.agentId, built.overrides)
+      // The engine is back with the words: now they are the record's, as `launchModel` is committed.
+      if (launchArgs) registry.setLaunchArgs(session.agentId, launchArgs)
 
       // Address the CANONICAL agentId from the resolved session, not the raw RPC input — `resolve()`
       // accepts either an agentId or a bare sessionId, but `setActive`/`byAgent` only ever key on the
@@ -258,6 +265,6 @@ export function createAgentRestarter({
     } finally {
       releaseRoute()
     }
-  })
+  }, 'restart', launchArgs && JSON.stringify(launchArgs))
   return restartAgentHandler
 }

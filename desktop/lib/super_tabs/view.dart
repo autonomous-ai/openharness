@@ -80,6 +80,7 @@ import 'message_row.dart';
 import 'message_receipt.dart';
 import 'notifications.dart';
 import 'buddies.dart';
+import 'buddy_restart.dart';
 import 'decisions.dart';
 import 'day_pill.dart';
 import 'decisions_view.dart';
@@ -3961,6 +3962,20 @@ class _SuperTabViewState extends State<SuperTabView>
             item(
               'Rename Buddy…',
               () => unawaited(showRenameBuddy(context, c, group.projectId)),
+            ),
+          if (editable &&
+              (c.buddy(group.projectId)?.harnessId.isNotEmpty ?? false) &&
+              c.buddy(group.projectId)!.machineId.isNotEmpty)
+            item(
+              'Restart Buddy…',
+              () => unawaited(
+                showRestartBuddy(
+                  context,
+                  c,
+                  group.projectId,
+                  app: widget.app,
+                ),
+              ),
             ),
           if (editable && c.buddy(group.projectId) != null)
             item(

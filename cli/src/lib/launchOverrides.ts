@@ -39,6 +39,7 @@ import { scmLaunchEnv } from '../scm/scmProjects.js'
 import type { ScmLaunchRecord } from '../scm/types.js'
 import { agentLaunchArgs, joinedInstructions, type StartedBy } from './agentAttribution.js'
 import { machineMcpLaunchArgs } from './machineMcp.js'
+import { checkLaunchWords } from './launchArgs.js'
 import type { CreationAuthority } from './agentCreationReceipt.js'
 import type { publishGridConfigDir } from './publishedGridConfig.js'
 import { nativeHookLocations } from '../engines/kit/nativeLocations.js'
@@ -49,6 +50,9 @@ export interface LaunchOverrides {
   env: Record<string, string>
   /** Appended to the engine's argv (`-c model_providers…`, `-m …`, `--mcp-config …`). */
   extraArgs: string[]
+  /** The owner's own launch words, checked at this launch: they go LAST on the command line (`ownerArgs` of
+   *  engineLaunch.ts), not into `extraArgs`. Absent when there are none, or when one is now refused. */
+  ownerArgs?: string[]
   /** Vendor credentials the launch must hide from the engine — see `gridConflictingEnvToClear`. */
   clearEnv: string[]
   /**
@@ -167,6 +171,9 @@ export interface LaunchSource extends NativeLaunchSource {
   agent?: string | null
   /** `agent` when another agent started it (the row's `startedBy`): every relaunch keeps its pull request line. */
   startedBy?: StartedBy | null
+  /** The owner's extra launch words (the registry row's `launchArgs`). Checked again at each launch (`checkLaunchWords`):
+   *  a row edited by hand, or a flag a later release refuses, applies none. */
+  launchArgs?: string[]
 }
 
 /** Fresh each time: callers hand `env` to tmux and may extend it, and a shared object would carry
@@ -319,6 +326,14 @@ export async function prepareLaunchOverrides(
     if (machineMcp.length) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...machineMcp] }
     // What the Swarm adds for its own sessions (core/api.ts `SwarmLaunch.args`), in the slot `agent_create` gave it.
     if (source.swarmSkill) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...swarm!.args(engine)] }
+    // The owner's own flags (`agent_restart`'s `launchArgs`) are the owner's, so they come last on the command line, in a
+    // slot of their own (`ownerArgs`). Checked again here, as they were when typed: a row edited by hand, or a flag a
+    // later release refuses, applies none, and the log says why.
+    if (source.launchArgs?.length) {
+      const checked = checkLaunchWords(engine, source.launchArgs)
+      if (checked.ok) overrides = { ...overrides, ownerArgs: [...source.launchArgs] }
+      else console.warn(`[launch] ${configKey.slice(0, 8)} saved launch flags not applied · ${checked.detail}`)
+    }
     // What Harness tells the agent rides every relaunch, in the slot `agent_create` gave it: last. Read again each
     // time, with the person's switches and settings as they are now.
     let swarmInstructions: string | undefined
