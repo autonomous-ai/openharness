@@ -1,0 +1,174 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
+
+import 'support/buddy_engine_fixture.dart';
+import 'support/super_tab_fixture.dart';
+
+void main() {
+  final picker = find.byKey(const ValueKey('super-buddy-engine'));
+  final model = find.byKey(const ValueKey('super-buddy-model'));
+  Finder row(String name) => find.widgetWithText(AppMenuItem, name);
+  List<Map> commands(ConversationServer server) => [
+    for (final post in server.posts)
+      if ((post['command'] as Map)['type'] == 'buddy.engine')
+        post['command'] as Map,
+  ];
+  Future<void> open(WidgetTester tester) async {
+    expect(picker, findsOneWidget);
+    await tester.tap(picker);
+    await tester.pumpAndSettle();
+  }
+
+  // Catches a wrong engine payload or a second command for the current engine.
+  testWidgets('selecting Codex submits the engine and keeps the Buddy chat', (
+    tester,
+  ) async {
+    final server = buddyEngineSwarm();
+    final c = await showBuddyEngine(tester, server);
+    await open(tester);
+    expect(row('Claude Code'), findsOneWidget);
+    expect(row('Codex'), findsOneWidget);
+    expect(row('OpenCode'), findsNothing);
+    await tester.tap(row('Claude Code'));
+    await tester.pumpAndSettle();
+    expect(commands(server), isEmpty);
+    await open(tester);
+    await tester.tap(row('Codex'));
+    await tester.pumpAndSettle();
+    expect(commands(server), [
+      {'type': 'buddy.engine', 'engine': 'codex'},
+    ]);
+    expect(c.selectedId, 'swarm-buddy-peer');
+    expect(c.buddy('')!.id, 'wren');
+    await closeBuddyEngine(tester, c);
+  });
+
+  // Catches interpreting unknown authentication, installation or old readings
+  // as an offer. Values are independent of the production eligibility helper.
+  for (final (label, signedIn, installed, ageMs) in [
+    ('signed out', false, true, 0),
+    ('unknown sign-in', null, true, 0),
+    ('missing installation', true, false, 0),
+    ('stale reading', true, true, 45001),
+  ]) {
+    testWidgets('$label never offers Codex', (tester) async {
+      final c = await showBuddyEngine(
+        tester,
+        buddyEngineSwarm(
+          codexSignIn: signedIn,
+          installed: installed,
+          ageMs: ageMs,
+        ),
+      );
+      await open(tester);
+      expect(row('Codex'), findsNothing);
+      await closeBuddyEngine(tester, c);
+    });
+  }
+
+  testWidgets('an older host has no engine action', (tester) async {
+    final c = await showBuddyEngine(
+      tester,
+      buddyEngineSwarm(capable: false, limited: true),
+    );
+    expect(picker, findsNothing);
+    expect(find.text('Switch engine'), findsNothing);
+    await closeBuddyEngine(tester, c);
+  });
+
+  testWidgets('an engine handoff names its target and disables model changes', (
+    tester,
+  ) async {
+    final server = buddyEngineSwarm(
+      switchRequest: {
+        'id': 'engine-request',
+        'engine': 'codex',
+        'profileId': 'default',
+        'requestedBy': 'peer',
+        'at': DateTime.now().toUtc().toIso8601String(),
+      },
+    );
+    final c = await showBuddyEngine(tester, server);
+    expect(find.text('Switching to Codex…'), findsOneWidget);
+    await tester.tap(model);
+    await tester.pumpAndSettle();
+    expect(find.byType(AppMenuItem), findsNothing);
+    expect(commands(server), isEmpty);
+    await closeBuddyEngine(tester, c);
+  });
+
+  testWidgets('a model switch disables engine changes', (tester) async {
+    final c = await showBuddyEngine(
+      tester,
+      buddyEngineSwarm(
+        modelRequest: {'id': 'model-request', 'gridModel': null},
+      ),
+    );
+    await open(tester);
+    expect(find.byType(AppMenuItem), findsNothing);
+    await closeBuddyEngine(tester, c);
+  });
+
+  testWidgets('a refused engine request shows the actionable server reason', (
+    tester,
+  ) async {
+    final server = buddyEngineSwarm();
+    server.refuse = {
+      'code': 'BUDDY_ENGINE_UNAVAILABLE',
+      'message': 'Sign in to Codex on your Buddy’s machine.',
+    };
+    final c = await showBuddyEngine(tester, server);
+    await open(tester);
+    await tester.tap(row('Codex'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Sign in to Codex on your Buddy’s machine.'),
+      findsOneWidget,
+    );
+    await closeBuddyEngine(tester, c);
+  });
+
+  testWidgets('a Codex Buddy model menu names the Codex subscription', (
+    tester,
+  ) async {
+    final c = await showBuddyEngine(tester, buddyEngineSwarm(engine: 'codex'));
+    await tester.tap(model);
+    await tester.pumpAndSettle();
+    final subscription = row('Your subscription');
+    expect(
+      find.descendant(of: subscription, matching: find.text('Codex')),
+      findsOneWidget,
+    );
+    expect(find.text('Claude Code'), findsNothing);
+    expect(find.text('SHARED IN THIS SWARM'), findsNothing);
+    await closeBuddyEngine(tester, c);
+  });
+
+  for (final narrow in [false, true]) {
+    testWidgets(
+      'subscription limit opens the same engine menu, narrow=$narrow',
+      (tester) async {
+        final server = buddyEngineSwarm(limited: true);
+        final c = await showBuddyEngine(tester, server, narrow: narrow);
+        final notice = find.byKey(const ValueKey('super-buddy-engine-limit'));
+        expect(notice, findsOneWidget);
+        expect(find.text('Subscription limit reached.'), findsOneWidget);
+        final action = find.descendant(
+          of: notice,
+          matching: find.text('Switch engine'),
+        );
+        expect(action, findsOneWidget);
+        await tester.tap(action);
+        await tester.pumpAndSettle();
+        await tester.tap(row('Codex'));
+        await tester.pumpAndSettle();
+        expect(commands(server), [
+          {'type': 'buddy.engine', 'engine': 'codex'},
+        ]);
+        expect(tester.takeException(), isNull);
+        await closeBuddyEngine(tester, c);
+      },
+    );
+  }
+}
