@@ -310,8 +310,9 @@ class _SetUpSwarmPageState extends State<SetUpSwarmPage> {
   /// The theme picked for Claude Code on Intern 3: dark, as its screen first offers.
   String _theme = 'dark';
 
-  /// Full mode accepted by the person: the Buddy starts only then.
-  bool _fullMode = false;
+  /// Full mode accepted by the person: the Buddy starts only then. Ticked to begin with, as the Buddy needs it (owner,
+  /// 2026-11-06); untick it and Continue waits.
+  bool _fullMode = true;
 
   static Widget _checked(Tty tty) =>
       Icon(LucideIcons.check300, size: 18, color: tty.green);
