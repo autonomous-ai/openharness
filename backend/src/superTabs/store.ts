@@ -3372,6 +3372,15 @@ export class SuperTabStore {
     })
   }
 
+  /** A project's machine rules alone, from its newest revision (policy.ts machines), for the route (task #3964): one
+   *  indexed read, never the history. Who reads the project reads them, as its record. */
+  async projectMachineRules(user: AuthUser, tabId: string, projectId: string, asAgentId?: string) {
+    return this.instructionHistory(user, tabId, projectId, asAgentId, async tx => {
+      const current = await currentRules(tx, tabId, projectId)
+      return { projectId, revision: current.revision, machines: current.rules.machines ?? [] }
+    })
+  }
+
   private async instructionHistory<T>(user: AuthUser, tabId: string, projectId: string, asAgentId: string | undefined, read: (tx: Transaction) => Promise<T>) {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
