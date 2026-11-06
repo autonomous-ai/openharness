@@ -4,6 +4,7 @@
  * (project instructions, Rules for every agent: Ken, 2026-10-29); a test step where the change runs (Workflow 2). The table is
  * the project's rules record (policy.ts, #3393): its review rows, test rows and untested paths, read through its own matcher.
  */
+import { unknownHistory, type HistoryReport } from './prHistory.js'
 import { requiredReads, SEED_RULES, testsFor, touchedRows, type ProjectRules } from './policy.js'
 
 export type StepKind = 'review' | 'security' | 'test'
@@ -59,7 +60,7 @@ export function sharedFiles(pulls: ReadonlyArray<{ url: string; files: readonly 
 
 /** What a step's agent is asked to do: which pull requests, at which head, for which task, and why this step. */
 export function stepBrief(step: PlannedStep, task: { number: number; title: string;
-  pulls: ReadonlyArray<{ url: string; head: string | null; base?: string | null }> }): string {
+  pulls: ReadonlyArray<{ url: string; head: string | null; base?: string | null; history?: HistoryReport }> }): string {
   // Each pull request at the whole head its own files were read at, on its base branch: a verdict records both (#3394), and
   // work.check refuses a short head, so the brief shows the id a reviewer can copy.
   const pulls = task.pulls.length ? task.pulls.map(pull => `${pull.url}${pull.head ? ` at head ${pull.head}` : ''}${pull.base ? ` on base ${pull.base}` : ''}`).join(', ')
@@ -71,11 +72,25 @@ export function stepBrief(step: PlannedStep, task: { number: number; title: stri
   const why = step.unread ? ' Its changed files could not be read, so it is reviewed as strictly as the review table goes.'
     : step.kind === 'security' ? ` It changes ${step.areas.join(', ')}: two independent security reviews before merge.` : ''
   // A verdict counts only at the exact head and base it read (#3394): the role sheets' words (cli swarmToolSheets.ts work.check).
-  return `${what}${why} Record your verdict as this step's check at the pull request head (whole commit id) and base branch you read, and send `
-    + 'it to the task\'s Engineer with "Ready to merge: Yes", "No" or "With fixes".'
+  return withHistoryBrief(`${what}${why} Record your verdict as this step's check at the pull request head (whole commit id) and base branch you read, and send `
+    + 'it to the task\'s Engineer with "Ready to merge: Yes", "No" or "With fixes".', task.pulls)
 }
 
 /** The acceptance check a step's agent records. */
 export const stepCheck = (step: PlannedStep): string => step.kind === 'test'
   ? `Runs as a user would: ${step.where!.join('; ')}`
   : `${step.kind === 'security' ? 'Security review' : 'Review'}: Ready to merge at the pull request's head`
+
+/** Replace only our generated report, preserving a manually written step's instructions on the next Ready. */
+export function withHistoryBrief(brief: string, pulls: ReadonlyArray<{ url: string; head: string | null; history?: HistoryReport }>): string {
+  const before = brief.replace(/\n\n<!-- harness-pr-history -->[\s\S]*?<!-- \/harness-pr-history -->/g, '')
+  const lines = pulls.map(pull => {
+    const h = pull.head && pull.history?.head === pull.head ? pull.history : unknownHistory(pull.head)
+    return `- ${pull.url} at ${pull.head ?? 'unread head'}: Plan first: ${h.planFirst}; Test before code: ${h.testBeforeCode}; `
+      + `${h.productionLines ?? 'unknown'} production lines, ${h.totalLines ?? 'unknown'} total changed lines; ${h.commits ?? 'unknown'} commits.`
+      + (h.missingTests.length ? ` No prior test-only commit: ${h.missingTests.slice(0, 5).map(sha => sha.slice(0, 12)).join(', ')}.` : '')
+      + (h.merges ? ' Merge resolutions need a manual read.' : '')
+  })
+  return `${before}\n\n<!-- harness-pr-history -->\nPR history checks:\n${lines.join('\n') || '- History unavailable.'}\n`
+    + 'History order does not prove a test failed or covers the change. Check red/green evidence and any small-fix exception.\n<!-- /harness-pr-history -->'
+}
