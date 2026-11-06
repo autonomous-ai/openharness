@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AuthSession } from '../lib/authSession.js'
 import type { TeamConfig } from './config.js'
 import {
-  AUTO_SETUP_RETRY_MS, readTeamSetupDecision, TeamAutoSetup, teamSetupDecisionFile, writeTeamSetupDecision, type AutoSetupDeps, type TeamSetupDecision,
+  AUTO_SETUP_RETRY_MS, readTeamSetupDecision, TEAM_SIGN_IN_LOST, TeamAutoSetup, teamSetupDecisionFile, writeTeamSetupDecision, type AutoSetupDeps, type TeamSetupDecision,
 } from './autoSetup.js'
 
 const session: AuthSession = { version: 1, accessToken: 'access-placeholder', autonomousEnv: 'prod', computerId: 'c'.repeat(32), updatedAt: 1 }
@@ -346,3 +346,43 @@ describe('a half-finished setup is repaired, not taken for done (#2765, Darren-M
   })
 })
 
+
+// #3684 (kelvin1295, 11-06): a revoked Team sign-in. Repair started the daemon again on it, and the row kept offering
+// Restart. The account's status file says its sign-in is lost (team __start writes it as the job starts).
+describe('a Team account whose sign-in was ended signs in again, only by the person\'s own action', () => {
+  const lost = (over: Partial<AutoSetupDeps> = {}) => fake({ accountExists: vi.fn(async () => true), missing: async () => ['daemon'],
+    signInLost: async () => true, ...over } as Partial<AutoSetupDeps>)
+
+  it('status says sign in again, before what else is missing, for the machine row', async () => {
+    expect(await lost().auto.status()).toEqual({ state: 'sign-in-again', detail: TEAM_SIGN_IN_LOST })
+    expect(await lost({ missing: async () => [] } as Partial<AutoSetupDeps>).auto.status()).toEqual({ state: 'sign-in-again', detail: TEAM_SIGN_IN_LOST })
+  })
+
+  it('Repair, Restart and Sign in again each run setup with a new sign-in', async () => {
+    for (const options of [{}, { restart: true }, { signInAgain: true }]) {
+      const f = lost()
+      expect(await f.auto.offer('manual', undefined, false, options), JSON.stringify(options)).toEqual({ state: 'started' })
+      await f.auto.settled()
+      expect(f.deps.setup).toHaveBeenCalledWith(expect.any(Function), { signInAgain: true })
+    }
+  })
+
+  it('an automatic moment starts nothing on it, and Desktop\'s explanation asks for nothing', async () => {
+    const f = lost()
+    for (const reason of ['startup', 'join', 'contribute'] as const) {
+      expect(await f.auto.offer(reason, async () => true), reason).toEqual({ state: 'incomplete' })
+    }
+    expect(await f.auto.offer('manual', async () => true, true)).toEqual({ state: 'wanted' })
+    expect(f.deps.setup).not.toHaveBeenCalled()
+  })
+
+  it('a daemon that is merely down restarts with the sign-in it has, and a lost sign-in it cannot read is not lost', async () => {
+    for (const signInLost of [async () => false, async () => { throw new Error('status unreadable') }]) {
+      const f = lost({ signInLost } as Partial<AutoSetupDeps>)
+      expect(await f.auto.status()).toMatchObject({ state: 'incomplete', missing: ['daemon'] })
+      expect(await f.auto.offer('manual', undefined, false, { restart: true })).toEqual({ state: 'started' })
+      await f.auto.settled()
+      expect(f.deps.setup).toHaveBeenCalledWith(expect.any(Function))
+    }
+  })
+})
