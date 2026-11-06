@@ -88,11 +88,13 @@ const conversation: Required<Conversation> = {
   step: 'Review',
   stepIds: [],
   stepUp: { attempt: 2, floor: 2, reason: 'r', at: 1, carry: '' },
+  stuck: { key: 'k', messageId: 'm', tagged: [], fixed: 'f' },
   talkedAt: { w: { person: 1, answer: 2 } },
   task: { goal: '', changes: '', constraints: '', owns: [] },
   teamWritten: true,
   teamWrittenBy: { kind: 'assigned' },
   title: 't',
+  writers: [],
 }
 
 describe('the light conversation projection (parts/light.ts)', () => {
