@@ -7,7 +7,7 @@ String _machineStatusGroup(_MachineView view) => switch (view.status) {
   _ => 'unknown',
 };
 
-Object _machineCounts(List<_MachineView> views) {
+Object _machineLayout(List<_MachineView> views) {
   final counts = <String, int>{};
   for (final view in views) {
     final group = _machineStatusGroup(view);
@@ -18,6 +18,7 @@ Object _machineCounts(List<_MachineView> views) {
     counts['asleep'] ?? 0,
     counts['offline'] ?? 0,
     counts['unknown'] ?? 0,
+    Object.hashAll(views.map((v) => (v.name, v.owner?.shownName))),
   );
 }
 
@@ -32,7 +33,21 @@ extension _ManageMachines on _SuperTabMachinesState {
   Widget _manageScreen(VoidCallback? add) {
     grid.AppTheme.watch(context);
     final views = _sortedViews();
-    _manageCountsDrawn = _machineCounts(views);
+    _manageLayoutDrawn = _machineLayout(views);
+    final names = <String, int>{};
+    for (final view in views) {
+      names.update(
+        superTabMachineName(view.name),
+        (n) => n + 1,
+        ifAbsent: () => 1,
+      );
+    }
+    _manageNames = {
+      for (final view in views)
+        view.id: names[superTabMachineName(view.name)]! > 1
+            ? '${superTabMachineName(view.name)} · ${view.owner?.shownName ?? view.id}'
+            : superTabMachineName(view.name),
+    };
     int count(String group) =>
         views.where((v) => _machineStatusGroup(v) == group).length;
     final summary =
@@ -223,14 +238,18 @@ extension _ManageMachines on _SuperTabMachinesState {
 class _ManageMachineLine extends StatelessWidget {
   const _ManageMachineLine({
     required this.view,
+    required this.name,
     required this.own,
     required this.local,
     required this.now,
+    this.port,
     required this.onMore,
   });
   final _MachineView view;
+  final String name;
   final bool own, local;
   final DateTime now;
+  final int? port;
   final Future<void> Function(Offset) onMore;
 
   @override
@@ -304,7 +323,7 @@ class _ManageMachineLine extends StatelessWidget {
                           child: Tooltip(
                             message: view.name,
                             child: Text(
-                              superTabMachineName(view.name),
+                              name,
                               key: ValueKey('super-machine-name-${view.id}'),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -353,7 +372,27 @@ class _ManageMachineLine extends StatelessWidget {
                       if (!narrow &&
                           group == 'online' &&
                           view.owner != null) ...[
-                        SuperTabAvatar.person(view.owner!, size: 20),
+                        Container(
+                          width: 20,
+                          height: 20,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: MachinesStyle.chip,
+                          ),
+                          child: Text(
+                            view.owner!.shownName.trim().isEmpty
+                                ? '?'
+                                : view.owner!.shownName
+                                      .trim()
+                                      .characters
+                                      .first
+                                      .toUpperCase(),
+                            style: MachinesStyle.small(
+                              color: MachinesStyle.metadata,
+                            ),
+                          ),
+                        ),
                         if (crew.length > 1)
                           Container(
                             width: 20,
@@ -443,7 +482,9 @@ class _MachineDisk extends StatelessWidget {
               .copyWith(fontFeatures: MachinesStyle.tabular),
         ),
         Text(
-          total == null ? 'No reading' : 'of ${resourceBytes(total)}',
+          total == null
+              ? 'No reading'
+              : 'of ${total >= 1000000000000 ? '${(total / 1000000000000).toStringAsFixed(total % 1000000000000 == 0 ? 0 : 1)} TB' : resourceBytes(total)}',
           style: MachinesStyle.small().copyWith(
             fontFeatures: MachinesStyle.tabular,
           ),

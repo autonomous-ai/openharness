@@ -840,7 +840,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   String? _selectedMachineId;
   String _machineSearch = '';
   String _machineFilter = 'all';
-  Object? _manageCountsDrawn;
+  Object? _manageLayoutDrawn;
+  Map<String, String> _manageNames = const {};
 
   /// Samples from before foreground return stay cached, but their readings are
   /// hidden behind the refreshing state until the next read answers.
@@ -999,7 +1000,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         for (final v in group) '$key/${v.id}',
     ];
     if (c.backendUnreachable ||
-        (widget.manage && _manageCountsDrawn != _machineCounts(views)) ||
+        (widget.manage && _manageLayoutDrawn != _machineLayout(views)) ||
         !listEquals(_groupsDrawn, groups)) {
       _changed();
       return;
@@ -1025,6 +1026,13 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     view.problem,
     view.subscriptionsAside,
     view.agents.length,
+    if (widget.manage) ...[
+      view.resources?.diskTotalBytes,
+      view.resources?.diskFreeBytes,
+      view.resources?.projectDiskTotalBytes,
+      view.resources?.projectDiskFreeBytes,
+      Object.hashAll(view.crew.map((a) => (a.id, a.crewAsleep, a.crewMoving))),
+    ],
   ]);
 
   /// Reads why this Mac has no Harness Team account, only while its person's
@@ -2299,11 +2307,19 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   child: widget.manage
                       ? _ManageMachineLine(
                           view: view,
+                          name:
+                              _manageNames[view.id] ??
+                              superTabMachineName(view.name),
                           own: view.owner?.id == c.accountId,
                           local:
                               widget.app?.stateOf(view.id)?.isLocalMachine ==
                               true,
                           now: widget.now(),
+                          port: widget.app
+                              ?.stateOf(view.id)
+                              ?.localEndpoint
+                              ?.wsUri
+                              .port,
                           onMore: (at) => _menu(view, at),
                         )
                       : _MachineLine(
@@ -2356,6 +2372,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               superTabMachineName(view.name),
               view.cleaning
                   ? 'Cleaning up'
+                  : widget.manage
+                  ? _machineStatusGroup(view)
+                        .replaceAll('unknown', 'status unknown')
                   : superTabMachineStateLabel(view.status),
               ?view.history,
               ?view.crewLine,
