@@ -41,12 +41,12 @@ owners the screen already reads.
 
 ### 1. Status groups, the reader's machines pinned (`machines.dart`)
 
-- [ ] Failing test: machines of the reader and of others, live, unknown and offline, sit under Yours, Online, Status
+- [x] Failing test: machines of the reader and of others, live, unknown and offline, sit under Yours, Online, Status
       unknown and Offline in that order, each heading with its count and announced as a heading; no empty group shows.
-- [ ] Code.
+- [x] Code.
 
 ### 2. Loading and error states (`machines.dart`)
 
-- [ ] Failing test: before the Swarm is read the screen shows its loading rows, not "Add a machine"; a Swarm that can't
+- [x] Failing test: before the Swarm is read the screen shows its loading rows, not "Add a machine"; a Swarm that can't
       be read and holds no machine says so with Retry, which reads it again; a read Swarm with none shows the empty note.
-- [ ] Code. Light and dark screenshots of the grouped list.
+- [x] Code. Light and dark screenshots of the grouped list.
