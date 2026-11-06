@@ -43,8 +43,16 @@ Implement sequentially in this session, test first, with one independent review 
 
 **Interfaces:** retain `CommandAvailability` (`status`, optional `detail`), `readCapabilities`, `requiredToolReason`, and the existing `toolProbeErrors` wire field. Missing results may carry a bounded PATH-source explanation; true results carry none.
 
-- [ ] Add real disposable-profile coverage for login-only discovery and start admission; assert the tool's execution marker is absent. Record already-passing behavior accurately.
-- [ ] Add regressions for missing PATH-source details in the probe, admission, cached machine report and route, plus a new-instance refresh check. Commit tests and observe failures before implementation.
-- [ ] Add the minimal diagnostic propagation. Keep old missing results without a detail compatible; keep failed probes unverified.
-- [ ] Run affected specs and typecheck; record red/green evidence. Use automatic CLI CI for the whole unit suite, plus the required portability gate if the engine helper changes.
+- [x] Add real disposable-profile coverage for login-only discovery and start admission; assert the tool's execution marker is absent. Record already-passing behavior accurately.
+- [x] Add regressions for missing PATH-source details in the probe, admission, cached machine report and route, plus a new-instance refresh check. Commit tests and observe failures before implementation.
+- [x] Add the minimal diagnostic propagation. Keep old missing results without a detail compatible; keep failed probes unverified.
+- [x] Run affected specs and typecheck; record red/green evidence. Use automatic CLI CI for the whole unit suite, plus the required portability gate if the engine helper changes.
 - [ ] Push ready work, obtain independent review and platform acceptance, and hand off with exact revision and evidence.
+
+
+## Execution evidence
+
+- Red commit `718527faa`: five diagnostic regressions fail; the real login-profile start acceptance already passes on main's behavior.
+- Green code `00ba599a6`: all six selected cases pass. The complete affected run passes 809 tests, with four pre-existing opt-in/platform skips; typecheck passes on macOS arm64 / Node 22.23.2.
+- No covered implementation file in a CLI per-file coverage gate changed; the portability gate does not include `engineLaunch.ts`. Native process arguments are unchanged. The Windows no-window guard passes.
+- The full CLI unit suite runs in automatic ready-for-review CI. Platform testers verify the existing path behavior; no live target-machine reproduction or Windows desktop session was claimed locally.
