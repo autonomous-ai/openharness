@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, wr
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { ASSIGNED_GRACE_MS, mayBeBuddy, mayBeLead, RETENTION_LAPSE_MS, retainContributions, retainedHarnesses, retainedLeads, retentionFile } from './retention.js'
+import { ASSIGNED_GRACE_MS, mayBeBuddy, mayBeLead, RETENTION_LAPSE_MS, retainContributions, retainedHarnesses, retainedLeads, retainedProjectLeads, retentionFile } from './retention.js'
 
 const roots: string[] = []
 const root = () => { const dir = mkdtempSync(join(tmpdir(), 'super-retention-')); roots.push(dir); return dir }
@@ -77,6 +77,34 @@ it('reopens no Lead from an unreadable file', () => {
   retainContributions(dir, 'machine', [row('lead', { lead: true })])
   writeFileSync(retentionFile(dir), '{')
   expect([...retainedLeads(dir)]).toEqual([])
+})
+
+it('permits account moves only for project Leads while crew members remain eligible for keepalive', () => {
+  const dir = root(), now = Date.now()
+  const standing = { tabId: 'tab', agent: { harnessId: 'standing', machineId: 'machine', crew: { role: 'Engineer', at: 1, by: 'pm' } } }
+  retainContributions(dir, 'machine', [row('pm', { lead: true }), standing, row('worker'), row('foreign-pm', { lead: true }, 'other')], now)
+  expect([...retainedProjectLeads(dir)]).toEqual(['pm'])
+  expect([...retainedLeads(dir)].sort()).toEqual(['pm', 'standing'])
+  const lapsed = new Date(now - RETENTION_LAPSE_MS - 1000)
+  utimesSync(retentionFile(dir), lapsed, lapsed)
+  expect([...retainedProjectLeads(dir)]).toEqual(['pm'])
+  retainContributions(dir, 'machine', [row('pm'), standing], now)
+  expect([...retainedProjectLeads(dir)]).toEqual([])
+})
+
+it('permits no account moves without explicit readable project Lead retention', () => {
+  const dir = root()
+  expect([...retainedProjectLeads(dir)]).toEqual([])
+  retainContributions(dir, 'machine', [row('pm', { lead: true })])
+  for (const content of [
+    JSON.stringify({ version: 2, machineId: 'machine', harnesses: ['pm'], crew: ['pm'] }),
+    JSON.stringify({ version: 2, machineId: 'machine', harnesses: ['pm'], leads: [null] }),
+    '{',
+    ' '.repeat(4 * 1024 * 1024 + 1),
+  ]) {
+    writeFileSync(retentionFile(dir), content)
+    expect([...retainedProjectLeads(dir)]).toEqual([])
+  }
 })
 
 // The review of #1635: a file from before Leads were kept, or one that cannot be read, must not let a stop through to a

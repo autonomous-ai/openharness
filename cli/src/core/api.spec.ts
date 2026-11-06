@@ -28,15 +28,44 @@ describe('the core API services stand on', () => {
   // A PM's account move (superTabs/pmRotation.ts): the core's own restarter answers it, and says why when it does not start.
   it('offers a restart on another Claude account only when handed the core\'s restarter, and says why it failed', async () => {
     const restartAgent = vi.fn(async (_id: string, _args: undefined, _home: string | null): Promise<{ ok: true } | { ok: false; error: string; detail?: string }> => ({ ok: true }))
-    const core = createCoreApi({ ...coreDeps(), restartAgent })
-    expect(await core.agents.restartOnAccount!('pm', '/work/.claude-b')).toEqual({ ok: true })
-    expect(restartAgent).toHaveBeenLastCalledWith('pm', undefined, '/work/.claude-b')
+    const core = createCoreApi({ ...coreDeps(), restartAgent, retainedProjectLeads: () => new Set(['live']) })
+    expect(await core.agents.restartOnAccount!('live', '/work/.claude-b')).toEqual({ ok: true })
+    expect(restartAgent).toHaveBeenLastCalledWith('live', undefined, '/work/.claude-b')
     restartAgent.mockResolvedValueOnce({ ok: false, error: 'INVALID_PROFILE' })
-    expect(await core.agents.restartOnAccount!('pm', null)).toEqual({ ok: false, code: 'INVALID_PROFILE' })
-    expect(restartAgent).toHaveBeenLastCalledWith('pm', undefined, null)
+    expect(await core.agents.restartOnAccount!('live', null)).toEqual({ ok: false, code: 'INVALID_PROFILE' })
+    expect(restartAgent).toHaveBeenLastCalledWith('live', undefined, null)
     restartAgent.mockResolvedValueOnce({ ok: false, error: 'RESTART_FAILED', detail: 'tmux gone' })
-    expect(await core.agents.restartOnAccount!('pm', null)).toEqual({ ok: false, code: 'RESTART_FAILED', message: 'tmux gone' })
+    expect(await core.agents.restartOnAccount!('live', null)).toEqual({ ok: false, code: 'RESTART_FAILED', message: 'tmux gone' })
     expect(createCoreApi(coreDeps()).agents.restartOnAccount).toBeUndefined()
+  })
+
+  it.each([
+    { name: 'the Swarm is absent', id: 'live', retained: undefined },
+    { name: 'the agent is not a retained Lead', id: 'live', retained: ['another-lead'] },
+    { name: 'only the supplied alias is retained', id: 's-live', retained: ['s-live'] },
+    { name: 'the retained agent has no live session', id: 'missing', retained: ['missing'] },
+  ])('refuses an account restart before touching the engine when $name', async ({ id, retained }) => {
+    const restartAgent = vi.fn(async () => ({ ok: true as const }))
+    const core = createCoreApi({ ...coreDeps(), restartAgent,
+      ...(retained ? { retainedProjectLeads: () => new Set(retained) } : {}) })
+    expect(await core.agents.restartOnAccount!(id, null)).toEqual({ ok: false, code: 'INVALID_AGENT' })
+    expect(restartAgent).not.toHaveBeenCalled()
+  })
+
+  it.each(['live', 's-live'])('restarts the canonical retained Lead when addressed as %s', async id => {
+    const restartAgent = vi.fn(async () => ({ ok: true as const }))
+    const core = createCoreApi({ ...coreDeps(), restartAgent, retainedProjectLeads: () => new Set(['live']) })
+    expect(await core.agents.restartOnAccount!(id, '/work/.claude-b')).toEqual({ ok: true })
+    expect(restartAgent).toHaveBeenCalledExactlyOnceWith('live', undefined, '/work/.claude-b')
+  })
+
+  it('refuses a new account move after the host releases the Lead', async () => {
+    const retained = new Set(['live']), restartAgent = vi.fn(async () => ({ ok: true as const }))
+    const core = createCoreApi({ ...coreDeps(), restartAgent, retainedProjectLeads: () => new Set(retained) })
+    expect(await core.agents.restartOnAccount!('live', '/work/.claude-b')).toEqual({ ok: true })
+    retained.clear()
+    expect(await core.agents.restartOnAccount!('live', null)).toEqual({ ok: false, code: 'INVALID_AGENT' })
+    expect(restartAgent).toHaveBeenCalledExactlyOnceWith('live', undefined, '/work/.claude-b')
   })
 
   it('exposes an optional native-turn observer without importing feature state', () => {
