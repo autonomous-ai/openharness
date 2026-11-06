@@ -284,11 +284,15 @@ export class PmRotation {
     const h = row.agent.harnessId
     const before = await this.deps.screen(h)
     const began = this.deps.now()
-    const result = await this.deps.restart(h, to.home)
+    const result = await this.deps.restart(h, to.home).catch(() => ({ ok: false as const, error: 'RESTART_FAILED' }))
     if (!result.ok) {
-      // The core refuses before it kills anything, so the PM is as it was: tried again after the pause.
+      // A failure may follow the old process stopping. The core attempts recovery, but its refusal alone cannot
+      // promise the PM is running; tell the owner without claiming a successful move or rollback.
       this.deps.log(`PM ${h.slice(0, 8)} could not move to ${said(to)}: ${result.error}.`)
       state.retryAt = now + MOVE_COOLDOWN_MS
+      state.avoid.set(to.id, now + AVOID_MS)
+      this.deps.record({ at: now, pm: this.deps.name(h), from: from?.id ?? '', to: to.id, why, ok: false })
+      await this.tellOwner(row, `${this.deps.name(h)} could not move to ${said(to)}. Check its pane before continuing.`)
       return
     }
     const done = this.deps.now()
@@ -351,10 +355,15 @@ export class PmRotation {
     state.avoid.set(after.to.id, now + AVOID_MS)
     state.lastMoveAt = now
     const back = after.from
-    if (!back) { this.deps.log(`PM ${h.slice(0, 8)}: the move to ${said(after.to)} failed and its first account is unknown.`); return }
-    const result = await this.deps.restart(h, back.home)
+    if (!back) {
+      this.deps.log(`PM ${h.slice(0, 8)}: the move to ${said(after.to)} failed and its first account is unknown.`)
+      await this.tellOwner(row, `${pm} could not recover after its move to ${said(after.to)} failed. Check its pane before continuing.`)
+      return
+    }
+    const result = await this.deps.restart(h, back.home).catch(() => ({ ok: false as const, error: 'RESTART_FAILED' }))
     this.deps.record({ at: now, pm, from: after.to.id, to: back.id, why: 'fallback', ok: result.ok })
     if (!result.ok) this.deps.log(`PM ${h.slice(0, 8)} could not go back to ${said(back)}: ${result.error}.`)
-    await this.tellOwner(row, failedCopy(pm, said(after.to), said(back)))
+    await this.tellOwner(row, result.ok ? failedCopy(pm, said(after.to), said(back))
+      : `${pm} could not move back to ${said(back)} after its move to ${said(after.to)} failed. Check its pane before continuing.`)
   }
 }
