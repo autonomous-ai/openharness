@@ -167,6 +167,8 @@ export interface LaunchSource extends NativeLaunchSource {
   agent?: string | null
   /** `agent` when another agent started it (the row's `startedBy`): every relaunch keeps its pull request line. */
   startedBy?: StartedBy | null
+  /** The owner's extra launch words (the registry row's `launchArgs`), already validated when they were saved. */
+  launchArgs?: string[]
 }
 
 /** Fresh each time: callers hand `env` to tmux and may extend it, and a shared object would carry
@@ -319,6 +321,9 @@ export async function prepareLaunchOverrides(
     if (machineMcp.length) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...machineMcp] }
     // What the Swarm adds for its own sessions (core/api.ts `SwarmLaunch.args`), in the slot `agent_create` gave it.
     if (source.swarmSkill) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...swarm!.args(engine)] }
+    // The owner's own flags (`agent_restart`'s `launchArgs`) come after the Swarm's and before Harness's instructions,
+    // so the instructions stay last and are still joined as they are today.
+    if (source.launchArgs?.length) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...source.launchArgs] }
     // What Harness tells the agent rides every relaunch, in the slot `agent_create` gave it: last. Read again each
     // time, with the person's switches and settings as they are now.
     let swarmInstructions: string | undefined

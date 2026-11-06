@@ -477,6 +477,24 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
     expect(JSON.stringify(buddy)).toContain('lamp-mcp')
   })
 
+  it('puts a Buddy\'s saved launch flags after the Swarm\'s args and before the instructions', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'overrides-buddy-'))
+    const source = { startedBy: null, cwd, swarmSkill: { role: 'buddy' as const, key: 'harness-claude-buddy' } }
+    const plain = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', source, 'a', () => true)
+    const flagged = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { ...source, launchArgs: ['--chrome'] }, 'a', () => true)
+    if (!plain.ok || !flagged.ok) throw new Error('Fixture launch failed')
+    const args = flagged.overrides.extraArgs
+    expect(args).toContain('--chrome')
+    expect(args.indexOf('--chrome')).toBeLessThan(args.indexOf('--append-system-prompt'))
+    expect(args.filter(a => a !== '--chrome')).toEqual(plain.overrides.extraArgs)
+    // Codex is the engine with Swarm args of its own, so the order against them is visible there.
+    const codex = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'codex', { ...source, launchArgs: ['--search'] }, 'a', () => true)
+    if (!codex.ok) throw new Error('Fixture launch failed')
+    const swarmArgs = swarmEngineArgs('codex')
+    expect(swarmArgs.length).toBeGreaterThan(0)
+    expect(codex.overrides.extraArgs.indexOf('--search')).toBeGreaterThan(codex.overrides.extraArgs.indexOf(swarmArgs[swarmArgs.length - 1]!))
+  })
+
   // A Buddy moved onto a grid model keeps the grid's web tools, as its owner's own session would, and everything that makes it a
   // Buddy (task #2832; before it, #2354 dropped them).
   it('a Buddy moved onto a grid keeps its web MCP and its Buddy launch', async () => {
