@@ -72,6 +72,7 @@ const conversation: Required<Conversation> = {
   projectId: 'p',
   proposal: { version: 1, text: 'Words', goal: 'Goal', why: 'Why', doneWhen: 'Done', evidence: ['Evidence'], priority: 'P2', createdAt: 0, senders: [], questions: [] },
   proposals: [],
+  pullRequestChecks: {},
   pullRequestEvents: {},
   pullRequestHeads: {},
   pullRequestUrls: [],

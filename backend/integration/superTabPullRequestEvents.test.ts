@@ -531,3 +531,52 @@ describe('pull request events', () => {
     })
   })
 })
+
+// Task #3827: the board's Done cards say whether the pull request's checks are green. The watch already reads them each pass; it
+// records one state per linked pull request on the task, and only when it changes.
+describe('a pull request\'s check state', () => {
+  const checksOf = async (f: Awaited<ReturnType<typeof swarm>>) => (await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === f.task)!.pullRequestChecks
+  const ran = (conclusion: string | null, at: number) => ({ checkRuns: [{ name: 'ci/required', status: conclusion ? 'completed' : 'in_progress', conclusion, completedAt: conclusion ? at : null }],
+    checkSuites: [{ status: conclusion ? 'completed' : 'in_progress', runs: 1 }] })
+
+  it('follows the checks of an open task: running, red, then green', async () => {
+    const f = await swarm()
+    f.pulls.set(f.PR, f.pull(ran(null, 0)))
+    await f.pass()
+    expect(await checksOf(f)).toEqual({ [f.PR]: 'running' })
+    f.pulls.set(f.PR, f.pull(ran('failure', f.clock.now + 10_000)))
+    await f.pass()
+    expect(await checksOf(f)).toEqual({ [f.PR]: 'red' })
+    f.pulls.set(f.PR, f.pull(ran('success', f.clock.now + 10_000)))
+    await f.pass()
+    expect(await checksOf(f)).toEqual({ [f.PR]: 'green' })
+  })
+
+  it('is recorded for a done task too, which posts nothing', async () => {
+    const f = await swarm()
+    await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'done', result: `Done ${f.PR}` }, host, f.worker)
+    const before = (await f.told()).length
+    f.pulls.set(f.PR, f.pull(ran('success', f.clock.now + 10_000)))
+    await f.pass()
+    expect(await checksOf(f)).toEqual({ [f.PR]: 'green' })
+    // A push turns it back: same head or not, the state moves with the checks.
+    f.pulls.set(f.PR, f.pull(ran('failure', f.clock.now + 10_000)))
+    await f.pass()
+    expect(await checksOf(f)).toEqual({ [f.PR]: 'red' })
+    expect(await f.told()).toHaveLength(before)
+  })
+
+  it('writes nothing when the checks did not change, and keeps the state a pass reads', async () => {
+    const f = await swarm()
+    await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'done', result: `Done ${f.PR}` }, host, f.worker)
+    f.pulls.set(f.PR, f.pull(ran('success', f.clock.now + 10_000)))
+    await f.pass()
+    const version = async () => (await f.store.read(owner, f.tab)).version
+    const at = await version()
+    await f.pass()
+    await f.pass()
+    expect(await version()).toBe(at)
+    expect(await checksOf(f)).toEqual({ [f.PR]: 'green' })
+  })
+})
+

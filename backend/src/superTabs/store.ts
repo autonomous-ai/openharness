@@ -94,7 +94,7 @@ import { activeMachineKeysOf } from '../lib/deviceKeyLog.js'
 import { commitParts, indexesOf, machineContentChanged, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
 import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
-import { pullRequestEvents, readPullRequestsNow, type PullRequestReader, type PullRequestWatch, type TaskHeads } from './pullRequestEvents.js'
+import { checksStateOf, pullRequestEvents, readPullRequestsNow, type PullRequestReader, type PullRequestWatch, type TaskHeads } from './pullRequestEvents.js'
 import { deriveCheck, keepHead, refreshChecks, watchedLinks } from './checkVerdicts.js'
 import { reopenOnEvents } from './handed.js'
 import type { TrainTask } from './mergeTrain/plan.js'
@@ -5356,14 +5356,19 @@ export class SuperTabStore {
           refreshChecks(checked.checks, watch.url, newHead ? known : undefined, group.pullRequestHeads)
         }
       }
+      // What the board says of its checks (task #3827): recorded with the head, even for a done task, and only when it changed.
+      const checks = checksStateOf(watch), checksMoved = group.pullRequestChecks?.[watch.url] !== checks
+      // Of the links it still has: a state of a pull request the task dropped goes with the link.
+      if (checksMoved) group.pullRequestChecks = Object.fromEntries(Object.entries({ ...group.pullRequestChecks, [watch.url]: checks })
+        .filter(([url]) => group.pullRequestUrls!.includes(url)))
       if (done) {
-        if (!newHead && !repatched) return 0
+        if (!newHead && !repatched && !checksMoved) return 0
         await this.save(tx, loaded, state, clock.next())
         return 0
       }
       const seen = group.pullRequestEvents?.[watch.url] ?? []
       const { events: seenEvents, keys } = pullRequestEvents(watch, seen, botLogin, now)
-      if (!newHead && !repatched && keys.length === seen.length && keys.every((key, i) => key === seen[i])) return 0
+      if (!newHead && !repatched && !checksMoved && keys.length === seen.length && keys.every((key, i) => key === seen[i])) return 0
       group.pullRequestEvents = { ...group.pullRequestEvents, [watch.url]: keys }
       // CI failing or a conflict brings a handed task back to its Engineer, in the message that tells it (handed.ts, #3399).
       const events = reopenOnEvents(group, seenEvents, now)
