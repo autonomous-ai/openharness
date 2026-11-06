@@ -22,16 +22,31 @@ Map<String, dynamic> machine(String id, String name, String owner, int age) => {
   },
 };
 
-Future<SuperTabController> mount(WidgetTester tester) async {
+Future<SuperTabController> mount(
+  WidgetTester tester, {
+  ConversationServer? fixture,
+  double width = 1200,
+}) async {
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(1200, 900);
+  tester.view.physicalSize = Size(width, 900);
   addTearDown(tester.view.reset);
-  final server = ConversationServer();
+  final server = fixture ?? ConversationServer();
   server.state['machines'] = [
     machine('mine', 'My Mac', 'owner', 0),
     machine('build', 'Build Box', 'peer', 0),
     machine('sleep', 'Sleeping Mac', 'peer', 25),
     machine('old', 'Old Linux', 'peer', 7200),
+  ];
+  server.state['agents'] = [
+    {
+      'id': 'crew-one',
+      'name': 'Builder',
+      'machineId': 'mine',
+      'harnessId': 'native-one',
+      'contributorId': 'owner',
+      'configuration': {'engine': 'codex'},
+      'crew': {'role': 'Engineer', 'lane': 'desktop'},
+    },
   ];
   final c = server.controller();
   await c.refresh();
@@ -115,6 +130,42 @@ void main() {
       await tester.enterText(key('machines-search'), '');
       await tester.pump();
       expect(key('super-machine-row-mine'), findsOneWidget);
+    },
+  );
+  testWidgets('pinned machine status updates summary and filter counts', (
+    tester,
+  ) async {
+    final server = ConversationServer();
+    final c = await mount(tester, fixture: server);
+    (server.state['machines'] as List)[0] = machine(
+      'mine',
+      'My Mac',
+      'owner',
+      25,
+    );
+    server.revision++;
+    await tester.runAsync(c.refresh);
+    await tester.pump();
+    expect(find.text('Online 1'), findsOneWidget);
+    expect(find.text('Asleep 2'), findsOneWidget);
+    expect(find.text('1 online · 2 asleep · 1 offline'), findsOneWidget);
+  });
+
+  testWidgets('crew chip expands the existing machine details', (tester) async {
+    final c = await mount(tester);
+    expect(find.text('1 crew'), findsOneWidget);
+    await tester.tap(key('machines-crew-mine'));
+    await tester.pump();
+    expect(c.isMachineExpanded('mine'), isTrue);
+    expect(find.text('Crew'), findsOneWidget);
+  });
+
+  testWidgets(
+    'long names at narrow desktop width keep 56pt rows without overflow',
+    (tester) async {
+      await mount(tester, width: 420);
+      expect(tester.takeException(), isNull);
+      expect(tester.getSize(key('machines-line-mine')).height, 56);
     },
   );
 }
