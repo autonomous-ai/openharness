@@ -23,7 +23,8 @@ function setup({ personal = true } = {}) {
   const create = (operationId: string) => run({ type: 'project.create', name: 'Untitled tab', visibility: 'private', brief: '' }, owner, {}, operationId)
     .result.projectId as string
   /** Desktop's close of the tab whose project request was [tabOperation]. */
-  const close = (projectId: string, tabOperation: string, actor: Actor = owner) => run({ type: 'project.closeTab', projectId, tabOperation } as Command, actor)
+  const close = (projectId: string, tabOperation: string, actor: Actor = owner) => run({ type: 'project.closeTab', projectId, tabOperation } as Command, actor,
+    { projectRules: null })
   const project = (projectId: string) => state.projects?.find(p => p.id === projectId)
   const chatOf = (projectId: string) => state.conversations.find(c => c.id === project(projectId)?.leadConversationId)
   const refusal = (body: () => unknown): string | null => { try { body(); return null } catch (error) { return (error as { code?: string }).code ?? 'thrown' } }

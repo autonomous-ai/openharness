@@ -2109,7 +2109,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // runs again on it, and archives instead.
       const project = closingTabProject(state, actor, command.projectId, command.tabOperation)
       const groups = state.conversations.filter(c => c.projectId === project.id || c.id === project.leadConversationId)
-      if (groups.every(c => !c.lastMessageSequence)) {
+      // What the person wrote without a message is theirs too (security review 2): instructions saved past the built-in first
+      // revision, or any rules record. A save meanwhile changes the project's part, or is read in this write (store.ts). Rules
+      // that could not be read (undefined) count as written: nothing is deleted on what was not checked.
+      const written = (project.instructionsRevision ?? 0) > 1 || context.projectRules !== null
+      if (!written && groups.every(c => !c.lastMessageSequence)) {
         deleteWholeProject(project)
         result.outcome = 'deleted'
         break

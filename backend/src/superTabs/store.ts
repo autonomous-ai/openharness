@@ -1944,6 +1944,8 @@ export class SuperTabStore {
       if (command.type === 'note.add' || command.type === 'note.remove') context.notes = await readNotes(tx, tabId, command.projectId)
       // A stale rules save is refused with the newest revision, to merge (policy.ts); null is the seed.
       if (command.type === 'rules.set') context.projectRules = await readRules(tx, tabId, command.projectId, true)
+      // A closed tab's project with a rules record of the person's is kept, not deleted (commands.ts project.closeTab).
+      if (command.type === 'project.closeTab') context.projectRules = await readRules(tx, tabId, command.projectId, true)
       if (command.type === 'crew.add' || command.type === 'work.lane' || command.type === 'work.define'
         || (command.type === 'conversation.create' && !command.reviewOf && !command.audience)) {
         authorizeCommandAccess(original, actor, command)
