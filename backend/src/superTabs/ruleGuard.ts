@@ -134,16 +134,19 @@ export function allowedDrops(state: SuperTabState, project: SwarmProject, before
 
 /**
  * Refuses a save that adds a line repeating one the document keeps (task #3283, Leo 11-05, from lamp: a PM saved a rule the
- * instructions already had as if new, which hid that it had skipped it). Each repeat is listed with the existing line quoted;
- * a change meant is made on that line. Conservative: only the same words (instructionsDiff.ts repeatedRules).
+ * instructions already had as if new, which hid that it had skipped it; #3568, anh Dee 11-06: also the same rule in other
+ * words, instructionsDiff.ts repeatedRules). Each repeat is listed with the existing line quoted; a change meant is made on
+ * that line. A person may keep both by giving a reason (repeatReason, [forced]); the coordinator never does.
  */
-export function refuseRepeats(before: string, after: string): void {
+export function refuseRepeats(before: string, after: string, forced = false): void {
+  if (forced) return
   const repeats = repeatedRules(before, after)
   if (!repeats.length) return
   const shown = repeats.slice(0, MAX_REPEATS)
   fail('INSTRUCTIONS_RULE_REPEATED', [
-    'Not saved: this adds a line the instructions already have, so it would be read twice. Check that rule before adding it: '
-      + 'it may be one you skipped. If you meant to change it, change that line in place instead of adding another.',
+    'Not saved: this adds a line that says what the instructions already say, so it would be read twice. Check that rule before '
+      + 'adding it: it may be one you skipped. If you meant to change it, change that line in place instead of adding another. '
+      + 'Only a member who means to keep both lines saves them, giving a reason (repeatReason).',
     ...shown.map(repeat => `- Existing line: "${cut(repeat.existing)}" (added again as "${cut(repeat.added)}")`),
     ...(repeats.length > shown.length ? [`- And ${repeats.length - shown.length} more.`] : []),
   ].join('\n'), 409, { repeated: shown })

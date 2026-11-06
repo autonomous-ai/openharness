@@ -596,6 +596,48 @@ describe('an instructions save refuses a rule that is already there', () => {
   })
 })
 
+// Task #3568 (anh Dee, 11-06, from lamp): the same rule in other words is refused too; a person may still keep both, saying why.
+describe('an instructions save refuses a rule said again in other words', () => {
+  const save = (text: string, extra: Partial<Extract<Command, { type: 'instructions.save' }>> = {}): Command =>
+    ({ type: 'instructions.save', projectId: 'lead', baseRevision: 1, text, summary: 'Added a rule', ...extra })
+  const rule = 'Every phone app task runs on Tony\'s Mac first, its Engineer and its Tester both (owner, 4 Nov).'
+  const base = ['# Project instructions', '', '## Rules', '', `- ${rule}`].join('\n')
+  const stored = { instructions: { revision: 1, text: base, at: 500 } }
+  const reworded = 'Its Engineer and its Tester both run every phone app task on Tony\'s Mac first.'
+  const caught = (run: () => unknown) => {
+    try { run() } catch (error) { return error as { code: string; status: number; message: string } }
+    throw new Error('the save went through')
+  }
+
+  it('refuses a reworded repeat, quoting the existing line', () => {
+    const f = fixture()
+    const refused = caught(() => f.run(save(`${base}\n- ${reworded}`), owner, stored))
+    expect(refused).toMatchObject({ code: 'INSTRUCTIONS_RULE_REPEATED', status: 409 })
+    expect(refused.message).toContain(`"${rule}"`)
+    expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 1 })
+  })
+
+  it('saves a genuinely new rule', () => {
+    const f = fixture()
+    expect(f.run(save(`${base}\n- Release notes list every pull request merged since the last release (owner, 6 Nov).`), owner, stored).result)
+      .toMatchObject({ revision: 2 })
+  })
+
+  it('lets a person keep both by giving a reason, which the revision\'s summary records', () => {
+    const f = fixture()
+    const effects = f.run(save(`${base}\n- ${reworded}`, { repeatReason: 'this one is for the Tester role only' }), owner, stored)
+    expect(effects.result).toMatchObject({ revision: 2 })
+    expect(JSON.stringify(effects)).toContain('this one is for the Tester role only')
+  })
+
+  it('does not let the coordinator force it', () => {
+    const f = fixture()
+    const lead = f.add('lead', 'lead', true)
+    expect(caught(() => f.run(save(`${base}\n- ${reworded}`, { repeatReason: 'because', askedBy: 'owner' }), as(lead), stored)))
+      .toMatchObject({ code: 'INSTRUCTIONS_RULE_REPEATED' })
+  })
+})
+
 // River, 11-05 (review of #3202): saves the server makes itself meet the repeat refusal too. The daily tidy is an
 // instructions.save, checked like any; an older client's rule.set appends one Routing line and must not add a repeat either.
 describe('server-made instruction saves and the repeat refusal', () => {

@@ -154,6 +154,21 @@ describe('repeatedRules', () => {
     expect(repeatedRules(base, base + '- Pushes its branch as it goes and opens a draft pull request.\n')).toHaveLength(1)
   })
 
+  // Task #3568 (anh Dee, 11-06, from lamp): a rule saved again in other words is a repeat too.
+  it('finds a rule said again in other words and in another order', () => {
+    const reordered = 'Its Engineer and its Tester both run every phone app task on Tony\'s Mac first (Faye, 11-05).'
+    expect(repeats(reordered)).toEqual([{ added: reordered, existing: rule }])
+    expect(repeats('Every phone app task runs first on Tony\'s Mac: its Engineer and its Tester both.')).toHaveLength(1)
+  })
+
+  it('does not find a reworded line whose negation, limit or number changed, or another rule', () => {
+    expect(repeats('Its Engineer but not its Tester runs every phone app task on Tony\'s Mac first.')).toEqual([])
+    expect(repeats('Its Engineer and its Tester both run every phone app task on Tony\'s Mac first, unless urgent.')).toEqual([])
+    expect(repeats('Its Engineer and its Tester both run every phone app task on 2 Macs first.')).toEqual([])
+    expect(repeats('Every web app task runs on the Linux box first, its Engineer and its Tester both.')).toEqual([])
+    expect(repeats('Phone app tasks run on Macs.')).toEqual([])
+  })
+
   it('finds an attributed rule repeated in another section', () => {
     const base = '# Project\n\n## PM\n\n- Decides, never asks the owner to choose (Ken, 2026-11-04).\n'
     const added = '- Decides, never asks the owner to choose (Faye, 11-05).'
