@@ -126,7 +126,6 @@ class SuperTabLaunch {
     late final HarnessLaunchIntegration integration;
     integration =
         HarnessLaunchIntegration(
-            forcedPermissionMode: 'full',
             startInSwarm: leadMachines == null
                 ? null
                 : (start) async {

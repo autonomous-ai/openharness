@@ -1474,10 +1474,10 @@ class NewHarnessController extends ChangeNotifier {
   String get _settingsEngine => _agentPreview ?? _engine;
   LocalCodexProfile? get _settingsProfile =>
       _settingsEngine == _engine ? _profile : null;
-  String? get _forcedPermissionMode => integration?.forcedPermissionMode;
-  List<PermissionMode> get _settingsModes => _forcedPermissionMode != null
-      ? const []
-      : permissionModesOf(_baseOf(_settingsEngine));
+  // A Product Manager the Swarm starts on another machine starts there with
+  // its owner's own permission settings (task #4215): no choice to offer.
+  List<PermissionMode> get _settingsModes =>
+      leadThroughSwarm ? const [] : permissionModesOf(_baseOf(_settingsEngine));
   String get _settingsMode =>
       _settingsModes.any((mode) => mode.id == _permissionFor(_settingsEngine))
       ? _permissionFor(_settingsEngine)
@@ -1485,7 +1485,7 @@ class NewHarnessController extends ChangeNotifier {
   bool get takesTask => isCloud || takesFirstTask(_base);
   bool get taskTooLong => task.trim().length > kFirstTaskMaxLength;
   List<PermissionMode> get _modes =>
-      _noAgentSetup || isCloud || _forcedPermissionMode != null
+      _noAgentSetup || isCloud || leadThroughSwarm
       ? const []
       : permissionModesOf(_base);
   bool get hasModes => _modes.isNotEmpty;
@@ -1506,7 +1506,7 @@ class NewHarnessController extends ChangeNotifier {
 
   /// Settings are offered separately so browsing never inserts list rows.
   List<NewHarnessOption> agentSettingsFor(String engine) {
-    final modes = _forcedPermissionMode != null
+    final modes = leadThroughSwarm
         ? const <PermissionMode>[]
         : permissionModesOf(_baseOf(engine));
     final mode =
@@ -4787,17 +4787,9 @@ class NewHarnessController extends ChangeNotifier {
         );
       }
     }
-    final forcedMode = _forcedPermissionMode;
-    // Only Claude Code and Codex name a full mode. Other engines use their
-    // existing approving launch flags through bypassPermission.
-    final permissionMode = forcedMode == null
-        ? (hasModes ? mode : null)
-        : permissionModesOf(base).any((mode) => mode.id == forcedMode)
-        ? forcedMode
-        : null;
+    final permissionMode = hasModes ? mode : null;
     final bypass =
-        forcedMode != null ||
-        (permissionMode != null && permissionModeApproves(permissionMode));
+        permissionMode != null && permissionModeApproves(permissionMode);
     final folder = _project.folder;
     final firstMessage = task.trim();
     String launchMessage = firstMessage;
@@ -4829,10 +4821,7 @@ class NewHarnessController extends ChangeNotifier {
     final launchSetup = LaunchSetup(
       engine: base,
       harnessId: harness,
-      // A Swarm's required mode is not the person's next ordinary launch choice.
-      permissionMode: _forcedPermissionMode != null
-          ? _permissionFor(base)
-          : permissionMode ?? kDefaultPermissionMode,
+      permissionMode: permissionMode ?? kDefaultPermissionMode,
       model: model,
       profile: base == 'codex' && model == null && !asGuest ? _profile : null,
       profileMachineId: _machineId,
