@@ -584,6 +584,19 @@ export class GrantReads {
     this.answers.set(key, answer)
     return answer
   }
+
+  /** Every machine of [wanted] not read yet, in one read, with the grant's own filter (machineAlive): each grant check then finds
+   *  its machine here, or none, instead of a read of its own (task #3925: the harness shares list read one per machine its
+   *  shared agents run on, ~850 a pod-minute after v1.4.24). */
+  async machines(db: Pick<PrismaClient, 'machine'>, environment: string, wanted: ReadonlyArray<{ machineId: string; ownerId: string }>): Promise<void> {
+    const missing = wanted.filter(w => !this.answers.has(machineKey(environment, w.machineId, w.ownerId)))
+    if (!missing.length) return
+    const rows = db.machine.findMany({ where: { machineId: { in: [...new Set(missing.map(w => w.machineId))] }, autonomousEnv: environment, ...machineAlive } })
+    for (const w of missing) {
+      this.answers.set(machineKey(environment, w.machineId, w.ownerId), rows.then(found => found.find(m => m.machineId === w.machineId && m.userId === w.ownerId) ?? null))
+    }
+    await rows
+  }
 }
 
 /** Another Swarm too busy to say whether a shared session is confidential there: the list hides those shares and lists the rest,
@@ -4425,7 +4438,9 @@ export class SuperTabStore {
     const byTab = new Map<string, T[]>()
     for (const share of shares) if (share.superTabId) byTab.set(share.superTabId, [...byTab.get(share.superTabId) ?? [], share])
     const observable = new Set<T>()
-    for (const [tabId, tabShares] of byTab) for (const share of await this.observable(user, tabId, tabShares)) observable.add(share)
+    // One request's grant reads, shared by every Swarm it lists (task #3925).
+    const reads = new GrantReads()
+    for (const [tabId, tabShares] of byTab) for (const share of await this.observable(user, tabId, tabShares, reads)) observable.add(share)
     return shares.filter(s => s.superTabId ? observable.has(s) : user.sub === s.ownerId || !anywhere.has(key(s)))
   }
 
@@ -4434,7 +4449,7 @@ export class SuperTabStore {
     reassemble(await readParts(this.db, await this.view([tabId]), tabId, { agentIds }), { share: true })
 
   /** mayObserve for each of `shares`, all in Swarm `tabId`, from one load of it. */
-  private async observable<T extends { machineId: string; agentId: string; ownerId: string }>(user: AuthUser, tabId: string, shares: T[]): Promise<T[]> {
+  private async observable<T extends { machineId: string; agentId: string; ownerId: string }>(user: AuthUser, tabId: string, shares: T[], reads = new GrantReads()): Promise<T[]> {
     if (isTeamSession(user)) return []
     let state: SuperTabState
     try {
@@ -4446,11 +4461,13 @@ export class SuperTabStore {
     const grants = new Map<string, Promise<boolean>>()
     const granted = (target: Agent) => {
       const key = JSON.stringify([target.contributorId, target.machineId, target.machineOwnerId, target.hostGrant])
-      if (!grants.has(key)) grants.set(key, this.agentGrant(this.db, state, target).then(() => true,
+      if (!grants.has(key)) grants.set(key, this.agentGrant(this.db, state, target, reads).then(() => true,
         error => { if (error instanceof SuperTabError) return false; throw error }))
       return grants.get(key)!
     }
     const targets = shares.map(share => state.agents.find(a => a.machineId === share.machineId && a.harnessId === share.agentId && a.machineOwnerId === share.ownerId))
+    // The machines every grant below reads, in one read for the Swarm (task #3925).
+    await reads.machines(this.db, state.environment, targets.flatMap(t => t ? [{ machineId: t.machineId, ownerId: t.machineOwnerId }] : []))
     // Confidential in another Swarm closes it here too; in this one, its current Lead stays open to readers (projects.ts watchClosed).
     const elsewhere = await confidentialSessions(this.db, targets.flatMap(t => t ? [t.id] : []), tabId, this.cachedState, busyListing)
     const allowed: T[] = []
