@@ -117,7 +117,7 @@ describe('Can chat in a switched project', () => {
   it('leaves agents, and people in a task\'s own chat, writing as today', () => {
     const f = switchedFixture()
     f.run(say(f.app.conversationId, 'From the PM'), f.asAgent(f.pm))
-    const task = f.run({ type: 'conversation.create', title: 'Task', priority: 'P2', requesterId: 'd',
+    const task = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Task', priority: 'P2', requesterId: 'd',
       task: { goal: 'Do it', changes: 'It', constraints: 'None', owns: ['x'] }, checks: [{ description: 'Done', independent: false }] }).conversationId as string
     f.run(say(task, 'In the card chat'), member)
     // A person's own Buddy chat belongs to no project: writing there is never this right's to refuse.
@@ -133,7 +133,7 @@ describe('Can chat in a switched project', () => {
 
 describe('priority by role in a switched project', () => {
   const card = (f: ReturnType<typeof boardFixture>, requesterId: string, actor: Actor = projectOwner, priority: 'P0' | 'P1' | 'P2' | 'P3' = 'P2') =>
-    f.run({ type: 'conversation.create', title: 'Card', priority, requesterId,
+    f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Card', priority, requesterId,
       task: { goal: 'Do it', changes: 'It', constraints: 'None', owns: ['x'] }, checks: [{ description: 'Done', independent: false }] }, actor).conversationId as string
   const set = (f: ReturnType<typeof boardFixture>, conversationId: string, priority: 'P0' | 'P1' | 'P2' | 'P3', actor: Actor) =>
     f.run({ type: 'work.priority', conversationId, priority }, actor)
