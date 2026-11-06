@@ -8,7 +8,7 @@ import { admitByRoom, admitMachineStart, noRepositoryStart, failOwnAccountTeamEn
 import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { addedAgentName, renameAgentTo } from './agentRename.js'
-import { addCrew, CREW_LANES, CREW_ROLE_MAX, removeCrew } from './crew.js'
+import { addCrew, CREW_ROLE_MAX, removeCrew } from './crew.js'
 import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
 import { agentWrittenNameOf, setName, shownNameOf } from './personNames.js'
 import { z } from 'zod'
@@ -81,7 +81,7 @@ import { contractRefusal, missingContract } from './taskContract.js'
 import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, proposalPriority, titlePriority, type TaskPriority } from './taskPriority.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
 import { inThread, leadsGroup, recordAnswered, requireUnanswered } from './answers.js'
-import { DISPATCH_RULES, laneNamed, pinBuilder, spokenList, stampLane } from './dispatch.js'
+import { laneNamed, pinBuilder, spokenList, stampLane } from './dispatch.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 /** The most steps a task lists (Conversation.stepIds): production's most was 14 (2026-11-05). */
@@ -377,7 +377,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   // Rename Harness on the agent's Mac renames the agent for every reader (task #2912); the contributor or machine owner only.
   z.object({ type: z.literal('agent.rename'), agentId: id, name: z.string().max(200) }).strict(),
   z.object({ type: z.literal('agent.release'), agentId: id, decision: z.enum(['keep', 'stop']) }).strict(),
-  z.object({ type: z.literal('crew.add'), agentId: id, role: z.string().trim().min(1).max(CREW_ROLE_MAX).regex(/^[^\x00-\x1f\x7f]+$/).optional(), lane: z.enum(CREW_LANES).optional() }).strict(),
+  z.object({ type: z.literal('crew.add'), agentId: id, role: z.string().trim().min(1).max(CREW_ROLE_MAX).regex(/^[^\x00-\x1f\x7f]+$/).optional(), lane: z.string().trim().min(1).max(80).regex(/^[^\x00-\x1f\x7f]+$/).optional() }).strict(),
   z.object({ type: z.literal('crew.remove'), agentId: id }).strict(),
   z.object({ type: z.literal('agent.sessionClosed'), agentId: id, harnessId: id }).strict(),
   z.object({ type: z.literal('agent.configuration'), previousVersion: id.nullable(), configuration }).strict(),
@@ -2150,6 +2150,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const revision = current.revision + 1
       effects.projectRules = { projectId: project.id, revision, rules: command.rules, diff: rulesDiff(current.rules, command.rules),
         summary: command.summary, writtenBy: { kind: sender.kind, id: sender.id }, askedBy, askedIn, at: context.now }
+      for (const group of state.conversations) if (!group.kind && !group.audience && !group.reviewOf
+        && (group.projectId ?? 'lead') === project.id) stampLane(group, command.rules.lanes)
       Object.assign(result, { projectId: project.id, revision })
       break
     }
@@ -2618,7 +2620,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         assignment: null, lastMessageSequence: 0, codePullRequestUrls: [],
         checks: storedChecks(command.checks, operationId),
       })
-      stampLane(state.conversations.at(-1)!)
+      stampLane(state.conversations.at(-1)!, (context.projectRules?.rules ?? SEED_RULES).lanes)
       recordAsked(state.conversations.at(-1)!, requesterId, context.now)
       if (command.reviewOf) listStep(conversation(state, command.reviewOf), operationId)
       // The reason stands only where nobody is named, and is shown in the task's first row beside its goal.
@@ -2714,9 +2716,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('LANE_TASK_ONLY', 'Only a task has a lane: name a task, not a chat or a step.', 400)
       }
       if (command.lane === null) delete task.lane
-      else task.lane = laneNamed(DISPATCH_RULES.lanes, command.lane)
-        ?? fail('LANE_UNKNOWN', `Name a lane: ${spokenList(DISPATCH_RULES.lanes.map(l => l.name))}.`, 400)
-      stampLane(task)
+      else task.lane = laneNamed((context.projectRules?.rules ?? SEED_RULES).lanes, command.lane)
+        ?? fail('LANE_UNKNOWN', `Name a lane: ${spokenList((context.projectRules?.rules ?? SEED_RULES).lanes.map(l => l.name))}.`, 400)
+      stampLane(task, (context.projectRules?.rules ?? SEED_RULES).lanes)
       break
     }
     case 'work.priority': {
@@ -3603,7 +3605,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       renameAgentTo(state, actor, agent(state, command.agentId), command.name)
       break
     case 'crew.add':
-      addCrew(state, actor, agent(state, command.agentId), command.role, command.lane, context.now)
+      addCrew(state, actor, agent(state, command.agentId), command.role, command.lane, context.now, (context.projectRules?.rules ?? SEED_RULES).lanes)
       break
     case 'crew.remove':
       removeCrew(state, actor, agent(state, command.agentId))
@@ -4079,7 +4081,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (command.task) group.task = command.task
       else delete group.task
       group.briefAt = context.now
-      stampLane(group)
+      stampLane(group, (context.projectRules?.rules ?? SEED_RULES).lanes)
       group.checks = storedChecks(command.checks, operationId)
       message(group.id, group.brief, [], null, SYSTEM_ROW)
       bindTaskCard(group, effects.messages.at(-1)!)
