@@ -111,8 +111,6 @@ export interface CableHostWiring {
   swarmCardRecap?: (tabId: string, leadId: string, chat?: CardChat) => Promise<LeadRecap | null>
   /** The recap a device (one cable `session`) has open, or null once closed. */
   swarmCardOpen?: (session: string, tabId: string, leadId: string | null, chat?: CardChat) => void
-  /** A round dial that speaks swarmBuddy swiped to a side of a Swarm (spec 2026-10-29-round-dial-pm-buddy). */
-  swarmCardSide?: (tabId: string, side: CardSide) => void
   /** Words for a Lead that runs here, posted as the person in its Swarm chat; not `said` when the harness leads no project,
    *  `refused` with the backend's reason when it refused the post. */
   swarmSay?: (harnessId: string, text: string, chat?: CardChat, chatId?: string, reviewed?: boolean) => Promise<SaidOnCard>
@@ -555,10 +553,6 @@ export class DaemonCableHost implements CableHost {
 
   swarmCardOpen(session: string, tabId: string, leadId: string | null, chat: CardChat = false): void {
     this.wiring.swarmCardOpen?.(session, tabId, leadId, chat)
-  }
-
-  swarmCardSide(tabId: string, side: CardSide): void {
-    this.wiring.swarmCardSide?.(tabId, side)
   }
 
   swarmSay(harnessId: string, text: string, chat: CardChat = false, chatId?: string, reviewed = false): Promise<SaidOnCard> {

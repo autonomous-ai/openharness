@@ -108,15 +108,11 @@ function faceOf(conversations: Json[], projectId: string, lead: Json, focus: str
   if (!open || (isBuddyChat(open) && !isReadersBuddyChat(open, me)) || (buddies && isChatWithPm(open))) return leadFace(lead)
   return { conversation: open, kind: isBuddyChat(open) ? 'pm' : 'group' }
 }
-/** A swarmBuddy dial's face (spec 2026-10-29 Switching): on the Buddy side the reader's Buddy chat; otherwise today's face,
- *  where the Buddy chat the window has open is the Buddy screen, unless the dial swiped back to the PM since (the newest
- *  wins: a swipe sets the side, and the window's next focus change clears it). */
-function sideFaceOf(conversations: Json[], projectId: string, lead: Json, focus: string | undefined, me: string | undefined, side: CardSide | undefined): Face | null {
+/** A swarmBuddy dial's face: the reader's Buddy chat in the project, and nothing else, whatever the window has open (task #3908: people
+ *  talk only to their Buddies). Null where the reader has none there: the dial says "No Buddy here yet". */
+function buddyFaceOf(conversations: Json[], projectId: string, me: string | undefined): Face | null {
   const buddyChat = buddyChatOf(conversations, projectId, me)
-  if (side === 'buddy' && buddyChat) return { conversation: buddyChat, kind: 'buddy' }
-  const face = faceOf(conversations, projectId, lead, focus, me, true)
-  if (face?.kind !== 'pm') return face
-  return side === 'pm' ? leadFace(lead) : { conversation: face.conversation, kind: 'buddy' }
+  return buddyChat ? { conversation: buddyChat, kind: 'buddy' } : null
 }
 /** Whose messages are the chat's recap: the Lead's in its conversation and, for an older dial, in the reader's Buddy chat
  *  (its private lines); the reader's Buddy's on a swarmBuddy dial's Buddy face; the group's agents' in a group. */
@@ -142,7 +138,7 @@ function buddyOf(agents: Json[], chat: Json, me: string | undefined, local: (a: 
  * harness and whether it is in a turn (null: not here); `me` is the signed-in person's id, so a Lead on someone else's
  * machine names that owner (people[] has an email, which is the name a Swarm shows a person by).
  */
-export function leadsOf(state: Json, machineId: string, live: (harnessId: string) => { inTurn: boolean; since?: number } | null, me?: string, focus?: string, side?: CardSide): { count: number; leads: SwarmLead[] } {
+export function leadsOf(state: Json, machineId: string, live: (harnessId: string) => { inTurn: boolean; since?: number } | null, me?: string, focus?: string): { count: number; leads: SwarmLead[] } {
   const agents = list(state.agents), conversations = list(state.conversations), people = list(state.people)
   const buddies = state.buddies === true
   // An old tab has no `projects`: its one project is the tab itself, `lead`, led by the conversation `lead`.
@@ -187,7 +183,7 @@ export function leadsOf(state: Json, machineId: string, live: (harnessId: string
     const chatOf = (face: Face | null): SwarmChat | undefined => face ? faceChat(face, String(agent.id), agents, me, turnHere) : undefined
     const chat = chatOf(faceOf(conversations, projectId, lead, focus, me, buddies))
     const buddyChat = buddies ? buddyChatOf(conversations, projectId, me) : undefined
-    const sideChat = buddies ? chatOf(sideFaceOf(conversations, projectId, lead, focus, me, side)) : undefined
+    const sideChat = buddies ? chatOf(buddyFaceOf(conversations, projectId, me)) : undefined
     const buddy = buddyChat && buddyOf(agents, buddyChat, me, a => turnHere(a) && cardId(a.harnessId) ? String(a.harnessId) : '')
     leads.push({
       id: String(agent.id), projectId: String(project.id ?? 'lead'), project: cut(String(project.name ?? ''), NAME_BYTES), engine: String(object(agent.configuration).engine ?? ''),
@@ -253,7 +249,6 @@ const recapKey = (tabId: string, leadId: string, chatId?: string) => chatId === 
 /** A recap's cache key: an older dial's and a swarmBuddy dial's recap of one Buddy chat hear different voices. */
 const cachedKey = (tabId: string, leadId: string, target: Pick<Target, 'chatId'>, chat: CardChat) =>
   `${recapKey(tabId, leadId, target.chatId)}${chat === 'buddy' ? ':buddy' : ''}`
-const isSide = (v: unknown): v is CardSide => v === 'pm' || v === 'buddy'
 /** Spec 2026-11-02-poll-cost Part 4.3: the list was read every 5 s whatever changed (prod 2026-11-02: about 200 list reads a
  *  minute). While the server says it pushes this account's Swarm changes (`swarm_changed` naming none, repeated every 4
  *  minutes: backend lib/swarmClientPushes.ts), the list is read when a Swarm's main parts change, and after this long as the
@@ -312,8 +307,6 @@ export class SwarmCards {
   private personal = new Set<string>()
   /** Each Lead's newest quiet notice from the reader's Buddy (`${tab}:${lead}`): apart, so it never hides the Lead's. */
   private buddyNotices = new Map<string, LeadNotice>()
-  /** The side a swarmBuddy dial swiped to, per Swarm; cleared by the window's next focus change (the newest wins). */
-  private sides = new Map<string, CardSide>()
   /** Watched conversations whose last read failed, so a run of failures is logged once. */
   private failed = new Set<string>()
   private readonly reads: SwarmReads
@@ -341,7 +334,7 @@ export class SwarmCards {
       this.stopNotices?.()
       this.stopNotices = null
       this.pushUntil = 0
-      this.opened.clear(); this.openBy.clear(); this.include = []; this.focus = null; this.sides.clear()
+      this.opened.clear(); this.openBy.clear(); this.include = []; this.focus = null
       // A device that attaches again starts a fresh baseline: what was said while none was here never alerts.
       this.seen.clear(); this.forgetNotices()
       return
@@ -350,11 +343,9 @@ export class SwarmCards {
     const moved = wanted.join(',') !== this.include.join(',')
     this.include = wanted
     const next: CardFocus | null = focus && cardId(focus.tabId) && cardId(focus.conversationId)
-      ? { tabId: focus.tabId, conversationId: focus.conversationId, ...(focus.fromDevice === true ? { fromDevice: true as const } : {}) } : null
+      ? { tabId: focus.tabId, conversationId: focus.conversationId } : null
     const refocused = `${next?.tabId}/${next?.conversationId}` !== `${this.focus?.tabId}/${this.focus?.conversationId}`
     this.focus = next
-    // The desktop's own move clears the dial's side; the move a dial's pick caused is the dial's, and keeps it.
-    if (refocused && !next?.fromDevice) this.sides.clear()
     // Other Swarms to show first: the list is read for them now, whatever the server pushes.
     if (moved) this.listTold = true
     if (this.timer) {
@@ -366,27 +357,6 @@ export class SwarmCards {
     this.timer = setInterval(() => { void this.tick() }, this.intervalMs)
     this.timer.unref?.()
     void this.tick()
-  }
-
-  /**
-   * The side a swarmBuddy dial is shown for a Swarm, which its faces, recaps and card all follow: the one it swiped to, else
-   * the Buddy side while the window has the reader's Buddy chat open there (spec 2026-10-29: opening it on the desktop
-   * shows the Buddy screen). Taken from the swipes alone, the card said the PM side over a Buddy face (re-check of #2216).
-   */
-  private sideOf(tabId: string, state: Json): CardSide | undefined {
-    const swiped = this.sides.get(tabId)
-    if (swiped) return swiped
-    const focus = this.focus?.tabId === tabId ? this.focus.conversationId : undefined
-    return focus !== undefined && state.buddies === true &&
-      list(state.conversations).some(c => c.id === focus && isReadersBuddyChat(c, this.me) && c.archived !== true) ? 'buddy' : undefined
-  }
-
-  /** A swarmBuddy dial swiped to a side of a Swarm (spec 2026-10-29): every project of it shows that side until the window
-   *  opens another conversation. The cards are rebuilt at once from the last reads, as a focus change does. */
-  side(tabId: string, side: CardSide): void {
-    if (!cardId(tabId) || !isSide(side) || this.sides.get(tabId) === side) return
-    this.sides.set(tabId, side)
-    if (this.timer && this.live) { this.emit(); void this.pushOpen() }
   }
 
   /** The recap on a Pro's screen (leadId null: closed), per Pro `session`: a change in that Lead's conversation is pushed once.
@@ -490,14 +460,12 @@ export class SwarmCards {
       const first = unread && this.last === null
       this.unreadSince = first ? this.unreadSince ?? this.now() : null
       this.holding = this.unreadSince !== null && this.now() - this.unreadSince < UNREAD_HOLD_MS
-      // A Swarm that left the cards (access lost) takes the dial's side with it.
-      for (const tabId of [...this.sides.keys()]) if (!known.has(tabId)) this.sides.delete(tabId)
       this.rows = rows.map(row => ({ id: row.id as string, name: row.name }))
       this.personal = new Set(rows.filter(row => row.personal === true).map(row => row.id as string))
     }
     const me = (await this.core.account.identity().catch(() => null))?.accountId
     // Another person signed in: nothing of the last account's is kept, and the list is said again whatever it is.
-    if (this.me !== undefined && me !== this.me) { this.last = null; this.recaps.clear(); this.seen.clear(); this.forgetNotices(); this.sides.clear() }
+    if (this.me !== undefined && me !== this.me) { this.last = null; this.recaps.clear(); this.seen.clear(); this.forgetNotices() }
     this.me = me ?? this.me
     const turns = await this.turnsHere()
     this.live = (harnessId: string) => this.core.agents.byAgent(harnessId) ? turns.get(harnessId) ?? { inTurn: false } : null
@@ -516,14 +484,13 @@ export class SwarmCards {
       const tab = this.tabs.get(row.id)
       if (!tab) continue
       const focus = this.focus?.tabId === row.id ? this.focus.conversationId : undefined
-      const side = this.sideOf(row.id, tab.state)
-      const { count, leads } = leadsOf(tab.state, this.machineId, live, this.me, focus, side)
+      const { count, leads } = leadsOf(tab.state, this.machineId, live, this.me, focus)
       const noticed = leads.map(lead => {
         const notice = this.notices.get(recapKey(row.id, lead.id)), buddyNotice = this.buddyNotices.get(recapKey(row.id, lead.id))
         return { ...lead, ...(notice ? { notice } : {}), ...(buddyNotice ? { buddyNotice } : {}) }
       })
       cards.push({ id: row.id, name: cut(String(tab.state.name ?? row.name ?? ''), NAME_BYTES), count, leads: noticed,
-        ...(side === 'buddy' ? { side: 'buddy' as const } : {}), ...(this.personal.has(row.id) ? { personal: true as const } : {}) })
+        ...(this.personal.has(row.id) ? { personal: true as const } : {}) })
     }
     // `since` moves every poll while a turn runs and the Pro counts on by itself, so it alone never re-sends the list.
     // Nor does a clock that keeps its turn; one whose turn changed (the Lead's ended, a worker's goes on) does. The start is
@@ -751,7 +718,7 @@ export class SwarmCards {
     if (!chat) return { id: found.lead.id, sequence: sequenceOf(found.lead), voices: new Set([leadId]) }
     const focus = this.focus?.tabId === tabId ? this.focus.conversationId : undefined
     const conversations = list(state.conversations), projectId = projectKey(found.project), buddies = state.buddies === true
-    const face = chat === 'buddy' && buddies ? sideFaceOf(conversations, projectId, found.lead, focus, this.me, this.sideOf(tabId, state))
+    const face = chat === 'buddy' && buddies ? buddyFaceOf(conversations, projectId, this.me)
       : faceOf(conversations, projectId, found.lead, focus, this.me, buddies)
     if (!face) return null
     const id = face.conversation.id as string

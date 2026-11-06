@@ -1260,9 +1260,7 @@ export interface SwarmLead {
   buddyNotice?: LeadNotice
 }
 /** One Swarm this account is in, as a Harness Pro's card: its Leads, most urgent first. */
-/** `side` 'buddy' while a swarmBuddy dial keeps the Swarm on its Buddy side (spec 2026-10-29-round-dial-pm-buddy): the dial
- *  follows it as the daemon's, which a face alone cannot tell where no project has a Buddy chat (review of #2218). */
-export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[]; side?: 'buddy'
+export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[]
   /** The reader's own Personal Swarm (the list row's `personal: true`); never set on a Team Swarm. */
   personal?: true }
 /** A Lead's last message, for its card; `chatId` when it is the last message of the chat on the round dial's face, and
@@ -1291,7 +1289,7 @@ export interface SwarmBuddy { chatId: string; name: string; engine: string; cell
   /** Its session id when it runs on this computer: how a tap on its notification is told from any other agent's. Never sent
    *  to a device. */
   local?: string }
-/** The screen a round dial shows of each project of a Swarm: the PM's (today's face) or the reader's Buddy's. */
+/** The chat the window opens when a device picks a project or taps a session: the project's Lead conversation or the reader's Buddy's. */
 export type CardSide = 'pm' | 'buddy'
 /** Which chat a card request is about: the Lead's conversation (false, the Pro), today's face (true, a swarmChat dial), or
  *  the face on a swarmBuddy dial's side ('buddy'). */
@@ -1300,9 +1298,7 @@ export type CardChat = boolean | 'buddy'
  *  refused by the backend with its code and message, which must never become a terminal turn instead. */
 export type SaidOnCard = { said: true } | { said: false; refused?: { code: string; message: string } }
 /** The conversation the window has open in a Swarm tab. */
-/** `fromDevice`: the window moved there because a device picked it (a dial's swipe to the next project), so the move is
- *  that device's own and keeps the side it keeps (spec 2026-10-29-round-dial-pm-buddy, newest wins). */
-export interface CardFocus { tabId: string; conversationId: string; fromDevice?: true }
+export interface CardFocus { tabId: string; conversationId: string }
 
 /** The Super Tab service's door into the core (superTabs/inCore/attention.ts): the waits of its members here. */
 export interface SuperTabsCore {

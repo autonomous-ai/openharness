@@ -176,7 +176,7 @@ export function recapFrame(r: LeadRecap): Message {
 }
 /** A Lead's entry for a swarmChat dial: its face chat, `work` only for a working group (with that group's clock), and never
  *  `ask` or `stuck`, which a group's state used to raise. A Lead whose chat did not come through reads as its Lead chat. */
-function chatLead(l: SwarmLead, chat = l.chat): Record<string, unknown> {
+function chatLead(l: SwarmLead, chat: SwarmChat | null | undefined = l.chat): Record<string, unknown> {
   const working = chat?.kind === 'group' && chat.working
   return { id: l.id, projectId: l.projectId, project: l.project, engine: l.engine, owner: l.owner, local: l.local,
     state: working ? 'work' : 'done', order: l.order, ...(working && chat.since !== undefined ? { since: chat.since } : {}),
@@ -189,7 +189,7 @@ function dialBuddy({ local: _local, ...drawn }: SwarmBuddy): Record<string, unkn
   return { ...drawn }
 }
 function buddyLead(l: SwarmLead): Record<string, unknown> {
-  return { ...chatLead(l, l.sideChat ?? l.chat), ...(l.buddies ? { buddies: true } : {}), ...(l.buddies && l.buddy ? { buddy: dialBuddy(l.buddy) } : {}) }
+  return { ...chatLead(l, l.sideChat ?? null), ...(l.buddies ? { buddies: true } : {}), ...(l.buddies && l.buddy ? { buddy: dialBuddy(l.buddy) } : {}) }
 }
 /** A Swarm agent's id as the backend makes it; a harness's id is a UUID, so the two never meet. */
 const SWARM_AGENT_ID = /^[0-9a-f]{24}$/
@@ -423,7 +423,6 @@ export interface CableHost {
   /** The recap a device has open (its Lead), or null once it closes: the only one pushed when its text changes. */
   swarmCardOpen?(session: string, tabId: string, leadId: string | null, chat?: CardChat): void
   /** A round dial that speaks swarmBuddy swiped to a side of a Swarm: the cards show that side's face. */
-  swarmCardSide?(tabId: string, side: CardSide): void
   /** Words for a Lead that runs here: posted as the person in its Swarm chat. Not `said`: not a Lead, send the turn as before;
    *  `refused`: the backend refused the post, whose words are never typed anywhere instead. `chatId`: the chat they were
    *  spoken to, the only one they may be posted in. */
@@ -1470,17 +1469,6 @@ export class CableSession {
       case 'supertab.select':
         await this.onSuperTab(msg.t, str('tab') ?? '', str('lead') ?? '')
         return
-      case 'supertab.side': {
-        // Only a dial that keeps sides, for a Swarm id it can hold; anything else is a frame this daemon cannot use.
-        const tab = str('tab') ?? '', side = str('side')
-        if (this.swarmBuddy && CARD_ID.test(tab) && (side === 'pm' || side === 'buddy')) {
-          this.host.swarmCardSide?.(tab, side)
-          // `kept`: the side a restart took off the dial's face, with no finger on it. The window stays where the person left it.
-          if (msg.kept !== true) this.followSide(tab, side)
-          if (side === 'buddy') this.queued(() => this.readSharedBuddyNotices(tab)).catch((err) => this.log(`cable: Buddy notices not cleared (${(err as Error).message})`))
-        }
-        return
-      }
       case 'swarm.select':
         // Not answered here: the window switches, its desk changes, and the new `swarms` and ring
         // pushes are the answer — the same shape as `machine.select`, minus the refusal, because the
@@ -2953,7 +2941,8 @@ export class CableSession {
       // The desk tab of the same Swarm, when the window has one: empty when it is closed or never opened it.
       const tab = desk.find((s) => s.superTabId === card.id)?.id ?? ''
       // A swarmBuddy dial follows the Swarm's side as the daemon's (review of #2218); no other device hears one.
-      const frame = { t: 'supertab', id: card.id, tab, name: card.name, count: card.count, ...(card.personal ? { personal: true } : {}), ...(this.swarmBuddy ? { side: card.side ?? 'pm' } : {}),
+      const frame = { t: 'supertab', id: card.id, tab, name: card.name, count: card.count, ...(card.personal ? { personal: true } : {}), ...(this.swarmBuddy ? { side: 'buddy' } : {}), // the Buddy face is the only one: firmware before task #3928 still reads this field
+       
         leads: card.leads.slice(0, SWARM_LEADS_MAX).map((l) => this.swarmBuddy ? buddyLead(l) : this.swarmChat ? chatLead(l, l.chat) : { id: l.id, projectId: l.projectId, project: l.project,
           engine: l.engine, owner: l.owner, local: l.local, state: l.state, order: l.order, ...(l.since === undefined ? {} : { since: l.since }) }) }
       // Every dial's guard drops a frame over 512 tokens whole, a round dial's too (task #2525).
@@ -3097,14 +3086,16 @@ export class CableSession {
     if (type === 'supertab.open') {
       this.openLead = { tabId: tab, leadId: lead }
       this.host.swarmCardOpen?.(this.cardSession, tab, lead, ...this.chatFlag())
+      // The Buddy face is on the dial: seeing it once reads the shared Buddy's word on every card.
+      if (this.swarmBuddy) this.queued(() => this.readSharedBuddyNotices(tab)).catch((err) => this.log(`cable: Buddy notices not cleared (${(err as Error).message})`))
       return
     }
     if (type === 'supertab.select') {
       const projectId = this.host.swarmCards?.()?.find((c) => c.id === tab)?.leads.find((l) => l.id === lead)?.projectId
       if (!projectId) { this.log(`cable: ignored pick of unknown Lead ${lead}`); return }
-      // A swarmBuddy dial on the Buddy side: the next project's Buddy chat, where the reader has one there.
+      // A swarmBuddy dial shows only Buddies: the next project's Buddy chat, where the reader has one there.
       const card = this.host.swarmCards?.()?.find((c) => c.id === tab)
-      const onBuddy = this.swarmBuddy && card?.side === 'buddy' && this.buddyIn(card, projectId)
+      const onBuddy = this.swarmBuddy && !!card && this.buddyIn(card, projectId)
       this.openSwarmChat(tab, projectId, onBuddy ? 'buddy' : undefined)
       return
     }
@@ -3147,32 +3138,6 @@ export class CableSession {
   private buddyIn(card: SwarmCard, projectId: string): boolean {
     const lead = card.leads.find((l) => l.projectId === projectId)
     return lead?.buddies === true && lead.buddy !== undefined
-  }
-
-  /**
-   * A swarmBuddy dial swiped a Swarm to a side: the desktop opens the Buddy chat (or the Lead chat) of the project on the
-   * dial's face, which is the one it last picked or was pointed at in that Swarm. With none known there, no project is
-   * guessed; a Buddy side where the reader has no Buddy opens nothing, so no Buddy chat is made from a swipe.
-   */
-  private followSide(tab: string, side: CardSide): void {
-    const [focusedTab, focusedProject] = this.focusedKey.split('/')
-    if (focusedTab !== tab) return
-    const card = this.host.swarmCards?.()?.find((c) => c.id === tab)
-    // The window is on the Swarm's one Buddy chat, which names no project (# buddy): the Buddy side is already open, and the
-    // PM side opens the Lead chat of the project the dial has open, else its first, so the dial is not stranded on # buddy
-    // (review of #2500). The Buddy side there asks for nothing. Only that chat: a DM or Chat with PM names no project either,
-    // and a swipe from one of them opens nothing, as before (second review of #2500).
-    let projectId = focusedProject
-    const window = this.host.activeSwarmProject?.()
-    const onBuddy = window?.superTabId === tab && window.conversationId !== undefined
-      && card?.leads.some((l) => l.buddies === true && l.buddy?.chatId === window.conversationId) === true
-    if (!projectId && side === 'pm' && card && onBuddy) {
-      const shown = this.openLead?.tabId === tab ? card.leads.find((l) => l.id === this.openLead?.leadId) : undefined
-      projectId = (shown ?? card.leads[0])?.projectId
-    }
-    if (!projectId || !card?.leads.some((l) => l.projectId === projectId)) return
-    if (side === 'buddy' && !this.buddyIn(card, projectId)) return
-    this.openSwarmChat(tab, projectId, side)
   }
 
   /**
