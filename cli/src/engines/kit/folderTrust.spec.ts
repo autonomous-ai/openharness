@@ -15,6 +15,17 @@ const codexTrusts = (path: string, codexHome?: string | null) => trustsIn(codex.
 const preTrustCodexProject = (cwd: string, codexHome?: string | null) => recordTrustIn(codex.trust!, join(launchCodexHome(codexHome), codex.trust!.file), cwd)
 
 describe('preTrustClaudeProject', () => {
+  it('creates the file holding only that folder when asked, for a machine Claude Code never ran on', () => {
+    const home = mkdtempSync(join(tmpdir(), 'trust-'))
+    const file = join(home, '.claude.json')
+    expect(recordTrustIn(claude.trust!, file, '/w')).toBe('skipped')
+    expect(readdirSync(home)).toEqual([])
+    expect(recordTrustIn(claude.trust!, file, '/w', { create: true })).toBe('trusted')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ projects: { '/w': { allowedTools: [], hasTrustDialogAccepted: true } } })
+    expect(recordTrustIn(claude.trust!, file, '/w', { create: true })).toBe('already')
+    expect(readdirSync(home)).toEqual(['.claude.json'])
+  })
+
   it('records trust for a new folder the way Claude Code does, keeping everything else', () => {
     const home = mkdtempSync(join(tmpdir(), 'trust-'))
     writeFileSync(join(home, '.claude.json'), JSON.stringify({ numStartups: 4, projects: { '/old': { allowedTools: ['Bash'], hasTrustDialogAccepted: true } } }))
