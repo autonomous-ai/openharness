@@ -204,4 +204,30 @@ void main() {
     );
     expect(bar.value, .1);
   });
+  testWidgets('duplicate hostnames include their owners', (tester) async {
+    final server = ConversationServer();
+    final c = await mount(tester, fixture: server);
+    (server.state['people'] as List).addAll([
+      {
+        'id': 'peer',
+        'email': 'peer@example.com',
+        'username': 'dee',
+        'role': 'collaborator',
+      },
+      {
+        'id': 'peer-two',
+        'email': 'peer-two@example.com',
+        'username': 'diego',
+        'role': 'collaborator',
+      },
+    ]);
+    final machines = server.state['machines'] as List;
+    machines[1] = machine('build', 'MacBooks-MacBook-Pro', 'peer', 0);
+    machines[2] = machine('sleep', 'MacBooks-MacBook-Pro', 'peer-two', 25);
+    server.revision++;
+    await tester.runAsync(c.refresh);
+    await tester.pump();
+    expect(find.text('MacBooks-MacBook-Pro · dee'), findsOneWidget);
+    expect(find.text('MacBooks-MacBook-Pro · diego'), findsOneWidget);
+  });
 }
