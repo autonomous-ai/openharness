@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - No secret in any report or log. Same admission rules as today's two engines.
-- Owns `cli/src/`; no backend or Desktop changes.
+- CLI plumbing owns `cli/src/`; no Desktop or admission changes. The report validator dependency below is the proposed minimal backend scope extension.
 - Never touch the person's real sign-in. Tests replace external shell/account boundaries.
 - No installs or new background processes. Existing four-worker probe limit stays.
 - Unknown sign-in is null, never true; uninstalled engines are not account-probed.
@@ -60,6 +60,21 @@
 - [ ] Run the two affected test files, observe failures, commit tests.
 - [ ] Request all PROCESS_ENGINES in own readiness, filter to known process engines, and limit relay satisfaction to Claude/Codex. Ask for accounts in the machine-engine command and update comments. Keep the separate launch admission/install gate unchanged.
 - [ ] Run those tests plus start/admission and account/probe tests; run CLI typecheck. Commit and push.
+
+### Task 3: Preserve the expanded report at the server boundary
+
+**Files:** `backend/src/superTabs/machines.ts`, `backend/src/superTabs/machines.test.ts`.
+
+**Interfaces:** existing `machineObservationSchema` accepts readiness rows; admission schemas stay unchanged.
+
+Discovery: the backend rejects more than eight readiness rows. The full process-engine catalog has fifteen, so the CLI change otherwise rejects every expanded report. Proposed to River in the task thread; implement the small reviewable validator fix while the scope decision is pending.
+
+- [ ] Add a test accepting the literal fifteen-engine catalog (boolean/null fields) and rejecting 17 rows and credential-bearing rows.
+- [ ] Run `npm test -- src/superTabs/machines.test.ts`, watch the catalog report fail, commit tests.
+- [ ] Raise only readiness.engines' bound from 8 to 16; no contribution or start allowlist changes.
+- [ ] Run the affected backend tests and backend typecheck. Automatic PR CI supplies backend unit and Super Tab integration evidence.
+
+Rollout: backend accepting sixteen rows must ship before a CLI sends fifteen. Older CLI reports remain valid. No schema, query or index changes.
 
 ## Validation
 
