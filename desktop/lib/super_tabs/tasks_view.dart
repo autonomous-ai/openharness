@@ -614,7 +614,11 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     final caption = _caption(entry, now, tile: !list);
     final snapshot = widget.controller.snapshot;
     final agentId = task?.assignment?['agentId'];
-    final requesterId = task?.requesterId ?? entry.proposal?.personId;
+    // A proposal's card names who proposed it (#3817), here as its requester avatar.
+    final requesterId =
+        task?.requesterId ??
+        task?.proposal?.senderIds.firstOrNull ??
+        entry.proposal?.personId;
     return SuperTabTaskCard(
       key: ValueKey('super-task-card-$id'),
       // A legacy marker is the badge now: the title drops it.
