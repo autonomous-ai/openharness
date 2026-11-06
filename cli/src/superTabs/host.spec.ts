@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // Whether this process runs as a Harness Team account, which a Buddy is never prepared in (lib/swarmSkills.ts prepareBuddyFolder).
 // The tests set it, so they pass the same in an owner account, a Team account and CI: it reports an owner account unless a test says.
 const team = vi.hoisted(() => ({ value: false }))
+vi.mock('./teamDaemon.js', async original => ({ ...await original<typeof import('./teamDaemon.js')>(), isTeamDaemon: () => team.value }))
 vi.mock('../team/config.js', async original => ({ ...await original<typeof import('../team/config.js')>(), isTeamAccount: () => team.value }))
 vi.mock('./buddyHome.js', async original => {
   const real = await original<typeof import('./buddyHome.js')>()
@@ -4526,7 +4527,7 @@ describe('ending a Buddy\'s thread sessions', () => {
       await t.poll()
       await awake(t, BUDDY_SESSION_IDLE_MS + 60_000)
       expect(ends(t)).toEqual([])
-      t.core.agents.activity = vi.fn(async () => ({ harness: 'idle' })) as never
+      t.core.agents.activity = vi.fn(async () => ({ harness: 'idle' as const })) as never
       await awake(t, 5 * 60_000)
       await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
     })
@@ -6353,7 +6354,7 @@ describe('a managed main Buddy sleeps and wakes (#3824)', () => {
       expect(t.closeMember).toHaveBeenCalledTimes(1)
       expect(t.keepLeadAlive).not.toHaveBeenCalled()
       t.live(false)
-      delete rows[0]!.agent.asleep
+      delete (rows[0]!.agent as Record<string, unknown>).asleep
       await t.poll(1_000)
       expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
       expect(drop).not.toHaveBeenCalled()
@@ -6368,7 +6369,7 @@ describe('a managed main Buddy sleeps and wakes (#3824)', () => {
     await t.poll()
     await t.poll(1_000)
     expect(t.closeMember).not.toHaveBeenCalled()
-    t.core.agents.activity = vi.fn(async () => ({ harness: 'idle' }))
+    t.core.agents.activity = vi.fn(async () => ({ harness: 'idle' as const }))
     await t.poll(1_000)
     expect(t.closeMember).toHaveBeenCalledTimes(1)
   })
@@ -6396,9 +6397,9 @@ describe('a managed main Buddy sleeps and wakes (#3824)', () => {
     const rows = [buddyRow({ asleep: { since: 1 } })], t = lifeFixture(rows)
     t.live(true)
     let finish!: (value: Record<string, 'idle'>) => void
-    t.core.agents.activity = vi.fn(() => new Promise(resolve => { finish = resolve }))
+    t.core.agents.activity = vi.fn(() => new Promise<Record<string, 'idle'>>(resolve => { finish = resolve }))
     await t.poll()
-    delete rows[0]!.agent.asleep
+    delete (rows[0]!.agent as Record<string, unknown>).asleep
     await t.poll(1_000)
     expect(t.core.agents.activity).toHaveBeenCalledWith(['harness'])
     finish({ harness: 'idle' })

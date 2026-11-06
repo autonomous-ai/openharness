@@ -559,6 +559,15 @@ export class ContributedMachines {
       // Every Swarm's reading first, sent in one call (DB roadmap 2.5), then each Swarm's starts.
       const looked: Array<{ row: Record<string, unknown>; pool: Record<string, unknown>; pending: ReturnType<typeof startsOf> }> = []
       const due: Reading[] = []
+      // One activity batch for this machine's Buddies, shared across its Swarms and only on a fresh report (#3824).
+      let buddyActivity: Promise<Record<string, 'working' | 'idle' | 'unknown'>> | undefined
+      const readBuddyActivity = async (): Promise<Record<string, 'working' | 'idle' | 'unknown'>> => {
+        const ids = [...new Set(pools.filter(row => row.buddySleepWanted === true).flatMap(row =>
+          Array.isArray(row.harnessIds) ? row.harnessIds.filter(identifier) : []))]
+          .filter(id => this.core.agents.byAgent(id)?.swarmSkill?.role === 'buddy').slice(0, 1000)
+        const running = (await Promise.all(ids.map(async id => await this.core.agents.stopped?.(id) ? [] : [id]))).flat()
+        return running.length ? this.core.agents.activity(running) : {}
+      }
       // The sessions the idle cleanup closed, read once a pass: only those the backend refuses work (review of #2953).
       const cleaned = began >= this.closedRefusedUntil ? cleanupClosed(this.core.dataDir, began) : new Set<string>()
       for (const row of pools) {
@@ -598,6 +607,7 @@ export class ContributedMachines {
           pending.map(start => start.id).sort(), [...preparing].sort(), refusedStarts.map(r => r.startId).sort(),
           // A privacy result that changes (a home folder opened again) is sent at once, not on the next beat.
           privacy ? [privacy.mode, 'passed' in privacy ? privacy.passed : null, 'item' in privacy ? privacy.item : null] : null,
+          row.buddySleepWanted === true,
           typeof row.localGrid === 'string' ? modelsStamp : null])
         const last = this.published.get(String(row.tabId))
         // A model still starting is read again every pass until the grid lists it, so the panel shows it live at once.
@@ -665,8 +675,14 @@ export class ContributedMachines {
         // every reading with it.
         // Only to a backend that asks for capabilities, as it is new enough to know the field: an older one refuses it.
         const profiles = row.capabilitiesWanted === true && began >= this.profilesRefusedUntil ? await this.profiles(local, engines, allowances) : []
+        const idleBuddies: Record<string, string> | null = row.buddySleepWanted === true
+          ? await (buddyActivity ??= readBuddyActivity().catch(error => {
+            this.log(`Could not read Buddy activity: ${error instanceof Error ? error.name : typeof error}`)
+            return {}
+          })) : null
         const observation = { generation: pool.generation, tools: reportedTools, ...(Object.keys(tokens).length ? { harnessTokens: tokens } : {}),
           ...(Object.keys(quotaReasons).length ? { quotaReasons } : {}),
+          ...(idleBuddies ? { idleBuddyHarnessIds: running.filter(id => idleBuddies[id] === 'idle').slice(0, 1000) } : {}),
           ...(profiles.length ? { profiles } : {}),
           ...(row.capabilitiesWanted === true ? { capabilities: CAPABILITIES } : {}),
           ...(preparing.length ? { preparingStartIds: preparing } : {}),
@@ -910,9 +926,9 @@ export class ContributedMachines {
     return lost
   }
 
-  /** What [beat] sends again for a Swarm: the reading the backend took, without whether folders hold uncommitted work. */
+  /** What [beat] sends again for a Swarm: the reading the backend took, without folder or Buddy idle proof; an unchanged heartbeat cannot vouch for either. */
   private taken(tab: string, body: Record<string, unknown>) {
-    const { harnessUncommitted: _fresh, ...kept } = body
+    const { harnessUncommitted: _fresh, idleBuddyHarnessIds: _idle, ...kept } = body
     this.lastSent.set(tab, { path: `/api/super-tabs/${tab}/machines/${this.machineId}`, body: kept, at: this.deps.now() })
   }
 
@@ -924,7 +940,8 @@ export class ContributedMachines {
    */
   private async sendAlone({ tab, observation, localModels }: Reading, began: number, refused?: SuperTabHostError): Promise<void> {
     const path = `/api/super-tabs/${tab}/machines/${this.machineId}`
-    const { closedHarnessIds: _closed, ...unclosed } = observation
+    const { idleBuddyHarnessIds: _idle, ...withoutIdle } = observation
+    const { closedHarnessIds: _closed, ...unclosed } = withoutIdle
     const { refusedStarts: _refusedStarts, ...unrefused } = unclosed
     const { profiles: _profiles, ...unprofiled } = unrefused
     const { quotaReasons: _reasons, ...unreasoned } = unprofiled
@@ -938,7 +955,7 @@ export class ContributedMachines {
     // A backend before `starting` refuses it: it gets the models the grid lists, as before, not none at all.
     const listedOnly = localModels?.some(m => m.starting)
       ? [{ ...withoutPrivacy, localModels: localModels.filter(m => !m.starting) }] : []
-    const attempts = [...('closedHarnessIds' in observation ? [observation] : []), ...('refusedStarts' in unclosed ? [unclosed] : []), ...('profiles' in unrefused ? [unrefused] : []), ...('quotaReasons' in unprofiled ? [unprofiled] : []), ...('harnessTokens' in unreasoned ? [unreasoned] : []), ...('preparingStartIds' in untokened ? [untokened] : []),
+    const attempts = [...('idleBuddyHarnessIds' in observation ? [observation] : []), ...('closedHarnessIds' in withoutIdle ? [withoutIdle] : []), ...('refusedStarts' in unclosed ? [unclosed] : []), ...('profiles' in unrefused ? [unrefused] : []), ...('quotaReasons' in unprofiled ? [unprofiled] : []), ...('harnessTokens' in unreasoned ? [unreasoned] : []), ...('preparingStartIds' in untokened ? [untokened] : []),
       ...('harnessUncommitted' in unprepared ? [unprepared] : []),
       ...('readiness' in known ? [known] : []), ready, ...('harnessProgress' in ready ? [withoutProgress] : []),
       ...('privacy' in withoutProgress ? [withoutPrivacy] : []), ...listedOnly,

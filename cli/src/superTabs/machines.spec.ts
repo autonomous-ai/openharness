@@ -3072,7 +3072,7 @@ describe('fresh Buddy idle proof (#3824)', () => {
     const f = fixture()
     Object.assign(f.pool, { buddySleepWanted: true, starts: [], harnessIds: ['idle', 'busy', 'unknown', 'worker'] })
     f.core.agents.byAgent = vi.fn(id => ({ agentId: id, swarmSkill: { role: id === 'worker' ? 'worker' : 'buddy' } }) as never)
-    f.core.agents.activity = vi.fn(async ids => Object.fromEntries(ids.map(id => [id, id === 'idle' ? 'idle' : id === 'busy' ? 'working' : 'unknown']))) as never
+    f.core.agents.activity = vi.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, id === 'idle' ? 'idle' : id === 'busy' ? 'working' : 'unknown']))) as never
     return f
   }
   it('reports explicit idle alone in one bounded activity batch', async () => {
