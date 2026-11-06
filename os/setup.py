@@ -54,6 +54,9 @@ NOW = Path('/run/harness-os/setup-now')
 SCREEN = Path('/run/harness-os/setup-screen')
 # Signed in from a phone: its first workspace is OpenCode alone, not with two terminals (onboarding.py).
 FROM_PHONE = STATE / 'set-up-from-phone'
+# A phone with Swarm on set it up for the person's Swarm: its screen opens no OpenCode, and no workspace, of its own
+# (hn app.rs); the Swarm's Buddy is its first work. A phone without it, or an older one, sends none: as before.
+FOR_SWARM = STATE / 'set-up-for-swarm'
 # A phone's Wi-Fi and sign-in, sent with the computer's password as it started (unlock/http): /run
 # outlives the switch from its startup to the system, and nothing of it reaches the disk.
 PHONE_SETUP = Path('/run/harness-os/phone-setup.json')
@@ -371,13 +374,17 @@ def forget(ssid):
         nmcli('connection', 'delete', 'uuid', saved)
 
 
-def sign_in(ticket):
+def sign_in(ticket, swarm=False):
     if signed_in():
         return True, ''
     # Before the sign-in, not after: the screen's hn opens its first workspace the moment the
-    # account is there, and reads this to open OpenCode alone (onboarding.py).
+    # account is there, and reads this to open OpenCode alone (onboarding.py), or none for a Swarm.
     try:
         FROM_PHONE.touch()
+        if swarm:
+            FOR_SWARM.touch()
+        else:
+            FOR_SWARM.unlink(missing_ok=True)
     except OSError:
         pass
     # A computer that joined the Wi-Fi a moment ago may not reach the backend on its first try: the MSI's
@@ -394,6 +401,7 @@ def sign_in(ticket):
     ok = ok or signed_in()
     if not ok:
         FROM_PHONE.unlink(missing_ok=True)
+        FOR_SWARM.unlink(missing_ok=True)
         return ok, message
     # Online in the account only with its daemon running, and nobody may ever sign in at a screen
     # to start a session (one with no encryption asks for its password there first): started here.
@@ -445,7 +453,7 @@ def join(request, networks, device):
         log(f'"{ssid}" failed after {int(time.monotonic() - started)}s: {failed}')
         return dict(state='failed', error=failed, ssid=ssid, message=MESSAGES[failed].format(ssid=ssid))
     if ticket:
-        ok, message = sign_in(ticket)
+        ok, message = sign_in(ticket, swarm=request.get('swarm') is True)
         if not ok:
             log('sign-in failed: ' + message)
             return dict(state='done', ssid=ssid, signedIn=False, error='SIGN_IN', message=message)
@@ -932,6 +940,7 @@ def sign_out(keep_wifi=False):
     log('signing out; the harnesses and projects stay')
     as_user('/usr/bin/harness', 'logout', timeout=60)
     FROM_PHONE.unlink(missing_ok=True)
+    FOR_SWARM.unlink(missing_ok=True)
     if not keep_wifi:
         forget_wifi()
     open_hotspot()
@@ -1104,7 +1113,7 @@ def factory_reset(keep_wifi=False, keep_ssh=False, reboot=False):
     (HOME / 'projects').mkdir(exist_ok=True)
     subprocess.run(['chown', '-R', f'{account.pw_uid}:{account.pw_gid}', str(HOME)], check=True, timeout=120)
     HOME.chmod(0o700)
-    for path in (RESULT, FROM_PHONE, SCREEN):
+    for path in (RESULT, FROM_PHONE, FOR_SWARM, SCREEN):
         path.unlink(missing_ok=True)
     restore_initial_password()
     if not keep_ssh:

@@ -117,6 +117,12 @@ fn split_starter(app: &mut App, pane: u64, dir: Dir, command: &str) {
     crate::input::new_shell_from(app, None, placement, None, Some(command.into()));
 }
 
+/// Set up from a phone with Swarm on (os/setup.py FOR_SWARM): its first use opens no welcome with an OpenCode of its
+/// own. Written before the sign-in, so read when the welcome would open. Not in a test: it would read this computer's.
+pub fn set_up_for_swarm() -> bool {
+    !cfg!(test) && std::path::Path::new("/var/lib/harness-os/set-up-for-swarm").is_file()
+}
+
 fn this_computer(app: &App, machine: &str) -> bool {
     machine == app.fleet.local_id || crate::local::is_local(machine)
 }
