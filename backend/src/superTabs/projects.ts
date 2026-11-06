@@ -91,6 +91,8 @@ export interface SwarmProject {
    *  from before instructions until the migration writes its document; it runs on the built-in template meanwhile. */
   instructionsRevision?: number
   instructionsHash?: string
+  /** The base its instructions were moved onto once (migration/rebase.ts, task #3600): a later save is never rewritten. */
+  instructionsBase?: number
   /** Moves on each note the coordinator keeps or a member removes (instructions.ts), so an open panel knows to read them. */
   notesRevision?: number
   /** Moves when its repository's GitHub access may have changed: someone allowed it, GitHub sent someone back after

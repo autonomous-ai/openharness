@@ -95,8 +95,23 @@ describe('the built-in PM schedule', () => {
     expect(draft).toMatchObject({ conversationId: 'lead-p1', recipients: ['lead'], source: { kind: 'schedule-request', projectId: 'p1', slot: SLOT } })
   })
 
+  // anh Dee, 11-06: every project's PM runs the v2 process today, through the one text the server adds to every coordinator's instructions.
+  it('holds the v2 process section word for word, above the schedule', () => {
+    const v2 = [
+      '## Swarm process v2 (from the Swarm, 2026-11-06): this replaces every process line in your project\'s instructions. Follow this, not them; your instructions keep only your project\'s own facts.',
+      '- Keep a standing crew. Mark agents as crew once, each with its role and area (backend, CLI, Desktop, mobile, docs: only the areas your project has), plus reviewers and a tester. Start a new agent only to replace a broken one or to fill an area that has none.',
+      '- Give each task its area, or let its files choose it. A free crew member takes the next task in its area by itself. Review and test steps open by themselves when a pull request is ready; don\'t open them by hand.',
+      '- Answer each person\'s message once, in its place. Your inbox lists every unanswered message until it is answered.',
+      '- A rule a program can check belongs in code, not in your instructions. Your instructions keep only judgment and your project\'s own facts.',
+      '- Releases run 09:00-18:00 Vietnam time. Sign-in, tokens, access, encryption, the Buddy guard, device links and deleting data get two security reviews.',
+    ].join('\n')
+    expect(PM_SCHEDULE_TEXT).toContain(`${v2}\n`)
+    expect(PM_SCHEDULE_TEXT.indexOf(v2)).toBeLessThan(PM_SCHEDULE_TEXT.indexOf('- Every 30 minutes, the open-task sweep'))
+    expect(PM_SCHEDULE_TEXT.indexOf(v2)).toBeLessThan(PM_SCHEDULE_TEXT.indexOf(BUILT_IN_HEADING))
+  })
+
   it('says in its own section that the Swarm runs it and that it is never saved', () => {
-    expect(PM_SCHEDULE_TEXT.startsWith(`${BUILT_IN_HEADING}\n`)).toBe(true)
+    expect(PM_SCHEDULE_TEXT).toContain(`${BUILT_IN_HEADING}\n`)
     expect(PM_SCHEDULE_TEXT).toContain('Set no timer of your own')
     expect(PM_SCHEDULE_TEXT).toContain('never save it into the document')
   })

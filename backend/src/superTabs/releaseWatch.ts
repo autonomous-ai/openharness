@@ -46,8 +46,10 @@ const BATCH_BEFORE_MS = 6 * 3_600_000, BATCH_AFTER_MS = 3_600_000, COMMIT_PAGES 
 const BATCH_TITLE = /^Merge batch [^:\n]*:((?:\s+#\d+)+)\s+\(#\d+\)\s*$/
 
 /** Whether the pass looks for [mergedAt]'s merge commit at [now]: every pass for an hour, then every 30 minutes, and after a
- *  day every 2 hours, so a batch never found costs a few reads an hour rather than five pages every 5 minutes for 14 days. */
-export function batchLookupDue(mergedAt: number, now: number): boolean {
+ *  day every 2 hours, so a batch never found costs a few reads an hour rather than five pages every 5 minutes for 14 days.
+ *  [first]: the first pass after a start looks for every one (task #3586), so merges already waiting are settled at once. */
+export function batchLookupDue(mergedAt: number, now: number, first = false): boolean {
+  if (first) return true
   const age = now - mergedAt, PASS = 5 * 60_000
   return age < 3_600_000 || now % (age < 86_400_000 ? 30 * 60_000 : 2 * 3_600_000) < PASS
 }
@@ -97,6 +99,19 @@ export function readReleases(get: GitHubGet): Omit<ReleaseReader, 'done'> {
         for (const commit of answer.body as Array<{ sha?: unknown; commit?: { message?: unknown } }>) {
           if (typeof commit.sha === 'string' && typeof commit.commit?.message === 'string' && names(commit.commit.message)) found = commit.sha
         }
+        path = answer.next
+      }
+      if (found) return found
+      // A merge recorded long after its batch landed (a release cut before releases were recorded, task #3586) is outside the
+      // window of the time it was recorded: main's newest commits are read, newest first, so the last one naming it is the oldest.
+      path = `/repos/${repository.fullName}/commits?sha=${encodeURIComponent(main)}&per_page=100`
+      for (let page = 0; path && page < COMMIT_PAGES; page++) {
+        const answer = await get(repository, path)
+        if (answer.status !== 200 || !Array.isArray(answer.body)) return null
+        for (const commit of answer.body as Array<{ sha?: unknown; commit?: { message?: unknown } }>) {
+          if (typeof commit.sha === 'string' && typeof commit.commit?.message === 'string' && names(commit.commit.message)) found = commit.sha
+        }
+        if (found) break
         path = answer.next
       }
       return found
@@ -173,7 +188,7 @@ type Log = Pick<typeof logger, 'warn' | 'info'>
  * it could not read is logged and skipped; the others go on. The projects settled.
  */
 export async function watchReleases(db: PrismaClient, store: Pick<SuperTabStore, 'settleReleases'>, reader: ReleaseReader, now: number,
-  log: Log = logger, candidates: () => Promise<Map<string, string[]>> = () => reflectionCandidates(db, now, log)): Promise<number> {
+  log: Log = logger, candidates: () => Promise<Map<string, string[]>> = () => reflectionCandidates(db, now, log), first = false): Promise<number> {
   let settled = 0
   try {
     for (const [tabId, projectIds] of await candidates()) {
@@ -199,7 +214,7 @@ export async function watchReleases(db: PrismaClient, store: Pick<SuperTabStore,
               const files = number ? await reader.files(repository, number) : null
               if (files) known.components = found.components = componentsOf(files)
             }
-            if (known.components?.length && !known.sha && batchLookupDue(entry.mergedAt, now)) {
+            if (known.components?.length && !known.sha && batchLookupDue(entry.mergedAt, now, first)) {
               const sha = number ? await reader.mergeCommit(repository, number, entry.mergedAt) : null
               if (sha) { known.sha = found.sha = sha; fresh.add(pendingKey(entry)) }
             }
@@ -216,14 +231,18 @@ export async function watchReleases(db: PrismaClient, store: Pick<SuperTabStore,
             // A new tag is compared with every merge waiting for it; the tag already settled only with merges resolved since.
             const carries: string[] = []
             let unsure = false
+            const compared: string[] = []
+            // Each waiting merge is compared once with each release, whenever the release was cut (task #3586); a release cut
+            // before the merge was recorded holds it all the same.
             for (const entry of entries.filter(e => e.sha && e.components?.includes(component.id) && !e.shippedIn?.[component.id]
-              && (release.tag !== last?.tag || fresh.has(pendingKey(e))))) {
+              && e.checked?.[component.id] !== release.tag)) {
               const inside = await reader.contains(repository, entry.sha!, release.sha)
               if (inside === null) { unsure = true; break }
+              compared.push(pendingKey(entry))
               if (inside) carries.push(pendingKey(entry))
             }
             if (unsure) unknown.push(component.id)
-            else facts.releases[component.id] = { ...release, carries }
+            else facts.releases[component.id] = { ...release, carries, compared }
           }
           // A merge commit found this pass is kept only when every release it waits for was compared with it: one kept after an
           // unsure comparison is no longer new next pass, so the tag already settled would never be compared with it.
@@ -260,7 +279,7 @@ export const CANDIDATES_MS = 60 * 60_000
 
 /** Runs the release watch every 5 minutes in the singleton worker. */
 export function startReleaseWatch(db: PrismaClient, store: Pick<SuperTabStore, 'settleReleases'>, reader: () => ReleaseReader, everyMs = 5 * 60_000): () => void {
-  let running = false
+  let running = false, first = true
   let kept: { at: number; value: Map<string, string[]> } | null = null
   const candidates = async (now: number) => {
     if (!kept || now - kept.at >= CANDIDATES_MS) kept = { at: now, value: await reflectionCandidates(db, now) }
@@ -270,7 +289,9 @@ export function startReleaseWatch(db: PrismaClient, store: Pick<SuperTabStore, '
     if (running) return
     running = true
     const now = Date.now()
-    void watchReleases(db, store, reader(), now, logger, () => candidates(now))
+    const start = first
+    first = false
+    void watchReleases(db, store, reader(), now, logger, () => candidates(now), start)
       .catch(error => logger.warn('[swarm-releases] pass failed', { error: error instanceof Error ? error.message : String(error) }))
       .finally(() => { running = false })
   }

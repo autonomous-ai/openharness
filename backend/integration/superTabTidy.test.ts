@@ -95,10 +95,9 @@ async function swarm() {
     clock: { get now() { return now }, set now(value: number) { now = value } } }
 }
 
-// Project instructions, phase 4 (decision 7): the server stops no idle agent. Its coordinator is told once per idle spell,
-// whether tidying is on or off, and the instructions say whether it stops or keeps the agent.
+// Dee, 2026-11-06: idle decisions run on the server; the coordinator's notice is informational.
 describe('an agent left idle', () => {
-  it('is told to its coordinator by the time checks 15 minutes after its last activity, once, and nothing stops it', async () => {
+  it('gets a host-confirmed idle stop after 15 minutes, with one informational notice to its coordinator', async () => {
     const f = await swarm()
     f.clock.now += 14 * MINUTE
     await f.timed.runTimeChecks(f.tab)
@@ -111,9 +110,10 @@ describe('an agent left idle', () => {
     // It waits for the coordinator's next digest (noticeDigest.ts).
     expect((await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: lines[0]!.id } })).map(d => d.status)).toEqual(['gathered'])
     const member = await f.member()
-    expect(member.workDecision).toBe('awaiting')
-    expect(member.releaseId).toBeUndefined()
-    expect((await rosterRows(f.timed, host, 'test-host')).find(r => r.agent.id === f.worker)!.agent.releaseId ?? null).toBeNull()
+    expect(member.workDecision).toBe('stop')
+    expect(member.idleStop).toEqual({ previous: 'awaiting' })
+    expect(member.releaseId).toEqual(expect.any(String))
+    expect((await rosterRows(f.timed, host, 'test-host')).find(r => r.agent.id === f.worker)!.agent.releaseId).toBe(member.releaseId)
     // The same idle spell is told once, however many polls follow.
     f.clock.now += 30 * MINUTE
     await f.timed.runTimeChecks(f.tab)
@@ -172,7 +172,7 @@ describe('an agent left idle', () => {
     expect(await told()).toHaveLength(1)
   })
 
-  it('is told by its loaded tasks alone: a task gone asleep is never read for it', async () => {
+  it('keeps a Reviewer by role without loading its dormant finished tasks', async () => {
     const f = await swarm()
     const review = String((await f.execute({ type: 'conversation.create', title: 'Review: Parser', brief: 'Review it', reviewOf: f.group,
       checks: [{ description: 'Verdict', independent: false }] })).result.conversationId)
@@ -190,18 +190,17 @@ describe('an agent left idle', () => {
       data: { ...part.data as object, dormant: true, lastActivityAt: recent.toISOString() } } })
     await f.timed.runTimeChecks(f.tab)
     const named = (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === reviewer)!
-    expect((await f.lines()).filter(m => (m.source as { agentId?: string }).agentId === reviewer))
-      .toEqual([expect.objectContaining({ conversationId: 'lead', text: `${named.displayName ?? named.name} has had no open task for 15 minutes.` })])
-    expect(named.workDecision).not.toBe('stop')
+    expect((await f.lines()).filter(m => (m.source as { agentId?: string }).agentId === reviewer)).toEqual([])
+    expect(named.workDecision).toBe('keep')
   })
 
-  it('is told whether or not the owner turned tidying off', async () => {
+  it('stops idle Engineers whether or not the owner turned archiving off', async () => {
     const f = await swarm()
     await f.execute({ type: 'tab.tidy', enabled: false })
     f.clock.now += 20 * MINUTE
     await f.timed.runTimeChecks(f.tab)
     expect(await f.lines()).toHaveLength(1)
-    expect((await f.member()).workDecision).toBe('awaiting')
+    expect((await f.member()).workDecision).toBe('stop')
   })
 })
 

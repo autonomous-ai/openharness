@@ -243,6 +243,7 @@ static EXT_RAM_BSS_ATTR struct {
     uint32_t voice_wait_until;
     hit_t hits[24];
     ht_rect_t caption_arc;
+    ht_rect_t recap_card;   // a Swarm face's recap on the glass (its card, padded), for a hold; empty on any other face
     int hit_count, pressed;
     bool touch_down, touch_cancelled;
     bool touch_brake, coasting;
@@ -884,6 +885,15 @@ static void tabs_open(void)
     if (s.view != TABS) return;
     ht_tab_carousel_reset(&tab_carousel, tabs_total(), tab_index_here());
 }
+// A hold on the face: on a Swarm face's recap, the Personal | Team picker when the dial has both (Diego, 2026-11-06: the
+// name stays the project list); anywhere else, or with no picker, the tabs.
+static void face_hold(void)
+{
+    ht_rect_t r = s.recap_card;
+    bool on_recap = r.w && s.start_x >= r.x && s.start_x < r.x + r.w && s.start_y >= r.y && s.start_y < r.y + r.h;
+    if (on_recap && swarm_pick_open()) return;
+    tabs_open();
+}
 static void workspace_failed(const char *message)
 {
     ht_workspace_cancel_request(&workspace);
@@ -1343,7 +1353,7 @@ static void surface_tick(uint32_t now)
         pressed_action.kind == A_PET && !gesture.moved && held >= 650 && held < 5000) {
         // Enter directly. The opening contact is consumed until a real release,
         // so lifting or sliding after the hold cannot also select a tab.
-        tabs_open();
+        face_hold();
         return;
     }
     ht_character_mood_t mood = s.view == VOICE ?
@@ -1754,6 +1764,29 @@ static void render_swarm_face(ht_scene_t *f)
         ht_rect_t r = ht_run_bounds(&f->runs[i]);
         s.caption_arc = (ht_rect_t){r.x - 14, r.y - 14, r.w + 28, r.h + 28};
         break;
+    }
+    // The recap's place, for a hold (face_hold): its card, or on a skin with none the box of its lines.
+    if (recap && *recap) {
+        ht_rect_t u = {0};
+        for (int i = 0; i < f->count; i++) {
+            const ht_run_t *r = &f->runs[i];
+            if (r->box.h >= 40 && r->w >= 280 && r->y > 120 && r->y < 380) { u = (ht_rect_t){r->x, r->y, r->w, (int16_t)r->box.h}; break; }
+        }
+        for (int i = 0; !u.w && i < f->count; i++) {
+            const ht_run_t *r = &f->runs[i];
+            if (!r->text[0] || r->arc || r->box.h || r->y < 140 || r->y > 380) continue;
+            ht_rect_t b = ht_run_bounds(r);
+            for (int j = i; j < f->count; j++) {
+                const ht_run_t *q = &f->runs[j];
+                if (!q->text[0] || q->arc || q->box.h || q->y < 140 || q->y > 380) continue;
+                ht_rect_t c = ht_run_bounds(q);
+                int x0 = c.x < b.x ? c.x : b.x, y0 = c.y < b.y ? c.y : b.y;
+                int x1 = c.x + c.w > b.x + b.w ? c.x + c.w : b.x + b.w, y1 = c.y + c.h > b.y + b.h ? c.y + c.h : b.y + b.h;
+                b = (ht_rect_t){x0, y0, x1 - x0, y1 - y0};
+            }
+            u = b;
+        }
+        if (u.w) s.recap_card = (ht_rect_t){u.x - 12, u.y - 12, u.w + 24, u.h + 24};
     }
     // With the badge, the companion and its badge are the inbox's target; the rest of the face still talks.
     if (badge) s.hits[s.hit_count++] = (hit_t){{pet.x - 16, pet.y - 24, pet.w + 48, pet.h + 40}, A_PET_INBOX, 0, true};
@@ -2786,6 +2819,7 @@ bool habitat_scene_take(ht_scene_t *f)
     s.dirty = false;
     s.notice_frame = 0;
     s.hit_count = 0;
+    s.recap_card = (ht_rect_t){0};
     // The custom pets' memory (pet_store.c): a pack dropped or replaced since the last scene was built is freed here.
     // The render task is the only caller, and it paints each scene before it takes the next (display_habitat.c), so
     // nothing drawn from those packs is still being rasterised. The scene it keeps as `front` (for the next damage
@@ -3133,7 +3167,6 @@ static void dispatch(action_t a)
         view(HOME);
         break;
     case A_AGENTS: {
-        if (swarm_pick_open()) break;   // a Swarm face with a Personal and a Team card: the picker, else PANES
         view(AGENTS);
         if (swarm_here()) { ht_tab_carousel_reset(&pane_carousel, swarm_here()->lead_n, sw.at); break; }
         ht_tab_carousel_reset(&pane_carousel, s.count, s.active >= 0 && s.active < s.count ? s.active : 0);
@@ -3974,7 +4007,9 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 dispatch((action_t){.kind = A_VOICE_STOP, .value = 1});
             } else if (s.view == DRAFT && pressed_action.kind == A_DRAFT_EDIT) {
                 pressed_action.kind = A_DRAFT_OPTIONS; dispatch(pressed_action);
-            } else if (surface && (pressed_action.kind == A_PET || pressed_action.kind == A_PET_INBOX))
+            } else if (surface && pressed_action.kind == A_PET)
+                face_hold();
+            else if (surface && pressed_action.kind == A_PET_INBOX)
                 tabs_open();
         } else if (result == HT_TOUCH_TAP) {
             if (pressed_action.kind == A_PET) {

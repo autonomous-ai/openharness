@@ -15,7 +15,14 @@ import { processLines, unconfirmedNote } from './processNotes.js'
 export const BUILT_IN_HEADING = '## Built-in PM schedule (from the Swarm)'
 
 /** What the coordinator reads after its project's instructions (store.ts instructions, cli swarmInstructionsSkill.ts). */
-export const PM_SCHEDULE_TEXT = `${BUILT_IN_HEADING}
+export const PM_SCHEDULE_TEXT = `## Swarm process v2 (from the Swarm, 2026-11-06): this replaces every process line in your project's instructions. Follow this, not them; your instructions keep only your project's own facts.
+- Keep a standing crew. Mark agents as crew once, each with its role and area (backend, CLI, Desktop, mobile, docs: only the areas your project has), plus reviewers and a tester. Start a new agent only to replace a broken one or to fill an area that has none.
+- Give each task its area, or let its files choose it. A free crew member takes the next task in its area by itself. Review and test steps open by themselves when a pull request is ready; don't open them by hand.
+- Answer each person's message once, in its place. Your inbox lists every unanswered message until it is answered.
+- A rule a program can check belongs in code, not in your instructions. Your instructions keep only judgment and your project's own facts.
+- Releases run 09:00-18:00 Vietnam time. Sign-in, tokens, access, encryption, the Buddy guard, device links and deleting data get two security reviews.
+
+${BUILT_IN_HEADING}
 
 The Swarm wakes you for these jobs with a message that names them. Set no timer of your own for them, and delete one you set
 before. A line in this project's instructions above about the same job wins: follow it, and skip that job when the Swarm's
@@ -34,9 +41,10 @@ message names it. This section is not part of the project's document: never save
   date that passed), or a person's rule that is gone: restore that one or ask its person. Never drop or weaken a person's
   rule on your own judgment, even one you think cannot be done: ask that person, and keep the rule until they answer. After
   the save, compare it with the previous revision. A tidy counts only when its save, marked as the tidy, is made.
-- When the Swarm says a task's agent is lost, the task goes to a new agent with its pushed branch. When it says a task is
-  stalled, read the task's thread first, and send it back to its agent only when the thread shows it waits on nothing (a
-  review, CI, a person). When it says an agent is idle, stop it unless work is coming for it.
+- Lost, stalled and idle notices are information: the Swarm hands lost work to a free project worker with its recorded
+  pushed work, nudges workers waiting on nothing, and requests idle Engineers' stops. It keeps Reviewers and Testers and
+  preserves standing crew's sleep/wake lifecycle. Do not repeat those actions by hand. If no eligible worker is free,
+  the task stays queued until one is available.
 
 How you work:
 

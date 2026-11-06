@@ -584,6 +584,21 @@ describe('reading a usage limit off a screen', () => {
   ])('reads no limit off %s: %s', name => {
     expect(limitOf(fixture(name), now)).toBeNull()
   })
+  it.each([
+    '⏺ harness - read_screen (MCP)(harnessId: "h1")',
+    '⏺ my.server-1 - read_screen.v2 (MCP)(harnessId: "h1")',
+  ])('reads no limit off an MCP reply: %s', header => {
+    expect(limitOf(`${header}\n  ⎿  ■ You've hit your usage limit. Try again at 4:08 PM.\n\n❯ `, now)).toBeNull()
+  })
+  it('still reads its own notice after MCP output or a reply with parentheses', () => {
+    for (const before of [
+      '⏺ harness - read_screen (MCP)(harnessId: "h1")\n  ⎿  Screen read.\n',
+      '⏺ Checked the agent (it is working).',
+    ]) {
+      expect(limitOf(`${before}\n  ⎿  You've hit your session limit · resets 3pm\n\n❯ `, now))
+        .toEqual({ resetAt: new Date(2026, 9, 23, 15, 0).toISOString() })
+    }
+  })
   it('reads no limit off a log a tool printed, quoted or indented, near the prompt', () => {
     expect(limitOf('⏺ Read(logs/codex.log)\n  ⎿  Read 3 lines\n     5-hour limit reached ∙ resets 3pm\n\n❯ ', now)).toBeNull()
     expect(limitOf('• Ran cat codex.log\n  └ ■ You\'ve hit your usage limit. Try again at 4:05 PM.\n\n› ', now)).toBeNull()

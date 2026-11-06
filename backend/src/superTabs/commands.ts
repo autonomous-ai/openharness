@@ -22,7 +22,7 @@ import {
 import { jobKindOf } from './evidence/jobKind.js'
 import { endSteps, stepEndedRows, isStep, stepName, stepsOf, taskOwner } from './steps.js'
 import { reviewPlan, stepBrief, stepCheck, type PlannedStep, type StepKind } from './reviewTable.js'
-import { reviewerCandidates } from './reviewerPick.js'
+import { builtBy, reviewerCandidates } from './reviewerPick.js'
 import { recordCheckVerdict } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
@@ -71,10 +71,12 @@ import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
 import { ACK_ONLY_HINT, isAcknowledgement } from './acknowledgements.js'
+import { isProjectChat, inMainChat, requireChatContent, requireChatPost, recordChatAsk, recordChatPost, requireChatAnswer, recordChatAnswer } from './chatLimits.js'
 import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROPPED_LINES, refuseOverBudget, refuseRepeats, type ApprovalRow, type DroppedLine } from './ruleGuard.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { repeatedRules } from './instructionsDiff.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
+import { BASE_DOCUMENT, BASE_VERSION } from './instructionsRebase.js'
 import { BUILT_IN_HEADING, tidySaved } from './pmSchedule.js'
 import { contractRefusal, missingContract } from './taskContract.js'
 import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, proposalPriority, titlePriority, type TaskPriority } from './taskPriority.js'
@@ -1714,6 +1716,17 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   /** [worker] takes [group]'s work as assignment [assignmentId], after assignRefusal let it: what work.assign writes, and its
    *  brief to the worker. */
   const assignTo = (group: Conversation, worker: Agent, assignmentId: string) => {
+    // The PR ref is fetchable on another machine; a local worktree path is not. The previous agent's free-text result stays
+    // in its own status message, where deliveries retain its attribution and cross-account warning.
+    const recovery = group.assignment?.status === 'lost' ? [
+      'Continue the previous attempt from its pushed work; read this task’s conversation before changing it.',
+      'The previous agent’s last status is in this task’s conversation.',
+      ...(group.pullRequestUrls ?? []).map(url => {
+        const number = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)$/.exec(url)?.[1]
+        const head = group.pullRequestHeads?.[url]?.head
+        return `Pushed work: ${url}${number ? ` (refs/pull/${number}/head)` : ''}${head ? ` at ${head}` : ''}`
+      }),
+    ].join('\n') : null
     // An asleep crew member wakes for it: its host reopens the session in place (crewKeep.ts). The wake is timed from here to
     // the first reading that shows it running (crewTimes.ts, task #3462).
     if (wakeCrewMember(worker, context.now)) startWake(worker, group.id, context.now)
@@ -1743,6 +1756,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     // whom this task's pull requests are for, from its own requester (projects.ts requestedByLine).
     const requestedBy = requestedByLine(state, groupProject(state, group), group, worker)
     message(group.id, [group.brief || group.title,
+      ...recovery ? [recovery] : [],
       ...group.checks.length ? [`Acceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`] : [],
       ...requestedBy ? [requestedBy] : []].join('\n\n'), [worker.id], null, SYSTEM_ROW, undefined, undefined, undefined, assignmentId)
     const news = assignedNotice(state, group, sender, assignmentId)
@@ -1765,7 +1779,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     state.conversations.push({ id, ...(state.projects ? { projectId: project.id } : {}), number, title: planned.name, leadId,
       agentIds: leadId ? [leadId] : [], archived: false, brief, reviewOf: task.id,
       // A step keeps its task's mark, as conversation.create's does (teamWritten.ts stepMark).
-      ...stepMark(state, task), step: planned.name,
+      ...stepMark(state, task), step: planned.name, openedBy: 'server',
       assignment: null, lastMessageSequence: 0, codePullRequestUrls: [], checks: storedChecks([{ description: stepCheck(planned), independent: true }], id) })
     const step = state.conversations.at(-1)!
     listStep(task, id)
@@ -1793,7 +1807,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         && (check.verdicts ?? []).some(verdict => verdict.passed && (verdict as { head?: string }).head === read.head))) continue
       step ??= openStep(task, planned, read)
       const previous = step.assignment?.agentId
-      const ranked = reviewerCandidates(state, task, planned.kind, read.head, context.now)
+      const ranked = reviewerCandidates(state, task, planned.kind, read.head, context.now, planned.os)
       const ordered = [...ranked.filter(a => a.id === previous), ...ranked.filter(a => a.id !== previous)]
       const target = step
       const worker = ordered.find(candidate => {
@@ -1884,9 +1898,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (projects.length >= 100) fail('PROJECTS_FULL', 'A swarm can have up to 100 projects.')
       const leadConversationId = `project-${operationId}`
       // It starts on a copy of the built-in instructions as revision 1, the team's own to change (design, The built-in template).
+      // In a Swarm whose projects moved onto the base (#3600), on the base, marked: one way to start a project (review of #3300).
+      const onBase = projects.some(p => (p.instructionsBase ?? 0) >= BASE_VERSION)
+      const first = onBase ? { instructionsRevision: 1, instructionsHash: instructionsHash(BASE_DOCUMENT), instructionsBase: BASE_VERSION } : FIRST_INSTRUCTIONS
       projects.push({ id: operationId, name: command.name, ownerId: actor.userId, ownerGeneration: person(state, actor.userId).generation, leadConversationId,
-        visibility: command.visibility, members: [], updateMinutes: 5, skillMode: 'default', ...FIRST_INSTRUCTIONS })
-      effects.instructions = { projectId: operationId, revision: 1, hash: FIRST_INSTRUCTIONS.instructionsHash, text: INSTRUCTIONS_TEMPLATE,
+        visibility: command.visibility, members: [], updateMinutes: 5, skillMode: 'default', ...first })
+      effects.instructions = { projectId: operationId, revision: 1, hash: first.instructionsHash, text: onBase ? BASE_DOCUMENT : INSTRUCTIONS_TEMPLATE,
         summary: FIRST_SUMMARY, writtenBy: { kind: 'person', id: actor.userId }, askedBy: actor.userId, at: context.now }
       state.conversations.push({ id: leadConversationId, projectId: operationId, title: 'Lead', leadId: null,
         agentIds: [], archived: false, brief: command.brief, checks: [], assignment: null, lastMessageSequence: 0 })
@@ -2556,6 +2573,20 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         open(state, reviewed.id)
         // One level: a step's own work is a task's step, never a task with steps of its own (task steps design).
         if (command.step && isStep(reviewed)) fail('STEP_OF_STEP', 'A step belongs to a task, not to another step.', 400)
+        // Never doubled (task #3602: #3561 got its server's Security reviews and Test, then its Engineer's review, review and
+        // test): the task's own Engineer is refused a step when one of the same name is open, or the server opened one of that
+        // kind, while its work is open. Its own second step of a kind under another name ("Security review 2") still opens. The
+        // PM, the Integrator and people open their later checks (a main merge check, a combination read) as before, and a done
+        // step blocks nobody (review of #3312).
+        const engineer = actor.kind === 'agent' && (reviewed!.assignment?.agentId === actor.agentId || builtBy(reviewed!).has(actor.agentId))
+        if (command.step && engineer) {
+          const name = (text: string) => text.trim().replace(/\s+/g, ' ').toLowerCase()
+          const kind = (text: string) => /security/i.test(text) ? 'security' : /test/i.test(text) ? 'test' : /review|read/i.test(text) ? 'review' : null
+          const wanted = kind(command.step)
+          const same = stepsOf(state, reviewed!.id).find(step => !step.archived && (!step.assignment || activeWork(step)) && (name(stepName(step)) === name(command.step!)
+            || (step.openedBy === 'server' && wanted !== null && kind(stepName(step)) === wanted)))
+          if (same) fail('STEP_OPEN', `"${stepName(same)}"${same.number ? ` (#${same.number})` : ''} is already open on this task: use it rather than opening another.`, 409)
+        }
       }
       // Who asked: the person named, else the one a Buddy's proposal was sent for, else a person opening it themselves.
       const proposal = command.proposalMessageId ? proposalOf(state, project, proposalNamed(context.proposal)) : undefined
@@ -2735,6 +2766,16 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const pullRequestUrl = projectPullRequestUrl(command.pullRequestUrl, repositoryUrl)
         ?? fail('PULL_REQUEST_REPOSITORY', `This pull request is not in the project's repository (${own!.fullName}).`, 400)
       const shippedAt = group.ledger?.shippedAt, linked = group.pullRequestUrls?.includes(pullRequestUrl)
+      // Whether the task itself named this pull request before the record: in its result or a check's evidence (the Ready line), or in
+      // its code list (its brief, its builder's or the project's own posts). A builder lost before its Ready line has only the
+      // posts, and its merged task must still close (task #3574). Read before the record links anything.
+      const assignment = group.assignment
+      // Only the code list: a task stored before it existed reads every link it held as its code, posts' and earlier merge records' included.
+      const namedBefore = group.codePullRequestUrls?.includes(pullRequestUrl) ?? false
+      const ownPullRequest = (namedBefore && !group.cards?.recorded?.includes(pullRequestUrl))
+        || (!!assignment && [assignment.result, ...group.checks.map(check => check.evidence)].some(text => !!text && pullRequestLinks(text, repositoryUrl).includes(pullRequestUrl)))
+      // What only this record linked stays marked, so a repeated record of an unrelated pull request closes nothing (Aster, #3259).
+      if (!ownPullRequest && !group.cards?.recorded?.includes(pullRequestUrl)) group.cards = { ...group.cards, recorded: [...group.cards?.recorded ?? [], pullRequestUrl] }
       appendPullRequestUrls(group, [pullRequestUrl], repositoryUrl)
       // The pull request that merged is the task's own code.
       appendCodePullRequestUrls(group, [pullRequestUrl], repositoryUrl)
@@ -2757,11 +2798,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A merged task whose builder is gone closes itself with the merge as its result (task #3510): a released builder can
       // no longer set its own Done, and the task would stay in review for good. A live builder still closes its own task, and
       // a step never closes here, nor its parent through it. Only the task's own pull request closes it: one its builder named in
-      // its result (the Ready line) or a check's evidence names, which a merge record never writes. A merge of an unrelated one
-      // recorded here, even twice, only links it (Aster, review of #3259).
-      const assignment = group.assignment
-      const ownPullRequest = assignment && [assignment.result, ...group.checks.map(check => check.evidence)]
-        .some(text => !!text && pullRequestLinks(text, repositoryUrl).includes(pullRequestUrl))
+      // its result (the Ready line), a check's evidence or its own posts, which a merge record never writes. A merge of an unrelated
+      // one recorded here, even twice, only links it (Aster, review of #3259). Closed whenever the record is made: a lost attempt, a
+      // merge recorded again later (#3574).
       if (ownPullRequest && !isStep(group) && assignment && !['done', 'cancelled'].includes(assignment.status) && builderGone(state, assignment)) {
         const previous = assignment.status
         assignment.status = 'done'
@@ -3789,7 +3828,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (command.answers && (command.replyTo || !context.reply || context.reply.id !== command.answers || context.reply.conversationId !== group.id)) {
         fail('INVALID_ANSWER', command.replyTo ? 'Answer a message right below it or reply in its thread, not both.' : 'Answer a message in this conversation.', 400)
       }
-      // A second answer to a message the PM answered is refused with where the first is; a plain post is not (answers.ts).
+      const chatPost = actor.kind === 'agent' && !command.agentOnly && isProjectChat(state, group)
+      const chatAsk = chatPost ? requireChatPost(group, command, context.reply) : null
+      const chatAnswer = chatPost ? requireChatAnswer(group, command, context.reply) : null
+      if (chatPost && inMainChat(command, context.reply)) {
+        requireChatContent(state, group, command.text)
+      }
+      // The answer command also keeps its existing guard outside project chats (answers.ts).
       if (command.answer) requireUnanswered(group, (command.answers ?? command.replyTo)!)
       const replyAgent = context.reply?.author.kind === 'agent' ? context.reply.author.id : null
       // An agent's post reaches the agents it names, by --to or by @Name, the agent whose message it answers, and, when it names
@@ -3898,7 +3943,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (!command.agentOnly) {
         const sent = effects.messages.find(m => m.id === operationId)!
         const root = command.replyTo && context.reply && !context.reply.agentOnly ? context.reply.thread ?? context.reply.id : null
-        if (actor.kind === 'person') owe(state, group, { id: sent.id, author: sent.author, recipients, thread: root, source: sent.source }, context.now)
+        if (actor.kind === 'person') {
+          owe(state, group, { id: sent.id, author: sent.author, recipients, thread: root, source: sent.source }, context.now)
+          if (isProjectChat(state, group)) recordChatAsk(group, sent.id, context.now)
+        }
         else {
           const owedBefore = group.owed ?? []
           settleReply(state, group, actor.agentId, { answers: command.answers ?? null, thread: root })
@@ -3907,6 +3955,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           const asked = command.answer && leadsGroup(state, group, actor.agentId) ? [{ id: (command.answers ?? command.replyTo)! }] : []
           recordAnswered(group, [...settled, ...asked.filter(a => !settled.some(s => s.id === a.id))], sent.id, root, context.now)
         }
+      }
+      if (chatPost) {
+        recordChatPost(group, chatAsk, operationId)
+        const root = command.replyTo && context.reply && !context.reply.agentOnly ? context.reply.thread ?? context.reply.id : null
+        recordChatAnswer(group, chatAnswer, operationId, root, context.now, context.reply?.createdAt ?? context.now)
       }
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
       // A post to an Engineer waiting on this review: its own step then waits for the new revision (liveness.ts waitingForRevision).
