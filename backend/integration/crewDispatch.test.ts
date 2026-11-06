@@ -9,6 +9,8 @@ import { noteChange, swarmTransaction } from '../src/superTabs/cache.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { Agent, Conversation } from '../src/superTabs/model.js'
 import { planDatabase } from './plans.test-support.js'
+import { poolRows } from './hostRows.test-support.js'
+import { logger } from '../src/utils/logger.js'
 
 // The Swarm hands the next task to a free crew member by itself (task #3400). A fresh loopback replica set; never DATABASE_URL.
 let replica: MongoMemoryReplSet
@@ -86,6 +88,65 @@ async function readGroup(tabId: string, groupId: string): Promise<Conversation> 
 describe('the crew dispatch pass', () => {
   const save = (s: Awaited<ReturnType<typeof swarm>>, revision: number, change: Partial<ProjectRules>) => s.execute({
     type: 'rules.set', projectId: 'lead', baseRevision: revision, rules: { ...structuredClone(SEED_RULES), ...change }, summary: 'Project dispatch policy',
+  })
+
+  /** Two projects, so a broken lead policy cannot hide a healthy project's work. */
+  async function twoProjects() {
+    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/a.ts' })
+    const other = String((await s.execute({ type: 'project.create', name: 'Phone', visibility: 'public', brief: '' })).result.projectId)
+    const head = (await db.swarmHead.findUniqueOrThrow({ where: { tabId_key: { tabId: s.tab, key: 'head' } } })).data as unknown as { projects: { id: string; leadConversationId: string }[] }
+    const chat = head.projects.find(p => p.id === other)!.leadConversationId
+    await s.execute({ type: 'agent.add', conversationId: chat, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Phone PM', configuration: config, lead: true })
+    const worker = String((await s.execute({ type: 'agent.add', conversationId: chat, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Phone worker', configuration: config, lead: false })).result.agentId)
+    await s.execute({ type: 'crew.add', agentId: worker, lane: 'mobile', role: 'Engineer' })
+    const phone = String((await s.execute({ type: 'conversation.create', projectId: other, title: 'Phone', checks: [], task: { goal: 'Phone.', changes: 'Change.', constraints: 'None.', owns: ['mobile/a.dart'] } })).result.conversationId)
+    const fast = { ...structuredClone(SEED_RULES), dispatch: { ...SEED_RULES.dispatch, nudgeAfterMs: 60_000, returnAfterMs: 120_000 } }
+    await save(s, 0, fast)
+    await s.execute({ type: 'rules.set', projectId: other, baseRevision: 0, rules: fast, summary: 'Fast phone clock' })
+    const corrupt = () => db.superTabProjectRules.updateMany({ where: { tabId: s.tab, projectId: 'lead' }, data: { rules: { ...fast, dispatch: { ...fast.dispatch, maxHanded: 0 } } } })
+    return { ...s, other, worker, phone, corrupt }
+  }
+
+  it('isolates invalid project rules from another project’s dispatch', async () => {
+    const s = await twoProjects()
+    await s.corrupt()
+    const errors = vi.spyOn(logger, 'error')
+    try {
+      expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
+      expect((await readGroup(s.tab, s.tasks.Api!)).assignment).toBeNull()
+      expect((await readGroup(s.tab, s.phone)).assignment?.agentId).toBe(s.worker)
+      expect(errors.mock.calls).toContainEqual([expect.any(String), expect.objectContaining({ tabId: s.tab, projectId: 'lead' })])
+    } finally { errors.mockRestore() }
+  })
+
+  it('keeps host reports and the lead sweep working when one project’s rules are invalid', async () => {
+    const s = await twoProjects()
+    await s.execute({ type: 'machine.contribute', machineId: 'owner-mac', name: 'Mac', cwd: '/repo', engines: ['claude'], maxAgents: 8 })
+    await s.execute({ type: 'work.assign', conversationId: s.tasks.Api!, agentId: s.crew.Ash! })
+    await s.execute({ type: 'work.assign', conversationId: s.phone, agentId: s.worker })
+    const pool = (await poolRows(s.store, owner, 'owner-mac')).find(p => p.tabId === s.tab)!.machine
+    const agents = (await db.swarmAgent.findMany({ where: { tabId: s.tab } })).map(row => row.data as unknown as Agent)
+    await s.corrupt()
+    s.advance(60_000)
+    await s.store.observeMachine(owner, s.tab, 'owner-mac', { generation: pool.generation, resources: null, quotas: [], tools: {},
+      runningHarnessIds: agents.map(a => a.harnessId), stoppedHarnessIds: [] })
+    const messages = (await s.store.messages(owner, s.tab, s.phone, {})).messages
+    expect(messages.filter(m => (m.source as { kind?: string })?.kind === 'crew-nudge')).toHaveLength(1)
+    s.advance(60_000)
+    await s.store.runTimeChecks(s.tab)
+    expect((await readGroup(s.tab, s.phone)).assignment?.status).toBe('lost')
+    expect((await readGroup(s.tab, s.tasks.Api!)).assignment?.status).toBe('working')
+    expect((await readGroup(s.tab, s.tasks.Api!)).assignment?.nudgedAt).toBeUndefined()
+  })
+
+  it('lets a review step open under invalid rules but refuses new tasks with a repair instruction', async () => {
+    const s = await twoProjects()
+    await s.corrupt()
+    const step = await s.execute({ type: 'conversation.create', title: 'Review', reviewOf: s.tasks.Api!, step: 'Review', checks: [] })
+    expect((await readGroup(s.tab, String(step.result.conversationId))).reviewOf).toBe(s.tasks.Api)
+    await expect(s.execute({ type: 'conversation.create', title: 'New task', checks: [] })).rejects.toMatchObject({
+      code: 'RULES_INVALID', message: expect.stringMatching(/lead.*repair.*rules/i),
+    })
   })
 
   it('uses custom lanes for crew, work.lane, stamps and dispatch while another project retains mobile', async () => {
