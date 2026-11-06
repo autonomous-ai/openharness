@@ -160,7 +160,7 @@ describe('personal approval enforced before work', () => {
     expect(f.state.conversations.find(c => c.proposal?.legacyMessageId === row.id)?.archived).toBe(true)
   })
   it('redacts a pasted credential from a rejection before its reason reaches stored parts or messages', () => {
-    const token = 'sk-' + 'x'.repeat(48) // Synthetic fixture, never a provider credential.
+    const token = ['sk', 'AbCdEf0123456789'.repeat(3)].join('-') // Synthetic fixture, never a provider credential.
     const removed: Parameters<typeof withoutCredentials>[1] = []
     const clean = withoutCredentials(commandSchema.parse({ type: 'task.reject', conversationId: 'task', reason: `Avoid ${token}` }), removed)
     expect(JSON.stringify(clean)).not.toContain(token)
