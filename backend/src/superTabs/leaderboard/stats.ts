@@ -7,7 +7,7 @@
 import type { ContributedMachine } from '../machines.js'
 import { isLeads, type Agent, type Conversation, type SuperTabState } from '../model.js'
 import { isBuddy, isSwarmBuddy } from '../buddies.js'
-import { agentProjectId, canReadProject, projectOf } from '../projects.js'
+import { agentProjectId, canReadProject, NO_PROJECT, projectOf } from '../projects.js'
 import { firstAssignedAt, waitedOn, waitsNow, type RanOn, type Unblock } from './record.js'
 import { lentIn, periodSpans, reviewsIn, weekSpan, within, type PeriodName, type Span } from './rolling.js'
 import { broughtMachines, contributorsIn } from './brought.js'
@@ -68,9 +68,11 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
   const landedBy = byKey(landed, g => g.requesterId!)
   const acceptedBy = weeklyOrg ? byKey(requests.filter(g => g.requesterId && firstAssignedAt(g.ledger ?? {}) != null), g => g.requesterId!) : new Map<string, Conversation[]>()
   const generations = new Map(state.people.map(p => [p.id, p.generation]))
+  // An idle v3 Regular agent and a Swarm Buddy have no project; visibility is resolved by the caller.
+  const agentProjects = new Set([...projectIds, NO_PROJECT])
   const agentsBy = weeklyOrg ? byKey(visibleAgents.filter(a => !a.teamAccount && !a.buddySession
     && generations.get(a.contributorId) === a.membershipGeneration
-    && (isSwarmBuddy(a) || projectIds.has(agentProjectId(state, a) ?? ''))), a => a.contributorId) : new Map<string, Agent[]>()
+    && agentProjects.has(agentProjectId(state, a))), a => a.contributorId) : new Map<string, Agent[]>()
   const answersBy = byKey(visible.flatMap(group => (group.ledger?.unblocks ?? []).map(unblock => ({ ...unblock, group }))), u => u.personId)
   const machinesBy = byKey(visibleMachines, m => m.contributorId)
   // Under All projects, whether a board of this reader's already shows the person; a project's board lists only its own.
