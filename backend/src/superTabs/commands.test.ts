@@ -6425,3 +6425,81 @@ describe('a held task carries one of four reasons (HOLD_REASON_MISSING)', () => 
     expect(f.state).toBeDefined(); expect(g.state).toBeDefined()
   })
 })
+
+// Task #3614 (anh Dee, 11-06): the PM must stay free to answer people. A start was start, resume until ready, assign, brief: the PM
+// waited on each, or lost the agent when its own script misread a receipt. A start that names what its agent is for ends with it
+// assigned and briefed by the server the moment its host says it is ready, and tells the PM only when the start fails.
+describe('a start that names its task assigns and briefs its agent when it is ready (#3614)', () => {
+  const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+  const setup = () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+    const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    const start = (harnessId: string, assign?: { message?: string }) => {
+      const request = { conversationId: group, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true, ...assign ? { assign } : {},
+        requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
+      const startId = f.run({ type: 'agent.start', request, ...via }, actor, { contribution, ...decisionIn(group) }).result.startId as string
+      f.run({ type: 'agent.startDispatch', startId }, actor, { contribution })
+      f.state.starts!.find(s => s.id === startId)!.poolGeneration = 'pool-1'
+      const agentId = f.run({ type: 'agent.started', startId, harnessId, configuration: { ...config, engine: 'claude' } }, actor, { contribution }).result.agentId as string
+      return { startId, agentId }
+    }
+    const settle = (startId: string) => f.run({ type: 'agent.startSettled', startId, warning: null }, actor, { contribution })
+    const work = () => f.state.conversations.find(c => c.id === group)!.assignment
+    return { f, group, lead, actor, start, settle, work }
+  }
+
+  it('ends with the agent assigned and the brief sent to it, with no assign call', () => {
+    const t = setup()
+    const { startId, agentId } = t.start('b-1', { message: 'Fix the login. Branch off main.' })
+    expect(t.work()).toBeNull()
+    const effects = t.settle(startId)
+    expect(t.work()).toMatchObject({ agentId, status: 'working' })
+    const brief = effects.messages.find(m => m.text === 'Fix the login. Branch off main.')!
+    expect(brief).toMatchObject({ conversationId: t.group, recipients: [agentId] })
+    // From the project's coordinator, who made the start, not from the host that settled it.
+    expect(brief.author).toMatchObject({ kind: 'agent', id: t.lead })
+  })
+
+  it('assigns without a brief when it names none, and leaves a start that names no task as it was', () => {
+    const t = setup()
+    const first = t.start('b-1', {})
+    t.settle(first.startId)
+    expect(t.work()).toMatchObject({ agentId: first.agentId })
+    const other = setup()
+    const plain = other.start('b-2')
+    other.settle(plain.startId)
+    expect(other.work()).toBeNull()
+  })
+
+  it('assigns once: a second settle of the same start changes nothing', () => {
+    const t = setup()
+    const { startId } = t.start('b-1', { message: 'Brief.' })
+    t.settle(startId)
+    const again = t.settle(startId)
+    expect(again.messages.filter(m => m.text === 'Brief.')).toEqual([])
+    expect(t.work()).toMatchObject({ status: 'working' })
+  })
+
+  it('tells the coordinator once, and assigns nobody, when the task cannot take the agent when it is ready', () => {
+    const t = setup()
+    const { startId } = t.start('b-1', { message: 'Brief.' })
+    t.f.run({ type: 'conversation.archive', conversationId: t.group, archived: true })
+    const effects = t.settle(startId)
+    expect(t.work()).toBeNull()
+    const told = effects.messages.filter(m => m.text.includes('could not be assigned'))
+    expect(told).toHaveLength(1)
+    expect(told[0]!.recipients).toContain(t.lead)
+  })
+
+  it('tells the coordinator of a failed start once, however often its host says so', () => {
+    const t = setup()
+    const request = { conversationId: t.group, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true, assign: { message: 'Brief.' },
+      requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
+    const startId = t.f.run({ type: 'agent.start', request, ...via }, t.actor, { contribution, ...decisionIn(t.group) }).result.startId as string
+    const notices = () => [t.f.run({ type: 'agent.startFailed', startId, error: 'The session did not open.' }, t.actor, { contribution }),
+      t.f.run({ type: 'agent.startFailed', startId, error: 'The session did not open.' }, t.actor, { contribution })]
+      .flatMap(e => e.messages).filter(m => m.text.includes('Could not start') || m.text.includes('did not start') || m.text.includes('The session did not open'))
+    expect(notices().length).toBe(1)
+    expect(t.work()).toBeNull()
+  })
+})
