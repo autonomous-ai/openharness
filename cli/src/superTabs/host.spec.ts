@@ -4840,6 +4840,23 @@ describe('keeping a Swarm Lead alive', () => {
     await vi.waitFor(() => expect(t.keepLeadAlive).toHaveBeenCalledWith('harness'))
   })
 
+  it('keeps Stop Harness effective after Buddy rollback, across host restart, while removing a late replacement', async () => {
+    const buddy = { ...leadRow({ lead: false }), agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyOf: { personId: 'peer', generation: 'g' } } }
+    const t = lifeFixture([buddy])
+    t.keepLeadAlive.mockResolvedValue({ ok: true })
+    switched(t)
+    await t.poll(SWITCH_HOLD_MS + 1)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+    t.host.stop()
+    // The person's Stop happens after recovery; the host restarts with the original stopped again.
+    const again = t.open()
+    replacement(t, () => true)
+    t.wait(5_000)
+    await again.tick()
+    await vi.waitFor(() => expect(t.closeMember).toHaveBeenCalledWith('new-session', 'f'.repeat(32)))
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+  })
+
   it('waits a minute after a reopen it asked for before asking again', async () => {
     const t = lifeFixture([leadRow()])
     t.keepLeadAlive.mockResolvedValue({ ok: true })
