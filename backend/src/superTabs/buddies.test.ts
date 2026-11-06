@@ -1618,6 +1618,37 @@ describe('several Buddies', () => {
     expect(g.state.starts!.filter(s => !s.harnessId && !s.error)).toEqual([])
   })
 
+  // Review of #3818 (SecReview3293, Important): a new Buddy whose start failed left an empty chat that nothing reused or removed.
+  it('reuses a failed Buddy\'s empty chat for the next one, and removes an empty chat when asked', () => {
+    const f = fresh()
+    add(f)
+    const fail = (name: string) => {
+      const added = f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name } as Command, peer, host)
+      f.run({ type: 'agent.startFailed', startId: added.result.startId as string, error: 'It did not launch.' }, peer, host)
+      return added.result.conversationId as string
+    }
+    const empty = fail('Research')
+    expect(fail('Planning')).toBe(empty)
+    expect(group(f, peerSwarmChat).buddyChats).toEqual([empty])
+    expect(group(f, empty).title).toBe('Planning')
+    f.run({ type: 'buddy.remove', conversationId: empty } as Command, peer)
+    expect(group(f, empty).archived).toBe(true)
+    expect(group(f, peerSwarmChat).buddyChats).toBeUndefined()
+    // The main chat stays theirs, as before: with no Buddy there, removing it says so.
+    f.run({ type: 'buddy.remove' }, peer)
+    expect(refusal(() => f.run({ type: 'buddy.remove', conversationId: peerSwarmChat } as Command, peer))?.code).toBe('NOT_FOUND')
+  })
+
+  // Review of #3818 (SecReview3293, Minor): a person's lines never go to a chat with no Buddy because it was picked as default.
+  it('refuses a default with no Buddy running or starting in it', () => {
+    const f = fresh()
+    add(f)
+    const added = f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Research' } as Command, peer, host)
+    f.run({ type: 'agent.startFailed', startId: added.result.startId as string, error: 'It did not launch.' }, peer, host)
+    expect(refusal(() => f.run({ type: 'buddy.default', conversationId: added.result.conversationId } as Command, peer))?.code).toBe('NO_BUDDY')
+    expect(defaultBuddyChat(f.state, f.state.people.find(p => p.id === 'peer')!).id).toBe(peerSwarmChat)
+  })
+
   it('moves the default, passes it to the oldest left when the default is removed, and archives a removed Buddy\'s chat', () => {
     const f = fresh()
     const first = add(f), second = add(f, { name: 'Research' }), third = add(f, { name: 'Planning' })
