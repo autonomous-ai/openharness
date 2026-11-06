@@ -16,9 +16,7 @@ import { queueOrder, queueSiblings } from './taskQueue.js'
 import { unavailableReason } from './liveness.js'
 import { FAILED, type PullRequestWatch } from './pullRequestEvents.js'
 import { roleNameOf } from './instructions.js'
-import { reviewerCandidates } from './reviewerPick.js'
-import { stepOs } from './reviewTable.js'
-import { stepName } from './steps.js'
+import { stepCandidates } from './reviewerPick.js'
 
 const HOUR_MS = 3_600_000
 
@@ -158,14 +156,8 @@ export function candidatesFor(state: SuperTabState, member: Agent, rules: Dispat
   const pinned = open.filter(g => pinOf(g)?.agentId === member.id).sort((a, b) => pinOf(a)!.at - pinOf(b)!.at)
   const members = new Set(state.agents.filter(a => a.workDecision !== 'stop' && !moving(a)).map(a => a.id))
   const acceptsLane = takes(state, member, rules)
-  const steps = open.filter(g => g.reviewOf && !lostByIt(g)).filter(step => {
-    const task = state.conversations.find(g => g.id === step.reviewOf)!
-    const kind = /test/i.test(stepName(step)) ? 'test' : /security/i.test(stepName(step)) ? 'security' : 'review'
-    const latest = task.pullRequestUrls?.at(-1)
-    const head = latest ? task.pullRequestHeads?.[latest]?.head ?? null : null
-    // A step named for an OS goes to an agent of that OS only (task #3926), as it went when first opened.
-    return reviewerCandidates(state, task, kind, head, now, stepOs(step)).some(a => a.id === member.id)
-  })
+  // A step named for an OS goes to an agent of that OS only (task #3926), as it went when first opened.
+  const steps = open.filter(g => g.reviewOf && !lostByIt(g)).filter(step => stepCandidates(state, step, now).some(a => a.id === member.id))
   const lane = open.filter(g => (!g.lane || !!laneNamed(rules.lanes, g.lane)) && !g.reviewOf && !pinned.includes(g) && !(pinOf(g) && members.has(pinOf(g)!.agentId)) && !lostByIt(g)
     // Ordinary workers recover work; new tasks still need the PM's route or a standing crew lane.
     && (member.crew || (g.assignment?.status === 'lost' && g.lostAttempt))
