@@ -23,6 +23,9 @@ rings only when a person must act, or when a person speaks to you. Push and Loca
 - an agent replying in your thread (unless it is a decision ask);
 - an agent tagging you without a decision or approval. This includes the server's "no reviewer can start" notice: it is
   written as the agent that asked for the review, so it is an agent's tag.
+- An agent's words never change this: a plain reply or tag from an agent that asks for your approval is still badge and
+  Activity only. Only a real ask rings: `decision.ask`, `needs_human` with an ask, or a command approval on the agent's
+  machine.
 
 **One task, one notification.** A task's "stuck", "needs you" and decision question share one notification slot
 (`task:<swarm>:<task chat>`): the later replaces the earlier, and it sounds once. Thread replies keep their own slot.
