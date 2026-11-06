@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
-import { BATCH_MS, noteWorkChanges, projectUpdateRequest, WAKE_GAP_MS } from './projectUpdates.js'
+import { BATCH_MS, dirtyGroups, noteWorkChanges, WAKE_GAP_MS } from './projectUpdates.js'
 import { DEFAULT_DIGEST, digestDue, digestOf } from './digest.js'
 import { projectOf } from './projects.js'
 import { numberMessages } from './parts/commit.js'
 
-// Quiet project chats (Dee, 2026-10-31): a report sets the project's status card and posts nothing, only a work group's
-// state wakes the coordinator, at most once every 15 minutes, and every project gets the morning digest by default.
+// Quiet project chats (Dee, 2026-10-31): a report sets the coordinator's own lines on the project's status card and posts nothing,
+// the server writes the card's lines itself and wakes nobody for them (task #3593), and every project gets the morning digest by default.
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -104,77 +104,33 @@ describe('the project status card', () => {
   })
 })
 
-describe('the coordinator\'s scheduled wake-up', () => {
-  const lead = (f: ReturnType<typeof fixture>) => f.state.agents.find(a => a.id === f.lead)!
-  /** The coordinator answers the request it got: everything summarized through what it read. */
-  const answer = (f: ReturnType<typeof fixture>, request: NonNullable<ReturnType<typeof projectUpdateRequest>>) => {
-    const progress = projectOf(f.state, 'lead').progress!
-    progress.requested = { ...progress.requested, ...request.source!.through as Record<string, number> }
-    progress.requestedAt = f.now
-    f.run(report('Card', request.source!.through as Record<string, number>), f.leadActor)
-  }
-
-  it('is never asked for by an ordinary message or a progress note', () => {
+describe('no card wake-up for the coordinator (#3593)', () => {
+  // The server writes the card (statusCard.ts), so a work group's change marks nothing for the coordinator to read.
+  it('marks no work group for a report, whatever changes in it', () => {
     const f = fixture(), group = f.group()
     const engineer = f.add('engineer', group)
     const as: Actor = { kind: 'agent', agentId: engineer, machineOwnerId: 'host-owner' }
     const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: engineer }).result.assignmentId as string
     f.tick(BATCH_MS)
-    answer(f, projectUpdateRequest(f.state, lead(f), f.now)!)
-    f.tick(WAKE_GAP_MS)
-    f.run({ type: 'message.send', conversationId: group, text: 'Halfway there.', replyTo: null, recipientIds: [] }, as)
-    f.run({ type: 'message.send', conversationId: group, text: 'How is it going?', replyTo: null, recipientIds: [engineer] }, owner)
-    // Still working: a progress note changes no state.
-    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'working', result: 'Tests written' }, as)
-    f.tick(WAKE_GAP_MS)
-    expect(projectUpdateRequest(f.state, lead(f), f.now)).toBeNull()
-    // Ready for review is a change: it wakes the coordinator five minutes on.
     f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'PR #7' }, as)
-    f.tick(BATCH_MS - 1)
-    expect(projectUpdateRequest(f.state, lead(f), f.now)).toBeNull()
-    f.tick(1)
-    expect(projectUpdateRequest(f.state, lead(f), f.now)?.source).toMatchObject({ kind: 'update-request', through: { [group]: expect.any(Number) } })
-  })
-
-  it('is asked for by a work group\'s change of state, at most once every 15 minutes', () => {
-    const f = fixture()
-    // A new group is a change: the wake-up comes five minutes on, so a burst of changes is one.
-    const a = f.group()
-    f.tick(BATCH_MS - 1)
-    expect(projectUpdateRequest(f.state, lead(f), f.now)).toBeNull()
-    f.tick(1)
-    const first = projectUpdateRequest(f.state, lead(f), f.now)
-    expect(first?.source).toMatchObject({ kind: 'update-request' })
-    answer(f, first!)
-    // Two changes within 15 minutes wake it once.
-    f.tick(MINUTE)
-    const b = f.group()
-    expect(projectUpdateRequest(f.state, lead(f), f.now)).toBeNull()
-    f.tick(5 * MINUTE)
-    f.run({ type: 'conversation.merged', conversationId: a, pullRequestUrl: 'https://github.com/example/app/pull/7' })
-    expect(projectUpdateRequest(f.state, lead(f), f.now)).toBeNull()
-    f.tick(WAKE_GAP_MS - 6 * MINUTE - 1)
-    expect(projectUpdateRequest(f.state, lead(f), f.now)).toBeNull()
-    f.tick(1)
-    const second = projectUpdateRequest(f.state, lead(f), f.now)!
-    expect(Object.keys(second.source!.through as object).sort()).toEqual([a, b].sort())
-    expect(second.text).toContain('status card')
-    answer(f, second)
+    f.run({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/7' })
     f.tick(WAKE_GAP_MS)
-    expect(projectUpdateRequest(f.state, lead(f), f.now)).toBeNull()
+    expect(dirtyGroups(f.state, projectOf(f.state, 'lead'))).toEqual([])
+    expect(f.state.conversations.find(c => c.id === group)!.reportSeq).toBeUndefined()
+    expect(projectOf(f.state, 'lead').progress).toBeUndefined()
   })
 
-  it('keeps its 15 minutes whatever cadence an older client set', () => {
-    const f = fixture()
-    f.run({ type: 'project.cadence', projectId: 'lead', minutes: 1 })
-    f.group()
-    f.tick(BATCH_MS)
-    answer(f, projectUpdateRequest(f.state, lead(f), f.now)!)
-    f.tick(MINUTE)
-    f.group()
-    expect(projectUpdateRequest(f.state, lead(f), f.now)).toBeNull()
-    f.tick(WAKE_GAP_MS - MINUTE)
-    expect(projectUpdateRequest(f.state, lead(f), f.now)).not.toBeNull()
+  it('lets an archived group go quiet at once, with no report to wait for', () => {
+    const f = fixture(), group = f.group()
+    f.run({ type: 'conversation.archive', conversationId: group, archived: true })
+    expect(f.state.conversations.find(c => c.id === group)!.dormant).toBe(true)
+  })
+
+  it('still takes an older host\'s report with through, and keeps its text as the coordinator\'s own lines', () => {
+    const f = fixture(), group = f.group()
+    f.run(report('Freeze starts Friday.', { [group]: 1 }), f.leadActor)
+    expect(projectOf(f.state, 'lead').status!.text).toBe('Freeze starts Friday.')
+    expect(JSON.stringify(visibleState(f.state, owner))).toContain('Freeze starts Friday.')
   })
 })
 
