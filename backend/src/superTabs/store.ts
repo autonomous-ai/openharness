@@ -1504,7 +1504,7 @@ export class SuperTabStore {
       } catch (error) {
         const code = error instanceof SuperTabError ? error.code : 'unknown'
         // Answered meanwhile, a recommendation out of range, or the person or Swarm gone: nothing for the sweep to do.
-        if (code === 'DECISION_ANSWERED' || code === 'INVALID_DECISION' || code === 'NOT_FOUND' || code === 'WORKSPACE_ACCESS_REVOKED') {
+        if (code === 'DECISION_ANSWERED' || code === 'INVALID_DECISION' || code === 'NOT_FOUND' || code === 'WORKSPACE_ACCESS_REVOKED' || code === 'FORBIDDEN' || code === 'READ_ONLY') {
           try { await withdrawDefault(row) } catch { result.failed++; codes.add('DEFAULT_WITHDRAW_FAILED'); continue }
           result.skipped++; continue
         }
