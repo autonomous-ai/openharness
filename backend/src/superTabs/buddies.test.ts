@@ -6,6 +6,7 @@ import { canReadGroup, canWatchAgent, isConfidential, readsRecordsIn, wordsOf } 
 import { CLOSED_CHAT_ANSWERED_NOTICE } from './decisions.js'
 import { buddyChatId, defaultBuddy, defaultBuddyChat, shownBefore, swarmBuddyChatId } from './buddies.js'
 import { isRoleName } from './agentNames.js'
+import { buddiesTold } from './buddyNews.js'
 import { sweepLiveness } from './liveness.js'
 import { hostTab } from './read/hostRows.js'
 import { groupView } from './read/views.js'
@@ -1643,5 +1644,41 @@ describe('several Buddies', () => {
     expect(f.state.starts!.find(s => s.id === pending.result.startId)!.error).toBeNull()
     const research = pending.result.conversationId as string
     expect(refusal(() => f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', conversationId: research } as Command, peer, host))?.code).toBe('BUDDY_EXISTS')
+  })
+})
+
+// Task #3818: what is addressed to a person goes to their default Buddy; news of a proposal to the Buddy that sent it while it is
+// still theirs, else to the default.
+describe('several Buddies: where a person\'s lines go', () => {
+  const host = { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } }
+  function two() {
+    const f = fresh()
+    const start = (fields: Record<string, unknown> = {}) => {
+      const added = f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', ...fields } as Command, peer, host)
+      const startId = added.result.startId as string
+      const agentId = f.run({ type: 'agent.started', startId, harnessId: `native-${startId}`, configuration }, peer, host).result.agentId as string
+      f.run({ type: 'agent.startSettled', startId, warning: null }, peer, host)
+      return { agentId, chat: added.result.conversationId as string }
+    }
+    return { f, first: start(), second: start({ name: 'Research' }) }
+  }
+
+  it('sends a PM\'s line to the default Buddy\'s chat, and an older app\'s Buddy chat is the default\'s', () => {
+    const { f, second } = two()
+    f.run({ type: 'buddy.default', conversationId: second.chat } as Command, peer)
+    const told = f.run({ type: 'person.tell', personId: 'peer', text: 'Your idea is next up.' }, agentActor(f.pm))
+    expect(told.messages.filter(m => m.text === 'Your idea is next up.').map(m => m.conversationId)).toContain(second.chat)
+    expect(told.messages.filter(m => m.text === 'Your idea is next up.').map(m => m.conversationId)).not.toContain(peerSwarmChat)
+    expect(f.run({ type: 'buddy.chat' }, peer).result.conversationId).toBe(second.chat)
+  })
+
+  it('tells a proposal\'s news to the Buddy that sent it, and to the default once that one is removed', () => {
+    const { f, first, second } = two()
+    const answer = { id: 'm1', conversationId: f.app.conversationId, text: 'Accepted: next up.', replyTo: 'p1', recipients: [],
+      author: { kind: 'agent', id: f.pm, name: 'app-pm' } } as never
+    const proposal = { kind: 'buddy-proposal', personId: 'peer', buddyId: second.agentId }
+    expect(buddiesTold(f.state, answer, proposal)).toEqual([second.agentId])
+    f.run({ type: 'buddy.remove', conversationId: second.chat } as Command, peer)
+    expect(buddiesTold(f.state, answer, proposal)).toEqual([first.agentId])
   })
 })
