@@ -544,6 +544,30 @@ void main() {
       await end(tester, c);
     });
 
+    testWidgets('a project that is selected shows its Board first, and its '
+        'Chat tab shows the chat', (tester) async {
+      final c = await view(tester, rightPane: (_) => const SizedBox.expand());
+      // The project's chat is the selected one at start: the Board is shown.
+      expect(c.selectedId, 'lead');
+      expect(key('super-tasks-lead'), findsOneWidget);
+      expect(key('super-middle-chat'), findsNothing);
+      await tester.tap(key('super-board-tab-chat'));
+      await settle(tester);
+      expect(key('super-middle-chat'), findsOneWidget);
+      expect(key('super-tasks-lead'), findsNothing);
+      expect(
+        find.descendant(
+          of: key('super-center-pane'),
+          matching: find.text('The project chat line.'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(key('super-board-tab-board'));
+      await settle(tester);
+      expect(key('super-tasks-lead'), findsOneWidget);
+      await end(tester, c);
+    });
+
     testWidgets('the right pane is the Tasks slot: always there, with the '
         'chat in the middle', (tester) async {
       final c = await view(
