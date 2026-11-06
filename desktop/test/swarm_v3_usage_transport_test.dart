@@ -54,6 +54,7 @@ void main() {
       expect(usage.readings.single.provider, UsageProvider.claude);
       expect(usage.accounts.single.isLocal, isTrue);
       expect(usage.hasAnswer, isTrue);
+      expect(usage.stale, isFalse);
     },
   );
 }
