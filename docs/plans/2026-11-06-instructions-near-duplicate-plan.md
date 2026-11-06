@@ -31,7 +31,7 @@ guard word in the words that differ).
 
 ## Task 2: Person's forced save (`commands.ts`, `ruleGuard.ts`)
 **Files:** `backend/src/superTabs/commands.ts`, `ruleGuard.ts`, `instructions.test.ts`
-**Interfaces:** `instructions.save.repeatReason?: string (1-150)`; `refuseRepeats(before, after, forced?)`.
+**Interfaces:** `instructions.save.repeatReason?: string (1-100)`; `refuseRepeats(before, after, forced?)`.
 - [ ] Failing tests: reworded repeat refused with the line quoted; new rule passes; a person's save with a reason passes and the
       summary keeps it; a coordinator's save with a reason is still refused.
 - [ ] Code.

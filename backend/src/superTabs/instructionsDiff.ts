@@ -288,6 +288,25 @@ const MIN_REPEAT_WORDS = 4
 /** Repeats one refusal lists; more are cut. */
 export const MAX_REPEATS = 20
 
+/** Fewest distinct content words of a line that can be a reworded repeat, and the share of the two lines' words they must have
+ *  in common (task #3568): set high, so a line that only shares a topic with another is a new rule. */
+const MIN_REWORDED_WORDS = 6
+const REWORDED_SIMILARITY = 0.85
+/** Words whose change makes a different rule: a negation, a limit, an exception, a quantity (a number is checked apart). */
+const SUBSTANCE = new Set(['no', 'not', 'never', 'none', 'nor', 'nothing', 'without', 'but', 'except', 'unless', 'only', 'before', 'after',
+  'until', 'least', 'most', 'more', 'less', 'fewer', 'max', 'min', 'maximum', 'minimum', 'any', 'all', 'every', 'each', 'one', 'once',
+  'may', 'must', 'should', 'can', 'cannot', 'always', 'else', 'instead', 'also'])
+
+/** Whether [added] says the same as a line of [existing] words in other words: nearly the same set of content words, in any
+ *  order, and none of the words that differ a negation, limit or number (so "but not its Tester" is a change, not a rewording). */
+function rewordedAs(added: Segment, existing: Set<string>): boolean {
+  if (added.words.size < MIN_REWORDED_WORDS || existing.size < MIN_REWORDED_WORDS) return false
+  const common = [...added.words].filter(w => existing.has(w)).length
+  if (common / (added.words.size + existing.size - common) < REWORDED_SIMILARITY) return false
+  const differ = [...added.words].filter(w => !existing.has(w)).concat([...existing].filter(w => !added.words.has(w)))
+  return !differ.some(w => SUBSTANCE.has(w) || /\d/.test(w))
+}
+
 /**
  * The lines [after] adds, or rewrites, that say what a line it keeps already says (task #3283, Leo 11-05, from lamp: a PM
  * saved a rule the document had as if it were new, which hid that it had skipped it). Conservative: a repeat has the same
@@ -299,7 +318,7 @@ export const MAX_REPEATS = 20
 export function repeatedRules(before: string, after: string): RepeatedRule[] {
   const old = new Map<string, number>()
   for (const item of items(before)) old.set(item.key, (old.get(item.key) ?? 0) + 1)
-  const kept = new Map<string, { text: string; path: string; attributed: boolean }[]>()
+  const kept = new Map<string, { text: string; path: string; attributed: boolean; words: Set<string> }[]>()
   const added: { segment: Segment; path: string }[] = []
   for (const item of items(after)) {
     if (item.heading) continue
@@ -309,13 +328,15 @@ export function repeatedRules(before: string, after: string): RepeatedRule[] {
       if (segment.seq.length < MIN_REPEAT_WORDS) continue
       if (n) {
         const key = segment.seq.join(' ')
-        kept.set(key, [...kept.get(key) ?? [], { text: segment.text, path: item.path, attributed: segment.people.length > 0 }])
+        kept.set(key, [...kept.get(key) ?? [], { text: segment.text, path: item.path, attributed: segment.people.length > 0, words: segment.words }])
       } else added.push({ segment, path: item.path })
     }
   }
   const repeats: RepeatedRule[] = []
+  const candidates = [...kept.values()].flat()
   for (const { segment, path } of added) {
-    const same = kept.get(segment.seq.join(' '))?.find(k => k.path === path || (k.attributed && segment.people.length > 0))
+    const fits = (k: { path: string; attributed: boolean }) => k.path === path || (k.attributed && segment.people.length > 0)
+    const same = kept.get(segment.seq.join(' '))?.find(fits) ?? candidates.find(k => fits(k) && rewordedAs(segment, k.words))
     if (same) repeats.push({ added: segment.text, existing: same.text })
   }
   return repeats
