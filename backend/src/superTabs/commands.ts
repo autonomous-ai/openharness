@@ -1015,6 +1015,9 @@ function open(state: SuperTabState, conversationId: string) {
   return group
 }
 
+/** What a host says once it launches a Regular agent's start (cli superTabs/machines.ts CAPABILITIES, task #4116). */
+export const REGULAR_AGENT_CAPABILITY = 'regularAgent'
+
 /** Pure policy/state transition. The store commits its state, messages and delivery records in one transaction. */
 /** One command, then each task's line brought up to date (taskLine.ts), whichever way the command returned. */
 /** Whether [assignment]'s builder can no longer close it: its attempt already ended (stopped or lost), or its agent is gone
@@ -3512,6 +3515,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // A Regular agent: in no project, in a chat of its own with its person, which nobody else reads (projects.ts readsAgentChat).
       const name = command.name ?? fail('AGENT_NAME_REQUIRED', 'Name your agent.', 400)
+      // Only a host that says it runs one gets its start (read/hostRows.ts regularStarts): an older one would leave it waiting.
+      if (!pool.observation?.capabilities?.includes(REGULAR_AGENT_CAPABILITY)) fail('HOST_OUTDATED', `Update Harness on ${pool.name ?? 'your computer'} to start this agent there.`, 409)
       const chatId = stableId('agent-chat', me.id, me.generation, operationId)
       state.conversations.push({ id: chatId, kind: 'agent-chat', title: name, leadId: null, agentIds: [], archived: false, brief: '', checks: [],
         assignment: null, lastMessageSequence: 0, audience: { people: [{ id: me.id, generation: me.generation }] } })

@@ -353,6 +353,8 @@ export interface HostPool {
   buddyStarts?: AgentStart[]
   /** Product Managers' starts (leadStart.ts), apart from `starts` for the same reason. */
   leadStarts?: AgentStart[]
+  /** Regular agents' starts (commands.ts agent.new, task #4116), apart for the same reason. */
+  regularStarts?: AgentStart[]
   projects?: Array<{ id: string; leadConversationId: string; repository?: unknown; conversationIds: string[] }>
   localGrid?: string
   reservations: Array<{ harnessId: string; generation: string }>
