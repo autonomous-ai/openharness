@@ -144,6 +144,22 @@ describe('a handed task opens its review steps', () => {
     expect(f.steps().map(s => s.name)).toEqual(['Review', 'Security review 1', 'Security review 2'])
   })
 
+  // ReviewLinnea's review of #3312: the PM and the Integrator open merge, combination and row checks after a main merge, once
+  // the server's review is done. Only the task's own Engineer is refused, and only for a step whose work is still open.
+  it('lets the PM or another agent open a later check after a done server step, and refuses only the Engineer while it is open', () => {
+    const f = fixture()
+    const rev = f.add('rev', f.task, 'Reviewer')
+    f.ready(['docs/a.md'])
+    const open = (step: string, by: string) => () => f.run({ type: 'conversation.create', title: step, reviewOf: f.task, step, brief: 'Read it.', checks: [] } as Command, f.as(by))
+    // While the server's Review is working, a PM's own check still opens; the Engineer's double does not.
+    expect(open('Review: main merge check', f.lead)).not.toThrow()
+    expect(open('Review', f.dev)).toThrow(expect.objectContaining({ code: 'STEP_OPEN' }))
+    // Done, it blocks nobody: the Engineer may open another review step of its own.
+    const review = stepsOf(f.state, f.task).find(s => s.step === 'Review')!
+    f.run({ type: 'work.status', conversationId: review.id, assignmentId: review.assignment!.id, status: 'done', result: 'Ready to merge: Yes' } as Command, f.as(rev))
+    expect(open('Review: combination read', f.dev)).not.toThrow()
+  })
+
   // #3576's Test went to a Mac only when its check needed a Mac and a Linux machine.
   it('opens one test step per machine its check names, each to a Tester on that OS', () => {
     const f = fixture()
@@ -157,6 +173,8 @@ describe('a handed task opens its review steps', () => {
         readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] },
         quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }] } })
     f.state.machines = [machine('mac1', 'macOS'), machine('linux1', 'Linux')] as never
+    // A Tester on a machine the Swarm does not list says no OS, so it takes neither (review of #3312, Minor 1).
+    tester('unlisted-tst', 'unlisted')
     f.ready(['cli/src/superTabs/host.ts'])
     expect(f.steps()).toEqual([{ name: 'Review', agent: expect.any(String), status: 'working' },
       { name: 'Test on a Mac', agent: mac, status: 'working' }, { name: 'Test on a Linux machine', agent: linux, status: 'working' }])
