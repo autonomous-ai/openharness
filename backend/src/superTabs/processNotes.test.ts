@@ -43,6 +43,10 @@ describe('a release\'s what-changed note for PMs', () => {
     expect(PROCESS_NOTES[0]!.text).toMatch(/crew\.add/)
   })
 
+  it('never says how the PM answers people: that stays in the built-in PM text alone, which a project can switch (Ken\'s spec)', () => {
+    for (const each of PROCESS_NOTES) expect(each.text, each.id).not.toMatch(/answer/i)
+  })
+
   it('wakes a PM once for a note it has not confirmed, and not again for it', () => {
     const state = swarm()
     const first = scheduleRequest(state, pm(state), T)!

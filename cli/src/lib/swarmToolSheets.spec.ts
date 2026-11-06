@@ -29,9 +29,11 @@ describe('the role tools sheets', () => {
   // Task #3581 (anh Dee, 11-06): lamp's PM did not know the Swarm v2 process. Its sheet says how the crew works.
   it('explains, in the PM sheet, the crew, lanes and when to start an agent', () => {
     const pm = sheet('pm')
-    for (const word of ['crew.add', 'role', 'lane', 'backend, cli, desktop, mobile, docs', 'work.lane', 'only to replace a broken one', '`answer GROUP ID', 'process.confirm']) {
+    for (const word of ['crew.add', 'role', 'lane', 'backend, cli, desktop, mobile, docs', 'work.lane', 'only to replace a broken one', 'process.confirm']) {
       expect(pm, word).toContain(word)
     }
+    // Ken's spec (River, 11-06): how the PM answers people stays in one place, the built-in PM text, so a project can switch it.
+    expect(pm.split('\n').find(line => line.includes('crew.add'))).not.toMatch(/answer/i)
   })
 
   // Task #3581: a release that changes the PM's sheet carries a what-changed note, which reaches each PM (backend
