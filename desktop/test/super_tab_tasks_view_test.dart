@@ -801,13 +801,17 @@ void main() {
       matching: find.text('One tag per ask'),
     );
     expect(tester.getTopLeft(label).dy, lessThan(tester.getTopLeft(title).dy));
-    // The caption keeps its words.
+    // The footer names the pull request; the card has no name line (task #3869).
+    expect(
+      find.descendant(of: _card('tag'), matching: find.text('#2867')),
+      findsOneWidget,
+    );
     expect(
       find.descendant(
         of: _card('tag'),
-        matching: find.text('dee · Finch2 · PR #2867'),
+        matching: find.textContaining('Finch2'),
       ),
-      findsOneWidget,
+      findsNothing,
     );
     expect(
       find.descendant(
@@ -907,23 +911,26 @@ void main() {
     await _close(tester, c);
   });
 
-  testWidgets('cards read the title, then requester · agent · state', (
-    tester,
-  ) async {
-    final c = await _show(tester, tasksServer());
-    Finder inCard(String id, String text) =>
-        find.descendant(of: _card(id), matching: find.text(text));
-    expect(inCard('tag', 'One tag per ask'), findsOneWidget);
-    expect(inCard('tag', 'dee · Finch2 · PR #2867'), findsOneWidget);
-    expect(inCard('shipped-means', 'scholes'), findsOneWidget);
-    expect(inCard('sender', 'scholes · Finch2 · PR #2870'), findsOneWidget);
-    expect(inCard('test-copy', 'ken15 · Finch2 · Needs you'), findsOneWidget);
-    // No task numbers, machines or models.
-    expect(find.textContaining('#12'), findsNothing);
-    expect(find.textContaining('studio'), findsNothing);
-    expect(find.textContaining('claude'), findsNothing);
-    await _close(tester, c);
-  });
+  testWidgets(
+    'cards read the title, then the state, the footer and the avatars (task #3869)',
+    (tester) async {
+      final c = await _show(tester, tasksServer());
+      Finder inCard(String id, String text) =>
+          find.descendant(of: _card(id), matching: find.text(text));
+      expect(inCard('tag', 'One tag per ask'), findsOneWidget);
+      expect(inCard('tag', '#2867'), findsOneWidget);
+      expect(inCard('sender', '#2870'), findsOneWidget);
+      expect(inCard('test-copy', 'Needs you'), findsOneWidget);
+      // Who asked and who works on it are avatars, not a line of names.
+      expect(find.textContaining('scholes'), findsNothing);
+      expect(find.textContaining('Finch2'), findsNothing);
+      // No task numbers, machines or models.
+      expect(find.textContaining('#12'), findsNothing);
+      expect(find.textContaining('studio'), findsNothing);
+      expect(find.textContaining('claude'), findsNothing);
+      await _close(tester, c);
+    },
+  );
 
   testWidgets('a task that needs the reader says so, first in its column', (
     tester,
@@ -964,7 +971,7 @@ void main() {
     final c = await _show(tester, tasksServer(), openedProposals: opened);
     expect(_cardsIn(tester, 'proposals'), ['p-old', 'p-new']);
     expect(
-      find.descendant(of: _card('p-new'), matching: find.text('tony · 23m')),
+      find.descendant(of: _card('p-new'), matching: find.text('23m')),
       findsOneWidget,
     );
     await tester.tap(_card('p-old'));
@@ -1479,20 +1486,30 @@ void main() {
         _cardsIn(tester, 'done'),
         containsAll(['green-done', 'stale-green']),
       );
-      expect(line('green-done', 'green, waiting 12 min'), findsOneWidget);
+      expect(line('green-done', 'waiting 12 min'), findsOneWidget);
       expect(
-        tester
-            .widget<Text>(line('green-done', 'green, waiting 12 min'))
-            .style
-            ?.color,
+        find.descendant(
+          of: _card('green-done'),
+          matching: find.text('Ready to merge'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tester.widget<Text>(line('green-done', 'waiting 12 min')).style?.color,
         isNot(grid.AppPalette.warn),
       );
-      final stale = line('stale-green', 'green, waiting 1 h 30 min');
+      final stale = line('stale-green', 'waiting 1 h 30 min');
       expect(stale, findsOneWidget);
       expect(tester.widget<Text>(stale).style?.color, grid.AppPalette.warn);
       expect(_cardsIn(tester, 'working'), contains('red-done'));
       expect(_cardsIn(tester, 'done'), isNot(contains('red-done')));
-      expect(line('red-done', 'CI red'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: _card('red-done'),
+          matching: find.text('CI failing'),
+        ),
+        findsOneWidget,
+      );
       expect(_cardsIn(tester, 'merged'), contains('merged-soon'));
       expect(
         line('merged-soon', 'waiting for Desktop · next release about 15:30'),

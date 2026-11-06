@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
+import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
+import '../shared/theme/pull_request_icon.dart';
 import '../state/harness_activity.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
@@ -9,6 +12,20 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/harness_activity_mark.dart';
 import 'backlog.dart';
 import 'chip.dart';
+import 'identity.dart';
+import 'model.dart';
+import 'task_groups.dart';
+
+/// What a Board card counts in its footer: its pull request ("#3480"), the acceptance checks done of all, and the messages in
+/// its task's chat. None of a kind shows nothing (task #3869).
+class SuperTabCardFacts {
+  const SuperTabCardFacts({this.pullRequest, this.checks, this.comments = 0});
+  final String? pullRequest;
+  final ({int done, int total})? checks;
+  final int comments;
+
+  bool get isEmpty => pullRequest == null && checks == null && comments == 0;
+}
 
 /// One card of a project's Tasks view, on the Board and as a List row alike:
 /// its title (up to [titleLines]), its caption led by its [priority] (task
@@ -37,6 +54,10 @@ class SuperTabTaskCard extends StatefulWidget {
     this.tile = false,
     this.selected = false,
     this.warn = false,
+    this.chips = const [],
+    this.facts = const SuperTabCardFacts(),
+    this.agent,
+    this.requester,
     this.trailing,
   });
 
@@ -57,6 +78,13 @@ class SuperTabTaskCard extends StatefulWidget {
 
   /// The caption is a warning (a merge that has waited too long).
   final bool warn;
+
+  /// A tile's state chips, its pull request, checks and comments, and the agent on it and who asked, which sit in its
+  /// footer, the avatars bottom right (task #3869). A List row shows none of them.
+  final List<SuperTabStateChip> chips;
+  final SuperTabCardFacts facts;
+  final SuperTabAgent? agent;
+  final SuperTabPerson? requester;
   final Widget? trailing;
 
   /// A tile's padding: the spacing scale's 12, between the control and the
@@ -107,6 +135,11 @@ class _SuperTabTaskCardState extends State<SuperTabTaskCard> {
             _ => w.activity.label,
           },
         if (w.unread) 'New replies',
+        for (final chip in w.chips) chip.label,
+        ?w.facts.pullRequest,
+        if (w.facts.checks case final checks?)
+          '${checks.done} of ${checks.total} checks done',
+        if (w.facts.comments > 0) '${w.facts.comments} comments',
       ].join(', '),
       excludeSemantics: true,
       child: _surface(
@@ -133,6 +166,21 @@ class _SuperTabTaskCardState extends State<SuperTabTaskCard> {
                   ?w.trailing,
                 ],
               ),
+              if (w.tile && w.chips.isNotEmpty) ...[
+                const SizedBox(height: grid.AppDesktop.controlGap),
+                Wrap(
+                  spacing: grid.AppDesktop.menuInset,
+                  runSpacing: grid.AppDesktop.menuInset,
+                  children: [for (final chip in w.chips) _chip(chip)],
+                ),
+              ],
+              if (w.tile &&
+                  (!w.facts.isEmpty ||
+                      w.agent != null ||
+                      w.requester != null)) ...[
+                const SizedBox(height: grid.AppDesktop.controlGap),
+                _footer(),
+              ],
             ],
           ),
         ),
@@ -203,6 +251,87 @@ class _SuperTabTaskCardState extends State<SuperTabTaskCard> {
       ],
     );
   }
+
+  Widget _chip(SuperTabStateChip chip) =>
+      superTabTintedChip(chip.label, switch (chip) {
+        SuperTabStateChip.readyToMerge => grid.AppPalette.online,
+        SuperTabStateChip.ciFailing => grid.AppPalette.usageCritical,
+        SuperTabStateChip.needsYou => grid.AppPalette.warn,
+      }, key: ValueKey('super-card-chip-${chip.name}'));
+
+  /// The pull request, the checks and the comments on the left, and on the right the agent's avatar with the requester's
+  /// small beside it, bottom right, where a Trello card puts its members.
+  Widget _footer() {
+    final w = widget;
+    Widget fact(String key, Widget icon, String text) => Padding(
+      padding: const EdgeInsets.only(right: grid.AppDesktop.controlGap),
+      child: Row(
+        key: ValueKey(key),
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          icon,
+          const SizedBox(width: grid.AppDesktop.listRowGap * 2),
+          Text(text, style: DesktopChrome.metadata()),
+        ],
+      ),
+    );
+    const iconSize = 14.0;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        if (w.facts.pullRequest case final pr?)
+          fact(
+            'super-card-pr',
+            SvgPicture.asset(
+              pullRequestIconAsset('Open'),
+              width: iconSize,
+              height: iconSize,
+              colorFilter: ColorFilter.mode(
+                DesktopChrome.muted,
+                BlendMode.srcIn,
+              ),
+            ),
+            pr,
+          ),
+        if (w.facts.checks case final checks?)
+          fact(
+            'super-card-checks',
+            Icon(AppIcons.check, size: iconSize, color: DesktopChrome.muted),
+            '${checks.done}/${checks.total}',
+          ),
+        if (w.facts.comments > 0)
+          fact(
+            'super-card-comments',
+            Icon(
+              AppIcons.messagesSquare,
+              size: iconSize,
+              color: DesktopChrome.muted,
+            ),
+            '${w.facts.comments}',
+          ),
+        const Spacer(),
+        if (w.requester case final person?) ...[
+          SuperTabAvatar.person(
+            person,
+            key: const ValueKey('super-card-requester'),
+            size: _requesterSize,
+          ),
+          const SizedBox(width: grid.AppDesktop.listRowGap * 2),
+        ],
+        if (w.agent case final agent?)
+          SuperTabAvatar.agent(
+            agent,
+            key: const ValueKey('super-card-agent'),
+            size: _agentSize,
+            engineBadge: false,
+          ),
+      ],
+    );
+  }
+
+  /// The agent's avatar, the size of a roster row's, and the requester's a step smaller beside it.
+  static const _agentSize = SuperTabAvatar.rowSize;
+  static const _requesterSize = 18.0;
 
   Widget _mark() => ListenableBuilder(
     listenable: Listenable.merge([terminalThemeStore, appearancePrefsStore]),

@@ -389,7 +389,20 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   /// The caption under a card's title: who asked, the agent on it and its
   /// state, joined by middle dots; a proposal's says who asked and how long
   /// ago. No task numbers, machines or models.
-  String _caption(SuperTabTaskEntry entry, DateTime now) {
+  String _caption(SuperTabTaskEntry entry, DateTime now, {bool tile = false}) {
+    // A tile names no one: its avatars do, and its chips say what its state says (task #3869).
+    if (tile) {
+      if (entry.proposal case final proposal?) {
+        return superTabAgoShort(now.difference(proposal.at));
+      }
+      // Who waits is the "Needs you" chip's to say, not the line's.
+      final waitingOnReader =
+          entry.needsYou &&
+          !superTabTaskShipped(entry.task!) &&
+          (entry.task!.assignment?['status'] == 'needs_human' ||
+              entry.task!.liveness?['why'] == 'person');
+      return waitingOnReader ? '' : superTabQuietState(entry.state) ?? '';
+    }
     final snapshot = widget.controller.snapshot;
     if (entry.proposal case final proposal?) {
       return [
@@ -459,7 +472,10 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   }) {
     final task = entry.task;
     final id = task?.id ?? entry.proposal!.messageId;
-    final caption = _caption(entry, now);
+    final caption = _caption(entry, now, tile: !list);
+    final snapshot = widget.controller.snapshot;
+    final agentId = task?.assignment?['agentId'];
+    final requesterId = task?.requesterId ?? entry.proposal?.personId;
     return SuperTabTaskCard(
       key: ValueKey('super-task-card-$id'),
       // A legacy marker is the badge now: the title drops it.
@@ -487,10 +503,37 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
           ? null
           : 1,
       tile: !list,
+      chips: list ? const [] : superTabStateChips(entry),
+      facts: list || task == null ? const SuperTabCardFacts() : _facts(task),
+      agent: list || agentId is! String ? null : snapshot?.agent(agentId),
+      requester: list
+          ? null
+          : snapshot?.people.where((p) => p.id == requesterId).firstOrNull,
       warn: task != null && superTabMergeOverdue(task, now),
       selected: id == widget.selectedId,
       onOpen: () =>
           task == null ? widget.onOpenProposal(id) : widget.onOpenTask(task.id),
+    );
+  }
+
+  /// What a tile counts in its footer: its pull request, the acceptance checks done, and the messages in its chat. The
+  /// message count is the task's own counter the Swarm already holds, so it reads nothing more (task #3869).
+  SuperTabCardFacts _facts(SuperTabConversation task) {
+    final url =
+        task.cards.pullRequests.firstOrNull?.url ??
+        task.pullRequestUrls.firstOrNull;
+    final number = url == null
+        ? null
+        : int.tryParse(Uri.tryParse(url)?.pathSegments.last ?? '');
+    return SuperTabCardFacts(
+      pullRequest: number == null ? null : '#$number',
+      checks: task.checks.isEmpty
+          ? null
+          : (
+              done: task.checks.where((c) => c['passedBy'] != null).length,
+              total: task.checks.length,
+            ),
+      comments: task.lastMessageSequence,
     );
   }
 
