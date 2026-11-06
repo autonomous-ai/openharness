@@ -164,4 +164,40 @@ describe('a merged task ends done whatever happened to its builder (#3574)', () 
     f.run(other, f.as(f.lead))
     expect(f.group(f.task).assignment).toMatchObject({ status: 'lost' })
   })
+  // Review of #3294: a task stored before the code list existed reads every link it ever held as its code. Its ownership stays what
+  // #3259 read (the result or a check's evidence), so a pull request only mentioned in a post, or only linked by an earlier merge
+  // record, closes nothing.
+  describe('a task stored without a code list', () => {
+    const OTHER = 'https://github.com/acme/app/pull/99'
+    function legacyFixture() {
+      const f = postedFixture()
+      delete f.group(f.task).codePullRequestUrls
+      f.group(f.task).assignment!.status = 'lost'
+      return f
+    }
+
+    it('closes nothing for a pull request an agent only mentioned in a post', () => {
+      const f = legacyFixture()
+      appendPullRequestUrls(f.group(f.task), [OTHER])
+      f.run({ type: 'conversation.merged', conversationId: f.task, pullRequestUrl: OTHER }, f.as(f.lead))
+      expect(f.group(f.task).assignment).toMatchObject({ status: 'lost' })
+    })
+
+    it('closes nothing for a pull request an earlier merge record linked, before the marker existed', () => {
+      const f = legacyFixture()
+      // Linked by a merge record of an earlier release: it left a link and no marker.
+      appendPullRequestUrls(f.group(f.task), [OTHER])
+      const effects = f.run({ type: 'conversation.merged', conversationId: f.task, pullRequestUrl: OTHER }, f.as(f.lead))
+      f.run({ type: 'conversation.merged', conversationId: f.task, pullRequestUrl: OTHER }, f.as(f.lead))
+      expect(f.group(f.task).assignment).toMatchObject({ status: 'lost' })
+      expect(effects.closedAssignment).toBeUndefined()
+    })
+
+    it('still closes on a pull request its result names', () => {
+      const f = legacyFixture()
+      f.group(f.task).assignment!.result = `Ready for review: ${PR} at abc1234`
+      f.merge()
+      expect(f.group(f.task).assignment).toMatchObject({ status: 'done' })
+    })
+  })
 })
