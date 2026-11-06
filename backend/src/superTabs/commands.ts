@@ -1352,6 +1352,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if (written && !(member ? onTeamAccount(state, member) : teamAccountPool(state.machines?.find(m => m.machineId === machineId)))
       && !(member && ledProject(state, member.id)?.id === project.id)) return { code: 'TEAM_WRITTEN_WORK' as const, reason: TEAM_WRITTEN_REASON }
     const contributor = member?.contributorId ?? state.machines?.find(m => m.machineId === machineId)?.contributorId ?? starter
+    // A step named for an OS on a machine of another OS (reviewTable.ts, task #3926).
+    const wrongOs = stepOsRefusal(state, group, machineId, member?.contributorId)
+    if (wrongOs) return { code: 'STEP_OS' as const, reason: wrongOs }
     // Then what the task needs to reach, in the account it would run in (machineAccess.ts, task #3047).
     return teamWorkCheck(state, machineId, contributor, project, context.now, context.teamMachines, context.otherWorkspaceMachines, needed)
       ?? accessRefusal(state, machineId, project, needed)
@@ -3004,6 +3007,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       else if (context.pushOrigin === 'unknown' && !teamAccountPool(state.machines?.find(m => m.machineId === moved.machineId))) failPushUnknown(unknownPushReason(context.repositoryReach))
       const request: AgentStartRequest = noRepositoryStart(state.machines?.find(m => m.machineId === moved.machineId), home,
         written ? { ...moved, projectSettings: 'off' } : moved)
+      // A step named for an OS starts its agent only on a machine of that OS (reviewTable.ts, task #3926).
+      const wrongOs = stepOsRefusal(state, startGroup, request.machineId)
+      if (wrongOs) fail('STEP_OS', wrongOs)
       // Before it is queued: a machine that cannot get the app's token for it would fail it, and count that against its engine.
       requireRepositoryReach(state, teamAccountPool(state.machines?.find(m => m.machineId === request.machineId)), grant.machineOwnerId, home, context.repositoryReach)
       const pool = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)
