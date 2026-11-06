@@ -2741,13 +2741,13 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       return Padding(
         key: const ValueKey('super-machines-error'),
         padding: emptyPadding,
-        child: Row(
+        // Wraps: in a narrow sidebar with large text, Retry goes under the sentence rather than squeezing it.
+        child: Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            Expanded(
-              child: Text(
-                "Couldn't read this Swarm's machines.",
-                style: DesktopChrome.metadata(),
-              ),
+            Text(
+              "Couldn't read this Swarm's machines.",
+              style: DesktopChrome.metadata(),
             ),
             TextButton(
               key: const ValueKey('super-machines-retry'),
