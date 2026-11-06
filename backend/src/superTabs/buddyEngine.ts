@@ -2,6 +2,8 @@
  * as Change agent; a backend request alone never changes the engine the Buddy is recorded as running. */
 import { buddyChatOf, buddyChatsOf, defaultBuddy, isSwarmBuddy, swarmBuddyChatId } from './buddies.js'
 import { mainBuddyOf } from './buddySessions.js'
+import { wakeCrewMember } from './crewKeep.js'
+import { startWake } from './crewTimes.js'
 import { machineOffline } from './machines.js'
 import { fail, person, type Actor, type Agent, type SuperTabState } from './model.js'
 
@@ -29,6 +31,7 @@ export function askBuddyEngine(state: SuperTabState, actor: Actor, engine: strin
   const offered = pool.observation.readiness?.engines?.find(e => e.engine === engine)
   if (offered?.installed !== true || offered.signedIn !== true) fail('BUDDY_ENGINE_UNAVAILABLE', `${buddyEngineName(engine)} must be installed and signed in on your Buddy's machine.`, 409)
   if (buddy.configuration.engine === engine && !buddy.gridModel) return
+  if (wakeCrewMember(buddy, now)) { buddy.keptAt = now; startWake(buddy, buddyEngineChat(state, buddy), now) }
   buddy.switchRequest = { id, engine, profileId: 'default', requestedBy: me.id, at: new Date(now).toISOString() }
 }
 

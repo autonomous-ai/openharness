@@ -1300,7 +1300,7 @@ export class SuperTabHost {
       const buddySwitch = buddy && this.now() <= (this.buddySwitches.get(target.agent.harnessId) ?? -Infinity)
       if (row.lead === true || target.agent.switchLanded || buddySwitch) {
         leads.add(target.agent.harnessId)
-        this.keepAlive(target.agent.harnessId, buddy ? 'buddy' : 'pm')
+        this.keepAlive(target.agent.harnessId, buddy ? row.buddySleepManaged === true ? 'buddy' : 'buddy-switch' : 'pm')
         if (row.lead === true) this.watchLead(target.agent.harnessId, row.owed)
         void this.leadSwitches.serve(target as unknown as SwitchRow).catch(error => this.log(`Engine switch: ${error instanceof Error ? error.name : typeof error}`))
       } else if (isCrewRow(row)) {
@@ -1528,8 +1528,8 @@ export class SuperTabHost {
     } finally { if (this.buddyRestChecks.get(key) === check) this.buddyRestChecks.delete(key) }
   }
 
-  private keepAlive(harnessId: string, kind: 'pm' | 'crew' | 'buddy' = 'pm'): void {
-    const crew = kind === 'crew', buddy = kind === 'buddy'
+  private keepAlive(harnessId: string, kind: 'pm' | 'crew' | 'buddy' | 'buddy-switch' = 'pm'): void {
+    const crew = kind === 'crew', buddy = kind === 'buddy' || kind === 'buddy-switch'
     const reopen = this.core.agents.keepLeadAlive
     if (!reopen) return
     const state = this.keepAlives.get(harnessId) ?? { running: false, failures: 0, retryAt: 0 }
@@ -1562,23 +1562,24 @@ export class SuperTabHost {
     state.running = true
     const failed = (reason: string) => {
       state.retryAt = this.now() + Math.min(LEAD_RETRY_MAX_MS, LEAD_RETRY_MS * 2 ** state.failures++)
-      if (reason !== state.reason) this.log(`Could not reopen the ${kind === 'buddy' ? 'Buddy' : crew ? 'crew member' : 'Product Manager'} ${harnessId.slice(0, 8)}: ${reason}. Trying again with backoff.`)
+      if (reason !== state.reason) this.log(`Could not reopen the ${buddy ? 'Buddy' : crew ? 'crew member' : 'Product Manager'} ${harnessId.slice(0, 8)}: ${reason}. Trying again with backoff.`)
       state.reason = reason
     }
     void (async () => {
       if (switched) {
         const replacement = await this.switchReplacement(switched)
         if (buddy && switched.recovered) {
-          // Rollback finished; the person can stop it again. A late candidate still has to go.
-          if (replacement) await this.closeReplacement(replacement, switched)
-          return
+          // Unmanaged Buddies get only rollback authority. A managed Buddy may still wake after a later sleep.
+          if (replacement && !await this.closeReplacement(replacement, switched)) return failed('the new session could not be closed')
+          if (kind === 'buddy-switch') return
+        } else {
+          // Its new session runs: the Swarm takes it in its place (recordReplacements), within its time.
+          if (replacement && switchWithin(switched, now, SWITCH_ADOPT_MS)) return
+          // Its new session has not started yet: waited for, within its time.
+          if (!replacement && switchWithin(switched, now)) return
+          // Not taken in: closed before the old one reopens, so the two never run side by side.
+          if (replacement && !await this.closeReplacement(replacement, switched)) return failed('the new session could not be closed')
         }
-        // Its new session runs: the Swarm takes it in its place (recordReplacements), within its time.
-        if (replacement && switchWithin(switched, now, SWITCH_ADOPT_MS)) return
-        // Its new session has not started yet: waited for, within its time.
-        if (!replacement && switchWithin(switched, now)) return
-        // Not taken in: closed before the old one reopens, so the two never run side by side.
-        if (replacement && !await this.closeReplacement(replacement, switched)) return failed('the new session could not be closed')
       }
       const result = await reopen(harnessId)
       if (!result.ok) return failed(result.detail ?? result.error)

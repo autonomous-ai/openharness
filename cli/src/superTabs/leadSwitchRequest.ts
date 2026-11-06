@@ -140,6 +140,8 @@ export class LeadSwitchRequests {
       return
     }
     if (leadSwitching(this.core.dataDir, agent.harnessId, changeId, now)) return
+    // A sleeping Buddy is reopened by the host first; claiming now would fail its handoff before that resume finishes.
+    if (agent.buddyOf && !this.core.agents.byAgent(agent.harnessId)) return
     // Held before the claim is awaited, so a poll that comes while it is in flight starts nothing.
     const created: Run = { switchId, harnessId: agent.harnessId, changeId, busy: true, closed: false,
       crossMachine: identifier(request.targetMachineId) && request.targetMachineId !== this.machineId }

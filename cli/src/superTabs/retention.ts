@@ -128,7 +128,7 @@ export function retainContributions(dataDir: string, machineId: string, rows: un
       buddies.add(agent.harnessId)
       if (row.buddySleepManaged === true && !agent.buddySession && row.stopRequested !== true) {
         wakeableBuddies.add(agent.harnessId)
-        if (agent.asleep && !agent.modelRequest && !agent.teamAccount) sleepingBuddies.add(agent.harnessId)
+        if (agent.asleep && !agent.modelRequest && !agent.switchRequest && !agent.switchLanded && !agent.teamAccount) sleepingBuddies.add(agent.harnessId)
       }
     }
     if (row.lead === true) leads.add(agent.harnessId)

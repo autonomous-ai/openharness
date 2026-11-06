@@ -27,7 +27,7 @@ export function buddySleepManaged(state: SuperTabState, agent: Agent): boolean {
 export function buddySleepCandidates(state: SuperTabState, now: number): Agent[] {
   if (state.paused) return []
   return state.agents.filter(agent => {
-    if (agent.asleep || agent.modelRequest || !buddySleepManaged(state, agent)) return false
+    if (agent.asleep || agent.modelRequest || agent.switchRequest || agent.switchLanded || !buddySleepManaged(state, agent)) return false
     const pool = state.machines?.find(m => m.machineId === agent.machineId), reading = pool?.observation
     if (!pool || pool.paused || pool.removal || !reading || now - reading.receivedAt > MACHINE_FRESH_MS
       || !reading.runningHarnessIds.includes(agent.harnessId) || !reading.idleBuddyHarnessIds?.includes(agent.harnessId)) return false
