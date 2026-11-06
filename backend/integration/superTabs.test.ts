@@ -892,7 +892,6 @@ describe('private swarm projects on the real control API', () => {
     expect(await updates()).toEqual([])
     expect((await chat()).filter(m => m.text === card || (m.source as Record<string, unknown>)?.kind === 'project-report')).toEqual([])
     expect((await status())!.text).toContain('"Work": to do.')
-    console.log('CARDTEXT', JSON.stringify(await status()), JSON.stringify((await timed.read(owner, tab)).state.projects![0]).slice(0, 700))
     expect((await status())!.text.endsWith(card)).toBe(true)
     // An ordinary message, a second task and a merge wake nobody.
     await execute({ ...message('Tests passed'), conversationId: group } as Command)
