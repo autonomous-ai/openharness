@@ -4,9 +4,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/buddy_rows.dart' show SuperTabCountBadge;
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/my_agents.dart';
-import 'package:harness/super_tabs/model.dart'
-    show SuperTabAgent, SuperTabConversation;
+import 'package:harness/super_tabs/model.dart' show SuperTabAgent;
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
 
@@ -49,7 +47,7 @@ void main() {
     bool board = true,
     void Function(ConversationServer server)? setup,
     List<String>? selected,
-    List<SuperTabAgentKind>? created,
+    List<String>? created,
     Widget? belowDecisions,
   }) async {
     final server = swarm();
@@ -75,7 +73,7 @@ void main() {
                 selected?.add(id);
                 c.select(id);
               },
-              onNewAgent: created?.add,
+              onNewAgent: () => created?.add('new'),
               belowDecisions: belowDecisions,
               onNewSwarm: () {},
               onNewProject: () {},
@@ -313,23 +311,12 @@ void main() {
       expect(find.byTooltip('Kestrel · no chat yet'), findsOneWidget);
     });
 
-    testWidgets('+ New agent offers Regular or PM and hands the choice on', (
-      tester,
-    ) async {
-      final created = <SuperTabAgentKind>[];
+    testWidgets('+ New agent hands on to the creation dialog', (tester) async {
+      final created = <String>[];
       await show(tester, agents: mine, setup: agents, created: created);
       await tester.tap(find.byTooltip('New agent'));
       await tester.pumpAndSettle();
-      expect(key('super-new-agent-regular'), findsOneWidget);
-      expect(key('super-new-agent-pm'), findsOneWidget);
-      await tester.tap(key('super-new-agent-pm'));
-      await tester.pumpAndSettle();
-      expect(created, [SuperTabAgentKind.pm]);
-      await tester.tap(find.byTooltip('New agent'));
-      await tester.pumpAndSettle();
-      await tester.tap(key('super-new-agent-regular'));
-      await tester.pumpAndSettle();
-      expect(created, [SuperTabAgentKind.pm, SuperTabAgentKind.regular]);
+      expect(created, ['new']);
     });
 
     testWidgets('a layout that is not the Desktop\'s has no My agents', (
@@ -340,12 +327,11 @@ void main() {
     });
   });
 
-  group('the view hands + New agent on', () {
-    Future<(SuperTabController, List<String>)> view(
+  group('the view offers + New agent only with an app', () {
+    Future<SuperTabController> view(
       WidgetTester tester, {
-      bool withNewProject = true,
+      required bool withApp,
     }) async {
-      final calls = <String>[];
       final server = swarm()..state['agents'] = [_agent('kestrel', 'Kestrel')];
       final c = server.controller(
         account: 'owner',
@@ -357,6 +343,8 @@ void main() {
         },
       );
       await tester.runAsync(c.refresh);
+      final AppNotifier? app = withApp ? createApp() : null;
+      if (app != null) addTearDown(app.dispose);
       await tester.binding.setSurfaceSize(const Size(1500, 900));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       await tester.pumpWidget(
@@ -365,12 +353,9 @@ void main() {
           home: Scaffold(
             body: SuperTabView(
               controller: c,
+              app: app,
               onInvite: () {},
-              onAddAgent: (SuperTabConversation group) =>
-                  calls.add('add-agent:${group.id}'),
-              onNewProject: withNewProject
-                  ? () => calls.add('new-project')
-                  : null,
+              onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               machineName: (_) => 'Mac Studio',
               board: true,
@@ -378,37 +363,20 @@ void main() {
           ),
         ),
       );
-      for (var i = 0; i < 3; i++) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 30)),
-        );
-        await tester.pump(const Duration(milliseconds: 50));
-      }
-      return (c, calls);
+      await settle(tester);
+      return c;
     }
 
-    testWidgets('a PM names and starts a project: New project opens', (
-      tester,
-    ) async {
-      final (c, calls) = await view(tester);
-      await tester.tap(find.byTooltip('New agent'));
-      await tester.pumpAndSettle();
-      await tester.tap(key('super-new-agent-pm'));
-      await tester.pumpAndSettle();
-      expect(calls, ['new-project']);
+    testWidgets('with an app the heading has + New agent', (tester) async {
+      final c = await view(tester, withApp: true);
+      expect(find.byTooltip('New agent'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
       c.dispose();
     });
 
-    testWidgets('a Regular agent starts from the open chat\'s creation flow', (
-      tester,
-    ) async {
-      final (c, calls) = await view(tester);
-      await tester.tap(find.byTooltip('New agent'));
-      await tester.pumpAndSettle();
-      await tester.tap(key('super-new-agent-regular'));
-      await tester.pumpAndSettle();
-      expect(calls, ['add-agent:lead']);
+    testWidgets('without one it has none', (tester) async {
+      final c = await view(tester, withApp: false);
+      expect(find.byTooltip('New agent'), findsNothing);
       await tester.pumpWidget(const SizedBox());
       c.dispose();
     });
