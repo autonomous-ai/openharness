@@ -4,6 +4,7 @@ import { createSuperTab, type Actor } from './model.js'
 import type { ContributedMachine } from './machines.js'
 import { staleSwitches } from './tidy.js'
 import { hostTab } from './read/hostRows.js'
+import { touchesFor } from './parts/touches.js'
 
 const NOW = 1_800_000_000_000
 const person: Actor = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -47,6 +48,19 @@ function addBuddy(f: ReturnType<typeof setup>) {
 }
 
 describe('a person switching their Buddy engine', () => {
+  it.each(['named', 'default'])('guards the %s Buddy’s machine against a concurrent readiness change', choice => {
+    const f = setup(), second = addBuddy(f)
+    f.state.machines!.push({ ...structuredClone(f.pool()), machineId: 'second-mac' })
+    second.target().machineId = 'second-mac'
+    if (choice === 'default') f.run({ type: 'buddy.default', conversationId: second.chat })
+    const command: Command = { type: 'buddy.engine', engine: 'codex', ...(choice === 'named' ? { conversationId: second.chat } : {}) }
+    const before = structuredClone(f.state)
+    const effects = f.run(command)
+    expect(second.target().switchRequest?.engine).toBe('codex')
+    expect(touchesFor(command, person, before, effects).filter(t => t.kind === 'machine'))
+      .toEqual([{ kind: 'machine', key: 'second-mac' }])
+  })
+
   it('switches the default Buddy when an older client names no chat', () => {
     const f = setup(), second = addBuddy(f)
     f.run({ type: 'buddy.default', conversationId: second.chat })
