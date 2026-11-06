@@ -165,6 +165,25 @@ export function heldByStarts(starts: Json[], machineId: string, now = Date.now()
   return held
 }
 
+/** What a start's reason says when its machine could not use its own storage or clone the project (task #3861): the fixed openings
+ *  this CLI writes (superTabs/start.ts, projectFolder.ts), which say a fault of the machine and not of the request. */
+const MACHINE_FAULTS: Array<[RegExp, string]> = [
+  [/^CREATION_STORAGE_FAILED: /, 'its creation folder cannot be used'],
+  [/^This machine could not clone the project repository with the Harness GitHub App's token/, 'it could not clone the project repository'],
+]
+/** Why [machineId] takes no new agents after its last start failed on a fault of the machine itself, else null: one such failure
+ *  is enough, since the next start would meet the same fault (River, 11-06: five re-routes in a day). It clears as [stalled] does:
+ *  a later start that launched, its daemon on another version than the failure was dispatched to, or [STALL_RETRY_MS]. */
+export function faulted(starts: Json[], machineId: string, pool: Json = {}, now = Date.now()): string | null {
+  const newest = starts.filter(s => object(s.request).machineId === machineId && !MODEL_NOT_OFFERED.test(String(s.error ?? ''))).at(-1)
+  if (!newest || newest.harnessId || typeof newest.error !== 'string') return null
+  const fault = MACHINE_FAULTS.find(([pattern]) => pattern.test(newest.error as string))
+  if (!fault) return null
+  if (typeof pool.clientVersion === 'string' && typeof newest.dispatchedVersion === 'string' && newest.dispatchedVersion !== pool.clientVersion) return null
+  const at = finite(newest.dispatchedAt) ? newest.dispatchedAt : finite(newest.requestedAt) ? newest.requestedAt : null
+  if (at !== null && now - at >= STALL_RETRY_MS) return null
+  return `Its last start on this machine failed: ${fault[1]}; its owner can check the machine. This clears once a start there succeeds, its Harness is updated, or 30 minutes pass.`
+}
 export function stalled(starts: Json[], machineId: string, pool: Json = {}, now = Date.now()): boolean {
   const last = starts.filter(s => object(s.request).machineId === machineId && !MODEL_NOT_OFFERED.test(String(s.error ?? ''))).slice(-2)
   if (last.length !== 2 || !last.every(s => !s.harnessId && (!!s.error || s.dispatched !== true))) return false
@@ -415,6 +434,8 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
       machine.accessNotes = productionNotes(listed, listed && macPoolOf(listed), needed)
     }
     machine.stalled = stalled(list(state.starts), machineId, list(state.machines).find(m => m.machineId === machineId))
+    const fault = faulted(list(state.starts), machineId, list(state.machines).find(m => m.machineId === machineId))
+    if (fault) machine.unready = { ...(machine.unready ?? READY), all: [...(machine.unready ?? READY).all, fault] }
     machine.held = heldByStarts(list(state.starts), machineId)
   }
   // One machine (docs/plans/2026-10-24-swarm-team-account.md): a Mac's Harness Team account is that Mac, under its name. A
@@ -830,7 +851,7 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       const os = String(resources.os)
       const unfit = NO_SWARM_AGENTS_ON.includes(os) ? [`Swarm agents do not run on ${os} yet.`] : []
       const allowance = quotaOf2(inspected.quota)
-      probes.push(newProbe(m, [...(inspected.allowed ? [] : reasons), ...unfit, ...unreached], allowance, inspected.unknown.length === 0 && inspected.quota.known, load,
+      probes.push(newProbe(m, [...(inspected.allowed ? [] : reasons), ...unfit, ...unready.all, ...unreached], allowance, inspected.unknown.length === 0 && inspected.quota.known, load,
         [...(stuck ? [STALLED] : []), ...usedUp(allowance)]))
     }
     return probes
