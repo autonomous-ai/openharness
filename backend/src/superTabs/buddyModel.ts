@@ -7,7 +7,7 @@
  * fresh reading of a machine in its Machines list. Never a model of another grid a member reads, which only that member's
  * machine can reach.
  *
- * Whoever serves the model is told whose Buddy runs on it, and their limits hold (PRODUCT.md, Contribution): a model that
+ * Whoever serves the model is told whose Buddy runs on it, and their limits hold (AGENTS.md, contributed capacity): a model that
  * hits a limit, keeps failing or is no longer served sends the Buddy back to its owner's subscription.
  */
 import { isSwarmBuddy, openSwarmBuddyChat, swarmBuddyChatId } from './buddies.js'
@@ -155,7 +155,7 @@ export function buddyModelResult(state: SuperTabState, actor: Actor,
     const by = shown.every(s => s.endsWith("'s saved API")) ? shown.join(', ') : `served by ${shown.join(', ')}`
     text = `Your Buddy now runs on ${name}${shown.length ? `, ${by}` : ''}.`
   }
-  // Seen (PRODUCT.md, Contribution): each other member serving it hears whose Buddy runs on their capacity, in their own chat.
+  // Seen (AGENTS.md, contributed capacity): each other member serving it hears whose Buddy runs on their capacity, in their own chat.
   const told = new Set<string>([owner.personId])
   const theirs: ModelLine[] = []
   for (const s of found) {

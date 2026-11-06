@@ -130,6 +130,6 @@ export interface Leaderboard {
   /** The models of the 7 days up to now, most attempts first. Absent from a backend before it. */
   recentModels: RecentModel[]
   /** People whose machine ran an attempt on the groups summed, this week and last, and how many of last week's ran again
-   *  this week: PRODUCT.md's contributors per week and kept next week. Counts only. Absent from a backend before it. */
+   *  this week: the PM's contributor targets (per week, kept next week). Counts only. Absent from a backend before it. */
   contributors: { thisWeek: number; lastWeek: number | null; kept: number | null }
 }
