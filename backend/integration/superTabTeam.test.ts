@@ -85,11 +85,13 @@ async function fixture() {
   // machine's own person while its stored reading does not yet say Team, as when Team accounts took work; then its Team session
   // reports again. It keeps what it holds.
   await store.observeMachine(team, tab, 'team-mac', reading(generation))
-  const before = await storedState(tab)
-  before.machines!.find(m => m.machineId === 'team-mac')!.observation!.sessionKind = 'computer'
-  await saveState(tab, before)
-  const startId = String((await run(tab, { type: 'agent.start', request: { conversationId: teamGroup, machineId: 'team-mac', engine: 'codex',
-    name: 'Builder', cwd: '/team', worktree: false, requirements } }, person)).result.startId)
+  const startId = await asBeforeV3('team-mac', async () => {
+    const before = await storedState(tab)
+    before.machines!.find(m => m.machineId === 'team-mac')!.observation!.sessionKind = 'computer'
+    await saveState(tab, before)
+    return String((await run(tab, { type: 'agent.start', request: { conversationId: teamGroup, machineId: 'team-mac', engine: 'codex',
+      name: 'Builder', cwd: '/team', worktree: false, requirements } }, person)).result.startId)
+  })
   await hostRun(tab, { type: 'agent.startDispatch', startId })
   const started = await hostRun(tab, { type: 'agent.started', startId, harnessId: `team-builder-${randomUUID()}`, configuration: config })
   await hostRun(tab, { type: 'agent.startSettled', startId, warning: null })
@@ -105,6 +107,14 @@ async function beforeV3<T>(tab: string, generation: string, body: () => Promise<
   state.machines!.find(m => m.machineId === machineId)!.observation!.sessionKind = 'computer'
   await saveState(tab, state)
   try { return await body() } finally { await store.observeMachine(host, tab, machineId, reading(generation)) }
+}
+
+/** Makes a start [body] with [machineId]'s account row read as an ordinary computer, as before Swarm v3, when a start there was
+ *  taken: the start's grant now refuses a Team sign-in's row (commands.ts agent.start, security review 2 of #3446). Only the start:
+ *  its Team host's own commands need the row as Team, which it is again after. */
+async function asBeforeV3<T>(machineId: string, body: () => Promise<T>): Promise<T> {
+  await db.machine.update({ where: { machineId }, data: { sessionKind: 'computer' } })
+  try { return await body() } finally { await db.machine.update({ where: { machineId }, data: { sessionKind: 'team' } }) }
 }
 
 beforeAll(async () => {
@@ -754,7 +764,7 @@ describe('a teammate\'s work and the machines that take it', () => {
 
   it('refuses at its launch a start queued in a Team account before the release', async () => {
     const f = await fixture()
-    const queued = String((await beforeV3(f.tab, f.generation, () => start(f.tab, f.teamGroup, 'team-mac', person))).result.startId)
+    const queued = String((await beforeV3(f.tab, f.generation, () => asBeforeV3('team-mac', () => start(f.tab, f.teamGroup, 'team-mac', person)))).result.startId)
     await expect(hostRun(f.tab, { type: 'agent.startDispatch', startId: queued })).rejects.toMatchObject({ code: 'TEAM_ACCOUNTS_REMOVED' })
     expect((await store.read(owner, f.tab)).state.starts!.find(s => s.id === queued)).toMatchObject({ dispatched: false })
   })
@@ -762,7 +772,7 @@ describe('a teammate\'s work and the machines that take it', () => {
   it('never fails a start its host already launched before the release when the dispatch is repeated', async () => {
     const f = await fixture()
     const launched = await beforeV3(f.tab, f.generation, async () => {
-      const id = String((await start(f.tab, f.teamGroup, 'team-mac', person)).result.startId)
+      const id = String((await asBeforeV3('team-mac', () => start(f.tab, f.teamGroup, 'team-mac', person))).result.startId)
       await hostRun(f.tab, { type: 'agent.startDispatch', startId: id })
       return id
     })
@@ -1124,8 +1134,8 @@ describe('a message from an agent of another account (audit M3)', () => {
   }
   /** Starts an agent [name] of the owner's project on the owner's Team machine, through its team session. */
   async function startTeam(f: Awaited<ReturnType<typeof fixture>>, name: string) {
-    const startId = String((await run(f.tab, { type: 'agent.start', request: { conversationId: f.teamGroup, machineId: 'owner-team-mac', engine: 'codex',
-      name, cwd: '/owner-team', worktree: false, requirements } })).result.startId)
+    const startId = String((await asBeforeV3('owner-team-mac', () => run(f.tab, { type: 'agent.start', request: { conversationId: f.teamGroup,
+      machineId: 'owner-team-mac', engine: 'codex', name, cwd: '/owner-team', worktree: false, requirements } }))).result.startId)
     await hostRun(f.tab, { type: 'agent.startDispatch', startId }, 'owner-team-mac', ownerTeam)
     const agentId = String((await hostRun(f.tab, { type: 'agent.started', startId, harnessId: `owner-team-${randomUUID()}`, configuration: config },
       'owner-team-mac', ownerTeam)).result.agentId)

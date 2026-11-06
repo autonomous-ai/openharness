@@ -49,6 +49,8 @@ let app: FastifyInstance
 const owner: AuthUser = { sub: '100000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
 const peer: AuthUser = { sub: '100000000000000000000002', email: 'peer@example.com', autonomousEnv: 'prod', role: 'user' }
 const host: AuthUser = { sub: '100000000000000000000003', email: 'host@example.com', autonomousEnv: 'prod', role: 'user' }
+/** The owner's own computer, where the owner and the owner's agents start new agents (task #4120). */
+const OWN_MAC = 'owner-mac'
 const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 const run = (tab: string, command: Command, user = owner, asAgentId?: string, operationId = randomUUID()) =>
   store.execute(user, tab, { operationId, command }, asAgentId)
@@ -73,12 +75,17 @@ async function fixture(leadHarnessId = randomUUID()) {
 async function routedStart(tab: string, lead: string, role?: 'reviewer', model = 'fixture-model', conversationId?: string) {
   // In a new task unless one is named: no agent but its coordinator starts into the project chat (#2207).
   conversationId ??= String((await run(tab, { type: 'conversation.create', title: 'Routed work', brief: '', checks: [] })).result.conversationId)
+  // On the owner's own computer, which an agent of the Swarm already runs on: an agent starts nowhere unlisted, and a new agent only on
+  // its own person's computer (task #4120). The Lead's person is the owner.
+  if (!(await store.read(owner, tab)).state.agents.some(a => a.machineId === OWN_MAC)) {
+    await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: OWN_MAC, harnessId: randomUUID(), name: 'Owner Mac', configuration: config, lead: false })
+  }
   const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
-    candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model, effort: 'high',
+    candidates: [{ id: 'c0', kind: 'new', machineId: OWN_MAC, engine: 'codex', model, effort: 'high',
       quality: 2, cost: 2, title: 'New agent', label: 'New agent' }],
     excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
   const routeDecisionId = String((await run(tab, { type: 'route.record', conversationId, decision } as Command, host, lead)).result.routeDecisionId)
-  const request = { conversationId, machineId: 'test-host', engine: 'codex', model, effort: 'high',
+  const request = { conversationId, machineId: OWN_MAC, engine: 'codex', model, effort: 'high',
     name: 'Builder', cwd: '/fixture/repo', worktree: false, ...(role ? { role } : {}),
     requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
   const startId = String((await run(tab, { type: 'agent.start', request, routeDecisionId } as Command, host, lead)).result.startId)
@@ -152,6 +159,9 @@ beforeAll(async () => {
   await db.machine.create({ data: { machineId: 'test-host', userId: host.sub, apiKey: 'fixture-only', managerId: 'fixture',
     autonomousEnv: 'prod', authMode: 'remote' } })
   await db.machineShare.create({ data: { machineId: 'test-host', ownerId: host.sub, autonomousEnv: 'prod', emails: [owner.email, peer.email] } })
+  // The owner's own computer: a new agent starts only on its own person's computer, through no share (Swarm v3, task #4120).
+  await db.machine.create({ data: { machineId: OWN_MAC, userId: owner.sub, apiKey: 'fixture-owner-mac', managerId: 'fixture',
+    autonomousEnv: 'prod', authMode: 'remote' } })
   app = Fastify()
   app.setErrorHandler(errorHandler)
   // External SSO is replaced with three fixture accounts; every permission/transaction below is real.
@@ -701,7 +711,7 @@ describe('deleting abandoned swarm projects', () => {
     const { projectId } = (await run(tab, { type: 'project.create', name: 'Heavy start', visibility: 'public', brief: '' })).result as { projectId: string }
     // In a task of the project: the project chat holds only its coordinator among agents (#2207).
     const conversationId = String((await run(tab, { type: 'conversation.create', projectId, title: 'Build', brief: '', checks: [] })).result.conversationId)
-    const request = { conversationId, machineId: 'test-host', engine: 'codex', name: 'Builder', cwd: '/work', worktree: true, heavy: ['build'],
+    const request = { conversationId, machineId: OWN_MAC, engine: 'codex', name: 'Builder', cwd: '/work', worktree: true, heavy: ['build'],
       requirements: { memoryBytes: 4e9, diskBytes: 15e9, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const startId = String((await run(tab, { type: 'agent.start', request } as Command)).result.startId)
     expect((await store.start(owner, tab, startId)).request).toMatchObject({ heavy: ['build'] })
@@ -713,7 +723,7 @@ describe('deleting abandoned swarm projects', () => {
     const { projectId } = (await run(tab, { type: 'project.create', name: 'Failed start', visibility: 'public', brief: '' })).result as { projectId: string }
     // In a task of the project: the project chat holds only its coordinator among agents (#2207).
     const conversationId = String((await run(tab, { type: 'conversation.create', projectId, title: 'Build', brief: '', checks: [] })).result.conversationId)
-    const request = { conversationId, machineId: 'test-host', engine: 'codex', name: 'Builder', cwd: '/work', worktree: true,
+    const request = { conversationId, machineId: OWN_MAC, engine: 'codex', name: 'Builder', cwd: '/work', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const startId = String((await run(tab, { type: 'agent.start', request })).result.startId)
     await expect(run(tab, { type: 'project.delete', projectId })).rejects.toMatchObject({ code: 'STARTS_PENDING' })
@@ -2465,11 +2475,11 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(await active()).toEqual({ [lead]: true, [worker]: false })
   })
 
-  it('serializes native start claims and fences a restored target-machine grant', async () => {
+  it('serializes native start claims, and starts nothing through another person\'s machine share (task #4120)', async () => {
     const { tab } = await fixture()
     // In a task: the project chat holds only its coordinator among agents (#2207).
     const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
-    const request = { conversationId: group, machineId: 'test-host', engine: 'claude', name: 'Builder', cwd: '/fixture/repo', worktree: true,
+    const request = { conversationId: group, machineId: OWN_MAC, engine: 'claude', name: 'Builder', cwd: '/fixture/repo', worktree: true,
       requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
     const intent = randomUUID()
     const starts = await Promise.all(Array.from({ length: 3 }, () => run(tab, { type: 'agent.start', request }, owner, undefined, intent)))
@@ -2479,18 +2489,9 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const claims = await Promise.allSettled(Array.from({ length: 2 }, () => run(tab, { type: 'agent.startDispatch', startId })))
     expect(claims.filter(c => c.status === 'fulfilled')).toHaveLength(1)
     expect((await store.start(owner, tab, startId)).dispatched).toBe(true)
-    const original = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'test-host' } })
-    try {
-      await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [peer.email],
-        grantVersions: nextMachineShareGrants(original, [peer.email], null) } })
-      await expect(store.start(owner, tab, startId)).rejects.toMatchObject({ code: 'HOST_REQUIRED' })
-    } finally {
-      const current = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'test-host' } })
-      await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [owner.email, peer.email],
-        grantVersions: nextMachineShareGrants(current, [owner.email, peer.email], null) } })
-    }
-    await expect(store.start(owner, tab, startId)).rejects.toMatchObject({ code: 'CONTRIBUTION_REVOKED' })
-    await expect(run(tab, { type: 'agent.started', startId, harnessId: 'must-not-join', configuration: config })).rejects.toMatchObject({ code: 'CONTRIBUTION_REVOKED' })
+    // A start on the host's machine, shared with the owner, would run in the host's account: refused before anything is queued.
+    await expect(run(tab, { type: 'agent.start', request: { ...request, machineId: 'test-host' } })).rejects.toMatchObject({ code: 'NOT_YOUR_COMPUTER' })
+    expect((await store.read(owner, tab)).state.starts).toHaveLength(1)
   })
 
   // Any agent of the project starts agents (project instructions, phase 4); a stuck start is its maker's or its coordinator's.
@@ -2632,8 +2633,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
   it('returns the receipt of a recorded agent start after its machine stops being listed', async () => {
     const { tab, lead } = await fixture()
     const machineId = `second-${randomUUID()}`
-    await db.machine.create({ data: { machineId, userId: host.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
-    await db.machineShare.create({ data: { machineId, ownerId: host.sub, autonomousEnv: 'prod', emails: [owner.email] } })
+    // The owner's own second computer, shared with nobody: a new agent starts only on its own person's computer (task #4120).
+    await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
     const helper = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'Helper', configuration: config, lead: false })).result.agentId as string
     // Routed and started in a task: the project chat holds only its coordinator among agents (#2207).
     const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
@@ -2653,13 +2654,15 @@ describe('Super Tabs on a real Mongo replica set', () => {
 
   it('corrects the log to the model that ran when the routed switch failed, and reads the times of one decision', async () => {
     const { tab, lead } = await fixture()
+    // The Lead's person's own computer, listed by an agent on it (task #4120).
+    await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: OWN_MAC, harnessId: randomUUID(), name: 'Owner Mac', configuration: config, lead: false })
     // Routed and started in a task: the project chat holds only its coordinator among agents (#2207).
     const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Docs.' },
-      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, title: 'New agent', label: 'New agent' }],
+      candidates: [{ id: 'c0', kind: 'new', machineId: OWN_MAC, engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, title: 'New agent', label: 'New agent' }],
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
     const routeDecisionId = (await run(tab, { type: 'route.record', conversationId: group, decision } as Command, host, lead)).result.routeDecisionId as string
-    const request = { conversationId: group, machineId: 'test-host', engine: 'claude', model: 'haiku', effort: 'auto', name: 'Builder', cwd: '/fixture/repo', worktree: false,
+    const request = { conversationId: group, machineId: OWN_MAC, engine: 'claude', model: 'haiku', effort: 'auto', name: 'Builder', cwd: '/fixture/repo', worktree: false,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const startId = (await run(tab, { type: 'agent.start', request, routeDecisionId } as Command, host, lead)).result.startId as string
     // A queued start already holds its account's quota when the Lead routes again.
@@ -2749,7 +2752,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBeNull()
     await run(tab, { type: 'agent.release', agentId, decision: 'stop' }, host, lead)
     const releaseId = (await store.read(owner, tab)).state.agents.find(agent => agent.id === agentId)!.releaseId!
-    await run(tab, { type: 'agent.remove', agentId, releaseId }, host, agentId)
+    // Its execution host is its own person's: the owner's computer it was started on (task #4120).
+    await run(tab, { type: 'agent.remove', agentId, releaseId }, owner, agentId)
     expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBe('stopped')
   })
 
