@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/machines.dart';
@@ -32,8 +31,13 @@ Future<void> _mount(WidgetTester tester, SuperTabController c) async {
   addTearDown(() => tester.binding.setSurfaceSize(null));
   await tester.pumpWidget(
     MaterialApp(
+      // As the Swarm view does: it rebuilds on the controller's changes.
       home: Scaffold(
-        body: SuperTabMachines(controller: c, onAddAgent: (_) {}),
+        body: ListenableBuilder(
+          listenable: c,
+          builder: (context, _) =>
+              SuperTabMachines(controller: c, onAddAgent: (_) {}),
+        ),
       ),
     ),
   );
@@ -50,8 +54,9 @@ double _top(WidgetTester tester, String key) =>
     tester.getTopLeft(_key(key)).dy;
 
 void main() {
-  testWidgets('rows sit under Yours, Online, Status unknown and Offline, in '
-      'that order, each heading with its count', (tester) async {
+  // Status unknown is the Swarm's own state (it cannot be read), not a machine's: its group shows only then.
+  testWidgets('rows sit under Yours, Online and Offline, in that order, each '
+      'heading with its count', (tester) async {
     final server = ConversationServer();
     (server.state['people'] as List).add({
       'id': 'peer',
@@ -60,7 +65,7 @@ void main() {
     });
     server.state['machines'] = [
       _machine('theirs-off', 'Old Box', 'peer', seen: const Duration(hours: 2)),
-      _machine('theirs-unknown', 'Quiet Box', 'peer'),
+      _machine('theirs-silent', 'Quiet Box', 'peer'),
       _machine('theirs-live', 'Build Box', 'peer', seen: Duration.zero),
       _machine('mine', 'My Mac', 'owner', seen: const Duration(hours: 2)),
     ];
@@ -73,10 +78,9 @@ void main() {
       'super-machine-row-mine',
       'super-machines-group-online',
       'super-machine-row-theirs-live',
-      'super-machines-group-unknown',
-      'super-machine-row-theirs-unknown',
       'super-machines-group-offline',
       'super-machine-row-theirs-off',
+      'super-machine-row-theirs-silent',
     ];
     for (final key in order) {
       expect(_key(key), findsOneWidget, reason: key);
@@ -103,6 +107,14 @@ void main() {
       ),
       findsOneWidget,
     );
+    expect(
+      find.descendant(
+        of: _key('super-machines-group-offline'),
+        matching: find.text('Offline · 2'),
+      ),
+      findsOneWidget,
+    );
+    expect(_key('super-machines-group-unknown'), findsNothing);
     final heading = tester.getSemantics(_key('super-machines-group-online'));
     expect(heading.flagsCollection.isHeader, isTrue);
     await _end(tester, c);
@@ -155,10 +167,10 @@ void main() {
 
     server.failReads = false;
     await tester.tap(_key('super-machines-retry'));
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 50)),
-    );
-    await tester.pump();
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+
     expect(_key('super-machines-error'), findsNothing);
     expect(_key('super-machine-row-theirs-live'), findsOneWidget);
     await _end(tester, c);

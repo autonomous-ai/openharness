@@ -23,6 +23,7 @@ import '../terminal/terminal_theme_store.dart';
 import '../usage/models_menu_controller.dart';
 import '../widgets/browser_menu_guard.dart';
 import '../widgets/finger_target.dart';
+import '../shared/widgets/skeleton.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
@@ -986,8 +987,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   void _redrawMoved() {
     if (!mounted || c.snapshot == null || c.accessRevoked) return;
     final views = _sortedViews();
-    if (c.backendUnreachable ||
-        !listEquals(_orderDrawn, [for (final v in views) v.id])) {
+    final order = [
+      for (final (_, _, group) in _groups())
+        for (final v in group) v.id,
+    ];
+    if (c.backendUnreachable || !listEquals(_orderDrawn, order)) {
       _changed();
       return;
     }
@@ -2676,18 +2680,111 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     return views;
   }
 
-  /// One row each, redrawn on its own ([_redrawMoved]).
-  List<Widget> _machines() {
+  /// Status first (Scholes, task #3801): the reader's own machines pinned in Yours, then Online, Status unknown and
+  /// Offline, each under a heading with its count. A group with no machine has no heading.
+  List<(String, String, List<_MachineView>)> _groups() {
     final views = _sortedViews();
-    _orderDrawn = [for (final v in views) v.id];
+    final yours = <_MachineView>[];
+    final online = <_MachineView>[];
+    final unknown = <_MachineView>[];
+    final offline = <_MachineView>[];
+    for (final view in views) {
+      if (view.owner?.id != null && view.owner?.id == c.accountId) {
+        yours.add(view);
+      } else {
+        (switch (view.status) {
+          SuperTabMachineStatus.unknown => unknown,
+          SuperTabMachineStatus.offline => offline,
+          _ => online,
+        }).add(view);
+      }
+    }
+    return [
+      ('yours', 'Yours', yours),
+      ('online', 'Online', online),
+      ('unknown', 'Status unknown', unknown),
+      ('offline', 'Offline', offline),
+    ].where((g) => g.$3.isNotEmpty).toList();
+  }
+
+  /// A group's heading, announced as one.
+  Widget _groupHeading(String key, String label, int count) => Semantics(
+    key: ValueKey('super-machines-group-$key'),
+    header: true,
+    container: true,
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(
+        grid.AppDesktop.controlGap,
+        grid.AppDesktop.controlGap,
+        grid.AppDesktop.controlGap,
+        grid.AppDesktop.listRowGap,
+      ),
+      child: Text(
+        '$label · $count',
+        style: DesktopChrome.metadata().copyWith(
+          fontWeight: grid.AppFont.semibold,
+        ),
+      ),
+    ),
+  );
+
+  /// Before the Swarm is read, a loading list; a Swarm that cannot be read and holds no machine says so with Retry;
+  /// a read Swarm with none, the empty note (task #3801). Null when there are machines to list.
+  Widget? _stateNote(EdgeInsets emptyPadding) {
+    if (_ids.isNotEmpty) return null;
+    if (c.snapshot == null && c.backendUnreachable) {
+      return Padding(
+        key: const ValueKey('super-machines-error'),
+        padding: emptyPadding,
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                "Couldn't read this Swarm's machines.",
+                style: DesktopChrome.metadata(),
+              ),
+            ),
+            TextButton(
+              key: const ValueKey('super-machines-retry'),
+              onPressed: () => unawaited(c.refresh()),
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
+      );
+    }
+    if (c.snapshot == null) {
+      return const SkeletonList(
+        key: ValueKey('super-machines-loading'),
+        rows: 3,
+      );
+    }
+    return Padding(
+      padding: emptyPadding,
+      child: Text(
+        "Add a machine for this Swarm's agents to use.",
+        style: DesktopChrome.metadata(),
+      ),
+    );
+  }
+
+  /// One row each, redrawn on its own ([_redrawMoved]), under its group's heading.
+  List<Widget> _machines() {
+    final groups = _groups();
+    _orderDrawn = [
+      for (final (_, _, views) in groups)
+        for (final v in views) v.id,
+    ];
     _rowBeats.removeWhere((id, beat) {
       if (_orderDrawn.contains(id)) return false;
       beat.dispose();
       return true;
     });
     return [
-      for (final id in _orderDrawn)
-        ValueListenableBuilder<int>(
+      for (final (key, label, views) in groups) ...[
+        _groupHeading(key, label, views.length),
+        for (final id in [for (final v in views) v.id])
+          ValueListenableBuilder<int>(
           key: ValueKey('super-machine-row-$id'),
           valueListenable: _rowBeats.putIfAbsent(id, () => ValueNotifier(0)),
           builder: (context, _, _) {
@@ -2696,6 +2793,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             return _machine(view);
           },
         ),
+      ],
     ];
   }
 
@@ -2734,16 +2832,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                     : widget.now().difference(failingSince),
               ),
             ),
-          if (_ids.isEmpty)
-            Padding(
-              padding: const EdgeInsets.all(grid.AppDesktop.controlGap),
-              child: Text(
-                "Add a machine for this Swarm's agents to use.",
-                style: DesktopChrome.metadata(),
-              ),
-            )
-          else
-            ..._machines(),
+          ?_stateNote(const EdgeInsets.all(grid.AppDesktop.controlGap)),
+          if (_ids.isNotEmpty) ..._machines(),
           const SizedBox(height: 8),
           Align(
             alignment: Alignment.centerRight,
@@ -2779,13 +2869,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       ),
       if (!widget.collapsed) ...[
         if (_ids.isEmpty)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(36, 8, 16, 16),
-            child: Text(
-              "Add a machine for this Swarm's agents to use.",
-              style: DesktopChrome.metadata(),
-            ),
-          )
+          _stateNote(const EdgeInsets.fromLTRB(36, 8, 16, 16))!
         else
           Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
