@@ -44,27 +44,36 @@
 **Files:** `backend/src/superTabs/decisions.ts`, `decisions.test.ts`, `commands.ts`, `crewNeeds.ts`; `backend/prisma/schema.prisma`.
 **Interfaces:** `decisionChoices.defaultAt?: string` (ISO), `DecisionDraft.defaultAt?: string`, `DecisionTarget.defaultAt?: number|null`; persisted `SuperTabDecision.defaultAt?: DateTime` and `defaulted?: Boolean`.
 
-- [ ] Commit tests: decision.ask and needs-human preserve deadline, malformed time rejected, PM routing retains it, repeats with the same time reuse while a changed time is distinct.
-- [ ] Run affected decision tests and verify missing schema/field behavior fails.
-- [ ] Extend choices, row writes/reads/list and crew-need metadata; include normalized deadline in repeat identity. Add optional schema fields/index; generate local Prisma client.
-- [ ] Run decision/crew-need unit tests, typecheck and focused persistence integration; commit and push.
+- [x] Commit tests: decision.ask and needs-human preserve deadline, malformed time rejected, PM routing retains it, repeats with the same time reuse while a changed time is distinct.
+- [x] Run affected decision tests and verify missing schema/field behavior fails.
+- [x] Extend choices, row writes/reads/list and crew-need metadata; include normalized deadline in repeat identity. Add optional schema fields/index; generate local Prisma client.
+- [x] Run decision/crew-need unit tests, typecheck and focused persistence integration; commit and push.
 
 ### Task 2: Apply due defaults once
 
 **Files:** `backend/src/superTabs/overdueDecisions.ts`, `decisions.ts`, `commands.ts`, `store.ts`; `backend/integration/overdueDecisions.test.ts`.
 **Interfaces:** `dueDefaultDecisions(db, now, limit)` returns IDs only; existing `leaveOverdueDecisions` processes explicit due defaults before legacy fallback. Server-only context `defaulted` becomes `DecisionAnswer.defaulted` and a dedicated notice.
 
-- [ ] Commit failing tests: before deadline stays open; exact deadline takes recommendation and tells asker; answered decision untouched; repeated/concurrent sweeps once; later deadline defeats old 24h fallback; long-lived question due today works; ended/private/withdrawn/reflection protections remain; query uses intended index with bounded examined rows.
-- [ ] Run focused integration file and observe missing timed behavior.
-- [ ] Add indexed query and transactional deadline validation, recording `defaulted` without mislabeling as person/24-hour choice. Reuse idempotent answer/notice path.
-- [ ] Run affected unit/integration tests, query-plan evidence and typecheck; commit and push.
+- [x] Commit failing tests: before deadline stays open; exact deadline takes recommendation and tells asker; answered decision untouched; repeated/concurrent sweeps once; later deadline defeats old 24h fallback; long-lived question due today works; ended/private/withdrawn/reflection protections remain; query uses intended index with bounded examined rows.
+- [x] Run focused integration file and observe missing timed behavior.
+- [x] Add indexed query and transactional deadline validation, recording `defaulted` without mislabeling as person/24-hour choice. Reuse idempotent answer/notice path.
+- [x] Run affected unit/integration tests, query-plan evidence and typecheck; commit and push.
 
 ### Task 3: Schedule defaults independently
 
 **Files:** `backend/src/superTabs/overdueDecisions.ts`, new `decisionSweep.test.ts`, `backend/src/worker.ts`, `sweeps.ts`.
 **Interfaces:** `startDecisionSweep(run, everyMs=60_000): stop`; singleton worker starts/stops it alongside hourly maintenance.
 
-- [ ] Commit timer tests with fake clock: immediate pass, one-minute pass, no overlap, failure recovers visibly, stop removes future wakes.
-- [ ] Run new test and observe missing scheduler.
-- [ ] Separate decision schedule from hourly maintenance, wire worker shutdown and preserve loud failure reporting.
-- [ ] Run affected scheduler/decision tests, focused integrations/typecheck, record timing/red-green evidence, mark ready and request one independent review.
+- [x] Commit timer tests with fake clock: immediate pass, one-minute pass, no overlap, failure recovers visibly, stop removes future wakes.
+- [x] Run new test and observe missing scheduler.
+- [x] Separate decision schedule from hourly maintenance, wire worker shutdown and preserve loud failure reporting.
+- [x] Run affected scheduler/decision tests, focused integrations/typecheck, record timing/red-green evidence, mark ready and request one independent review.
+
+## Evidence
+
+- Task 1: `2a25b628e` produced three failures / 27 passes in decisions.test.ts because defaultAt was not accepted; persistence regression `4464f0bfd` also failed on the unsupported field. `2ea902402` passes 38 decision/crew-need tests and the focused storage/list/repeat integration test. Offset-equivalent times share a decision; a changed deadline creates another.
+- Task 2: `83f0854f9` produced four failures / one pass in timed integration cases (deadline ignored, future deadline answered early, no due cap/query); `8161cdb57` fails trusted-clock enforcement. `11011f0f5` passes the deadline behavior and existing 24-hour cases. A follow-up removed a redundant date-type filter that Prisma’s profile reader could not decode; the date comparison already uses MongoDB date type bracketing. The intended deadline index returns one due row and examines at most two documents amid future, legacy and answered noise.
+- Task 3: `8927710b4` cannot load the absent scheduler. `b9545b2e7` passes immediate/minute/stop, non-overlap and loud failure recovery tests. Decision work no longer waits behind hourly maintenance.
+- Final affected local checks: 469 unit tests across decisionSweep, decisions, crewNeeds and commands, plus backend typecheck. Full backend unit and four integration shards are ready PR CI’s responsibility. The focused deadline integration file covers normalized persistence, exact deadline, future and long-lived questions, person/concurrent answers, replay, cap, withdrawal/reflection exclusions and both query plans.
+- No production read/write was attempted. The required read-only environment file is absent on this Team machine. Collection count, index size and daily growth therefore remain a release-owner measurement, with bounded loopback query-plan evidence as the local substitute.
+- Release: add the non-TTL decision_waiting_default index through the normal schema step, deploy backend before new callers; no backfill. Each pass takes at most 500 questions, explicit due first. Failed explicit defaults retry without an age cutoff; a sustained backlog can delay later questions and is visible in worker failure counts. Minute precision means the first pass at/after deadline; a slow active pass postpones the next one. Rollback ignores the additive fields and leaves the index harmlessly unused.

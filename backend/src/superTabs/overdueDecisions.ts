@@ -25,7 +25,7 @@ export async function overdueDecisions(db: PrismaClient, now: number, limit = OV
  * missing/null deadlines and answered rows. IDs only, through decision_waiting_default; withdrawn/reflection rows stay closed. */
 export async function dueDefaultDecisions(db: PrismaClient, now: number, limit = OVERDUE_PER_PASS): Promise<Array<{ tabId: string; id: string; personId: string }>> {
   const rows = await db.superTabDecision.aggregateRaw({ pipeline: [
-    { $match: { answeredAt: null, defaultAt: { $type: 'date', $lte: at(now) }, withdrawn: { $ne: true }, kind: { $ne: REFLECTION_DECISION } } },
+    { $match: { answeredAt: null, defaultAt: { $lte: at(now) }, withdrawn: { $ne: true }, kind: { $ne: REFLECTION_DECISION } } },
     { $sort: { defaultAt: 1 } }, { $limit: limit }, { $project: { _id: 1, tabId: 1, personId: 1 } }] }) as unknown as Array<Record<string, unknown>>
   return rows.map(row => ({ tabId: String(row.tabId), id: String(row._id), personId: String(row.personId) }))
 }
