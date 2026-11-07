@@ -19,6 +19,15 @@ export const stepName = (group: Pick<Conversation, 'step' | 'title'>): string =>
 export const taskEnded = (state: SuperTabState, step: Pick<Conversation, 'reviewOf'>): boolean =>
   ['done', 'cancelled'].includes(state.conversations.find(c => c.id === step.reviewOf)?.assignment?.status ?? '')
 
+/** The most steps a task lists (Conversation.stepIds): production's most was 14 (2026-11-05). */
+const STEPS_LISTED = 200
+/** [task] lists its new step [id], so a new head of its pull request re-derives the step's checks even once it is dormant
+ *  (#3394), however the step opened (conversation.create, or a Ready's review steps). A task from before lists none until its
+ *  PR watch looks its dormant steps up (review of #3218, round 3): listing only this one would hide those. */
+export function listStep(task: Conversation, id: string): void {
+  if (task.stepIds) task.stepIds = [...task.stepIds, id].slice(-STEPS_LISTED)
+}
+
 /** The steps of task [taskId], in creation order. */
 export const stepsOf = (state: SuperTabState, taskId: string): Conversation[] =>
   state.conversations.filter(c => c.reviewOf === taskId)

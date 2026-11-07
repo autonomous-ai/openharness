@@ -47,9 +47,7 @@ import 'model.dart';
 import 'join_machine.dart'
     show superTabOldJoinSuggestion, superTabSuggestedAgentSlots;
 import 'personal_machine_rows.dart';
-import 'team_account_setup.dart';
 import 'section_heading.dart';
-import 'swarm_switcher.dart' show PersonalSwarm;
 import '../widgets/laid_out_list.dart';
 
 export 'machine_status.dart';
@@ -379,7 +377,6 @@ Future<bool> _sendContribution(
   required bool memory,
   required bool Function() alive,
   bool teamAccountOnly = false,
-  bool offerTeamAccount = true,
   bool ifMissing = false,
   bool unlessRemoved = false,
 }) async {
@@ -420,14 +417,6 @@ Future<bool> _sendContribution(
     );
   }
   await app.wakeSuperTabHost(machineId);
-  // This Mac, added while its person is here: macOS asks once for the Harness
-  // Team account (cli/src/team/autoSetup.ts). Never for the Personal Swarm,
-  // which has no teammates to run work for (Diego, 2026-11-03).
-  if (offerTeamAccount &&
-      app.stateOf(machineId)?.isLocalMachine == true &&
-      PersonalSwarm.of(app).id != c.tabId) {
-    unawaited(app.offerTeamAccount('contribute', tabId: c.tabId));
-  }
   return true;
 }
 
@@ -438,9 +427,7 @@ Future<bool> _sendContribution(
 /// [setupId] is the caller's to keep between tries: a setup still running
 /// answers the next try with the same one. With [teamAccountOnly], teammates'
 /// work reaches it only through its Harness Team account once that passes its
-/// privacy check (backend superTabs/machines.ts `teamWorkRefusal`). Without
-/// [offerTeamAccount], this Mac is not offered a Harness Team account: a
-/// Personal Swarm has no teammates to run work for.
+/// privacy check (backend superTabs/machines.ts `teamWorkRefusal`).
 /// [readResources] stands in for [AppNotifier.readMachineResources].
 Future<String?> contributeComputer(
   SuperTabController c,
@@ -449,7 +436,6 @@ Future<String?> contributeComputer(
   required String setupId,
   required bool Function() alive,
   bool teamAccountOnly = false,
-  bool offerTeamAccount = true,
   bool ifMissing = false,
   bool unlessRemoved = false,
   Future<MachineResources?> Function(String machineId)? readResources,
@@ -484,7 +470,6 @@ Future<String?> contributeComputer(
     memory: true,
     alive: alive,
     teamAccountOnly: teamAccountOnly,
-    offerTeamAccount: offerTeamAccount,
     ifMissing: ifMissing,
     unlessRemoved: unlessRemoved,
   );
@@ -736,10 +721,6 @@ Future<void> _machineSettingsDialog(
                   maxAgents: atMost ?? memoryLimit(prepared),
                   memory: atMost == null,
                   alive: () => context.mounted,
-                  // The machine is in the Swarm already: changing its
-                  // settings is no moment to ask for the Team account, and
-                  // asking locked the app (Diego, 2026-11-03).
-                  offerTeamAccount: false,
                 )) {
                   return;
                 }
@@ -869,35 +850,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   bool _reading = false;
   int _revision = 0;
 
-  /// What this Mac's daemon remembers of its Harness Team account setup
-  /// ([AppNotifier.teamSetupStatus]), for its own row's line; null until read
-  /// or when it cannot say.
-  ({String state, String? detail})? _teamSetup;
-
   /// This Mac's daemon's word on why its Team account, signed in, has not
   /// joined (#3215); null unless this Mac's own row reads joining.
   ({String? failure, bool hostRunning})? _teamJoin;
-  bool _teamSetupReading = false;
-
-  /// This Mac's setup while it runs in the background (#3169), for its row's
-  /// step and time left; null without the app's lock in the window.
-  TeamSetupWatch? _setupWatch;
-
-  void _followSetupWatch() {
-    final app = widget.app;
-    final watch = app == null ? null : TeamSetupWatch.of(app);
-    if (identical(watch, _setupWatch)) return;
-    _setupWatch?.removeListener(_setupMoved);
-    _setupWatch = watch?..addListener(_setupMoved);
-  }
-
-  /// The row says the step as it moves, and what the daemon remembers once
-  /// setup ends.
-  void _setupMoved() {
-    if (!mounted) return;
-    _changed();
-    if (_setupWatch?.running == false) unawaited(_readTeamSetup());
-  }
+  bool _teamJoinReading = false;
 
   SuperTabController get c => widget.controller;
   // Team agents only: a Buddy is listed nowhere, and its machine may be its
@@ -917,8 +873,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   void initState() {
     super.initState();
     c.machinesChanged.addListener(_machinesMoved);
-    _followSetupWatch();
-    unawaited(_readTeamSetup());
+    unawaited(_readTeamJoin());
     if ((!kUnderTest || widget.readLocal != null) && widget.app != null) {
       _updateUsage();
       widget.app!.foreground.addListener(_foreground);
@@ -1022,38 +977,32 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     view.agents.length,
   ]);
 
-  /// Reads why this Mac has no Harness Team account, only while its person's
-  /// own row offers Set up: asked of this Mac's daemon, never of another's.
-  Future<void> _readTeamSetup() async {
+  /// Reads why this Mac's Team account has not joined, only while its
+  /// person's own row reads joining: asked of this Mac's daemon, never of
+  /// another's.
+  Future<void> _readTeamJoin() async {
     final app = widget.app;
-    if (app == null || _teamSetupReading || !app.canSetUpTeamAccount) return;
-    bool own(String code) =>
+    if (app == null || _teamJoinReading) return;
+    final joining =
         c.snapshot?.machines.any(
           (m) =>
               m['contributorId'] == c.accountId &&
               app.stateOf(m['machineId'] as String)?.isLocalMachine == true &&
-              (m['teamWork'] as Map?)?['code'] == code,
+              (m['teamWork'] as Map?)?['code'] == 'TEAM_ACCOUNT_JOINING',
         ) ==
         true;
-    final setup = own('TEAM_ACCOUNT_REQUIRED'),
-        joining = own('TEAM_ACCOUNT_JOINING');
-    if (!setup) _teamSetup = null;
-    if (!joining) _teamJoin = null;
-    if (!setup && !joining) return;
-    _teamSetupReading = true;
+    if (!joining) {
+      _teamJoin = null;
+      return;
+    }
+    _teamJoinReading = true;
     try {
-      final read = setup ? await app.teamSetupStatus() : null;
-      final join = joining ? await app.teamJoinStatus() : null;
+      final join = await app.teamJoinStatus();
       if (!mounted) return;
-      if (setup) _teamSetup = read;
-      if (joining) _teamJoin = join;
-      // Running and nobody following it (the app opened while it ran, or it
-      // was started from a terminal): followed from here, so it ends in a
-      // notice too.
-      if (read?.state == 'running') TeamSetupWatch.of(app)?.follow();
+      _teamJoin = join;
       _changed();
     } finally {
-      _teamSetupReading = false;
+      _teamJoinReading = false;
     }
   }
 
@@ -1113,7 +1062,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       }
       _samples.removeWhere((id, _) => !_ids.contains(id));
       _awaiting.removeWhere((id) => !_samples.containsKey(id));
-      await _readTeamSetup();
+      await _readTeamJoin();
     } finally {
       _reading = false;
       // A Swarm that isn't showing reads nothing; coming back reads at once ([_machinesMoved]).
@@ -1131,7 +1080,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     _timer?.cancel();
     _tick?.cancel();
     c.machinesChanged.removeListener(_machinesMoved);
-    _setupWatch?.removeListener(_setupMoved);
     for (final beat in _rowBeats.values) {
       beat.dispose();
     }
@@ -1408,7 +1356,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
   /// Everything a machine's row, its tooltip and its details say of it, read once per build.
   _MachineView _view(String id) {
-    _followSetupWatch();
     final app = widget.app, snapshot = c.snapshot!;
     final shared = snapshot.pool(id);
     // The Mac's Harness Team account is part of its row: its agents are listed here, and everyone but the Mac's owner
@@ -1584,23 +1531,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     final line = _teammatesLine(shared, team, contributor);
     // Sorted once, for both the row's line and its details (task #3412).
     final crew = superTabMachineCrew(agents);
-    final restartTeam =
-        team != null &&
-        (team['teamWork'] as Map?)?['code'] == 'MACHINE_OFFLINE' &&
-        contributor == c.accountId &&
-        app != null &&
-        app.canSetUpTeamAccount &&
-        app.stateOf(id)?.isLocalMachine == true &&
-        (status == SuperTabMachineStatus.live ||
-            status == SuperTabMachineStatus.late);
-    final setUpTeam =
-        line != null &&
-        team == null &&
-        (shared?['teamWork'] as Map?)?['code'] == 'TEAM_ACCOUNT_REQUIRED' &&
-        contributor == c.accountId &&
-        app != null &&
-        app.canSetUpTeamAccount &&
-        app.stateOf(id)?.isLocalMachine == true;
     // A Team account signed in but not joined (#3215): this Mac's own person reads why, and Retry.
     final join = _teamJoin;
     final joinLine =
@@ -1609,20 +1539,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             (shared?['teamWork'] as Map?)?['code'] == 'TEAM_ACCOUNT_JOINING' &&
             contributor == c.accountId &&
             app != null &&
-            app.canSetUpTeamAccount &&
             app.stateOf(id)?.isLocalMachine == true &&
             join != null
         ? superTabTeamJoinLine(join)
         : null;
-    // While setup runs, its step and the time left, and that the person may
-    // go on working (#3169); otherwise its own person reads why: they
-    // cancelled, or setup failed and why.
-    final progress = (setUpTeam || restartTeam) ? _setupWatch?.line : null;
-    final problem = progress != null
-        ? '$progress\nKeep working. We\'ll tell you when it\'s ready.'
-        : setUpTeam
-        ? superTabTeamSetupLine(_teamSetup) ?? line
-        : joinLine ?? line;
+    final problem = joinLine ?? line;
     return _MachineView(
       apiModels: apiModels,
       localModels: localModels,
@@ -1635,15 +1556,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         crew,
         diskFree: dim ? null : diskFree?.toDouble(),
       ),
-      // Set up would ask for the password again while one setup runs.
-      setUpTeam:
-          ((setUpTeam || restartTeam) && progress == null) || joinLine != null,
       retryJoin: joinLine != null,
-      setUpTeamLabel: joinLine != null
-          ? 'Retry'
-          : restartTeam
-          ? 'Restart'
-          : superTabTeamSetupAction(_teamSetup),
       owner: person,
       contributor: contributor,
       shared: shared,
@@ -2143,27 +2056,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                     onMore: BrowserMenuGuard.inBrowser
                         ? (at) => _menu(view, at)
                         : null,
-                    onSetUpTeam: view.retryJoin
+                    onRetryJoin: view.retryJoin
                         ? () async {
                             await widget.app!.retryTeamJoin();
-                            await _readTeamSetup();
-                          }
-                        : view.setUpTeam
-                        ? () async {
-                            await showTeamAccountSetup(
-                              context,
-                              widget.app!,
-                              restart: view.setUpTeamLabel == 'Restart',
-                              missing: view.setUpTeamLabel == 'Restart'
-                                  ? 'Harness Team account offline'
-                                  : _teamSetup?.state == 'incomplete'
-                                  ? _teamSetup?.detail ?? ''
-                                  : null,
-                              signInAgain:
-                                  view.setUpTeamLabel != 'Restart' &&
-                                  _teamSetup?.state == 'exists',
-                            );
-                            await _readTeamSetup();
+                            await _readTeamJoin();
                           }
                         : null,
                   ),
@@ -2867,9 +2763,7 @@ class _MachineView {
     this.history,
     this.crew = const [],
     this.crewLine,
-    this.setUpTeam = false,
     this.retryJoin = false,
-    this.setUpTeamLabel = 'Set up',
     this.apiModels = const [],
     this.localModels = const [],
     this.access = const [],
@@ -2880,14 +2774,8 @@ class _MachineView {
 
   final String id, name, details, tip;
 
-  /// Its [problem] is this Mac's, its own person looking: no Harness Team account yet, which they can set up here.
-  final bool setUpTeam;
-
-  /// The row's button retries this Mac's join of its Team account (#3215), not its setup.
+  /// The row's button retries this Mac's join of its Team account (#3215), its own person looking.
   final bool retryJoin;
-
-  /// Its button's word: Repair for an account that is there with a part missing (#2765), else Set up.
-  final String setUpTeamLabel;
 
   /// Its one line when teammates' agents cannot run there ([superTabTeammatesPaused]); null otherwise.
   final String? problem;
@@ -2973,28 +2861,6 @@ String? superTabTeammatesPaused(Object? code) {
   return why == null ? null : "Teammates' agents paused: $why";
 }
 
-/// This Mac's own row, for its person, when its daemon remembers why it has no Harness Team account
-/// (cli/src/team/autoSetup.ts `status`); null when it does not, and the Swarm's own line stands.
-String? superTabTeamSetupLine(({String state, String? detail})? setup) {
-  final detail = setup?.detail?.trim().replaceFirst(RegExp(r'[.]+$'), '');
-  final why = switch (setup?.state) {
-    'declined' => 'setup was cancelled',
-    'failed' when detail != null && detail.isNotEmpty =>
-      'setup failed: $detail',
-    'failed' => 'setup failed',
-    'running' => 'setting up',
-    // The account is there, a part of it is not (cli/src/team/autoSetup.ts `missingDetail`, #2765).
-    'incomplete' when detail != null && detail.isNotEmpty =>
-      'Harness Team is not finished ($detail)',
-    'incomplete' => 'Harness Team is not finished',
-    // The Swarm has no Team account for this row while this Mac has one: it serves another account of this computer,
-    // the one signed in here before (#3122).
-    'exists' => 'Harness Team on this computer works for another account',
-    _ => null,
-  };
-  return why == null ? null : "Teammates' agents paused: $why";
-}
-
 /// This Mac's own row while its Team account, signed in, has not joined (#3215): the last refusal or error of its join, or
 /// that this Mac's Swarm work is not running; null while the join simply runs.
 String? superTabTeamJoinLine(({String? failure, bool hostRunning}) join) {
@@ -3008,13 +2874,6 @@ String? superTabTeamJoinLine(({String? failure, bool hostRunning}) join) {
       ? null
       : "Teammates' agents paused: Harness Team could not join: $why";
 }
-
-/// The row's button for this Mac's own setup: Repair when the account is there but a part of it is not (#2765), or it
-/// works for another account (#3122), else Set up.
-String superTabTeamSetupAction(({String state, String? detail})? setup) =>
-    setup?.state == 'incomplete' || setup?.state == 'exists'
-    ? 'Repair'
-    : 'Set up';
 
 /// Who had this computer's row before the account signed in on it now, and until when: "Was kelvin until 5 Nov"
 /// (backend machines.ts previousOwner, #3122). Null for a row never moved, or one whose person is not in the Swarm.
@@ -3209,7 +3068,7 @@ class _MachineProjectsSettingState extends State<_MachineProjectsSetting> {
 class _MachineLine extends StatelessWidget {
   const _MachineLine({
     required this.view,
-    this.onSetUpTeam,
+    this.onRetryJoin,
     this.onMore,
     this.words = false,
   });
@@ -3222,8 +3081,8 @@ class _MachineLine extends StatelessWidget {
   /// In a browser, opens the machine's menu at a point until it closes: the ⋯ that needs no right-click.
   final Future<void> Function(Offset at)? onMore;
 
-  /// This Mac's row, without its Harness Team account: Set up under the paused line.
-  final VoidCallback? onSetUpTeam;
+  /// This Mac's row, its Team account not joined: Retry under the paused line.
+  final VoidCallback? onRetryJoin;
 
   @override
   Widget build(BuildContext context) {
@@ -3318,17 +3177,17 @@ class _MachineLine extends StatelessWidget {
                           style: DesktopChrome.metadata(),
                         ),
                       // The design system's secondary action, as themed (desktop-design-system.md): no local style.
-                      if (problem != null && onSetUpTeam != null)
+                      if (problem != null && onRetryJoin != null)
                         Padding(
                           padding: const EdgeInsets.only(
                             top: grid.AppDesktop.controlGap,
                           ),
                           child: OutlinedButton(
                             key: ValueKey(
-                              'super-machine-team-setup-${view.id}',
+                              'super-machine-team-retry-${view.id}',
                             ),
-                            onPressed: onSetUpTeam,
-                            child: Text(view.setUpTeamLabel),
+                            onPressed: onRetryJoin,
+                            child: const Text('Retry'),
                           ),
                         ),
                     ],

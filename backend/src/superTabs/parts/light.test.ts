@@ -96,6 +96,7 @@ const conversation: Required<Conversation> = {
   teamWrittenBy: { kind: 'assigned' },
   title: 't',
   unlinkedPullRequests: [],
+  waitingLinuxStep: { step: { name: 'Test on a Linux machine', kind: 'test', areas: [], where: ['The CLI on a Linux machine'], os: 'linux' }, pulls: [] },
   writers: [],
 }
 

@@ -10,10 +10,6 @@ const permissionModes = {
   plan: ['--permission-mode', 'plan'],
   ask: ['--permission-mode', 'default'],
   full: ['--dangerously-skip-permissions'],
-  // An older Buddy's saved mode, from when a guard held it read-only. A Buddy is its owner's right hand now (Ken, 11-04, task
-  // #2832): relaunched like their own session, in full mode. After `full`, so a process's argv reads back as `full`
-  // (lib/processTable.ts). Remove after 2026-12-04, once every Buddy saved before #2832 has started again.
-  buddy: ['--dangerously-skip-permissions'],
   // Code a Harness Team agent wrote, in a Team account (backend superTabs/teamWritten.ts, audit H2): full mode, and nothing the
   // branch carries. `user` and not `local`: a branch can commit `.claude/settings.local.json`. Harness's hooks are in the user
   // settings. Claude Code 2.1.316, tried: planted settings.json, settings.local.json and .mcp.json each ran in a trusted
@@ -47,14 +43,6 @@ export const launch: EngineLaunch = {
     home: { variable: 'CLAUDE_CONFIG_DIR', otherwise: 'home' }, file: '.claude.json',
     format: 'json', projects: 'projects', accepted: 'hasTrustDialogAccepted', entry: { allowedTools: [] },
   },
-  /**
-   * "WARNING: Claude Code running in Bypass Permissions mode … Yes, I accept", the first time `--dangerously-skip-permissions`
-   * runs: a Swarm Lead on the Mac Studio sat there before its first turn (2026-10-26). Accepting writes
-   * `skipDangerousModePermissionPrompt: true` to the user settings, "Whether the user has accepted the bypass permissions
-   * mode dialog" in its settings schema, and the key its own message tells people to add (2.1.310; with it set the
-   * dialog is not shown, tried with the binary).
-   */
-  bypassAcceptance: { home: { variable: 'CLAUDE_CONFIG_DIR', otherwise: { folder: '.claude' } }, file: 'settings.json', key: 'skipDangerousModePermissionPrompt' },
   /**
    * `.mcp.json` in a folder above, such as the home's, is asked about as "New MCP server found in this project". Its
    * default, "Continue without using this MCP server", adds the name to `disabledMcpjsonServers` in the folder's
