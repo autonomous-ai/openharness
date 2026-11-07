@@ -1857,8 +1857,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if ((state.starts ?? []).filter(s => !s.harnessId && !s.error).length >= 32) return none()
     const chatId = openAgentChat(owner, name)
     const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: pool.engines[0]!, name,
-      // Its home, as a Regular agent's (agent.new): its host makes the project's worktree inside it from `member` (#4698).
-      cwd: buddyHomeFolder(pool, owner), worktree: false, requirements: { ...BUDDY_REQUIREMENTS, memoryBytes: AGENT_MEMORY_BYTES },
+      // Its project's folder with a worktree, as any project agent's (machines.ts admitMachineStart reads `member`): its host
+      // copies a helper from it, and reopens it in place after a sleep (#4698).
+      cwd: projectFolder(pool, project), worktree: true, requirements: { ...BUDDY_REQUIREMENTS, memoryBytes: AGENT_MEMORY_BYTES },
       regular: true, mainProjectId: project.id, member: { projectId: project.id } }
     let admitted: ReturnType<typeof admitMachineStart>
     try { admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines) } catch (error) {
