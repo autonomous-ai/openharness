@@ -151,9 +151,9 @@ void main() {
         'status': 'rejected',
         'reason': 'Too much scope',
       });
-      expect(find.text('Rejected'), findsOneWidget);
+      expect(find.text('Declined'), findsOneWidget);
       expect(find.text('Reason: Too much scope'), findsOneWidget);
-      expect(find.byTooltip('Rejected: Too much scope'), findsOneWidget);
+      expect(find.byTooltip('Declined: Too much scope'), findsOneWidget);
     });
     testWidgets('a long reason wraps instead of overflowing', (t) async {
       await header(t, {
