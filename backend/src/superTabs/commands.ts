@@ -4105,6 +4105,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         ...(start.request.buddyScope ? { buddyScope: start.request.buddyScope } : {}),
         ...(start.request.regular ? { regular: true as const } : {}),
         ...(start.request.member ? { member: start.request.member } : {}),
+        // A private main project ties it there from its start, not its first task (security review 2 of #3575): it carries the
+        // project's name, so no other project's Lead sees it or gives it work once its person stops reading the project.
+        ...(start.request.mainProjectId && projectsOf(state).find(p => p.id === start.request.mainProjectId)?.visibility === 'private'
+          ? { privateProjectId: start.request.mainProjectId } : {}),
         ...(start.request.helperOf ? { helperOf: start.request.helperOf } : {}),
         ...(start.request.mainProjectId ? { mainProjectId: start.request.mainProjectId } : {}),
         ...(start.request.buddyNarrow ? { buddyNarrow: true as const } : {}),
