@@ -92,12 +92,14 @@ const measured = (entries: ProfileEntry[]) => {
 }
 
 /** Each command's most queries and KB on this store, a little above what it read (the PR's numbers). What is left is each
- *  kind's listing, ~110 bytes a part, and the parts the command wrote: on prod, parts are larger and more. */
+ *  kind's listing, ~110 bytes a part, and the parts the command wrote: on prod, parts are larger and more. A command that reads
+ *  GitHub first loads once more to check its caller (task #4388: 34 to 38 queries and 39 to 56 KB for work.assign, 34 to 36
+ *  and 47 to 59 for a Ready), and its reads look their facts up in that load. */
 const BUDGET = {
   'conversation.create': { queries: 24, kb: 36 },
-  'work.assign': { queries: 36, kb: 44 },
+  'work.assign': { queries: 40, kb: 60 },
   'work.status': { queries: 22, kb: 36 },
-  'work.status review': { queries: 36, kb: 52 },
+  'work.status review': { queries: 38, kb: 64 },
   'post': { queries: 20, kb: 34 },
   'react': { queries: 22, kb: 34 },
   'dispatch pass': { queries: 12, kb: 32 },
