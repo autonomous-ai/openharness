@@ -257,6 +257,39 @@ describe('the crew dispatch pass', () => {
     expect((await readGroup(s.tab, phone)).handOutLane).toBe('mobile')
   })
 
+  // Task #3964: the store reads the project's machine rules for a start, an assignment and the dispatch pass.
+  it('follows the project\'s machine rules from its record in a start, an assignment and the dispatch pass', async () => {
+    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
+    await save(s, 0, { machines: [{ machineIds: ['owner-mac'], why: 'This Mac takes no new work for now', noEngines: ['claude'] }] })
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 0 })
+    await expect(s.execute({ type: 'work.assign', conversationId: s.tasks.Api!, agentId: s.crew.Ash! }, s.pm))
+      .rejects.toMatchObject({ code: 'MACHINE_RULE', message: 'This Mac takes no new work for now' })
+    await s.execute({ type: 'machine.contribute', machineId: 'owner-mac', name: 'Owner Mac', cwd: '/swarm', scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 4 })
+    const generation = (await poolRows(s.store, owner, 'owner-mac')).find(p => p.tabId === s.tab)!.machine.generation
+    await s.store.observeMachine(owner, s.tab, 'owner-mac', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 64e9, memoryUsedBytes: 4e9,
+      diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Desktop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+    quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [] })
+    const request = (engine: string) => ({ conversationId: s.tasks.Api!, machineId: 'owner-mac', engine, name: 'Builder', cwd: '/swarm/lead', worktree: false,
+      requirements: { memoryBytes: 1e9, diskBytes: 1e9, maxCpuPercent: 90, tools: [], devices: [], quotaRequired: false } })
+    await expect(s.execute({ type: 'agent.start', request: request('claude') })).rejects.toMatchObject({ code: 'MACHINE_RULE' })
+    expect((await s.execute({ type: 'agent.start', request: request('codex') })).result.startId).toBeTruthy()
+    // Cleared by the people who set it: the member takes the task again.
+    await save(s, 1, { machines: [] })
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
+    expect(await s.holders()).toEqual({ Api: 'Ash' })
+  })
+
+  // Security review 1 of #3964: a record broken elsewhere still applies the machine rules it holds that pass.
+  it('applies the machine rules of a record that fails the schema elsewhere, to an assignment', async () => {
+    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
+    const rule = { machineIds: ['owner-mac'], why: 'This Mac takes no new work for now', noEngines: ['claude' as const] }
+    await save(s, 0, { machines: [rule] })
+    await db.superTabProjectRules.updateMany({ where: { tabId: s.tab, projectId: 'lead' },
+      data: { rules: { ...structuredClone(SEED_RULES), dispatch: { ...SEED_RULES.dispatch, maxHanded: 0 }, machines: [rule] } } })
+    await expect(s.execute({ type: 'work.assign', conversationId: s.tasks.Api!, agentId: s.crew.Ash! }, s.pm))
+      .rejects.toMatchObject({ code: 'MACHINE_RULE', message: 'This Mac takes no new work for now' })
+  })
+
   it('hands a free member its pinned task first, then its lane\'s top task, as the PM, through work.assign', async () => {
     const s = await swarm({ Ash: 'backend', Birch: 'desktop' }, { Api: 'backend/src/a.ts', Store: 'backend/src/b.ts', Board: 'desktop/lib/c.dart' })
     await editGroup(s.tab, s.tasks.Store!, group => ({ ...group, pin: { agentId: s.crew.Ash!, why: 'ci', at: NOW } }))
@@ -392,21 +425,6 @@ describe('the crew dispatch pass', () => {
     expect(await s.holders()).toEqual({ Api: 'Ash' })
   })
 
-  it('assigns within the short retry once the repository is approved, and not before it', async () => {
-    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
-    // Ash runs in a Team account, which reaches the repository only through the GitHub App (repositoryReach.ts).
-    await editAgent(s.tab, s.crew.Ash!, agent => ({ ...agent, teamAccount: true }))
-    const store = s.store as unknown as { repositoryReachFor: (...args: unknown[]) => Promise<unknown> }
-    vi.spyOn(store, 'repositoryReachFor').mockResolvedValueOnce({ state: 'not-approved', repository: 'owner/repo' })
-    const refused = await s.store.dispatchCrew(s.tab)
-    expect(refused).toMatchObject({ assigned: 0, skipped: { REPOSITORY_UNREACHABLE: 1 } })
-    // Approved now, in the same round. The pick waits its short retry, then goes.
-    expect(await s.store.dispatchCrew(s.tab)).toEqual({ assigned: 0, skipped: {} })
-    s.advance(DISPATCH_RETRY_MS)
-    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
-    expect(await s.holders()).toEqual({ Api: 'Ash' })
-  })
-
   it('does not assign a task postponed while the pass read GitHub', async () => {
     const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
     // Between the pass's read and its write: a person moves the task to tomorrow.
@@ -432,12 +450,12 @@ describe('the crew dispatch pass', () => {
     expect(second.status).toBe('working')
   })
 
-  it('skips a task the member may not take (Team-written code, main account) and gives it its next one', async () => {
+  // Swarm v3 (task #4120, the PM's ruling): Team-written code goes only to the project owner's own agent, as Ash is here.
+  it('gives Team-written code to the project owner\'s own agent', async () => {
     const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts', Store: 'backend/src/b.ts' })
-    // Team-written code goes only to a Team account's agent: Ash runs in the main account.
     await editGroup(s.tab, s.tasks.Api!, group => ({ ...group, teamWritten: true }))
     const done = await s.store.dispatchCrew(s.tab)
     expect(done.assigned).toBe(1)
-    expect(await s.holders()).toEqual({ Api: null, Store: 'Ash' })
+    expect(await s.holders()).toEqual({ Api: 'Ash', Store: null })
   })
 })

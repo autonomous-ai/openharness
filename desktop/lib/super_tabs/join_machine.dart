@@ -1,13 +1,17 @@
 import 'dart:async';
 
 import '../core/machine_resources.dart';
-import '../core/models.dart' show sameMachineId;
 import 'controller.dart';
 
-/// A join waiting for the local person's account choice. Never persisted;
-/// closing the UI cancels it without enabling own-account work.
+/// A join waiting for the person to bring their own agent. Never persisted;
+/// closing the prompt starts nothing and never enrolls a machine.
 class SwarmJoinAccountRequest {
-  SwarmJoinAccountRequest(this.swarmName, this.accountId);
+  SwarmJoinAccountRequest(
+    this.swarmName,
+    this.accountId, {
+    required this.tabId,
+  });
+  final String tabId;
   final String swarmName, accountId;
   final _answer = Completer<bool?>();
   bool get answered => _answer.isCompleted;
@@ -72,201 +76,5 @@ class SwarmInviteAccepts {
     final reply = await send(operationId);
     _attempts.remove(inviteId);
     return reply;
-  }
-}
-
-/// The engines a Swarm machine runs (backend `swarmEngine`).
-const _swarmEngines = {'claude', 'codex'};
-
-/// This computer, added to a Swarm by the join that just let its person in
-/// (Scholes, 2026-10-29): what [SwarmJoinMachine.add] did, for the note the
-/// person sees. [problem]: why it was not added, in a sentence for them.
-/// [teamProblem]: it was added, but its Harness Team account could not be
-/// offered, and where to set it up (task #3160).
-class SwarmJoinedMachine {
-  const SwarmJoinedMachine({
-    required this.tabId,
-    required this.swarmName,
-    required this.machineId,
-    required this.machineName,
-    this.problem,
-    this.teamProblem,
-    this.ownAccount = false,
-    this.accountProblem,
-  });
-
-  final String tabId, swarmName, machineId, machineName;
-  final String? problem, teamProblem, accountProblem;
-  final bool ownAccount;
-  bool get added => problem == null;
-
-  /// The same machine, added, whose Team account offer failed.
-  SwarmJoinedMachine withoutTeamOffer() => SwarmJoinedMachine(
-    tabId: tabId,
-    swarmName: swarmName,
-    machineId: machineId,
-    machineName: machineName,
-    teamProblem: 'Set it up from Machines.',
-  );
-}
-
-/// Adds this computer to a Swarm its person just joined, with Add machine's
-/// defaults: the Claude Code and Codex it has, the folder its daemon sets up,
-/// and the number of agents its memory suggests. It is added as
-/// `teamAccountOnly`, so the server sends teammates' work to it only through
-/// its Harness Team account whose privacy check passed (backend
-/// superTabs/machines.ts `teamWorkRefusal`); until then it runs only its
-/// person's own projects.
-///
-/// Only a new collaborator's computer, in a Swarm that uses Harness Team
-/// accounts: a viewer, a computer already in the Swarm, one its person took
-/// out of it, and a Swarm whose server does not try Team accounts yet are left
-/// as they are.
-class SwarmJoinMachine {
-  SwarmJoinMachine({
-    required this.machineRequest,
-    required this.readResources,
-    required this.wake,
-    this.pause = const Duration(seconds: 1),
-    this.deadline = const Duration(minutes: 5),
-  });
-
-  /// A `super_tabs` request to this computer's own daemon.
-  final Future<Map<String, dynamic>> Function(
-    String machineId,
-    Map<String, dynamic> payload,
-  )
-  machineRequest;
-  final Future<MachineResources?> Function(String machineId) readResources;
-
-  /// Tells the daemon it is in the Swarm now, so it starts hosting at once.
-  final Future<void> Function(String machineId) wake;
-
-  /// Between two reads of a folder setup still running, and how long the
-  /// whole setup may take, as Add machine waits.
-  final Duration pause, deadline;
-
-  /// Null when nothing was to be done, or the account changed or signed out
-  /// meanwhile ([current] false): nothing is added or said then.
-  Future<SwarmJoinedMachine?> add(
-    SuperTabController c, {
-    required String machineId,
-    required String machineName,
-    required bool Function() current,
-    bool ownAccount = false,
-  }) async {
-    final snapshot = c.snapshot;
-    if (snapshot == null || !current()) return null;
-    if (!snapshot.teamAccounts || !c.canWrite) return null;
-    final me = snapshot.people.where((p) => p.id == c.accountId).firstOrNull;
-    if (me?.role != 'collaborator') return null;
-    if (snapshot.machines.any((m) => m['machineId'] == machineId)) return null;
-    // Its person took it out, on any computer, a reinstall of this one
-    // included: it stays out until they add it with Add machine (backend
-    // commands.ts machine.remove; task #3212).
-    if (snapshot.removedMachines.any((id) => sameMachineId(id, machineId))) {
-      return null;
-    }
-    SwarmJoinedMachine note([String? problem]) => SwarmJoinedMachine(
-      tabId: c.tabId,
-      swarmName: snapshot.name,
-      machineId: machineId,
-      machineName: machineName,
-      problem: problem,
-    );
-
-    final operationId = superTabOperationId();
-    final until = DateTime.now().add(deadline);
-    Map<String, dynamic> prepared;
-    while (true) {
-      try {
-        prepared = await machineRequest(machineId, {
-          'action': 'prepareContribution',
-          'tabId': c.tabId,
-          'scope': 'swarm',
-          'operationId': operationId,
-        });
-      } catch (_) {
-        if (!current()) return null;
-        return note(
-          'Could not reach Harness on this computer. Add it from Machines.',
-        );
-      }
-      if (!current()) return null;
-      if (prepared['state'] == 'ready' && prepared['scope'] == 'swarm') break;
-      if (prepared['state'] != 'preparing') {
-        return note(
-          'Update Harness on this computer, then add it from Machines.',
-        );
-      }
-      if (DateTime.now().isAfter(until)) {
-        return note(
-          'Setting up this computer took too long. Add it from Machines.',
-        );
-      }
-      await Future<void>.delayed(pause);
-    }
-    final engines = [
-      for (final engine in prepared['engines'] as List? ?? const [])
-        if (_swarmEngines.contains(engine)) engine as String,
-    ];
-    if (engines.isEmpty) {
-      return note(
-        'Install Claude Code or Codex on this computer, then add it from Machines.',
-      );
-    }
-    MachineResources? resources;
-    try {
-      resources = await readResources(machineId);
-    } catch (_) {
-      // Its offer below stands in.
-    }
-    final offered = prepared['maxAgents'];
-    final slots =
-        superTabSuggestedAgentSlots(resources) ??
-        (offered is num ? offered.toInt().clamp(1, 1024) : 4);
-    if (!current() || !c.canWrite) return null;
-    final result = await c.command({
-      'type': 'machine.contribute',
-      'machineId': machineId,
-      'name': machineName,
-      'cwd': prepared['cwd'],
-      'scope': 'swarm',
-      'engines': engines,
-      'maxAgents': slots,
-      // Joining sets no limit: free memory is checked at each start.
-      'agents': 'memory',
-      'teamAccountOnly': true,
-    });
-    if (!current()) return null;
-    if (result == null) {
-      return note(
-        c.operationError ??
-            'Could not add this computer. Add it from Machines.',
-      );
-    }
-    try {
-      await wake(machineId);
-    } catch (_) {
-      // Its daemon finds the Swarm on its next read anyway.
-    }
-    if (!current()) return null;
-    if (!ownAccount) return note();
-    final consent = await c.command({
-      'type': 'machine.ownAccountWork',
-      'machineId': machineId,
-      'allowed': true,
-    });
-    if (!current()) return null;
-    return SwarmJoinedMachine(
-      tabId: c.tabId,
-      swarmName: snapshot.name,
-      machineId: machineId,
-      machineName: machineName,
-      ownAccount: consent != null,
-      accountProblem: consent == null
-          ? 'Could not confirm the account setting. Check Machines to confirm or try again.'
-          : null,
-    );
   }
 }

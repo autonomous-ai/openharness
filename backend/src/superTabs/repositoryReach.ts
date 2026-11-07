@@ -30,11 +30,11 @@ export function requireRepositoryReach(state: SuperTabState, team: boolean, mach
       + '(Project details, GitHub access), then start or assign it again.', 409)
 }
 
-/** Why GitHub cannot show who pushed, when it is that the app is not installed: a Team account cannot reach it either. */
+/** Why GitHub cannot show who pushed, when it is that the app is not installed (task #4120: only the owner's own agent runs it then). */
 export function unknownPushReason(reach: RepositoryReach | undefined): string | null {
   return reach?.state === 'not-installed'
-    ? `GitHub cannot show who pushed this task's code because the Harness GitHub App is not installed on ${reach.repository}, so it may run only in a `
-      + `Team account, and a Team account reaches the repository only through that app. ${install(reach)}; then it runs in your own account.`
+    ? `GitHub cannot show who pushed this task's code because the Harness GitHub App is not installed on ${reach.repository}, so only the project `
+      + `owner's own agent may run it. ${install(reach)}; then it runs in your own account.`
     : null
 }
 
