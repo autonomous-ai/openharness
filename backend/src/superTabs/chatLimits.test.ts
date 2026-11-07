@@ -210,3 +210,30 @@ describe('answer recording at the ledger boundary', () => {
       .toThrow(expect.objectContaining({ code: 'CHAT_ASK_CLOSED' }))
   })
 })
+
+// Task #4555: no chat has threads, so no refusal sends an agent to one.
+describe('what a refused agent post says', () => {
+  it('points at the task, an edit or a newer message, never a thread', () => {
+    const { f, send, ask } = setup()
+    const said = (body: () => unknown): string => {
+      try { body() } catch (error) { return (error as Error).message }
+      throw new Error('not refused')
+    }
+    const messages = [said(() => send('Status: tests running.'))]
+    const url = 'https://github.com/acme/repo/pull/12'
+    f.group('lead').cards = { pullRequests: [{ url, messageId: 'card' }] }
+    messages.push(said(() => send(url)))
+    const question = ask()
+    const answer = send('I can fix login.', { reply: question, extra: { answers: question.id } })
+    const response = { ...question, id: String(answer.result.messageId), author: answer.messages[0]!.author }
+    send('Login now works offline.', { by: f.dev, reply: response, extra: { answers: response.id } })
+    messages.push(said(() => send('The fix also handles expired tokens.', { reply: response, extra: { answers: response.id } })))
+    const old = ask()
+    for (let i = 0; i < 51; i++) { f.tick(1); ask() }
+    messages.push(said(() => send('Yes, offline works.', { reply: old, extra: { answers: old.id, answer: true } })))
+    const fresh = ask()
+    messages.push(said(() => send('Done.', { reply: fresh, extra: { answers: fresh.id, replyTo: fresh.id } })))
+    expect(messages).toHaveLength(5)
+    for (const message of messages) expect(message).not.toMatch(/thread/i)
+  })
+})
