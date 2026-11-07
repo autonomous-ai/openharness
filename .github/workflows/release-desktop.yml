@@ -546,6 +546,41 @@ jobs:
           endpoint: ${{ vars.SIGNING_ENDPOINT }}
           account: ${{ vars.SIGNING_ACCOUNT }}
           profile: ${{ vars.SIGNING_PROFILE }}
+      # The Dart code (data/app.so) and the other files Authenticode cannot sign, by hash, in a catalog signed
+      # next. The updater installs a version folder only when this catalog is signed like the running app and
+      # every file in the folder matches it (desktop/lib/update/update_signature.dart). Written after the
+      # programs are signed, so their listed hashes are of the bytes that ship.
+      - name: Write the file catalogs
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($arch in 'x64', 'arm64') {
+            $folder = (Resolve-Path -LiteralPath "windows-sign/$arch/app/$env:VERSION").Path
+            $catalog = Join-Path $env:RUNNER_TEMP "harness-desktop-$arch.cat"
+            New-FileCatalog -CatalogVersion 2.0 -Path $folder -CatalogFilePath $catalog | Out-Null
+            Move-Item -LiteralPath $catalog -Destination (Join-Path $folder 'harness-desktop.cat')
+          }
+      - name: Sign the file catalogs
+        uses: ./.github/actions/windows-signing
+        with:
+          path: windows-sign
+          publisher: ${{ vars.WINDOWS_SIGNING_PUBLISHER || 'AUTONOMOUS INC.' }}
+          azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          endpoint: ${{ vars.SIGNING_ENDPOINT }}
+          account: ${{ vars.SIGNING_ACCOUNT }}
+          profile: ${{ vars.SIGNING_PROFILE }}
+      # What the updater will ask of the same folder once it is unpacked.
+      - name: Check the file catalogs
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($arch in 'x64', 'arm64') {
+            $folder = (Resolve-Path -LiteralPath "windows-sign/$arch/app/$env:VERSION").Path
+            $result = Test-FileCatalog -CatalogFilePath (Join-Path $folder 'harness-desktop.cat') -Path $folder -FilesToSkip 'harness-desktop.cat' -Detailed
+            if ($result.Status -ne 'Valid') { throw "$arch catalog check: $($result.Status)" }
+            if ($result.Signature.Status -ne 'Valid') { throw "$arch catalog signature: $($result.Signature.Status)" }
+            Write-Host "$arch catalog valid: $($result.CatalogItems.Count) files, signed by $($result.Signature.SignerCertificate.Subject)"
+          }
       # The same entries package-windows.ps1 writes: files only, relative, with forward slashes.
       - name: Write the signed zips
         run: |

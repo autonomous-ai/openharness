@@ -142,6 +142,20 @@ project name, Enter GitHub URL, Run Blender with. Standard named destinations
 retain their names, such as Harness Store and New Tab. Avoid repeated labels,
 internal state names, decorative punctuation and implementation details.
 
+All copy is sharp, not only empty states (anh Dee, 2026-11-07, task #4465):
+
+1. **One idea per line.** No line runs past one short sentence unless someone
+   asked for an explanation.
+2. **Buttons are one or two words, verb first:** Accept, New agent, Join.
+3. **Labels and notes are a few words.**
+4. **Cut filler:** please, you can, just, simply, currently, in order to,
+   will appear here.
+5. **Say it once.** Never repeat what the screen already shows.
+6. **Errors say what happened and what to do**, in two short sentences at
+   most.
+
+An empty list or pane says nothing (Swarm elements, rule 7).
+
 ## Color and state
 
 Use semantic light/dark tokens throughout. Floating surfaces share the same
@@ -292,9 +306,10 @@ sized for the widest expected value; names take the remaining width and
 truncate first. Row anatomy is the list rule above: rank, identity, name with
 its metadata, then trend and the emphasized number at the right.
 
-The left pane's People and Agents have no rank number (Dee, 2026-10-29):
-people sort by name with their points at the right, and the crown sits after
-the week's top person's name.
+The Desktop left pane's Humans has no rank number and no crown: it is the
+Leaderboard in short, its people most points first with their points at the
+right ([Swarm left pane](#swarm-left-pane)). There, as the one exception to the
+table, points are the row's quiet detail: 12, tertiary, tabular.
 
 A place is its numeral; a celebration mark sits beside it and never replaces
 it, as [Team and celebration](#team-and-celebration) describes. Color never
@@ -377,6 +392,50 @@ against `test/goldens/swarm-elements-{light,dark}.png`, holding each element
 to its own area: a face or ring may barely differ, an icon or letter a
 quarter of its box, and nothing else outside the words more than 38 pixels.
 
+Seven rules hold the whole Swarm screen to minimal, clear and quiet, with less
+on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
+
+1. **Grey everywhere; colour only on agent faces.** Grounds, text, rules and
+   controls take the neutral ramp. The faces and the Lead ring are the colour.
+2. **Blue only for the main action; red only for failed.** One filled blue
+   action per surface; the semantic error ink only for what failed.
+3. **Three text sizes: 14 chat, 13 names, 12 details.** Messages are 14,
+   names and controls 13 (`AppType.label`), every detail 12
+   (`AppType.caption`). In lists, bold means unread and nothing else.
+4. **Every row: face, name, one quiet detail on the right.** One detail, in
+   12-point `AppPalette.textFaint`; anything more waits for hover or a menu.
+5. **Dropdowns stay plain text until you hover.** At rest a dropdown is its
+   value in quiet text; hover, focus or an open menu brings the chevron and
+   the primary ink. The chevron's room is kept at rest, so hover moves nothing.
+6. **If it doesn't help you decide, it's gone.** A line that only describes
+   (a subscription, a machine, what an agent can read) leaves the screen; its
+   full value stays in menus, tooltips and accessibility.
+7. **Empty means empty.** An empty list or pane shows nothing, or only the
+   action that fills it (such as + New agent). Words stay only when they help
+   someone act: why something can't be used and who can fix it, or an error.
+   "None yet", "No tasks yet", "Nothing here yet", "Start the conversation."
+   and the like are not drawn. The gallery draws each element empty.
+
+- **One surface.** The left, middle and right panes share one ground,
+  `AppPalette.swarmField`, the colour the selected native tab joins. Only the
+  layout's 1-point `AppDesktop.rim` hairlines split them. `SuperTabView` paints
+  it under all three, and the Tasks pane paints it too, so no pane shows its
+  host's colour. A palette the person chose that names its own sidebar (Plum)
+  keeps it.
+- **Top bar.** Every agent's chat has the same 44-high bar
+  (`SuperTabAgentChatHeader`): at the left the 22-point face and the name in
+  13-point semibold, inset as the Buddy card button insets them, the name
+  taking at most half the bar; at the right one line
+  (`SuperTabEngineModelLine`), `Claude Code · Opus 5.5`, in 12-point
+  `textFaint`, then the ⋯ menu (`AppIcons.ellipsis`). The line gives way with
+  "…" before the name or ⋯ do. For the reader's own Swarm Buddy it is a
+  dropdown by rule 5 and opens one menu: its engines first (the one it runs on
+  takes it back from a shared model), then the models shared in the Swarm.
+  The server switches no other agent, so theirs is the same words and opens
+  nothing. A switch under way reads `Switching to Codex…`; a shared model
+  nobody serves adds `not served now`. The subscription, the machine and
+  "reads all your projects" are not in the bar. The gallery draws the bar of
+  the reader's Buddy and of a member agent.
 - **Agent face.** An agent with no chosen picture wears a face
   (`SuperTabAvatarFace`, `avatar_art.dart`) in rows, cards, chat and profile:
   a round disc with a soft top-to-bottom fill, two eyes and a small smile.
@@ -394,23 +453,93 @@ quarter of its box, and nothing else outside the words more than 38 pixels.
   mouth shift sideways by `[-3,0,3][(hash>>9)%3]` units and tilt around the
   centre by `[-9,-4,0,5,10][(hash>>5)%5]` degrees. The face is artwork: the
   same in light and dark, and always a disc. A chosen picture still wins.
-- **Person avatar.** A person keeps their photo, preset or initial; a person
-  never wears an agent face.
+- **Person avatar.** A person keeps their photo or preset, else an initial on
+  a neutral grey disc (task #4466); a person never wears an agent face.
 - **Lead ring.** A Lead (a PM) wears a thin gold ring, hsl(42 92% 58%)
   (`SwarmPalette.leadRing`), around its avatar: stroke 5% of the face's
   diameter, gap 7%, drawn outside the avatar's box so no row moves. Its
   accessible label says Lead. The crown is only number one's on the
   leaderboard.
-- **Task status marks.** Proposal is Lucide `lightbulb`, Rejected
+- **Task status marks.** Proposal is Lucide `lightbulb`, Declined
   `thumbs-down`, Failed (Stuck) `triangle-alert` in the semantic error ink.
   The check, question mark and spinner stay, from the shared activity
-  vocabulary. No status in Flutter draws an X: an X means close. Terminal text
+  vocabulary. Shipped (a verified release holds the task, task #4547) wears
+  Done's check and says Shipped. No status in Flutter draws an X: an X means close. Terminal text
   and native tab marks may keep `✗`.
-- **Task card and row.** The Tasks pane card (`SuperTabPersonalTaskCard`) and
-  the sidebar row (`SuperTabBuddyRow`) carry the elements above at their
-  shipped sizes; their size and layout do not change when an element does.
+- **Left pane row.** The left pane's row (`SuperTabQuietRow`,
+  [Swarm left pane](#swarm-left-pane)) carries the elements above at its
+  shipped size; its size and layout do not change when an element does.
+- **Tasks pane header** (`SuperTabTasksPaneHeader`). "Tasks" in 13 semibold
+  on the left. The Accept all or Ask me choice on the right is plain 12
+  secondary text; its chevron and a faint fill show only on hover, focus or
+  while its menu is open, and the chevron's room is held at rest so the text
+  never moves. The menu is the app's one dropdown, with a check on the stored
+  choice.
+- **Tasks pane card** (`SuperTabPersonalTaskCard`). A card surface with one
+  hairline (`DesktopChrome.rim`), radius 10 and no shadow; a selected card
+  differs by its fill alone. On top, the project's name in a neutral grey
+  capsule (`AppSurface.wellFill`, secondary text), never a project colour, and
+  the status mark at the right. Then the title in 13 medium, up to three
+  lines, and two 18 faces: who asked, then who is doing it. Only while the
+  task waits for the reader: Decline as plain text and Accept as the blue
+  capsule, on the right.
+- **Chat message.** A message row (`SuperTabMessageRow`) leads with a round
+  28 face, then one header line: the name at 13 semibold and the time at 12
+  in tertiary ink (`textFaint`), nothing else; no engine mark, since colour
+  is only the face's. The text reads at 14 on 20 px lines (`SwarmType`).
+  An empty chat shows no line; only a chat that can't be read or is still
+  loading says so (task #4467).
+- **Chat composer.** Both composers (the chat's and a thread's) are Cmd-N's
+  field: radius 12, a hairline (`rim`) and the faint fill (`field`). Under
+  the text, the paperclip on the left and, on the right, the mic beside the
+  round send (`SwarmSendButton`, `super_tabs/chat/send_button.dart`): a 28
+  circle in a 32 target, `rim` with a `textFaint` arrow while there is
+  nothing to send, `AppPalette.accent` with a white (`onSelection`) arrow
+  once there is text or a file. No @ button: an @ typed tags.
+- **Decision card.** One question (`SuperTabDecisionCard`, in the Buddy chat
+  and Notifications; the Decisions page row uses the same buttons): the
+  question, `Unblocks:` line, one button per option with the recommended one
+  filled and marked `· Recommended`, then quiet `Let <coordinator> decide` and
+  Not now. A person's own Buddy's question has no Let decide: only they
+  answer it. A line their Buddy waits to post as them shows its exact words,
+  whole, with Send and Not now, neither marked; its Not now answers it, so the
+  quiet Not now that only folds a card is not shown (task #4525).
 - **Adding or changing one.** A new or changed element updates this section
   and the gallery, with its images, in the same pull request.
+
+## Swarm left pane
+
+The Desktop's Swarm left pane (anh Dee, 2026-11-07, task #4466) follows the
+Swarm's six rules: grey everywhere, colour only on agent faces; blue only for
+the main action, red only for failed; 14 chat, 13 names, 12 details, and in a
+list bold means unread; every row a face, a name and one quiet detail on the
+right; dropdowns plain text until hovered; nothing that does not help you
+decide. Top to bottom:
+
+```text
+ autonomous.ai ⌄              org name, semibold 13 primary; ⌄ only on hover
+ ⊡  Decisions              3  inbox icon; the waiting count is the detail
+ ▦  Projects               1  grid icon; opens the grid; the detail counts tags of you
+ My agents ⌄                  quiet heading; ⌄ only on hover; folds, remembered
+ ◉  Buddy                  ⠋  the Buddy first, by its own name and face
+ ◎  River        harness   ?  a Lead's detail is the project it leads
+ ◉  Leftquiet    offline      a down agent's detail is "offline"
+ +  New agent                 the last row, opens Cmd-N
+ Humans                       quiet heading; opens the Leaderboard
+ D  dee              120      the board's top 8 by points; a tap opens it
+ ⚙  Manage                    at the foot
+```
+
+| Element | Implementation | Rule |
+| --- | --- | --- |
+| Quiet row | `SuperTabQuietRow` (`super_tabs/buddy_rows.dart`) | 30 high, 2 under it. A 20 face (`SuperTabQuietRow.faceSize`) or a 16 icon centred in the 32 column, so every name starts on one line. Name 13 (`DesktopChrome.control`): read `textSecondary` regular, unread `textPrimary` semibold, the open row `SidebarInk.selected` with a primary name. One detail, 12 (`DesktopChrome.metadata`) in the tertiary grey (`SidebarInk.faint`, `textFaint`), right-aligned, tabular figures, no brackets; it keeps up to 40% of a row whose name is long, and is cut first. |
+| Status mark | `SuperTabQuietRow.mark`, `superTabAgentMark` | My agents only, in one 20 column at the right edge after the detail, kept on every agent row so details line up. A mark only while the agent works (the spinner), needs you (`?`) or failed: grey, failed in the error ink. Idle and finished show nothing; a finished agent's unread reply is its semibold name. |
+| Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) only while hovered or focused. |
+| Org name | `SuperTabQuietHeading.org` | Semibold 13 primary, no icon; its chevron only on hover; opens the Swarm menu. |
+| Person | `SuperTabAvatar.person` at 20 | A photo, or an initial on the neutral grey disc. |
+| Projects grid | `SuperTabProjectsPage` (`super_tabs/projects_page.dart`) | Every project as a card, as repositories under a GitHub org, most recent first (the latest message in its chat or tasks). Cards at least 260 wide with 12 between them, transparent with a hairline (`DesktopChrome.rim`) and the hover fill; the name semibold 13 primary, one line 12 tertiary: its repository's `owner/name`, or Private. New project is the page's one blue button. A card opens its project's Board, which lights Projects in the left pane. |
+
+The phone and web layouts keep their own rows.
 
 ## Phone
 

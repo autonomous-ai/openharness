@@ -32,6 +32,17 @@ worse; a wall our own Swarms hit; what the outside company needs; contribution o
 - Fixes to what ships, security fixes and anything that makes the crew faster or more reliable are a yes at once. New
   features and scope are a no unless they strengthen the positioning.
 
+# anh Dee's product rules
+
+- Copy is short and sharp. An empty list shows nothing. Buttons are 1-2 words.
+- Every UI element follows the [design doc](desktop/design/desktop-design-system.md); the doc and its gallery change in
+  the same pull request.
+- Tasks are Accept and Decline.
+- Voice messages play only.
+- Every Desktop feature gets a Flutter test that clicks through it as a person does.
+- Anything that can be code is code (standard 13).
+- Accept all stays off for subscriptions until Anthropic and OpenAI confirm in writing.
+
 # Code standards
 
 Every change, by a person or an agent, meets these. Component rules are in each component's AGENTS.md and add to them.
@@ -70,6 +81,9 @@ Every change, by a person or an agent, meets these. Component rules are in each 
     one thing; a file holds one idea.
 12. **The pull request.** One task, one pull request, as small as the task allows. It says what changed, why, and the
     evidence: the red then green test, hot-path numbers, screenshots, the platforms it ran on.
+13. **Code over prompts.** A rule a program can check runs as code. A rule in a prompt says why it can't be code, and its
+    prompt line goes once its code fully enforces it ([audit](docs/prompt-rules-audit.md)). A safety rule (secrets,
+    outside text, other accounts, production writes, processes) keeps its line: its code is a backstop.
 
 # Tech limits
 

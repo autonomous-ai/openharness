@@ -5,6 +5,7 @@ import { applyCommand, commandSchema, type Command, type CommandContext } from '
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { ANSWERED_NOTICE, askDecisions, checkAsker, decisionsWaiting, listDecisions, overdueNotice, delegatedNotice, answerDecision, waitingInProject, withdrawIn, workEnded, workOver, type DecisionTarget } from './decisions.js'
 import { buddyChatId } from './buddies.js'
+import { giveOwnBuddy } from './ownBuddy.test-support.js'
 
 const HOLD = { kind: 'person', personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' } as const
 
@@ -215,11 +216,14 @@ describe('leaving a decision to the PM', () => {
       brief: '', checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'peer', generation }] } })
     return id
   }
+  /** The peer's own Buddy, who writes the line: only they and it post in their private chat (task #4558). */
+  const withBuddy = (s: ReturnType<typeof swarm>) => giveOwnBuddy(s.state, 'peer')
   const delegate = (s: ReturnType<typeof swarm>, actor: Actor, decision: DecisionTarget | undefined) =>
     s.run({ type: 'decision.answer', decisionId: 'decision-1', delegate: true }, actor, decision ? { decision } : {})
 
-  it('answers with the recommended option for the person asked, recorded as delegated, and the PM says so in their Buddy chat', () => {
+  it('answers with the recommended option for the person asked, recorded as delegated, and their own Buddy says what the PM chose', () => {
     const s = swarm()
+    withBuddy(s)
     const chat = buddyChat(s)
     const answered = delegate(s, peer, open(s))
     expect(answered.decisionAnswer).toEqual({ id: 'decision-1', choice: 1, note: null, delegated: true })
@@ -228,24 +232,26 @@ describe('leaving a decision to the PM', () => {
     expect(notice).toMatchObject({ conversationId: s.group, recipients: [s.worker, s.lead], source: { kind: 'agent-only', decisionId: 'decision-1' } })
     expect(notice!.text).toContain('left to the Product Manager')
     for (const text of ['Ship how?', 'To everyone']) expect(notice!.text).not.toContain(text)
-    // One line from the PM in the person's one Buddy chat, marked with its project, and the same in their older chat there for
-    // older apps (Dee, 10-31): only they read either, and it goes to nobody.
+    // One line from their own Buddy in their one Buddy chat, marked with its project, and the same in their older chat there for
+    // older apps (Dee, 10-31): only they read either, and it goes to nobody. Never the PM's: only they and their agent post there.
     const swarmChat = s.state.conversations.find(c => c.kind === 'swarm-buddy')!
     expect(swarmLine).toMatchObject({ conversationId: swarmChat.id, recipients: [], text: 'PM decided: To everyone — Ship how?',
-      author: { kind: 'agent', id: s.lead }, source: { kind: 'decision-delegated', decisionId: 'decision-1', projectId: 'lead' } })
+      author: { kind: 'agent', id: 'peer-buddy' }, source: { kind: 'decision-delegated', decisionId: 'decision-1', projectId: 'lead' } })
     expect(line).toMatchObject({ conversationId: chat, recipients: [], text: 'PM decided: To everyone — Ship how?',
-      author: { kind: 'agent', id: s.lead }, source: { kind: 'decision-delegated', decisionId: 'decision-1' } })
+      author: { kind: 'agent', id: 'peer-buddy' }, source: { kind: 'decision-delegated', decisionId: 'decision-1' } })
     expect(new Set([notice!.id, swarmLine!.id, line!.id]).size).toBe(3)
     expect(answered.messages).toHaveLength(3)
   })
 
-  it('opens the person\'s Buddy chat for the line when they have none, and opens an archived one again: the line never drops', () => {
+  it('writes no line without a Buddy, else opens the person\'s older chat for it when they have none, and an archived one again', () => {
     const s = swarm()
+    expect(delegate(s, peer, open(s)).messages.map(m => m.conversationId)).toEqual([s.group])
+    withBuddy(s)
     const answered = delegate(s, peer, open(s))
     expect(answered.decisionAnswer).toMatchObject({ choice: 1, delegated: true })
     const chat = s.state.conversations.find(c => c.kind === 'buddy')!, swarmChat = s.state.conversations.find(c => c.kind === 'swarm-buddy')!
     expect(chat).toMatchObject({ projectId: 'lead', agentIds: [], audience: { people: [{ id: 'peer' }] } })
-    expect(swarmChat).toMatchObject({ agentIds: [], audience: { people: [{ id: 'peer' }] } })
+    expect(swarmChat).toMatchObject({ agentIds: ['peer-buddy'], audience: { people: [{ id: 'peer' }] } })
     expect(swarmChat.projectId).toBeUndefined()
     expect(answered.messages.map(m => m.conversationId)).toEqual([s.group, swarmChat.id, chat.id])
     chat.archived = true
@@ -280,6 +286,7 @@ describe('leaving a decision to the PM', () => {
 
   it('takes a timed default only at its trusted deadline, and never accepts the marker from a client', () => {
     const s = swarm()
+    withBuddy(s)
     const decision = open(s, { defaultAt: 1000 })
     const command = { type: 'decision.answer', decisionId: 'decision-1', delegate: true } as const
     expect(() => s.run(command, peer, { decision, defaulted: true, now: 999 } as Partial<CommandContext>)).toThrow(/default.*time|deadline/i)

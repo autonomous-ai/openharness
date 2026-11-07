@@ -26,6 +26,8 @@ class SuperTabDecision {
       delegated = row['delegated'] == true,
       overdue = row['overdue'] == true,
       pmTakesOver = row['pmTakesOver'] == true,
+      fromBuddy = row['fromBuddy'] == true,
+      send = row['send'] == true,
       note = row['note'] as String?,
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
       answeredAt = DateTime.tryParse(row['answeredAt'] as String? ?? '');
@@ -37,11 +39,22 @@ class SuperTabDecision {
   /// recommends none.
   final int? recommended;
 
-  /// Whether Let PM decide can answer it: only with a recommended option.
+  /// Whether Let PM decide can answer it: only with a recommended option,
+  /// and never a person's own Buddy's question (task #4525).
   bool get canDelegate {
     final r = recommended;
-    return r != null && r >= 0 && r < options.length;
+    return !fromBuddy && r != null && r >= 0 && r < options.length;
   }
+
+  /// The reader's own Buddy asked it, in their Buddy chat.
+  final bool fromBuddy;
+
+  /// A line their Buddy waits to post as them: [question] is its exact
+  /// words, and its options are Send and Not now, neither recommended.
+  final bool send;
+
+  /// The option marked Recommended: none on a line waiting to be sent.
+  int? get marked => send ? null : recommended;
 
   /// The option the reader chose, or the PM chose for them ([delegated]);
   /// null while it is open.

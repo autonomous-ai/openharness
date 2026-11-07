@@ -376,7 +376,7 @@ void main() {
       );
     });
 
-    testWidgets('an agent\'s engine mark stays between its name and the time', (
+    testWidgets('an agent\'s name comes before its tag, with no engine mark', (
       tester,
     ) async {
       final server = _server('task-line')..threadAsks['root'] = 'proposal';
@@ -400,16 +400,17 @@ void main() {
         of: _row('root'),
         matching: find.text('River'),
       );
-      final mark = find.descendant(
-        of: _row('root'),
-        matching: find.byType(EngineMark),
-      );
       final tag = find.descendant(
         of: _row('root'),
         matching: find.text('✋ Proposal'),
       );
-      expect(left(name), lessThan(left(mark)));
-      expect(left(mark), lessThan(left(tag)));
+      // No engine mark in a message header: colour is the face's (River,
+      // 11-07, #4467).
+      expect(
+        find.descendant(of: _row('root'), matching: find.byType(EngineMark)),
+        findsNothing,
+      );
+      expect(left(name), lessThan(left(tag)));
     });
 
     testWidgets('keeps its header when the same person wrote just before', (

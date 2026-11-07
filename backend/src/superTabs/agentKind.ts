@@ -5,9 +5,24 @@
  */
 import { isBuddy, isBuddyChat } from './buddies.js'
 import type { Actor, Agent, SuperTabState } from './model.js'
-import { isAgentChat, ledProject, onTeamAccount } from './projects.js'
+import { isAgentChat, ledProject, onTeamAccount, projectsOf } from './projects.js'
 
 export type AgentKind = 'buddy' | 'pm' | 'regular'
+/** Members and Leads (task #4540; spec 2026-11-07-members-and-leads): a Lead leads a project, every other agent is a Member.
+ *  Derived, never stored; `kind` stays beside it for clients until 2026-12-07. */
+export type AgentRole = 'lead' | 'member'
+
+/** The project each Lead leads, by its agent id, from one pass (projects.ts ledProject scans every conversation per call): a
+ *  read derives every agent's role and main project from it. The first project in order, as ledProject picks. */
+export function ledProjects(state: SuperTabState): Map<string, string> {
+  const chats = new Map(state.conversations.map(c => [c.id, c]))
+  const led = new Map<string, string>()
+  for (const project of projectsOf(state)) {
+    const leadId = chats.get(project.leadConversationId)?.leadId
+    if (leadId && !led.has(leadId)) led.set(leadId, project.id)
+  }
+  return led
+}
 
 export function agentKind(state: SuperTabState, target: Agent): AgentKind {
   if (isBuddy(target)) return 'buddy'

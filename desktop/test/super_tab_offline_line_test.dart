@@ -59,7 +59,8 @@ void main() {
   }
 
   for (final brightness in Brightness.values) {
-    for (final page in ['super-decisions', 'super-leaderboard']) {
+    // Humans opens the Leaderboard on the Desktop (task #4466).
+    for (final page in ['super-decisions', 'project-sidebar-humans']) {
       testWidgets('${brightness.name}: $page says it is reconnecting, once, '
           'and Retry reads again', (tester) async {
         final f = await mount(tester, brightness);

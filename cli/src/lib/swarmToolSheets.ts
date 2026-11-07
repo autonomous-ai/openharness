@@ -83,7 +83,7 @@ const ENTRIES: readonly SheetEntry[] = [
   T('- `react GROUP', '`react GROUP ID EMOJI OPERATION_ID [--off]` acknowledges without a post: eyes when you start, check when done, rocket when merged.'),
   OFF('- A reaction tells the people'),
   T('- Post only substance', 'Post only substance (plan, question, ruling, finding, verdict, handoff, blocker, result); react instead of acknowledging.'),
-  T('`command OPERATION_ID JSON`', "`command OPERATION_ID JSON` sends one command; JSON with quotes goes on stdin (`command OPERATION_ID - <<'JSON' … JSON`). A refusal says what to fix.", 'core', 'pertg', "`command OPERATION_ID JSON` (JSON with quotes on stdin: `command OPERATION_ID - <<'JSON'`; a refusal says what to fix). Tasks: conversation.create (an agent's needs goal, a check, a priority, requesterId; reviewOf with step opens a step), work.define, conversation.agent, conversation.requester, work.queue, work.priority (P0 only a person or you), work.assign, work.status, work.cancel, agent.release, conversation.merged (a task is Done only after it), proposal.close, decision.ask, person.tell, project.report, project.digest. Settings: tab.tidy, machine.engineResume, instructions.save (a person or you; baseRevision, the whole text; a stale base: read again, merge), note.add, note.remove."),
+  T('`command OPERATION_ID JSON`', "`command OPERATION_ID JSON` sends one command; JSON with quotes goes on stdin (`command OPERATION_ID - <<'JSON' … JSON`). A refusal says what to fix.", 'core', 'pertg', "`command OPERATION_ID JSON` (JSON with quotes on stdin: `command OPERATION_ID - <<'JSON'`; a refusal says what to fix). Tasks: conversation.create (an agent's needs goal, a check, a priority, requesterId; reviewOf with step opens a step), work.define, conversation.agent, conversation.requester, work.queue, work.priority (P0 only a person or you), work.assign, work.status, work.cancel, agent.release, conversation.merged (a task is Done only after it), proposal.close, decision.ask, project.report, project.digest. Settings: tab.tidy, machine.engineResume, instructions.save (a person or you; baseRevision, the whole text; a stale base: read again, merge), note.add, note.remove."),
   OFF('Task and group commands:'),
   T('- `{"type":"conversation.create"', '`conversation.create` {title, task {goal, changes, constraints, owns}, checks, priority, requesterId} opens a task: an agent\'s (yours too) needs a goal, a check, a priority and `requesterId` (or `noRequesterReason` for work nobody asked for), else TASK_CONTRACT_MISSING says what to resend; `reviewOf` with `step` opens a step, which needs none of it.', 'pm', 'pe'),
   T('- `{"type":"work.define"', '`work.define` {conversationId, task, checks} replaces an open task.', 'pm', 'p'),
@@ -100,7 +100,6 @@ const ENTRIES: readonly SheetEntry[] = [
   T('- `{"type":"proposal.close"', '`proposal.close` {projectId, messageId, reason} closes an answered Buddy proposal.', 'pm', 'p'),
   T('- `{"type":"conversation.merged"', '`conversation.merged` {conversationId, pullRequestUrl} records a merge; a task is Done only after it.', 'pm', 'p'),
   T('- `{"type":"decision.ask"', '`decision.ask` {conversationId, personId, questions with 2-5 options} asks a person.', 'pm', 'pe'),
-  T('- `{"type":"person.tell"', '`person.tell` {personId, text} lands in a person\'s Buddy chat; it is not private.', 'pm', 'p'),
   T('- `{"type":"project.report"', '`project.report` {projectId, through, text|null} answers an update request.', 'pm', 'p'),
   T('- `{"type":"project.digest"', '`project.digest` {projectId, time, timeZone} sets the morning digest.', 'pm', 'p'),
   OFF('Swarm and machine settings', 'pm'),
@@ -147,7 +146,7 @@ export const sheetEntries = (): readonly SheetEntry[] => ENTRIES
 /** The what-changed note for PMs the PM sheet was last announced with (backend superTabs/processNotes.ts, task #3581), and the
  *  sheet's fingerprint then. A change to the PM sheet fails swarmToolSheets.spec.ts until a new note is added there and pinned
  *  here, so every running PM hears what changed. */
-export const PM_SHEET_NOTE = { id: '2026-11-07-mktemp', sheet: '8d58b0265cf5' } as const
+export const PM_SHEET_NOTE = { id: '2026-11-07-private-chat', sheet: '1651178080e7' } as const
 
 /** The role a session's sheet is for: the coordinator is the PM; an agent by its project role's name (anything unknown is an
  *  Engineer, whose sheet points to the full manual); a Reviewer started as the fallback role is a Reviewer. */
@@ -230,7 +229,6 @@ const SOURCE: Readonly<Record<string, string>> = {
   "- `{\"type\":\"proposal.close\"": "f0fcba7d14b9",
   "- `{\"type\":\"conversation.merged\"": "4ff068d0f513",
   "- `{\"type\":\"decision.ask\"": "263c78061d01",
-  "- `{\"type\":\"person.tell\"": "231dccc17c03",
   "- `{\"type\":\"project.report\"": "5038f6f8a74f",
   "- `{\"type\":\"project.digest\"": "347b4add2b14",
   "Swarm and machine settings": "8e649e313863",

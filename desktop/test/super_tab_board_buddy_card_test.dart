@@ -87,7 +87,6 @@ void main() {
         'accountId': 'owner',
         'selectedId': 'lead',
         // v3 folds Projects while the person has an agent.
-        'projectsGroupOpen': true,
       },
     );
     await tester.runAsync(c.refresh);
@@ -109,6 +108,9 @@ void main() {
       ),
     );
     await settle(tester);
+    // A project's Board opens from the Projects grid (task #4466).
+    await tester.tap(find.byKey(const ValueKey('super-projects')));
+    await tester.pump();
     await tester.tap(key('super-group-lead'));
     await settle(tester);
     return c;
@@ -681,12 +683,15 @@ void main() {
     await end(tester, c);
   });
 
+  // Task #4568: it names the agent, and an empty name gets a fresh real one, never "<person>'s Buddy".
   testWidgets('Rename opens the rename dialog', (tester) async {
     final c = await show(tester);
     await open(tester);
     await tester.tap(key('super-buddy-card-rename'));
     await settle(tester);
-    expect(find.text('Rename your Buddy'), findsOneWidget);
+    expect(find.text('Rename Wren'), findsOneWidget);
+    expect(find.text('Leave it empty for a new name.'), findsOneWidget);
+    expect(find.textContaining("'s Buddy"), findsNothing);
     await end(tester, c);
   });
 
