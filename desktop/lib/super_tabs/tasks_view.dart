@@ -263,8 +263,8 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
               : hidden
               ? _noMatch()
               : _layout == _Layout.list
-              ? _listView(shown, now)
-              : _boardView(shown, now),
+              ? _listView(project, shown, now)
+              : _boardView(project, shown, now),
         ),
       ],
     );
@@ -445,7 +445,12 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   static const _searchWidth = 220.0;
   static const _columnGap = grid.AppDesktop.groupGap;
 
-  Widget _heading(SuperTabTaskColumn column, int count, {bool? folded}) {
+  Widget _heading(
+    SuperTabProject project,
+    SuperTabTaskColumn column,
+    int count, {
+    bool? folded,
+  }) {
     // A Board lane's name is its bold title, as Trello's (task #3787).
     final style = folded == null
         ? DesktopChrome.control(color: DesktopChrome.foreground)
@@ -460,7 +465,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
             color: DesktopChrome.muted,
           ),
         if (folded != null) const SizedBox(width: grid.AppDesktop.menuInset),
-        Text(column.label, style: style),
+        Text(superTabColumnLabel(project, column), style: style),
         const SizedBox(width: grid.AppDesktop.controlGap),
         Text('$count', style: DesktopChrome.metadata()),
       ],
@@ -706,12 +711,14 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   /// mouse drags; a trackpad swipe and shift with the wheel scroll it too. Each
   /// column scrolls its own cards.
   Widget _boardView(
+    SuperTabProject project,
     Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> shown,
     DateTime now,
   ) => LayoutBuilder(
     builder: (context, box) {
       const edge = grid.AppDesktop.groupGap;
-      final count = SuperTabTaskColumn.values.length;
+      final columns = superTabBoardColumns(project);
+      final count = columns.length;
       final share =
           (box.maxWidth - 2 * edge - (count - 1) * _columnGap) / count;
       final width = math.max(SuperTabTasksView.minColumnWidth, share);
@@ -731,12 +738,11 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              for (final column in SuperTabTaskColumn.values) ...[
-                if (column != SuperTabTaskColumn.values.first)
-                  const SizedBox(width: _columnGap),
+              for (final (i, column) in columns.indexed) ...[
+                if (i > 0) const SizedBox(width: _columnGap),
                 SizedBox(
                   width: width,
-                  child: _panel(column, shown[column]!, now),
+                  child: _panel(project, column, shown[column]!, now),
                 ),
               ],
             ],
@@ -799,15 +805,17 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
 
   /// One column of the Board.
   Widget _panel(
+    SuperTabProject project,
     SuperTabTaskColumn column,
     List<SuperTabTaskEntry> entries,
     DateTime now,
   ) => _framed(
     ValueKey('super-tasks-column-${column.name}'),
-    _heading(column, entries.length),
+    _heading(project, column, entries.length),
     entries.isEmpty
         ? _noTasks()
-        : column == SuperTabTaskColumn.nextUp
+        // Simple's To do also holds proposals, which are not in the queue: a plain list, not the Next up drag.
+        : column == SuperTabTaskColumn.nextUp && !project.isSimple
         ? _nextUp(entries, now)
         : LaidOutListView.builder(
             padding: _laneInset,
@@ -971,12 +979,14 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   }
 
   Widget _listView(
+    SuperTabProject project,
     Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> shown,
     DateTime now,
   ) {
     final rows = <Widget>[
-      for (final column in SuperTabTaskColumn.values) ...[
+      for (final column in superTabBoardColumns(project)) ...[
         _heading(
+          project,
           column,
           shown[column]!.length,
           folded: _folded.contains(column),

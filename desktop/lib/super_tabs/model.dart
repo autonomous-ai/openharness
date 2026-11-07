@@ -625,6 +625,10 @@ class SuperTabConversation {
 /// costs/reflection.ts `DEFAULT_TIME_ZONE`).
 const superTabDefaultTimeZone = 'Asia/Ho_Chi_Minh';
 
+/// How a project works (task #3897, #3896): Full is the Board's six columns with review, test and merge;
+/// Simple is To do, Doing and Done with none of them.
+enum SuperTabProcess { full, simple }
+
 class SuperTabProject {
   SuperTabProject.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -660,6 +664,17 @@ class SuperTabProject {
         row['repositoryCreation'],
       ),
       boardMode = row['boardMode'] == true,
+      process = row['process'] == 'simple'
+          ? SuperTabProcess.simple
+          : SuperTabProcess.full,
+      columns = List.unmodifiable([
+        for (final column in row['columns'] as List? ?? const [])
+          if (column is Map && column['id'] is String)
+            (
+              id: column['id'] as String,
+              title: column['title'] as String? ?? column['id'] as String,
+            ),
+      ]),
       canChatIds = List.unmodifiable(
         (row['canChat'] as List? ?? const []).whereType<String>(),
       ),
@@ -670,6 +685,16 @@ class SuperTabProject {
   /// people talk to their Buddies, work comes in as proposals, and only people with Can chat write in its chat.
   /// False when not switched and from an older backend: everything then works as today.
   final bool boardMode;
+
+  /// Its process preset, and the columns the server draws for it, in order: Full, with none, from an older server.
+  final SuperTabProcess process;
+  final List<({String id, String title})> columns;
+  bool get isSimple => process == SuperTabProcess.simple;
+  List<String> get columnIds => [for (final column in columns) column.id];
+
+  /// The server's title for the column [id], or null when it sent none.
+  String? columnTitle(String id) =>
+      columns.where((column) => column.id == id).firstOrNull?.title;
 
   /// The people granted Can chat in it; its owner and the Swarm's owner always have it and are not listed.
   final List<String> canChatIds;

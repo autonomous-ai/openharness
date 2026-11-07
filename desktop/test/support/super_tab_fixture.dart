@@ -42,6 +42,28 @@ Map<String, dynamic> projectFixture(
   'updateMinutes': 5,
 };
 
+/// A project's `process` and `columns` as #3896's head carries them: Simple's three, Full's six.
+Map<String, dynamic> _processOf(Object? process) => process == 'simple'
+    ? {
+        'process': 'simple',
+        'columns': [
+          {'id': 'nextUp', 'title': 'To do'},
+          {'id': 'working', 'title': 'Doing'},
+          {'id': 'done', 'title': 'Done'},
+        ],
+      }
+    : {
+        'process': 'full',
+        'columns': [
+          {'id': 'proposals', 'title': 'Proposal'},
+          {'id': 'nextUp', 'title': 'Next up'},
+          {'id': 'working', 'title': 'Working'},
+          {'id': 'done', 'title': 'Done'},
+          {'id': 'merged', 'title': 'Merged'},
+          {'id': 'shipped', 'title': 'Shipped'},
+        ],
+      };
+
 /// What the backend's Swarm reads answer (docs/design/2026-10-26-swarm-state-parts.md, section 4), worked out from
 /// a test's whole-Swarm state. Each read compares every part with what it held: a part whose JSON changed gets the
 /// next version and a new `changedAt`, a part that is gone gets a tombstone. Tests keep changing the state as they
@@ -1763,6 +1785,7 @@ class ConversationServer {
             visibility: command['visibility'] as String,
           ),
           'skillMode': 'default',
+          ..._processOf(command['process']),
         });
         (state['conversations'] as List).add({
           ...conversationFixture(leadId, 'Lead'),
@@ -1810,6 +1833,13 @@ class ConversationServer {
                   (g) => g['id'] == command['conversationId'],
                 )['priority'] =
             command['priority'];
+        revision++;
+      } else if (command['type'] == 'project.process') {
+        // As #3896 keeps it: the preset on the project, with the columns the board read draws for it.
+        final project = (state['projects'] as List).cast<Map>().firstWhere(
+          (p) => p['id'] == command['projectId'],
+        );
+        project.addAll(_processOf(command['process']));
         revision++;
       } else if (command['type'] == 'project.canChat') {
         // As #3819 keeps it: the people granted Can chat, on the project.

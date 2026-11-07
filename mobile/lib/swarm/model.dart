@@ -663,6 +663,15 @@ class SuperTabProject {
           if (entry is Map && entry['id'] is String) entry['id'] as String,
       },
       boardMode = row['boardMode'] == true,
+      isSimple = row['process'] == 'simple',
+      columns = List.unmodifiable([
+        for (final column in row['columns'] as List? ?? const [])
+          if (column is Map && column['id'] is String)
+            (
+              id: column['id'] as String,
+              title: column['title'] as String? ?? column['id'] as String,
+            ),
+      ]),
       canChatIds = List.unmodifiable(
         (row['canChat'] as List? ?? const []).whereType<String>(),
       ),
@@ -671,6 +680,11 @@ class SuperTabProject {
 
   /// The Board way of working (#3819), read as the desktop's model reads it; the phone draws it with #3821.
   final bool boardMode;
+
+  /// Its Simple process and the columns the server draws for it (#3896), read as the desktop's model reads them; Full,
+  /// with none, from an older server. The phone draws them with #3821.
+  final bool isSimple;
+  final List<({String id, String title})> columns;
   final List<String> canChatIds;
   final String? deciderId;
 

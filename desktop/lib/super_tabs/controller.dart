@@ -3412,6 +3412,19 @@ class SuperTabController extends ChangeNotifier {
         : operationError ?? 'Another change is on its way. Try again.';
   }
 
+  /// Sets [projectId]'s process, Simple or Full (#3896 `project.process`): its owner or the Swarm's owner does. Null
+  /// when done, else the server's sentence.
+  Future<String?> setProcess(String projectId, SuperTabProcess process) async {
+    final done = await command({
+      'type': 'project.process',
+      'projectId': projectId,
+      'process': process.name,
+    });
+    return done != null
+        ? null
+        : operationError ?? 'Another change is on its way. Try again.';
+  }
+
   /// Whether the reader may write in [group]: in a project on the Board its chat takes only its owner, the Swarm's
   /// owner and people granted Can chat (#3819); everything else is as today.
   bool mayChatIn(SuperTabConversation? group) {
