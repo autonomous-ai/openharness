@@ -229,7 +229,7 @@ void main() {
   testWidgets('approve with no agent shown says none was shown', (t) async {
     await mount(t);
     f.rows.last
-      ..['agent'] = <String, dynamic>{}
+      ..['agent'] = null
       ..['suggested'] = false
       ..['version'] = 2;
     await f.controller.refresh();

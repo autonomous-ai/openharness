@@ -81,8 +81,9 @@ export interface Derived {
   /** `roleName`: the role it goes by (instructions.ts roleNameOf), its stored one or what it is. */
   /** `kind`: the reader's Buddy, a PM leading a project, or a Regular agent; `chatId`: the chat its person talks to it in, or null
    *  (agentKind.ts, task #4116). Absent from an older backend. */
+  /** `myAgent`: whether it is in the reader's My agents (agentKind.ts inMyAgents, task #4192). Absent from an older backend. */
   agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null; roleId: string | null; roleName: string;
-    kind: import('../agentKind.js').AgentKind; chatId: string | null }>
+    kind: import('../agentKind.js').AgentKind; chatId: string | null; myAgent: boolean }>
   /** Every contributed machine the reader can see. */
   /** `clientVersion`: the CLI version its daemon last connected with (routing reads a machine updated since its failed starts). */
   machines: Record<string, { availableSlots: number; teamWork: { allowed: true } | { allowed: false; reason: string; [key: string]: unknown }; clientVersion?: string

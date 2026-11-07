@@ -4465,19 +4465,19 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'route.record': {
       chatOnly(command.conversationId)
       projectChatWork(command.conversationId)
-      // A teammate's work runs only on Team machines: candidates elsewhere leave the decision for its exclusions, with
-      // why, so the Lead and people see it. A pick there is refused; a current CLI already leaves those machines out.
+      // Candidates that cannot take the work (a Team account, another person's computer, task #4120) leave the decision for its
+      // exclusions, with why, so the Lead and people see it. A pick among them is left out too and the record keeps no pick, so
+      // the coordinator chooses among the rest by the Routing rules: refusing the whole route stopped every PM (task #4194).
       const starter = actor.kind === 'agent' ? agent(state, actor.agentId).contributorId : actor.userId
       const refusals = new Map(command.decision.candidates.flatMap(c => {
         const refusal = candidateRefusal(c, command.conversationId, starter)
         return refusal ? [[c.id, refusal] as const] : []
       }))
-      const pickRefusal = command.decision.pick === undefined ? undefined : refusals.get(command.decision.pick)
-      if (pickRefusal) failTeamWork(pickRefusal, ' Route again.')
-      // A route that names no pick (task #2901) is refused only once it has no candidate left to choose.
+      // A route is refused only once it has no candidate left to choose.
       const [firstRefusal] = refusals.values()
       if (firstRefusal && refusals.size === command.decision.candidates.length) failTeamWork(firstRefusal, ' Route again.')
-      const decision = !refusals.size ? command.decision : { ...command.decision,
+      const { pick: sentPick, ...unpicked } = command.decision
+      const decision = !refusals.size ? command.decision : { ...(sentPick !== undefined && refusals.has(sentPick) ? unpicked : command.decision),
         candidates: command.decision.candidates.filter(c => !refusals.has(c.id)),
         excluded: [...command.decision.candidates.flatMap(c => refusals.has(c.id) ? [{ title: c.title, reason: refusals.get(c.id)!.reason }] : []),
           ...command.decision.excluded].slice(0, 200) }

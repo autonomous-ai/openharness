@@ -149,302 +149,326 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
       final projects = {
         for (final p in snapshot?.projects ?? <SuperTabProject>[]) p.id: p,
       };
-      return Material(
+      // One filled box as large as the slot, under a see-through Material that
+      // only carries the rows' ink: a Material's own surface was drawn only as
+      // far as the rows, and the window's backing showed below them.
+      return ColoredBox(
         color: Theme.of(context).colorScheme.surface,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppDesktop.groupGap,
-                vertical: AppDesktop.controlGap,
-              ),
-              child: Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      'Tasks',
-                      style: TextStyle(fontWeight: FontWeight.w600),
+        child: SizedBox.expand(
+          child: Material(
+            type: MaterialType.transparency,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppDesktop.groupGap,
+                    vertical: AppDesktop.controlGap,
+                  ),
+                  child: Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Tasks',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      if (supported)
+                        DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            key: const ValueKey('tasks-approval-mode'),
+                            value: tasks!.mode,
+                            style: Theme.of(context).textTheme.bodySmall,
+                            items: const [
+                              DropdownMenuItem(
+                                value: 'autoApprove',
+                                child: Text('Auto approve'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'review',
+                                child: Text('Review'),
+                              ),
+                            ],
+                            onChanged: enabled
+                                ? (value) {
+                                    if (value != null) {
+                                      unawaited(
+                                        _send({
+                                          'type': 'member.approvalMode',
+                                          'mode': value,
+                                        }),
+                                      );
+                                    }
+                                  }
+                                : null,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppDesktop.groupGap,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _error!,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: _sending
+                              ? null
+                              : () => _send(_action!, retry: true),
+                          child: const Text('Retry'),
+                        ),
+                      ],
                     ),
                   ),
-                  if (supported)
-                    DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        key: const ValueKey('tasks-approval-mode'),
-                        value: tasks!.mode,
-                        style: Theme.of(context).textTheme.bodySmall,
-                        items: const [
-                          DropdownMenuItem(
-                            value: 'autoApprove',
-                            child: Text('Auto approve'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'review',
-                            child: Text('Review'),
-                          ),
-                        ],
-                        onChanged: enabled
-                            ? (value) {
-                                if (value != null) {
-                                  unawaited(
-                                    _send({
-                                      'type': 'member.approvalMode',
-                                      'mode': value,
-                                    }),
-                                  );
-                                }
-                              }
-                            : null,
-                      ),
+                if (!supported)
+                  Padding(
+                    padding: const EdgeInsets.all(AppDesktop.groupGap),
+                    child: Text(
+                      c.accessRevoked
+                          ? 'Tasks are unavailable.'
+                          : c.snapshot == null
+                          ? 'Loading Tasks…'
+                          : 'Update Harness to use Tasks.',
                     ),
-                ],
-              ),
+                  )
+                else
+                  Expanded(
+                    child: tasks!.rows.isEmpty
+                        ? const Center(child: Text('No tasks yet'))
+                        : LaidOutListView.builder(
+                            itemCount: tasks.rows.length,
+                            itemBuilder: (context, index) {
+                              final task = tasks.rows[index];
+                              final agent = agents[task.agentId];
+                              final name =
+                                  agent?.displayName ??
+                                  agent?.name ??
+                                  task.agent['name'] as String? ??
+                                  'Not assigned';
+                              final project =
+                                  projects[task.projectId]?.name ??
+                                  task.projectName;
+                              final pending =
+                                  task.status == 'proposal' && task.canApprove;
+                              return Column(
+                                key: ValueKey('personal-task-${task.id}'),
+                                children: [
+                                  InkWell(
+                                    onTap: () {
+                                      if (pending) {
+                                        setState(
+                                          () => _expanded = _expanded == task.id
+                                              ? null
+                                              : task.id,
+                                        );
+                                      } else {
+                                        widget.onOpenTask(task.id);
+                                      }
+                                    },
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: AppDesktop.groupGap,
+                                        vertical: AppDesktop.controlGap,
+                                      ),
+                                      child: Column(
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Flexible(
+                                                child: Container(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: AppDesktop
+                                                            .badgeInset,
+                                                        vertical: AppDesktop
+                                                            .listRowGap,
+                                                      ),
+                                                  decoration: BoxDecoration(
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .surfaceContainerHighest,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          AppDesktop.rowRadius,
+                                                        ),
+                                                  ),
+                                                  child: Text(
+                                                    project,
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: Theme.of(context)
+                                                        .textTheme
+                                                        .labelSmall,
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 7),
+                                              Expanded(
+                                                flex: 2,
+                                                child: Text(
+                                                  task.title,
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 5),
+                                          Row(
+                                            children: [
+                                              if (task.agentId != null) ...[
+                                                SuperTabAvatar(
+                                                  identity:
+                                                      'agent:${task.agentId}',
+                                                  name: name,
+                                                  size: 20,
+                                                  picture:
+                                                      agent?.avatar ??
+                                                      SuperTabAvatarPicture.fromJson(
+                                                        task.agent['avatar'],
+                                                      ),
+                                                  pattern: true,
+                                                ),
+                                                const SizedBox(width: 6),
+                                              ],
+                                              Expanded(
+                                                child: Text(
+                                                  name,
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: Theme.of(context)
+                                                      .textTheme
+                                                      .bodySmall
+                                                      ?.copyWith(
+                                                        color:
+                                                            DesktopChrome.muted,
+                                                      ),
+                                                ),
+                                              ),
+                                              if (pending)
+                                                Text(
+                                                  'Waiting for you',
+                                                  style: Theme.of(context)
+                                                      .textTheme
+                                                      .bodySmall
+                                                      ?.copyWith(
+                                                        color:
+                                                            DesktopChrome.muted,
+                                                      ),
+                                                ),
+                                              const SizedBox(width: 8),
+                                              _TaskMark(task.status),
+                                            ],
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                  if (_expanded == task.id && pending)
+                                    Padding(
+                                      padding: const EdgeInsets.fromLTRB(
+                                        AppDesktop.groupGap,
+                                        0,
+                                        AppDesktop.groupGap,
+                                        AppDesktop.controlGap,
+                                      ),
+                                      child: Column(
+                                        children: [
+                                          DropdownButtonFormField<String>(
+                                            key: ValueKey(
+                                              'task-agent-${task.id}',
+                                            ),
+                                            initialValue:
+                                                agents.containsKey(
+                                                      task.agentId,
+                                                    ) &&
+                                                    !agents[task.agentId]!
+                                                        .isBuddy
+                                                ? task.agentId
+                                                : null,
+                                            decoration: const InputDecoration(
+                                              labelText: 'Suggested agent',
+                                              isDense: true,
+                                            ),
+                                            items: [
+                                              for (final a
+                                                  in agents.values.where(
+                                                    (a) => !a.isBuddy,
+                                                  ))
+                                                DropdownMenuItem(
+                                                  value: a.id,
+                                                  child: Text(
+                                                    a.displayName ?? a.name,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                  ),
+                                                ),
+                                            ],
+                                            onChanged: enabled
+                                                ? (id) {
+                                                    if (id != null) {
+                                                      unawaited(
+                                                        _send({
+                                                          'type':
+                                                              'task.suggest',
+                                                          'conversationId':
+                                                              task.id,
+                                                          'agentId': id,
+                                                        }),
+                                                      );
+                                                    }
+                                                  }
+                                                : null,
+                                          ),
+                                          Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.end,
+                                            children: [
+                                              TextButton(
+                                                onPressed: enabled
+                                                    ? () => _reject(task)
+                                                    : null,
+                                                child: const Text('Reject'),
+                                              ),
+                                              FilledButton(
+                                                onPressed: enabled
+                                                    ? () => _send({
+                                                        'type': 'task.approve',
+                                                        'conversationId':
+                                                            task.id,
+                                                        // The agent shown, null for none: a suggestion changed
+                                                        // since is refused (task #4217).
+                                                        'suggestedAgentId':
+                                                            task.agentId,
+                                                      })
+                                                    : null,
+                                                child: const Text('Approve'),
+                                              ),
+                                            ],
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                ],
+                              );
+                            },
+                          ),
+                  ),
+              ],
             ),
-            if (_error != null)
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppDesktop.groupGap,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _error!,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.error,
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: _sending
-                          ? null
-                          : () => _send(_action!, retry: true),
-                      child: const Text('Retry'),
-                    ),
-                  ],
-                ),
-              ),
-            if (!supported)
-              Padding(
-                padding: const EdgeInsets.all(AppDesktop.groupGap),
-                child: Text(
-                  c.accessRevoked
-                      ? 'Tasks are unavailable.'
-                      : c.snapshot == null
-                      ? 'Loading Tasks…'
-                      : 'Update Harness to use Tasks.',
-                ),
-              )
-            else
-              Expanded(
-                child: tasks!.rows.isEmpty
-                    ? const Center(child: Text('No tasks yet'))
-                    : LaidOutListView.builder(
-                        itemCount: tasks.rows.length,
-                        itemBuilder: (context, index) {
-                          final task = tasks.rows[index];
-                          final agent = agents[task.agentId];
-                          final name =
-                              agent?.displayName ??
-                              agent?.name ??
-                              task.agent['name'] as String? ??
-                              'Not assigned';
-                          final project =
-                              projects[task.projectId]?.name ??
-                              task.projectName;
-                          final pending =
-                              task.status == 'proposal' && task.canApprove;
-                          return Column(
-                            key: ValueKey('personal-task-${task.id}'),
-                            children: [
-                              InkWell(
-                                onTap: () {
-                                  if (pending) {
-                                    setState(
-                                      () => _expanded = _expanded == task.id
-                                          ? null
-                                          : task.id,
-                                    );
-                                  } else {
-                                    widget.onOpenTask(task.id);
-                                  }
-                                },
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: AppDesktop.groupGap,
-                                    vertical: AppDesktop.controlGap,
-                                  ),
-                                  child: Column(
-                                    children: [
-                                      Row(
-                                        children: [
-                                          Flexible(
-                                            child: Container(
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                    horizontal:
-                                                        AppDesktop.badgeInset,
-                                                    vertical:
-                                                        AppDesktop.listRowGap,
-                                                  ),
-                                              decoration: BoxDecoration(
-                                                color: Theme.of(context)
-                                                    .colorScheme
-                                                    .surfaceContainerHighest,
-                                                borderRadius:
-                                                    BorderRadius.circular(
-                                                      AppDesktop.rowRadius,
-                                                    ),
-                                              ),
-                                              child: Text(
-                                                project,
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: Theme.of(context)
-                                                    .textTheme
-                                                    .labelSmall,
-                                              ),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 7),
-                                          Expanded(
-                                            flex: 2,
-                                            child: Text(
-                                              task.title,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 5),
-                                      Row(
-                                        children: [
-                                          if (task.agentId != null) ...[
-                                            SuperTabAvatar(
-                                              identity: 'agent:${task.agentId}',
-                                              name: name,
-                                              size: 20,
-                                              picture:
-                                                  agent?.avatar ??
-                                                  SuperTabAvatarPicture.fromJson(
-                                                    task.agent['avatar'],
-                                                  ),
-                                              pattern: true,
-                                            ),
-                                            const SizedBox(width: 6),
-                                          ],
-                                          Expanded(
-                                            child: Text(
-                                              name,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: Theme.of(context)
-                                                  .textTheme
-                                                  .bodySmall
-                                                  ?.copyWith(
-                                                    color: DesktopChrome.muted,
-                                                  ),
-                                            ),
-                                          ),
-                                          if (pending)
-                                            Text(
-                                              'Waiting for you',
-                                              style: Theme.of(context)
-                                                  .textTheme
-                                                  .bodySmall
-                                                  ?.copyWith(
-                                                    color: DesktopChrome.muted,
-                                                  ),
-                                            ),
-                                          const SizedBox(width: 8),
-                                          _TaskMark(task.status),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                              if (_expanded == task.id && pending)
-                                Padding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                    AppDesktop.groupGap,
-                                    0,
-                                    AppDesktop.groupGap,
-                                    AppDesktop.controlGap,
-                                  ),
-                                  child: Column(
-                                    children: [
-                                      DropdownButtonFormField<String>(
-                                        key: ValueKey('task-agent-${task.id}'),
-                                        initialValue:
-                                            agents.containsKey(task.agentId) &&
-                                                !agents[task.agentId]!.isBuddy
-                                            ? task.agentId
-                                            : null,
-                                        decoration: const InputDecoration(
-                                          labelText: 'Suggested agent',
-                                          isDense: true,
-                                        ),
-                                        items: [
-                                          for (final a in agents.values.where(
-                                            (a) => !a.isBuddy,
-                                          ))
-                                            DropdownMenuItem(
-                                              value: a.id,
-                                              child: Text(
-                                                a.displayName ?? a.name,
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                            ),
-                                        ],
-                                        onChanged: enabled
-                                            ? (id) {
-                                                if (id != null) {
-                                                  unawaited(
-                                                    _send({
-                                                      'type': 'task.suggest',
-                                                      'conversationId': task.id,
-                                                      'agentId': id,
-                                                    }),
-                                                  );
-                                                }
-                                              }
-                                            : null,
-                                      ),
-                                      Row(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.end,
-                                        children: [
-                                          TextButton(
-                                            onPressed: enabled
-                                                ? () => _reject(task)
-                                                : null,
-                                            child: const Text('Reject'),
-                                          ),
-                                          FilledButton(
-                                            onPressed: enabled
-                                                ? () => _send({
-                                                    'type': 'task.approve',
-                                                    'conversationId': task.id,
-                                                    // The agent shown, null for none: a suggestion changed
-                                                    // since is refused (task #4217).
-                                                    'suggestedAgentId':
-                                                        task.agentId,
-                                                  })
-                                                : null,
-                                            child: const Text('Approve'),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                            ],
-                          );
-                        },
-                      ),
-              ),
-          ],
+          ),
         ),
       );
     },
