@@ -261,6 +261,88 @@ describe('the merge train finishes batches', () => {
     expect(second!.body).toContain('f'.repeat(12))
   })
 
+  it('builds the fresh batch on the main it reads right before building, not the main the pass began with (#3496, 11-07)', async () => {
+    const { repo, swarm, pass } = setup()
+    swarm.approve(repo.addPull(7, ['backend/src/a.ts']))
+    const moved = 'e'.repeat(40)
+    // A hand merge lands while the pass reads its candidates, after it read main.
+    repo.state.afterRead = name => { if (name === 'files') { repo.state.main = moved; repo.state.afterRead = null } }
+    await pass()
+    const [batch] = repo.batches()
+    expect(batch!.body).toContain(moved.slice(0, 12))
+    repo.state.ci.set(batch!.head, 'success')
+    await pass()
+    expect(repo.state.squashes.map(s => s.number)).toEqual([batch!.number])
+  })
+
+  it('rebuilds a batch closed because main moved on the next pass, while GitHub still reads its members as not worked out', async () => {
+    const { repo, swarm, pass } = setup()
+    const a = repo.addPull(7, ['backend/src/a.ts']), b = repo.addPull(8, ['cli/src/b.ts'])
+    swarm.approve(a); swarm.approve(b)
+    await pass()
+    const first = repo.batches()[0]!
+    // A hand merge moves main mid-batch; GitHub answers mergeable null for every open pull request until it has worked it out.
+    repo.state.main = 'd'.repeat(40)
+    a.mergeable = null; b.mergeable = null
+    await pass()
+    expect(repo.state.pulls.get(first.number)!.state).toBe('closed')
+    const [second] = repo.batches()
+    expect(second!.body).toContain('d'.repeat(12))
+    expect(repo.state.contents.get(second!.head)).toEqual([a.head, b.head])
+  })
+
+  it('leaves out a member that now conflicts with the new main, with its reason, and rebuilds the rest', async () => {
+    const { repo, swarm, pass } = setup()
+    const a = repo.addPull(7, ['backend/src/a.ts']), b = repo.addPull(8, ['cli/src/b.ts'])
+    swarm.approve(a); swarm.approve(b)
+    await pass()
+    repo.state.main = 'd'.repeat(40)
+    a.mergeable = null; b.mergeable = null
+    repo.state.conflicts.add(b.head)
+    await pass()
+    expect(repo.batches().map(p => repo.state.contents.get(p.head))).toEqual([[a.head]])
+    expect(swarm.told.map(t => [t.taskId, t.key])).toEqual([['task-8', `train-conflict:${b.head}`]])
+  })
+
+  it('never merges a docs pull request GitHub has not worked out yet: the fast lane merges on GitHub, with no batch to test it', async () => {
+    const { repo, swarm, pass } = setup()
+    swarm.approve(repo.addPull(7, ['docs/a.md'], { mergeable: null }))
+    await pass()
+    expect(repo.state.squashes).toEqual([])
+    expect(repo.batches()).toEqual([])
+  })
+
+  it('tells a member left waiting after main moved why it waits and when the next batch starts, once', async () => {
+    const { repo, swarm, pass } = setup()
+    const rules: TrainRules = { ...ON, everyMinutes: 10 }
+    const a = repo.addPull(7, ['backend/src/a.ts']), b = repo.addPull(8, ['cli/src/b.ts'])
+    swarm.approve(a); swarm.approve(b)
+    await pass(rules)
+    const first = repo.batches()[0]!
+    repo.state.main = 'd'.repeat(40)
+    b.labels = ['hold']
+    await pass(rules)
+    expect(repo.batches().map(p => repo.state.contents.get(p.head))).toEqual([[a.head]])
+    expect(swarm.told.map(t => [t.taskId, t.key])).toEqual([['task-8', `train-moved:${first.number}:${b.head}`]])
+    expect(swarm.told[0]!.text).toMatch(/main moved/i)
+    expect(swarm.told[0]!.text).toContain('hold label')
+    expect(swarm.told[0]!.text).toContain('in about 10 minutes')
+    await pass(rules)
+    expect(swarm.told).toHaveLength(1)
+  })
+
+  it('says nothing on a member merged by hand meanwhile, often why main moved', async () => {
+    const { repo, swarm, pass } = setup()
+    const a = repo.addPull(7, ['backend/src/a.ts']), b = repo.addPull(8, ['cli/src/b.ts'])
+    swarm.approve(a); swarm.approve(b)
+    await pass()
+    repo.state.main = 'd'.repeat(40)
+    Object.assign(b, { state: 'closed', merged: true })
+    await pass()
+    expect(repo.batches().map(p => repo.state.contents.get(p.head))).toEqual([[a.head]])
+    expect(swarm.told).toEqual([])
+  })
+
   it('never merges a member pushed after its batch went green: the heads are read again first', async () => {
     const { repo, swarm, pass } = setup()
     const a = repo.addPull(7, ['backend/src/a.ts']), b = repo.addPull(8, ['backend/src/b.ts'])

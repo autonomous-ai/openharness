@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { groupProject } from './projects.js'
 import { storeOldLeads } from './leads.test-support.js'
-import { applyCommand, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, type Command, type CommandContext } from './commands.js'
+import { applyCommand, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, WORDS, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { readsRawReason } from './startFailure.js'
 import { sweepLiveness } from './liveness.js'
@@ -4464,6 +4464,136 @@ describe('credentials in Swarm chat', () => {
     // Commands with no words of their own are passed through untouched.
     const pause: Command = { type: 'tab.pause', paused: true }
     expect(withoutCredentials(pause, removed)).toBe(pause)
+  })
+})
+
+// Task #4340: WORDS listed only the older commands, so these were stored, and copied, as typed.
+describe('credentials in every command', () => {
+  const github = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_')
+  /** A command holding [value] at [path] (`[]` an item of a list), with only what withoutCredentials reads. */
+  const holding = (type: string, path: string, value: string): Command => {
+    const command: Record<string, unknown> = { type }
+    let holder = command
+    const keys = path.split('.')
+    keys.forEach((key, i) => {
+      const many = key.endsWith('[]'), name = many ? key.slice(0, -2) : key, last = i === keys.length - 1
+      const next = last ? value : {}
+      holder[name] = many ? [next] : next
+      holder = next as Record<string, unknown>
+    })
+    return command as unknown as Command
+  }
+  const at = (command: unknown, path: string): unknown => path.split('.').reduce<unknown>((value, key) => {
+    const many = key.endsWith('[]'), item = (value as Record<string, unknown>)[many ? key.slice(0, -2) : key]
+    return many ? (item as unknown[])[0] : item
+  }, command)
+
+  it.each([
+    ['proposal.decide', 'reason'], ['proposal.decide', 'task.changes'], ['proposal.decide', 'checks[].description'],
+    ['proposal.ask', 'question'], ['proposal.ask', 'defaultAnswer'], ['proposal.answer', 'text'], ['proposal.merge', 'reason'],
+    ['proposal.create', 'text'], ['proposal.create', 'evidence[]'], ['buddy.propose', 'why'], ['buddy.propose', 'evidence[]'],
+    ['decision.ask', 'questions[].question'], ['decision.ask', 'questions[].options[]'], ['decision.ask', 'questions[].unblocks'],
+    ['decision.answer', 'note'], ['work.status', 'ask.options[]'], ['work.status', 'ask.unblocks'], ['work.pause', 'reason'],
+    ['person.tell', 'text'], ['agent.new', 'name'], ['agent.new', 'projectName'], ['buddy.create', 'name'], ['buddy.create', 'setup.name'],
+    ['member.name', 'name'], ['member.username', 'username'], ['agent.add', 'roleName'], ['agent.start', 'request.roleName'],
+    ['project.role.set', 'role.name'], ['project.roles.create', 'roles[].name'], ['crew.add', 'lane'], ['work.lane', 'lane'],
+    ['swarm.delete', 'name'], ['tab.routingPolicy', 'policy.notes'],
+    ['rules.set', 'rules.machines[].why'], ['rules.set', 'rules.crew[].names[]'], ['conversation.create', 'step'],
+    ['conversation.create', 'task.requires.access[]'], ['route.record', 'decision.context.missing[]'], ['agent.screenResult', 'error'],
+  ])('removes a credential from %s %s', (type, path) => {
+    const removed: CredentialKind[] = []
+    expect(at(withoutCredentials(holding(type, path, `see ${github}`), removed), path)).toBe(`see ${CREDENTIAL_MARKER}`)
+    expect(removed).toEqual(['github'])
+  })
+
+  /** Strings that are not words people read, or that must reach their reader exactly, each with why. Anything else a
+   *  command takes as a string is in WORDS: a new command's text fails the walk below until it is listed in one of the two. */
+  const NOT_WORDS: readonly (readonly [why: string, fields: readonly string[]])[] = [
+    // agent.input: the host types the exact text and terminal.ts redacts its chat row. A screen goes, exact, only to the agent that asked.
+    ['A terminal\'s exact text', ['agent.input text', 'agent.screenResult text', 'agent.inputResult text']],
+    ['A role\'s skill text, read only by its project\'s owner, Lead and hosts', ['project.role.set role.text', 'project.roles.create roles[].text',
+      'project.roles.reset roles[].text']],
+    // A token here fails the launch rather than reaching anyone.
+    ['A lab\'s engine, model, effort or grid, passed to its CLI or matched to a list', [
+      'agent.add configuration.engine', 'agent.add configuration.model', 'agent.add configuration.effort', 'agent.add configuration.engineVersion',
+      'agent.add launchRefused.model', 'agent.add launchRefused.effort',
+      ...['agent.configuration', 'agent.rebind', 'agent.started', 'agent.startSettled'].flatMap(type =>
+        ['engine', 'model', 'effort', 'engineVersion'].map(field => `${type} configuration.${field}`)),
+      'agent.new engine', 'agent.new model', 'buddy.create engine', 'buddy.create model', 'buddy.create setup.engines[]', 'buddy.engine engine',
+      'buddy.model gridModel', 'lead.start engine', 'lead.start model', 'lead.start effort', 'lead.switch engine', 'lead.switch model',
+      'lead.switch effort', 'machine.contribute engines[]', 'machine.engineResume engine', 'localModels.status grid',
+      'agent.start request.engine', 'agent.start request.model', 'agent.start request.effort', 'agent.start request.permissionMode',
+      'agent.start request.gridModel', 'agent.start request.gridName', 'agent.start request.requirements.tools[]',
+      'route.modelResult model', 'route.modelResult effort', 'route.record decision.assessment.model', 'route.record decision.assessment.kind',
+      'route.record decision.candidates[].model', 'route.record decision.candidates[].effort', 'route.record decision.candidates[].gridModel',
+      'route.record decision.candidates[].gridName', 'rule.set rule.model', 'rule.set rule.taskKind',
+      'tab.routingPolicy policy.models[].model', 'tab.routingPolicy policy.models[].effort', 'tab.routingPolicy policy.localModels.models[].model',
+      'tab.routingPolicy policy.priorOverrides[].model',
+      ...['project.role.set role', 'project.roles.create roles[]', 'project.roles.reset roles[]'].flatMap(role =>
+        [`${role}.defaults.model`, `${role}.defaults.effort`])]],
+    // A repository URL that holds a credential is refused by its schema.
+    ['A folder a host opens, or a URL or ref held to its shape', ['agent.add project.cwd', 'agent.add project.repositoryUrl',
+      'agent.new repositoryUrl', 'agent.start request.cwd', 'agent.start request.codexHome', 'agent.start request.branchRef',
+      'agent.start request.requirements.devices[]', 'buddy.create setup.cwd', 'lead.start branchRef', 'lead.start repositoryUrl',
+      'machine.contribute cwd', 'project.repository repositoryUrl', 'tab.project project.cwd', 'tab.project project.repositoryUrl',
+      'conversation.create task.requires.devices[]', 'work.define task.requires.devices[]', 'proposal.decide task.requires.devices[]',
+      'conversation.merged pullRequestUrl', 'conversation.merged fixes', 'conversation.unlink pullRequestUrl', 'work.check head', 'work.check base']],
+    ['An id, an account key, a time or a time zone', ['agent.add roleId', 'agent.rebind profileId', 'agent.start request.roleId',
+      'machine.access entryId', 'process.confirm noteId', 'project.closeTab tabOperation', 'project.role.remove roleId', 'project.role.set role.id',
+      'project.roles.create roles[].id', 'project.roles.reset roles[].id', 'proposal.create projectId', 'route.override candidateId',
+      'route.record decision.candidates[].id', 'route.record decision.pick', 'route.record decision.candidates[].fit.account', 'work.assign roleId',
+      'work.queue hold.personId', 'work.status hold.personId', 'rules.set rules.instructionApprovals.topDeciderId',
+      'rules.set rules.instructionApprovals.people[].accountIds[]', 'member.timeZone timeZone', 'project.digest timeZone', 'project.digest time',
+      'work.queue notBefore', 'rules.set rules.releaseWindow.start', 'rules.set rules.releaseWindow.end', 'rules.set rules.releaseWindow.timeZone',
+      'rules.set rules.releasePace.backendPause.start', 'rules.set rules.releasePace.backendPause.end', 'rules.set rules.machines[].away.windows[][]',
+      'rules.set rules.machines[].away.timeZone']],
+    ['The address an invitation goes to, which its person signs in with', ['invite.create email']],
+    // Redacting first would hide the token from that refusal and store the marker instead.
+    ['Refused outright when it looks like a secret (machineAccess.ts ACCESS_SECRET)', ['machine.access name', 'machine.access note', 'machine.access check']],
+    ['Written by the server; the command\'s value is dropped (route.record)', ['route.record decision.stepUp.reason', 'route.record decision.sameEngine']],
+  ]
+
+  /** Every string a command takes, as `type path`, but ids and ISO times (shapes no credential fits). */
+  const strings = (): string[] => {
+    const found: string[] = []
+    const ID = /^[A-Za-z0-9_-]+$/.source
+    const walk = (schema: { _zod: { def: Record<string, any> } }, type: string, path: string): void => {
+      const def = schema._zod.def
+      switch (def.type) {
+        case 'object': for (const [key, field] of Object.entries(def.shape)) if (key !== 'type' || path) walk(field as never, type, path ? `${path}.${key}` : key); return
+        case 'array': return walk(def.element, type, `${path}[]`)
+        case 'tuple': return def.items.forEach((item: never) => walk(item, type, `${path}[]`))
+        case 'record': return walk(def.valueType, type, `${path}{}`)
+        case 'optional': case 'nullable': case 'default': case 'readonly': return walk(def.innerType, type, path)
+        case 'pipe': return walk(def.in._zod.def.type === 'transform' ? def.out : def.in, type, path)
+        case 'union': return def.options.forEach((option: never) => walk(option, type, path))
+        case 'lazy': return walk(def.getter(), type, path)
+        case 'string': {
+          const checks: { format?: string; pattern?: RegExp }[] = (def.checks ?? []).map((check: { _zod: { def: object } }) => check._zod.def)
+          const patterns = checks.map(check => check.pattern?.source).filter(Boolean)
+          const time = [def.format, ...checks.map(check => check.format)].some(format => format === 'datetime' || format === 'date')
+          if (time || (patterns.length === 1 && patterns[0] === ID)) return
+          return void found.push(`${type} ${path}`)
+        }
+        case 'enum': case 'literal': case 'number': case 'int': case 'boolean': case 'null': case 'undefined': return
+        default: throw new Error(`The walk does not read a ${def.type} (${type} ${path}): teach it.`)
+      }
+    }
+    for (const option of (commandSchema as unknown as { _zod: { def: { options: { _zod: { def: Record<string, any> } }[] } } })._zod.def.options) {
+      walk(option, option._zod.def.shape.type._zod.def.values[0], '')
+    }
+    return [...new Set(found)]
+  }
+
+  it('walks every command: each string is in WORDS or named, with why, as not words', () => {
+    const exempt = NOT_WORDS.flatMap(([, fields]) => fields)
+    const covered = new Set([...Object.entries(WORDS).flatMap(([type, paths]) => paths!.map(path => `${type} ${path}`)), ...exempt])
+    const all = strings()
+    expect(all.length).toBeGreaterThan(200)
+    expect(all.filter(field => !covered.has(field))).toEqual([])
+    // Nothing listed is stale or listed twice.
+    expect([...covered].filter(field => !all.includes(field))).toEqual([])
+    expect(exempt.filter(field => Object.entries(WORDS).some(([type, paths]) => paths!.some(path => `${type} ${path}` === field)))).toEqual([])
   })
 })
 

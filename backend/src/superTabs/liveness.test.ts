@@ -95,6 +95,18 @@ describe('a task waiting on a person (task #2969)', () => {
     expect(status(working(asked + QUIET_RUNNING_MS + 1), asked + QUIET_RUNNING_MS + 1).status).toBe('lost')
   })
 
+  it('stays its agent\'s while its terminal waits at a prompt for a person, though its status says working (task #4217)', () => {
+    const prompted = (alerting: Array<'prompt'>) => {
+      const state = swarm(assignment({ leaseUntil: asked + LEASE_MS, progressAt: asked }), { receivedAt: asked + 2 * HOUR, harnessProgress: { h: asked } })
+      state.agents[0]!.alerting = alerting
+      return state
+    }
+    expect(status(prompted(['prompt']), asked + 2 * HOUR).status).toBe('working')
+    expect(nextLossAt(prompted(['prompt']), 'm')).toBeUndefined()
+    // The prompt answered, its quiet time counts again.
+    expect(status(prompted([]), asked + 2 * HOUR).status).toBe('lost')
+  })
+
   it('has no loss time while it waits for the person, so a machine\'s report is not scheduled for it', () => {
     expect(nextLossAt(waiting(), 'm')).toBeUndefined()
   })

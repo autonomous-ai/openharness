@@ -449,6 +449,20 @@ describe('production resume handler', () => {
     const stopOrder = vi.mocked(stopConflictingBackgroundJob).mock.invocationCallOrder[0]
     const argvOrder = vi.mocked(buildEngineLaunchArgv).mock.invocationCallOrder[0]
     expect(stopOrder).toBeLessThan(argvOrder)
+    // What the stop reports reaches the daemon's log under the agent's short id.
+    const said = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      vi.mocked(stopConflictingBackgroundJob).mock.calls[0]![0].log!('stopped background job bg-1')
+      expect(said).toHaveBeenCalledWith(`[resume] ${saved.agentId.slice(0, 8)} stopped background job bg-1`)
+    } finally { said.mockRestore() }
+  })
+
+  it('builds nothing when the resume is cancelled while the background job stops', async () => {
+    rewrite({ engine: 'claude' })
+    vi.mocked(stopConflictingBackgroundJob).mockImplementationOnce(async () => { deps.restartJobs.cancel(saved.agentId) })
+    expect(await start()).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+    expect(buildEngineLaunchArgv).not.toHaveBeenCalled()
+    expect(create).not.toHaveBeenCalled()
   })
 
   it('never checks for a background job on a fresh or fork launch (no resumeSessionId)', async () => {

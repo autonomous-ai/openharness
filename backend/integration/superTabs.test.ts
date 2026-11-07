@@ -1113,17 +1113,18 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await store.observeMachine(host, tab, 'pool-host', { ...observation })
     // Started and assigned in a task: the project chat holds only its coordinator among agents (#2207).
     const task = String((await run(tab, { type: 'conversation.create', title: 'Pool work', brief: '', checks: [] })).result.conversationId)
-    const request = { permissionMode: 'full', conversationId: task, machineId: 'pool-host', engine: 'codex', name: 'Builder', cwd: '/project', worktree: true,
+    const request = { conversationId: task, machineId: 'pool-host', engine: 'codex', name: 'Builder', cwd: '/project', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     await expect(asHost(tab, { type: 'agent.start', request: { ...request, cwd: '/private' } })).rejects.toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
-    await expect(asHost(tab, { type: 'agent.start', request: { ...request, permissionMode: 'bypassPermissions' } })).rejects.toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
+    await expect(asHost(tab, { type: 'agent.start', request: { ...request, permissionMode: 'full' } })).rejects.toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
     const starts = await Promise.allSettled([asHost(tab, { type: 'agent.start', request }), asHost(tab, { type: 'agent.start', request })])
     expect(starts.filter(r => r.status === 'fulfilled')).toHaveLength(1)
     expect(starts.filter(r => r.status === 'rejected')).toHaveLength(1)
     const startId = (starts.find(r => r.status === 'fulfilled') as PromiseFulfilledResult<Awaited<ReturnType<typeof run>>>).value.result.startId as string
     const queued = await store.start(host, tab, startId)
     expect(queued.poolGeneration).toBe(generation)
-    expect(queued.request.permissionMode).toBe('full')
+    // Swarm v3 (#4215): the agent starts with its owner's own settings.
+    expect(queued.request).not.toHaveProperty('permissionMode')
     await expect(run(tab, { type: 'agent.startDispatch', startId })).rejects.toMatchObject({ code: 'HOST_REQUIRED' })
     await expect(store.start(peer, tab, startId, undefined, 'pool-host')).rejects.toMatchObject({ code: 'FORBIDDEN' })
     const hostRun = (command: Command) => store.execute(host, tab, { operationId: randomUUID(), command }, undefined, 'pool-host')
@@ -1166,7 +1167,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await pool()).observation.quotaReasons).toEqual({ codex: 'OpenAI could not be reached.' })
     // Started in a task: the project chat holds only its coordinator among agents (#2207).
     const task = String((await run(tab, { type: 'conversation.create', title: 'Health work', brief: '', checks: [] })).result.conversationId)
-    const request = { permissionMode: 'full', conversationId: task, machineId: 'health-host', engine: 'codex', name: 'Builder', cwd: '/project', worktree: true,
+    const request = { conversationId: task, machineId: 'health-host', engine: 'codex', name: 'Builder', cwd: '/project', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const hostRun = (command: Command) => store.execute(host, tab, { operationId: randomUUID(), command }, undefined, 'health-host')
     // Preparation failures remain failed starts, but do not disable either engine.
