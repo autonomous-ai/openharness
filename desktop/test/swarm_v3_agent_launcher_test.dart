@@ -280,4 +280,30 @@ void main() {
       ),
     );
   });
+
+  // Task #4541: Join's agent becomes a Member of the project picked, or the Lead of a new one.
+  test('the pick goes with the start: a main project, or a new project\'s '
+      'name', () async {
+    final sent = <Map<String, dynamic>>[];
+    SwarmAgentLauncher launcher() => SwarmAgentLauncher(
+      machineId: 'local',
+      machineName: 'Mac',
+      inSwarm: true,
+      isCurrent: () => true,
+      prepare: (op) async => throw StateError('must not prepare'),
+      command: (command, op) async {
+        sent.add(command);
+        return {'startId': 'one'};
+      },
+    );
+    await launcher().create('claude', 'a', mainProjectId: 'lamp');
+    await launcher().create('codex', 'b', projectName: 'radio');
+    await launcher().create('claude', 'c');
+    expect(sent[0], containsPair('mainProjectId', 'lamp'));
+    expect(sent[0].containsKey('projectName'), isFalse);
+    expect(sent[1], containsPair('projectName', 'radio'));
+    expect(sent[1].containsKey('mainProjectId'), isFalse);
+    expect(sent[2].containsKey('mainProjectId'), isFalse);
+    expect(sent[2].containsKey('projectName'), isFalse);
+  });
 }
