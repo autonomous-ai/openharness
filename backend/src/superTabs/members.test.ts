@@ -335,6 +335,30 @@ describe('a helper', () => {
     expect(code(() => f.run({ type: 'member.helper', conversationId: waiting }, owner))).toBe('FORBIDDEN')
   })
 
+  // Review of #3575 (Secrev7): a helper that finished while work waited, whose last task its Member then took, stops too.
+  it('stops, idle, once its person\'s queue empties, whoever took the last task', () => {
+    const { f, lamp, running, waiting, member } = busy(['src/b/'])
+    f.run({ type: 'member.helper', conversationId: waiting }, kai)
+    const start = f.state.starts!.find(s => s.request.helperOf)!
+    const own = { contribution: { machineOwnerId: 'kai', contributorId: 'kai' } }
+    f.run({ type: 'agent.startDispatch', startId: start.id }, kai, own)
+    const helper = f.run({ type: 'agent.started', startId: start.id, harnessId: 'h-helper',
+      configuration: { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null } }, kai, own).result.agentId as string
+    f.run({ type: 'agent.startSettled', startId: start.id, warning: null }, kai, own)
+    f.run({ type: 'work.assign', conversationId: waiting, agentId: helper }, owner)
+    // A third task waits while the helper finishes its own: it stays.
+    const third = f.ask(lamp, 'Third', owns(['src/a/c.ts']))
+    f.run({ type: 'task.approve', conversationId: third }, kai)
+    const done = (id: string, agentId: string) => f.run({ type: 'work.status', conversationId: id, assignmentId: f.group(id).assignment!.id, status: 'done',
+      result: 'Done at abc: https://github.com/o/r/pull/3' }, { kind: 'agent', agentId, machineOwnerId: 'kai' })
+    done(waiting, helper)
+    expect(f.state.agents.find(a => a.id === helper)!.workDecision).not.toBe('stop')
+    // The Member frees and takes the last waiting task: the idle helper stops.
+    done(running, member)
+    f.run({ type: 'work.assign', conversationId: third, agentId: member }, owner)
+    expect(f.state.agents.find(a => a.id === helper)!.workDecision).toBe('stop')
+  })
+
   it('takes its task, and stops once it ends with nothing waiting', () => {
     const { f, lamp, waiting } = busy(['src/b/'])
     f.run({ type: 'member.helper', conversationId: waiting }, kai)
