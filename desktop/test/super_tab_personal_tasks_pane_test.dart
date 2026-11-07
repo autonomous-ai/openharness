@@ -416,6 +416,19 @@ void main() {
       expect(find.text('Retry'), findsNothing);
       expect(approve('old').onPressed, isNotNull);
     });
+    testWidgets('an update required says so, with no Retry', (t) async {
+      await mount(t);
+      f.refusal = const SuperTabFailure(
+        'UPDATE_REQUIRED',
+        'fixture private payload',
+        statusCode: 426,
+      );
+      await t.tap(inCard('new', find.text('Approve')));
+      await t.pumpAndSettle();
+      expect(find.text('Update Harness to change Tasks.'), findsOneWidget);
+      expect(find.textContaining('fixture private'), findsNothing);
+      expect(find.text('Retry'), findsNothing);
+    });
     testWidgets('a refused mode change unlocks the cards', (t) async {
       await mount(t);
       f.refusal = const SuperTabFailure(
