@@ -491,7 +491,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('message.delete'), conversationId: id, messageId: id }).strict(),
   // A person's own Buddy asks them too (task #4525), in its own chat: `projectId` is the project its questions are about, and a
   // `send` question is a line waiting for their OK to post to that project's PM (decisions.ts BUDDY_SEND).
-  z.object({ type: z.literal('decision.ask'), conversationId: id, personId: id, projectId: id.optional(),
+  // A Buddy that names nobody asks its owner; every other asker names the person.
+  z.object({ type: z.literal('decision.ask'), conversationId: id, personId: id.optional(), projectId: id.optional(),
     questions: z.array(z.union([decisionQuestion, sendQuestion])).min(1).max(MAX_QUESTIONS) }).strict(),
   // A choice, or `delegate`: the person asked leaves it to the PM, who takes its recommended option (decisions.ts answerDecision).
   // `ownerMessageId`: a Buddy settling its own question from its owner's answer in its chat names that message (task #4525).
@@ -3086,7 +3087,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const group = open(state, command.conversationId)
       const buddy = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
       if (buddy) {
-        const own = checkBuddyAsker(state, buddy, group, command.personId, command.projectId)
+        const own = checkBuddyAsker(state, buddy, group, command.personId ?? buddy.buddyOf!.personId, command.projectId)
         if (own) readProject(state, actor, own)
         const questions = command.questions.map((q): AskedQuestion => {
           if (!('send' in q)) return { ...q, projectId: own, kind: BUDDY_DECISION }
@@ -3097,13 +3098,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           return { question: words.text, options: SEND_OPTIONS, recommended: 0, unblocks: `Posts this in the ${project.name} chat as you.`,
             projectId, kind: BUDDY_SEND, send: { ...words, projectId } }
         })
-        effects.decisions = askDecisions(state, group, command.personId, questions, { now: context.now, operationId, askerAgentId: buddy.id, assignmentId: null })
+        effects.decisions = askDecisions(state, group, buddy.buddyOf!.personId, questions, { now: context.now, operationId, askerAgentId: buddy.id, assignmentId: null })
         result.decisionIds = effects.decisions.map(d => d.id)
         break
       }
       const plain = command.questions.map(q => 'send' in q ? fail('BUDDY_ONLY', 'Only a Buddy asks its owner to send a line.', 403) : q)
       if (command.projectId) fail('INVALID_DECISION', 'Only a Buddy names a project: you ask in your project\'s conversations.', 400)
-      const drafts = askDecisions(state, group, command.personId, plain,
+      const personId = command.personId ?? fail('INVALID_PERSON', 'Name the person to ask.', 400)
+      const drafts = askDecisions(state, group, personId, plain,
         { now: context.now, operationId, askerAgentId: checkAsker(state, actor, group), assignmentId: null })
       // In a switched project the person is asked directly, through their default Buddy (task #3826). Elsewhere people talk only
       // to the PM (anh Dee, 11-05; crewNeeds.ts): another agent's questions are the PM's crew needs, one each, checked as a
@@ -3112,7 +3114,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (direct) checkDirectAsk(plain)
       const pmInstead = direct ? null : routesToPm(state, actor, group)
       if (pmInstead) {
-        plain.forEach((q, i) => crewNeed(group, pmInstead, { personIds: [command.personId], conversationId: group.id,
+        plain.forEach((q, i) => crewNeed(group, pmInstead, { personIds: [personId], conversationId: group.id,
           question: q.question, options: q.options, recommended: q.recommended, ...q.defaultAt ? { defaultAt: q.defaultAt } : {} }, q.question, stableId(operationId, 'crew-need', String(i))))
         result.decisionIds = []
         break
