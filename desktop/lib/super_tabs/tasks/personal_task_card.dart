@@ -23,6 +23,8 @@ class SuperTabPersonalTaskCard extends StatelessWidget {
     this.waiting = false,
     this.onApprove,
     this.onReject,
+    this.issue,
+    this.onOpenIssue,
   });
 
   final SuperTabPersonalTask task;
@@ -36,6 +38,12 @@ class SuperTabPersonalTaskCard extends StatelessWidget {
   /// The task waits for the reader: Approve and Reject show, disabled while [onApprove] and [onReject] are null.
   final bool waiting;
   final VoidCallback? onApprove, onReject;
+
+  /// The task's GitHub issue number, shown beside the project; null for a task with no issue, which shows none.
+  final int? issue;
+
+  /// Opens the issue on GitHub. A tap on the number does only this; anywhere else on the card opens the task.
+  final VoidCallback? onOpenIssue;
 
   @override
   Widget build(BuildContext context) {
@@ -76,7 +84,18 @@ class SuperTabPersonalTaskCard extends StatelessWidget {
                       Expanded(
                         child: Align(
                           alignment: AlignmentDirectional.centerStart,
-                          child: _Tag(project),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Flexible(child: _Tag(project)),
+                              if (issue case final issue?) ...[
+                                const SizedBox(
+                                  width: grid.AppDesktop.menuInset,
+                                ),
+                                _IssueLink(issue, onOpen: onOpenIssue),
+                              ],
+                            ],
+                          ),
                         ),
                       ),
                       const SizedBox(width: grid.AppDesktop.controlGap),
@@ -148,6 +167,46 @@ const _buttonPadding = EdgeInsets.symmetric(
   horizontal: grid.AppDesktop.controlGap,
   vertical: grid.AppDesktop.menuInset,
 );
+
+/// The GitHub issue number as quiet linked text beside the project's capsule: secondary 12, underlined while hovered.
+/// One capsule per card; the number is a detail, so it stays plain text.
+class _IssueLink extends StatefulWidget {
+  const _IssueLink(this.number, {required this.onOpen});
+  final int number;
+  final VoidCallback? onOpen;
+
+  @override
+  State<_IssueLink> createState() => _IssueLinkState();
+}
+
+class _IssueLinkState extends State<_IssueLink> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = DesktopChrome.metadata().copyWith(
+      height: 1.25,
+      fontFeatures: const [FontFeature.tabularFigures()],
+      decoration: _hovered ? TextDecoration.underline : null,
+    );
+    return Semantics(
+      link: true,
+      label: 'Issue ${widget.number} on GitHub',
+      excludeSemantics: true,
+      child: Tooltip(
+        message: 'Open on GitHub',
+        child: InkWell(
+          key: const ValueKey('personal-task-issue'),
+          onTap: widget.onOpen,
+          onHover: (hovered) => setState(() => _hovered = hovered),
+          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+          hoverColor: Colors.transparent,
+          child: Text('#${widget.number}', style: style),
+        ),
+      ),
+    );
+  }
+}
 
 /// The project's name in a neutral grey capsule: grey everywhere, colour only on agent faces (anh Dee, 11-07).
 class _Tag extends StatelessWidget {
