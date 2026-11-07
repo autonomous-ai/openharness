@@ -6,7 +6,7 @@
  */
 import { execFile } from 'node:child_process'
 import { constants } from 'node:fs'
-import { cp, rm, stat } from 'node:fs/promises'
+import { cp, lstat, rm } from 'node:fs/promises'
 import { join, posix } from 'node:path'
 import { promisify } from 'node:util'
 import { ownProcessGroup } from '../lib/windows/noWindow.js'
@@ -41,8 +41,9 @@ export async function copySetup(from: string, to: string, clone: CloneFolder = c
     .filter(path => SETUP_FOLDERS.has(posix.basename(path)) && !path.split('/').includes('..')).sort().slice(0, MAX_FOLDERS)
   const copied: string[] = []
   for (const folder of folders) {
-    // One the helper's checkout already has (a tracked `build/`) stays the checkout's.
-    if (await stat(join(to, folder)).then(() => true, () => false)) continue
+    // Only into a plain folder of the helper's own: one its checkout already has (a tracked `build/`) stays the checkout's, and a
+    // link anywhere on the way (a tracked symlink, dangling or not) is never followed out of its folder (security reviews of #3579).
+    if (!await freshInside(to, folder)) continue
     try {
       await clone(join(from, folder), join(to, folder))
       copied.push(folder)
@@ -55,13 +56,29 @@ export async function copySetup(from: string, to: string, clone: CloneFolder = c
   return { copied }
 }
 
+/** Whether [folder] (a relative path from git) is not in [root] yet and every folder on its way is a real one, not a link. */
+async function freshInside(root: string, folder: string): Promise<boolean> {
+  const parts = folder.split('/')
+  for (let i = 0; i < parts.length; i++) {
+    const info = await lstat(join(root, ...parts.slice(0, i + 1))).catch((error: NodeJS.ErrnoException) => error.code === 'ENOENT' ? null : error)
+    if (info instanceof Error) return false
+    if (i === parts.length - 1) return info === null
+    // A missing folder on the way is made by the copy itself, inside [root].
+    if (info && (info.isSymbolicLink() || !info.isDirectory())) return false
+    if (!info) return true
+  }
+  return false
+}
+
 /** A Member's start note: set up once, here, and say so with the commands it ran. */
 export function memberLine(tabId: string, projectId: string): string {
   return `You are your person's Member for this project: you set the project up once in this folder, then do its tasks here, one at a time. Before your first task, set the project up once as its own docs say (README, AGENTS.md, CONTRIBUTING): install its dependencies and build it in this folder. Then report it once with harness super-tab --tab ${tabId} command OPERATION_ID - <<'JSON' and this JSON, naming each command you ran: {"type":"agent.setUp","projectId":"${projectId}","ok":true,"steps":["…"]}. If it cannot be set up, send {"type":"agent.setUp","projectId":"${projectId}","ok":false,"reason":"…"} with the reason in one line. Start each task on a new branch from the default branch, in this same folder.`
 }
 
-/** A helper's start note: its folder came from its Member's setup, and these are the commands that made it. Quoted, as data. */
-export function helperLine(steps: string[]): string {
+/** A helper's start note: its folder came from its Member's setup, and these are the commands that made it, quoted as data. Null
+ *  [steps]: its Member is not this computer's own, so its words are not run here (security review 1 of #3579); it sets up itself. */
+export function helperLine(steps: string[] | null): string {
+  if (!steps) return 'You are a helper: before your task, set the project up in this folder as its own docs say (README, AGENTS.md, CONTRIBUTING). You end when no task waits, so leave nothing running.'
   const listed = steps.length ? ` Your Member set the project up with these commands; run only the ones still needed:\n${steps.map(step => `> ${step}`).join('\n')}\n` : ' '
   return `You are a helper: your folder was made from your Member's set-up copy of this project, with its installed folders copied where this computer could.${listed}You end when no task waits, so leave nothing running.`
 }

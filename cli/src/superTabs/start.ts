@@ -467,9 +467,10 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       // The role's name from the project's document, when the backend's start request has it; one line, bounded.
       const roleName = typeof request.roleName === 'string' ? request.roleName.replace(/\s+/g, ' ').trim().slice(0, 80) : ''
       // Anh Dee's agent model (task #4698): a Member sets its project up once in its folder; a helper starts from that setup.
+      // A helper's Member's commands only when its host found that Member on this computer (machines.ts `memberHere`).
       const memberProject = !buddy && !lead ? text(object(request.member).projectId) : null
       const helper = !buddy && !lead && identifier(object(request.helperOf).harnessId)
-      const setUpLine = memberProject && identifier(memberProject) ? ` ${memberLine(String(input.tabId), memberProject)}` : helper ? ` ${helperLine(setUpSteps(request.setUpSteps))}` : ''
+      const setUpLine = memberProject && identifier(memberProject) ? ` ${memberLine(String(input.tabId), memberProject)}` : helper ? ` ${helperLine(input.memberHere === true ? setUpSteps(request.setUpSteps) : null)}` : ''
       // Swarm v3 (task #4215): a PM, an agent and a Buddy start with their owner's own permission settings: no mode, so the
       // engine opens in the person's own default. Forced full mode turned off every check on people's own computers, where
       // Anthropic says to use it only in isolated environments. Team-written work keeps its barrier against the branch's own
