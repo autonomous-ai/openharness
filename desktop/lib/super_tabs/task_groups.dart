@@ -66,8 +66,8 @@ String superTabColumnLabel(
 ) {
   if (project?.isSimple != true) return column.label;
   return switch (column) {
-    SuperTabTaskColumn.nextUp => project!.columnTitle('todo') ?? 'To do',
-    SuperTabTaskColumn.working => project!.columnTitle('doing') ?? 'Doing',
+    SuperTabTaskColumn.nextUp => project!.columnTitle('nextUp') ?? 'To do',
+    SuperTabTaskColumn.working => project!.columnTitle('working') ?? 'Doing',
     _ => project!.columnTitle('done') ?? column.label,
   };
 }

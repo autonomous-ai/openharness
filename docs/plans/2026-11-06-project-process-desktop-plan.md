@@ -10,7 +10,7 @@ half is #3896, PR #3427).
 
 **Architecture:** Delta to Desktop, no other redesign. The contract is the one #3896's plan documents ("Settings and read
 contract"): a head project carries `process` (`simple` | `full`; missing means Full) and `columns` (`[{id, title}]`, Simple ids
-`todo`, `doing`, `done`; Full ids as today); `project.create` takes an optional `process`; `project.process {projectId, process}`
+are the Board's own ids (#3427, `process.ts`) `nextUp`, `working`, `done` titled To do, Doing, Done; Full ids as today); `project.create` takes an optional `process`; `project.process {projectId, process}`
 changes it, and the server refuses anyone but the project's owner and the Swarm's owner.
 - Model: `SuperTabProject.process` and `.columns`, read from the head; an older server sends neither and means Full.
 - Board: a Simple project draws three columns, the existing Next up, Working and Done placements under the server's titles (To do,

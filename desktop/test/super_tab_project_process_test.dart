@@ -36,16 +36,16 @@ void main() {
         _project({
           'process': 'simple',
           'columns': [
-            {'id': 'todo', 'title': 'To do'},
-            {'id': 'doing', 'title': 'Doing'},
+            {'id': 'nextUp', 'title': 'To do'},
+            {'id': 'working', 'title': 'Doing'},
             {'id': 'done', 'title': 'Done'},
           ],
         }),
       );
       expect(project.process, SuperTabProcess.simple);
       expect(project.isSimple, isTrue);
-      expect(project.columnIds, ['todo', 'doing', 'done']);
-      expect(project.columnTitle('doing'), 'Doing');
+      expect(project.columnIds, ['nextUp', 'working', 'done']);
+      expect(project.columnTitle('working'), 'Doing');
     });
 
     // #3427 sends Simple's columns under the Board's own ids (process.ts): nextUp, working, done.
@@ -114,8 +114,8 @@ void main() {
         final project = (server.state['projects'] as List).single as Map;
         project['process'] = 'simple';
         project['columns'] = [
-          {'id': 'todo', 'title': 'To do'},
-          {'id': 'doing', 'title': 'Doing'},
+          {'id': 'nextUp', 'title': 'To do'},
+          {'id': 'working', 'title': 'Doing'},
           {'id': 'done', 'title': 'Done'},
         ];
       }

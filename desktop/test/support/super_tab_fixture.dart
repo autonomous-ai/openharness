@@ -47,8 +47,8 @@ Map<String, dynamic> _processOf(Object? process) => process == 'simple'
     ? {
         'process': 'simple',
         'columns': [
-          {'id': 'todo', 'title': 'To do'},
-          {'id': 'doing', 'title': 'Doing'},
+          {'id': 'nextUp', 'title': 'To do'},
+          {'id': 'working', 'title': 'Doing'},
           {'id': 'done', 'title': 'Done'},
         ],
       }
