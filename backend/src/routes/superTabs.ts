@@ -126,6 +126,8 @@ const threadsQuery = z.object({ read: z.string().regex(/^[1-9][0-9]{0,2}$/).tran
   .refine(n => n <= READ_THREADS_ASKED_MAX, `At most ${READ_THREADS_ASKED_MAX}.`).optional() }).strict()
 // The project whose open Buddy proposals a person reads (superTabs/proposals.ts).
 const proposalsQuery = z.object({ projectId: id }).strict()
+/** The Cmd-N and join project list's query (superTabs/projectList.ts): the project the person was invited to, if any. */
+const projectListQuery = z.object({ invitedTo: id.optional() }).strict()
 // The reader's own catch-up (superTabs/catchUp.ts): no asAgentId, since agents read every message as it comes.
 const catchUpQuery = z.object({ after: z.coerce.number().int().nonnegative().safe() }).strict()
 // Pages by (sequence, id) (design 4.6): `afterId`/`beforeId` go with `after`/`before`, from the previous page's `next`.
@@ -674,6 +676,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof proposalsQuery> }>('/api/super-tabs/:tabId/proposals',
     { preHandler: [validateParams(tabParams), validateQuery(proposalsQuery)] },
     (req, reply) => respond(reply, () => store.proposals(req.user!, req.params.tabId, req.query.projectId)))
+  // The projects a person may pick a main project from (superTabs/projectList.ts, task #4540), read when Cmd-N or Join opens.
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof projectListQuery> }>('/api/super-tabs/:tabId/project-list',
+    { preHandler: [validateParams(tabParams), validateQuery(projectListQuery)] },
+    (req, reply) => respond(reply, () => store.projectList(req.user!, req.params.tabId, req.query.invitedTo)))
   // A person's Activity (superTabs/activity.ts): replies to their messages and reactions to them, read when its digest moves.
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery> }>('/api/super-tabs/:tabId/activity',
     { preHandler: [validateParams(tabParams), validateQuery(noQuery)] }, async (req, reply) => {

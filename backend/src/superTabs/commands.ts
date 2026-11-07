@@ -294,6 +294,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('note.remove'), projectId: id, noteId: id }).strict(),
   // What the project calls its coordinator, as its instructions say (instructions.ts coordinatorNameOf).
   z.object({ type: z.literal('project.coordinatorName'), projectId: id, name: roleNameSchema }).strict(),
+  // What the project is, in one line, for the Cmd-N and join project list (task #4540): empty clears it.
+  z.object({ type: z.literal('project.about'), projectId: id, about: z.string().trim().max(80).regex(/^[^\r\n]*$/, 'One line.') }).strict(),
   z.object({ type: z.literal('lead.start'), projectId: id, machineId: id.nullable(), engine: swarmEngine,
     model: z.string().trim().min(1).max(200).optional(), effort: z.string().trim().min(1).max(80).optional(),
     branchRef: z.string().max(1024).regex(/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/).optional(), repositoryUrl: repositoryUrl.optional() }).strict(),
@@ -401,12 +403,16 @@ export const commandSchema = z.discriminatedUnion('type', [
   // `conversationId` starts that one of the person's Buddies again; neither, the default, as before.
   z.object({ type: z.literal('buddy.create'), projectId: id.optional(), machineId: id, engine: swarmEngine, model: z.string().trim().min(1).max(200).optional(),
     setup: z.object({ name: title, cwd: path, engines: z.array(swarmEngine).min(1).max(2) }).strict().optional(),
-    name: z.string().max(200).optional(), conversationId: id.optional() }).strict(),
+    name: z.string().max(200).optional(), conversationId: id.optional(),
+    // The project the person picked to join as a Member of (task #4540): kept on the agent as its main project.
+    mainProjectId: id.optional() }).strict(),
   // + New agent (Swarm v3, task #4116): a Regular agent in a chat of its own, or a PM that names and starts a project, on the
   // person's own listed computer and account.
   z.object({ type: z.literal('agent.new'), kind: z.enum(['regular', 'pm']), machineId: id, engine: swarmEngine,
     model: z.string().trim().min(1).max(200).optional(), name: z.string().trim().min(1).max(80).optional(), projectName: title.optional(),
     repositoryUrl: repositoryUrl.optional(),
+    // The Member's main project (task #4540): only on the Swarm's start of a Member; New project makes the Lead of its own.
+    mainProjectId: id.optional(),
     // A Member its person's Desktop starts itself through Cmd-N (task #4196): only its chat opens here; agent.add brings in the session.
     local: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
@@ -584,6 +590,7 @@ export const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'instructions.save': ['text', 'summary', 'repeatReason', 'dropped[].text'],
   'note.add': ['text'],
   'project.coordinatorName': ['name'],
+  'project.about': ['about'],
   'rule.set': ['text'],
   'rules.set': ['summary', 'rules.instructionApprovals.people[].name', 'rules.reviews.rows[].area', 'rules.reviews.rows[].paths[]',
     'rules.reviews.test[].where', 'rules.reviews.test[].paths[]', 'rules.reviews.untested[]', 'rules.caps[].name', 'rules.paths[].name',
@@ -1746,7 +1753,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     // Its sessions still starting in people's one Buddy chats go with it (their chats belong to no project).
     for (const start of state.starts ?? []) {
       if (start.request.buddySession?.projectId === project.id && !start.harnessId && !start.error) start.error = 'Its project was deleted.'
+      if (start.request.mainProjectId === project.id) delete start.request.mainProjectId
     }
+    // Members elsewhere whose main project it was have none now (spec: they ask their person again, build task 9).
+    for (const target of state.agents) if (target.mainProjectId === project.id) delete target.mainProjectId
     deleteProject(state, actor, project.id, orphaned, context.now)
     // No machine keeps it any more; one kept only for it now serves none (machines.ts machineProjectRefusal).
     for (const pool of state.machines ?? []) if (pool.projects) pool.projects = pool.projects.filter(id => id !== project.id)
@@ -2540,6 +2550,17 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       else manageProject(state, actor, project.id)
       mutableProjects(state)
       projectOf(state, project.id).coordinatorName = command.name
+      break
+    }
+    case 'project.about': {
+      // As its coordinator's name: the coordinator sets it, or a person who manages the project.
+      const project = readProject(state, actor, command.projectId)
+      if (actor.kind === 'agent') coordinatorOf(project)
+      else manageProject(state, actor, project.id)
+      mutableProjects(state)
+      const stored = projectOf(state, project.id)
+      if (command.about) stored.about = command.about
+      else delete stored.about
       break
     }
     case 'process.confirm': {
@@ -3697,6 +3718,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
       // One Buddy per person per Swarm (Dee, 10-31). An older app's Start names a project it reads: it adds that same one Buddy.
       if (command.projectId) readProject(state, actor, command.projectId)
+      if (command.mainProjectId) readProject(state, actor, command.mainProjectId)
       const me = person(state, actor.userId)
       // Which Buddy (task #3818): one of the person's own, by its chat; a new one, named, in the main chat while no Buddy is there,
       // else in a chat of its own, within the Swarm's cap; neither, the default, as before several.
@@ -3757,7 +3779,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
         ...(command.model ? { model: command.model } : {}), name: named.name, cwd: buddyHomeFolder(pool, me), worktree: false,
         requirements: BUDDY_REQUIREMENTS, buddyOf: { personId: me.id, generation: me.generation }, buddyScope: 'swarm',
-        buddyProjects: buddyProjectsOn(state, pool, me) }
+        buddyProjects: buddyProjectsOn(state, pool, me), ...(command.mainProjectId ? { mainProjectId: command.mainProjectId } : {}) }
       const admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)!
       state.starts ??= []
       if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')
@@ -3780,6 +3802,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const grant = context.contribution ?? fail('HOST_REQUIRED', 'Choose your own computer.', 403)
       if (grant.machineOwnerId !== me.id || grant.contributorId !== me.id || grant.hostGrant || grant.hostMachineId || grant.teamSession) {
         fail('AGENT_OWN_MACHINE', 'A new agent runs only on your own computer, in your own account.', 403)
+      }
+      // Cmd-N starts a Member through the Swarm, as Join does (task #4540): a local start or a Lead, which leads its own, takes none.
+      if (command.mainProjectId) {
+        if (command.local || command.kind !== 'regular') fail('MAIN_PROJECT_MEMBER_ONLY', 'Only a Member the Swarm starts takes a main project; New project makes its own Lead.', 400)
+        readProject(state, actor, command.mainProjectId)
       }
       // A Member started through Cmd-N (task #4196, anh Dee 11-07): a server start waited on its host (p50 18 s, p95 4 min), so
       // its person's Desktop starts it on their own computer at once. Only its chat opens here, with no start, so neither a listed
@@ -3812,7 +3839,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
         ...(command.model ? { model: command.model } : {}), name, cwd: buddyHomeFolder(pool, me), worktree: false,
         // A Buddy's smaller memory is for a session that only reads and talks (#3738); a Regular agent takes tasks.
-        requirements: { ...BUDDY_REQUIREMENTS, memoryBytes: AGENT_MEMORY_BYTES }, regular: true }
+        requirements: { ...BUDDY_REQUIREMENTS, memoryBytes: AGENT_MEMORY_BYTES }, regular: true,
+        ...(command.mainProjectId ? { mainProjectId: command.mainProjectId } : {}) }
       const admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)!
       state.starts ??= []
       if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')
@@ -3989,6 +4017,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           : state.projects ? { projectId: groupProject(state, group).id } : {}),
         ...(start.request.buddyScope ? { buddyScope: start.request.buddyScope } : {}),
         ...(start.request.regular ? { regular: true as const } : {}),
+        ...(start.request.mainProjectId ? { mainProjectId: start.request.mainProjectId } : {}),
         ...(start.request.buddyNarrow ? { buddyNarrow: true as const } : {}),
         machineOwnerId: start.machineOwnerId, contributorId: start.contributorId, membershipGeneration: start.membershipGeneration,
         hostGrant: start.hostGrant, name: start.request.name, configuration: command.configuration, configurationVersion: operationId,

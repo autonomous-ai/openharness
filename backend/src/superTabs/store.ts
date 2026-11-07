@@ -41,6 +41,7 @@ import { deliveriesByMessage } from './read/pageDeliveries.js'
 import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
 import { closeProposal, databaseProposalReads, openProposalRows, openProposals, proposalChat, type OpenProposal } from './proposals.js'
+import { projectList, type ProjectList } from './projectList.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, peekType, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
 import { makeThumbnail, MAX_READ_BACK_BYTES, pictureFields, THUMBNAILED_TYPES, thumbKeyOf, thumbnailsReserve, type StoredImage } from './thumbnails.js'
@@ -3942,6 +3943,21 @@ export class SuperTabStore {
     if (!state.conversations.some(c => c.id === chatId)) ({ state } = await this.readLoad(user, tabId, { groupIds: [chatId] }))
     const chat = proposalChat(state, actor, projectId)
     return { proposals: await openProposals(state, chat, databaseProposalReads(this.db, tabId, chat.id)) }
+  }
+
+  /** The projects a person may pick a main project from, in Cmd-N and when joining (projectList.ts, task #4540): only those they
+   *  read. A project's chat holds its pulse; a quiet one is not in the first load, so the readable ones missing are loaded by id
+   *  (at most the Swarm's 100 projects). */
+  async projectList(user: AuthUser, tabId: string, invitedTo?: string): Promise<ProjectList> {
+    this.personOnly(user)
+    let { state } = await this.readLoad(user, tabId)
+    const actor = await this.actor(this.db, user, state)
+    // Only a member: someone who left reads no list, as for a Swarm that is not there.
+    author(state, actor)
+    const missing = projectsOf(state).filter(p => canReadProject(state, actor, p) && !state.conversations.some(c => c.id === p.leadConversationId))
+      .map(p => p.leadConversationId)
+    if (missing.length) ({ state } = await this.readLoad(user, tabId, { groupIds: missing }))
+    return projectList(state, actor, invitedTo)
   }
 
   /** The main-chat excerpt a Buddy thread session starts from: main-stream rows at or before `from` it may read (never a session
