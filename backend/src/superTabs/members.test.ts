@@ -200,10 +200,14 @@ describe('the Member', () => {
 
   // The host contract of #4698 (Threadland): a host that says memberSetUp reports the project set up before work comes.
   // Its mark names its project, which may be private: readers never get it, as its main project's id (read/views.ts).
-  it('keeps its mark out of what readers get, its host alone reads it', () => {
-    const { f, member } = withMember()
+  // Security review 2 of #3575: its set-up record names that project too, with its commands or failure text.
+  it('keeps its mark and set-up out of what readers get, its host alone reads them', () => {
+    const { f, lamp, member } = withMember()
+    f.run({ type: 'agent.setUp', projectId: lamp, ok: true, steps: ['npm ci'] } as Command, { kind: 'agent', agentId: member, machineOwnerId: 'kai' })
     const parts = readerView(store.split(f.state, { tabId: 'tab', version: 9_000, now: NOW }), owner, NOW, { teamMachines: [] }).parts
-    expect(parts.agents.find(a => a.key === member)?.data).not.toHaveProperty('member')
+    const row = parts.agents.find(a => a.key === member)?.data
+    expect(row).not.toHaveProperty('member')
+    expect(row).not.toHaveProperty('setUp')
   })
 
   it('waits for its set-up on a host that reports one, and is refused another agent\'s report', () => {
@@ -255,7 +259,9 @@ describe('a crew agent', () => {
     f.run({ type: 'crew.add', agentId: ada, role: 'engineer', lane: 'backend' })
     const task = (title: string, extra: Record<string, unknown>) => f.run({ type: 'conversation.create', title, brief: 'Do it.',
       task: { goal: title, changes: 'Change it.', constraints: 'None.', owns: ['backend/src/a.ts'] }, checks: [], ...extra } as unknown as Command).result.conversationId as string
-    task('Asked', { requesterId: 'kai' })
+    f.run({ type: 'member.approvalMode', mode: 'review' }, kai)
+    const asked = task('Asked', { requesterId: 'kai' })
+    f.run({ type: 'task.approve', conversationId: asked }, kai)
     const free = task('Free', {})
     expect(dispatchPlan(f.state, 'lead', DISPATCH_RULES, NOW).map(p => p.conversationId)).toEqual([free])
   })
@@ -347,5 +353,21 @@ describe('a helper', () => {
     f.run({ type: 'work.status', conversationId: waiting, assignmentId, status: 'done', result: 'Done at abc: https://github.com/o/r/pull/2' },
       { kind: 'agent', agentId: helper, machineOwnerId: 'kai' })
     expect(f.state.agents.find(a => a.id === helper)!.workDecision).toBe('stop')
+  })
+})
+
+// Security review 1 of #3575: an agent starts on a person's computer only for work they accepted, whoever names them requester.
+describe('a task its requester never accepted', () => {
+  it('starts no Member or helper, and stays with the crew as before', () => {
+    const f = swarm()
+    const lamp = f.project('lamp')
+    // Kai never chose a mode: nothing is staged, and nothing is accepted either.
+    const id = f.ask(lamp, 'Named by someone else')
+    expect(f.group(id).taskApproval).toBeUndefined()
+    expect(memberQueue(f.state, lamp, 'kai', NOW)).toEqual([])
+    expect(memberPlan(f.state, lamp, NOW)).toEqual([])
+    expect(code(() => f.run({ type: 'member.start', conversationId: id }, kai))).toBe('TASK_NOT_ACCEPTED')
+    expect(code(() => f.run({ type: 'member.helper', conversationId: id }, kai))).toBe('TASK_NOT_ACCEPTED')
+    expect(f.state.starts ?? []).toEqual([])
   })
 })
