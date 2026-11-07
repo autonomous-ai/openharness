@@ -25,6 +25,10 @@ export const WAIT_LINE: Record<WaitingOs, string> = {
   windows: 'No Windows machine: a person\'s Windows check is owed.',
 }
 
+/** What a task's merge says while its Windows step waits (taskLine.ts): River's ruling 11-07, an owed Windows check does not
+ *  hold the merge and is never silent; the release that ships the task lists it (releases.ts). */
+export const WINDOWS_OWED = 'Windows check owed: no Windows machine took its test step.'
+
 /** A task's test step that waits for a machine of its OS, with the pull requests its brief names (no history: the brief says
  *  it is unknown). One per OS and task, replaced at each Ready, gone once the step opens. */
 export interface WaitingStep { step: PlannedStep; pulls: StepPull[] }
