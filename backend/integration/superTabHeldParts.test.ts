@@ -61,8 +61,13 @@ async function write(tabId: string, pick: (all: parts.SwarmParts) => parts.PartW
 
 const liveOf = <T>(list: parts.Part<T>[]) => list.filter(p => !p.deleted)
 const observed = (tabId: string, held: HeldParts) => db.$transaction(tx => parts.loadObserved(tx, tabId, 'host', held))
-/** A command's load (store.ts loadRow), naming one quiet conversation as a command naming it does. */
-const commanded = (tabId: string, held: HeldParts | null, groupIds: string[] = []) => db.$transaction(tx => parts.loadActive(tx, tabId, { groupIds }, held))
+/** A command's load (store.ts loadRow), naming one quiet conversation as a command naming it does. Agents, machines, members
+ *  and progress in key order: a whole read comes in its plan's order, which no reader depends on (shape.ts orders by ordinal). */
+const commanded = async (tabId: string, held: HeldParts | null, groupIds: string[] = []) => {
+  const loaded = await db.$transaction(tx => parts.loadActive(tx, tabId, { groupIds }, held))
+  const sorted = <T extends { key: string }>(list: T[]) => [...list].sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+  return { ...loaded, agents: sorted(loaded.agents), machines: sorted(loaded.machines), members: sorted(loaded.members), progress: sorted(loaded.progress) }
+}
 
 describe('a full report\'s held parts (B3, #2597)', () => {
   it('load what a server holding nothing loads, after every kind of write', { timeout: 120_000 }, async () => {
@@ -114,7 +119,7 @@ describe('a full report\'s held parts (B3, #2597)', () => {
     }
   })
 
-  it('reads the machines\' columns through the Swarm\'s index, examining only what it returns, and whole only the one that changed', async () => {
+  it('lists the machines\' columns from their held index, examining no document, and reads whole only the one that changed', async () => {
     const tabId = await scene()
     await scene()
     const held = new HeldParts()
@@ -124,7 +129,7 @@ describe('a full report\'s held parts (B3, #2597)', () => {
     const entries = (await profiled(db, () => observed(tabId, held))).filter(e => e.ns.endsWith('.SwarmMachine'))
     const live = (await db.swarmMachine.count({ where: { tabId, deleted: false } }))
     expect(entries.map(e => [e.planSummary?.startsWith('IXSCAN') || e.planSummary === 'IDHACK' || e.planSummary === 'EXPRESS_IXSCAN', e.docsExamined, e.nreturned]))
-      .toEqual([[true, live, live], [true, 1, 1]])
+      .toEqual([[true, 0, live], [true, 1, 1]])
   })
   it('reads the machines that changed in one read by id, however many changed (task #3119)', async () => {
     const tabId = await scene()
@@ -138,7 +143,7 @@ describe('a full report\'s held parts (B3, #2597)', () => {
     }
     const entries = (await profiled(db, () => observed(tabId, held))).filter(e => e.ns.endsWith('.SwarmMachine'))
     expect(entries.map(e => [e.planSummary?.startsWith('IXSCAN') || e.planSummary === 'IDHACK' || e.planSummary === 'EXPRESS_IXSCAN', e.docsExamined, e.nreturned]))
-      .toEqual([[true, machines.length, machines.length], [true, 2, 2]])
+      .toEqual([[true, 0, machines.length], [true, 2, 2]])
   })
 })
 
@@ -182,5 +187,64 @@ describe('a command\'s held conversations (#3146)', () => {
         expect(await commanded(tabId, warm), name).toEqual(fresh)
       }
     }
+  })
+})
+
+// Ken's prod scan, 2026-11-07 (task #4368): every command read each live agent, machine, member and progress part of its
+// Swarm whole, ~85% of what a post read. A command lists them from an index that holds every column it compares, and reads
+// whole only those that changed since this server last read them.
+describe('a command\'s held agents, machines, members and progress (#4368)', () => {
+  const KINDS = [['agent', 'SwarmAgent'], ['machine', 'SwarmMachine'], ['member', 'SwarmMember'], ['progress', 'SwarmProgress']] as const
+
+  it('load what a server holding nothing loads, after every kind of write', { timeout: 120_000 }, async () => {
+    const tabId = await scene()
+    const warm = new HeldParts(), tiny = new HeldParts(1)
+    let n = 0
+    const at = () => Date.now() + ++n
+    const some = <T>(list: parts.Part<T>[]) => liveOf(list)[0]!
+    const cases: Array<[string, () => Promise<boolean>]> = [
+      ['an agent changed', () => write(tabId, all => { const a = some(all.agents)
+        return { op: 'update', kind: 'agent', key: a.key, seen: a.version, data: { ...a.data!, name: `A${n}` } } }, at())],
+      ['an agent touched (its version alone moves)', () => write(tabId, all => { const a = some(all.agents)
+        return { op: 'touch', kind: 'agent', key: a.key, seen: a.version } }, at())],
+      ['an agent removed', () => write(tabId, all => { const a = some(all.agents)
+        return { op: 'remove', kind: 'agent', key: a.key, seen: a.version, data: a.data } }, at())],
+      ['an agent added again under its key', () => write(tabId, all => { const a = all.agents.find(x => x.deleted)!
+        return { op: 'insert', kind: 'agent', key: a.key, ordinal: a.ordinal, data: a.data } }, at())],
+      ['a member changed', () => write(tabId, all => { const m = some(all.members)
+        return { op: 'update', kind: 'member', key: m.key, seen: m.version, data: { ...m.data!, ordinalNote: n } as never } }, at())],
+      ['a progress part added', () => write(tabId, () => ({ op: 'insert', kind: 'progress', key: `p-${n}`, ordinal: 900 + n, data: { note: n } as never }), at())],
+      ['a machine\'s reading alone (dated readAt)', () => write(tabId, all => { const m = some(all.machines)
+        return { op: 'update', kind: 'machine', key: m.key, seen: m.version, data: { ...m.data!, ordinalNote: n } as never } }, at())],
+      ['an agent rewritten at the version it had, under a new date (purged, then added again)', async () => {
+        const row = await db.swarmAgent.findFirstOrThrow({ where: { tabId, deleted: false } })
+        await db.swarmAgent.update({ where: { id: row.id }, data: { changedAt: new Date(at()), data: { ...row.data as object, name: 'rewritten' } } })
+        return true
+      }],
+    ]
+    expect(await commanded(tabId, warm)).toEqual(await commanded(tabId, null))
+    for (const [name, change] of cases) {
+      expect(await change(), name).toBe(true)
+      const fresh = await commanded(tabId, null)
+      expect(await commanded(tabId, warm), name).toEqual(fresh)
+      expect(await commanded(tabId, tiny), name).toEqual(fresh)
+    }
+  })
+
+  it('lists each kind through its held index, examining no document, and reads whole only the part that changed', async () => {
+    const tabId = await scene()
+    const held = new HeldParts()
+    await commanded(tabId, held)
+    await write(tabId, all => { const a = liveOf(all.agents)[0]!
+      return { op: 'update', kind: 'agent', key: a.key, seen: a.version, data: { ...a.data!, name: 'Changed' } } })
+    const entries = await profiled(db, () => commanded(tabId, held))
+    const read = (collection: string) => entries.filter(e => e.ns.endsWith(`.${collection}`)).map(e => [e.planSummary, e.docsExamined])
+    for (const [kind, collection] of KINDS) {
+      const listing = read(collection)[0]
+      expect([kind, listing?.[0], listing?.[1]]).toEqual([kind, expect.stringMatching(/^IXSCAN \{ tabId: 1, deleted: 1, key: 1, version: 1, changedAt: 1/), 0])
+    }
+    // The one agent that changed, by id; nothing else of any kind.
+    expect(read('SwarmAgent').slice(1)).toEqual([[expect.stringMatching(/IDHACK|EXPRESS|IXSCAN \{ _id: 1 \}/), 1]])
+    for (const collection of ['SwarmMachine', 'SwarmMember', 'SwarmProgress']) expect([collection, read(collection).length]).toEqual([collection, 1])
   })
 })
