@@ -722,7 +722,7 @@ class ProjectSidebar extends StatelessWidget {
     padding: EdgeInsets.fromLTRB(
       SuperTabSectionHeading.indentFor(0) + _iconColumn,
       SwarmType.sidebarRowPadding(compact: compact),
-      12,
+      grid.AppDesktop.controlGap,
       SwarmType.sidebarRowPadding(compact: compact),
     ),
     child: Text(
