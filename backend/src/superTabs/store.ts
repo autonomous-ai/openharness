@@ -87,7 +87,7 @@ import { endedReply, taskLineChats } from './taskLine.js'
 import { owedAsk } from './timeChecks.js'
 import { ledgerGroupIds, settleReleases, type ReleaseFacts, type ReleaseRules, type SettledReleases } from './releases.js'
 import { groupsOf, archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
-import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadNamed, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
+import { clock, insertParts, loadActive, loadGroups, loadGroupsByKey, loadLightGroups, loadMachineParts, loadNamed, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { autoJoinSwarms, machineSwarms, memberSwarms } from './swarmRows.js'
 import type { MachineRename } from './machineRenames.js'
@@ -1041,6 +1041,18 @@ export class SuperTabStore {
     return loadedFrom(loaded.row, await loadNamed(tx, loaded.parts, named))
   }
 
+  /**
+   * The Swarm a caller may address with only its head and the conversations a command names, each step's task too: what the
+   * GitHub reads before a command look up (a conversation's project and pull requests). Each loaded the whole Swarm, so a
+   * work.assign read it three times and a Ready five (task #4368). They authorize nothing; the command's own load does.
+   */
+  private async factsLoad(tx: Transaction, user: AuthUser, tabId: string, command: unknown): Promise<Loaded> {
+    const row = await this.row(tx, user, tabId)
+    const parts = await loadGroupsByKey(tx, row.id, namedFor(command as Command).groupIds ?? [])
+    const tasks = parts.groups.flatMap(g => g.data?.reviewOf ? [g.data.reviewOf] : [])
+    return loadedFrom(row, tasks.length ? await loadNamed(tx, parts, { groupIds: tasks }) : parts)
+  }
+
   /** A Swarm with one start loaded even when finished, and the start's group even when dormant. */
   private async loadStart(tx: Transaction, user: AuthUser, tabId: string, startId: string): Promise<Loaded> {
     const loaded = await this.load(tx, user, tabId, { startIds: [startId] })
@@ -1701,7 +1713,7 @@ export class SuperTabStore {
       if (typeof ref === 'string' && this.hooks.branchPushOrigin) {
         const branch = ref.replace(/^refs\/(heads|remotes\/origin)\//, '')
         const repositoryUrl = await transaction(this.db, async tx => {
-          const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
+          const { state } = await this.factsLoad(tx, user, tabId, command)
           if (asked.type === 'lead.start') return projectsOf(state).find(p => p.id === asked.projectId)?.repository?.repositoryUrl ?? null
           const group = state.conversations.find(c => c.id === asked.request?.conversationId)
           return group ? groupProject(state, group).repository?.repositoryUrl ?? null : undefined
@@ -1711,7 +1723,7 @@ export class SuperTabStore {
       const reads = asked.type === 'work.assign' || asked.type === 'work.teamWritten' || (asked.type === 'conversation.agent' && asked.present === true) || (asked.type === 'work.status' && asked.status === 'review')
       if (!hook || typeof asked.conversationId !== 'string' || !reads) return undefined
       const facts = await transaction(this.db, async tx => {
-        const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
+        const { state } = await this.factsLoad(tx, user, tabId, command)
         const group = state.conversations.find(c => c.id === asked.conversationId)
         if (!group) return null
         const task = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
@@ -1761,7 +1773,7 @@ export class SuperTabStore {
     if (!hook || typeof conversationId !== 'string') return undefined
     try {
       const project = await transaction(this.db, async tx => {
-        const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
+        const { state } = await this.factsLoad(tx, user, tabId, command)
         const group = state.conversations.find(c => c.id === conversationId)
         return group ? groupProject(state, group) : undefined
       })
@@ -1786,7 +1798,7 @@ export class SuperTabStore {
     let facts: { repositoryUrl: string | null; urls: string[] } | null = null
     try {
       facts = await transaction(this.db, async tx => {
-        const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
+        const { state } = await this.factsLoad(tx, user, tabId, command)
         const group = state.conversations.find(c => c.id === asked.conversationId)
         if (!group || group.reviewOf) return null
         const repositoryUrl = groupProject(state, group).repository?.repositoryUrl ?? null
@@ -2543,7 +2555,7 @@ export class SuperTabStore {
       const same = (sha: string) => sha.toLowerCase() === head.toLowerCase()
       if (!task || !url || (known && (same(known.head) || known.carries?.some(same)) && (base === undefined || base === known.base))) return null
       return { task, urls: [url] }
-    }, [command.conversationId])
+    })
   }
 
   /** After a task's Ready, the heads of the pull requests it names that the task links, else its newest link (task #3628). */
@@ -2556,21 +2568,19 @@ export class SuperTabStore {
       const named = typeof command.result === 'string' ? pullRequestsIn(command.result, groupProject(state, task).repository?.repositoryUrl ?? null) : []
       const urls = linked.filter(url => named.includes(url))
       return { task, urls: urls.length ? urls : linked.slice(-1) }
-    }, [])
+    })
   }
 
   /** [pick]'s pull requests of a task read from GitHub now and recorded (pullRequestEvents.ts readPullRequestsNow), outside any
    *  command's transaction, as GitHub may take seconds. A failure leaves the record as it was and is logged: the command is
-   *  judged on the record then, as before. [groups]: the command's groups whose task, when they are a step, is loaded too. */
+   *  judged on the record then, as before. */
   private async headsReadNow(user: AuthUser, tabId: string, command: Command,
-    pick: (state: SuperTabState) => { task: Conversation; urls: string[] } | null, groups: string[]): Promise<void> {
+    pick: (state: SuperTabState) => { task: Conversation; urls: string[] } | null): Promise<void> {
     let picked: { task: TaskHeads; urls: string[] } | null = null
     try {
       picked = await transaction(this.db, async tx => {
-        const loaded = await this.load(tx, user, tabId, namedFor(command))
-        // A step's task may be dormant: loaded by its id.
-        const reviewOf = groups.map(id => loaded.state.conversations.find(c => c.id === id)?.reviewOf).filter((id): id is string => !!id)
-        const { state } = reviewOf.length ? await this.ensure(tx, loaded, { groupIds: [...groups, ...reviewOf] }) : loaded
+        // A step's task, dormant ones too, is loaded with it.
+        const { state } = await this.factsLoad(tx, user, tabId, command)
         const chosen = pick(state)
         return chosen && chosen.urls.length ? { task: { key: chosen.task.id, heads: chosen.task.pullRequestHeads ?? null,
           steps: chosen.task.stepIds ?? null }, urls: chosen.urls } : null
