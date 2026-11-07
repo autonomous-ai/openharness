@@ -212,7 +212,8 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
   /** Every project whose files Harness put on this computer: its clones, the chat copies in its Buddy homes and the worktrees in
    *  its Members' task homes (task #4543). Ids only. Absent from hosts before it, whose list the server never shrinks. */
   projectsOnDisk: z.array(z.string().min(1).max(160)).max(200).optional(),
-  /** Per Member (its chat session's harness id), the projects its task home holds a worktree of, set up (task #4543). */
+  /** Per Member (its chat session's agent id, which its task sessions' starts name), the projects its task home holds a set-up
+   *  worktree of (task #4543). A project it leaves out was dropped. */
   memberSetUp: z.record(z.string().max(160), z.array(z.string().min(1).max(160)).max(5)).refine(v => Object.keys(v).length <= 1000).optional(),
   /** What this host can launch beyond workers: `leadStart`, a project's Product Manager (leadStart.ts). Absent from hosts
    *  before it, which are never given one. */

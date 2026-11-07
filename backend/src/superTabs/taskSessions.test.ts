@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { Command } from './commands.js'
 import type { Actor } from './model.js'
 import { canReadGroup, agentProjectId } from './projects.js'
-import { code, config, mate, own, swarm, type Swarm } from './taskSessions.test-support.js'
+import { applyMemberSetUp } from './taskSessions.js'
+import { code, config, mate, NOW, own, swarm, type Swarm } from './taskSessions.test-support.js'
 
 // Task #4543 (spec #4489 section 2, build task 6): a Member is one agent to its person, with a chat session that talks with
 // them and never runs a task, and a task session per project that does the work, bound to that project alone by the server.
@@ -132,4 +133,47 @@ describe('a Member\'s task', () => {
     // Free again: a new assignment starts it again.
     expect(assign(f, app.task, app.asPm).result.startId).toBeDefined()
   })
+})
+
+describe('what a Member\'s host reports set up', () => {
+  /** mate's Member with its task session in [name], running. */
+  function working(f: Swarm, name: string) {
+    const p = f.project(name)
+    const session = host(f, assign(f, p.task, p.asPm).result.startId as string, `h-${name}`)
+    return { ...p, session }
+  }
+  const report = (f: Swarm, setUp: Record<string, string[]>, at = 0) => applyMemberSetUp(f.state, 'mate-mac', setUp, NOW + at)
+
+  it('tells the project\'s Lead, as the task session, once, that it is ready after its first set-up there', () => {
+    const f = swarm()
+    const app = working(f, 'app')
+    const rows = report(f, { [f.buddy]: [app.projectId] })
+    expect(rows).toEqual([expect.objectContaining({ conversationId: app.conversationId, text: 'Ready to work on app.', recipients: [app.pm],
+      author: expect.objectContaining({ kind: 'agent', id: app.session }) })])
+    expect(f.agent(f.buddy).setUp).toEqual([{ projectId: app.projectId, at: NOW }])
+    expect(report(f, { [f.buddy]: [app.projectId] }, 5_000)).toEqual([])
+    expect(f.agent(f.buddy).setUp).toEqual([{ projectId: app.projectId, at: NOW }])
+  })
+
+  it('drops a project its host no longer holds from set-up and held, but not one whose task session is starting again', () => {
+    const f = swarm()
+    const app = working(f, 'app')
+    finishAll(f)
+    const docs = working(f, 'docs')
+    finishAll(f)
+    report(f, { [f.buddy]: [app.projectId, docs.projectId] })
+    // app's session went down; its next task starts it again, in the worktree its host still holds.
+    f.agent(app.session).downSince = new Date(NOW).toISOString()
+    assign(f, app.newTask('again'), app.asPm)
+    report(f, { [f.buddy]: [] }, 1_000)
+    expect(f.agent(f.buddy).setUp).toBeUndefined()
+    expect(f.agent(f.buddy).projectsHeld).toEqual([app.projectId])
+    // Reported for an agent that is no Member here, nothing changes and nothing is written.
+    expect(report(f, { nobody: [app.projectId], [app.session]: [app.projectId] })).toEqual([])
+  })
+
+  /** Every task of mate's Member's sessions done. */
+  function finishAll(f: Swarm) {
+    for (const c of f.state.conversations.filter(c => c.assignment?.status === 'working')) finish(f, c.id, c.assignment!.agentId)
+  }
 })
