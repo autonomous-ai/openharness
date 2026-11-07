@@ -1,4 +1,4 @@
-import { authorizeTaskApproval, pendingTaskApproval, personalApprovalCommand, requireTaskApproval, stageTaskApproval } from './taskApproval.js'
+import { authorizeTaskApproval, pendingTaskApproval, personalApprovalCommand, reopenTaskApproval, requireTaskApproval, stageTaskApproval, undecidedProposal } from './taskApproval.js'
 import type { PullRequestFilesRead } from './pullRequestFiles.js'
 import { legacyProposalId, migrateLegacyProposals, type LegacyProposalAsk, pmAcceptsMessage, applyProposalAction, authorizeProposalAction, authorizePersonProposal, cardPriority, createPersonProposal, createProposalCard, proposalCreateSchema, proposalFields, proposalRoot } from './proposalCards.js'
 import { pulseProjectOf, recordPulse, owe, settleDeleted, settleReaction, settleReply, settleRequest } from './pulse.js'
@@ -1843,7 +1843,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
    *  caller trying candidates in turn (openReviewSteps) catches the refusal and tries the next. */
   const assignRefusal = (group: Conversation, worker: Agent, suggestion = false) => {
     if (!suggestion) requireTaskApproval(group, worker.id)
-    if (!suggestion && group.proposal && !['accept', 'reshape'].includes(group.proposal.decision?.kind ?? '')) fail('PROPOSAL_UNDECIDED', 'The PM must accept or reshape this proposal before assigning work.', 409)
+    if (!suggestion && undecidedProposal(group)) fail('PROPOSAL_UNDECIDED', 'The PM must accept or reshape this proposal before assigning work.', 409)
     if (state.starts?.some(s => s.poolGeneration && !s.poolSettled && s.request.machineId === worker.machineId && s.harnessId === worker.harnessId)) {
       fail('START_PENDING', 'Wait for the host to finish this agent’s launch and model selection.')
     }
@@ -2872,8 +2872,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         const mirror = state.conversations.find(c => c.id === legacyProposalId(project.id, proposal.messageId))
         if (mirror?.proposal?.mergedInto) fail('PROPOSAL_DECIDED', 'This proposal already became a task.', 409)
         if (mirror?.taskApproval) {
-          if (requesterId !== mirror.taskApproval.personId) fail('TASK_APPROVAL_FORBIDDEN', 'Keep the proposal’s requesting person.', 403)
-          created.taskApproval = { ...mirror.taskApproval }
+          const { personId, generation } = mirror.taskApproval
+          if (requesterId !== personId) fail('TASK_APPROVAL_FORBIDDEN', 'Keep the proposal’s requesting person.', 403)
+          // The person approves this task as the PM shaped it: never the card's decision or chosen agent (#4249).
+          created.taskApproval = { personId, generation, state: 'proposal', createdAt: context.now }
         }
         if (mirror?.proposal) { mirror.proposal.mergedInto = created.id; mirror.archived = true }
       }
@@ -4552,6 +4554,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       group.briefAt = context.now
       stampLane(group, (context.projectRules?.rules ?? SEED_RULES).lanes)
       group.checks = storedChecks(command.checks, operationId)
+      reopenTaskApproval(group)
       message(group.id, group.brief, [], null, SYSTEM_ROW)
       bindTaskCard(group, effects.messages.at(-1)!)
       break
@@ -4581,6 +4584,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         approval.state = 'proposal'
         delete approval.decidedAt
       } else {
+        if (command.type === 'task.approve' && undecidedProposal(group))
+          fail('PROPOSAL_UNDECIDED', 'Approve the task once the PM has accepted or reshaped this proposal.', 409)
         approval.state = command.type === 'task.approve' ? 'approved' : 'rejected'
         approval.decidedAt = context.now
         if (command.type === 'task.reject') approval.reason = command.reason
