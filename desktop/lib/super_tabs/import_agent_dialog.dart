@@ -21,7 +21,6 @@ import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'import_agent.dart';
 import 'model.dart';
-import 'team_account_setup.dart';
 
 /// Whether Add agent offers Import: Harness on a Mac or a Windows PC, where its
 /// daemon and a Harness Team account are; never the web or Linux.
@@ -169,14 +168,7 @@ class _ImportAgentDialogState extends State<_ImportAgentDialog> {
         return SuperTabDetailDialog(
           title: title,
           body: Text(why, style: DesktopChrome.control()),
-          actions: [
-            cancel,
-            if (why == kImportNeedsTeamAccount && app.canSetUpTeamAccount)
-              FilledButton(
-                onPressed: () => showTeamAccountSetup(context, app),
-                child: const Text('Set up Harness Team'),
-              ),
-          ],
+          actions: [cancel],
         );
       }
       final handoff = _handoff;

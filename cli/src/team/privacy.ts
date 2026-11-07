@@ -305,7 +305,7 @@ export class TeamPrivacyObserver {
         if (!signedIn) {
           try {
             this.deps.writeStatus(config.statusFile, { signIn: { state: 'signed-out', at: now,
-              detail: 'The Team sign-in is no longer available. Run harness team setup --sign-in-again.' } })
+              detail: 'The Team sign-in is no longer available.' } })
             this.signedIn = signedIn
           } catch { /* Try the status write again at the next observation; privacy is checked independently. */ }
         } else this.signedIn = signedIn

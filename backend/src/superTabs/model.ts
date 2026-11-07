@@ -477,6 +477,9 @@ export interface Conversation {
    *  pull request head re-derives the checks of, dormant ones included (#3394). Empty from a task's start; absent on a task
    *  from before, whose PR watch looks them up once (pullRequestEvents.ts listedSteps). */
   stepIds?: string[]
+  /** Its Linux test step, waiting for a Linux machine the project can test on (linuxSteps.ts, task #4278): set by a Ready that
+   *  found none, gone once the step opens. */
+  waitingLinuxStep?: import('./linuxSteps.js').WaitingStep
   /** Its messages drawn as live cards: its task and each linked pull request (cards.ts). Absent until its first card. */
   cards?: import('./cards.js').GroupCards
   /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */

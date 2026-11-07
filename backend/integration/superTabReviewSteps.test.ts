@@ -32,6 +32,8 @@ beforeAll(async () => {
   for (const user of [owner, host]) await db.user.create({ data: { id: user.sub, externalId: `fixture-${user.sub}`, email: user.email, autonomousEnv: user.autonomousEnv } })
   await db.machine.create({ data: { machineId: 'review-host', userId: host.sub, apiKey: 'fixture-review-host', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
   await db.machineShare.create({ data: { machineId: 'review-host', ownerId: host.sub, autonomousEnv: 'prod', emails: [owner.email] } })
+  await db.machine.create({ data: { machineId: 'linux-host', userId: host.sub, apiKey: 'fixture-linux-host', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+  await db.machineShare.create({ data: { machineId: 'linux-host', ownerId: host.sub, autonomousEnv: 'prod', emails: [owner.email] } })
 })
 afterAll(async () => {
   await db?.$disconnect()
@@ -47,11 +49,14 @@ async function swarm(hooks: SuperTabStoreHooks) {
   await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
   await execute({ type: 'machine.contribute', machineId: 'review-host', name: 'Review Mac', cwd: '/repo', engines: ['claude'], maxAgents: 8 }, host)
   // It reports as a live machine does, so its own agents can take steps (reviewSeats.ts canStart): they are its person's own (task #4120).
-  const generation = (await poolRows(store, host, 'review-host')).find(p => p.tabId === tab)!.machine.generation
-  await store.observeMachine(host, tab, 'review-host', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
-    diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
-    quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
-    readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] } } as never)
+  const observe = async (machineId: string, os: string) => {
+    const generation = (await poolRows(store, host, machineId)).find(p => p.tabId === tab)!.machine.generation
+    await store.observeMachine(host, tab, machineId, { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
+      diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os, gpuPercent: null },
+      quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
+      readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] } } as never)
+  }
+  await observe('review-host', 'macOS')
   const add = async (conversationId: string, name: string, lead = false, roleName?: string) => String((await execute({ type: 'agent.add',
     conversationId, machineId: 'review-host', harnessId: randomUUID(), name, configuration: opus, lead, ...roleName ? { roleName } : {} } as Command, host)).result.agentId)
   const lead = await add('lead', 'PM', true)
@@ -59,7 +64,7 @@ async function swarm(hooks: SuperTabStoreHooks) {
   const dev = await add(task, 'Dev', false, 'Engineer')
   const reviewers = [await add(task, 'Rev A', false, 'Reviewer'), await add(task, 'Rev B', false, 'Reviewer')]
   const assignment = String((await execute({ type: 'work.assign', conversationId: task, agentId: dev })).result.assignmentId)
-  return { store, tab, execute, lead, task, dev, reviewers, assignment }
+  return { store, tab, execute, observe, lead, task, dev, reviewers, assignment }
 }
 
 const stepsIn = async (tab: string, task: string) => (await db.swarmGroup.findMany({ where: { tabId: tab } }))
@@ -113,6 +118,31 @@ describe('a Ready through the store', () => {
     await execute({ type: 'work.status', conversationId: task, assignmentId: assignment, status: 'review', result: 'Ready' }, host, dev)
     expect(pullRequestFiles).not.toHaveBeenCalled()
     expect(await stepsIn(tab, task)).toEqual([])
+  })
+
+  // Task #4278: with no Linux machine the project can reach, a CLI change's Linux test waits and the task says why; once the
+  // PM's person's Linux computer reports, the time checks open it.
+  it('opens a CLI change\'s Linux test only once a Linux machine is there', async () => {
+    const head = 'c'.repeat(40)
+    const { store, tab, execute, observe, task, dev, assignment } = await swarm({ pullRequestFiles: async (_repository, urls) => ({ urls, head,
+      files: ['cli/src/superTabs/host.ts'] }) })
+    await execute({ type: 'work.status', conversationId: task, assignmentId: assignment, status: 'review', result: `Ready: ${REPO}/pull/7` }, host, dev)
+    expect((await stepsIn(tab, task)).map(step => step.step).sort()).toEqual(['Review', 'Test on a Mac'])
+    const said = await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: task } })
+    expect(said.filter(row => row.text === 'No Linux machine: CI\'s Linux runs stand in.')).toHaveLength(1)
+    await store.runTimeChecks(tab)
+    expect((await stepsIn(tab, task)).map(step => step.step).sort()).toEqual(['Review', 'Test on a Mac'])
+    await execute({ type: 'machine.contribute', machineId: 'linux-host', name: 'Linux box', cwd: '/repo', engines: ['claude'], maxAgents: 8 }, host)
+    await observe('linux-host', 'Linux')
+    await store.runTimeChecks(tab)
+    const steps = await stepsIn(tab, task)
+    expect(steps.map(step => step.step).sort()).toEqual(['Review', 'Test on a Linux machine', 'Test on a Mac'])
+    const linux = (await db.swarmGroup.findMany({ where: { tabId: tab } })).map(row => row.data as { id: string; step?: string; brief?: string })
+      .find(group => group.step === 'Test on a Linux machine')!
+    expect(linux.brief).toContain(head)
+    const listed = ((await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, key: task } })).data as { stepIds?: string[]; waitingLinuxStep?: unknown })
+    expect(listed.stepIds).toContain(linux.id)
+    expect(listed.waitingLinuxStep).toBeUndefined()
   })
 
   it('opens the strictest steps when the read throws, and the Ready still goes through', async () => {

@@ -6,8 +6,6 @@ import { randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { admission, quotaOf, type Requirements } from './capacity.js'
 import { groupSkillMode, identifier, object } from './host.js'
-import { permissionModeFlags } from '../lib/engineLaunch.js'
-import type { AgentEngine } from '../engines/types.js'
 import { isSwarmSkillMode, swarmSkillUse, wireRole, type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { isTeamDaemon, pmEngineHome } from './teamDaemon.js'
 import { agentFolderFor, prepareAgentFolder, temporaryFolder } from './agentFolder.js'
@@ -24,7 +22,8 @@ const text = (v: unknown) => typeof v === 'string' ? v : null
 const number = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 // These native validations run before dispatch. Storage errors, conflicts and
 // unknown failures deliberately stay uncertain: they cannot prove no launch.
-const TEAM_WRITTEN_MAIN_ACCOUNT = 'A Harness Team agent wrote this task\'s code, so it runs only in a Team account, never in this machine\'s main account. Choose an agent or machine in a Team account.'
+/** Why Team-written work starts only on Claude Code off a Team daemon (task #4307). */
+export const TEAM_WRITTEN_CLAUDE_ONLY = 'A Harness Team agent wrote this task\'s code, so on this computer it runs only on Claude Code, which keeps the branch\'s own settings out. Codex would need a sign-in of its own for that, which Harness never makes from yours. Choose Claude Code for this task.'
 const PRE_DISPATCH_REFUSALS = new Set([
   'INVALID_ENGINE', 'INVALID_CWD', 'INVALID_PROJECT_SOURCE', 'INVALID_REPOSITORY',
   'INVALID_GRID', 'INVALID_CODEX_HOME', 'INVALID_DSH', 'INVALID_PROMPT',
@@ -248,15 +247,18 @@ export const HEAVY_NOT_RECORDED = 'This server cannot record that the start runs
 async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open: typeof openDaemon): Promise<Json> {
   let startId = input.startId
   let routed: unknown
-  let permissionWarning: string | undefined, heavyWarning: string | undefined
+  let heavyWarning: string | undefined
   if (input.action === 'start') {
     // The routing decision belongs to the command, not to the machine-side request.
     const { routeDecisionId, overrideReason, ...request } = object(input.request)
     routed = routeDecisionId
     const submit = (request: Json) => scoped({ action: 'command', operationId: input.operationId,
       command: { type: 'agent.start', request, ...(routeDecisionId ? { routeDecisionId } : {}), ...(overrideReason ? { overrideReason } : {}) } })
-    let sent = request
-    let reply = await submit({ ...sent, permissionMode: 'full' })
+    // Swarm v3 (task #4215): an agent starts with its owner's own permission settings, so the start names no mode, whatever
+    // the caller sent; the backend refuses one.
+    const { permissionMode: _mode, ...own } = request
+    let sent: Json = own
+    let reply = await submit(sent)
     // A backend from before heavy work was recorded refuses that field in its body check, before it records anything: that
     // refusal alone sends the start again without it. A timeout or any other refusal may have started an agent, so it never
     // does (Lead, 10-31).
@@ -264,19 +266,7 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       const { heavy: _heavy, ...plain } = sent
       sent = plain
       heavyWarning = HEAVY_NOT_RECORDED
-      reply = await submit({ ...sent, permissionMode: 'full' })
-    }
-    // Older backends refused this field before recording a start. A recorded
-    // legacy retry may instead report a hash mismatch after its reply was lost:
-    // replay its exact payload with the same operation ID to recover that receipt.
-    // Other refusals and uncertain replies never authorize another intent.
-    if (reply.error === 'OPERATION_REUSED' || (reply.error === 'OUTSIDE_CONTRIBUTION' && typeof reply.detail === 'string' &&
-      reply.detail.endsWith('Refused: permissionMode (it runs with its own default account settings, so leave it out).'))) {
-      const { permissionMode: _mode, ...legacyRequest } = sent
-      if (reply.error === 'OUTSIDE_CONTRIBUTION') {
-        permissionWarning = "This backend cannot request full permissions. Older machine hosts run the agent with the machine's default. Update Harness on the backend and machine."
-      }
-      reply = await submit(legacyRequest)
+      reply = await submit(sent)
     }
     const result = requireSuccess(reply)
     startId = object(result.result).startId
@@ -294,15 +284,15 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
     return { error: 'SWARM_ENGINE', startId, detail }
   }
   if (start.harnessId && (!start.poolGeneration || start.poolSettled)) return { ok: true, startId, machineId: request.machineId, harnessId: start.harnessId,
-    ...(permissionWarning ? { permissionWarning } : {}), ...(heavyWarning ? { heavyWarning } : {}) }
+    ...(heavyWarning ? { heavyWarning } : {}) }
   // Contributed capacity is executed by its owner. A collaborator receives no
   // machine credentials and cannot issue arbitrary commands to that computer.
   // Its machine reports it preparing (backend liveness.ts): the backend waits up to 15 minutes, and so should the Lead.
   if (start.poolGeneration && input.hostDispatch !== true) return start.preparing === true
-    ? { ok: true, queued: true, preparing: true, startId, machineId: request.machineId, ...(permissionWarning ? { permissionWarning } : {}), ...(heavyWarning ? { heavyWarning } : {}),
+    ? { ok: true, queued: true, preparing: true, startId, machineId: request.machineId, ...(heavyWarning ? { heavyWarning } : {}),
       detail: 'Its machine is still preparing it (fetching the project, checking its worktree out); that can take up to 15 minutes. Resume this start ID to read its receipt; do not start another.' }
     : { ok: true, queued: true, startId, machineId: request.machineId,
-      ...(permissionWarning ? { permissionWarning } : {}), ...(heavyWarning ? { heavyWarning } : {}),
+      ...(heavyWarning ? { heavyWarning } : {}),
       detail: 'Queued on the contributed machine. Resume this start ID to read its receipt.' }
   const target = await open(where, request.machineId)
   /** What the agent runs now, and its frame, as the frame says; null when the frame cannot say. */
@@ -391,12 +381,16 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
         if (!refusedByBackend(error)) throw error
         return await releaseRefused(error)
       }
-      // Code a Team agent wrote never runs as this machine's owner (backend superTabs/teamWritten.ts, audit H2). The server sends it
-      // only to a Team account's machine, so this is the last check, for a row or a server that says otherwise.
-      const projectSettingsOff = request.projectSettings === 'off'
-      if (projectSettingsOff && !isTeamDaemon()) {
-        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: TEAM_WRITTEN_MAIN_ACCOUNT } }))
-        return { error: 'START_FAILED', startId, detail: TEAM_WRITTEN_MAIN_ACCOUNT }
+      // Code a Team agent wrote runs with none of its branch's own settings, hooks or trust (backend superTabs/teamWritten.ts,
+      // audit H2). Since Swarm v3 there is no Team machine, and the server sends such work only to the project owner's own
+      // computer (ruling #4120); a refusal here failed every start of it (#4188, 11-07). Claude Code launches there in the
+      // `teamWritten` mode below. Codex keeps the branch's settings out only in an engine home of its own, which off a Team
+      // daemon has no sign-in, and Harness never reads or links one (anh Dee, 11-07; loginReads.spec.ts): refused, before
+      // anything is made.
+      const projectSettingsOff = request.projectSettings === 'off', team = isTeamDaemon()
+      if (projectSettingsOff && !team && request.engine !== 'claude') {
+        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: TEAM_WRITTEN_CLAUDE_ONLY } }))
+        return { error: 'START_FAILED', startId, detail: TEAM_WRITTEN_CLAUDE_ONLY }
       }
       // Both direct and contributed-host starts reach this boundary. Existing
       // native receipts are read above and never have their permissions changed.
@@ -450,13 +444,17 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       const hosted = input.hostDispatch === true ? object(input.github) : null
       const facts = skilled && !hosted ? await projectFacts(scoped, request.conversationId, start.machineOwnerId) : null
       const mode = !skilled ? null : isSwarmSkillMode(start.skillMode) ? start.skillMode : facts?.mode ?? 'orchestration'
-      // A Buddy is its owner's right hand (Ken, 11-04, task #2832): on their own machine it launches like their own session, in
-      // full mode, and uses their own git and gh. It never gets the Harness GitHub App's token, which is for a task's agents.
+      // A Buddy is its owner's right hand (Ken, 11-04, task #2832): on their own machine it launches like their own session and
+      // uses their own git and gh. It never gets the Harness GitHub App's token, which is for a task's agents.
       const github = buddy ? null : hosted ? (typeof hosted.requester === 'string' && hosted.requester ? { requester: hosted.requester } : null) : facts?.github ?? null
       // The role's name from the project's document, when the backend's start request has it; one line, bounded.
       const roleName = typeof request.roleName === 'string' ? request.roleName.replace(/\s+/g, ' ').trim().slice(0, 80) : ''
-      const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: true,
-        ...(projectSettingsOff ? { permissionMode: 'teamWritten' } : permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
+      // Swarm v3 (task #4215): a PM, an agent and a Buddy start with their owner's own permission settings: no mode, so the
+      // engine opens in the person's own default. Forced full mode turned off every check on people's own computers, where
+      // Anthropic says to use it only in isolated environments. Team-written work keeps its barrier against the branch's own
+      // settings, and approves nothing on its own either: it runs as the owner, on their own computer (review of #3485).
+      const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: false,
+        ...(projectSettingsOff ? { permissionMode: 'teamWritten' } : {}),
         ...(mode ? { swarmRole: role, swarmSkillMode: mode } : {}),
         ...(github ? { swarmGitHub: true } : {}),
         // A thread session (#2345) gets its own Buddy note; a coordinator's and an agent's notes name their role (phase 3).
@@ -473,7 +471,7 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       // A Codex Product Manager in a Harness Team account runs in an engine home of its own, deleted whole when the Swarm
       // ends it, so nothing of its chats stays where the account's next agent reads (teamDaemon.ts, security re-check 2 of #2089).
       // Team-written Codex work too: a home that trusts no project keeps the branch's own settings out (engines/codex/launch.ts).
-      const pmHome = lead || projectSettingsOff ? pmEngineHome(String(request.engine), creationId, isTeamDaemon(), homedir()) : null
+      const pmHome = lead || projectSettingsOff ? pmEngineHome(String(request.engine), creationId, team, homedir()) : null
       if (pmHome) {
         // Codex refuses a CODEX_HOME that is not there; only the Team user reads it.
         mkdirSync(pmHome, { recursive: true, mode: 0o700 })
@@ -663,6 +661,6 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       engineVersion: text(last.frame.engineVersion)?.slice(0, 160) ?? null } : null
     return { ok: true, startId, machineId: request.machineId, harnessId: nativeId, ...object(joined.result),
       ...(settledConfiguration ? { configuration: settledConfiguration } : {}),
-      ...(permissionWarning ? { permissionWarning } : {}), ...(heavyWarning ? { heavyWarning } : {}), ...(modelWarning ? { modelWarning } : {}) }
+      ...(heavyWarning ? { heavyWarning } : {}), ...(modelWarning ? { modelWarning } : {}) }
   } finally { target.close() }
 }

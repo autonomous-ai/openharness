@@ -150,7 +150,7 @@ describe('adminRunner', () => {
     it('without a desktop session, answers that it needs a terminal and runs nothing', async () => {
       const f = linux({ code: 0 }, false)
       expect(await f.run(() => ({ script: '' }), 'p'))
-        .toEqual({ ok: false, code: 'NO_PROMPT', message: 'No administrator prompt here: run harness team setup in a terminal.' })
+        .toEqual({ ok: false, code: 'NO_PROMPT', message: 'No administrator prompt here: run the command in a terminal.' })
       expect(f.runner).not.toHaveBeenCalled()
       expect(existsSync(f.stage)).toBe(false)
     })

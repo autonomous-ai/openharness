@@ -2247,13 +2247,12 @@ class AppNotifier extends ChangeNotifier {
     return result;
   }
 
-  /// Whether the Harness Team account can be made on this computer's system,
-  /// as the offer reads it. Off under test, on a Mac too, unless a test sets
-  /// it.
+  /// Whether this computer's system can have a Harness Team account, for
+  /// its join status. Off under test, on a Mac too, unless a test sets it.
   @visibleForTesting
   bool? teamAccountHereForTest;
 
-  /// The systems the Harness Team account is made on, by
+  /// The systems a Harness Team account was made on, by
   /// [RuntimePlatform.operatingSystem]: a Mac, Linux and Windows
   /// (cli/src/team/layout.ts; Windows' daemon sets it up behind User Account
   /// Control); never a phone, a tablet or a browser.
@@ -2264,372 +2263,8 @@ class AppNotifier extends ChangeNotifier {
       teamAccountHereForTest ??
       (teamAccountOn(RuntimePlatform.operatingSystem) && !kUnderTest);
 
-  /// How long before asking again a daemon that could not answer the start
-  /// offer; each further try waits one more step.
-  @visibleForTesting
-  Duration teamOfferRetryForTest = const Duration(seconds: 30);
-  static const _teamOfferTries = 5;
-
-  /// Which daemon process answers this Mac, for a spec; the daemon's own
-  /// status otherwise.
-  @visibleForTesting
-  Future<String?> Function()? daemonIdentityForTest;
-  bool _teamOfferBusy = false;
-  Timer? _teamOfferRetry;
-
-  /// The daemon process the start offer's budget is for, its tries, and
-  /// whether it answered. A socket reconnect to the same process keeps them;
-  /// only a new process starts over (review of #1790).
-  bool _teamOfferStarted = false;
-  String? _teamOfferDaemon;
-  int _teamOfferTried = 0;
-  bool _teamOfferAnswered = false;
-  bool _teamStartExplained = false;
-
-  /// This Mac's daemon process as its own status says it: its pid and
-  /// version, so a restart or an update reads as a new one. Null when it
-  /// cannot say.
-  Future<String?> _daemonIdentity() async {
-    if (daemonIdentityForTest case final read?) return read();
-    try {
-      final probe = await _discovery.probe();
-      return probe.pid == null ? null : '${probe.pid}:${probe.version ?? ''}';
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// The Harness Team account on this computer (cli/src/team/autoSetup.ts),
-  /// asked of this computer's own daemon while the person is here: as they
-  /// join a Swarm ([reason] `join`), add this computer to one (`contribute`),
-  /// or open the app (`startup`). On a Mac, Linux and Windows
-  /// ([teamAccountOn]), and never for another machine, where nobody may be at
-  /// it.
-  ///
-  /// A join or a contribution with the account missing locks the app until it
-  /// exists ([teamSetupLocked]; Scholes, 2026-11-03: Macs that joined stayed
-  /// "not set up" until someone found their row in Machines). For a join, a
-  /// cancel or a failure the daemon remembers from before locks too: this is
-  /// a new join. A contribution locks only while it is wanted or running.
-  /// At start the daemon decides (no account, not declined, in a Swarm with
-  /// other people), and it is explained once a launch ([teamSetupAsks]),
-  /// never behind the lock.
-  ///
-  /// [tabId]: the Swarm joined or added to, so a Swarm its server does not
-  /// try team accounts in yet asks nothing (the daemon reads it), and the lock
-  /// knows where Remove this Mac from the Swarm removes it from.
-  ///
-  /// True when the daemon answered, whatever it decided; false when it was not
-  /// asked or could not say.
-  Future<bool> offerTeamAccount(String reason, {String? tabId}) async {
-    final here = _teamAccountHere();
-    if (here == null) return false;
-    try {
-      final answer = await superTabMachineRequest(here, {
-        'action': 'teamSetupCheck',
-        'reason': reason,
-        'tabId': ?tabId,
-      });
-      final state = answer['state'];
-      appLog.info('super-tabs', 'team account offer ($reason): $state');
-      if (reason == 'startup') {
-        // The start check runs once for each daemon process, so a restart
-        // with the explanation still open must not show it again: once a
-        // launch.
-        if (state == 'wanted' && !_teamStartExplained && !teamSetupLocked) {
-          _teamSetupAsks.add(reason);
-        }
-        if (state == 'wanted') _teamStartExplained = true;
-      } else if (tabId != null &&
-          (reason == 'join' ? _teamLockStates : _teamContributeLockStates)
-              .contains(state)) {
-        await _lockForTeamSetup(tabId);
-      }
-      return true;
-    } catch (error) {
-      // An older daemon, or one that cannot say: nothing is asked.
-      appLog.info('super-tabs', 'team account not offered ($reason): $error');
-      return false;
-    }
-  }
-
-  /// The daemon's answers that leave the account to be made here: wanted, or
-  /// held back only by an earlier cancel or failure, already running, or with
-  /// no prompt to ask in (the window then says how).
-  static const _teamLockStates = {
-    'wanted',
-    'declined',
-    'waiting',
-    'running',
-    'no-prompt',
-  };
-
-  /// A contribution locks only while the account is to be made now: wanted,
-  /// or already running. A cancel or failure the daemon remembers was the
-  /// person's answer, and a contribution (settings saved, this Mac added
-  /// again) is no new Swarm to ask it again for (Diego, 2026-11-03).
-  static const _teamContributeLockStates = {'wanted', 'running'};
-
-  /// The Swarms this computer joined, or was added to, while its Harness Team
-  /// account was missing, for [_teamLockAccount]. Kept on this computer so a
-  /// restart locks again.
-  final _teamLockTabs = <String>{};
-  String? _teamLockAccount;
-  String? _teamLockRestored;
-
-  static String _teamLockKey(String account) => 'team_setup_lock.$account';
-
-  /// Whether the app is held until this computer's Harness Team account exists
-  /// (super_tabs/team_account_setup.dart `TeamAccountSetupLock`).
-  bool get teamSetupLocked =>
-      _teamLockTabs.isNotEmpty &&
-      _teamLockAccount != null &&
-      _teamLockAccount == currentUser?.id &&
-      _teamAccountHere() != null;
-
-  Future<void> _lockForTeamSetup(String tabId) async {
-    final account = currentUser?.id;
-    if (account == null) return;
-    if (_teamLockAccount != account) {
-      _teamLockAccount = account;
-      _teamLockTabs.clear();
-    }
-    if (!_teamLockTabs.add(tabId)) return;
-    notifyListeners();
-    await _saveTeamLock(account);
-  }
-
-  Future<void> _saveTeamLock(String account) async {
-    final store = localStore;
-    if (store == null) return;
-    try {
-      if (_teamLockTabs.isEmpty) {
-        await store.delete(_teamLockKey(account));
-      } else {
-        await store.write(
-          _teamLockKey(account),
-          jsonEncode(_teamLockTabs.toList()),
-        );
-      }
-    } catch (error) {
-      appLog.info('super-tabs', 'team account lock not saved: $error');
-    }
-  }
-
-  /// At each connection of this computer's daemon: a lock left by a join
-  /// before the app closed holds again, unless the account exists by now.
-  /// Read once for each account.
-  Future<void> _restoreTeamSetupLock() async {
-    final account = currentUser?.id;
-    final store = localStore;
-    if (account == null || store == null || _teamLockRestored == account) {
-      return;
-    }
-    if (_teamAccountHere() == null) return;
-    _teamLockRestored = account;
-    List<String> tabs;
-    try {
-      final raw = await store.read(_teamLockKey(account));
-      tabs = raw == null
-          ? const []
-          : [
-              for (final id in jsonDecode(raw) as List)
-                if (id is String) id,
-            ];
-    } catch (error) {
-      appLog.info('super-tabs', 'team account lock not read: $error');
-      return;
-    }
-    if (tabs.isEmpty || _disposed || currentUser?.id != account) return;
-    final setup = await teamSetupStatus();
-    if (_disposed || currentUser?.id != account) return;
-    if (_teamLockAccount != account) {
-      _teamLockAccount = account;
-      _teamLockTabs.clear();
-    }
-    _teamLockTabs.addAll(tabs);
-    if (setup?.state == 'exists') {
-      await teamAccountMade();
-      return;
-    }
-    // A Swarm that let this computer go meanwhile (removed from Machines on
-    // another device, or the person's access gone) holds nothing.
-    final here = _teamAccountHere();
-    if (here != null) {
-      for (final tabId in tabs) {
-        if (await _swarmHolds(tabId, here) == false) {
-          _teamLockTabs.remove(tabId);
-        }
-      }
-    }
-    if (_disposed || currentUser?.id != account) return;
-    notifyListeners();
-    if (_teamLockTabs.length != tabs.length) await _saveTeamLock(account);
-  }
-
-  /// Whether Swarm [tabId] still has computer [here] in its Machines list, not
-  /// being removed: false when it does not, or when this person can no longer
-  /// open it; null when it cannot be read now (offline), which keeps the lock.
-  Future<bool?> _swarmHolds(String tabId, String here) async {
-    try {
-      final c = await superTabs.open(tabId);
-      await c.refresh();
-      if (c.accessRevoked) return false;
-      final snapshot = c.snapshot;
-      if (snapshot == null || c.error != null) return null;
-      return snapshot.machines.any(
-        (m) => m['machineId'] == here && m['removal'] == null,
-      );
-    } on SuperTabFailure catch (failure) {
-      return const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)
-          ? false
-          : null;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// The Swarms the lock holds for, by the names they go by, read now so
-  /// Remove can say which it leaves; "a Swarm" for one that cannot be read.
-  Future<List<String>> readTeamSetupLockSwarmNames() async => [
-    for (final id in [..._teamLockTabs])
-      switch (await _swarmName(id)) {
-        final String name when name.isNotEmpty => name,
-        _ => 'a Swarm',
-      },
-  ];
-
-  /// A Swarm's name, given up after [_teamLockNameWait] (offline): Remove
-  /// still asks, naming it "a Swarm".
-  Future<String?> _swarmName(String tabId) async {
-    try {
-      return await () async {
-        final c = await superTabs.open(tabId);
-        if (c.snapshot == null) await c.refresh();
-        return c.snapshot?.name.trim();
-      }().timeout(_teamLockNameWait);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  static const _teamLockNameWait = Duration(seconds: 5);
-
-  /// This computer's Harness Team account exists: the lock ends.
-  Future<void> teamAccountMade() async {
-    final account = _teamLockAccount;
-    if (account == null || _teamLockTabs.isEmpty) return;
-    _teamLockTabs.clear();
-    notifyListeners();
-    await _saveTeamLock(account);
-  }
-
-  /// The lock's one way out, where setup can never finish here: removes this
-  /// computer from each Swarm it is held for. Null when that is done;
-  /// otherwise why not, and the lock stays for the Swarms not done.
-  Future<String?> removeLockedMachine() async {
-    final here = _teamAccountHere();
-    final account = currentUser?.id;
-    if (here == null || account == null || _teamLockAccount != account) {
-      return null;
-    }
-    for (final tabId in [..._teamLockTabs]) {
-      // Already gone from it, being removed, or no longer this person's to
-      // open: nothing to remove, and the lock lets it go.
-      final holds = await _swarmHolds(tabId, here);
-      if (holds != false) {
-        try {
-          final c = await superTabs.open(tabId);
-          final result = await c.command({
-            'type': 'machine.remove',
-            'machineId': here,
-          });
-          if (result == null) {
-            return c.operationError ?? 'Could not do that. Try again.';
-          }
-        } on SuperTabFailure catch (failure) {
-          return failure.message;
-        } catch (error) {
-          appLog.info('super-tabs', 'machine not removed for the lock: $error');
-          return 'Could not reach the Swarm. Try again.';
-        }
-      }
-      _teamLockTabs.remove(tabId);
-      notifyListeners();
-      await _saveTeamLock(account);
-    }
-    return null;
-  }
-
-  /// The lock's last way out, once Remove was refused (the Mac runs a
-  /// project's PM, say): "Not now", recorded with the daemon so it is not
-  /// offered again on its own, and the app opens. The machine row keeps its
-  /// Set up button.
-  Future<void> declineTeamSetupLock() async {
-    await declineTeamAccount();
-    final account = _teamLockAccount;
-    if (account == null || _teamLockTabs.isEmpty) return;
-    _teamLockTabs.clear();
-    notifyListeners();
-    await _saveTeamLock(account);
-  }
-
-  /// The start offer, once for each process of this Mac's daemon: Macs
-  /// already in a Swarm meet no join or contribute moment, and one ask a
-  /// launch went to whichever daemon answered first, one still starting or the
-  /// version from before an update, so nobody saw the prompt (2026-10-27).
-  /// The daemon decides, and remembers a cancel. One ask at a time; a daemon
-  /// that could not say is asked again a few times, with a growing wait, and
-  /// a reconnect to it neither restarts the count nor cuts the wait short.
-  Future<void> _offerTeamAccountAtStart() async {
-    if (_disposed || _teamOfferBusy) return;
-    if (!_teamAccountSystem) return;
-    _teamOfferBusy = true;
-    try {
-      final daemon = await _daemonIdentity();
-      if (_disposed) return;
-      // Only a confirmed process other than the last confirmed one starts
-      // over. A status read that could not say (a timeout) is no evidence of
-      // a restart, and counting it as one asked without end (re-check of
-      // #1790); the first identity read after an unknown one is taken as the
-      // same process.
-      final restarted =
-          daemon != null &&
-          _teamOfferDaemon != null &&
-          daemon != _teamOfferDaemon;
-      if (!_teamOfferStarted || restarted) {
-        _teamOfferRetry?.cancel();
-        _teamOfferRetry = null;
-        _teamOfferStarted = true;
-        _teamOfferTried = 0;
-        _teamOfferAnswered = false;
-      }
-      _teamOfferDaemon = daemon ?? _teamOfferDaemon;
-      if (_teamOfferAnswered ||
-          _teamOfferTried >= _teamOfferTries ||
-          _teamOfferRetry != null) {
-        return;
-      }
-      final answered = await offerTeamAccount('startup');
-      // A request still out at dispose must not schedule another.
-      if (_disposed) return;
-      if (answered) {
-        _teamOfferAnswered = true;
-        return;
-      }
-      _teamOfferTried++;
-      if (_teamOfferTried >= _teamOfferTries) return;
-      _teamOfferRetry = Timer(teamOfferRetryForTest * _teamOfferTried, () {
-        _teamOfferRetry = null;
-        if (!_disposed) unawaited(_offerTeamAccountAtStart());
-      });
-    } finally {
-      _teamOfferBusy = false;
-    }
-  }
-
-  /// This computer's own machine, when the Harness Team account can be made
-  /// here: never a machine shared with this account.
+  /// This computer's own machine, when it can have a Harness Team account:
+  /// never a machine shared with this account.
   String? _teamAccountHere() {
     if (!_teamAccountSystem) return null;
     return machineStates.values
@@ -2639,56 +2274,6 @@ class AppNotifier extends ChangeNotifier {
         .firstOrNull
         ?.machine
         .machineId;
-  }
-
-  /// Whether this Mac can make its Harness Team account: the machine row's
-  /// Set up button shows only then.
-  bool get canSetUpTeamAccount => _teamAccountHere() != null;
-
-  final StreamController<String> _teamSetupAsks =
-      StreamController<String>.broadcast();
-
-  /// Each moment the Harness Team account is wanted on this Mac, by its
-  /// reason: the screen explains it, then [setUpTeamAccount] or
-  /// [declineTeamAccount].
-  Stream<String> get teamSetupAsks => _teamSetupAsks.stream;
-
-  /// Starts the Harness Team account's setup on this Mac, the person having
-  /// asked: macOS's administrator prompt follows. Answers the daemon's state
-  /// (`started`, `exists`, `running`, ...), or `update` from a daemon too old
-  /// to set it up from here. With [signInAgain], an account already here is
-  /// signed in again for this account: the Swarm found it serving another
-  /// account of this computer (#3122).
-  Future<String> setUpTeamAccount({
-    bool signInAgain = false,
-    bool restart = false,
-  }) async {
-    final here = _teamAccountHere();
-    if (here == null) return 'unsupported';
-    try {
-      final answer = await superTabMachineRequest(here, {
-        'action': 'teamSetup',
-        'reason': 'manual',
-        if (signInAgain) 'signInAgain': true,
-        if (restart) 'restart': true,
-      });
-      return answer['state']?.toString() ?? 'started';
-    } on SuperTabFailure catch (failure) {
-      if (failure.code == 'INVALID_REQUEST') return 'update';
-      rethrow;
-    }
-  }
-
-  /// "Not now": not offered again on its own. The machine row keeps its Set
-  /// up button.
-  Future<void> declineTeamAccount() async {
-    final here = _teamAccountHere();
-    if (here == null) return;
-    try {
-      await superTabMachineRequest(here, {'action': 'teamSetupDecline'});
-    } catch (error) {
-      appLog.debug('super-tabs', 'team account decline not saved: $error');
-    }
   }
 
   /// Why this Mac's Harness Team account, signed in, has not joined a Swarm
@@ -2724,44 +2309,6 @@ class AppNotifier extends ChangeNotifier {
       await superTabMachineRequest(here, {'action': 'teamJoinRetry'});
     } catch (error) {
       appLog.debug('super-tabs', 'team join retry not sent: $error');
-    }
-  }
-
-  /// Why this Mac has no Harness Team account, as its own daemon remembers
-  /// it (cli/src/team/autoSetup.ts `status`): `{state: declined}` after a
-  /// cancel, `{state: failed, detail}`, `running`, `exists` or `none`. Null
-  /// when it cannot say: not this Mac's to set up, or a daemon too old.
-  Future<({String state, String? detail})?> teamSetupStatus() async {
-    final read = await teamSetupProgress();
-    return read == null ? null : (state: read.state, detail: read.detail);
-  }
-
-  /// [teamSetupStatus], and while setup runs, [step]: the step it is on, and
-  /// [elapsed]: how long it has run, when the daemon says (the setup lock's
-  /// waiting step, Scholes 2026-11-04).
-  Future<({String state, String? detail, String? step, Duration? elapsed})?>
-  teamSetupProgress() async {
-    final here = _teamAccountHere();
-    if (here == null) return null;
-    try {
-      final answer = await superTabMachineRequest(here, {
-        'action': 'teamSetupStatus',
-      });
-      final state = answer['state'];
-      if (state is! String) return null;
-      final detail = answer['detail'];
-      final step = answer['step'];
-      final elapsedMs = answer['elapsedMs'];
-      return (
-        state: state,
-        detail: detail is String ? detail : null,
-        step: step is String ? step : null,
-        elapsed: elapsedMs is num && elapsedMs >= 0
-            ? Duration(milliseconds: elapsedMs.round())
-            : null,
-      );
-    } catch (_) {
-      return null;
     }
   }
 
@@ -6398,13 +5945,6 @@ class AppNotifier extends ChangeNotifier {
       // the offline poll (the one thing that would have re-probed) stopped, and the tiles sat on
       // "Offline" over a live terminal with nothing left to restore them. Measured 2026-09-18 21:50.
       machine.localEndpoint ??= _cliEndpoint;
-      // With the person here, at each start of this Mac's daemon: a Mac that
-      // joined a Swarm before teammates' work went only to Team machines never
-      // met the join or contribute moment.
-      if (!machine.machine.isSharedMachine) {
-        unawaited(_restoreTeamSetupLock());
-        unawaited(_offerTeamAccountAtStart());
-      }
     } else {
       machine.transportMode = MachineTransportMode.cloudE2ee;
     }
@@ -24206,7 +23746,6 @@ class AppNotifier extends ChangeNotifier {
 
   @override
   void dispose() {
-    _teamOfferRetry?.cancel();
     _approvalRefresh?.cancel();
     if (identical(CrashLog.healthError, _measurementError)) {
       CrashLog.healthError = null;
@@ -24291,7 +23830,6 @@ class AppNotifier extends ChangeNotifier {
     for (final request in _joinAccountRequests) {
       request.complete(null);
     }
-    unawaited(_teamSetupAsks.close());
     super.dispose();
   }
 }

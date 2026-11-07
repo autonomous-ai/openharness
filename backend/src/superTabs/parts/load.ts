@@ -70,6 +70,33 @@ export async function loadActive(tx: Transaction, tabId: string,
 }
 
 /**
+ * `loaded` with the parts `loadActive` would add for these names and `loaded` lacks: the groups named by key, the named
+ * agents' and projects' groups, and the starts named by key or agent. One indexed read per kind of name, and nothing else:
+ * reading the whole Swarm again for one quiet conversation doubled what every command read (task #4213). Inside one
+ * transaction every read sees one snapshot, so the result is what `loadActive` with the same names returns.
+ */
+export async function loadNamed(tx: Transaction, loaded: SwarmParts,
+  named: { groupIds?: string[]; agentIds?: string[]; projectIds?: string[]; startIds?: string[]; startAgentIds?: string[] }): Promise<SwarmParts> {
+  const { tabId } = loaded
+  const groups = new Set(loaded.groups.map(g => g.key)), starts = new Set(loaded.starts.map(s => s.key))
+  const groupIds = [...new Set(named.groupIds ?? [])].filter(id => !groups.has(id))
+  const startIds = [...new Set(named.startIds ?? [])].filter(id => !starts.has(id))
+  const projectIds = [...named.projectIds ?? [], ...named.projectIds?.includes('lead') ? [null] : []]
+  const reads: GroupReads = [...groupIds.length ? [['key', { key: { $in: groupIds } }] as const] : [],
+    ...named.agentIds?.length ? [['agents', { agentIds: { $in: named.agentIds } }] as const] : [],
+    ...projectIds.length ? [['project', { projectId: { $in: projectIds } }] as const] : []]
+  const [groupRows, byKey, byAgent] = await Promise.all([
+    reads.length ? liveGroups(tx, tabId, reads) : Promise.resolve([]),
+    startIds.length ? readBy(tx, 'SwarmStart', 'id', [{ $match: { _id: { $in: startIds.map(id => partId(tabId, id)) }, tabId, deleted: false } }]) : Promise.resolve([]),
+    loadStartsOfAgents(tx, tabId, named.startAgentIds ?? []),
+  ])
+  const addedGroups = groupRows.filter(row => !groups.has(row.key)).map(row => toPart<GroupData>('group', row))
+  const addedStarts = [...new Map([...byKey.map(row => toPart<AgentStart>('start', rawPartRow(row))), ...byAgent]
+    .filter(s => !starts.has(s.key)).map(s => [s.key, s])).values()]
+  return { ...loaded, groups: [...loaded.groups, ...addedGroups], starts: [...loaded.starts, ...addedStarts] }
+}
+
+/**
  * What a machine's report works on (store.ts observeMachine, #876): `loadActive`'s parts with only the conversations its
  * checks read, whole, since it may write them: running work, the Lead conversations, the unfinished starts' conversations,
  * the conversations of agents stored with no project (projects.ts agentProjectId), and the private chats of this machine's

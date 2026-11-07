@@ -4,7 +4,7 @@ import { FEED_IDS, FEED_PAGE, FEED_READS } from '../parts/load.js'
 import { canReadGroup, canReadProject, groupProject } from '../projects.js'
 import { logger } from '../../utils/logger.js'
 import { askedKey } from './feedIds.js'
-import type { ApprovalMode } from '../taskApproval.js'
+import { undecidedProposal, type ApprovalMode } from '../taskApproval.js'
 import type { AgentView } from './contract.js'
 import { decodeDormantPage } from './dormantPage.js'
 import type { ReaderView } from './views.js'
@@ -85,7 +85,7 @@ function summary(part: Part, reader: Reader): PersonalTask | 'gone' | null {
     : group.assignment?.status ?? (group.proposal && !['accept', 'reshape'].includes(group.proposal.decision?.kind ?? '') ? 'proposal' : 'planned')
   const pullRequestUrl = group.pullRequestUrls?.at(-1)
   return { id: group.id, version: part.version, at: activityAt(part as Part<GroupData>), projectId: project.id, projectName: project.name,
-    title: group.title, status, suggested: !group.assignment && !!approval?.suggestedAgentId, canApprove: approval?.state === 'proposal' && asked,
+    title: group.title, status, suggested: !group.assignment && !!approval?.suggestedAgentId, canApprove: approval?.state === 'proposal' && asked && !undecidedProposal(group),
     agent: agent ? { id: agent.id, name: agent.displayName ?? agent.name, ...agent.avatar ? { avatar: agent.avatar } : {} } : null,
     requester: asker ? { id: asker.id, ...askerName ? { name: askerName } : {}, ...asker.avatar ? { avatar: asker.avatar } : {} } : null,
     ...pullRequestUrl ? { pullRequestUrl } : {}, ...approval?.reason ? { reason: approval.reason } : {} }

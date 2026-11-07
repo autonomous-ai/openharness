@@ -10,7 +10,7 @@ vi.mock('../team/config.js', async (original) => ({ ...await original<object>(),
 const started = vi.hoisted(() => ({ owner: 'peer' as string | null }))
 vi.mock('./buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => started.owner }))
 import { SWARM_TOOLS_SKILL } from './swarmTools.js'
-import { swarmToolsSheet, type ToolsRole } from './swarmToolSheets.js'
+import { TOOLS_ROLES, swarmToolsSheet, type ToolsRole } from './swarmToolSheets.js'
 import { prepareSwarmSkill, parseSwarmSkill, recordSwarmSkillNotice, refreshSwarmSkill, roleFromWire, skillFile } from './swarmSkills.js'
 import { agentLaunchArgs } from './agentAttribution.js'
 import { buildLaunchOverrides } from './launchOverrides.js'
@@ -27,6 +27,16 @@ const fixture = () => { const root = mkdtempSync(join(tmpdir(), 'swarm-skills-')
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 
 describe('built-in Swarm skills', () => {
+  it('say nothing of Team accounts, which Swarm v3 has none of (#4221): the role skills, the tools manual and every sheet', () => {
+    const team = /Team account|Team agent/i
+    for (const role of ['lead', 'dev', 'review', 'buddy'] as const) for (const mode of ['default', 'orchestration'] as const) {
+      const prepared = prepareSwarmSkill(fixture(), { role, key: `${role}-${mode}`, mode })
+      expect(readFileSync(prepared.file, 'utf8'), `${role} ${mode}`).not.toMatch(team)
+    }
+    expect(SWARM_TOOLS_SKILL).not.toMatch(team)
+    for (const role of TOOLS_ROLES) expect(swarmToolsSheet(role), role).not.toMatch(team)
+  })
+
   it('writes the tools skill beside the role\'s and sends the agent to its instructions', () => {
     for (const role of ['lead', 'dev', 'review'] as const) for (const mode of ['default', 'orchestration'] as const) {
       const workspace = fixture(), saved = { role, key: `${role}-${mode}`, mode }
@@ -213,10 +223,10 @@ describe('built-in Swarm skills', () => {
   // iPhone): the Builder's and the Reviewer's check, in both modes, and the Lead's move, in both modes.
   const toolCheck = '- In your first minutes, check that this machine and account have every tool, device and sign-in you need to do the work yourself (for example flutter, xcodebuild, a connected iPhone, a signed-in gh or App Store account, docker); a device step the brief leaves to a person stays a "Needs:" line. If one is missing, mark blocked at once and stop (see Blocked).\n'
   // The stop lives in the Builder's Blocked section, the only place its skill lets it stop (review of #2096).
-  const missingStop = '- A missing tool, device or sign-in on this machine and account: mark blocked at once, naming what is missing, the machine, and whether it is the owner\'s or the Team account (no emails or tokens), and stop: the Lead moves the task. Never wait silently.\n'
+  const missingStop = '- A missing tool, device or sign-in on this machine and account: mark blocked at once, naming what is missing, the machine (no emails or tokens), and stop: the Lead moves the task. Never wait silently.\n'
   // The Reviewer's, at the end of its first paragraph.
-  const reviewCheck = ' In your first minutes, check that this machine and account have every tool, device and sign-in the review needs; if one is missing, mark blocked at once, naming what is missing, the machine, and whether it is the owner\'s or the Team account (no emails or tokens), and stop: the Lead moves the task.'
-  const moveMissing = '- A Builder or Reviewer blocked on a missing tool, device or sign-in: within minutes, route the task again with what was missing in its needs (fix its required machine if that is the one without it), assign it to a machine and account that has it, then stop the blocked agent unless other work fits its machine. A Mac\'s own account and its Team account are different: the Team account has none of the owner\'s tools, devices or sign-ins. If none has it, tag the requester with the choice.\n'
+  const reviewCheck = ' In your first minutes, check that this machine and account have every tool, device and sign-in the review needs; if one is missing, mark blocked at once, naming what is missing, the machine (no emails or tokens), and stop: the Lead moves the task.'
+  const moveMissing = '- A Builder or Reviewer blocked on a missing tool, device or sign-in: within minutes, route the task again with what was missing in its needs (fix its required machine if that is the one without it), assign it to a machine and account that has it, then stop the blocked agent unless other work fits its machine. If none has it, tag the requester with the choice.\n'
   // The Builder's check replaces its machine-or-device line; the Default Builder keeps the person part of it. The orchestration
   // Builder's "missing machine" now means another machine, since its own is the stop above.
   const failFast: Array<['orchestration' | 'default', 'lead' | 'dev', string, string]> = [
@@ -1088,8 +1098,9 @@ describe('a Buddy\'s folder', () => {
 // built-in text it launched with, for a Swarm with no instructions, and a row an older CLI saved relaunches onto its own.
 describe('role kinds keep their role files', () => {
   /** The whole file a Reviewer's launch writes in each mode, byte for byte, as before role kinds (its post rules as of #3057). */
-  // Task #3029's ask-a-person line changed both; the byte-for-byte tests above show it is the only change.
-  const REVIEW = { orchestration: 'a308926d41b60cdbe3405d25b9c89a2c8924cfe3b65a1d6a0ab3106165279316', default: '9a010ed13a8b1c1019a8aee156baa94c0cfe9c657d2a614ff24fc746a454663e' }
+  // Task #3029's ask-a-person line changed both, and #4221 took the Team account out of the missing-tool line; the
+  // byte-for-byte tests above show those are the only changes.
+  const REVIEW = { orchestration: '278287b99bba7edf3cac6194a72c3110d973e2974835ec01afdd6a9953f430ca', default: 'a6215d1202c1a95be0408cc5008247c6626b5716aca140b8382c2195ae16836d' }
   const folder = (workspace: string, key: string, name: string) =>
     join(realpathSync(workspace), '.harness', 'runtime', sha256(key), 'swarm', 'skills', name)
   it('keeps each session\'s role file', () => {
