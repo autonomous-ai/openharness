@@ -759,15 +759,19 @@ class ProjectSidebar extends StatelessWidget {
   /// swipes projects in this order (cli superTabs/cards.ts `leadsOf`); a
   /// Personal project whose panes are all closed leaves this list but stays
   /// on the dial (task #3042: the brief is the project list).
+  /// [taggedOnly]: only the projects whose chat tags the reader, as folded Projects lists them.
   List<(String, Widget)> _channels(
     SuperTabSnapshot? snapshot,
-    _SidebarReading reading,
-  ) {
+    _SidebarReading reading, {
+    bool taggedOnly = false,
+  }) {
     final hidden = superTabHiddenProjects(controller, app: app);
     return [
       for (final project in ([...?snapshot?.projects]..sort(_compareProjects)))
         if (reading.of(project) case final read
             when read.lead != null &&
+                (!taggedOnly ||
+                    (attention?.chatTagsIn(read.lead!.id) ?? 0) > 0) &&
                 (!controller.unreadOnly || _hasUnread(read)) &&
                 !_paneless(project, read.lead!, hidden))
           (
@@ -917,9 +921,13 @@ class ProjectSidebar extends StatelessWidget {
                 // The reader's one Buddy, the first item under Projects (anh
                 // Dee, 11-05).
                 if (controller.oneBuddy && !board) ?_swarmBuddyRow(),
-                if (!board || controller.projectsOpen)
-                  for (final (_, channel) in _channels(snapshot, reading))
-                    channel,
+                // Folded, it keeps the projects whose chat tags the reader: the Desktop has no Mentions row (task #4220).
+                for (final (_, channel) in _channels(
+                  snapshot,
+                  reading,
+                  taggedOnly: board && !controller.projectsOpen,
+                ))
+                  channel,
                 const SizedBox(height: 16),
                 // Buddies replaced Chat with PM in every Swarm (Ken, 10-29); where the
                 // server gives one Buddy for the whole Swarm, it is # buddy above.
