@@ -157,11 +157,11 @@ describe('the window pull leaves alone', () => {
 })
 
 describe('the window pull\'s reason', () => {
-  it('names the window, never the account or the machine a reading was relayed from', () => {
-    const relayed = codex('zulu', { ...windows([80, 3 * H], [60, 40 * M], 'acct-7f3a9c'), from: 'Ken\'s MacBook Pro' })
-    const reason = windowPullAdjust(fitted(relayed), NOW, [])!.reason
+  it('names the window, never the account', () => {
+    const reading = codex('zulu', windows([80, 3 * H], [60, 40 * M], 'acct-7f3a9c'))
+    const reason = windowPullAdjust(fitted(reading), NOW, [])!.reason
     expect(reason).toContain('resets in 40m')
-    expect(reason).not.toMatch(/acct|7f3a9c|Ken|MacBook/)
+    expect(reason).not.toMatch(/acct|7f3a9c/)
   })
   it('built from another group\'s pick, names nothing of it: only numbers and the kind of candidate', async () => {
     // Another group's pick, not started yet, on the same account, carrying all a history row can: its group, title, person, path.

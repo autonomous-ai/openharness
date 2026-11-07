@@ -69,6 +69,8 @@ const addSession = (f: ReturnType<typeof setup>, id: string, harnessId: string, 
   if (gridModel) session.gridModel = gridModel
   else delete session.gridModel
   f.state.agents.push(session)
+  // A session is in its Buddy's chat, as a New session puts it (commands.ts routeBuddySession).
+  f.state.conversations.find(c => c.id === f.chat)!.agentIds.push(id)
   return () => f.state.agents.find(a => a.id === id)!
 }
 const code = (fn: () => unknown): string | undefined => {
@@ -173,6 +175,8 @@ describe('the Buddy\'s machine reporting the switch', () => {
     const { f, requestId } = asked()
     f.state.agents.push({ ...structuredClone(f.agent()), id: 'session', harnessId: 'h-session', buddySession: { thread: 't', from: 0 } })
     delete f.state.agents.at(-1)!.modelRequest
+    // A session is in its Buddy's chat, as a New session puts it (commands.ts routeBuddySession).
+    f.state.conversations.find(c => c.id === f.chat)!.agentIds.push('session')
     f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId, ok: true }, f.buddy())
     expect(f.state.agents.find(a => a.id === 'session')!.gridModel).toBe(MODEL)
     f.run({ type: 'buddy.model', gridModel: null })
@@ -455,5 +459,37 @@ describe('a Buddy\'s new thread session', () => {
     const request = f.state.starts!.at(-1)!.request
     expect(request.gridModel).toBeUndefined()
     expect(request.model).toBeUndefined()
+  })
+})
+
+// Task #3818: a person with several Buddies switches one of them, named by its chat (else their default); its own thread
+// sessions move with it, and the outcome is told in its own chat.
+describe('switching one of several Buddies', () => {
+  function two() {
+    const f = setup()
+    const added = f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Research' } as Command)
+    const startId = added.result.startId as string
+    const second = f.run({ type: 'agent.started', startId, harnessId: 'peer-research', configuration }).result.agentId as string
+    f.run({ type: 'agent.startSettled', startId, warning: null })
+    return { f, second, secondChat: added.result.conversationId as string, agent: (id: string) => f.state.agents.find(a => a.id === id)! }
+  }
+
+  it('switches the Buddy whose chat is named, and tells it there', () => {
+    const { f, second, secondChat, agent } = two()
+    f.run({ type: 'buddy.model', gridModel: MODEL, conversationId: secondChat } as Command)
+    expect(agent(second).modelRequest).toMatchObject({ gridModel: MODEL })
+    expect(f.agent().modelRequest).toBeUndefined()
+    const effects = f.run({ type: 'buddy.modelResult', agentId: second, requestId: agent(second).modelRequest!.id, ok: true },
+      { kind: 'agent', agentId: second, machineOwnerId: 'peer' })
+    expect(effects.messages.filter(m => m.text.startsWith('Your Buddy now runs')).map(m => m.conversationId)).toEqual([secondChat])
+  })
+
+  it('switches the default without a chat named, and refuses a chat that is not one of the person\'s Buddies', () => {
+    const { f, second, secondChat, agent } = two()
+    f.run({ type: 'buddy.default', conversationId: secondChat } as Command)
+    f.run({ type: 'buddy.model', gridModel: MODEL })
+    expect(agent(second).modelRequest).toBeDefined()
+    expect(f.agent().modelRequest).toBeUndefined()
+    expect(code(() => f.run({ type: 'buddy.model', gridModel: MODEL, conversationId: 'lead' } as Command))).toBe('NOT_FOUND')
   })
 })

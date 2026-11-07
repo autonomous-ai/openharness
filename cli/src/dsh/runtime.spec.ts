@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -16,6 +16,9 @@ import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 import { HARNESS_INSTRUCTIONS, joinedInstructions } from '../lib/agentAttribution.js'
 import { env } from '../config/env.js'
 import { setAgentSettingsForTest, signedOutForTest } from '../testing/agentSettings.js'
+
+// Harness's status line rides every Claude launch beside what these pin (engines/claude/statusLine.spec.ts).
+vi.mock('../engines/kit/statusLine.js', async (original) => ({ ...await original<object>(), statusLineSetting: () => null }))
 
 let root: string
 let ws: string

@@ -10,7 +10,8 @@
  * Whoever serves the model is told whose Buddy runs on it, and their limits hold (AGENTS.md, contributed capacity): a model that
  * hits a limit, keeps failing or is no longer served sends the Buddy back to its owner's subscription.
  */
-import { isSwarmBuddy, openSwarmBuddyChat, swarmBuddyChatId } from './buddies.js'
+import { buddyChatOf, buddyChatsOf, defaultBuddy, defaultBuddyChat, isSwarmBuddy, swarmBuddyChatId } from './buddies.js'
+import { mainBuddyOf, sessionAgentsOf } from './buddySessions.js'
 import { machineOffline, servedLocalModels } from './machines.js'
 import { fail, person, type Actor, type Agent, type SuperTabState } from './model.js'
 import { usernameOf } from './usernames.js'
@@ -52,11 +53,14 @@ function served(state: SuperTabState, gridModel: string, now: number) {
     ...(windows.length ? { contextWindow: Math.min(...windows) } : {}) }
 }
 
-/** The person's own running Buddy for the Swarm: never a thread session, never someone else's. */
-function ownBuddy(state: SuperTabState, actor: Actor): Agent {
+/** The person's own running Buddy for the Swarm: never a thread session, never someone else's. With several (task #3818), the
+ *  one whose chat [conversationId] names, one of theirs, else their default. */
+function ownBuddy(state: SuperTabState, actor: Actor, conversationId?: string): Agent {
   if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person switches their own Buddy.', 403)
   const me = person(state, actor.userId)
-  return mainBuddy(state, me.id, me.generation) ?? fail('NO_BUDDY', 'You have no Buddy running.', 404)
+  const chat = conversationId ? buddyChatsOf(state, me).find(c => c.id === conversationId) ?? fail('NOT_FOUND', 'This conversation is unavailable.', 404) : undefined
+  const buddy = chat ? mainBuddyOf(state, chat) : defaultBuddy(state, me.id) ?? mainBuddy(state, me.id, me.generation)
+  return buddy ?? fail('NO_BUDDY', 'You have no Buddy running.', 404)
 }
 const mainBuddy = (state: SuperTabState, personId: string, generation: string) =>
   state.agents.find(a => isSwarmBuddy(a) && a.buddyOf!.personId === personId && a.buddyOf!.generation === generation && !a.buddySession)
@@ -72,11 +76,11 @@ function switchable(state: SuperTabState, buddy: Agent, now: number): { ok: true
   return { ok: true }
 }
 
-export function askBuddyModel(state: SuperTabState, actor: Actor, gridModel: string | null, requestId: string, now: number): void {
-  const buddy = ownBuddy(state, actor)
+export function askBuddyModel(state: SuperTabState, actor: Actor, gridModel: string | null, requestId: string, now: number, conversationId?: string): void {
+  const buddy = ownBuddy(state, actor, conversationId)
   const can = switchable(state, buddy, now)
   if (!can.ok) fail(can.code, can.message, 409)
-  if (buddy.modelRequest) fail('BUDDY_SWITCHING', 'Your Buddy is already switching.', 409)
+  if (buddy.modelRequest || buddy.switchRequest || buddy.switchLanded) fail('BUDDY_SWITCHING', 'Your Buddy is already switching.', 409)
   const shown = gridModel === null ? {} : served(state, gridModel, now)
   if (!shown) fail('BUDDY_MODEL_UNAVAILABLE', 'Nobody in the Swarm serves that model now.', 409)
   // The grid its machine moves it onto (agent_retarget's gridName): the Swarm's own, the one the models were checked on.
@@ -88,8 +92,10 @@ export function askBuddyModel(state: SuperTabState, actor: Actor, gridModel: str
  *  cannot carry it out (then its own lines say so: its model fails in its terminal, and the person can switch it). */
 export function sendBuddyHome(state: SuperTabState, from: Agent, reason: 'limit' | 'failing' | 'gone', requestId: string, now: number): void {
   if (!from.buddyOf) return
-  const buddy = mainBuddy(state, from.buddyOf.personId, from.buddyOf.generation)
-  if (!buddy?.gridModel || buddy.modelRequest || !switchable(state, buddy, now).ok) return
+  // The main Buddy of [from]'s own chat (task #3818: a person may have several), else theirs as before.
+  const chat = buddyChatOf(state, from)
+  const buddy = (chat && mainBuddyOf(state, chat)) ?? mainBuddy(state, from.buddyOf.personId, from.buddyOf.generation)
+  if (!buddy?.gridModel || buddy.modelRequest || buddy.switchRequest || buddy.switchLanded || !switchable(state, buddy, now).ok) return
   buddy.modelRequest = { id: requestId, gridModel: null, name: current(state, buddy, now), reason,
     requestedBy: buddy.buddyOf!.personId, at: new Date(now).toISOString() }
 }
@@ -123,7 +129,9 @@ export function buddyModelResult(state: SuperTabState, actor: Actor,
   const hidden = hiddenMachines(state, buddy, request, now)
   delete buddy.modelRequest
   const owner = buddy.buddyOf!
-  const conversationId = swarmBuddyChatId({ id: owner.personId, generation: owner.generation })
+  // Its own chat (task #3818), where its owner talks with it.
+  const chat = buddyChatOf(state, buddy)
+  const conversationId = chat?.id ?? swarmBuddyChatId({ id: owner.personId, generation: owner.generation })
   const mine = (text: string): ModelLine[] => [{ conversationId, text, machines: hidden }]
   if (!command.ok) {
     return mine(`Couldn't switch your Buddy: ${clean(command.error ?? '') || 'it failed'}. It is still on ${current(state, buddy, now)}.`)
@@ -133,7 +141,7 @@ export function buddyModelResult(state: SuperTabState, actor: Actor,
   // costs and the serving member's "Used by" read it right. One it could not move (`stayed`) runs where it was, and is
   // recorded there (task #3810); left on a shared model by a move home, it is owed one, which the liveness sweep asks for.
   const stayedIds = new Set(command.stayed ?? []), words = clean(command.error ?? '')
-  const sessions = state.agents.filter(a => a.buddySession && a.buddyOf?.personId === owner.personId && a.buddyOf.generation === owner.generation)
+  const sessions = chat ? sessionAgentsOf(state, chat) : state.agents.filter(a => a.buddySession && a.buddyOf?.personId === owner.personId && a.buddyOf.generation === owner.generation)
   const gaveUp: Agent[] = []
   for (const session of sessions) {
     if (!stayedIds.has(session.harnessId)) {
@@ -187,7 +195,7 @@ export function buddyModelResult(state: SuperTabState, actor: Actor,
     const member = state.people.find(p => p.id === s.personId)
     if (!member) continue
     // No machine named: their own Buddy reads this chat, and a Buddy reads no machines.
-    theirs.push({ conversationId: openSwarmBuddyChat(state, member).id, machines: [],
+    theirs.push({ conversationId: defaultBuddyChat(state, member).id, machines: [],
       text: `${personName(state, owner.personId)}'s Buddy now runs on ${name}, ${s.api ? 'on your saved API' : 'which your machine serves'}.` })
   }
   // The Buddy moved; a thread session that could not is named, so its owner knows where that thread's answers come from.
@@ -202,16 +210,16 @@ export function expiredModelRequests(state: SuperTabState, now: number): Array<{
     const request = buddy.modelRequest
     if (!request || !buddy.buddyOf || now < Date.parse(request.at) + BUDDY_MODEL_LEASE_MS) continue
     delete buddy.modelRequest
+    const conversationId = buddyChatOf(state, buddy)?.id ?? swarmBuddyChatId({ id: buddy.buddyOf.personId, generation: buddy.buddyOf.generation })
     // A sessions-only move home its machine never answered counts as a try, said only when it gives up (task #3810; review of
     // #3393: the last one gave up without a word).
     if (request.sessionsOnly) {
       const gaveUp = owedHome(state, buddy).filter(countTry)
-      if (gaveUp.length) out.push({ buddy, requestId: request.id, machines: hiddenMachines(state, buddy, request, now),
-        conversationId: swarmBuddyChatId({ id: buddy.buddyOf.personId, generation: buddy.buddyOf.generation }),
+      if (gaveUp.length) out.push({ buddy, requestId: request.id, machines: hiddenMachines(state, buddy, request, now), conversationId,
         text: stillOn(state, gaveUp[0]!.gridModel!, 'its computer didn\'t answer', now, request.name) })
       continue
     }
-    out.push({ buddy, requestId: request.id, conversationId: swarmBuddyChatId({ id: buddy.buddyOf.personId, generation: buddy.buddyOf.generation }),
+    out.push({ buddy, requestId: request.id, conversationId,
       machines: hiddenMachines(state, buddy, request, now),
       text: `Couldn't switch your Buddy: its computer didn't answer. It is still on ${current(state, buddy, now)}.` })
   }
