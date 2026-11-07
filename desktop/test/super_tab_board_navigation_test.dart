@@ -188,6 +188,28 @@ void main() {
     expect(_litRows(tester), ['super-group-lead']);
   });
 
+  // Below 1000 the Board folds the left pane into its drawer (#4445): the drawer lights the same row (Test of #4445).
+  _scene(
+    'a narrow Board\'s drawer lights its project row, not Buddy',
+    'board-drawer-lights-project',
+    (tester, c) async {
+      await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+      await _settle(tester);
+      await tester.binding.setSurfaceSize(const Size(880, 800));
+      await _settle(tester);
+      expect(find.byKey(const ValueKey('super-left-pane')), findsNothing);
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const ValueKey('super-board-header')),
+          matching: find.byTooltip('Conversations'),
+        ),
+      );
+      await _settle(tester);
+
+      expect(_litRows(tester), ['super-group-lead']);
+    },
+  );
+
   _scene('a PM lights its own row alone', 'pm-lights-one-row', (
     tester,
     c,

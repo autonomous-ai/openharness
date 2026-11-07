@@ -37,6 +37,7 @@ class SuperTabTasksView extends StatefulWidget {
     required this.onOpenMessage,
     this.selectedId,
     this.storage,
+    this.layout,
     this.now = DateTime.now,
   });
 
@@ -59,6 +60,10 @@ class SuperTabTasksView extends StatefulWidget {
 
   /// Where Board, List or Members, and Mine, are kept for this reader on this Mac.
   final LocalKeyValueStore? storage;
+
+  /// Board, List or Members, held by the page around the view for its life: that page's Board tab is on only while
+  /// the Board is, and names the view, so the view draws no title of its own (audit polish, #4445).
+  final ValueNotifier<SuperTabTasksLayout>? layout;
   final DateTime Function() now;
 
   /// A Members column's width: about a card and a half of title per line (task #2948).
@@ -81,10 +86,11 @@ class SuperTabTasksView extends StatefulWidget {
 typedef _Span = ({SuperTabTaskColumn column, double left, double right});
 
 /// How the Tasks view lays its cards out, kept by its name.
-enum _Layout { board, list, members }
+enum SuperTabTasksLayout { board, list, members }
 
 class _SuperTabTasksViewState extends State<SuperTabTasksView> {
-  var _layout = _Layout.board;
+  late final _shown = widget.layout ?? ValueNotifier(SuperTabTasksLayout.board);
+  SuperTabTasksLayout get _layout => _shown.value;
   bool _mine = false;
   String _query = '';
 
@@ -109,6 +115,8 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
 
   @override
   void dispose() {
+    _shown.removeListener(_choose);
+    if (widget.layout == null) _shown.dispose();
     _boardScroll.dispose();
     _search.dispose();
     super.dispose();
@@ -117,6 +125,8 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   @override
   void initState() {
     super.initState();
+    // A layout chosen here or by the page's Board tab is drawn and kept.
+    _shown.addListener(_choose);
     unawaited(_restore());
     // The lanes read each task's not-before day in its project's zone.
     if (!superTabZonesLoaded) {
@@ -149,25 +159,25 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     try {
       final saved = jsonDecode(raw);
       if (saved is! Map) return;
-      setState(() {
-        _layout =
-            _Layout.values
-                .where((l) => l.name == saved['layout'])
-                .firstOrNull ??
-            _Layout.board;
-        _mine = saved['mine'] == true;
-      });
+      setState(() => _mine = saved['mine'] == true);
+      _shown.value =
+          SuperTabTasksLayout.values
+              .where((l) => l.name == saved['layout'])
+              .firstOrNull ??
+          SuperTabTasksLayout.board;
     } on FormatException {
       // A copy this build cannot read: the defaults stand, and the next
       // choice replaces it.
     }
   }
 
-  void _choose({_Layout? layout, bool? mine}) {
-    setState(() {
-      _layout = layout ?? _layout;
-      _mine = mine ?? _mine;
-    });
+  void _choose({SuperTabTasksLayout? layout, bool? mine}) {
+    if (layout != null && layout != _layout) {
+      // Its listener comes back here to draw and keep it.
+      _shown.value = layout;
+      return;
+    }
+    setState(() => _mine = mine ?? _mine);
     unawaited(
       widget.storage?.write(
         _key,
@@ -256,7 +266,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
           ),
         Expanded(
           // Members draws the crew, free or not, though no task is open.
-          child: _layout == _Layout.members
+          child: _layout == SuperTabTasksLayout.members
               ? _membersView(project, board, now)
               : empty
               ? Center(
@@ -267,7 +277,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
                 )
               : hidden
               ? _noMatch()
-              : _layout == _Layout.list
+              : _layout == SuperTabTasksLayout.list
               ? _listView(shown, now)
               : _boardView(shown, now),
         ),
@@ -353,7 +363,9 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   /// The view's own bar: Board, List or Members, Mine and Search, nothing
   /// else.
   Widget _bar(BuildContext context) {
-    final title = Text('Tasks', style: DesktopChrome.text(medium: true));
+    final title = widget.layout != null
+        ? null
+        : Text('Tasks', style: DesktopChrome.text(medium: true));
     final error = _moveError == null
         ? null
         : Text(
@@ -369,19 +381,23 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       DesktopPill(
         key: const ValueKey('super-tasks-layout-list'),
         label: 'List',
-        selected: _layout == _Layout.list,
+        selected: _layout == SuperTabTasksLayout.list,
         onPressed: () => _choose(
-          layout: _layout == _Layout.list ? _Layout.board : _Layout.list,
+          layout: _layout == SuperTabTasksLayout.list
+              ? SuperTabTasksLayout.board
+              : SuperTabTasksLayout.list,
         ),
       ),
       const SizedBox(width: grid.AppDesktop.listRowGap),
       DesktopPill(
         key: const ValueKey('super-tasks-layout-members'),
         label: 'Members',
-        selected: _layout == _Layout.members,
+        selected: _layout == SuperTabTasksLayout.members,
         tooltip: 'Tasks by crew member',
         onPressed: () => _choose(
-          layout: _layout == _Layout.members ? _Layout.board : _Layout.members,
+          layout: _layout == SuperTabTasksLayout.members
+              ? SuperTabTasksLayout.board
+              : SuperTabTasksLayout.members,
         ),
       ),
       const SizedBox(width: grid.AppDesktop.groupGap),
@@ -430,9 +446,10 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              title,
+              ?title,
               if (error != null) ...[
-                const SizedBox(width: grid.AppDesktop.groupGap),
+                if (title != null)
+                  const SizedBox(width: grid.AppDesktop.groupGap),
                 Flexible(child: error),
               ],
             ],
@@ -791,15 +808,17 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   /// The width the Board's columns with cards share in a [view] that wide,
   /// [empty] saying which are slim lanes: all of it when they fit at
   /// [SuperTabTasksView.minColumnWidth] or more; else as many whole columns
-  /// as fit at rest, the lanes after the last of them included, so none is
-  /// cut mid-word until the reader scrolls (finding 5 of #4211).
+  /// as fit at rest with the lanes between them, so none is cut mid-word
+  /// until the reader scrolls (finding 5 of #4211). The lanes after the last
+  /// are included while they fit; the rest start at the view's edge, as the
+  /// columns then fill it exactly: lanes after Working once hid it (#4445).
   static double _fullWidth(double view, List<bool> empty) {
     const edge = grid.AppDesktop.groupGap;
     var width = SuperTabTasksView.minColumnWidth;
     var full = 0, slim = 0;
-    for (final (i, isEmpty) in empty.indexed) {
+    for (final isEmpty in empty) {
       isEmpty ? slim++ : full++;
-      if (full == 0 || i + 1 < empty.length && empty[i + 1]) continue;
+      if (full == 0) continue;
       final share =
           (view -
               2 * edge -
@@ -813,8 +832,9 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   }
 
   /// The pills over the Board's bottom corners: each names, with its count,
-  /// every column with cards out of view at its edge, and pressed scrolls
-  /// the nearest of them into view.
+  /// every column with cards wholly out of view at its edge, never one partly
+  /// on screen (#4445), and pressed scrolls the nearest column cut or out
+  /// there into view.
   Widget _offView(
     List<_Span> spans,
     Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> shown,
@@ -841,7 +861,8 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     Widget? pill(String side, List<_Span> off, VoidCallback onPressed) {
       final named = [
         for (final span in off)
-          if (shown[span.column]!.isNotEmpty)
+          if (shown[span.column]!.isNotEmpty &&
+              (span.right <= at + .5 || span.left >= at + view - .5))
             '${span.column.label} ${shown[span.column]!.length}',
       ];
       if (named.isEmpty) return null;

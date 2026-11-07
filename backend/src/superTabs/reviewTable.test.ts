@@ -25,12 +25,43 @@ describe('reviewPlan', () => {
   it('adds a test step where the change runs, and none for docs or tests alone', () => {
     // Task #3602: a test that runs on a Mac and a Linux machine is one step per OS; one OS is that step's.
     const plan = reviewPlan(['desktop/lib/super_tabs/view.dart', 'cli/src/superTabs/route.ts'])
-    expect(plan.map(step => [step.name, step.os ?? null])).toEqual([['Review', null], ['Test on a Mac', 'mac'], ['Test on a Linux machine', 'linux']])
+    expect(plan.map(step => [step.name, step.os ?? null])).toEqual([['Review', null], ['Test on a Mac', 'mac'], ['Test on a Linux machine', 'linux'], ['Test on Windows', 'windows']])
     expect(plan.find(step => step.kind === 'test')?.where).toEqual(['Desktop on a Mac', 'The CLI on a Mac and on a Linux machine'])
-    expect(reviewPlan(['desktop/lib/a.dart']).map(step => [step.name, step.os ?? null])).toEqual([['Review', null], ['Test', 'mac']])
+    expect(reviewPlan(['desktop/lib/a.dart']).map(step => [step.name, step.os ?? null])).toEqual([['Review', null], ['Test', 'mac'], ['Test on Windows', 'windows']])
     expect(reviewPlan(['mobile/lib/a.dart']).map(step => [step.name, step.os ?? null])).toEqual([['Review', null], ['Test', null]])
     expect(names(['desktop/test/super_tabs/view_test.dart', 'backend/src/superTabs/steps.test.ts', 'docs/a.md'])).toEqual(['Review'])
     expect(names(['backend/src/superTabs/steps.ts'])).toEqual(['Review'])
+  })
+
+
+  // Removing Windows detection must leave these Ready flows without their required test.
+  it.each([
+    'desktop/lib/super_tabs/view.dart', 'desktop/windows/runner/main.cpp', 'desktop/pubspec.yaml',
+    'cli/src/services/process.ts', 'cli/src/lib/daemonLaunch.ts', 'cli/src/lib/path.ts',
+    'cli/src/superTabs/buddyHome.ts', 'cli/src/team/autoSetup.ts', 'cli/src/team/windowsScript.ts',
+    'cli/src/lib/windows/noWindow.ts', 'cli/src/lib/machineResources.ts',
+  ])('requires Windows for %s even with saved rules predating Windows', file => {
+    const windows = reviewPlan([file], structuredClone(SEED_RULES)).filter(step => step.os === 'windows')
+    expect(windows).toHaveLength(1)
+    expect(windows[0]).toMatchObject({ name: 'Test on Windows', kind: 'test' })
+  })
+
+  it.each([
+    'docs/windows-rules.md', 'backend/src/superTabs/steps.ts', 'cli/README.md',
+    'desktop/test/view_test.dart', 'cli/src/lib/daemonLaunch.spec.ts', 'cli/src/lib/__fixtures__/process.ts',
+    'desktop/macos/Runner/MainFlutterWindow.swift', 'desktop/lib/core/mac_responsibility_probe_native.dart',
+    'desktop/lib/core/linux_app_image.dart', 'cli/src/lib/macosProcessGpu.ts',
+    'cli/src/team/script.ts', 'cli/src/team/nodeTools.ts', 'cli/src/team/tmux.ts',
+  ])('does not require Windows for docs, tests or platform-only code: %s', file => {
+    expect(reviewPlan([file]).filter(step => step.os === 'windows')).toEqual([])
+  })
+
+  it('keeps custom test places and emits only one Windows step when the rules already request Windows', () => {
+    const rules: ProjectRules = { ...SEED_RULES, reviews: { ...SEED_RULES.reviews,
+      test: [{ where: 'Desktop on Windows', paths: ['desktop/**'] }, { where: 'Staging', paths: ['desktop/**'] }] } }
+    const plan = reviewPlan(['desktop/lib/view.dart'], rules)
+    expect(plan.filter(step => step.os === 'windows')).toHaveLength(1)
+    expect(plan.find(step => step.os === 'windows')).toMatchObject({ name: 'Test on Windows', where: ['Desktop on Windows', 'Staging'] })
   })
 
   it('plans the strictest reads when the files could not be read', () => {

@@ -908,7 +908,8 @@ add a kind there, not at the call site.
 - The app has no flash UI: the dial is flashed with `harness flash`. `SerialPortLease` sees that
   flash's lease file and pauses daemon supervision so `harness start` cannot steal the port mid-write.
 - `lib/update/desktop_updater.dart` self-updates from the GCS manifest (sha256-verified, strictly
-  newer only). Its keys must match what writes the manifest — `_otaKeyMacOS`/`_otaKeyMacOSArm64` the
+  newer only, and on macOS and Windows signed by the running app's own publisher:
+  `lib/update/update_signature.dart`, RELEASE.md "How a running app self-updates"). Its keys must match what writes the manifest — `_otaKeyMacOS`/`_otaKeyMacOSArm64` the
   variant table in `scripts/publish-macos-variant.sh`, `desktop-linux-<arch>` the `OTA_KEY` in
   `scripts/upload-desktop-linux.sh`. An Intel Mac reads only `desktop-macos` (the Skia build); Apple
   Silicon takes the newer of `desktop-macos-arm64` and `desktop-macos`, arm64 winning a tie.
