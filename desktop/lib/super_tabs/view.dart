@@ -3479,8 +3479,6 @@ class _SuperTabViewState extends State<SuperTabView>
       title: count == 1
           ? '1 pane in this project'
           : '$count panes in this project',
-      message:
-          'Discuss the plan with ${c.snapshot!.coordinatorNameOf(group.projectId)}.',
       action: OutlinedButton(
         key: const ValueKey('super-project-show-panes'),
         onPressed: _openTerminals(group),
@@ -3497,8 +3495,7 @@ class _SuperTabViewState extends State<SuperTabView>
   };
 
   /// A Personal project's empty chat with no Lead: the card that starts one
-  /// (Huy 11-04, task #2815), and under it what the chat says without it: its
-  /// panes when it holds any, else its plain line.
+  /// (Huy 11-04, task #2815), and its panes under it when it holds any.
   Widget _leadWaiting(SuperTabConversation group) => Center(
     child: SingleChildScrollView(
       padding: const EdgeInsets.all(grid.AppDesktop.panelPadding),
@@ -3513,20 +3510,7 @@ class _SuperTabViewState extends State<SuperTabView>
               conversationId: group.id,
               app: widget.app!,
             ),
-            if (_personalPaneCount(group) > 0)
-              _panesWaiting(group)
-            else
-              Padding(
-                padding: const EdgeInsets.only(
-                  top: grid.AppDesktop.panelPadding,
-                ),
-                child: Text(
-                  'Discuss the plan with '
-                  '${c.snapshot!.coordinatorNameOf(group.projectId)}.',
-                  textAlign: TextAlign.center,
-                  style: DesktopChrome.text(color: DesktopChrome.muted),
-                ),
-              ),
+            if (_personalPaneCount(group) > 0) _panesWaiting(group),
           ],
         ),
       ),
@@ -5549,6 +5533,13 @@ class _SuperTabViewState extends State<SuperTabView>
                     group != null &&
                     _personalPaneCount(group) > 0
               ? _panesWaiting(group)
+              // Empty means empty (anh Dee, 11-07, rule 7): only a chat that
+              // can't be read, or isn't here yet, says so.
+              : messages.isEmpty &&
+                    outgoing.isEmpty &&
+                    !c.accessRevoked &&
+                    group != null
+              ? const SizedBox.shrink()
               : messages.isEmpty && outgoing.isEmpty
               ? Padding(
                   // The pane's side padding, as the composer has: a long line
@@ -5560,13 +5551,7 @@ class _SuperTabViewState extends State<SuperTabView>
                     child: Text(
                       c.accessRevoked
                           ? 'Conversation unavailable.'
-                          : group == null
-                          ? 'Loading conversation…'
-                          : c.snapshot!.isProjectLead(group.id)
-                          ? 'Discuss the plan with ${c.snapshot!.coordinatorNameOf(group.projectId)}.'
-                          : _buddyName(group) != null
-                          ? "Only you and ${_buddyName(group)} read this chat. Say what you want to build; say 'send to the ${c.snapshot!.coordinatorNameOf(group.projectId)}' when it's ready."
-                          : 'Start the conversation.',
+                          : 'Loading conversation…',
                       textAlign: TextAlign.center,
                       style: DesktopChrome.text(color: DesktopChrome.muted),
                     ),

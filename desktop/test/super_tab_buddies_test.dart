@@ -1096,65 +1096,15 @@ void main() {
         },
       );
 
-      testWidgets('the empty Buddy chat text keeps the pane\'s side padding', (
-        tester,
-      ) async {
-        final server = buddySwarm();
-        giveBuddy(server);
-        final c = await show(tester, server);
-        await tester.tap(buddyEntry);
-        await tester.pumpAndSettle();
-
-        final text = tester.getRect(find.textContaining('Only you and Wren'));
-        final composer = tester.getRect(
-          find.byKey(const ValueKey('super-message-composer-row')),
-        );
-        // The composer row spans the pane; its field is inset by the panel
-        // padding, and so is the empty text.
-        expect(
-          text.left,
-          greaterThanOrEqualTo(composer.left + grid.AppDesktop.panelPadding),
-        );
-        expect(
-          text.right,
-          lessThanOrEqualTo(composer.right - grid.AppDesktop.panelPadding),
-        );
-        await close(tester, c);
-      });
-
       testWidgets(
-        'an empty Buddy chat says who reads it and how to reach the coordinator',
+        'an empty Buddy chat shows no line (anh Dee, 11-07, rule 7)',
         (tester) async {
           final server = buddySwarm();
           giveBuddy(server);
-          var c = await show(tester, server);
+          final c = await show(tester, server);
           await tester.tap(buddyEntry);
           await tester.pumpAndSettle();
-
-          expect(
-            find.text(
-              "Only you and Wren read this chat. Say what you want to build; say 'send to the Product Manager' when it's ready.",
-            ),
-            findsOneWidget,
-          );
-          await close(tester, c);
-
-          // Called what its project calls it.
-          server.state['projects'] = [
-            {
-              ...projectFixture('lead', 'openharness', 'lead'),
-              'coordinatorName': 'Coordinator',
-            },
-          ];
-          c = await show(tester, server);
-          await tester.tap(buddyEntry);
-          await tester.pumpAndSettle();
-          expect(
-            find.text(
-              "Only you and Wren read this chat. Say what you want to build; say 'send to the Coordinator' when it's ready.",
-            ),
-            findsOneWidget,
-          );
+          expect(find.textContaining('Say what you want to build'), findsNothing);
           await close(tester, c);
         },
       );

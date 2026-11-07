@@ -179,7 +179,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Start the conversation.'), findsNothing);
       expect(find.textContaining('Discuss the plan'), findsNothing);
-      expect(find.textContaining('read this chat'), findsNothing);
+      expect(find.textContaining('Say what you want to build'), findsNothing);
     }
   });
 }

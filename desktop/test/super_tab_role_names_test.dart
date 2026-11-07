@@ -1,9 +1,6 @@
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/model.dart';
-import 'package:harness/super_tabs/view.dart';
 
-import 'support/super_tab_fixture.dart';
 
 Map<String, dynamic> _agent(String id, [Map<String, dynamic>? extra]) => {
   'id': id,
@@ -98,45 +95,6 @@ void main() {
       'lead is the Product Manager of project Lamp. Delete the project first.',
     );
   });
-
-  testWidgets(
-    'an empty project chat names its coordinator as the project does',
-    (tester) async {
-      for (final (coordinator, line) in [
-        (null, 'Discuss the plan with Product Manager.'),
-        ('Coordinator', 'Discuss the plan with Coordinator.'),
-      ]) {
-        final server = ConversationServer();
-        server.state['projects'] = [
-          {
-            ...projectFixture('lead', 'web-project', 'lead'),
-            'coordinatorName': ?coordinator,
-          },
-        ];
-        final c = server.controller();
-        await c.refresh();
-        await c.select('lead');
-        await tester.pumpWidget(
-          MaterialApp(
-            home: Scaffold(
-              body: SuperTabView(
-                controller: c,
-                onInvite: () {},
-                onAddAgent: (_) {},
-                onOpenTerminal: (_) {},
-                machineName: (_) => 'Team Mac',
-              ),
-            ),
-          ),
-        );
-        await tester.pumpAndSettle();
-        expect(find.text(line), findsOneWidget);
-        await tester.pumpWidget(const SizedBox());
-        await c.flush();
-        c.dispose();
-      }
-    },
-  );
 
   test('a badge is the name, or its first 11 characters and an ellipsis', () {
     expect(superTabRoleBadge('Tester'), 'Tester');

@@ -1072,7 +1072,7 @@ void main() {
     expect(box(tester, chatSession).on, isTrue);
     expect(
       tester.widget<Text>(chatNote).data,
-      'Your message starts its own thread and Buddy session',
+      'Starts its own thread and Buddy session',
     );
     // The line's place was kept: the box doesn't move.
     expect(tester.getRect(chatComposer).bottom, restingBottom);
