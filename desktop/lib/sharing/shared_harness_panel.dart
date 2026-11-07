@@ -37,6 +37,7 @@ class SharedHarnessPanel extends StatefulWidget {
     this.linkEnvironment,
     this.onSignIn,
     this.onUsage,
+    @visibleForTesting this.allowLocalTcpFixtureForTest = false,
   });
   final AppNotifier notifier;
   final TerminalPane pane;
@@ -49,6 +50,10 @@ class SharedHarnessPanel extends StatefulWidget {
 
   /// A shared link's clicks, for its page to count; the workspace's own shared panes pass none.
   final ValueChanged<SharedAction>? onUsage;
+
+  /// A loopback daemon fixture stands in for the Windows pipe under test
+  /// ([WsConn.allowLocalTcpFixture]).
+  final bool allowLocalTcpFixtureForTest;
   @override
   State<SharedHarnessPanel> createState() => _SharedHarnessPanelState();
 }
@@ -142,6 +147,7 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel>
       localTransport: viewer == null
           ? widget.notifier.localDaemonTransport
           : null,
+      allowLocalTcpFixture: widget.allowLocalTcpFixtureForTest,
       accessTokenProvider: (force, failedToken) async => viewer == null
           ? ''
           : widget.link && !await viewer.auth.hasSession()

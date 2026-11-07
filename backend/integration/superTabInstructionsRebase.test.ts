@@ -108,7 +108,7 @@ describe('every project on the new base, once, by itself', () => {
     expect(JSON.stringify((revision as { dropped?: unknown }).dropped ?? [])).not.toContain('Talks with people in the project chat')
     expect((await store.instructions(owner, tab, app)).text).toBe(rebasedDocument(INSTRUCTIONS_TEMPLATE).text)
     // The new revision and hash on the head are what every agent's host compares: its PM is told the instructions changed and
-    // reads them again (cli swarmInstructionsSkill.ts), as for any save.
+    // reads them again (cli superTabs/instructionsNotice.ts), as for any save.
     const head = await projects(tab)
     expect(head.map(p => [p.instructionsRevision, p.instructionsBase])).toEqual([[3, 1], [2, 1]])
     expect((await store.instructions(owner, tab, 'lead', pm)).revision).toBe(3)

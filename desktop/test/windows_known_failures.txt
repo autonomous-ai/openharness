@@ -10,7 +10,7 @@
 test/community_hub_contract_test.dart::the limits and names are the backend's
 test/swarm_screen_test.dart::the store tab has a compact text label (native=true)
 
-# POSIX-font-fixture (88)
+# POSIX-font-fixture (75)
 # test/support/real_fonts.dart searches only /System/Library and /usr/share/fonts; print events explicitly report no sans font.
 test/api_connections_test.dart::(setUpAll)
 test/api_model_picker_test.dart::(setUpAll)
@@ -34,11 +34,6 @@ test/harness_comments_test.dart::(setUpAll)
 test/harness_customize_test.dart::(setUpAll)
 test/harness_picker_entry_test.dart::(setUpAll)
 test/icon_catalog_render_test.dart::(setUpAll)
-test/keyboard_practice_test.dart::practice stays readable at Size(1000.0, 800.0) and 1.0 text in Brightness.dark
-test/keyboard_practice_test.dart::practice stays readable at Size(1000.0, 800.0) and 1.0 text in Brightness.light
-test/keyboard_practice_test.dart::practice stays readable at Size(480.0, 420.0) and 1.7 text in Brightness.dark
-test/keyboard_practice_test.dart::practice stays readable at Size(480.0, 420.0) and 1.7 text in Brightness.light
-test/keyboard_practice_test.dart::quick start wraps beside a narrow workspace with enlarged text
 test/layout_palette_render_test.dart::(setUpAll)
 test/local_model_picker_test.dart::(setUpAll)
 test/login_fleet_map_test.dart::(setUpAll)
@@ -67,10 +62,6 @@ test/setup_review_render_test.dart::(setUpAll)
 test/share_harness_test.dart::(setUpAll)
 test/shared_agent_page_test.dart::(setUpAll)
 test/shared_harness_panel_test.dart::(setUpAll)
-test/shortcuts_browser_test.dart::lazy shortcuts keep keyboard paging visible at Size(1000.0, 700.0)/1.0/Brightness.dark
-test/shortcuts_browser_test.dart::lazy shortcuts keep keyboard paging visible at Size(1000.0, 700.0)/1.0/Brightness.light
-test/shortcuts_browser_test.dart::lazy shortcuts keep keyboard paging visible at Size(480.0, 420.0)/1.8/Brightness.dark
-test/shortcuts_browser_test.dart::lazy shortcuts keep keyboard paging visible at Size(480.0, 420.0)/1.8/Brightness.light
 test/sign_in_step_test.dart::(setUpAll)
 test/signout_recovery_test.dart::(setUpAll)
 test/status_line_test.dart::(setUpAll)
@@ -90,10 +81,6 @@ test/usage_loading_test.dart::(setUpAll)
 test/usage_section_test.dart::(setUpAll)
 test/web_tab_switcher_test.dart::(setUpAll)
 test/welcome_entry_layout_test.dart::(setUpAll)
-test/welcome_wallpaper_shortcuts_test.dart::shortcut browser searches live bindings and practices the selected row
-test/welcome_wallpaper_shortcuts_test.dart::shortcut popup fits and closes with Escape
-test/welcome_wallpaper_shortcuts_test.dart::wallpaper gallery persists a choice and restores the blank default
-test/welcome_wallpaper_shortcuts_test.dart::wallpapers keep a centered welcome and the selected terminal type
 test/workspace_account_test.dart::(setUpAll)
 test/workspace_activity_test.dart::(setUpAll)
 test/workspace_expiry_screen_test.dart::(setUpAll)
@@ -180,15 +167,8 @@ test/harness_cli_runner_test.dart::remote-password status invokes cli.js as dire
 test/harness_cli_runner_test.dart::uses the explicit legacy launcher before PATH
 test/harness_cli_runner_test.dart::uses the managed Node runtime and CLI bundle without a shell
 
-# POSIX-unix-socket-fixture (3)
-# test/local_daemon_transport_test.dart creates Unix sockets; Windows uses an authenticated named pipe and never sends the credential over TCP.
-test/local_daemon_transport_test.dart::local credential goes with REST over the port, never down the socket
-test/local_daemon_transport_test.dart::local credential goes with the local WebSocket over the port
-test/local_daemon_transport_test.dart::local WebSocket falls back to the port when the socket is not there
-
-# POSIX-updater-or-appimage (8)
+# POSIX-updater-or-appimage (7)
 # These tests exercise macOS updater keys/staging, or Linux AppImage Exec/chmod/install behavior; Windows updater is added later in C4.
-test/about_section_test.dart::names the app and version without claiming an untested update status
 test/desktop_updater_test.dart::Linux architecture packaging downloadAndStage stages the AppImage as-is and makes it executable
 test/desktop_updater_test.dart::Linux architecture packaging downloadAndStage verifies a large download off the UI isolate
 test/linux_app_image_test.dart::a path with spaces is quoted for the launcher
