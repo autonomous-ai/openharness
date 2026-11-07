@@ -62,6 +62,18 @@ describe('a Buddy brought on joining', () => {
     expect(new Set(names).size).toBe(10)
   })
 
+  // Security review 2 of #3560: a Buddy never comes up with a teammate's shown name or username, an agent passing as a person.
+  it('never takes a name a person in the Swarm goes by', () => {
+    const firstPick = () => { const f = swarm(2); return { f, name: f.startOf(f.bring(person(0)).result.startId).request.name } }
+    const { name } = firstPick()
+    for (const field of ['name', 'username'] as const) {
+      const f = swarm(2)
+      // Another person goes by the name this person's Buddy would be offered first.
+      Object.assign(f.state.people.find(p => p.id === 'p1')!, { [field]: name })
+      expect(f.startOf(f.bring(person(0)).result.startId).request.name.toLowerCase()).not.toBe(name.toLowerCase())
+    }
+  })
+
   it('keeps its name when started again', () => {
     const f = swarm(1)
     const first = f.bring(person(0))
