@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 import type { ContributedMachine } from './machines.js'
-import { agentProjectId, canReadAgent, canReadGroup, NO_PROJECT } from './projects.js'
+import { agentProjectId, canReadAgent, canReadGroup, NO_PROJECT, projectOf } from './projects.js'
 
 // Task #4116 (Swarm v3, anh Dee 11-07): "A Regular agent isn't tied to a project; the task decides where it works." Its PM gives
 // it a task only in a project its person can read, so nothing reaches its person that they could not read anyway; while it
@@ -184,5 +184,34 @@ describe('a Regular agent and its task', () => {
     expect(canReadAgent(f.state, mate, f.agent(f.ada))).toBe(true)
     expect(canReadAgent(f.state, { kind: 'agent', agentId: f.ada, machineOwnerId: 'mate' }, f.agent(f.ada))).toBe(true)
     expect(canReadAgent(f.state, owner, f.agent(f.ada))).toBe(false)
+  })
+})
+
+// Task #4218 (anh Dee's Buddy's review): a Regular agent starts in its own empty folder, so its task tells it where the code is.
+describe('a Regular agent\'s task', () => {
+  const brief = (f: ReturnType<typeof swarm>, app: ReturnType<ReturnType<typeof swarm>['project']>) =>
+    f.run({ type: 'work.assign', conversationId: app.task, agentId: f.ada }, app.asPm).messages
+      .find(m => m.recipients.includes(f.ada))!.text
+
+  it('names its project\'s GitHub repository, to clone into its own folder', () => {
+    const f = swarm(), app = f.project('app', 'public')
+    projectOf(f.state, app.projectId).repository = { machineId: 'owner-mac', cwd: '/code/app', repositoryUrl: 'https://github.com/acme/app' }
+    const text = brief(f, app)
+    expect(text).toContain('https://github.com/acme/app')
+    expect(text).not.toContain('/code/app')
+  })
+
+  it('names its project\'s checkout when it is on the agent\'s own computer', () => {
+    const f = swarm(), app = f.project('app', 'public')
+    projectOf(f.state, app.projectId).repository = { machineId: 'mate-mac', cwd: '/code/app', repositoryUrl: null }
+    expect(brief(f, app)).toContain('/code/app')
+  })
+
+  it('says when its project has no code it can reach', () => {
+    const f = swarm(), app = f.project('app', 'public')
+    projectOf(f.state, app.projectId).repository = { machineId: 'owner-mac', cwd: '/code/app', repositoryUrl: null }
+    const text = brief(f, app)
+    expect(text).toContain('no code this computer can reach')
+    expect(text).not.toContain('/code/app')
   })
 })
