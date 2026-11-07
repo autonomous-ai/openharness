@@ -272,6 +272,34 @@ void main() {
       expect(find.descendant(of: row, matching: find.text('1')), findsNothing);
     });
 
+    // Audit finding 19 (task #4445), carried to the Projects row: new lines from a person count as a tag does.
+    testWidgets('a tag in one project and new lines in another: Projects is '
+        'bold and counts the two', (tester) async {
+      await show(
+        tester,
+        setup: (server) {
+          (server.state['projects'] as List).add(
+            projectFixture('second', 'second-project', 'second'),
+          );
+          (server.state['conversations'] as List).add({
+            ...conversationFixture('second', 'second-project'),
+            'projectId': 'second',
+          });
+          server.tag('message-1', conversationId: 'lead');
+          server.append('Can someone look?', conversationId: 'second');
+          server.messages.last['author'] = {
+            'kind': 'person',
+            'id': 'tuan',
+            'name': 'tuan@example.com',
+          };
+        },
+      );
+      expect(
+        find.descendant(of: key('super-projects'), matching: find.text('2')),
+        findsOneWidget,
+      );
+    });
+
     // Review of #3539: the Desktop has no unread filter to turn off, so one saved on must hide nothing there.
     testWidgets('a saved unread filter hides no Buddy row on the Desktop', (
       tester,
@@ -293,7 +321,9 @@ void main() {
             find
                 .descendant(
                   of: key('super-projects'),
-                  matching: find.byType(Semantics),
+                  matching: find.byWidgetPredicate(
+                    (w) => w is Semantics && w.properties.selected != null,
+                  ),
                 )
                 .first,
           )

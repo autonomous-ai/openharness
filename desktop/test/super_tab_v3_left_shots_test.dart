@@ -213,16 +213,24 @@ void main() {
         }
 
         await settle();
+        // Under 1000 the Board folds the left pane into its drawer (#4445): its header opens it.
+        Future<void> openProjects() async {
+          if (find.byKey(const ValueKey('super-projects')).evaluate().isEmpty) {
+            await tester.tap(find.byTooltip('Conversations').first);
+            await settle();
+          }
+          await tester.tap(find.byKey(const ValueKey('super-projects')));
+          await settle();
+        }
+
         if (scene == 'agent-chat') {
           await tester.tap(find.byKey(const ValueKey('super-agent-kestrel')));
           await settle();
         } else if (scene.startsWith('projects')) {
-          await tester.tap(find.byKey(const ValueKey('super-projects')));
-          await settle();
+          await openProjects();
         } else if (scene.startsWith('board')) {
           // A project's Board opens from the Projects grid (task #4466).
-          await tester.tap(find.byKey(const ValueKey('super-projects')));
-          await tester.pump();
+          await openProjects();
           await tester.tap(find.byKey(const ValueKey('super-group-lead')));
           await settle();
         } else if (scene == 'decisions') {

@@ -204,7 +204,8 @@ class _BuddyMachineFieldState extends State<BuddyMachineField> {
     final fitted = widget.fitNames
         ? AppSelectField.fitWidth(
                 context,
-                labels: [for (final m in widget.machines) m.name],
+                // The prompt too, shown when no machine can be picked.
+                labels: [label, for (final m in widget.machines) m.name],
                 textStyle: style,
               ) +
               grid.AppControl.iconSize

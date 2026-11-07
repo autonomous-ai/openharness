@@ -11,9 +11,9 @@ import 'keymap_host_test.dart' show MemoryKeymap;
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 
 // Task #4196 (anh Dee, 11-07): + New agent in My agents opens the workspace's
-// Cmd-N form, with every picker and one more choice, Member or Lead.
+// Cmd-N form, with every picker and one more choice, Agent or Product Manager.
 void main() {
-  testWidgets('+ New agent opens Cmd-N as a Member', (tester) async {
+  testWidgets('+ New agent opens Cmd-N as an Agent', (tester) async {
     final oldEntry = newHarnessOpensInBox;
     newHarnessOpensInBox = true;
     addTearDown(() => newHarnessOpensInBox = oldEntry);
@@ -32,8 +32,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: grid.buildAppTheme(brightness: Brightness.light),
-        builder: (context, child) =>
-            KeymapProvider(keymap: map, child: child!),
+        builder: (context, child) => KeymapProvider(keymap: map, child: child!),
         home: SwarmScreen(
           notifier: f.app,
           nativeTabs: false,
@@ -50,8 +49,10 @@ void main() {
     final form = find.byType(NewHarnessForm);
     expect(form, findsOneWidget);
     final kind = find.byKey(const ValueKey('new-harness-field-agent-kind'));
-    expect(find.descendant(of: kind, matching: find.text('Member')),
-        findsOneWidget);
+    expect(
+      find.descendant(of: kind, matching: find.text('Agent')),
+      findsOneWidget,
+    );
     for (final picker in ['agent', 'machine', 'project']) {
       expect(find.byKey(ValueKey('new-harness-field-$picker')), findsOneWidget);
     }

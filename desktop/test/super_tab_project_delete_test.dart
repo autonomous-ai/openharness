@@ -207,7 +207,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(c.hasPendingAction, isTrue);
       expect(c.snapshot!.projects, isEmpty);
-      await tester.tap(find.widgetWithText(TextButton, 'Check pending action'));
+      await tester.tap(find.widgetWithText(TextButton, 'Check again'));
       await tester.pumpAndSettle();
       expect(c.hasPendingAction, isFalse);
       expect(server.posts, hasLength(2));
