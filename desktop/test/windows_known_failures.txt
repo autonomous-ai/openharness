@@ -180,12 +180,6 @@ test/harness_cli_runner_test.dart::remote-password status invokes cli.js as dire
 test/harness_cli_runner_test.dart::uses the explicit legacy launcher before PATH
 test/harness_cli_runner_test.dart::uses the managed Node runtime and CLI bundle without a shell
 
-# POSIX-unix-socket-fixture (3)
-# test/local_daemon_transport_test.dart creates Unix sockets; Windows uses an authenticated named pipe and never sends the credential over TCP.
-test/local_daemon_transport_test.dart::local credential goes with REST over the port, never down the socket
-test/local_daemon_transport_test.dart::local credential goes with the local WebSocket over the port
-test/local_daemon_transport_test.dart::local WebSocket falls back to the port when the socket is not there
-
 # POSIX-updater-or-appimage (8)
 # These tests exercise macOS updater keys/staging, or Linux AppImage Exec/chmod/install behavior; Windows updater is added later in C4.
 test/about_section_test.dart::names the app and version without claiming an untested update status
