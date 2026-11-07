@@ -6445,8 +6445,6 @@ class _SuperTabViewState extends State<SuperTabView>
                                                   widget.onOpenTerminal)
                                               .call(agent);
                                         },
-                                        onOpenConversation: _openConversation,
-                                        facts: _facts,
                                       )
                                     : const SizedBox.shrink(),
                                 _tasksPage(boardProject: boardProject),
