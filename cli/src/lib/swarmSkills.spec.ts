@@ -917,7 +917,8 @@ describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
     expect(text).toContain('never tell them to open a session just to send')
     expect(text).not.toContain('tell them to start a New session')
     // Ken, 11-04 (task #2832): its owner's right hand on their own machine; in the Swarm it still only talks and proposes.
-    expect(text).toContain('In the Swarm you only talk with your owner and send the proposals they ask for: never assign work or start agents there.')
+    // Task #4525: it also asks its owner in their Decisions.
+    expect(text).toContain('In the Swarm you only talk with your owner, ask them in their Decisions and send the proposals they ask for: never assign work or start agents there.')
     expect(text).toContain('you run as they do in their own Claude Code or Codex session, with full access')
     expect(text).not.toContain('git grep, log, show, diff, blame and status')
     expect(text).not.toContain('Your folder is for reading')
@@ -927,7 +928,8 @@ describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
     expect(text).toContain('One short note in your chat at each milestone: the PM took it, the task it went to, its pull request merged or released.')
     expect(text).toContain('Nothing when nothing changed')
     // anh Dee (task #2926): a proposal is its owner's own message: shown to them first, posted in full once they say ok.
-    expect(text).toContain('Before you send, show your owner the exact line you will post as them, in their voice: I\'ll post this as you: "…", and wait for their ok.')
+    // Task #4525: a Send decision shows the line now; propose keeps the quoted line for their own words and files.
+    expect(text).toContain('Show your owner the exact line you will post as them, in their voice: I\'ll post this as you: "…", and wait for their ok.')
     expect(text).toContain('"text":"the line they okayed, or their own words"')
     expect(text).toContain('Quotes around that line are required')
     expect(text).toContain('Only the quoted line immediately after "I\'ll post this as you:" counts as shown; nothing after its closing quote counts')
