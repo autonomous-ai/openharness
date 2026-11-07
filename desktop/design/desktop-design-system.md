@@ -406,9 +406,23 @@ quarter of its box, and nothing else outside the words more than 38 pixels.
   The check, question mark and spinner stay, from the shared activity
   vocabulary. No status in Flutter draws an X: an X means close. Terminal text
   and native tab marks may keep `✗`.
-- **Task card and row.** The Tasks pane card (`SuperTabPersonalTaskCard`) and
-  the sidebar row (`SuperTabBuddyRow`) carry the elements above at their
-  shipped sizes; their size and layout do not change when an element does.
+- **Sidebar row.** The sidebar row (`SuperTabBuddyRow`) carries the elements
+  above at its shipped size; its size and layout do not change when an
+  element does.
+- **Tasks pane header** (`SuperTabTasksPaneHeader`). "Tasks" in 13 semibold
+  on the left. The Auto approve or Review choice on the right is plain 12
+  secondary text; its chevron and a faint fill show only on hover, focus or
+  while its menu is open, and the chevron's room is held at rest so the text
+  never moves. The menu is the app's one dropdown, with a check on the stored
+  choice.
+- **Tasks pane card** (`SuperTabPersonalTaskCard`). A card surface with one
+  hairline (`DesktopChrome.rim`), radius 10 and no shadow; a selected card
+  differs by its fill alone. On top, the project's name in a neutral grey
+  capsule (`AppSurface.wellFill`, secondary text), never a project colour, and
+  the status mark at the right. Then the title in 13 medium, up to three
+  lines, and two 18 faces: who asked, then who is doing it. Only while the
+  task waits for the reader: Reject as plain text and Approve as the blue
+  capsule, on the right.
 - **Adding or changing one.** A new or changed element updates this section
   and the gallery, with its images, in the same pull request.
 
