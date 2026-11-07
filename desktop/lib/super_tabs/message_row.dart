@@ -798,9 +798,9 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                         'Earlier message',
                                     text: switch (widget.reply) {
                                       final reply? => superTabQuoteText(reply),
-                                      null when widget.replyGone => 'The original message is no longer in this conversation.',
-                                      null =>
-                                        'The original message isn’t loaded.',
+                                      null when widget.replyGone =>
+                                        'Original message removed',
+                                      null => 'Original message not loaded',
                                     },
                                     onTap: widget.onOpenReply == null
                                         ? null

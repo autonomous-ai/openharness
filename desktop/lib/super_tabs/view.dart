@@ -2727,11 +2727,7 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() => _finding = null);
     if (target == null) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        SnackBar(
-          content: Text(
-            note ?? 'The original message is no longer in this conversation.',
-          ),
-        ),
+        SnackBar(content: Text(note ?? 'Original message removed')),
       );
       return;
     }
@@ -5975,7 +5971,7 @@ class _SuperTabViewState extends State<SuperTabView>
                               bottom: grid.AppDesktop.controlGap,
                             ),
                             child: Text(
-                              'Your message starts its own thread and Buddy session',
+                              'Starts its own thread and Buddy session',
                               key: const ValueKey('super-chat-session-note'),
                               style: DesktopChrome.metadata(
                                 color: DesktopChrome.muted,
@@ -6215,7 +6211,7 @@ class _SuperTabViewState extends State<SuperTabView>
               maintainAnimation: true,
               maintainState: true,
               child: Text(
-                'Your message starts its own thread and Buddy session',
+                'Starts its own thread and Buddy session',
                 key: const ValueKey('super-chat-session-note'),
                 style: DesktopChrome.metadata(color: DesktopChrome.muted),
               ),
