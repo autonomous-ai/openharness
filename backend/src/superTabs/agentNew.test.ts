@@ -118,6 +118,12 @@ describe('a Regular agent\'s chat', () => {
     f.run(say(f.chat, 'Hello'), { kind: 'agent', agentId: f.agentId, machineOwnerId: 'mate' })
   })
 
+  // Task #4252 (audit 29): it is a talk with its person, as a Buddy's is, where a short reply is the answer.
+  it('takes the agent\'s short reply to its person, which a task would refuse as only an acknowledgement', () => {
+    const f = running()
+    expect(code(() => f.run(say(f.chat, 'Thanks!'), { kind: 'agent', agentId: f.agentId, machineOwnerId: 'mate' }))).toBeNull()
+  })
+
   it('is read and written by nobody else: not the Swarm\'s owner, nor another agent', () => {
     const f = running()
     expect(code(() => f.run(say(f.chat, 'Peeking'), owner))).toBe('NOT_FOUND')
