@@ -11,7 +11,7 @@ function fixture() {
   const request = (id: string, person = 'owner', projectId = 'lead', extra: Partial<Conversation> = {}): Conversation => ({
     id, projectId, title: id, leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null,
     lastMessageSequence: 0, requesterId: person, pullRequestUrls: ['https://github.com/o/r/pull/1'],
-    ledger: { firstAssignedAt: WEEK + 1, shippedAt: WEEK + 2 }, ...extra,
+    ledger: { firstAssignedAt: WEEK + 1, shippedAt: WEEK + 2, mergedAt: WEEK + 2 }, ...extra,
   })
   const agent = (id: string, extra: Partial<Agent> = {}): Agent => ({
     id, projectId: 'lead', name: id, machineId: 'mac', harnessId: id, machineOwnerId: 'owner', contributorId: 'owner',

@@ -291,7 +291,6 @@ class PersonalSwarm extends ChangeNotifier {
         // As Add machine: where the Swarm runs teammates' work through Team
         // accounts, this Mac is never lent under its owner's own login.
         teamAccountOnly: snapshot.teamAccounts,
-        offerTeamAccount: false,
         // The server decides, whatever this computer read.
         ifMissing: true,
         unlessRemoved: true,

@@ -203,6 +203,7 @@ void main() {
       expect(f.commands.single, {
         'type': 'task.approve',
         'conversationId': 'new',
+        'suggestedAgentId': '0540',
       });
     });
   }
@@ -221,8 +222,27 @@ void main() {
     expect(f.commands.single, {
       'type': 'task.approve',
       'conversationId': 'new',
+      'suggestedAgentId': '0540',
     });
     expect(find.text('Task new'), findsOneWidget);
+  });
+  testWidgets('approve with no agent shown says none was shown', (t) async {
+    await mount(t);
+    f.rows.last
+      ..['agent'] = null
+      ..['suggested'] = false
+      ..['version'] = 2;
+    await f.controller.refresh();
+    await t.pump();
+    await t.tap(find.text('Task new'));
+    await t.pump();
+    await t.tap(find.text('Approve'));
+    await t.pumpAndSettle();
+    expect(f.commands.single, {
+      'type': 'task.approve',
+      'conversationId': 'new',
+      'suggestedAgentId': null,
+    });
   });
   testWidgets('rejection needs a reason and remains in the list', (t) async {
     await mount(t);

@@ -10,7 +10,6 @@ void main() {
       final f = SuperTabLaunchFixture();
       f.app.status = AppStatus.authenticated;
       f.app.teamAccountHereForTest = true;
-      f.connection.teamCheck = {'state': 'wanted'};
       f.connection.server.state['people'] = [
         {'id': 'boss', 'email': 'boss@example.com', 'role': 'owner'},
         {'id': 'owner', 'email': 'owner@example.com', 'role': 'collaborator'},
