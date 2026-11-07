@@ -55,7 +55,7 @@ extension FinderFileActions on FinderController {
     final repository = git.repository;
     if (repository == null) return;
     for (final change in changes.where((c) => c.area == GitArea.untracked)) {
-      await files.trash(p.join(repository.root, change.path));
+      await files.trash(repository.pathOf(change));
     }
     await git.discard([
       for (final change in changes)
