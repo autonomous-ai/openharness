@@ -49,7 +49,7 @@ afterAll(async () => {
 })
 
 /** A Swarm whose coordinator runs on one machine and whose worker, on another, works on task "Ship the parser". The coordinator's
- *  first update request (for the assignment) has gone, so nothing merges with a digest in the next 15 minutes, unless [fresh]. */
+ *  first poll is a full one ([fresh] is kept for callers: no update request goes with the setup any more, task #3593). */
 async function swarm({ fresh = false, told, capable = false }: { fresh?: boolean; told?: string[]; capable?: boolean } = {}) {
   let now = Date.parse('2026-11-02T06:30:00.000Z')
   const timed = new SuperTabStore(db, () => now, null, told ? { deliveriesWaiting: w => { told.push(w.agentId) } } : {})
@@ -95,12 +95,6 @@ async function swarm({ fresh = false, told, capable = false }: { fresh?: boolean
   }
   const status = (s: 'done' | 'blocked' | 'needs_human' | 'working', result = 'A result') =>
     execute({ type: 'work.status', conversationId: group, assignmentId, status: s, result }, host, worker)
-  if (!fresh) {
-    clock.now += DUE + 1_000
-    await poll()
-    const early = await rowsOf(tab, { status: 'gathered' })
-    expect(await Promise.all(early.map(d => db.superTabMessage.findUnique({ where: { id: d.messageId } }).then(m => [m?.text, m?.source])))).toEqual([])
-  }
   /** Writes one message as the store writes every message, for a notice no short command here sets off. */
   const write = async (source: Record<string, unknown> | undefined, recipient: string, conversationId = group, text = 'A notice.', as = worker) => {
     const id = randomUUID().replaceAll('-', '').slice(0, 24)
@@ -219,7 +213,8 @@ describe('the coordinator\'s poll releases what was gathered', () => {
     await f.poll()
     expect(await digests(f.tab)).toEqual([])
     expect(await rowsOf(f.tab, { status: 'gathered' })).toHaveLength(2)
-    f.clock.now += 1_000
+    // The next full poll is 30 seconds on (the quiet poll reads one row until then).
+    f.clock.now += 30_000
     await f.poll()
     expect((await digests(f.tab))[0]!.source).toMatchObject({ kind: 'notice-digest', count: 2 })
   })
@@ -719,71 +714,15 @@ describe('when the coordinator changes', () => {
   })
 })
 
-describe('with the update request', () => {
-  it('goes as one message when both are due in one poll, and the report still answers it', async () => {
-    const f = await swarm({ fresh: true })
-    await f.status('done', 'PR 2515')
-    const done = await statusRow(f.tab, f.group, 'Done')
-    f.clock.now += DUE
-    const inbox = await f.poll()
-    expect(await digests(f.tab)).toEqual([])
-    const requests = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => kindOf(m) === 'update-request')
-    expect(requests).toHaveLength(1)
-    const [request] = requests
-    expect(request!.text).toContain('Work changed in project')
-    expect(request!.text.indexOf('Work changed')).toBeLessThan(request!.text.indexOf('Notices since'))
-    expect(request!.text).toContain(`"Ship the parser": Done — PR 2515 (message ${done.id} in ${f.group})`)
-    expect(request!.source).toMatchObject({ kind: 'update-request', notices: 1 })
-    expect((await deliveryOf(done.id, f.lead)).status).toBe('digested')
-    expect(inbox.filter(d => d.messageId === request!.id)).toHaveLength(1)
-    // One new message for the coordinator.
-    expect(inbox.filter(d => !d.messageId.startsWith(request!.id)).filter(d => d.conversationId === 'lead' && d.status === 'queued' && d.createdAt.getTime() === f.clock.now)).toEqual([])
-    const through = (request!.source as { through: Record<string, number> }).through
-    await f.execute({ type: 'project.report', projectId: (await f.timed.read(host, f.tab, undefined, f.lead)).state.projects![0]!.id, through, text: null }, host, f.lead)
-    expect((await deliveryOf(request!.id, f.lead)).status).toBe('answered')
-  })
-
-  it('goes alone when the update request is not due', async () => {
+describe('the notice digest alone', () => {
+  it('goes alone, and no update request goes with it (#3593)', async () => {
     const f = await swarm()
     const id = await f.write({ kind: 'idle' }, f.lead)
     f.clock.now += DUE
     await f.poll()
     expect(await digests(f.tab)).toHaveLength(1)
     expect((await deliveryOf(id, f.lead)).status).toBe('digested')
-  })
-
-  it('does not merge into an update request already stored under its id, so no line is lost and the poll still goes', async () => {
-    const f = await swarm({ fresh: true })
-    const id = await f.write({ kind: 'idle' }, f.lead)
-    f.clock.now += DUE
-    const { projectUpdateRequest } = await import('../src/superTabs/projectUpdates.js')
-    const { state } = await f.timed.read(host, f.tab, undefined, f.lead)
-    const draft = projectUpdateRequest(state, state.agents.find(a => a.id === f.lead)!, f.clock.now)!
-    await db.superTabMessage.create({ data: { id: draft.id, tabId: f.tab, conversationId: draft.conversationId, sequence: 1, text: draft.text, replyTo: null, recipientIds: draft.recipients,
-      mentions: [], thread: draft.id, source: draft.source as object, author: draft.author as object } })
-    await f.poll()
-    expect((await digests(f.tab))[0]!.text).toContain(`message ${id} `)
-    expect((await deliveryOf(id, f.lead)).status).toBe('digested')
-  })
-})
-
-// A kept message's deliveries were read by message id alone: a scan of all 43 k deliveries, 440 ms inside this write
-// transaction, 21 times a day (Atlas slow log, 2026-11-04).
-describe('a poll keeping a message already stored', () => {
-  it('reads its deliveries by Swarm and message, examining only those', async () => {
-    const f = await swarm({ fresh: true })
-    await f.write({ kind: 'idle' }, f.lead)
-    f.clock.now += DUE
-    const { projectUpdateRequest } = await import('../src/superTabs/projectUpdates.js')
-    const { state } = await f.timed.read(host, f.tab, undefined, f.lead)
-    const draft = projectUpdateRequest(state, state.agents.find(a => a.id === f.lead)!, f.clock.now)!
-    await db.superTabMessage.create({ data: { id: draft.id, tabId: f.tab, conversationId: draft.conversationId, sequence: 1, text: draft.text, replyTo: null, recipientIds: draft.recipients,
-      mentions: [], thread: draft.id, source: draft.source as object, author: draft.author as object } })
-    const entries = await profiled(db, () => f.poll())
-    const rows = reads(entries, 'SuperTabDelivery', ['messageId'], ['agentId'])
-    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
-    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, messageId: 1/)
-    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(1)
+    expect((await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => kindOf(m) === 'update-request')).toEqual([])
   })
 })
 

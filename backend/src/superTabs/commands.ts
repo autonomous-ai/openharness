@@ -2,6 +2,7 @@ import { authorizeTaskApproval, pendingTaskApproval, personalApprovalCommand, re
 import type { PullRequestFilesRead } from './pullRequestFiles.js'
 import { legacyProposalId, migrateLegacyProposals, type LegacyProposalAsk, pmAcceptsMessage, applyProposalAction, authorizeProposalAction, authorizePersonProposal, cardPriority, createPersonProposal, createProposalCard, proposalCreateSchema, proposalFields, proposalRoot } from './proposalCards.js'
 import { pulseProjectOf, recordPulse, owe, settleDeleted, settleReaction, settleReply, settleRequest } from './pulse.js'
+import { linesOf } from './statusCard.js'
 import { applyPushOrigin, barredFromTeamWritten, failPushUnknown, failTeamWritten, mainAccountMembers, markTeamWritten, mayName, ownersOwnAgent, ownersOwnMachine, requireTeamWrittenAccount, requireTeamWrittenMachine, stepMark, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import { crewMoveFailed, takeOverCrewMember, wakeCrewMember } from './crewKeep.js'
 import { moveTimingRow, startWake } from './crewTimes.js'
@@ -53,7 +54,7 @@ import { reviewCapacityNotice } from './reviewCapacity.js'
 import { processOf, taskProcess, type ProjectProcess } from './process.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
-import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
+import { reportGroups, summarize } from './projectUpdates.js'
 import { cloneData } from './cloneData.js'
 import { WORKSPACE_LABEL, workspaceCan, type WorkspaceRole } from './workspaces.js'
 import { fixedOriginal, LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordFix, recordDecision, recordMerged, recordPost, recordProposal, recordReview, recordRun, recordStatus,
@@ -266,7 +267,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   // wake-up from before the store by parts named; it is accepted only up to that split (projectUpdates.ts).
   z.object({ type: z.literal('project.report'), projectId: id, through: z.record(id, z.number().int().nonnegative().safe()).optional(),
     throughRevision: z.number().int().nonnegative().safe().optional(),
-    text: z.string().trim().min(1).max(PROJECT_STATUS_MAX, `Keep the status card under ${PROJECT_STATUS_MAX.toLocaleString('en-US')} characters: one short line per active task.`).nullable() }).strict()
+    text: z.string().trim().min(1).max(PROJECT_STATUS_MAX, `Keep your own status lines under ${PROJECT_STATUS_MAX.toLocaleString('en-US')} characters: the Swarm writes the line of every active task.`).nullable() }).strict()
     .refine(c => (c.through === undefined) !== (c.throughRevision === undefined), 'Acknowledge with through, the map your wake-up names.'),
   z.object({ type: z.literal('project.repository'), projectId: id, repositoryUrl }).strict(),
   // The project's instructions, saved on the revision the writer read (instructions.ts). `askedBy`: the member whose words it
@@ -1087,7 +1088,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   for (const row of effects.messages) row.recipients = row.recipients.filter(id => pmAcceptsMessage(effects.state, id, row.source))
   // Every open group is loaded for a command (parts/load.ts): the board's pulse is worked out on it (pulse.ts), for the project
   // of the conversation the command names when it names one (it moves no other), else for every project.
-  recordPulse(effects.state, context.now, pulseProjectOf(effects.state, input))
+  const only = pulseProjectOf(effects.state, input)
+  recordPulse(effects.state, context.now, only, linesOf(original, context.now, only))
   return effects
 }
 
@@ -2119,7 +2121,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Without text the report only acknowledges, and the card stays.
       if (command.text) {
         mutableProjects(state)
-        projectOf(state, project.id).status = { text: command.text, at: new Date(context.now).toISOString(), by: (actor as Extract<Actor, { kind: 'agent' }>).agentId }
+        projectOf(state, project.id).status = { text: command.text, at: new Date(context.now).toISOString(), by: (actor as Extract<Actor, { kind: 'agent' }>).agentId, own: true }
       }
       break
     }
@@ -3224,9 +3226,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (tags.length) message(group.id, `Archived without shipping: the task was cancelled${cancelReason(group) ? ` (${cancelReason(group)})` : ''}.`, [], null, SYSTEM_ROW, undefined, tags)
       group.archived = command.archived
       if (command.archived) endStepsOf(group, `${group.title} was archived.`, true)
-      // Archived by hand, it leaves the active set until it is reopened (spec, Archive), once its reports are acknowledged:
-      // until then the sweep leaves it in the active set, where the report check sees it (design section 3.6).
-      if (command.archived && !dirtyGroups(state, groupProject(state, group)).includes(group)) group.dormant = true
+      // Archived by hand, it leaves the active set until it is reopened (spec, Archive). No report is waited for: the server writes
+      // the status card (task #3593).
+      if (command.archived) group.dormant = true
       else delete group.dormant
       break
     }

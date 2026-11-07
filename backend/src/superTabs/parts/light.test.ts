@@ -86,6 +86,7 @@ const conversation: Required<Conversation> = {
   requesterId: 'p',
   reviewOf: 'r',
   reviewStamp: { assignmentId: 'w', handoff: 1 },
+  statusLine: { text: '', since: 0 },
   step: 'Review',
   stepIds: [],
   stepUp: { attempt: 2, floor: 2, reason: 'r', at: 1, carry: '' },

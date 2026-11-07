@@ -18,7 +18,8 @@ import { revokeNativeContexts } from '../src/superTabs/native.js'
 import { stableId, type MessageDraft, type SuperTabState } from '../src/superTabs/model.js'
 import { logger } from '../src/utils/logger.js'
 import { wantSchedule } from './noDefaultDigest.test-support.js'
-import { SCHEDULE_SLOT_MS, scheduleSlot } from '../src/superTabs/pmSchedule.js'
+import { SCHEDULE_SLOT_MS, scheduleRequest, scheduleSlot } from '../src/superTabs/pmSchedule.js'
+import { plan, profiled, reads } from './plans.test-support.js'
 
 // Ken, 2026-11-04 (docs/plans/2026-11-04-pm-built-in-schedule-design.md): the coordinator's poll wakes it every 30 minutes for
 // the built-in schedule when the sweep has something to do, in one message per poll. A fresh loopback replica set, created here.
@@ -50,7 +51,7 @@ afterAll(async () => {
 })
 
 /** A Swarm whose coordinator runs on one machine and whose worker, on another, works on task "Ship the parser". The coordinator's
- *  first update request (for the assignment) has gone, so nothing merges with a digest in the next 15 minutes, unless [fresh]. */
+ *  first poll is a full one ([fresh] is kept for callers: no update request goes with the setup any more, task #3593). */
 async function swarm({ fresh = false, told }: { fresh?: boolean; told?: string[] } = {}) {
   let now = Date.parse('2026-11-02T06:30:00.000Z')
   const timed = new SuperTabStore(db, () => now, null, told ? { deliveriesWaiting: w => { told.push(w.agentId) } } : {})
@@ -96,12 +97,6 @@ async function swarm({ fresh = false, told }: { fresh?: boolean; told?: string[]
   }
   const status = (s: 'done' | 'blocked' | 'needs_human' | 'working', result = 'A result') =>
     execute({ type: 'work.status', conversationId: group, assignmentId, status: s, result }, host, worker)
-  if (!fresh) {
-    clock.now += DUE + 1_000
-    await poll()
-    const early = await rowsOf(tab, { status: 'gathered' })
-    expect(await Promise.all(early.map(d => db.superTabMessage.findUnique({ where: { id: d.messageId } }).then(m => [m?.text, m?.source])))).toEqual([])
-  }
   /** Writes one message as the store writes every message, for a notice no short command here sets off. */
   const write = async (source: Record<string, unknown> | undefined, recipient: string, conversationId = group, text = 'A notice.', as = worker) => {
     const id = randomUUID().replaceAll('-', '').slice(0, 24)
@@ -172,8 +167,9 @@ describe('the built-in schedule on the coordinator\'s poll', () => {
     expect(await schedules(f.tab)).toEqual([])
     expect(await headOf(f.tab)).toEqual(before)
     expect((await projectOf(f)).schedule).toBeUndefined()
-    // Something to sweep later in the same slot wakes it once.
+    // Something to sweep later in the same slot wakes it once (at the next full poll, 30 seconds on).
     await unassigned(f)
+    f.clock.now += 30_000
     await f.poll()
     expect(await schedules(f.tab)).toHaveLength(1)
   })
@@ -211,7 +207,7 @@ describe('the built-in schedule on the coordinator\'s poll', () => {
     expect(await schedules(f.tab)).toHaveLength(1)
   })
 
-  it('sends no wake of its own while the update request that carried the last one is unread', async () => {
+  it('sends no wake of its own while the wake that carried the last one is unread', async () => {
     const f = await swarm({ fresh: true })
     wantSchedule()
     await unassigned(f)
@@ -219,24 +215,10 @@ describe('the built-in schedule on the coordinator\'s poll', () => {
     await f.poll()
     f.clock.now += SCHEDULE_SLOT_MS
     await f.poll()
-    expect((await schedules(f.tab)).map(kindOf)).toEqual(['update-request'])
+    expect((await schedules(f.tab)).map(kindOf)).toEqual(['schedule-request'])
   })
 
-  it('goes in the update request when one is written in the same poll', async () => {
-    // Fresh: the setup's own update request would still wait for its answer, and no second one goes meanwhile.
-    const f = await swarm({ fresh: true })
-    wantSchedule()
-    await unassigned(f)
-    f.clock.now += DUE
-    await f.poll()
-    const [wake] = await schedules(f.tab)
-    expect(kindOf(wake!)).toBe('update-request')
-    expect(wake!.source).toMatchObject({ kind: 'update-request', schedule: scheduleSlot(f.clock.now) })
-    expect(wake!.text.indexOf('Work changed')).toBeLessThan(wake!.text.indexOf('Built-in schedule,'))
-    expect((await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => kindOf(m) === 'schedule-request')).toEqual([])
-  })
-
-  it('goes in the notice digest when one is written and no update request is', async () => {
+  it('goes in the notice digest when one is written', async () => {
     const f = await swarm()
     wantSchedule()
     await f.write({ kind: 'idle' }, f.lead)
@@ -246,22 +228,6 @@ describe('the built-in schedule on the coordinator\'s poll', () => {
     const [digest] = await digests(f.tab)
     expect(digest!.text).toContain('Built-in schedule,')
     expect(digest!.source).toMatchObject({ kind: 'notice-digest', schedule: scheduleSlot(f.clock.now) })
-    expect(await schedules(f.tab)).toHaveLength(1)
-  })
-
-  it('does not go in an update request already stored under its id', async () => {
-    const f = await swarm({ fresh: true })
-    wantSchedule()
-    await f.write({ kind: 'idle' }, f.lead)
-    await unassigned(f)
-    f.clock.now += DUE
-    const { projectUpdateRequest } = await import('../src/superTabs/projectUpdates.js')
-    const { state } = await f.timed.read(host, f.tab, undefined, f.lead)
-    const draft = projectUpdateRequest(state, state.agents.find(a => a.id === f.lead)!, f.clock.now)!
-    await db.superTabMessage.create({ data: { id: draft.id, tabId: f.tab, conversationId: draft.conversationId, sequence: 1, text: draft.text, replyTo: null, recipientIds: draft.recipients,
-      mentions: [], thread: draft.id, source: draft.source as object, author: draft.author as object } })
-    await f.poll()
-    expect((await db.superTabMessage.findUniqueOrThrow({ where: { id: draft.id } })).text).not.toContain('Built-in schedule,')
     expect(await schedules(f.tab)).toHaveLength(1)
   })
 
@@ -275,6 +241,7 @@ describe('the built-in schedule on the coordinator\'s poll', () => {
     await f.poll()
     expect(await schedules(f.tab)).toEqual([])
     await f.execute({ type: 'tab.pause', paused: false })
+    f.clock.now += 30_000
     await f.poll()
     expect(await schedules(f.tab)).toHaveLength(1)
     expect((await projectOf(f)).schedule).toMatchObject({ lastSlot: scheduleSlot(f.clock.now) })
@@ -320,5 +287,26 @@ describe('the daily tidy on the coordinator\'s poll', () => {
     f.clock.now = night(4)
     await f.poll()
     expect(await tidies(f.tab)).toHaveLength(2)
+  })
+})
+
+// A kept message's deliveries were read by message id alone: a scan of all 43 k deliveries, 440 ms inside this write transaction, 21 times
+// a day (Atlas slow log, 2026-11-04). The path is the Lead's poll keeping a message already stored; this wake is one (the update request
+// that used to carry this check is gone, task #3593).
+describe('a poll keeping a message already stored', () => {
+  it('reads its deliveries by Swarm and message, examining only those', async () => {
+    const f = await swarm({ fresh: true })
+    wantSchedule()
+    await unassigned(f)
+    f.clock.now += DUE
+    const { state } = await f.timed.read(host, f.tab, undefined, f.lead)
+    const { draft } = scheduleRequest(state, state.agents.find(a => a.id === f.lead)!, f.clock.now)!
+    await db.superTabMessage.create({ data: { id: draft.id, tabId: f.tab, conversationId: draft.conversationId, sequence: 1, text: draft.text, replyTo: null, recipientIds: draft.recipients,
+      mentions: [], thread: draft.id, source: draft.source as object, author: draft.author as object } })
+    const entries = await profiled(db, () => f.poll())
+    const rows = reads(entries, 'SuperTabDelivery', ['messageId'], ['agentId'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, messageId: 1/)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(1)
   })
 })
