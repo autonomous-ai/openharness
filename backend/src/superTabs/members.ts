@@ -123,7 +123,7 @@ const ownPaths = (task: Conversation): string[] => (task.task?.owns ?? []).map(o
 /** What [projectId]'s dispatch pass does for the people whose tasks wait there (store.ts), each person's tasks in queue order: a
  *  helper in a task's own conversation takes it; else the free, set-up Member takes the first; while it is busy, a free helper
  *  takes one touching no running code, or a helper is started where helperCheck allows; a person with no Member yet gets one
- *  started (their first task may need no Accept). Anything else waits. */
+ *  started (Accept all on API accounts gives their tasks no Accept to start it from). Anything else waits. */
 export function memberPlan(state: SuperTabState, projectId: string, now: number): MemberPick[] {
   const people = new Set(openTasks(state, projectId, now).filter(g => !g.reviewOf && g.requesterId && state.people.some(p => p.id === g.requesterId))
     .map(g => g.requesterId!))

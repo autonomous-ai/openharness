@@ -1854,7 +1854,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     const none = () => message(group.id, `${who} has no computer in this Swarm to run their agent for ${project.name}. This task waits until they open Harness on one.`, [], null, SYSTEM_ROW, undefined, undefined, undefined, stableId(operationId, 'member-line'))
     if (!pool) return none()
     const name = `${newAgentName(state, actor, undefined, stableId(operationId, 'member'))} · ${project.name}`
-    if ((state.starts ?? []).filter(s => !s.harnessId && !s.error).length >= 32) return none()
+    if ((state.starts ?? []).filter(s => !s.harnessId && !s.error).length >= 32) {
+      return message(group.id, `Too many agents are starting in this Swarm to start ${who}'s agent for ${project.name} now. This task waits, and the next pass tries again.`,
+        [], null, SYSTEM_ROW, undefined, undefined, undefined, stableId(operationId, 'member-line'))
+    }
     const chatId = openAgentChat(owner, name)
     const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: pool.engines[0]!, name,
       // Its project's folder with a worktree, as any project agent's (machines.ts admitMachineStart reads `member`): its host
@@ -1874,6 +1877,20 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     state.starts.push({ poolGeneration: admitted!.generation, id, creationId: `super-${id}`, actorKey: actorKey(actor), contributorId: owner.id,
       membershipGeneration: owner.generation, machineOwnerId: owner.id, hostGrant: null, request, harnessId: null, dispatched: false, error: null,
       requestedAt: context.now })
+  }
+  /** [personId]'s Member's helpers that hold no task stop once that person's queue in [projectId] is empty (members.ts; review of
+   *  #3575): whoever took the last task, a helper that finished earlier never sits idle on their computer. Its host closes it and
+   *  drops its worktree (#4698). */
+  const stopIdleHelpers = (personId: string, projectId: string) => {
+    if (memberQueue(state, projectId, personId, context.now).length) return
+    const member = memberOf(state, personId, projectId)?.agent
+    if (!member) return
+    for (const helper of state.agents) {
+      if (helper.helperOf?.agentId !== member.id || helper.workDecision === 'stop') continue
+      if (state.conversations.some(c => c.assignment?.agentId === helper.id && occupiesAgent(c))) continue
+      helper.workDecision = 'stop'
+      helper.releaseId = stableId(operationId, helper.id)
+    }
   }
   const addBuddyMachine = (machineId: string, setup: NonNullable<Extract<Command, { type: 'buddy.create' }>['setup']>, me: { id: string; generation: string }) => {
     // Its last Buddy's folders are still being deleted there: a new one would lose its own (machine.contribute does the same).
@@ -4971,6 +4988,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       if (routeNote) effects.messages.push({ id: routeNote.id, conversationId: group.id, author: sender,
         text: routeNote.text, replyTo: null, recipients: [], source: bookkeeping(group.id, routeNote.source) })
+      // This assignment may take its person's last waiting task: their idle helpers stop (review of #3575).
+      if (group.requesterId && !group.reviewOf) stopIdleHelpers(group.requesterId, groupProject(state, group).id)
       break
     }
     case 'work.status': {
@@ -5103,8 +5122,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (!activeWork(group)) {
         const worker = state.agents.find(a => a.id === assignment.agentId)
         if (worker?.regular && worker.mainProjectId && !memberQueue(state, worker.mainProjectId, worker.contributorId, context.now).length) {
-          // A helper ends once nothing waits; its host closes it and drops its worktree (#4698).
-          if (worker.helperOf) { worker.workDecision = 'stop'; worker.releaseId = operationId } else worker.asleep = { since: context.now }
+          if (!worker.helperOf) worker.asleep = { since: context.now }
+          // Helpers end once nothing waits, this one among them (stopIdleHelpers).
+          stopIdleHelpers(worker.contributorId, worker.mainProjectId)
         }
       }
       break
