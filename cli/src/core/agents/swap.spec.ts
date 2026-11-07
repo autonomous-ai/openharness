@@ -60,6 +60,13 @@ describe('the pane-process swap', () => {
     prepared.buildArgv({ resumeSessionId: 's1', bypassPermission: false })
     expect(buildEngineLaunchArgv).toHaveBeenCalledWith('claude', expect.objectContaining({ native, resumeSessionId: 's1' }))
   })
+  it('hands the owner\'s launch words to the argv builder, which puts them last, for a restart, a retarget and a host move alike', () => {
+    const prepared = setup().swap.paneSwapDeps(session(), place(), { ownerArgs: ['--chrome'] })
+    prepared.buildArgv({ resumeSessionId: 's1', bypassPermission: false })
+    expect(buildEngineLaunchArgv).toHaveBeenLastCalledWith('claude', expect.objectContaining({ ownerArgs: ['--chrome'] }))
+    setup().swap.paneSwapDeps(session(), place(), {}).buildArgv({ bypassPermission: false })
+    expect(vi.mocked(buildEngineLaunchArgv).mock.lastCall![1]).not.toHaveProperty('ownerArgs')
+  })
   it('wires a background-job check for a plain Claude pane restart, with its own session and env', async () => {
     const prepared = setup().swap.paneSwapDeps(session(), place(), { env: { CLAUDE_CONFIG_DIR: '/custom' } })
     expect(prepared.stopConflictingJob).toBeDefined()

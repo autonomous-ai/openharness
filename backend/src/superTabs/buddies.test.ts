@@ -4,8 +4,9 @@ import { applyCommand, commandSchema, type Command, type CommandContext } from '
 import { createSuperTab, stableId, visibleState, type Actor, type Conversation } from './model.js'
 import { canReadGroup, canWatchAgent, isConfidential, readsRecordsIn, wordsOf } from './projects.js'
 import { CLOSED_CHAT_ANSWERED_NOTICE } from './decisions.js'
-import { buddyChatId, shownBefore, swarmBuddyChatId } from './buddies.js'
+import { buddyChatId, defaultBuddy, defaultBuddyChat, shownBefore, swarmBuddyChatId } from './buddies.js'
 import { isRoleName } from './agentNames.js'
+import { buddiesTold } from './buddyNews.js'
 import { sweepLiveness } from './liveness.js'
 import { hostTab } from './read/hostRows.js'
 import { groupView } from './read/views.js'
@@ -782,10 +783,10 @@ describe('a Buddy\'s proposal to the PM', () => {
   })
 
   it('gives a task opened from it the proposal\'s goal, scope and priority as its brief, unless the PM writes one', () => {
-    const { f, propose } = asked()
-    const root = propose().messages[0]!
-    const context = { proposal: { id: root.id, conversationId: f.app.conversationId, author: root.author, source: root.source as Record<string, unknown> } }
     const open = (brief: string) => {
+      const { f, propose } = asked()
+      const root = propose().messages[0]!
+      const context = { proposal: { id: root.id, conversationId: f.app.conversationId, author: root.author, source: root.source as Record<string, unknown> } }
       const id = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline drafts', brief, checks: [{ description: 'Done', independent: false }], proposalMessageId: root.id },
         agentActor(f.pm), context).result.conversationId
       return group(f, id as string)
@@ -795,17 +796,20 @@ describe('a Buddy\'s proposal to the PM', () => {
   })
 
   it('gives a task opened from it the proposal\'s priority on the one P0-P3 scale, unless the PM gives one (task #3117)', () => {
-    const { f, propose } = asked()
-    const root = propose().messages[0]!
-    const context = { proposal: { id: root.id, conversationId: f.app.conversationId, author: root.author, source: root.source as Record<string, unknown> } }
-    const open = (fields: Record<string, unknown> = {}) => f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline drafts',
-      brief: '', checks: [{ description: 'Done', independent: false }], proposalMessageId: root.id, ...fields } as Command, agentActor(f.pm), context).result
+    const open = (fields: Record<string, unknown> = {}) => {
+      const { f, propose } = asked()
+      const root = propose().messages[0]!
+      const context = { proposal: { id: root.id, conversationId: f.app.conversationId, author: root.author, source: root.source as Record<string, unknown> } }
+      const result = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline drafts',
+        brief: '', checks: [{ description: 'Done', independent: false }], proposalMessageId: root.id, ...fields } as Command, agentActor(f.pm), context).result
+      return { result, task: group(f, result.conversationId as string) }
+    }
     // Its Buddy said high: a P1, with no warning that none was given.
-    const opened = open()
+    const { result: opened, task } = open()
     expect(opened).toMatchObject({ priority: 'P1' })
     expect(opened.warnings ?? []).not.toContainEqual(expect.stringContaining('No priority given'))
-    expect(group(f, opened.conversationId as string).priority).toBe('P1')
-    expect(group(f, open({ priority: 'P0' }).conversationId as string).priority).toBe('P0')
+    expect(task.priority).toBe('P1')
+    expect(open({ priority: 'P0' }).task.priority).toBe('P0')
   })
 
   it('counts as shown only the Buddy\'s own lines in the ask\'s lane, since its owner\'s previous message', () => {
@@ -1545,5 +1549,235 @@ describe('naming a Buddy (Diego, 10-29)', () => {
       { contribution: { machineOwnerId: 'peer', contributorId: 'peer' }, buddyNames: [{ conversationId: 'quiet-chat', name: 'sparky' }] })
     expect(f.state.starts!.find(s => s.id === again.result.startId)!.request.name).toBe('peer\'s Buddy')
     expect(group(f, chat).buddyName).toBeUndefined()
+  })
+})
+
+// Task #3818 (Phase 2 of the Buddy board spec, "Many Buddies", approved by Ken and anh Dee 11-06): a person creates, names and
+// removes several Buddies, one per purpose, so each keeps its own context; one is their default; a cap per Swarm bounds them.
+describe('several Buddies', () => {
+  const host = { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } }
+  /** peer's Buddy added in [chat] (or a new one named [name]) and started on their Mac. */
+  function add(f: ReturnType<typeof setup>, fields: { name?: string; conversationId?: string } = {}) {
+    const added = f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', ...fields } as Command, peer, host)
+    const startId = added.result.startId as string
+    const agentId = f.run({ type: 'agent.started', startId, harnessId: `native-${startId}`, configuration }, peer, host).result.agentId as string
+    f.run({ type: 'agent.startSettled', startId, warning: null }, peer, host)
+    return { agentId, chat: added.result.conversationId as string }
+  }
+  const refusal = (body: () => unknown): { code: string; message: string } | null => {
+    try { body(); return null } catch (error) { return error as { code: string; message: string } }
+  }
+  const peerPerson = (f: ReturnType<typeof setup>) => f.state.people.find(p => p.id === 'peer')!
+
+  it('creates a second Buddy with its name, in its own chat beside the first, which stays the default', () => {
+    const f = fresh()
+    const first = add(f)
+    expect(first.chat).toBe(peerSwarmChat)
+    const second = add(f, { name: 'Research' })
+    expect(second.chat).not.toBe(peerSwarmChat)
+    const chat = group(f, second.chat)
+    expect(chat).toMatchObject({ kind: 'swarm-buddy', title: 'Research', buddyName: 'Research', agentIds: [second.agentId],
+      audience: { people: [{ id: 'peer', generation: 'first' }] } })
+    expect([canReadGroup(f.state, peer, chat), canReadGroup(f.state, owner, chat)]).toEqual([true, false])
+    expect(group(f, peerSwarmChat).buddyChats).toEqual([second.chat])
+    expect(defaultBuddyChat(f.state, peerPerson(f)).id).toBe(peerSwarmChat)
+    expect(defaultBuddy(f.state, 'peer')?.id).toBe(first.agentId)
+    // A name another Buddy has is refused, as a rename is.
+    expect(refusal(() => f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Research' } as Command, peer, host))?.code).toBe('BUDDY_NAME_TAKEN')
+  })
+
+  it('refuses one more past the Swarm\'s cap, which its owner sets, counting Buddies still starting', () => {
+    const f = fresh()
+    f.run({ type: 'tab.buddyCap', cap: 2 } as Command, owner)
+    expect(f.state.buddyCap).toBe(2)
+    add(f)
+    f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Research' } as Command, peer, host)
+    const refused = refusal(() => f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Planning' } as Command, peer, host))
+    expect(refused).toMatchObject({ code: 'BUDDY_CAP', message: 'You have 2 Buddies, the most this Swarm allows. Remove one to add another.' })
+    expect(refusal(() => f.run({ type: 'tab.buddyCap', cap: 3 } as Command, peer))?.code).toBe('OWNER_REQUIRED')
+  })
+
+  // Review of #3818 (Readycheck, P1): the cap counts every start that adds a Buddy, also into one of the person's chats with none.
+  it('refuses a Buddy past the cap into a chat of theirs that has none: a failed start retried, or an empty main chat', () => {
+    const f = fresh()
+    f.run({ type: 'tab.buddyCap', cap: 3 } as Command, owner)
+    add(f)
+    add(f, { name: 'Planning' })
+    const failed = f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Research' } as Command, peer, host)
+    f.run({ type: 'agent.startFailed', startId: failed.result.startId as string, error: 'It did not launch.' }, peer, host)
+    // At the cap once its owner lowers it: retrying the failed Buddy's chat would be a third.
+    f.run({ type: 'tab.buddyCap', cap: 2 } as Command, owner)
+    const starts = f.state.starts!.length
+    expect(refusal(() => f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', conversationId: failed.result.conversationId } as Command, peer, host))?.code).toBe('BUDDY_CAP')
+    // A refusal starts nothing.
+    expect(f.state.starts!.length).toBe(starts)
+    // The main chat left empty, with the cap lowered below what is left: neither a new Buddy nor that chat takes one.
+    const g = fresh()
+    g.run({ type: 'tab.buddyCap', cap: 3 } as Command, owner)
+    add(g)
+    add(g, { name: 'Research' })
+    add(g, { name: 'Planning' })
+    g.run({ type: 'buddy.remove', conversationId: peerSwarmChat } as Command, peer)
+    g.run({ type: 'tab.buddyCap', cap: 2 } as Command, owner)
+    expect(refusal(() => g.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Writing' } as Command, peer, host))?.code).toBe('BUDDY_CAP')
+    expect(refusal(() => g.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', conversationId: peerSwarmChat } as Command, peer, host))?.code).toBe('BUDDY_CAP')
+    expect(g.state.starts!.filter(s => !s.harnessId && !s.error)).toEqual([])
+  })
+
+  // Review of #3818 (SecReview3293, Important): a new Buddy whose start failed left an empty chat that nothing reused or removed.
+  it('reuses a failed Buddy\'s empty chat for the next one, and removes an empty chat when asked', () => {
+    const f = fresh()
+    add(f)
+    const fail = (name: string) => {
+      const added = f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name } as Command, peer, host)
+      f.run({ type: 'agent.startFailed', startId: added.result.startId as string, error: 'It did not launch.' }, peer, host)
+      return added.result.conversationId as string
+    }
+    const empty = fail('Research')
+    expect(fail('Planning')).toBe(empty)
+    expect(group(f, peerSwarmChat).buddyChats).toEqual([empty])
+    expect(group(f, empty).title).toBe('Planning')
+    f.run({ type: 'buddy.remove', conversationId: empty } as Command, peer)
+    expect(group(f, empty).archived).toBe(true)
+    expect(group(f, peerSwarmChat).buddyChats).toBeUndefined()
+    // The main chat stays theirs, as before: with no Buddy there, removing it says so.
+    f.run({ type: 'buddy.remove' }, peer)
+    expect(refusal(() => f.run({ type: 'buddy.remove', conversationId: peerSwarmChat } as Command, peer))?.code).toBe('NOT_FOUND')
+  })
+
+  // Review of #3818 (SecReview3293, Minor): a person's lines never go to a chat with no Buddy because it was picked as default.
+  it('refuses a default with no Buddy running or starting in it', () => {
+    const f = fresh()
+    add(f)
+    const added = f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Research' } as Command, peer, host)
+    f.run({ type: 'agent.startFailed', startId: added.result.startId as string, error: 'It did not launch.' }, peer, host)
+    expect(refusal(() => f.run({ type: 'buddy.default', conversationId: added.result.conversationId } as Command, peer))?.code).toBe('NO_BUDDY')
+    expect(defaultBuddyChat(f.state, f.state.people.find(p => p.id === 'peer')!).id).toBe(peerSwarmChat)
+  })
+
+  it('moves the default, passes it to the oldest left when the default is removed, and archives a removed Buddy\'s chat', () => {
+    const f = fresh()
+    const first = add(f), second = add(f, { name: 'Research' }), third = add(f, { name: 'Planning' })
+    f.run({ type: 'buddy.default', conversationId: second.chat } as Command, peer)
+    expect(defaultBuddyChat(f.state, peerPerson(f)).id).toBe(second.chat)
+    expect(defaultBuddy(f.state, 'peer')?.id).toBe(second.agentId)
+    expect([peerSwarmChat, second.chat, third.chat].map(id => group(f, id).buddyDefault ?? false)).toEqual([false, true, false])
+    // Without a chat named, the default goes, and the oldest Buddy left becomes the default.
+    f.run({ type: 'buddy.remove' }, peer)
+    expect(f.state.agents.some(a => a.id === second.agentId)).toBe(false)
+    expect(group(f, second.chat).archived).toBe(true)
+    expect(group(f, peerSwarmChat).buddyChats).toEqual([third.chat])
+    expect(defaultBuddy(f.state, 'peer')?.id).toBe(first.agentId)
+    f.run({ type: 'buddy.remove', conversationId: third.chat } as Command, peer)
+    expect(group(f, third.chat).archived).toBe(true)
+    expect(defaultBuddy(f.state, 'peer')?.id).toBe(first.agentId)
+  })
+
+  it('is only its person\'s to change: never another person\'s, an agent\'s, or a chat that is not their Buddy\'s', () => {
+    const f = fresh()
+    add(f)
+    const second = add(f, { name: 'Research' })
+    expect(refusal(() => f.run({ type: 'buddy.default', conversationId: second.chat } as Command, owner))?.code).toBe('NOT_FOUND')
+    expect(refusal(() => f.run({ type: 'buddy.remove', conversationId: second.chat } as Command, owner))?.code).toBe('NOT_FOUND')
+    // An agent: one that cannot read the chat is told it is not there; the Buddy itself may not pick for its person either.
+    expect(refusal(() => f.run({ type: 'buddy.default', conversationId: second.chat } as Command, agentActor(f.pm)))?.code).toBe('NOT_FOUND')
+    expect(refusal(() => f.run({ type: 'buddy.default', conversationId: second.chat } as Command, agentActor(second.agentId)))).not.toBeNull()
+    expect(defaultBuddyChat(f.state, f.state.people.find(p => p.id === 'peer')!).id).toBe(peerSwarmChat)
+    expect(refusal(() => f.run({ type: 'buddy.default', conversationId: f.group } as Command, peer))?.code).toBe('NOT_FOUND')
+    expect(refusal(() => f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', conversationId: f.group } as Command, peer, host))?.code).toBe('NOT_FOUND')
+  })
+
+  it('changes nothing for a person with one Buddy: the same chat, its running Buddy kept, and removed as before', () => {
+    const f = fresh()
+    const first = add(f)
+    expect(refusal(() => f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude' }, peer, host))?.code).toBe('BUDDY_EXISTS')
+    expect(group(f, peerSwarmChat).buddyChats).toBeUndefined()
+    expect(group(f, peerSwarmChat).buddyDefault).toBeUndefined()
+    f.run({ type: 'buddy.remove' }, peer)
+    expect(f.state.agents.some(a => a.id === first.agentId)).toBe(false)
+    expect(group(f, peerSwarmChat).archived).toBe(false)
+  })
+
+  it('starts a named Buddy again in its own chat, and a second Buddy\'s start is not failed by the first\'s', () => {
+    const f = fresh()
+    add(f)
+    const pending = f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Research' } as Command, peer, host)
+    add(f, { name: 'Planning' })
+    expect(f.state.starts!.find(s => s.id === pending.result.startId)!.error).toBeNull()
+    const research = pending.result.conversationId as string
+    expect(refusal(() => f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', conversationId: research } as Command, peer, host))?.code).toBe('BUDDY_EXISTS')
+  })
+})
+
+// Task #3818: what is addressed to a person goes to their default Buddy; news of a proposal to the Buddy that sent it while it is
+// still theirs, else to the default.
+describe('several Buddies: where a person\'s lines go', () => {
+  const host = { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } }
+  function two() {
+    const f = fresh()
+    const start = (fields: Record<string, unknown> = {}) => {
+      const added = f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', ...fields } as Command, peer, host)
+      const startId = added.result.startId as string
+      const agentId = f.run({ type: 'agent.started', startId, harnessId: `native-${startId}`, configuration }, peer, host).result.agentId as string
+      f.run({ type: 'agent.startSettled', startId, warning: null }, peer, host)
+      return { agentId, chat: added.result.conversationId as string }
+    }
+    return { f, first: start(), second: start({ name: 'Research' }) }
+  }
+
+  it('sends a PM\'s line to the default Buddy\'s chat, and an older app\'s Buddy chat is the default\'s', () => {
+    const { f, second } = two()
+    f.run({ type: 'buddy.default', conversationId: second.chat } as Command, peer)
+    const told = f.run({ type: 'person.tell', personId: 'peer', text: 'Your idea is next up.' }, agentActor(f.pm))
+    expect(told.messages.filter(m => m.text === 'Your idea is next up.').map(m => m.conversationId)).toContain(second.chat)
+    expect(told.messages.filter(m => m.text === 'Your idea is next up.').map(m => m.conversationId)).not.toContain(peerSwarmChat)
+    expect(f.run({ type: 'buddy.chat' }, peer).result.conversationId).toBe(second.chat)
+  })
+
+  it('tells a proposal\'s news to the Buddy that sent it, and to the default once that one is removed', () => {
+    const { f, first, second } = two()
+    const answer = { id: 'm1', conversationId: f.app.conversationId, text: 'Accepted: next up.', replyTo: 'p1', recipients: [],
+      author: { kind: 'agent', id: f.pm, name: 'app-pm' } } as never
+    const proposal = { kind: 'buddy-proposal', personId: 'peer', buddyId: second.agentId }
+    expect(buddiesTold(f.state, answer, proposal)).toEqual([second.agentId])
+    f.run({ type: 'buddy.remove', conversationId: second.chat } as Command, peer)
+    expect(buddiesTold(f.state, answer, proposal)).toEqual([first.agentId])
+  })
+})
+
+// Task #3818: on its machine, each of a person's Buddies and its thread sessions are told their own chat, so the host ends a
+// session and moves a model switch in the right one; an older host, which names the main chat, still ends the right session.
+describe('several Buddies on their machine', () => {
+  const host = { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } }
+  const lookups = { people: [], confidential: new Set<string>(), agentGrant: async () => {}, teams: [], githubApp: false }
+  const user = { sub: 'peer', email: peer.email, role: 'user', autonomousEnv: 'test' } as never
+  function withSession() {
+    const f = fresh()
+    const start = (command: Record<string, unknown>) => {
+      const added = f.run(command as Command, peer, host)
+      const startId = added.result.startId as string
+      const agentId = f.run({ type: 'agent.started', startId, harnessId: `native-${startId}`, configuration }, peer, host).result.agentId as string
+      f.run({ type: 'agent.startSettled', startId, warning: null }, peer, host)
+      return { agentId, conversationId: added.result.conversationId as string, messageId: added.result.messageId as string }
+    }
+    const first = start({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude' })
+    const second = start({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Research' })
+    const session = start({ type: 'message.send', conversationId: second.conversationId, text: 'Dig into the CPU spike', replyTo: null, recipientIds: [], newSession: true })
+    return { f, first, second, session }
+  }
+
+  it('tells each Buddy and its thread sessions their own chat', async () => {
+    const { f, first, second, session } = withSession()
+    const rows = (await hostTab('swarm', f.state, 'peer-mac', user, null, lookups)).roster as Array<{ agent: { id: string }; buddyChatId?: string | null }>
+    const chatOf = (agentId: string) => rows.find(r => r.agent.id === agentId)?.buddyChatId
+    expect([chatOf(first.agentId), chatOf(second.agentId), chatOf(session.agentId)]).toEqual([peerSwarmChat, second.conversationId, second.conversationId])
+    expect(rows.find(r => r.agent.id === f.pm)?.buddyChatId).toBeUndefined()
+  })
+
+  it('ends a thread session of another Buddy that an older host names by the main chat', () => {
+    const { f, second, session } = withSession()
+    const ended = f.run({ type: 'buddy.sessionEnd', conversationId: peerSwarmChat, thread: session.messageId, reason: 'idle' }, peer)
+    expect(ended.result.ended).toBe(true)
+    expect(group(f, second.conversationId).buddySessions ?? []).toEqual([])
   })
 })

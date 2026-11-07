@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { Prisma } from '@prisma/client'
-import { profileNames, recentDormantGroups } from './read.js'
+import { profileNames, recentDormantGroups, weeklyBoard } from './read.js'
+import { SwarmCache } from '../cache.js'
+import { MemoryStamps } from '../cache.test-support.js'
+import type { Leaderboard } from './contract.js'
 import { DIRECT } from '../cachedReads.js'
 import { weekStart } from './week.js'
 
@@ -50,5 +53,34 @@ describe('the names the board shows', () => {
   it('reads nothing when no member is an account', async () => {
     const tx = { user: { findMany: async () => { throw new Error('read') } } } as unknown as Prisma.TransactionClient
     expect(await profileNames(tx, ['owner'])).toEqual(new Map())
+  })
+})
+
+describe('the weekly aggregate cache', () => {
+  it('reuses an unchanged aggregate, separates audiences, and invalidates on change or date rollover', async () => {
+    const stamps = new MemoryStamps(), cache = new SwarmCache(stamps)
+    let loads = 0
+    const now = Date.UTC(2026, 10, 3), week = weekStart(now)
+    const load = async () => ({ projectId: `load-${++loads}`, people: [] }) as unknown as Leaderboard
+    const read = async (actor = 'owner', at = now, start = week) => weeklyBoard(await cache.at(['tab']), 'tab', actor, 'lead', start, at, load)
+    expect((await read()).projectId).toBe('load-1')
+    expect((await read()).projectId).toBe('load-1')
+    expect((await read('peer')).projectId).toBe('load-2')
+    await stamps.bump('tab', ['main'])
+    expect((await read()).projectId).toBe('load-3')
+    await stamps.bump('tab', ['machine'])
+    expect((await read()).projectId).toBe('load-4')
+    expect((await read('owner', now + 86_400_000)).projectId).toBe('load-5')
+    expect((await read('owner', now, week - 7 * 86_400_000)).projectId).toBe('load-6')
+  })
+
+  it('does not keep results or failures when the shared stamps are unavailable', async () => {
+    let loads = 0
+    const load = async () => { loads++; if (loads === 1) throw new Error('offline'); return { people: [] } as unknown as Leaderboard }
+    const read = () => weeklyBoard(DIRECT, 'tab', 'owner', 'lead', 0, 0, load)
+    await expect(read()).rejects.toThrow('offline')
+    await read()
+    await read()
+    expect(loads).toBe(3)
   })
 })

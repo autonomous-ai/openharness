@@ -1,5 +1,5 @@
 import { author, conversation, isLeads, stableId, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { agentProjectId, groupProject, projectOf, type SwarmProject } from './projects.js'
+import { agentProjectId, groupProject, NO_PROJECT, projectOf, type SwarmProject } from './projects.js'
 import type { ProgressData } from './parts/types.js'
 
 /** A project with no report progress yet starts clean at the start of every conversation's numbering. */
@@ -70,6 +70,8 @@ export function projectUpdateRequest(state: SuperTabState, target: Agent, now: n
   // An older Swarm without stored projects is one synthesized project. It keeps no report progress (noteWorkChanges),
   // so its Lead is woken only for lost work (liveness.ts), which replaced the wake-up for workers down two hours.
   if (state.paused) return null
+  // An agent in no project (a Regular one between tasks, task #4116) leads none.
+  if (agentProjectId(state, target) === NO_PROJECT) return null
   const project = projectOf(state, agentProjectId(state, target))
   const group = conversation(state, project.leadConversationId), progress = project.progress
   if (group.leadId !== target.id || group.archived) return null

@@ -82,11 +82,11 @@ describe('the PM\'s answer', () => {
     expect(refusal(() => answer(f.lead, question, 'Rowan, on a Team account.'))?.code).toBe(ALREADY_ANSWERED)
   })
 
-  it('a plain post right below an answered ask still goes out: only the answer command refuses', () => {
+  it('refuses a second plain answer below the same project ask', () => {
     const { f, ask, answer, refusal } = setup()
     const question = ask('Is CI green?')
     answer(f.lead, question, 'Green.')
-    expect(refusal(() => answer(f.lead, question, 'Still green after the batch.', { plain: true }))).toBeNull()
+    expect(refusal(() => answer(f.lead, question, 'Still green after the batch.', { plain: true }))?.code).toBe(ALREADY_ANSWERED)
   })
 
   it('to a message nobody owed is posted in its place and recorded, so a second one is refused', () => {
@@ -98,13 +98,13 @@ describe('the PM\'s answer', () => {
     expect(refusal(() => answer(f.lead, question, 'Again.'))?.code).toBe(ALREADY_ANSWERED)
   })
 
-  it('by an agent that is not the PM is posted in its place but neither settles nor blocks the PM\'s answer', () => {
+  it('by an Engineer leaves PM owed settlement alone but blocks a second answer', () => {
     const { f, ask, answer, owed, refusal } = setup()
     const question = ask('Is the fix in?')
     // The Engineer has work in the project, so it posts in its chat without joining it.
     answer(f.dev, question, 'I pushed it.')
     expect(owed()).toEqual([question.id])
-    expect(refusal(() => answer(f.lead, question, 'Merged at 21:00.'))).toBeNull()
+    expect(refusal(() => answer(f.lead, question, 'Merged at 21:00.'))?.code).toBe(ALREADY_ANSWERED)
   })
 
   it('needs the message it answers', () => {

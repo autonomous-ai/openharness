@@ -117,21 +117,31 @@ describe('reviewerCandidates', () => {
     expect(f.pick('security')).toEqual(['free'])
   })
 
-  it('takes the step\'s role first, then any other free agent; never a Guide or an Integrator', () => {
+  // Task #3602: only the step's own role, with no other free agent standing in.
+  it('takes only the step\'s role; never an Engineer, a Guide or an Integrator', () => {
     const f = fixture()
     f.add('eng', f.task, opus, { roleName: 'Engineer' })
     f.add('guide', f.task, opus, { roleName: 'Guide' })
     f.add('integrator', f.task, opus, { roleName: 'Integrator' })
     f.add('tst', f.task, opus, { roleName: 'Tester' })
     f.add('rev', f.task, opus, { roleName: 'Reviewer' })
-    const review = f.pick('review'), test = f.pick('test')
-    expect(review[0]).toBe('rev')
-    expect(review.slice(1).sort()).toEqual(['eng', 'tst'])
-    expect(test[0]).toBe('tst')
-    expect(test.slice(1).sort()).toEqual(['eng', 'rev'])
+    expect(f.pick('review')).toEqual(['rev'])
+    expect(f.pick('test')).toEqual(['tst'])
   })
 
   // Review of #3227 (Digest): on the live Swarm the Guides carry the role Reviewer and the Integrator none (an Engineer).
+  // Task #3602: #3576's Test step went to an Engineer. A server-opened step goes only to its own role, with no stand-in.
+  it('is only the step\'s own role: never an Engineer, nor an agent of no role', () => {
+    const f = fixture()
+    f.add('eng', f.task, opus, { roleName: 'Engineer' }); f.add('plain', f.task, opus)
+    expect(f.pick('review')).toEqual([])
+    expect(f.pick('test')).toEqual([])
+    f.add('rev', f.task, opus, { roleName: 'Reviewer' }); f.add('tst', f.task, opus, { roleName: 'Tester' })
+    expect(f.pick('review')).toEqual(['rev'])
+    expect(f.pick('security')).toEqual(['rev'])
+    expect(f.pick('test')).toEqual(['tst'])
+  })
+
   it('is never the Guide or the Integrator, whatever role name they carry', () => {
     const f = fixture()
     f.add('Guide', f.task, opus, { roleName: 'Reviewer' })
@@ -169,5 +179,18 @@ describe('reviewerCandidates', () => {
     const otherLead = f.state.projects!.find(p => p.name === 'Other')!.leadConversationId
     f.add('away', otherLead, opus, { roleName: 'Reviewer' })
     expect(f.pick()).toEqual([])
+  })
+
+  // Task #3774: a test step's Tester needs a mid-strength model or stronger, whatever the engineer runs; a review keeps its bar.
+  it('takes a Sonnet Tester for an Opus engineer\'s test step, never for its review', () => {
+    const f = fixture()
+    f.add('s-tst', f.task, sonnet, { roleName: 'Tester' })
+    f.add('s-rev', f.task, sonnet, { roleName: 'Reviewer' })
+    const grid = f.add('g-tst', f.task, opus, { roleName: 'Tester' })
+    f.state.agents.find(a => a.id === grid)!.gridModel = 'kimi k3'
+    f.add('h-tst', f.task, { ...opus, model: 'haiku', effort: 'auto' }, { roleName: 'Tester' })
+    expect(f.pick('test')).toEqual(['s-tst'])
+    expect(f.pick('review')).toEqual([])
+    expect(f.pick('security')).toEqual([])
   })
 })
