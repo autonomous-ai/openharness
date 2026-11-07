@@ -52,6 +52,7 @@ void main() {
     void Function(ConversationServer server)? setup,
     List<String>? selected,
     List<String>? created,
+    List<String>? terminals,
   }) async {
     final server = swarm();
     if (agents != null) server.state['agents'] = agents;
@@ -77,6 +78,7 @@ void main() {
                 c.select(id);
               },
               onNewAgent: () => created?.add('new'),
+              onOpenAgentTerminal: (agent) => terminals?.add(agent.id),
               places: SuperTabPlaces.of(c),
               onNewSwarm: () {},
               onNewProject: () {},
@@ -334,10 +336,9 @@ void main() {
       await tester.runAsync(c.flush);
     });
 
-    testWidgets('an agent with no chat yet opens nothing and says why', (
-      tester,
-    ) async {
-      final selected = <String>[];
+    // Task #4220: an agent from before its own chat (#4116), with no open task, was a row that did nothing.
+    testWidgets('an agent with no chat opens its terminal', (tester) async {
+      final selected = <String>[], terminals = <String>[];
       await show(
         tester,
         agents: mine,
@@ -348,11 +349,13 @@ void main() {
               .remove('assignment');
         },
         selected: selected,
+        terminals: terminals,
       );
       await tester.tap(key('super-agent-kestrel'));
       await tester.pump();
       expect(selected, isEmpty);
-      expect(find.byTooltip('Kestrel · no chat yet'), findsOneWidget);
+      expect(terminals, ['kestrel']);
+      expect(find.byTooltip('Kestrel · opens its terminal'), findsOneWidget);
     });
 
     testWidgets('+ New agent is the last row, below the agents, and hands on '
