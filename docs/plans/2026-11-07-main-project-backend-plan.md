@@ -11,8 +11,8 @@ project and its role (Lead or Member) beside its kind.
 the project's owner). The list is a new person-only GET read, `/api/super-tabs/:tabId/project-list`, computed by
 `projectList.ts` from what the Swarm's first load already holds: each project and the pulse stored on its chat (waiting
 count, Members working there, its Lead). `mainProjectId` is stored on the agent: `agent.new` and `buddy.create` take it,
-server starts copy it from their request, and a local Cmd-N start keeps it on the new agent chat until `agent.add` brings
-the session in. Clients read `role` and `mainProjectId` in each agent's derived row, beside `kind`, which keeps its values.
+and their server starts copy it from the start request when the agent starts. Desktop's new Cmd-N starts a Member through
+the server, as Join does (#4541), so a local `agent.new` that names a main project is refused. Clients read `role` and `mainProjectId` in each agent's derived row, beside `kind`, which keeps its values.
 
 **Tech Stack:** TypeScript backend (Fastify, zod), vitest.
 
@@ -93,13 +93,11 @@ Design section's lines for `about`, `mainProjectId`, the list's read cost, compa
 ### Task 3: A main project and a role on every agent
 
 **Files:**
-- Modify: `backend/src/superTabs/model.ts` (`Agent.mainProjectId?`, `AgentStartRequest.mainProjectId?`, agent chat's
-  `Conversation.mainProjectId?`)
+- Modify: `backend/src/superTabs/model.ts` (`Agent.mainProjectId?`, `AgentStartRequest.mainProjectId?`)
 - Modify: `backend/src/superTabs/agentKind.ts` (`agentRole`, `mainProjectOf`)
 - Modify: `backend/src/superTabs/read/views.ts` (`agentView` keeps `mainProjectId` out of the part; derived `role`,
   `mainProjectId`), `backend/src/superTabs/read/contract.ts`
-- Modify: `backend/src/superTabs/commands.ts` (`agent.new`, `buddy.create`, `agent.add`, `agent.started`,
-  `project.delete`)
+- Modify: `backend/src/superTabs/commands.ts` (`agent.new`, `buddy.create`, `agent.started`, `project.delete`)
 - Test: `backend/src/superTabs/mainProject.test.ts`, `backend/src/superTabs/agentKind.test.ts`
 
 **Interfaces:**
@@ -108,7 +106,7 @@ Design section's lines for `about`, `mainProjectId`, the list's read cost, compa
   can't read it). `agent.new` and `buddy.create` take an optional `mainProjectId`.
 
 - [ ] **Step 1: Write the failing tests.** A Regular agent started by the server with a main project carries it; a local
-  Cmd-N start's chat holds it and the session `agent.add` brings in gets it; Bring agent (`buddy.create`) with a main
+  start that names one is refused `LOCAL_MAIN_PROJECT`; Bring agent (`buddy.create`) with a main
   project makes a Buddy whose role is member and main project is that one; a project the person can't read is refused
   `NOT_FOUND`; a PM made by `agent.new` is a Lead whose main project is its project; the derived rows carry `role` and
   `mainProjectId` while `kind` is unchanged; a reader who can't read the main project gets null; deleting the project
