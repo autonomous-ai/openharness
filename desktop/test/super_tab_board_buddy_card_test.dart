@@ -357,6 +357,26 @@ void main() {
       await end(tester, c);
     });
 
+    testWidgets(
+      "the Buddy chat's menu beside the card does not repeat Rename, Restart or Remove",
+      (tester) async {
+        final c = await middle(tester);
+        await tester.tap(
+          find.descendant(
+            of: key('super-middle-chat'),
+            matching: find.byTooltip('Buddy options'),
+          ),
+        );
+        await settle(tester);
+        expect(find.text('Rename Buddy…'), findsNothing);
+        expect(find.text('Restart Buddy…'), findsNothing);
+        expect(find.text('Remove Buddy'), findsNothing);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await settle(tester);
+        await end(tester, c);
+      },
+    );
+
     testWidgets("another agent's chat in the middle keeps its plain header", (
       tester,
     ) async {
