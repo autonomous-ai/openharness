@@ -276,11 +276,18 @@ describe('routing a teammate\'s work', () => {
     expect(effects.messages[0]!.source).toMatchObject({ pick: { id: 'c3' }, alternatives: [{ id: 'c2', title: 'personal on mate-mac' }] })
   })
 
-  it('refuses a pick that cannot take it, so no decision names it', () => {
+  // Task #4194: a route that picked a Team account was refused whole, and routing again picked it again, so no PM could route.
+  it('leaves out a pick that cannot take it and keeps the rest, with no pick, so the coordinator chooses among them', () => {
     const f = routed()
-    expect(refusal(() => f.run({ type: 'route.record', conversationId: f.group, decision: record([candidate('c0', 'mate-team'), candidate('c1', 'owner-mac')]) } as Command,
-      f.leadActor, {}))).toMatchObject({ code: 'TEAM_ACCOUNTS_REMOVED',
-      message: 'Harness Team accounts are gone: an agent runs on its own person\'s computer, in their own account. Route again.' })
+    const effects = f.run({ type: 'route.record', conversationId: f.group, decision: record([candidate('c0', 'mate-team'), candidate('c1', 'owner-mac')]) } as Command,
+      f.leadActor, {})
+    const [created] = effects.routeDecisions as Array<{ record: Record<string, unknown> }>
+    expect(created!.record).toMatchObject({ candidates: [{ id: 'c1' }],
+      excluded: [{ title: 'c0 on mate-team', reason: 'Harness Team accounts are gone: an agent runs on its own person\'s computer, in their own account.' },
+        { title: 'Owner Mac · claude' }] })
+    expect(created!.record.pick).toBeUndefined()
+    // No row names a pick the record does not keep: the start or assignment posts the one it chose.
+    expect(effects.messages.filter(m => m.source?.kind === 'route')).toEqual([])
   })
 
   // Task #2901 (Ken, 2026-11-04): a route names no pick, so no single refusal decides it; it is refused once no candidate is left.
