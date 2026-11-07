@@ -44,7 +44,7 @@ void _desk(SuperTabLaunchFixture f, {bool repo = true}) {
     ),
   ];
   f.app.swarms.add(
-    Swarm(id: 'desk', name: 'Harness Monitor')
+    Swarm(id: '0e5c0000000000000000000000000001', name: 'Harness Monitor')
       ..panes.add(TerminalPane(id: _paneIds++, machineId: 'm', agentId: 'n1')),
   );
 }
