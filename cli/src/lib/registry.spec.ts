@@ -620,6 +620,50 @@ describe('registry remote display names', () => {
     expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))).toHaveLength(2)
   })
 
+  // Swarm v3 (task #4215): until then Harness itself started every Swarm agent in full mode, and an older Buddy in `buddy` or
+  // `readOnlyAsk`; a relaunch reapplies a saved mode, so those agents kept skipping permissions after the fix.
+  it('clears, once, the permission modes Harness forced on saved agents, and keeps the person\'s own', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    registry.openProcessAgent({ agentId: 'template', engine: 'claude', tmuxPane: '%50', processIdentity: processIdentity(950) })
+    const [row] = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))
+    const at = (agentId: string, pane: string, fields: Record<string, unknown>) => ({ ...row, agentId, sessionId: '', processIdentity: null,
+      tmuxPane: pane, runtimes: [{ backend: 'tmux', paneId: pane }], primaryRuntimeKey: `tmux\u0000${pane}`, ...fields })
+    const swarmSkill = { role: 'lead', key: 'swarm-lead' }
+    const saved = [
+      at('swarm-full', '%51', { swarmSkill, permissionMode: 'full', bypassPermission: true }),
+      at('old-buddy', '%52', { swarmSkill: { role: 'buddy', key: 'swarm-buddy' }, permissionMode: 'buddy', bypassPermission: true }),
+      at('old-codex-buddy', '%53', { permissionMode: 'readOnlyAsk', bypassPermission: true }),
+      at('own-full', '%54', { permissionMode: 'full', bypassPermission: true }),
+      at('swarm-ask', '%55', { swarmSkill, permissionMode: 'ask' }),
+      at('team-written', '%56', { swarmSkill, permissionMode: 'teamWritten', bypassPermission: true }),
+    ]
+    writeFileSync(join(dataDir, 'registry.json'), JSON.stringify(saved), { mode: 0o600 })
+    // As a machine upgrading from a build before the sweep: no marker yet.
+    rmSync(join(dataDir, 'registry-own-modes'), { force: true })
+
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+
+    for (const id of ['swarm-full', 'old-buddy', 'old-codex-buddy']) {
+      expect(reloaded.byAgent(id)?.permissionMode, id).toBeUndefined()
+      expect(reloaded.byAgent(id)?.bypassPermission, id).toBeUndefined()
+    }
+    expect([reloaded.byAgent('own-full')?.permissionMode, reloaded.byAgent('own-full')?.bypassPermission]).toEqual(['full', true])
+    expect(reloaded.byAgent('swarm-ask')?.permissionMode).toBe('ask')
+    expect(reloaded.byAgent('team-written')?.permissionMode).toBe('teamWritten')
+    const persisted = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8')) as Array<Record<string, unknown>>
+    expect(persisted.find(entry => entry.agentId === 'swarm-full')).not.toHaveProperty('permissionMode')
+    expect(persisted.find(entry => entry.agentId === 'swarm-full')).not.toHaveProperty('bypassPermission')
+
+    // Once: full mode a person chooses for a Swarm agent afterwards is theirs, and a later load keeps it.
+    writeFileSync(join(dataDir, 'registry.json'), JSON.stringify(persisted.map(entry => entry.agentId === 'swarm-full'
+      ? { ...entry, permissionMode: 'full', bypassPermission: true } : entry)), { mode: 0o600 })
+    const { registry: later } = await loadRegistryModule()
+    later.load()
+    expect([later.byAgent('swarm-full')?.permissionMode, later.byAgent('swarm-full')?.bypassPermission]).toEqual(['full', true])
+  })
+
   it('repairs a Codex parent registry entry overwritten with a child rollout', async () => {
     const parentId = '019f7f1b-195d-70f2-861b-de5d54a3e141'
     const childId = '019f8dae-e5f4-7c11-90d1-600854063b2c'
