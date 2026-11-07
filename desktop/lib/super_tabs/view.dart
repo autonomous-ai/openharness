@@ -6510,8 +6510,10 @@ class _SuperTabViewState extends State<SuperTabView>
                                 onChoose: _chooseManageTab,
                               ),
                             ),
-                          // The chat draws the line itself; every other surface in the middle gets it here.
+                          // The chat draws the line itself, and a terminal's chat beside it answers for the terminal's own
+                          // connection; every other surface in the middle gets it here.
                           if (pagesIndex != 0 &&
+                              !_terminalsVisible &&
                               !(_readsFirst && c.snapshot == null))
                             _connectionLine(c),
                           Expanded(
