@@ -670,10 +670,12 @@ export interface CommandContext {
     teamSession?: true }
   /** Loaded from this tab and conversation by the store. */
   /** `thread` is the replied message's thread root, null for a message written before threads (it keeps inline replies), and
-   *  `threadSource` that root's source: a Buddy's proposal is news for its Buddy (buddyNews.ts). */
+   *  `threadSource` that root's source: a Buddy's proposal is news for its Buddy (buddyNews.ts). `threadRoot`: that root's id,
+   *  or for an answer in the chat the message it quotes (task #4555). */
   /** `agentOnly`: a notice people cannot read (model.ts agentOnly), whose thread a reply does not join. */
   reply?: { id: string; conversationId: string; author: Author; createdAt: number; thread?: string | null; threadSource?: Record<string, unknown> | null
     agentOnly?: true
+    threadRoot?: string
     /** In a Buddy chat: its thread has had a thread session (a `buddySession` reply), read by the store (buddySessions.ts). */
     sessionThread?: true
     /** The project of the thread's latest session row: a session reopened there keeps it (Scholes, 11-02). */
@@ -4658,6 +4660,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           const topic = command.answers && context.reply?.id === command.answers && context.reply.thread && context.reply.thread !== command.answers
             ? context.reply.thread : null
           settleReply(state, group, actor.agentId, { answers: command.answers ?? null, thread: root ?? topic })
+          // The PM's answer to a Buddy's proposal, in the chat or in its older thread, takes it from the open proposals as a reply in
+          // its thread did (proposals.ts; task #4555).
+          if (command.answers && context.reply?.threadRoot && context.reply.threadSource?.kind === 'buddy-proposal' && leadsGroup(state, group, actor.agentId)) {
+            effects.closedProposal = { messageId: context.reply.threadRoot, conversationId: group.id, reason: 'Answered by the PM in the chat.' }
+          }
           const settled = owedBefore.filter(ask => !group.owed?.some(left => left.id === ask.id))
           // The PM's answer is recorded for the asks it settled, and for the message `answer` names though nobody owed it.
           const asked = command.answer && leadsGroup(state, group, actor.agentId) ? [{ id: (command.answers ?? command.replyTo)! }] : []

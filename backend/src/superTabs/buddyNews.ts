@@ -31,7 +31,7 @@ function listeningBuddy(state: SuperTabState, personId: string, group: Conversat
 
 /** The Buddy that sent the proposal [message]'s thread answers, when it does (task #3818): its news goes back to that one. */
 const senderOf = (message: MessageDraft, threadSource: Record<string, unknown> | null): string | undefined =>
-  message.replyTo && threadSource?.kind === PROPOSAL_KIND && typeof threadSource.buddyId === 'string' ? threadSource.buddyId : undefined
+  (message.replyTo || message.answers) && threadSource?.kind === PROPOSAL_KIND && typeof threadSource.buddyId === 'string' ? threadSource.buddyId : undefined
 
 /** The people a project-chat row is news for: whoever's proposal it answers, in its thread or quoting it, each person it tags, and who requested
  *  the work it says shipped. Never its own author: they know what they wrote. */

@@ -2040,8 +2040,10 @@ export class SuperTabStore {
       if (command.type === 'message.send' && (command.replyTo || command.answers)) {
         const reply = await tx.superTabMessage.findFirst({ where: { id: (command.replyTo ?? command.answers)!, tabId, conversationId: command.conversationId } })
         // The thread's root says whose proposal the reply answers (buddyNews.ts): the reply itself, or one more read by id.
-        const root = reply?.thread && reply.thread !== reply.id
-          ? await tx.superTabMessage.findFirst({ where: { id: reply.thread, tabId, conversationId: command.conversationId }, select: { source: true } }) : reply
+        // An answer in the chat quoting another message is about that one, as a reply in a thread is about its root (task #4555).
+        const topic = reply?.thread && reply.thread !== reply.id ? reply.thread : reply?.answers ?? null
+        const root = topic
+          ? await tx.superTabMessage.findFirst({ where: { id: topic, tabId, conversationId: command.conversationId }, select: { id: true, source: true } }) : reply
         // In a Buddy chat: whether the thread ever had a session (buddySessions.ts), by the thread index, one row at most: its
         // latest, whose project a session reopened there keeps.
         const buddyChat = original.conversations.find(c => c.id === command.conversationId)
@@ -2050,7 +2052,7 @@ export class SuperTabStore {
             orderBy: [{ sequence: 'desc' }, { id: 'desc' }], select: { buddyProject: true } })
           : null
         if (reply) context.reply = { id: reply.id, conversationId: reply.conversationId, author: reply.author as unknown as Author, createdAt: reply.createdAt.getTime(),
-          thread: reply.thread, threadSource: (root?.source ?? null) as Record<string, unknown> | null,
+          thread: reply.thread, threadSource: (root?.source ?? null) as Record<string, unknown> | null, ...root ? { threadRoot: root.id } : {},
           ...(agentOnly(reply.source, reply.recipientIds) ? { agentOnly: true } : {}), ...(sessionRow ? { sessionThread: true as const, ...(sessionRow.buddyProject ? { sessionProject: sessionRow.buddyProject } : {}) } : {}) }
       }
       if (command.type === 'message.send' && actor.kind === 'person') context.openTags = await openTags(tx, tabId, command.conversationId, actor.userId, context.now)
