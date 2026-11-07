@@ -97,8 +97,11 @@ void main() {
     var made = 0;
     final c = await show(tester, onNewProject: () => made++);
     expect(find.text('Loading conversation…'), findsNothing);
-    expect(find.text('Create a project to get started.'), findsOneWidget);
-    final project = find.widgetWithText(FilledButton, 'New project');
+    expect(
+      find.text('Start a project, or bring an agent to work with you.'),
+      findsOneWidget,
+    );
+    final project = find.widgetWithText(TextButton, 'New project');
     expect(project, findsOneWidget);
     expect(find.byKey(const ValueKey('super-empty-new-agent')), findsOneWidget);
     await tester.tap(project);
@@ -120,11 +123,17 @@ void main() {
         ];
       },
     );
-    expect(find.text('Create a project to get started.'), findsOneWidget);
+    expect(
+      find.text('Start a project, or bring an agent to work with you.'),
+      findsOneWidget,
+    );
     unawaited(c.select('agent-chat-kestrel'));
     await settle(tester);
     expect(c.selected?.id, 'agent-chat-kestrel');
-    expect(find.text('Create a project to get started.'), findsNothing);
+    expect(
+      find.text('Start a project, or bring an agent to work with you.'),
+      findsNothing,
+    );
     await end(tester, c);
   });
 

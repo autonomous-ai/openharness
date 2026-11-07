@@ -342,8 +342,16 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
   try {
     let refusal: string | null = null
     let native = await target.request('agent_create_status', { creationId }, 10_000)
-    if (native.creationId !== creationId) return { error: 'START_UNCERTAIN', startId, creationId,
-      detail: 'The machine did not confirm the requested creation receipt. Nothing was dispatched.' }
+    if (native.creationId !== creationId) {
+      // A daemon that answers with its own code (its receipts folder cannot be used) has a fault the Swarm can be told, not an
+      // uncertain launch: stone7890's Mac waited hours on "did not confirm" (task #3861). Its words carry no secret.
+      if (typeof native.error === 'string' && /^[A-Z_]{3,60}$/.test(native.error)) {
+        const detail = typeof native.detail === 'string' ? `: ${native.detail.slice(0, 400)}` : ''
+        return { error: 'START_MACHINE_FAULT', startId, creationId, detail: `${native.error}${detail}` }
+      }
+      return { error: 'START_UNCERTAIN', startId, creationId,
+        detail: 'The machine did not confirm the requested creation receipt. Nothing was dispatched.' }
+    }
     if (native.state === 'missing') {
       if (start.dispatched) return { error: 'START_UNCERTAIN', startId, creationId,
         detail: 'This start was submitted but its machine has no receipt. Inspect the machine before creating another agent.' }

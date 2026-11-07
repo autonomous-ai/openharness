@@ -95,7 +95,7 @@ Future<void> _showWork(
                 if (c.hasPendingAction)
                   TextButton(
                     onPressed: c.saving ? null : c.retry,
-                    child: const Text('Check pending action'),
+                    child: const Text('Check again'),
                   ),
               ],
             ),
