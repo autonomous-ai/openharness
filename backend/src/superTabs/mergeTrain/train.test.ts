@@ -247,6 +247,20 @@ describe('the merge train finishes batches', () => {
     expect(second!.body).toContain('f'.repeat(12))
   })
 
+  it('builds the fresh batch on the main it reads right before building, not the main the pass began with (#3496, 11-07)', async () => {
+    const { repo, swarm, pass } = setup()
+    swarm.approve(repo.addPull(7, ['backend/src/a.ts']))
+    const moved = 'e'.repeat(40)
+    // A hand merge lands while the pass reads its candidates, after it read main.
+    repo.state.afterRead = name => { if (name === 'files') { repo.state.main = moved; repo.state.afterRead = null } }
+    await pass()
+    const [batch] = repo.batches()
+    expect(batch!.body).toContain(moved.slice(0, 12))
+    repo.state.ci.set(batch!.head, 'success')
+    await pass()
+    expect(repo.state.squashes.map(s => s.number)).toEqual([batch!.number])
+  })
+
   it('never merges a member pushed after its batch went green: the heads are read again first', async () => {
     const { repo, swarm, pass } = setup()
     const a = repo.addPull(7, ['backend/src/a.ts']), b = repo.addPull(8, ['backend/src/b.ts'])
