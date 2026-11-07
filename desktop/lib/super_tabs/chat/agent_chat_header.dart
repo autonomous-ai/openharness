@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../state/app_state.dart';
 import '../../widgets/desktop_chrome.dart';
+import '../../widgets/quiet_link.dart';
 import '../buddies.dart';
 import '../controller.dart';
 import '../identity.dart';
@@ -21,6 +22,7 @@ class SuperTabAgentChatHeader extends StatelessWidget {
     this.menu,
     this.app,
     this.title,
+    this.onOpenProject,
   });
 
   /// The face's size in the bar.
@@ -39,6 +41,9 @@ class SuperTabAgentChatHeader extends StatelessWidget {
   /// which draws the same face and name with the same inset.
   final Widget Function(String name)? title;
 
+  /// Opens a project's group chat: a Lead's private chat names its project, one quiet link beside its name (task #4664).
+  final ValueChanged<SuperTabProject>? onOpenProject;
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
@@ -53,6 +58,10 @@ class SuperTabAgentChatHeader extends StatelessWidget {
         : group.isBuddyChat
         ? 'Your agent'
         : group.label;
+    // A Lead's private chat: its project's chat is one quiet link away (task #4664).
+    final project = agent != null && group.isAgentChat && onOpenProject != null
+        ? snapshot!.leadProjectForAgent(agent.id)
+        : null;
     final identity = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -72,6 +81,13 @@ class SuperTabAgentChatHeader extends StatelessWidget {
         ),
       ],
     );
+    final head =
+        title?.call(name) ??
+        Padding(
+          // The Buddy card button's inset, so every face sits in one place.
+          padding: const EdgeInsets.all(grid.AppDesktop.menuInset),
+          child: identity,
+        );
     return SizedBox(
       key: const ValueKey('super-agent-chat-header'),
       height: 44,
@@ -83,13 +99,23 @@ class SuperTabAgentChatHeader extends StatelessWidget {
             const SizedBox(width: grid.AppDesktop.controlGap),
             ConstrainedBox(
               constraints: BoxConstraints(maxWidth: box.maxWidth / 2),
-              child:
-                  title?.call(name) ??
-                  Padding(
-                    // The Buddy card button's inset, so every face sits in one place.
-                    padding: const EdgeInsets.all(grid.AppDesktop.menuInset),
-                    child: identity,
-                  ),
+              child: project == null
+                  ? head
+                  // The link shares the name's half, giving way with "…" first.
+                  : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(flex: 2, child: head),
+                        const SizedBox(width: grid.AppDesktop.controlGap),
+                        Flexible(
+                          child: QuietLink(
+                            key: const ValueKey('super-agent-chat-project'),
+                            label: '${project.name} chat',
+                            onPressed: () => onOpenProject!(project),
+                          ),
+                        ),
+                      ],
+                    ),
             ),
             const SizedBox(width: grid.AppDesktop.controlGap),
             Expanded(

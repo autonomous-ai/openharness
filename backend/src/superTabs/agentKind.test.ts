@@ -30,14 +30,19 @@ describe('an agent\'s kind and chat', () => {
     expect(agentChatId(state, buddy)).toBe(chat.id)
   })
 
-  it('is a PM in its project\'s Lead chat', () => {
+  // Task #4664 (anh Dee 11-07, 21:23): an agent is a direct message and a project a group chat, so a Lead's row opens its
+  // person's private chat with it, never its project chat; none until that chat is opened (agent.chat).
+  it('is a PM whose chat is its private chat with its person, never its project chat', () => {
     const { state, agent } = setup()
     const pm = agent('pm')
     const lead = state.conversations.find(c => c.id === 'lead')!
     lead.leadId = pm.id
     lead.agentIds.push(pm.id)
     expect(agentKind(state, pm)).toBe('pm')
-    expect(agentChatId(state, pm)).toBe('lead')
+    expect(agentChatId(state, pm)).toBeNull()
+    state.conversations.push({ id: 'pm-chat', kind: 'agent-chat', title: 'pm', leadId: null, agentIds: [pm.id], archived: false, brief: '',
+      checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'peer', generation: 'second' }] } })
+    expect(agentChatId(state, pm)).toBe('pm-chat')
   })
 
   it('is Regular otherwise, with no chat of its own yet', () => {

@@ -434,8 +434,11 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   The server switches no other agent, so theirs is the same words and opens
   nothing. A switch under way reads `Switching to Codex…`; a shared model
   nobody serves adds `not served now`. The subscription, the machine and
-  "reads all your projects" are not in the bar. The gallery draws the bar of
-  the reader's Buddy and of a member agent.
+  "reads all your projects" are not in the bar. A Lead's private chat with
+  its person adds one `QuietLink` after the name, `Lamp chat`, that opens its
+  project's chat; the two share the name's half, the link giving way first
+  (task #4664). The gallery draws the bar of the reader's Buddy, of a member
+  agent and of a Lead.
 - **Agent face.** An agent with no chosen picture wears a face
   (`SuperTabAvatarFace`, `avatar_art.dart`) in rows, cards, chat and profile:
   a round disc with a soft top-to-bottom fill, two eyes and a small smile.

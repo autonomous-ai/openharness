@@ -313,8 +313,10 @@ proposals, the Board and the rights. This spec changes it in these places:
    idea, propose with the person's agreement, answer the Lead on the cards it sent, tell its person at decided, needs
    you, late and shipped) is done by each Member's chat session for its own person. A Member also does tasks, in
    separate task sessions that never see the chat (section 2).
-2. **"The PM never chats with people."** The Lead chats with its own person, in its project chat under My agents, as
-   Swarm v3 already shows it. Everyone else still reaches it by proposals and answers on cards.
+2. **"The PM never chats with people."** The Lead chats with its own person in their private chat, which My agents
+   opens as it opens a Member's: an agent is a direct message, a project a group chat (anh Dee, 11-07, task #4664). Only
+   they and that Lead read it. The Lead still posts in its project chat, which opens from Projects and from the link in
+   the private chat's header. Everyone else still reaches it by proposals and answers on cards.
 3. **Many Buddies** become many Members: a person makes, names and removes their own. The Swarm's cap per person
    (`BUDDY_CAP`, 5 by default, up to 20) stays on what Buddies were, chat sessions talking with their person: at most
    that many awake at once. When the person writes to one more, the one idle longest sleeps (it wakes again when they

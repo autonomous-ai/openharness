@@ -70,6 +70,7 @@ void main() {
     List<String>? selected,
     List<String>? created,
     List<String>? terminals,
+    List<String>? leads,
     double width = 300,
     Brightness brightness = Brightness.light,
     List<SwarmPage>? pages,
@@ -107,6 +108,7 @@ void main() {
               },
               onNewAgent: () => created?.add('new'),
               onOpenAgentTerminal: (agent) => terminals?.add(agent.id),
+              onOpenLeadChat: (agent) => leads?.add(agent.id),
               places: SuperTabPlaces.of(c),
               onNewSwarm: () {},
               onNewProject: () {},
@@ -797,20 +799,23 @@ void main() {
       );
     });
 
-    testWidgets('opening an agent opens its chat: a PM\'s project chat, a '
+    // Task #4664: a Lead opens its private chat with its person, never its project chat.
+    testWidgets('opening an agent opens its chat: a Lead\'s private chat, a '
         'Regular agent\'s task', (tester) async {
-      final selected = <String>[];
+      final selected = <String>[], leads = <String>[];
       final c = await show(
         tester,
         agents: mine,
         setup: agents,
         selected: selected,
+        leads: leads,
       );
       await tester.tap(key('super-agent-orion'));
       await tester.pump();
       await tester.tap(key('super-agent-kestrel'));
       await tester.pump();
-      expect(selected, ['lead', 'offline']);
+      expect(leads, ['orion']);
+      expect(selected, ['offline']);
       await tester.runAsync(c.flush);
     });
 
@@ -1117,9 +1122,40 @@ void main() {
       await end(tester, c);
     });
 
-    testWidgets('a PM opens its project\'s chat in the middle', (tester) async {
-      final c = await view(tester);
+    // Task #4664 (anh Dee 11-07): an agent is a direct message, a project a group chat. A Lead opened its project's chat;
+    // it opens the person's private chat with it, and its header's quiet link opens the project chat.
+    testWidgets('a Lead opens its private chat in the middle, and its header '
+        'opens its project\'s chat', (tester) async {
+      final c = await view(
+        tester,
+        setup: (server) =>
+            (server.state['agents'] as List<Map<String, dynamic>>)
+                .firstWhere((a) => a['id'] == 'orion')
+                .addAll({'kind': 'pm', 'chatId': null}),
+      );
+      final project = c.snapshot!.leadProjectForAgent('orion')!;
       await tester.tap(key('super-agent-orion'));
+      await settle(tester);
+      expect(c.selectedId, 'agent-chat-orion');
+      expect(c.snapshot!.conversation('agent-chat-orion')!.isAgentChat, isTrue);
+      expect(key('super-middle-chat'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: key('super-center-pane'),
+          matching: find.text('The project chat line.'),
+        ),
+        findsNothing,
+      );
+      final link = find.descendant(
+        of: key('super-agent-chat-header'),
+        matching: key('super-agent-chat-project'),
+      );
+      expect(link, findsOneWidget);
+      expect(
+        find.descendant(of: link, matching: find.text('${project.name} chat')),
+        findsOneWidget,
+      );
+      await tester.tap(link);
       await settle(tester);
       expect(c.selectedId, 'lead');
       expect(
@@ -1129,7 +1165,14 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(key('super-tasks-lead'), findsNothing);
+      // Back in My agents, the Lead opens the same private chat again.
+      await tester.tap(key('super-agent-orion'));
+      await settle(tester);
+      expect(c.selectedId, 'agent-chat-orion');
+      expect(
+        c.snapshot!.conversations.where((g) => g.id == 'agent-chat-orion'),
+        hasLength(1),
+      );
       await end(tester, c);
     });
 
@@ -1233,6 +1276,45 @@ void main() {
         await settle(tester);
         expect(key('super-tasks-board'), findsOneWidget, reason: layout);
       }
+      await end(tester, c);
+    });
+
+    // Security review of #3570: a chat opened at a membership its person left is not theirs; after they rejoin, the Lead's
+    // row asks again and opens a new one, never the answer it had the first time.
+    testWidgets('after its person leaves and rejoins, a Lead opens a new '
+        'private chat', (tester) async {
+      late ConversationServer server;
+      final c = await view(
+        tester,
+        setup: (s) {
+          server = s;
+          (s.state['agents'] as List<Map<String, dynamic>>)
+              .firstWhere((a) => a['id'] == 'orion')
+              .addAll({'kind': 'pm', 'chatId': null});
+          (s.state['people'] as List).cast<Map>().firstWhere(
+            (p) => p['id'] == 'owner',
+          )['generation'] = 'first';
+        },
+      );
+      await tester.tap(key('super-agent-orion'));
+      await settle(tester);
+      expect(c.selectedId, 'agent-chat-orion-first');
+      // They left and rejoined: the old chat is not theirs, and the Lead names none.
+      (server.state['people'] as List).cast<Map>().firstWhere(
+        (p) => p['id'] == 'owner',
+      )['generation'] = 'second';
+      (server.state['conversations'] as List).cast<Map>().removeWhere(
+        (g) => g['id'] == 'agent-chat-orion-first',
+      );
+      (server.state['agents'] as List<Map<String, dynamic>>).firstWhere(
+        (a) => a['id'] == 'orion',
+      )['chatId'] = null;
+      server.revision++;
+      await tester.runAsync(c.refresh);
+      await settle(tester);
+      await tester.tap(key('super-agent-orion'));
+      await settle(tester);
+      expect(c.selectedId, 'agent-chat-orion-second');
       await end(tester, c);
     });
 

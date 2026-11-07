@@ -70,6 +70,7 @@ class ProjectSidebar extends StatelessWidget {
     this.onOpenAgentChat,
     this.boardProjectId,
     this.onOpenAgentTerminal,
+    this.onOpenLeadChat,
     this.leaderboard,
   });
   final SuperTabController controller;
@@ -100,6 +101,9 @@ class ProjectSidebar extends StatelessWidget {
 
   /// Opens the terminal of an agent in My agents that has no chat to open (task #4220); without it the row opens nothing.
   final ValueChanged<SuperTabAgent>? onOpenAgentTerminal;
+
+  /// Opens the reader's private chat with their own Lead that has none yet (task #4664): an agent is a direct message.
+  final ValueChanged<SuperTabAgent>? onOpenLeadChat;
   final ValueChanged<String> onSelect;
   final AppNotifier? app;
   final VoidCallback? onNewProject;
@@ -881,7 +885,10 @@ class ProjectSidebar extends StatelessWidget {
       leading: _face(agent, name, lead: pm),
       name: name,
       // Only what the row does not say itself.
-      tooltip: chat == null && onOpenAgentTerminal != null
+      tooltip:
+          chat == null &&
+              !(pm && onOpenLeadChat != null) &&
+              onOpenAgentTerminal != null
           ? 'Opens its terminal'
           : null,
       detail: _detail(
@@ -892,9 +899,10 @@ class ProjectSidebar extends StatelessWidget {
       markColumn: true,
       selected: _chatLit(chat),
       unread: chat != null && controller.unreadShown(chat),
-      onTap: switch ((chat, onOpenAgentTerminal)) {
-        (final chat?, _) => () => (onOpenAgentChat ?? onSelect)(chat.id),
-        (null, final terminal?) => () => terminal(agent),
+      onTap: switch ((chat, pm ? onOpenLeadChat : null, onOpenAgentTerminal)) {
+        (final chat?, _, _) => () => (onOpenAgentChat ?? onSelect)(chat.id),
+        (null, final lead?, _) => () => lead(agent),
+        (null, null, final terminal?) => () => terminal(agent),
         _ => null,
       },
     );

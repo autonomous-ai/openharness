@@ -1747,6 +1747,38 @@ class ConversationServer {
           'machineId': ?machineId,
           'requestedAt': revision,
         };
+      } else if (command['type'] == 'agent.chat') {
+        // As backend agent.chat (task #4664): the reader's private chat with
+        // their own Lead, opened once; the Lead names it as its chat.
+        final agentId = command['agentId'] as String;
+        // One per membership: a rejoined reader gets a new chat.
+        final generation = (state['people'] as List? ?? const [])
+            .cast<Map>()
+            .where((p) => p['id'] == (reader ?? 'owner'))
+            .firstOrNull?['generation'];
+        final chatId = generation == null
+            ? 'agent-chat-$agentId'
+            : 'agent-chat-$agentId-$generation';
+        final conversations = (state['conversations'] as List)
+            .cast<Map<String, dynamic>>();
+        final agent = (state['agents'] as List)
+            .cast<Map<String, dynamic>>()
+            .firstWhere((a) => a['id'] == agentId);
+        if (!conversations.any((g) => g['id'] == chatId)) {
+          revision++;
+          conversations.add({
+            ...conversationFixture(chatId, agent['name'] as String),
+            'kind': 'agent-chat',
+            'agentIds': [agentId],
+            'audience': {
+              'people': [
+                {'id': reader ?? 'owner', 'generation': generation ?? 'g'},
+              ],
+            },
+          });
+          agent['chatId'] = chatId;
+        }
+        output['conversationId'] = chatId;
       } else if (command['type'] == 'agent.new' && command['local'] == true) {
         // As backend agent.new with `local` (task #4196): a Member's own chat,
         // and no start; its person's Desktop starts the agent itself.

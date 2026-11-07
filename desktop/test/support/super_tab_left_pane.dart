@@ -57,6 +57,8 @@ Future<SuperTabController> showLeftPane(
             app: app,
             onSelect: c.select,
             onNewAgent: () {},
+            // As the app's: a Lead with no private chat yet opens one (#4664).
+            onOpenLeadChat: (_) {},
             places: SuperTabPlaces.of(c),
             onNewSwarm: () {},
             onNewProject: () {},
