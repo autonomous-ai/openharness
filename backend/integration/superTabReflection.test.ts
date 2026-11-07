@@ -62,11 +62,11 @@ async function swarm() {
   for (const machineId of ['lead-host', 'test-host']) generations.set(machineId, (await poolRows(store, host, machineId)).find(p => p.tabId === tab)!.machine.generation)
   const harness = { lead: randomUUID(), worker: randomUUID() }
   const lead = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId: 'lead-host', harnessId: harness.lead, name: 'Lead',
-    configuration: config, lead: true })).result.agentId)
+    configuration: config, lead: true }, host)).result.agentId)
   const group = String((await execute({ type: 'conversation.create', title: 'Secret parser plan', brief: 'Implement it',
     checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
   const worker = String((await execute({ type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: harness.worker, name: 'Worker',
-    configuration: config, lead: false })).result.agentId)
+    configuration: config, lead: false }, host)).result.agentId)
   const beat = async (tokens: TokensByModel) => {
     for (const [machineId, running] of [['lead-host', [harness.lead]], ['test-host', [harness.worker]]] as const) {
       await store.observeMachine(host, tab, machineId, { generation: generations.get(machineId)!, resources: { cpuPercent: 10, memoryTotalBytes: 32e9,

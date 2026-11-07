@@ -67,26 +67,32 @@ it('says how much memory is free and how much a start needs, in GiB', () => {
 // Ken's MacBook Pro showed no Claude allowance while Claude agents ran there (2026-10-28). Every way the reading can fail
 // now says why, in words that name no account, token or plan.
 it('says why an allowance is unknown, for each way its reading fails', () => {
-  const reply = (claude: Record<string, unknown>) => ({ providers: [{ provider: 'claude', account: 'k', ...claude }] })
-  expect(quotaUnknownReason({}, 'claude', false)).toBe('The allowance reader on this machine did not answer.')
-  expect(quotaUnknownReason({ error: 'USAGE_READ_FAILED' }, 'claude', false)).toBe('The allowance reader on this machine did not answer.')
-  expect(quotaUnknownReason(reply({ outcome: 'signedOut' }), 'claude', false)).toBe('No subscription sign-in is stored on this machine.')
-  expect(quotaUnknownReason(reply({ outcome: 'signedOut', message: 'Claude session expired — run claude to sign in again' }), 'claude', false))
-    .toBe('The stored sign-in has expired; it renews the next time the engine runs here.')
-  expect(quotaUnknownReason(reply({ outcome: 'unreachable' }), 'claude', false)).toBe('Anthropic could not be reached.')
-  expect(quotaUnknownReason(reply({ outcome: 'answered', httpStatus: 429, body: { error: {} } }), 'claude', false))
+  const reply = (claude: Record<string, unknown>) => ({ providers: [{ provider: 'claude', account: null, source: 'cli', ...claude }] })
+  expect(quotaUnknownReason({}, 'claude')).toBe('The allowance reader on this machine did not answer.')
+  expect(quotaUnknownReason({ error: 'USAGE_READ_FAILED' }, 'claude')).toBe('The allowance reader on this machine did not answer.')
+  expect(quotaUnknownReason(reply({ outcome: 'signedOut' }), 'claude')).toBe('No subscription sign-in is stored on this machine.')
+  // The CLI's own report says why there is none (services/usage.ts): that sentence is the reason.
+  const notYet = 'Claude Code has not reported its allowance on this machine yet: it does after its first reply in a session Harness started.'
+  expect(quotaUnknownReason(reply({ outcome: 'unreachable', message: notYet }), 'claude')).toBe(notYet)
+  expect(quotaUnknownReason(reply({ outcome: 'unreachable', message: '' }), 'claude')).toBe('Anthropic could not be reached.')
+  expect(quotaUnknownReason(reply({ outcome: 'unreachable' }), 'claude')).toBe('Anthropic could not be reached.')
+  expect(quotaUnknownReason(reply({ outcome: 'answered', httpStatus: 429, body: { error: {} } }), 'claude'))
     .toBe('Anthropic is limiting how often the allowance can be read.')
-  expect(quotaUnknownReason(reply({ outcome: 'answered', httpStatus: 401 }), 'claude', false)).toBe('Anthropic refused the stored sign-in.')
-  expect(quotaUnknownReason(reply({ outcome: 'answered', httpStatus: 403 }), 'claude', false)).toBe('Anthropic refused the stored sign-in.')
-  expect(quotaUnknownReason(reply({ outcome: 'answered', httpStatus: 503 }), 'claude', false)).toBe('Anthropic answered with an error (HTTP 503).')
-  expect(quotaUnknownReason(reply({ outcome: 'answered', httpStatus: 200, body: { five_hour: null } }), 'claude', false))
+  expect(quotaUnknownReason(reply({ outcome: 'answered', httpStatus: 503 }), 'claude')).toBe('Anthropic answered with an error (HTTP 503).')
+  expect(quotaUnknownReason(reply({ outcome: 'answered', httpStatus: 200, body: { five_hour: null } }), 'claude'))
     .toBe('Anthropic answered without usage windows.')
-  expect(quotaUnknownReason({ providers: [{ provider: 'codex', outcome: 'unreachable' }] }, 'codex', false)).toBe('OpenAI could not be reached.')
-  // A Harness Team account spends its owner's subscription through the owner's relay; its own home holds no sign-in.
-  expect(quotaUnknownReason({ providers: [{ provider: 'codex', outcome: 'signedOut' }] }, 'codex', true))
-    .toBe("This account runs on its owner's subscription; its allowance is read on the owner's machine.")
+  expect(quotaUnknownReason({ providers: [{ provider: 'codex', outcome: 'unreachable' }] }, 'codex')).toBe('OpenAI could not be reached.')
+  expect(quotaUnknownReason({ providers: [{ provider: 'codex', outcome: 'unreachable', message: 'Codex did not answer when asked for its allowance on this machine.' }] }, 'codex'))
+    .toBe('Codex did not answer when asked for its allowance on this machine.')
+  expect(quotaUnknownReason({ providers: [{ provider: 'codex', outcome: 'signedOut' }] }, 'codex')).toBe('No subscription sign-in is stored on this machine.')
+  // Nothing reads a stored sign-in any more, so nothing says one was refused or has expired.
+  for (const said of [quotaUnknownReason(reply({ outcome: 'answered', httpStatus: 401 }), 'claude'),
+    quotaUnknownReason(reply({ outcome: 'answered', httpStatus: 403 }), 'claude'),
+    quotaUnknownReason(reply({ outcome: 'signedOut', message: 'Claude session expired — run claude to sign in again' }), 'claude')]) {
+    expect(said).not.toMatch(/stored sign-in|expired/)
+  }
   // A readable allowance has no reason.
-  expect(quotaUnknownReason(reply({ outcome: 'answered', httpStatus: 200, body: { five_hour: { utilization: 5 } } }), 'claude', false)).toBeNull()
+  expect(quotaUnknownReason(reply({ outcome: 'answered', httpStatus: 200, body: { five_hour: { utilization: 5 } } }), 'claude')).toBeNull()
 })
 it('admits a Product Manager, Buddy or template start on a busy CPU, as a routed Builder start, while memory, disk and pressure still refuse (Diego, 10-30)', () => {
   const GiB = 1024 ** 3

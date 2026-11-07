@@ -83,7 +83,11 @@ export interface Derived {
   releaseTimes?: Record<string, import('../releases.js').ReleaseLedger['nextAt'] & object>
   /** Every agent the reader can see. `workDecision` is null when the stored value stands; `roleId` null outside Custom. */
   /** `roleName`: the role it goes by (instructions.ts roleNameOf), its stored one or what it is. */
-  agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null; roleId: string | null; roleName: string }>
+  /** `kind`: the reader's Buddy, a PM leading a project, or a Regular agent; `chatId`: the chat its person talks to it in, or null
+   *  (agentKind.ts, task #4116). Absent from an older backend. */
+  /** `myAgent`: whether it is in the reader's My agents (agentKind.ts inMyAgents, task #4192). Absent from an older backend. */
+  agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null; roleId: string | null; roleName: string;
+    kind: import('../agentKind.js').AgentKind; chatId: string | null; myAgent: boolean }>
   /** Every contributed machine the reader can see. */
   /** `clientVersion`: the CLI version its daemon last connected with (routing reads a machine updated since its failed starts). */
   machines: Record<string, { availableSlots: number; teamWork: { allowed: true } | { allowed: false; reason: string; [key: string]: unknown }; clientVersion?: string
@@ -170,6 +174,8 @@ interface ReadMeta {
 
 /** GET /api/super-tabs/:tabId/parts[?asAgentId=] */
 export interface FirstLoad extends ReadMeta {
+  /** Own active Tasks; absent for agent readers and older servers. */
+  personalTasks?: import('./personalTasks.js').PersonalTasks
   tabId: string
   githubApp?: true
   /** This backend opens a task's steps (`conversation.create` with `step`, task steps design); absent on an older one. */
@@ -201,6 +207,8 @@ export interface MachineReading { key: string; version: number; receivedAt: numb
 /** GET /api/super-tabs/:tabId/machine-readings[?asAgentId=]: every machine the reader sees, whole, for the route and the machine panel. */
 export interface MachineReadings { format: number; serverTime: number; machines: LivePart<MachineView>[] }
 export interface ChangesDelta extends ReadMeta {
+  /** Only summaries changed since this response’s existing cursor. */
+  personalTasks?: import('./personalTasks.js').PersonalTasks
   reload: false
   head: LivePart<HeadView> | null
   members: PartChange<MemberView>[]
@@ -301,6 +309,8 @@ export type HostRosterRow =
   | { tabId: string; cleanup: { machineId: string; removalId: string } }
   | { tabId: string; joinTeam: { machineId: string; name: string; maxAgents: number } }
 export interface HostAgentRow {
+  /** A main Buddy's private chat, used only by its own host to restart it on another engine. */
+  buddyConversationId?: string
   tabId: string
   tabName: string
   lastChangedAt: number | null
@@ -314,6 +324,8 @@ export interface HostAgentRow {
   /** A Buddy's own chat, its main one's or the thread session's (task #3818): its host ends a session and moves a model switch
    *  there. Absent on every other agent; null while its chat is not loaded. An older backend sends none: the person's main chat. */
   buddyChatId?: string | null
+  /** Main Buddy whose session may rest and resume in place (#3824). */
+  buddySleepManaged?: true
   joinSwarm: boolean
   skillMode: 'default' | 'orchestration'
   role?: { id: string; name: string; kind: string; version: string; projectId: string } | null
@@ -350,6 +362,8 @@ export interface HostPool {
   buddyStarts?: AgentStart[]
   /** Product Managers' starts (leadStart.ts), apart from `starts` for the same reason. */
   leadStarts?: AgentStart[]
+  /** Regular agents' starts (commands.ts agent.new, task #4116), apart for the same reason. */
+  regularStarts?: AgentStart[]
   projects?: Array<{ id: string; leadConversationId: string; repository?: unknown; conversationIds: string[] }>
   localGrid?: string
   reservations: Array<{ harnessId: string; generation: string }>
@@ -358,6 +372,8 @@ export interface HostPool {
   githubApp?: true
   /** The host may say what it launches beyond workers in its readings (leadStart.ts). */
   capabilitiesWanted?: true
+  /** Asks for positive idle Buddy activity in fresh machine readings (#3824). */
+  buddySleepWanted?: true
 }
 
 /** HTTP 426 on GET /api/super-tabs, /:tabId, /hosts/:m, /hosts/:m/pools and /hosts/:m/assignments. */

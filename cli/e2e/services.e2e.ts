@@ -197,7 +197,7 @@ printf '%s' '{"title":"A merged pull request","state":"MERGED","mergedAt":"2026-
       expect(await client.request(type, { modelId: 'org/Model-GGUF' }), type).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'models', retryable: false })
     }
     // The services that came out of the socket's switch (docs/design/2026-10-06-core-boundary-next.md, step 4).
-    // usage_read is asked only here, with its service off: on, it reads the vendors' credentials.
+    // usage_read is asked only here, with its service off: on, it starts the person's own codex.
     expect(await client.request('usage_read', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'usage', retryable: false })
     expect(await client.request('machine_resources', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'monitor', retryable: false })
     expect(await client.request('shell_capabilities', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'shell', retryable: false })

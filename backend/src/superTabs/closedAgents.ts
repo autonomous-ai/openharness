@@ -144,7 +144,7 @@ export function restoreRefusal(state: SuperTabState, record: RemovedSession, mac
     const held = productManagerOn(state, record.machineId)
     if (held && held !== project.id) return 'team-other-project'
   }
-  return teamWorkCheck(state, record.machineId, agent.contributorId, project, now, facts.teamMachines, facts.otherWorkspaceMachines) ? 'team-work' : null
+  return teamWorkCheck(state, record.machineId, agent.contributorId, project) ? 'team-work' : null
 }
 
 /**

@@ -72,12 +72,13 @@ async function swarm(memory?: (now: () => number) => ReportMemory, shared?: { cl
   const generations = new Map<string, string>()
   for (const machineId of ['lead-host', 'test-host']) generations.set(machineId, (await poolRows(timed, host, machineId)).find(p => p.tabId === tab)!.machine.generation)
   const harness = { lead: randomUUID(), worker: randomUUID() }
-  const add = async (conversationId: string, machineId: string, harnessId: string, name: string, lead = false) => String((await execute({ type: 'agent.add',
-    conversationId, machineId, harnessId, name, configuration: config, lead })).result.agentId)
+  // An agent runs as its own person, on their own computer (task #4120): the machines are host's, so host adds the worker.
+  const add = async (conversationId: string, machineId: string, harnessId: string, name: string, lead = false, user = owner) => String((await execute({ type: 'agent.add',
+    conversationId, machineId, harnessId, name, configuration: config, lead }, user)).result.agentId)
   const lead = await add('lead', 'lead-host', harness.lead, 'Lead', true)
   const group = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief: 'Implement it',
     checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
-  const worker = await add(group, 'test-host', harness.worker, 'Worker')
+  const worker = await add(group, 'test-host', harness.worker, 'Worker', false, host)
   await execute({ type: 'work.assign', conversationId: group, agentId: worker })
   const reading = (machineId: string, running: string[], extra: Partial<MachineObservation> = {}): MachineObservation => ({
     generation: generations.get(machineId)!, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9,
@@ -185,11 +186,11 @@ describe('every reason a report runs in full (DB 2.5 spec, Tests)', () => {
     ['a running session lost its progress entry', async () => ({ extra: { harnessProgress: {} } }), { progress: true }],
     // What concerns this machine changed since its last full report (task #3119): what its host reads (commit.ts hostsToTell).
     ['an agent was added on it', async f => {
-      await f.execute({ type: 'agent.add', conversationId: f.group, machineId: 'test-host', harnessId: randomUUID(), name: 'Helper', configuration: config, lead: false })
+      await f.execute({ type: 'agent.add', conversationId: f.group, machineId: 'test-host', harnessId: randomUUID(), name: 'Helper', configuration: config, lead: false }, host)
     }],
     ['a start was queued on it', async f => {
       await f.execute({ type: 'agent.start', request: { conversationId: f.group, machineId: 'test-host', engine: 'codex', name: 'Builder', cwd: '/repo',
-        worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } })
+        worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } }, host)
     }],
     ['a conversation an agent on it works in changed', async f => {
       await f.execute({ type: 'message.send', conversationId: f.group, text: 'hi', replyTo: null, recipientIds: [] })
@@ -501,9 +502,9 @@ describe('a busy Swarm\'s readings (task #3119)', () => {
     const [spare] = spares[0]!
     for (const [machineId, generation] of spares) await f.timed.observeMachine(host, f.tab, machineId, { ...f.reading('test-host', []), generation })
     for (let i = 0; i < 10; i++) {
-      await f.execute({ type: 'agent.add', conversationId: f.group, machineId: spare, harnessId: randomUUID(), name: `Helper ${i}`, configuration: config, lead: false })
+      await f.execute({ type: 'agent.add', conversationId: f.group, machineId: spare, harnessId: randomUUID(), name: `Helper ${i}`, configuration: config, lead: false }, host)
       await f.execute({ type: 'agent.start', request: { conversationId: f.group, machineId: spare, engine: 'codex', name: `Builder ${i}`, cwd: '/repo',
-        worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } })
+        worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } }, host)
     }
     await f.beat({}, store)
     f.clock.now += BEAT
