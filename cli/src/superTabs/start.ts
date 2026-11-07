@@ -1,5 +1,5 @@
 import { encodeRuntimeProfile } from '../engines/kit/runtime.js'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, symlinkSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { parseRuntimeProfile } from '../lib/runtimeProfileWire.js'
 import { randomUUID } from 'node:crypto'
@@ -14,9 +14,10 @@ import { agentFolderFor, prepareAgentFolder, temporaryFolder } from './agentFold
 import { BUDDY_COPIES_FILE, BUDDY_HOMES, buddyProjectsOf, prepareBuddyHome, trustBuddyHome } from './buddyHome.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
-import { join as joinPath } from 'node:path'
+import { isAbsolute, join as joinPath } from 'node:path'
 import { markBuddyOwner } from '../lib/buddyGuard.js'
 import { engineAccount } from '../lib/engineAccount.js'
+import { launchCodexHome } from '../lib/engineHomes.js'
 
 type Json = Record<string, unknown>
 export type ScopedRequest = (payload: Json) => Promise<Json>
@@ -24,7 +25,6 @@ const text = (v: unknown) => typeof v === 'string' ? v : null
 const number = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 // These native validations run before dispatch. Storage errors, conflicts and
 // unknown failures deliberately stay uncertain: they cannot prove no launch.
-const TEAM_WRITTEN_MAIN_ACCOUNT = 'A Harness Team agent wrote this task\'s code, so it runs only in a Team account, never in this machine\'s main account. Choose an agent or machine in a Team account.'
 const PRE_DISPATCH_REFUSALS = new Set([
   'INVALID_ENGINE', 'INVALID_CWD', 'INVALID_PROJECT_SOURCE', 'INVALID_REPOSITORY',
   'INVALID_GRID', 'INVALID_CODEX_HOME', 'INVALID_DSH', 'INVALID_PROMPT',
@@ -241,6 +241,25 @@ export function untrustCheckout(home: string, checkout: string): void {
   if (tables.length) appendFileSync(file, `${config && !config.endsWith('\n') ? '\n' : ''}${tables.map(table => `${table}\ntrust_level = "untrusted"\n`).join('')}`, { mode: 0o600 })
 }
 
+/**
+ * Links the person's own Codex sign-in into a Team-written start's own engine home off a Team daemon (task #4307), as a link:
+ * Harness never opens or copies a login (anh Dee, 11-07), and the person's sign-out, or a token Codex refreshes, is the same
+ * file. The branch's code gains nothing by it: it runs as the person on their own computer, where that file already is. Null
+ * when linked, here or by an earlier try of the same start; otherwise why the start cannot run.
+ */
+export function linkCodexSignIn(home: string, own: string): string | null {
+  const source = joinPath(own, 'auth.json'), target = joinPath(home, 'auth.json')
+  if (!isAbsolute(source) || !existsSync(source)) return CODEX_TEAM_WRITTEN_SIGNED_OUT
+  try { symlinkSync(source, target, 'file') } catch (error) {
+    try { if (readlinkSync(target) === source) return null } catch { /* Not a link: said below. */ }
+    return `Codex could not be signed in for this task: its code was written by a Harness Team agent, so Codex runs it in a home of its own that loads none of the branch's settings, and this computer could not link its Codex sign-in there (${(error as NodeJS.ErrnoException).code ?? 'error'}). Choose Claude Code for this task.`
+  }
+  return null
+}
+
+/** Why Team-written Codex work cannot start where Codex keeps no sign-in file (signed out, or in the system keychain). */
+export const CODEX_TEAM_WRITTEN_SIGNED_OUT = 'Codex is not signed in with a sign-in file on this computer. This task\'s code was written by a Harness Team agent, so Codex runs it in a home of its own that loads none of the branch\'s settings, and that home uses this computer\'s Codex sign-in file. Sign in to Codex here, or choose Claude Code for this task.'
+
 /** How a backend from before `heavy` (backend superTabs/commands.ts startRequestSchema) refuses it, word for word. */
 export const HEAVY_REFUSED = 'command.request: Unrecognized key: "heavy"'
 export const HEAVY_NOT_RECORDED = 'This server cannot record that the start runs heavy work, so routes in the next minutes will not count it on its machine. Update the Harness server.'
@@ -391,13 +410,11 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
         if (!refusedByBackend(error)) throw error
         return await releaseRefused(error)
       }
-      // Code a Team agent wrote never runs as this machine's owner (backend superTabs/teamWritten.ts, audit H2). The server sends it
-      // only to a Team account's machine, so this is the last check, for a row or a server that says otherwise.
-      const projectSettingsOff = request.projectSettings === 'off'
-      if (projectSettingsOff && !isTeamDaemon()) {
-        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: TEAM_WRITTEN_MAIN_ACCOUNT } }))
-        return { error: 'START_FAILED', startId, detail: TEAM_WRITTEN_MAIN_ACCOUNT }
-      }
+      // Code a Team agent wrote runs with none of its branch's own settings, hooks or trust (backend superTabs/teamWritten.ts,
+      // audit H2). Since Swarm v3 there is no Team machine, and the server sends such work only to the project owner's own
+      // computer (ruling #4120); a refusal here failed every start of it (#4188, 11-07). It launches with the protections a
+      // Team daemon gave it: the `teamWritten` mode below, and for Codex an engine home of its own.
+      const projectSettingsOff = request.projectSettings === 'off', team = isTeamDaemon()
       // Both direct and contributed-host starts reach this boundary. Existing
       // native receipts are read above and never have their permissions changed.
       // Engines without a full mode retain their existing approving launch flags.
@@ -472,11 +489,20 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       for (const key of ['codexHome', 'gridModel', 'gridName']) if (request[key] !== undefined) payload[key] = request[key]
       // A Codex Product Manager in a Harness Team account runs in an engine home of its own, deleted whole when the Swarm
       // ends it, so nothing of its chats stays where the account's next agent reads (teamDaemon.ts, security re-check 2 of #2089).
-      // Team-written Codex work too: a home that trusts no project keeps the branch's own settings out (engines/codex/launch.ts).
-      const pmHome = lead || projectSettingsOff ? pmEngineHome(String(request.engine), creationId, isTeamDaemon(), homedir()) : null
+      // Team-written Codex work too, on any machine: a home that trusts no project keeps the branch's own settings out
+      // (engines/codex/launch.ts).
+      const pmHome = lead || projectSettingsOff ? pmEngineHome(String(request.engine), creationId, team || projectSettingsOff, homedir()) : null
       if (pmHome) {
         // Codex refuses a CODEX_HOME that is not there; only the Team user reads it.
         mkdirSync(pmHome, { recursive: true, mode: 0o700 })
+        // Off a Team daemon that home has no sign-in: Team accounts got theirs from the relay v3 removed. It takes the person's
+        // own, from the Codex home this start would have used.
+        const unsigned = projectSettingsOff && !team
+          ? linkCodexSignIn(pmHome, launchCodexHome(typeof payload.codexHome === 'string' ? payload.codexHome : null)) : null
+        if (unsigned) {
+          requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: unsigned } }))
+          return { error: 'START_FAILED', startId, detail: unsigned }
+        }
         payload.codexHome = pmHome
         if (projectSettingsOff) untrustCheckout(pmHome, String(request.cwd))
       }
