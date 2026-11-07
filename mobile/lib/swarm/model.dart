@@ -527,11 +527,14 @@ class SuperTabConversation {
   final List<String>? releasing;
 
   /// Each linked pull request's check state as the server's PR watch last read it, by URL: `green`, `red` or `running`
-  /// (backend pullRequestEvents.ts checksStateOf, task #3827). Read as the desktop does; the phone draws no board yet.
+  /// (backend pullRequestEvents.ts checksStateOf, task #3827). Read as the desktop does;
+  /// the phone's Board does not draw it yet.
   final Map<String, String> pullRequestChecks;
 
-  /// The release tags that carried it to people, once they have (backend releases.ts `released`); empty before. Read as the
-  /// desktop does; the phone draws no board yet.
+  /// The release tags that carried it to people, `v1.3.84_desktop` and the
+  /// like, once the server recorded the release (backend releases.ts
+  /// `released`): what the Board's Shipped names. Empty before, and from an
+  /// older server.
   final List<String> releasedTags;
 
   /// Its place in its project's shared Next up and the day before which it

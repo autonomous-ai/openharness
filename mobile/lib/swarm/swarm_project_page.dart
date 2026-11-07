@@ -17,6 +17,7 @@ import 'linked_tasks.dart';
 import 'model.dart';
 import 'swarm_buddy.dart';
 import 'swarm_buddy_chat.dart';
+import 'swarm_board_page.dart';
 import 'swarm_chat_menu.dart';
 import 'swarm_conversation_page.dart';
 import 'swarm_home_keeper.dart';
@@ -274,6 +275,7 @@ class _SwarmOpenedChatState extends State<SwarmOpenedChat> {
       key: const ValueKey('swarm-opened-project'),
       swarmId: widget.swarmId,
       projectId: projectId,
+      tab: SwarmProjectTab.chat,
       messageId: widget.messageId,
       threadId: widget.threadId,
       threadFocus: widget.threadFocus,
@@ -304,7 +306,7 @@ class SwarmProjectPage extends StatefulWidget {
     super.key,
     required this.swarmId,
     required this.projectId,
-    this.tab = SwarmProjectTab.chat,
+    this.tab,
     this.tabs = SwarmProjectTab.current,
     this.mention,
     this.messageId,
@@ -314,8 +316,9 @@ class SwarmProjectPage extends StatefulWidget {
 
   final String swarmId, projectId;
 
-  /// The tab it opens on.
-  final SwarmProjectTab tab;
+  /// The tab it opens on: the first, else the chat when it is asked for a
+  /// message, a thread or a mention, which only the chat shows.
+  final SwarmProjectTab? tab;
 
   /// The tabs it has.
   final List<SwarmProjectTab> tabs;
@@ -343,12 +346,19 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
   /// the chat's page under it answers.
   final _findRequests = ValueNotifier(0);
   void _findInChat() => _findRequests.value++;
-  late SwarmProjectTab _tab = widget.tabs.contains(widget.tab)
-      ? widget.tab
-      : widget.tabs.first;
+  late SwarmProjectTab _tab = switch (widget.tab) {
+    final tab? when widget.tabs.contains(tab) => tab,
+    _
+        when widget.tabs.contains(SwarmProjectTab.chat) &&
+            (widget.mention ?? widget.messageId ?? widget.threadId) != null =>
+      SwarmProjectTab.chat,
+    _ => widget.tabs.first,
+  };
 
-  /// Swarm Home C's page: its chat alone, its leaderboard and team in sheets.
-  bool get _homeC => widget.tabs.length == 1;
+  /// Swarm Home C's page: its header with the project's details, and its
+  /// leaderboard and team in sheets; direction B's tabs, with the Buddy,
+  /// keep their own header.
+  bool get _homeC => !widget.tabs.contains(SwarmProjectTab.buddy);
 
   /// Where the chat opens ([SwarmProjectPage.messageId]): forgotten once
   /// another tab is picked, so the chat shown again opens at its end.
@@ -755,6 +765,13 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       projectId: project.id,
       actions: _buddy!,
     ),
+    SwarmProjectTab.board => SwarmBoardPage(
+      session: session,
+      reader: reader,
+      projectId: project.id,
+      onOpen: _open,
+      onOpenChat: () => setState(() => _tab = SwarmProjectTab.chat),
+    ),
     SwarmProjectTab.tasks => SwarmProjectTasks(
       session: session,
       reader: reader,
@@ -803,7 +820,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
                 _header(session, reader, snapshot, project, back),
                 // The chat's news moves with the Lead's tags too: they build
                 // the tabs alone.
-                if (!_homeC)
+                if (widget.tabs.length > 1)
                   ListenableBuilder(
                     listenable: asks ?? Listenable.merge(const []),
                     builder: (context, _) => SwarmProjectTabBar(
