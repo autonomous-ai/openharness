@@ -223,6 +223,12 @@ export interface AgentStartRequest {
   /** The projects a Swarm-wide Buddy's folder holds, one read-only worktree each, made from that project's own checkout on its
    *  machine (spec: Folder). Ids, names and folders only. */
   buddyProjects?: Array<{ id: string; name: string; cwd: string }>
+  /** A Member's task session's start (taskSessions.ts, task #4543): the Member (its chat session's agent id) it works for, and the
+   *  one project it works in, from a worktree of that project's folder ([cwd]) in the Member's task home. `dropProjectId`: its
+   *  Member's held project whose worktree its host removes first, when clean and pushed, to stay within five. Server-written. */
+  memberOf?: string
+  memberProject?: { id: string; name: string }
+  dropProjectId?: string
   /** The offered account selected for a destination PM switch. */
   profileId?: string
   /** A crew member's move (crewKeep.ts): the agent its start takes over from once it runs. Written by the server alone. */

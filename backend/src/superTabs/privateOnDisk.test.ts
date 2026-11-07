@@ -27,18 +27,21 @@ describe('the private projects whose files Harness put on a computer', () => {
     notePrivateOnDisk(f.state, queued(f, app.task))
     expect(f.machine().privateOnDisk).toBeUndefined()
     const start = queued(f, secret.task)
-    f.run({ type: 'agent.startDispatch', startId: start.id }, mate, own('mate'))
+    notePrivateOnDisk(f.state, start)
     expect(f.machine().privateOnDisk).toEqual([secret.projectId])
     // Sent again (a retried dispatch), it is still listed once.
     notePrivateOnDisk(f.state, start)
     expect(f.machine().privateOnDisk).toEqual([secret.projectId])
   })
 
-  it('gains the private projects a Buddy start copies into its chat home', () => {
+  it('gains the private projects a Buddy start copies into its chat home, as the server sends it', () => {
     const f = swarm()
     const secret = f.project('secret', 'private'), app = f.project('app')
-    notePrivateOnDisk(f.state, queued(f, app.task, { buddyProjects: [{ id: app.projectId, name: 'app', cwd: '/swarm/a' },
-      { id: secret.projectId, name: 'secret', cwd: '/swarm/s' }] }))
+    const chat = f.state.conversations.find(c => c.kind === 'swarm-buddy')!.id
+    const start = queued(f, chat, { cwd: '/swarm/.buddy-mate', worktree: false, buddyScope: 'swarm', buddyOf: { personId: 'mate', generation: f.agent(f.buddy).membershipGeneration },
+      buddyProjects: [{ id: app.projectId, name: 'app', cwd: '/swarm/a' }, { id: secret.projectId, name: 'secret', cwd: '/swarm/s' }] })
+    expect(f.machine().privateOnDisk).toBeUndefined()
+    f.run({ type: 'agent.startDispatch', startId: start.id }, mate, own('mate'))
     expect(f.machine().privateOnDisk).toEqual([secret.projectId])
   })
 
