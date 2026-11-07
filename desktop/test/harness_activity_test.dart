@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/notify/alert_sounds.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/state/harness_activity.dart';
 import 'package:harness/state/pending_question.dart';
 import 'package:harness/state/swarm.dart';
@@ -294,7 +295,9 @@ void main() {
         'error': 'Failed',
       });
       await tester.pump();
-      expect(find.text('✗'), findsOneWidget);
+      // A failed turn is the triangle, never an X beside the pane's close.
+      expect(find.byIcon(AppIcons.triangleAlert), findsOneWidget);
+      expect(find.text('✗'), findsNothing);
       expect(
         tester.getRect(find.byKey(const ValueKey('terminal-pane-title'))),
         titleRect,

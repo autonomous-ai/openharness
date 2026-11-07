@@ -253,7 +253,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(c.hasPendingAction, isTrue);
       expect(tester.widget<FilledButton>(confirm).onPressed, isNull);
-      await tester.tap(find.widgetWithText(TextButton, 'Check pending action'));
+      await tester.tap(find.widgetWithText(TextButton, 'Check again'));
       await tester.pumpAndSettle();
       expect(c.hasPendingAction, isFalse);
       expect(tester.widget<FilledButton>(confirm).onPressed, isNotNull);

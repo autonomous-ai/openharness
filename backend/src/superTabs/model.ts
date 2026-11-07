@@ -261,6 +261,9 @@ export interface AgentStart {
   /** When it was asked for (absent on starts from before 2026-10-29): a Buddy's fails if its machine never takes it, and a
    *  task's start never launched leaves the task orphaned (liveness.ts). */
   requestedAt?: number
+  /** Why its machine holds it without launching it, from the machine's report (cli superTabs/machines.ts), with when it was first
+   *  told: gone once the start launches or fails. Read whole by the readers of its raw reason, as what it means by the rest. */
+  waiting?: { reason: string; at: number }
   /** On reads only, never stored: its machine's fresh report says it is preparing (machines.ts startPreparing). */
   preparing?: true
   error: string | null
@@ -511,6 +514,9 @@ export interface Conversation {
   lostAttempt?: { id: string; agentId: string; machineId?: string; engine?: string }
   /** Counts reaction changes here (reactions.ts), so readers see a new reaction on an older message. */
   reactionSeq?: number
+  /** The tasks its work goes on in, as its cancel's reason names them (commands.ts goesOnIn, task #4462): a duplicate, or
+   *  work folded or split into others. It leaves people's Tasks feeds and stays in its project's archived list, which can open them. */
+  foldedInto?: string[]
   /** A durable proposal on this card (#3817); retained when its accepted work becomes a task. */
   proposal?: import('./proposalCards.js').ProposalRecord
   /** A Buddy chat's owner messages its Buddy already proposed for (buddies.ts): each asks once. */
@@ -1317,7 +1323,9 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   }
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) visible.invitations = []
   for (const start of visible.starts ?? []) {
-    if (start.error && !readsRawReason(actor, start, state.conversations.find(c => c.id === start.request.conversationId))) start.error = publicReason(start.error)
+    const raw = readsRawReason(actor, start, state.conversations.find(c => c.id === start.request.conversationId))
+    if (start.error && !raw) start.error = publicReason(start.error)
+    if (start.waiting && !raw) start.waiting = { ...start.waiting, reason: publicReason(start.waiting.reason) }
   }
   // A Buddy brainstorms; where agents run and how work is routed are none of its business (buddies.ts). A start names the
   // machine and the folder on it, so it reads none, though it reads their workgroups.

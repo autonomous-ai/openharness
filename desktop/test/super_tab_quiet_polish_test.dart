@@ -343,7 +343,12 @@ void main() {
       await tester.tap(_key('super-manage'));
       await tester.pumpAndSettle();
       final heading = tester.getTopLeft(find.text('Manage').last).dx;
-      expect(tester.getTopLeft(find.text('Machines')).dx, heading);
+      // The Machines screen has its own title too; this is the tab's.
+      final machinesTab = find.descendant(
+        of: _key('super-manage-tab-machines'),
+        matching: find.text('Machines'),
+      );
+      expect(tester.getTopLeft(machinesTab).dx, heading);
       await tester.tap(_key('super-manage-tab-swarm'));
       await tester.pumpAndSettle();
       expect(tester.getTopLeft(find.text('Name')).dx, heading);

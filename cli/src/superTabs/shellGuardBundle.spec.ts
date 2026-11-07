@@ -18,6 +18,9 @@ describe('the shell guard in a shipped CLI', () => {
     execFileSync(process.execPath, ['build-bundle.mjs'], {
       cwd: CLI_ROOT, env: { ...process.env, BUNDLE_OUT_DIR: out }, stdio: 'pipe', timeout: 120_000,
     })
+    // As the shipped CLI's folder says: cli.js is an ES module. Without it, a temporary folder under an agent's own, whose
+    // parent marks scripts CommonJS (lib/agentTmp.ts), loaded cli.js as CommonJS and every case failed (#4395).
+    writeFileSync(join(out, 'package.json'), '{"type":"module"}\n')
     // The lean core gives hooks the cli.js it was started for through argv[1]. Compile the real helper into
     // a separate chunk, as the release does: its import.meta.url is no longer src/lib/agentShellGuard.ts.
     const source = join(scratch, 'hook-command.ts')

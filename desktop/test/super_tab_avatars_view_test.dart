@@ -13,7 +13,7 @@ Finder saying(String text) => find.byWidgetPredicate(
 
 void main() {
   testWidgets(
-    'the roster shows each person’s avatar and status, each agent its pattern',
+    'the roster shows each person’s avatar and status, each agent its face',
     (tester) async {
       final f = RosterFixture();
       addTearDown(f.dispose);
@@ -52,7 +52,7 @@ void main() {
       );
       expect(f.inRow(1, find.text('🦉')), findsOneWidget);
       expect(
-        f.inRow(3, find.byKey(const ValueKey('super-avatar-pattern'))),
+        f.inRow(3, find.byKey(const ValueKey('super-agent-face'))),
         findsOneWidget,
       );
       await f.close(tester);
