@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { PROCESS_ENGINES } from '../engines/types.js'
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -306,12 +307,14 @@ export class ContributedMachines {
   }
   /** The engines' own installs and sign-ins, probed again once [READINESS_MS] old. */
   private async ownEngines(local: { request: (type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown> }, now: number): Promise<ReadyEngine[] | null> {
+    // Periodic work asks only engines with account readers. Add a vendor here when its reader lands;
+    // unsupported engines would spawn login shells just to return unknown (#3839 security review).
     const answer = await local.request('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000).catch(() => null)
     const engines = object(answer).engines
     // An engine that says nothing of its sign-in (an older daemon, an engine not installed) is unknown, never signed out.
     // Not installed is unknown too: the probe answers the same for a login shell that timed out (lib/engineProbe.ts), and
     // such a machine fails its first start loudly instead (review of #1743).
-    const value = Array.isArray(engines) ? list(engines).filter(e => e.engine === 'claude' || e.engine === 'codex')
+    const value = Array.isArray(engines) ? list(engines).filter(e => (PROCESS_ENGINES as readonly unknown[]).includes(e.engine))
       .map((e): ReadyEngine => ({ engine: String(e.engine), installed: e.installed === true ? true : null,
         signedIn: e.installed === true && typeof e.signedIn === 'boolean' ? e.signedIn : null })) : null
     this.engineRead = { value, until: now + (value ? READINESS_MS : READINESS_RETRY_MS) }
