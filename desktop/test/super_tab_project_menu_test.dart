@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/widgets/app_menu.dart';
@@ -324,6 +326,32 @@ void main() {
         expect(find.text('Project settings'), findsNothing);
       },
     );
+  });
+
+  // Task #4705: the dialog worked out its rows once, so a save under way when it opened hid Rename until reopened.
+  testWidgets('Rename project shows once a save under way finishes', (
+    tester,
+  ) async {
+    final server = swarm();
+    final c = await showView(tester, server);
+    final hold = server.holdCommands = Completer<void>();
+    unawaited(
+      c.command({'type': 'project.about', 'projectId': 'lead', 'about': 'x'}),
+    );
+    await tester.pump();
+    expect(c.saving, isTrue);
+    await openSettings(tester);
+    expect(find.text('Rename project'), findsNothing);
+    expect(find.text('Project details'), findsOneWidget);
+    hold.complete();
+    server.holdCommands = null;
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.pumpAndSettle();
+    expect(c.saving, isFalse);
+    expect(find.text('Rename project'), findsOneWidget);
+    await tester.tap(find.text('Rename project'));
+    await tester.pumpAndSettle();
+    expect(find.text('Project settings'), findsNothing);
   });
 
   testWidgets('a settings row closes the dialog and does its work', (
