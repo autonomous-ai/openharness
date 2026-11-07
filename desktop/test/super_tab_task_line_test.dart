@@ -259,7 +259,9 @@ void main() {
     await showView(tester, server);
     expect(find.text('Save offline drafts · in review'), findsOneWidget);
     expect(find.byType(SuperTabShipRow), findsOneWidget);
-    expect(find.text('Shipped: Offline drafts'), findsOneWidget);
+    expect(find.text('Offline drafts'), findsOneWidget);
+    await tester.tap(find.text('What changed'));
+    await tester.pumpAndSettle();
     expect(find.text('Built by'), findsOneWidget);
   });
 
@@ -287,7 +289,7 @@ void main() {
     }
 
     for (final (ask, tag) in [('proposal', '✋ Proposal')]) {
-      testWidgets('$ask shows $tag after the time, in its muted style', (
+      testWidgets('$ask shows $tag after the name, in its muted style', (
         tester,
       ) async {
         final server = _server('buddy-proposal')..threadAsks['root'] = ask;
@@ -301,17 +303,9 @@ void main() {
           tester.widget<Text>(shown).style,
           SwarmType.time(tester.element(shown)),
         );
-        final time = find.descendant(
-          of: _row('root'),
-          matching: find.textContaining(RegExp(r'^\d+:\d\d')),
-        );
-        expect(
-          tester.getTopLeft(time).dx,
-          lessThan(tester.getTopLeft(shown).dx),
-        );
         expect(
           tester.getTopLeft(find.text('dee')).dx,
-          lessThan(tester.getTopLeft(time).dx),
+          lessThan(tester.getTopLeft(shown).dx),
         );
       });
     }

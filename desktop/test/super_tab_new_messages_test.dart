@@ -155,6 +155,8 @@ void main() {
       tester.getTopLeft(find.byKey(_line)).dy,
       lessThan(tester.getTopLeft(find.text('After my answer')).dy),
     );
+    // Bubbles are short enough to read to the end: its mark's save runs out.
+    await tester.pump(const Duration(milliseconds: 300));
   });
 
   /// [server]'s next message as a reply in message 5's thread, [inChat] when
@@ -186,6 +188,7 @@ void main() {
       tester.getTopLeft(find.byKey(_line)).dy,
       lessThan(tester.getTopLeft(find.text('Reply also in the chat')).dy),
     );
+    await tester.pump(const Duration(milliseconds: 300));
   });
 
   testWidgets('only thread replies past the mark: no line and no pill', (

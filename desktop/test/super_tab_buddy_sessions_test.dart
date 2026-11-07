@@ -1057,10 +1057,16 @@ void main() {
       find.byTooltip('Starts a separate Buddy session for this message'),
       findsOneWidget,
     );
-    // Left of the attach and send buttons, on the composer's row.
+    // Inside the composer's pill, on its row (#4529).
     expect(
       tester.getRect(chatSession).right,
-      lessThan(tester.getRect(chatSend).left),
+      lessThanOrEqualTo(
+        tester
+            .getRect(
+              find.byKey(const ValueKey('super-message-composer-surface')),
+            )
+            .right,
+      ),
     );
     final chatNote = find
         .byKey(const ValueKey('super-chat-session-note'))
@@ -1097,9 +1103,17 @@ void main() {
     // In the chat the message stands on its own, not under the one before
     // it, with its session's line: found again once the pane is closed.
     final row = find.byKey(ValueKey('super-message-$root'));
+    // Its bubble joins none above: its upper corner on your side is round.
+    final bubble = tester.widget<DecoratedBox>(
+      find.descendant(
+        of: row,
+        matching: find.byKey(const ValueKey('swarm-bubble')),
+      ),
+    );
     expect(
-      find.descendant(of: row, matching: find.text('You')),
-      findsOneWidget,
+      ((bubble.decoration as BoxDecoration).borderRadius! as BorderRadius)
+          .topRight,
+      const Radius.circular(18),
     );
     c.closeThread();
     await tester.pumpAndSettle();
