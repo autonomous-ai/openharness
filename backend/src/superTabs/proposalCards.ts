@@ -155,19 +155,6 @@ export function authorizeProposalAction(state: SuperTabState, actor: Actor, comm
   }
 }
 
-/** Notices stay inside the consenting person's private Buddy chat, including when no Buddy can currently run. */
-export function proposalNotices(state: SuperTabState, card: Conversation & { proposal: ProposalRecord }, moment: 'decided' | 'needs-you' | 'shipped',
-  text: string, sender: Author, operationId: string, recipients = card.proposal.senders): MessageDraft[] {
-  const project = groupProject(state, card)
-  return recipients.flatMap((identity, i) => {
-    const member = state.people.find(p => p.id === identity.personId && p.generation === identity.generation)
-    if (!member || !canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)) return []
-    const route = buddyFor(state, member, identity.buddyId ?? null)
-    return [{ id: stableId(operationId, 'proposal-notice', String(i), moment), conversationId: route.chat.id, author: sender,
-      text, replyTo: null, recipients: route.agent ? [route.agent.id] : [], buddyProject: project.id,
-      source: { kind: 'proposal-notice', moment, projectId: project.id, cardId: card.id } }]
-  })
-}
 function pending(card: Conversation & { proposal: ProposalRecord }): void {
   if (card.proposal.decision || card.proposal.mergedInto) fail('PROPOSAL_DECIDED', 'This proposal already has a decision or was merged.', 409)
 }
@@ -197,8 +184,6 @@ export function applyProposalAction(state: SuperTabState, actor: Actor, command:
     card.proposal.questions.push(q)
     result.questionId = q.id
     row(`${q.question}\nDefault: ${q.defaultAnswer}\nBy: ${new Date(q.deadline).toISOString()}`, { kind: 'proposal-question', questionId: q.id })
-    messages.push(...proposalNotices(state, card, 'needs-you', `${card.title}: ${q.question}`, sender, operationId,
-      currentSender(state, card, command.personId)))
   } else if (command.type === 'proposal.decide') {
     pending(card)
     if (hasOpenQuestion(card)) fail('PROPOSAL_QUESTION_OPEN', 'Answer the open questions before deciding.', 409)
@@ -220,7 +205,6 @@ export function applyProposalAction(state: SuperTabState, actor: Actor, command:
     delete card.proposal.overdue
     if (command.decision === 'no') card.archived = true
     row(`${command.decision}: ${command.reason}`, { kind: 'proposal-decision', decision: command.decision })
-    messages.push(...proposalNotices(state, card, 'decided', `${card.title}: ${command.decision}. ${command.reason}`, sender, operationId))
   } else {
     if (card.taskApproval) fail('TASK_APPROVAL_REQUIRED', 'Keep Review proposals separate so each person’s decision and chosen agent stay attached.', 409)
     pending(card)
@@ -245,7 +229,6 @@ export function applyProposalAction(state: SuperTabState, actor: Actor, command:
     row(`Merged into #${target.number}: ${command.reason}`, { kind: 'proposal-merged', intoConversationId: target.id })
     messages.push({ id: stableId(operationId, 'merge-target'), conversationId: target.id, author: sender, text: `Merged #${card.number}: ${command.reason}`,
       recipients: target.leadId ? [target.leadId] : [], replyTo: null, source: { kind: 'proposal-merged' } })
-    messages.push(...proposalNotices(state, target, 'decided', `${card.title} was merged into ${target.title}. ${command.reason}`, sender, operationId))
     result.conversationId = target.id
   }
   return { messages, result }

@@ -444,22 +444,18 @@ describe('an instructions save keeps the rules people gave', () => {
     expect(f.run(save(2, doc(reworded, merged), { askedBy: 'owner' }), as(lead), stored(doc(leo, merged), 2)).result.revision).toBe(3)
   })
 
-  it('lets a drop approved by the rule\'s person go through, and tells that person in one private line', () => {
+  it('lets a drop approved by the rule\'s person go through, and tells that person in one line in the project chat', () => {
     const { f, lead } = pm()
     const effects = f.run(save(1, doc(tony, quiet), { askedBy: 'owner', approvals: ['yes-from-peer'] }), as(lead),
       { ...stored(), approvals: [approval('yes-from-peer', { kind: 'person', id: 'peer' })] })
     expect(effects.result.revision).toBe(2)
-    const notices = effects.messages.filter(m => m.conversationId !== 'lead')
-    expect(notices.length).toBeGreaterThan(0)
-    for (const notice of notices) {
-      expect(notice.recipients).toEqual([])
-      expect(notice.text.split('\n')).toHaveLength(1)
-      expect(notice.text).toContain('A bug that reaches stable')
-      const chat = f.state.conversations.find(c => c.id === notice.conversationId)!
-      expect(chat.audience).toMatchObject({ people: [{ id: 'peer' }] })
-    }
-    // Nothing in the project chat: a save posts no line there (#3132), and the person's notice is theirs alone.
-    expect(effects.messages.filter(m => m.conversationId === 'lead')).toEqual([])
+    // In the project chat, mentioning them, where its instructions are everyone's to read: never in their private chat with their
+    // own agent (task #4547).
+    expect(effects.messages).toEqual([expect.objectContaining({ conversationId: 'lead', recipients: [], mentions: ['peer'],
+      source: { kind: 'rule-approved', projectId: 'lead' } })])
+    const [notice] = effects.messages
+    expect(notice!.text.split('\n')).toHaveLength(1)
+    expect(notice!.text).toContain('A bug that reaches stable')
   })
 
   it('lets the rule\'s person drop it themselves with no approval and no notice', () => {

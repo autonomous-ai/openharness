@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { openSwarmBuddyChat, swarmBuddyChatId } from './buddies.js'
 import { applyCommand, type Command } from './commands.js'
 import { createSuperTab, SuperTabError, type Actor, type Agent, type Author, type MessageDraft } from './model.js'
-import { checkPrivateChat } from './privateChat.js'
+import { checkPrivateChat, SWARM_AUTHOR } from './privateChat.js'
 
 // Task #4547 (anh Dee, 11-07 18:28): only a person and their own agent post in their private chat with that agent. River and
 // Theo showed up in his: a Lead's private lines and proposal notices were written there as the Lead.
@@ -67,5 +67,28 @@ describe('a person’s private chat with their own agent', () => {
     catch (error) { message = (error as Error).message; expect((error as SuperTabError).code).toBe('PRIVATE_CHAT') }
     expect(message).toContain('decision.ask')
     expect(message).toContain('project chat')
+  })
+})
+
+describe('the Swarm’s own lines in a person’s private chat', () => {
+  const line = (conversationId: string, author: Author): MessageDraft => ({ ...row(conversationId, author), source: { kind: 'others-work-notice' } })
+
+  it('are written as the person’s own Buddy', () => {
+    const f = fixture()
+    expect(checkPrivateChat(f.state, [line(f.peerBuddy.chat, as('agent', f.pm))])[0]!.author).toMatchObject({ kind: 'agent', id: f.peerBuddy.id })
+  })
+
+  it('are written as Harness when the person has no Buddy there, so a contributor still hears their machine is used', () => {
+    const f = fixture()
+    const chat = f.state.conversations.find(c => c.id === f.peerBuddy.chat)!
+    chat.agentIds = []
+    expect(checkPrivateChat(f.state, [line(chat.id, as('agent', f.pm))])[0]!.author).toEqual(SWARM_AUTHOR)
+    // And again at the store's write.
+    expect(checkPrivateChat(f.state, checkPrivateChat(f.state, [line(chat.id, as('agent', f.pm))]))[0]!.author).toEqual(SWARM_AUTHOR)
+  })
+
+  it('are never a Lead’s or person’s words: a row of another kind as Harness is refused', () => {
+    const f = fixture()
+    expect(code(() => checkPrivateChat(f.state, [row(f.peerBuddy.chat, SWARM_AUTHOR)]))).toBe('PRIVATE_CHAT')
   })
 })

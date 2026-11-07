@@ -313,16 +313,15 @@ describe('personal approval enforced before work', () => {
       { proposal: { id: row.id, conversationId: row.conversationId, author: row.author, source: row.source ?? null } })
     expect(f.state.conversations.find(c => c.proposal?.legacyMessageId === row.id)?.archived).toBe(true)
   })
-  it('tells the person, through their Buddy, that the PM closed their proposal and why (task #4252, audit 18)', () => {
+  it('records on the person\'s card that the PM closed their proposal and why, writing nothing in their Buddy chat (task #4252, audit 18)', () => {
     const f = fixture(false); const sent = f.propose()
     const row = sent.messages.find(m => m.source?.kind === 'buddy-proposal')!
     const closed = f.runCommand({ type: 'proposal.close', projectId: 'lead', messageId: row.id, reason: 'Out of scope' }, f.pm,
       { proposal: { id: row.id, conversationId: row.conversationId, author: row.author, source: row.source ?? null } })
-    const notice = closed.messages.find(m => m.source?.kind === 'proposal-notice')
     const mirror = f.state.conversations.find(c => c.proposal?.legacyMessageId === row.id)!
-    // Routed as a board decision's notice is (buddies.ts buddyFor).
-    expect(notice).toMatchObject({ source: { moment: 'decided', cardId: mirror.id } })
-    expect(notice!.text).toContain('Out of scope')
+    expect(mirror).toMatchObject({ archived: true, proposal: { decision: { kind: 'no', reason: 'Out of scope' } } })
+    // Task #4547: only the person and their own Buddy write in their Buddy chat, so the PM's close posts no notice there.
+    expect(closed.messages).toEqual([])
   })
   it('redacts a pasted credential from a rejection before its reason reaches stored parts or messages', () => {
     const token = ['sk', 'AbCdEf0123456789'.repeat(3)].join('-') // Synthetic fixture, never a provider credential.

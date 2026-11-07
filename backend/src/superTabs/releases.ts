@@ -1,4 +1,3 @@
-import { proposalNotices } from './proposalCards.js'
 import { shippedNotice } from './buddyNews.js'
 /**
  * Releases scheduled by the Swarm (task #3405, anh Dee's Swarm redesign, 2026-11-05: the server does the routine). A merge
@@ -288,10 +287,8 @@ export function settleReleases(state: SuperTabState, projectId: string, facts: R
     if (!group || group.releasing) continue
     const sender = { kind: 'agent' as const, id: lead.id, name: lead.name, membershipGeneration: lead.membershipGeneration }
     const once = stableId(group.id, 'shipped', String(group.released!.at))
-    if (group.proposal) {
-      outcome.messages.push(...proposalNotices(state, group as Conversation & { proposal: NonNullable<Conversation['proposal']> },
-        'shipped', `${group.title} shipped.`, sender, once))
-    } else {
+    // A proposal's card shows it shipped (task #4547: nothing in its person's Buddy chat but theirs and their own agent's).
+    if (!group.proposal) {
       const news = shippedNotice(state, group, sender, once)
       if (news) outcome.messages.push(news)
     }

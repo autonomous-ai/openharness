@@ -158,8 +158,12 @@ const decide = (conversationId: unknown, decision = 'accept', extra = {}) => ({ 
 const ask = (conversationId: unknown, extra = {}) => ({ type: 'proposal.ask', conversationId, personId: peer.userId,
   question: 'Keep drafts for seven days?', defaultAnswer: 'Keep seven days', deadline, ...extra })
 
+/** Rows a command wrote into any person's Buddy chat: only they and their own Buddy write there (task #4547). */
+const inBuddyChats = (f: ReturnType<typeof fixture>, messages: Array<{ conversationId: string }>) =>
+  messages.filter(m => ['buddy', 'swarm-buddy'].includes(f.state.conversations.find(c => c.id === m.conversationId)?.kind ?? ''))
+
 describe('PM decisions and card questions', () => {
-  it('sends shipped notices once to every proposer after verified release, never at merge', async () => {
+  it('marks the card shipped once, after verified release, never at merge, with no notice in a proposer\'s Buddy chat', async () => {
     const { notePendingRelease, pendingKey, settleReleases } = await import('./releases.js')
     const { shippedNotice } = await import('./buddyNews.js')
     const { author } = await import('./model.js')
@@ -171,11 +175,15 @@ describe('PM decisions and card questions', () => {
     notePendingRelease(project, card, 'https://github.com/o/r/pull/1', NOW)
     const entry = project.releases!.pending[0]!
     const facts = { resolved: [{ ...entry, components: ['backend' as const] }], releases: {} }
-    expect(settleReleases(f.state, 'lead', facts, NOW).messages.filter(m => m.source?.moment === 'shipped')).toHaveLength(0)
+    expect(settleReleases(f.state, 'lead', facts, NOW).shipped).toEqual([])
+    expect(card.released).toBeUndefined()
     const verified = { resolved: [], releases: { backend: { tag: 'v1.0.0_backend', sha: 'verified', at: NOW + 1000, carries: [pendingKey(entry)] } } }
     const result = settleReleases(f.state, 'lead', verified, NOW + 1000)
-    expect(result.messages.filter(m => m.source?.moment === 'shipped')).toHaveLength(2)
-    expect(settleReleases(f.state, 'lead', verified, NOW + 2000).messages.filter(m => m.source?.moment === 'shipped')).toHaveLength(0)
+    // The card shows it shipped; its proposers' Buddy chats get no line (task #4547).
+    expect(result.shipped).toEqual([id])
+    expect(f.card(id).released).toEqual({ at: NOW + 1000, tags: ['v1.0.0_backend'] })
+    expect(inBuddyChats(f, result.messages)).toEqual([])
+    expect(settleReleases(f.state, 'lead', verified, NOW + 2000).shipped).toEqual([])
   })
 
   it.each(['accept', 'reshape', 'later', 'no'])('records %s with its reason on the same card exactly once', decision => {
@@ -183,7 +191,8 @@ describe('PM decisions and card questions', () => {
     const result = f.run(decide(id, decision, decision === 'later' ? { revisitAt: deadline } : {}), f.pm)
     expect(f.card(id).proposal?.decision).toMatchObject({ kind: decision, reason: 'Prevents lost work for contributors', at: NOW, by: f.lead })
     expect(result.messages.some(m => m.conversationId === id && m.text.includes('Prevents lost work'))).toBe(true)
-    expect(result.messages.some(m => m.source?.kind === 'proposal-notice' && m.source.moment === 'decided')).toBe(true)
+    // On the card alone: no notice in its proposer's Buddy chat (task #4547).
+    expect(inBuddyChats(f, result.messages)).toEqual([])
     if (['accept', 'reshape'].includes(decision)) {
       expect(f.card(id).task).toEqual(acceptedTask)
       expect(queueSiblings(f.state, f.state.projects![0]!)).toContainEqual(f.card(id))
@@ -211,7 +220,8 @@ describe('PM decisions and card questions', () => {
     // A direct Board proposal has no sending Buddy: its current default may answer for its person.
     const asked = f.run(ask(id), f.pm), q = f.card(id).proposal!.questions[0]!
     expect(q).toMatchObject({ personId: peer.userId, question: 'Keep drafts for seven days?', defaultAnswer: 'Keep seven days', deadline, requiresConsent: false })
-    expect(asked.messages.some(m => m.source?.kind === 'proposal-notice' && m.source.moment === 'needs-you')).toBe(true)
+    // The question is on the card, to its person; nothing in their Buddy chat (task #4547).
+    expect(asked.messages).toEqual([expect.objectContaining({ conversationId: id, source: { kind: 'proposal-question', questionId: q.id } })])
     const answer = { type: 'proposal.answer', conversationId: id, questionId: q.id, text: 'Keep fourteen days' }
     expect(() => f.run(answer, outsider)).toThrow(expect.objectContaining({ code: 'PROPOSAL_ANSWER_FORBIDDEN' }))
     f.state.people.find(p => p.id === peer.userId)!.role = 'viewer'
@@ -265,12 +275,13 @@ describe('PM decisions and card questions', () => {
     expect(f.card(id).proposal!.questions[0]!.answer?.by).toBe(fallback.id)
   })
 
-  it('merges duplicates into one card, preserving attribution and notifying every proposer', () => {
+  it('merges duplicates into one card, preserving attribution, and says so on both cards, not in a proposer\'s Buddy chat', () => {
     const f = fixture(), first = f.create().result.conversationId, second = f.create(outsider).result.conversationId
     const merged = f.run({ type: 'proposal.merge', conversationId: second, intoConversationId: first, reason: 'Same reconnect loss' }, f.pm)
     expect(f.card(second)).toMatchObject({ archived: true, proposal: { mergedInto: first } })
     expect(f.card(first).proposal!.senders.map(s => s.personId).sort()).toEqual([peer.userId, outsider.userId].sort())
-    expect(merged.messages.filter(m => m.source?.kind === 'proposal-notice')).toHaveLength(2)
+    // Task #4547: each card says so; every proposer reads the card it now has, and their Buddy chats get nothing.
+    expect(merged.messages.map(m => [m.conversationId, m.source?.kind])).toEqual([[second, 'proposal-merged'], [first, 'proposal-merged']])
     expect(() => f.run({ type: 'proposal.merge', conversationId: first, intoConversationId: second, reason: 'Cycle' }, f.pm)).toThrow()
     expect(() => f.run({ type: 'proposal.merge', conversationId: first, intoConversationId: f.secretGroup, reason: 'Other project' }, f.pm)).toThrow()
     const third = f.create(owner).result.conversationId
@@ -288,7 +299,7 @@ describe('PM decisions and card questions', () => {
   })
 })
 
-// Task #4340: a ruling's reason was stored and copied to the proposer's Buddy chat as typed.
+// Task #4340: a ruling's reason was stored and copied to the proposer's Buddy chat as typed (since task #4547, the card alone).
 describe('credentials in proposal words', () => {
   // Assembled at run time from obviously fake parts, never a credential-shaped literal.
   const token = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_')
@@ -303,9 +314,9 @@ describe('credentials in proposal words', () => {
     sent.push(f.run({ type: 'proposal.merge', conversationId: f.create(owner).result.conversationId, intoConversationId: id, reason: `Same as ${token}` }, f.pm))
     const ruled = f.run(decide(id, 'accept', { reason: `Rotate ${token} first`, task: { ...acceptedTask, changes: `Remove ${token}` },
       checks: [{ description: `No ${token} in logs`, independent: false }] }), f.pm)
-    // Both proposers hear the ruling in their Buddy chats, in its cleaned words.
-    const notices = ruled.messages.filter(m => m.source?.kind === 'proposal-notice')
-    expect(notices.map(m => m.text)).toEqual([0, 1].map(() => `Rotate ${CREDENTIAL_MARKER}: accept. Rotate ${CREDENTIAL_MARKER} first`))
+    // The ruling is on the card, in its cleaned words; no proposer's Buddy chat gets a copy (task #4547).
+    expect(inBuddyChats(f, ruled.messages)).toEqual([])
+    expect(ruled.messages.find(m => m.conversationId === id && m.source?.kind === 'proposal-decision')!.text).toBe(`accept: Rotate ${CREDENTIAL_MARKER} first`)
     expect(f.card(id).proposal!.decision!.reason).toBe(`Rotate ${CREDENTIAL_MARKER} first`)
     expect(f.card(id).proposal!.questions[0]!.answer!.text).toBe(`Yes, ${CREDENTIAL_MARKER}`)
     expect(JSON.stringify([...sent, ruled].map(e => e.messages))).not.toContain(token)

@@ -866,7 +866,7 @@ export const NOTICE_READERS = {
   // Proposal history and private Buddy notices are visible to the people who can read their card/chat.
   'proposal-card': 'people', 'proposal-answer': 'people', 'proposal-notice': 'people', 'proposal-merged': 'people', 'proposal-overdue': 'people',
   'decision-delegated': 'people', 'machine-removed': 'people', ship: 'people',
-  // An agent's question to a person in a switched project, in their default Buddy chat (decisions.ts askedThroughBuddy, #3826).
+  // An agent's question to a person in a switched project, in their default Buddy chat (#3826): no longer written (#4547), read for old rows.
   'decision-asked': 'people',
   // A Buddy's question settled in its owner's Decisions, in their Buddy chat (decisions.ts settleBuddyDecision).
   'decision-answered': 'people',
@@ -879,9 +879,11 @@ export const NOTICE_READERS = {
   'machine-left': 'agent',
   // A task's one line in its project chat, edited as it moves (taskLine.ts): people read a task's state there.
   'task-line': 'people',
-  // A project PM's private line in a person's one Buddy chat, marked with its project (commands.ts person.tell): its person
-  // reads it, as they read the line in their older project chat.
+  // A project PM's private line in a person's one Buddy chat, marked with its project: no longer written (person.tell retired,
+  // #4547), read for old rows.
   'pm-line': 'people',
+  // A rule its person approved dropping, told to them in the project chat, mentioning them (commands.ts instructions.save, #4547).
+  'rule-approved': 'people',
   // Their one Buddy cannot start in a person's older project chat, told to them there once per outage (commands.ts buddyDownLine).
   'buddy-cannot-start': 'people',
   'auto-archive': 'people', native: 'people',
@@ -975,6 +977,8 @@ export interface CommandEffects {
   decisionAnswer?: import('./decisions.js').DecisionAnswer
   /** A must-agree decision past its time, kept waiting for its person (decisions.ts keepWaiting). */
   decisionKeptWaiting?: string
+  /** Decisions whose question was answered elsewhere, closed by the store (decisions.ts closeDecisions; task #4547). */
+  closedDecisions?: string[]
   /** Deliveries of messages already stored: a Buddy thread session's first messages, sent while it started (buddySessions.ts). */
   /** `lead`: a project's Lead hearing its person's messages sent while the chat had none (leadStart.ts leadArrived). */
   lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string }; lead?: true }>

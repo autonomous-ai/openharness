@@ -16,7 +16,8 @@ export const isSwarmBuddy = (target: Pick<Agent, 'buddyOf' | 'buddyScope'> | und
 /** The project a project session works in (spec: The model); undefined for a Swarm-wide Buddy and for a Buddy of a project's
  *  chat, whose project is its chat's. */
 export const sessionProjectId = (target: Pick<Agent, 'buddySession'> | undefined): string | undefined => target?.buddySession?.projectId
-/** A project PM's private line to one person in their one Buddy chat (commands.ts person.tell): its source names the project. */
+/** A project PM's private line to one person in their one Buddy chat: its source names the project. No longer written (task #4547:
+ *  person.tell is retired); read for the rows already stored. */
 export const PM_LINE_KIND = 'pm-line'
 
 /** Whether a Buddy reads [group] of its own project, as its person would (Ken, 10-29): the project chat, its own chat, and

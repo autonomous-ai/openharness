@@ -42,6 +42,14 @@ export const PROCESS_NOTES: readonly ProcessNote[] = [
       + 'so the shell guard turns it away. Your tool sheet says it.',
     schedule: '52cb6172d956',
   },
+  {
+    // #4547 (anh Dee, 11-07): a person's chat with their own agent is theirs alone, so person.tell is retired.
+    id: '2026-11-07-private-chat',
+    text: 'There is no private line to a person any more: their chat with their own agent is theirs alone, so person.tell is refused. '
+      + 'Ask them with decision.ask when you need their choice, or post in the project chat when everyone may read it. Your proposal '
+      + 'questions (proposal.ask) reach their Decisions by themselves.',
+    schedule: '52cb6172d956',
+  },
 ]
 
 export const latestProcessNote = (): ProcessNote | undefined => PROCESS_NOTES.at(-1)

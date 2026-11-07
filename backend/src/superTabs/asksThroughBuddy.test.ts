@@ -5,8 +5,9 @@ import { crewNeedOf } from './crewNeeds.js'
 import { createSuperTab, type Actor, type Agent, type MessageDraft } from './model.js'
 
 // Task #3826 (Phase 2 of the Buddy board spec, "When an agent needs a person"): in a switched project an agent asks the person
-// directly, never through the PM: the question reaches their default Buddy and their Needs you list (their open decisions),
-// always with a default and a time. A project not switched keeps "people talk only to the PM" (crewNeeds.test.ts).
+// directly, never through the PM: the question reaches their Needs you list (their open decisions), always with a default and a
+// time. A project not switched keeps "people talk only to the PM" (crewNeeds.test.ts). Since task #4547 the asking agent writes
+// nothing in the person's Buddy chat: only they and their own Buddy post there.
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -48,8 +49,8 @@ function fixture(switched: boolean) {
 const needs = (effects: { messages: MessageDraft[] }) => effects.messages.filter(m => crewNeedOf(m.source))
 const statusRow = (effects: { messages: MessageDraft[] }) => effects.messages.find(m => (m.source as { status?: string } | null)?.status === 'needs_human')!
 
-describe('in a switched project, an agent’s ask reaches the person through their Buddy', () => {
-  it('opens the person’s decision for a needs_human, writes the question to their default Buddy, and sends nothing to the PM', () => {
+describe('in a switched project, an agent’s ask reaches the person in their Decisions', () => {
+  it('opens the person’s decision for a needs_human, writes nothing in their Buddy chat, and sends nothing to the PM', () => {
     const f = fixture(true)
     const sent = f.run({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'needs_human',
       result: 'Ship to everyone, or behind a flag?', ask: { personId: 'peer', ...choices, defaultAt } }, asAgent(f.worker))
@@ -59,17 +60,13 @@ describe('in a switched project, an agent’s ask reaches the person through the
     // The PM sees the task waiting on peer, and is not told the question.
     expect(statusRow(sent).recipients).not.toContain(f.pm)
     expect(f.state.conversations.find(c => c.id === f.group)!.assignment!.askedOf).toBe('peer')
-    const line = sent.messages.filter(m => m.conversationId === f.buddyChat)
-    expect(line).toEqual([expect.objectContaining({ recipients: ['peer-buddy'], buddyProject: f.app.projectId,
-      source: { kind: 'decision-asked', decisionId: sent.decisions![0]!.id, projectId: f.app.projectId } })])
-    expect(line[0]!.author).toMatchObject({ kind: 'agent', id: f.worker })
-    expect(line[0]!.text).toContain('Ship to everyone, or behind a flag?')
-    expect(line[0]!.text).toContain('Behind a flag (recommended)')
-    expect(line[0]!.text).toContain(defaultAt)
+    // The worker writes nothing in peer's private chat with their own Buddy (task #4547): the decision is the question.
+    expect(sent.messages.filter(m => m.conversationId === f.buddyChat)).toEqual([])
+    expect(sent.decisions![0]).toMatchObject({ options: choices.options, recommended: 0, askerAgentId: f.worker })
     expect(sent.messages.filter(m => m.recipients.includes(f.pm))).toEqual([])
   })
 
-  it('opens the person’s decisions for a decision.ask, one Buddy line each, and no crew need', () => {
+  it('opens the person’s decisions for a decision.ask, with no Buddy line and no crew need', () => {
     const f = fixture(true)
     const questions = [{ question: 'Ship how?', ...choices, defaultAt }, { question: 'Which copy?', options: ['Short', 'Long'], recommended: 1, unblocks: 'Copy', defaultAt }]
     const asked = f.run({ type: 'decision.ask', conversationId: f.group, personId: 'peer', questions }, asAgent(f.worker))
@@ -77,17 +74,18 @@ describe('in a switched project, an agent’s ask reaches the person through the
     expect(asked.result.decisionIds).toHaveLength(2)
     expect(needs(asked)).toEqual([])
     expect(asked.result.routedToPm).toBeUndefined()
-    expect(asked.messages.filter(m => m.conversationId === f.buddyChat).map(m => (m.source as { decisionId: string }).decisionId)).toEqual(asked.result.decisionIds)
+    // Task #4547: no line in peer's Buddy chat; the decisions are what reaches them.
+    expect(asked.messages.filter(m => m.conversationId === f.buddyChat)).toEqual([])
+    expect(asked.decisions!.map(d => d.id)).toEqual(asked.result.decisionIds)
   })
 
-  it('tells the person that a required agreement never applies a default', () => {
+  it('records that a required agreement never applies a default, on the decision and not in the Buddy chat', () => {
     const f = fixture(true)
     const asked = f.run({ type: 'decision.ask', conversationId: f.group, personId: 'peer',
       questions: [{ question: 'Authorize the release?', ...choices, defaultAt, mustAgree: true }] }, asAgent(f.worker))
-    const line = asked.messages.find(m => m.conversationId === f.buddyChat)!
-    expect(line.text).toContain('No default applies')
-    expect(line.text).toContain(defaultAt)
-    expect(line.text).not.toContain('if not answered: Behind a flag')
+    expect(asked.decisions).toEqual([expect.objectContaining({ question: 'Authorize the release?', defaultAt, mustAgree: true })])
+    // Task #4547: the person reads it in their Decisions, never as an agent's line in their private chat.
+    expect(asked.messages.filter(m => m.conversationId === f.buddyChat)).toEqual([])
   })
 
   it('refuses an ask with no default time, saying what to add', () => {

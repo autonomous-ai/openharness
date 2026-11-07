@@ -873,7 +873,7 @@ describe('a Buddy\'s proposal to the PM', () => {
   })
 
   // River, 11-04 (task #2926): proposals answered before threads, or opened as tasks without the link, still read as open.
-  it('is closed with a reason by its project\'s PM or a person in the project, posting only its person\'s notice, and by nobody else', () => {
+  it('is closed with a reason by its project\'s PM or a person in the project, posting nothing, and by nobody else', () => {
     const { f, propose } = asked()
     const root = propose().messages[0]!
     const context = { proposal: { id: root.id, conversationId: f.app.conversationId, author: root.author, source: root.source as Record<string, unknown> } }
@@ -881,9 +881,9 @@ describe('a Buddy\'s proposal to the PM', () => {
       f.run({ type: 'proposal.close', projectId: f.app.projectId, messageId, reason: '  Built in #2901 ' }, actor, loaded)
     const closed = close(agentActor(f.pm))
     expect(closed.closedProposal).toEqual({ messageId: root.id, conversationId: f.app.conversationId, reason: 'Built in #2901' })
-    // Nothing in the project's chat: only the notice to its person (task #4252).
-    expect(closed.messages.map(m => m.source?.kind)).toEqual(['proposal-notice'])
-    expect(closed.messages.some(m => m.conversationId === f.app.conversationId)).toBe(false)
+    // Nothing in the project's chat (task #4252), and no notice in its person's Buddy chat (task #4547): its card records the no.
+    expect(closed.messages).toEqual([])
+    expect(f.state.conversations.find(c => c.proposal && c.archived)?.proposal?.decision).toMatchObject({ kind: 'no', reason: 'Built in #2901' })
     expect(close(peer).closedProposal).toMatchObject({ messageId: root.id })
     const webPm = group(f, f.web.conversationId).leadId!
     for (const actor of [agentActor('buddy'), agentActor(webPm)]) expect(() => close(actor)).toThrow()
@@ -1257,19 +1257,14 @@ describe('a Buddy\'s terminal alert', () => {
 })
 
 describe('a decision left to the PM while Buddies are on', () => {
-  it('puts the PM\'s line in the person\'s one Buddy chat marked with its project, and in their older Buddy chat there, to no one, not in their read-only Chat with PM', () => {
+  it('writes no PM line in any of the person\'s Buddy chats, nor in their read-only Chat with PM', () => {
+    // Task #4547: only the person and their own Buddy post in their Buddy chat; the answer is in their Decisions.
     const f = setup()
     const decision = { id: 'decision-1', personId: 'peer', conversationId: f.group, projectId: f.app.projectId, askerAgentId: f.pm,
       question: 'Ship how?', options: ['Behind a flag', 'To everyone'], recommended: 1, answeredAt: null, createdAt: 0, assignmentId: null }
-    const delegate = () => f.run({ type: 'decision.answer', decisionId: 'decision-1', delegate: true }, peer, { decision }).messages
-      .filter(m => (m.source as { kind?: string } | undefined)?.kind === 'decision-delegated')
-    const lines = delegate()
-    expect(lines).toEqual([
-      expect.objectContaining({ conversationId: peerSwarmChat, recipients: [], text: 'PM decided: To everyone — Ship how?',
-        source: { kind: 'decision-delegated', decisionId: 'decision-1', projectId: f.app.projectId } }),
-      expect.objectContaining({ conversationId: f.chat, recipients: [], text: 'PM decided: To everyone — Ship how?',
-        source: { kind: 'decision-delegated', decisionId: 'decision-1' } })])
-    expect(lines.map(m => m.conversationId)).not.toContain(f.pmChat)
+    const answered = f.run({ type: 'decision.answer', decisionId: 'decision-1', delegate: true }, peer, { decision })
+    expect(answered.decisionAnswer).toMatchObject({ id: 'decision-1', choice: 1, delegated: true })
+    expect(answered.messages.map(m => m.conversationId).filter(id => [peerSwarmChat, f.chat, f.pmChat].includes(id))).toEqual([])
   })
 })
 

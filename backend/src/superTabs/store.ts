@@ -132,7 +132,7 @@ import { answeredAgents, dropHeldTags, listMentions, markDone, mentionsWaiting, 
 import { stuckAlerts } from './stuck.js'
 import { OVERDUE_PER_PASS, overdueDecisions, dueDefaultDecisions } from './overdueDecisions.js'
 import { checkPrivateChat } from './privateChat.js'
-import { answerableBy, askDecisions, BUDDY_SEND, DECISION_ASKED_KIND, keepWaiting, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingConversations, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
+import { answerableBy, askDecisions, BUDDY_SEND, closeDecisions, keepWaiting, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingConversations, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
 import { recordMessageReach } from './messageReachStats.js'
@@ -2218,12 +2218,17 @@ export class SuperTabStore {
       if (command.type === 'project.boardMode' && command.on) context.legacyProposals = await this.legacyProposalBodies(tx, original, command.projectId)
       const effects = applyCommand(original, actor, command, context)
       // Resolve repeats before numbering or writing Buddy notices: a repeated ask is the existing decision, already told.
-      const decisionIds = effects.decisions ? await writeDecisions(tx, tabId, effects.decisions, context.now) : []
+      // A card's question stays on its card when its person's Decisions from this PM are full: the ask still counts (task #4547).
+      const decisionIds = !effects.decisions ? [] : command.type !== 'proposal.ask' ? await writeDecisions(tx, tabId, effects.decisions, context.now)
+        : await writeDecisions(tx, tabId, effects.decisions, context.now).catch((error: unknown) => {
+          if (!(error instanceof SuperTabError) || error.code !== 'DECISIONS_FULL') throw error
+          logger.warn('[swarm-decisions] a proposal question stays on its card only: its person has the most open decisions from this asker')
+          effects.decisions = []
+          return []
+        })
       const newDecisions = effects.decisions?.filter((draft, i) => decisionIds[i] === draft.id) ?? []
       if (effects.decisions) {
         if (command.type === 'decision.ask') effects.result.decisionIds = decisionIds
-        const fresh = new Set(newDecisions.map(d => d.id))
-        effects.messages = effects.messages.filter(m => m.source?.kind !== DECISION_ASKED_KIND || fresh.has(String(m.source.decisionId)))
       }
       hasWorkers = effects.state.agents.some(a => !isBuddy(a) && !ledProject(effects.state, a.id))
       // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
@@ -2488,6 +2493,7 @@ export class SuperTabStore {
       // A new decision reaches its person's phones (task #3248); a repeat was already brought to them.
       if (newDecisions.length) this.tellPhones(tx, tabId, effects.state, { replies: [], tags: [], decisions: newDecisions }, [])
       if (effects.decisionAnswer) await recordAnswer(tx, tabId, effects.decisionAnswer, context.now)
+      if (effects.closedDecisions) await closeDecisions(tx, tabId, effects.closedDecisions, context.now)
       if (effects.decisionKeptWaiting) await keepWaiting(tx, tabId, effects.decisionKeptWaiting)
       // Work this command ended (done, cancelled, archived) closes the decisions still waiting there (Dee, 10-31). After this
       // command's own answer and asks, so an answer in the same write counts and a reopened task's new ask is a new decision.
@@ -3682,7 +3688,7 @@ export class SuperTabStore {
       && isDeepStrictEqual(row.source ?? undefined, m.source))).map(row => row.id))
     if (kept.size) logger.warn('Kept Swarm notices already stored', { tabId, ids: [...kept] })
     // Only a person and their own agent write in their private chat (task #4547).
-    checkPrivateChat(state, messages)
+    messages = checkPrivateChat(state, messages)
     const measured = proposalMessageMeasures(state, messages.filter(m => !kept.has(m.id)), this.now())
     if (measured.length) afterCommit(tx, () => proposalMeasures(measured))
     const rows: Prisma.SuperTabMessageCreateManyInput[] = []

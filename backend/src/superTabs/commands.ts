@@ -1,6 +1,6 @@
 import { authorizeTaskApproval, pendingTaskApproval, personalApprovalCommand, rejectTaskApproval, reopenTaskApproval, REQUESTER_LEFT, requireTaskApproval, stageTaskApproval, undecidedProposal } from './taskApproval.js'
 import type { PullRequestFilesRead } from './pullRequestFiles.js'
-import { legacyProposalId, migrateLegacyProposals, type LegacyProposalAsk, pmAcceptsMessage, applyProposalAction, authorizeProposalAction, authorizePersonProposal, cardPriority, createPersonProposal, createProposalCard, proposalCreateSchema, proposalFields, proposalNotices, proposalRoot, type ProposalRecord } from './proposalCards.js'
+import { legacyProposalId, migrateLegacyProposals, type LegacyProposalAsk, pmAcceptsMessage, applyProposalAction, authorizeProposalAction, authorizePersonProposal, cardPriority, createPersonProposal, createProposalCard, proposalCreateSchema, proposalFields, proposalRoot, type ProposalRecord } from './proposalCards.js'
 import { pulseProjectOf, recordPulse, owe, settleDeleted, settleReaction, settleReply, settleRequest } from './pulse.js'
 import { linesOf } from './statusCard.js'
 import { applyPushOrigin, barredFromTeamWritten, failPushUnknown, failTeamWritten, mainAccountMembers, markTeamWritten, mayName, ownersOwnAgent, ownersOwnMachine, requireTeamWrittenAccount, requireTeamWrittenMachine, stepMark, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
@@ -43,7 +43,8 @@ import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
 import { CREW_NEED_KIND, crewNeedPlace, crewNeedText, projectPm, routedLine, routesToPm, type CrewNeed } from './crewNeeds.js'
 import { checkReason, heldReason, missingReason } from './heldReason.js'
-import { answerDecision, askDecisions, askedThroughBuddy, mustAgreePassed, asksDirectly, BUDDY_DECISION, BUDDY_SEND, checkBuddyAsker, checkDirectAsk, checkDecisionDeadline, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, SEND_OPTIONS, settleBuddyDecision, isBuddyDecision, type AskedQuestion, type DecisionTarget, type OwnerAnswer } from './decisions.js'
+import { checkPrivateChat } from './privateChat.js'
+import { answerDecision, askDecisions, mustAgreePassed, asksDirectly, BUDDY_DECISION, BUDDY_SEND, checkBuddyAsker, checkDirectAsk, checkDecisionDeadline, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, SEND_OPTIONS, PROPOSAL_QUESTION, proposalQuestionDecision, proposalQuestionDecisionId, settleBuddyDecision, isBuddyDecision, type AskedQuestion, type DecisionTarget, type OwnerAnswer } from './decisions.js'
 import { leadOf, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest, workedAgain } from './terminal.js'
 import { BACK_WITH_YOU, pickUp, reopenHanded } from './handed.js'
 import { changesRequested, engineerAnswered, leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, revisionReady, toldEngineer, waitingForReview } from './liveness.js'
@@ -1123,6 +1124,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   try { sender = author(effects.state, actor) } catch { sender = undefined }
   syncTaskLines(original, effects, sender, stableId(original.id, actorKey(actor), context.operationId))
   for (const row of effects.messages) row.recipients = row.recipients.filter(id => pmAcceptsMessage(effects.state, id, row.source))
+  // Only a person and their own agent write in their private chat (task #4547); the store checks every write again.
+  effects.messages = checkPrivateChat(effects.state, effects.messages)
   // Every open group is loaded for a command (parts/load.ts): the board's pulse is worked out on it (pulse.ts), for the project
   // of the conversation the command names when it names one (it moves no other), else for every project.
   const only = pulseProjectOf(effects.state, input)
@@ -2480,14 +2483,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // The coordinator's save that says it is the tidy is that tidy done (pmSchedule.ts tidyRequest); a correction it saves
       // meanwhile is not (review of #3112).
       if (actor.kind === 'agent' && command.tidy) tidySaved(projectOf(state, project.id), current + 1)
-      // Approvers and authors affected by a decider's override hear privately, in their one Buddy chat and older one here.
+      // Approvers and authors affected by a decider's override hear it in the project chat, where its instructions are everyone's
+      // to read (task #4547: never in their private chat with their own agent).
       for (const [personId, rules] of told) {
-        const to = person(state, personId)
         const text = approvedDropNotice(who, project, rules, deciderId ? agentWrittenNameOf(state, deciderId) ?? 'the project top decider' : undefined)
-        const id = stableId(operationId, 'rule-approved', personId)
-        message(defaultBuddyChat(state, to).id, text, [], null, { kind: PM_LINE_KIND, projectId: project.id }, undefined, undefined, undefined, id)
-        Object.assign(effects.messages.at(-1)!, { buddyProject: project.id })
-        effects.messages.push({ id: stableId(id, 'project-chat'), conversationId: openBuddyChat(state, project.id, to).id, author: sender, text, replyTo: null, recipients: [] })
+        message(project.leadConversationId, text, [], null, { kind: 'rule-approved', projectId: project.id }, undefined, [personId], undefined, stableId(operationId, 'rule-approved', personId))
       }
       break
     }
@@ -3120,7 +3120,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         break
       }
       effects.decisions = drafts
-      if (direct) effects.messages.push(...askedThroughBuddy(state, group, drafts, sender))
       result.decisionIds = effects.decisions.map(d => d.id)
       break
     }
@@ -3151,12 +3150,24 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         result.keptWaiting = true
         break
       }
-      const { answer, noticeIn, notice, recipients, source, line } = answerDecision(state, actor, context.decision,
+      // A proposal card's question (task #4547): answering it answers the card, as its person would there.
+      if (context.decision?.kind === PROPOSAL_QUESTION) {
+        const asked = context.decision, card = conversation(state, asked.conversationId)
+        const q = card.proposal?.questions.find(x => proposalQuestionDecisionId(x.id) === asked.id)
+        if (!q || q.answer) fail('DECISION_ANSWERED', 'This decision is already answered.')
+        const { answer } = answerDecision(state, actor, asked, { choice: command.choice, note: command.note ?? null, delegate: command.delegate === true,
+          defaulted: context.defaulted === true, now: context.now })
+        effects.decisionAnswer = answer
+        const text = answer.choice !== null ? asked.options[answer.choice]! : answer.note!
+        effects.messages.push(...applyProposalAction(state, actor, { type: 'proposal.answer', conversationId: card.id, questionId: q.id, text }, operationId, context.now).messages)
+        result.decisionId = answer.id
+        break
+      }
+      const { answer, noticeIn, notice, recipients, source } = answerDecision(state, actor, context.decision,
         { choice: command.choice, note: command.note ?? null, delegate: command.delegate === true, overdue: context.overdue === true, defaulted: context.defaulted === true, now: context.now })
       effects.decisionAnswer = answer
       recordDecision(conversation(state, context.decision!.conversationId), context.decision!, context.now, answer.delegated === true)
       if (recipients.length) message(noticeIn, notice, recipients, null, source)
-      for (const [at, each] of (line ?? []).entries()) effects.messages.push({ id: stableId(operationId, at ? `delegated-${at}` : 'delegated'), replyTo: null, recipients: [], ...each })
       result.decisionId = answer.id
       break
     }
@@ -3578,6 +3589,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const outcome = applyProposalAction(state, actor, command, operationId, context.now)
       effects.messages.push(...outcome.messages)
       Object.assign(result, outcome.result)
+      // What needs its person lands in their Decisions (task #4547), and an answer on the card closes it there.
+      if (command.type === 'proposal.ask') {
+        const card = conversation(state, command.conversationId), q = card.proposal!.questions.find(x => x.id === outcome.result.questionId)!
+        effects.decisions = [proposalQuestionDecision(state, card, q, actor.kind === 'agent' ? actor.agentId : actor.userId, operationId)]
+      }
+      if (command.type === 'proposal.answer' && outcome.result.applied) effects.closedDecisions = [proposalQuestionDecisionId(command.questionId)]
       break
     }
     case 'proposal.create': {
@@ -3639,10 +3656,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (mirror?.proposal && !mirror.proposal.mergedInto) {
         mirror.archived = true
         mirror.proposal.decision = { kind: 'no', reason: command.reason, at: context.now, by: sender.id }
-        // Its person hears it through their Buddy, as a board decision tells them (proposalCards.ts), unless they closed it.
-        const card = mirror as Conversation & { proposal: ProposalRecord }
-        effects.messages.push(...proposalNotices(state, card, 'decided', `${mirror.title}: no. ${command.reason}`, sender, operationId,
-          card.proposal.senders.filter(s => actor.kind !== 'person' || s.personId !== actor.userId)))
       }
       effects.closedProposal = { messageId, conversationId: project.leadConversationId, reason: command.reason }
       result.proposalId = messageId
@@ -4913,7 +4926,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           effects.decisions = drafts
           asked = context.repeatedDecision ?? drafts[0]!.id
           // A repeat of a question still open was already brought to the person.
-          if (direct && !context.repeatedDecision) effects.messages.push(...askedThroughBuddy(state, group, drafts, sender))
         }
         else effects.result.notAsked = `Not asked ${agentWrittenNameOf(state, person(state, personId).id)}: ${context.openDecisions} decisions you asked them are still open, and at most ${MAX_OPEN_DECISIONS} can be. Wait for answers before asking more.`
       }

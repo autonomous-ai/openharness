@@ -1,7 +1,7 @@
 /** Timed proposal transitions run in the existing singleton worker and the answering card's transaction. */
 import { author, stableId, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { groupProject } from './projects.js'
-import { proposalNotices, type ProposalQuestion, type ProposalRecord } from './proposalCards.js'
+import { type ProposalQuestion, type ProposalRecord } from './proposalCards.js'
 
 export const PROPOSAL_WAIT_MS = 30 * 60_000
 export type ProposalCard = Conversation & { proposal: ProposalRecord }
@@ -24,10 +24,10 @@ function clockAuthor(state: SuperTabState, card: ProposalCard): Author {
 export function expireProposalQuestion(state: SuperTabState, card: ProposalCard, q: ProposalQuestion, now: number): MessageDraft[] {
   if (q.answer || q.overdue || now < q.deadline) return []
   const sender = clockAuthor(state, card), id = stableId(q.id, 'deadline')
+  // An agreement keeps waiting for its person, in their Decisions (task #4547): no line in their Buddy chat.
   if (q.requiresConsent) {
     q.overdue = true
-    return proposalNotices(state, card, 'needs-you', `${card.title}: agreement is overdue. ${q.question}`, sender, id,
-      card.proposal.senders.filter(s => s.personId === q.personId))
+    return []
   }
   q.answer = { text: q.defaultAnswer, at: q.deadline, by: 'default', defaulted: true }
   return [{ id, conversationId: card.id, author: sender, text: q.defaultAnswer, recipients: card.leadId ? [card.leadId] : [], replyTo: null,
@@ -50,12 +50,9 @@ export function advanceProposalCards(state: SuperTabState, now: number): Message
     for (const q of record.questions) messages.push(...expireProposalQuestion(state, card, q, now))
     if (!record.decision && !record.overdue && now >= (record.waitSince ?? record.createdAt) + PROPOSAL_WAIT_MS) {
       record.overdue = true
-      const owner = state.people.find(p => p.id === project.ownerId)
-      if (owner) {
-        const rows = proposalNotices(state, card, 'needs-you', `${card.title} has waited over 30 minutes for a PM decision.`, clockAuthor(state, card),
-          stableId(card.id, 'overdue', String(record.waitSince ?? record.createdAt)), [{ personId: owner.id, generation: owner.generation }])
-        messages.push(...rows.map(row => ({ ...row, source: { ...row.source, kind: 'proposal-overdue' } })))
-      }
+      // On the card, where its people read it (task #4547: never in the project owner's Buddy chat).
+      messages.push({ id: stableId(card.id, 'overdue', String(record.waitSince ?? record.createdAt)), conversationId: card.id, author: clockAuthor(state, card),
+        text: 'This proposal has waited over 30 minutes for a PM decision.', recipients: [], replyTo: null, source: { kind: 'proposal-overdue', projectId: project.id } })
     }
   }
   return messages
