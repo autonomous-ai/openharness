@@ -292,9 +292,9 @@ sized for the widest expected value; names take the remaining width and
 truncate first. Row anatomy is the list rule above: rank, identity, name with
 its metadata, then trend and the emphasized number at the right.
 
-The left pane's People and Agents have no rank number (Dee, 2026-10-29):
-people sort by name with their points at the right, and the crown sits after
-the week's top person's name.
+The Desktop left pane's Humans has no rank number and no crown: it is the
+Leaderboard in short, its people most points first with their points at the
+right ([Swarm left pane](#swarm-left-pane)).
 
 A place is its numeral; a celebration mark sits beside it and never replaces
 it, as [Team and celebration](#team-and-celebration) describes. Color never
@@ -366,6 +366,40 @@ leaderboard) share four rules.
   show as usernames, by default the prefix of their email address
   (`mai@example.com` shows as `mai`); full identity stays available to
   tooltips and accessibility.
+
+## Swarm left pane
+
+The Desktop's Swarm left pane (anh Dee, 2026-11-07, task #4466) follows the
+Swarm's six rules: grey everywhere, colour only on agent faces; blue only for
+the main action, red only for failed; 14 chat, 13 names, 12 details, and in a
+list bold means unread; every row a face, a name and one quiet detail on the
+right; dropdowns plain text until hovered; nothing that does not help you
+decide. Top to bottom:
+
+```text
+ autonomous.ai ⌄              org name, semibold 13 primary; ⌄ only on hover
+ ⊡  Decisions              3  inbox icon; the waiting count is the detail
+ ▦  Projects                  grid icon; opens the Projects grid in the middle
+ My agents ⌄                  quiet heading; ⌄ only on hover; folds, remembered
+ ◉  Buddy                  ⠋  the Buddy first, by its own name and face
+ ◎  River        harness   ?  a Lead's detail is the project it leads
+ ◉  Leftquiet    offline      a down agent's detail is "offline"
+ +  New agent                 the last row, opens Cmd-N
+ Humans                       quiet heading; opens the Leaderboard
+ D  dee              120      the board's top 8 by points; a tap opens it
+ ⚙  Manage                    at the foot
+```
+
+| Element | Implementation | Rule |
+| --- | --- | --- |
+| Quiet row | `SuperTabQuietRow` (`super_tabs/buddy_rows.dart`) | 30 high, 2 under it. A 20 face (`SuperTabQuietRow.faceSize`) or a 16 icon centred in the 32 column, so every name starts on one line. Name 13 (`DesktopChrome.control`): read `textSecondary` regular, unread `textPrimary` semibold, the open row `SidebarInk.selected` with a primary name. One detail, 12 (`DesktopChrome.metadata`) in the tertiary grey (`SidebarInk.faint`, `textFaint`), right-aligned, tabular figures, no brackets; it keeps up to 40% of a row whose name is long, and is cut first. |
+| Status mark | `SuperTabQuietRow.mark`, `superTabAgentMark` | My agents only, in one 20 column at the right edge after the detail, kept on every agent row so details line up. A mark only while the agent works (the spinner), needs you (`?`) or failed: grey, failed in the error ink. Idle and finished show nothing; a finished agent's unread reply is its semibold name. |
+| Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) only while hovered or focused. |
+| Org name | `SuperTabQuietHeading.org` | Semibold 13 primary, no icon; its chevron only on hover; opens the Swarm menu. |
+| Person | `SuperTabAvatar.person` at 20 | A photo, or an initial on the neutral grey disc. |
+| Projects grid | `SuperTabProjectsPage` (`super_tabs/projects_page.dart`) | Every project as a card, as repositories under a GitHub org, most recent first (the latest message in its chat or tasks). Cards at least 260 wide with 12 between them, transparent with a hairline (`DesktopChrome.rim`) and the hover fill; the name semibold 13 primary, one line 12 tertiary: its repository's `owner/name`, or Private. New project is the page's one blue button. A card opens its project's Board, which lights Projects in the left pane. |
+
+The phone and web layouts keep their own rows.
 
 ## Phone
 
