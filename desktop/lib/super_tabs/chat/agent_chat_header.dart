@@ -75,12 +75,14 @@ class SuperTabAgentChatHeader extends StatelessWidget {
     return SizedBox(
       key: const ValueKey('super-agent-chat-header'),
       height: 44,
-      child: Row(
-        children: [
-          const SizedBox(width: grid.AppDesktop.controlGap),
-          Expanded(
-            child: Align(
-              alignment: Alignment.centerLeft,
+      // The name comes first, up to half the row; the engine and model take the rest, giving way with "…", so a long
+      // model id never pushes the name or ⋯ out (#4444).
+      child: LayoutBuilder(
+        builder: (context, box) => Row(
+          children: [
+            const SizedBox(width: grid.AppDesktop.controlGap),
+            ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: box.maxWidth / 2),
               child:
                   title?.call(name) ??
                   Padding(
@@ -89,17 +91,24 @@ class SuperTabAgentChatHeader extends StatelessWidget {
                     child: identity,
                   ),
             ),
-          ),
-          if (agent != null)
-            SuperTabEngineModelLine(
-              controller: c,
-              agent: agent,
-              machine: buddyMachineName(c, agent.machineId, app: app),
-              switchable: buddy != null && group.isSwarmBuddyChat,
+            const SizedBox(width: grid.AppDesktop.controlGap),
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: agent == null
+                    ? null
+                    : SuperTabEngineModelLine(
+                        controller: c,
+                        agent: agent,
+                        machine: buddyMachineName(c, agent.machineId, app: app),
+                        switchable: buddy != null && group.isSwarmBuddyChat,
+                      ),
+              ),
             ),
-          ?menu,
-          const SizedBox(width: grid.AppDesktop.menuInset),
-        ],
+            ?menu,
+            const SizedBox(width: grid.AppDesktop.menuInset),
+          ],
+        ),
       ),
     );
   }

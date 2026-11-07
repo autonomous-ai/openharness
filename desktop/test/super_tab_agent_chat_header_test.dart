@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/runtime_model_name.dart';
 import 'package:harness/shared/theme/app_icons.dart';
@@ -13,19 +16,29 @@ import 'package:harness/super_tabs/zone_time.dart';
 
 import 'super_tab_personal_tasks_pane_test.dart' show TasksFixture;
 import 'support/buddy_engine_fixture.dart';
+import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
+
+final shots = Platform.environment['HARNESS_SUPER_TAB_CAPTURE'];
 
 Future<void> show(
   WidgetTester t,
   SuperTabController c, {
   bool tasks = false,
+  double width = 1600,
+  Brightness brightness = Brightness.dark,
 }) async {
   t.view.devicePixelRatio = 1;
-  t.view.physicalSize = const Size(1600, 900);
+  t.view.physicalSize = Size(width, 900);
   addTearDown(t.view.reset);
+  // The design tokens follow the app's brightness, which main.dart sets from the theme.
+  final previous = grid.AppTheme.brightness.value;
+  grid.AppTheme.brightness.value = brightness;
+  addTearDown(() => grid.AppTheme.brightness.value = previous);
   await t.pumpWidget(
     MaterialApp(
-      theme: grid.buildAppTheme(brightness: Brightness.dark),
+      debugShowCheckedModeBanner: false,
+      theme: grid.buildAppTheme(brightness: brightness),
       home: WorkspaceChromeScope(
         chrome: WorkspaceChrome(compactBelow: 720),
         child: Scaffold(
@@ -274,5 +287,113 @@ void main() {
       ),
       findsOneWidget,
     );
+  });
+
+  // The header sits between the left pane and the Tasks pane, so at 880 it is far narrower than the window.
+  group('at 880 wide the model gives way, not the name or ⋯ (#4444)', () {
+    const long = 'openrouter/qwen/qwen3-coder-480b-a35b-instruct';
+    setUpAll(() => loadCaptureFonts(shots));
+
+    bool cut(WidgetTester t, Finder text) => t
+        .renderObject<RenderParagraph>(
+          find.descendant(of: text, matching: find.byType(RichText)).first,
+        )
+        .didExceedMaxLines;
+
+    // [title] is what holds the name: the name itself, or the Buddy card's button.
+    void fits(WidgetTester t, {required Finder name, Finder? title}) {
+      // The engine and model are one line; it gives way with "…".
+      final engine = line;
+      final model = find.descendant(of: line, matching: find.byType(Text));
+      expect(t.takeException(), isNull);
+      final row = t.getRect(header);
+      final menu = t.getRect(
+        inHeader(find.byKey(const ValueKey('super-group-options'))),
+      );
+      expect(
+        row.left <= menu.left && menu.right <= row.right,
+        isTrue,
+        reason: '⋯ $menu is outside the header $row',
+      );
+      expect(cut(t, name), isFalse, reason: 'the name is cut');
+      expect(cut(t, model), isTrue, reason: 'the model has no …');
+      expect(
+        t.getRect(engine).left - t.getRect(title ?? name).right,
+        greaterThanOrEqualTo(grid.AppDesktop.controlGap),
+        reason: 'no gap between the name and the engine',
+      );
+    }
+
+    testWidgets("a member agent's name and ⋯ stay; its model ends in …", (
+      t,
+    ) async {
+      final f = TasksFixture();
+      addTearDown(f.controller.dispose);
+      // The fixture's reads, with Hugo's model a long OpenRouter id.
+      final c = SuperTabController(
+        tabId: f.controller.tabId,
+        accountId: f.controller.accountId,
+        initial: {
+          'tabId': f.controller.tabId,
+          'accountId': f.controller.accountId,
+          'selectedId': 'lead5701',
+        },
+        pollInterval: Duration.zero,
+        save: (_) async {},
+        request: (method, path, {body}) async {
+          final result = await f.controller.request(method, path, body: body);
+          for (final row in (result['agents'] as List? ?? const [])) {
+            final agent = (row as Map)['data'] as Map;
+            if (agent['id'] == '0540') {
+              agent['configuration'] = {
+                ...agent['configuration'] as Map,
+                'model': long,
+              };
+            }
+          }
+          return result;
+        },
+      );
+      addTearDown(c.dispose);
+      await c.refresh();
+      await c.select('aeef');
+      for (final (brightness, mode) in [
+        (Brightness.light, 'light'),
+        (Brightness.dark, 'dark'),
+      ]) {
+        await show(t, c, tasks: true, width: 880, brightness: brightness);
+        fits(t, name: inHeader(find.text('Hugo')));
+        await captureWindow(t, shots, '06-chat-header-880-$mode');
+      }
+    });
+
+    testWidgets("the Buddy's name and ⋯ stay; its model ends in …", (t) async {
+      final server = buddyEngineSwarm();
+      // A model nobody serves is named by its id, and said not to be served.
+      (server.state['agents'] as List).cast<Map>().firstWhere(
+        (a) => a['id'] == 'wren',
+      )['gridModel'] = long;
+      final c = server.controller(account: 'peer');
+      addTearDown(c.dispose);
+      await c.refresh();
+      await c.select('swarm-buddy-peer');
+      final agent = c.snapshot!.agent('wren')!;
+      for (final (brightness, mode) in [
+        (Brightness.light, 'light'),
+        (Brightness.dark, 'dark'),
+      ]) {
+        await show(t, c, width: 880, brightness: brightness);
+        fits(
+          t,
+          name: inHeader(
+            find.text(c.snapshot!.agentName('wren', fallback: agent.name)),
+          ),
+          title: inHeader(
+            find.byKey(const ValueKey('super-board-buddy-button')),
+          ),
+        );
+        await captureWindow(t, shots, '06-buddy-header-880-$mode');
+      }
+    });
   });
 }

@@ -206,6 +206,8 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
             request.gridModel == null
                 ? 'Switching to your subscription…'
                 : 'Switching to ${request.name ?? nameOf(request.gridModel!)}…',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: DesktopChrome.metadata(),
           )
         : AppDropdown(
@@ -235,6 +237,8 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
                     Flexible(
                       child: Text(
                         current == null ? 'Your subscription' : nameOf(current),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: DesktopChrome.metadata(
                           color: DesktopChrome.foreground,
                         ),
