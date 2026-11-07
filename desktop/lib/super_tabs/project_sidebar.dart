@@ -66,6 +66,7 @@ class ProjectSidebar extends StatelessWidget {
     this.onNewAgent,
     this.onOpenAgentChat,
     this.boardProjectId,
+    this.onOpenAgentTerminal,
   });
   final SuperTabController controller;
 
@@ -85,6 +86,9 @@ class ProjectSidebar extends StatelessWidget {
   /// The project whose Board holds the Desktop's middle, if one does. Its row is then the lit one, though the selected
   /// chat is the Buddy's on the right (task #4220).
   final String? boardProjectId;
+
+  /// Opens the terminal of an agent in My agents that has no chat to open (task #4220); without it the row opens nothing.
+  final ValueChanged<SuperTabAgent>? onOpenAgentTerminal;
   final ValueChanged<String> onSelect;
   final AppNotifier? app;
   final VoidCallback? onNewProject;
@@ -690,14 +694,22 @@ class ProjectSidebar extends StatelessWidget {
       key: ValueKey('super-agent-${agent.id}'),
       agentId: agent.id,
       name: name,
-      tooltip: chat == null ? '$name · no chat yet' : name,
+      tooltip: chat != null
+          ? name
+          : onOpenAgentTerminal != null
+          ? '$name · opens its terminal'
+          : '$name · no chat yet',
       crownKey: superTabAgentIsPm(snapshot, agent)
           ? ValueKey('super-agent-crown-${agent.id}')
           : null,
       status: _buddyMark(agent),
       selected: _chatLit(chat),
       unread: chat != null && controller.unreadShown(chat),
-      onTap: chat == null ? null : () => (onOpenAgentChat ?? onSelect)(chat.id),
+      onTap: switch ((chat, onOpenAgentTerminal)) {
+        (final chat?, _) => () => (onOpenAgentChat ?? onSelect)(chat.id),
+        (null, final terminal?) => () => terminal(agent),
+        _ => null,
+      },
     );
   }
 

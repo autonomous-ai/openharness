@@ -261,6 +261,18 @@ class _SuperTabViewState extends State<SuperTabView>
     _closeSidebar();
   }
 
+  /// Opens the terminal of an agent chosen in My agents that has no chat to open (task #4220), as Members opens one.
+  void _openAgentTerminal(SuperTabAgent agent) {
+    setState(() {
+      _showPullRequests = _showTasks = false;
+      _rosterOpen = false;
+      _showManage = false;
+      _page = null;
+    });
+    (widget.onChooseAgentTerminal ?? widget.onOpenTerminal)(agent);
+    _closeSidebar();
+  }
+
   bool get _projectChatOnly {
     final group = c.selected;
     return _boardProjectId == null &&
@@ -2105,6 +2117,7 @@ class _SuperTabViewState extends State<SuperTabView>
     onNewProject: widget.onNewProject,
     onNewAgent: widget.app == null ? null : _newAgent,
     onOpenAgentChat: _openAgentChat,
+    onOpenAgentTerminal: _openAgentTerminal,
     onNewSwarm: widget.onNewSwarm,
     page: _pageShown,
     places: SuperTabPlaces.of(c),
