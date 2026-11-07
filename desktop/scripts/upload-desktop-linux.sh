@@ -36,7 +36,7 @@ set +x
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # repository root
 
 normalize_architecture() {
-  case "${1,,}" in
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in   # bash 3.2 (macOS test hosts) has no ${1,,}
     arm64|aarch64) printf 'arm64\n' ;;
     x64|x86_64|amd64) printf 'x64\n' ;;
     *)
