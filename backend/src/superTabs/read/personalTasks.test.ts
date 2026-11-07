@@ -129,6 +129,16 @@ describe('personal Tasks summaries', () => {
     delete row.data!.pullRequestUrls
     expect(personalTasksFor([row], s.view(), peer)!.upserts[0]).not.toHaveProperty('pullRequestUrl')
   })
+  it('keeps a proposal the PM declined, as rejected with its reason; a merged one still leaves (task #4252, audit 3 and 18)', () => {
+    const s = scene(), row = s.stored.groups.find(g => g.key === s.f.web)!
+    const generation = s.f.state.people.find(p => p.id === peer.userId)!.generation
+    const proposal = { version: 1, text: 'Keep drafts', goal: 'Drafts', why: 'Loss', doneWhen: 'Returns', evidence: ['Repro'], priority: 'P2',
+      createdAt: NOW, questions: [], senders: [{ personId: peer.userId, generation }], decision: { kind: 'no', reason: 'Out of scope', at: NOW, by: 'pm' } }
+    const declined = { ...row, data: { ...row.data!, assignment: null, taskApproval: undefined, archived: true, proposal } } as typeof row
+    expect(personalTasksFor([declined], s.view(), peer)!.upserts).toEqual([expect.objectContaining({ id: row.key, status: 'rejected', reason: 'Out of scope' })])
+    const merged = { ...declined, data: { ...declined.data!, proposal: { ...proposal, mergedInto: 'other' } } } as typeof row
+    expect(personalTasksFor([merged], s.view(), peer)).toMatchObject({ upserts: [], removed: [row.key] })
+  })
   it('never leaks a hidden project, private chat, hidden agent or stale membership proposal', () => {
     const s = scene(), row = s.stored.groups.find(g => g.key === s.f.secretGroup)!
     const hidden = s.f.state.agents.find(a => a.projectId === s.f.secret)

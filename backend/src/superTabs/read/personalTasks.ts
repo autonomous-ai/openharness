@@ -81,14 +81,16 @@ function summary(part: Part, reader: Reader): PersonalTask | 'gone' | null {
   const agent = view.parts.agents.find(a => a.key === worker)?.data
   const asker = group.requesterId ? view.state.people.find(p => p.id === group.requesterId) : undefined
   const askerName = asker && (asker.name ?? asker.username)
-  const status = approval?.state === 'proposal' || approval?.state === 'rejected' ? approval.state
+  // A proposal the PM declined shows as rejected, with its reason (task #4252).
+  const declined = group.proposal?.decision?.kind === 'no'
+  const status = declined ? 'rejected' : approval?.state === 'proposal' || approval?.state === 'rejected' ? approval.state
     : group.assignment?.status ?? (group.proposal && !['accept', 'reshape'].includes(group.proposal.decision?.kind ?? '') ? 'proposal' : 'planned')
   const pullRequestUrl = group.pullRequestUrls?.at(-1)
   return { id: group.id, version: part.version, at: activityAt(part as Part<GroupData>), projectId: project.id, projectName: project.name,
     title: group.title, status, suggested: !group.assignment && !!approval?.suggestedAgentId, canApprove: approval?.state === 'proposal' && asked && !undecidedProposal(group),
     agent: agent ? { id: agent.id, name: agent.displayName ?? agent.name, ...agent.avatar ? { avatar: agent.avatar } : {} } : null,
     requester: asker ? { id: asker.id, ...askerName ? { name: askerName } : {}, ...asker.avatar ? { avatar: asker.avatar } : {} } : null,
-    ...pullRequestUrl ? { pullRequestUrl } : {}, ...approval?.reason ? { reason: approval.reason } : {} }
+    ...pullRequestUrl ? { pullRequestUrl } : {}, ...declined ? { reason: group.proposal!.decision!.reason } : approval?.reason ? { reason: approval.reason } : {} }
 }
 
 const newestFirst = (a: PersonalTask, b: PersonalTask) => b.at - a.at || a.id.localeCompare(b.id)

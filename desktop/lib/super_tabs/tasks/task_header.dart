@@ -34,6 +34,9 @@ class SuperTabTaskHeader extends StatelessWidget {
         .firstOrNull;
     final agent = snapshot?.agent(task.agentId ?? '');
     final pr = task.pullRequestUrl;
+    final rejection = task.status == 'rejected'
+        ? superTabTaskRejection(task.reason)
+        : null;
     const avatar = 18.0;
     Widget fact(List<Widget> children) => Row(
       mainAxisSize: MainAxisSize.min,
@@ -71,7 +74,7 @@ class SuperTabTaskHeader extends StatelessWidget {
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               fact([
-                SuperTabTaskStatusMark(task.status),
+                SuperTabTaskStatusMark(task.status, reason: task.reason),
                 words(superTabTaskStatusLabel(task.status)),
               ]),
               if (task.requesterId case final id?)
@@ -142,6 +145,11 @@ class SuperTabTaskHeader extends StatelessWidget {
                 ),
             ],
           ),
+          // Its own line, so a long reason wraps under the facts (audit #4436, 17).
+          if (rejection != null) ...[
+            const SizedBox(height: grid.AppDesktop.menuInset),
+            Text('Reason: $rejection', style: DesktopChrome.metadata()),
+          ],
         ],
       ),
     );
