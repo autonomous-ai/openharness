@@ -12,8 +12,10 @@ against main d1f33f5ca first. All six are real; none was dropped.
    read still gives `teamWork.allowed: false, TEAM_ACCOUNT_REQUIRED` for any machine without a Team session when the machine was
    added at join (`teamAccountOnly`) or `SWARM_TEAM_ACCOUNT_REQUIRED=1`. The CLI route turns that into `teammatesRefused` and
    leaves out every teammate's own agent there. The server's own check (teamWorkCheck, task #4120) allows that agent. Fix: a
-   machine that is not a Team account reads no Team-account refusal. The `required` parameter goes; Team account entries keep
-   their reading until #4120's follow-up removes them.
+   machine that is not a Team account reads no Team-account refusal. A Mac reads as itself, no longer as its Team account,
+   whose privacy check left its person's own agents out the same way. The `required` parameter goes, and so does the
+   "Team account joining" reading (#3122), which can no longer happen, with the database read behind it. Team account entries
+   keep their reading until #4120's follow-up removes them.
 2. **An assigned Regular agent gets no project code** (commands.ts assignTo, the finding's start.ts:428). A Regular agent starts
    in its own empty folder. Assigning it a task changes only its project membership, and the brief does not say where the code
    is. Fix: its task message names the project's code: the GitHub address to clone into its own folder with its person's own
@@ -69,9 +71,11 @@ against main d1f33f5ca first. All six are real; none was dropped.
 
 ### Task 1: own computers read no Team-account refusal
 
-**Files:** backend/src/superTabs/machines.ts, backend/src/superTabs/teamRouting.test.ts, backend/src/superTabs/computerMoves.test.ts
+**Files:** backend/src/superTabs/machines.ts, store.ts, read/views.ts, read/service.ts, and the tests teamRouting, ownAccountWork,
+computerMoves.
 
-**Interfaces:** `teamWorkRefusal(pool, now, teamRow, otherWorkspace)` (no `required`).
+**Interfaces:** `teamWorkRefusal(pool, now, teamRow, otherWorkspace)` (no `required`); `machineTeamWork(pool, now, teamMachines,
+otherWorkspaceMachines)` (no state, no joining list); `joiningTeamMacs` and `store.joiningTeams` removed.
 
 - [ ] Change the tests that pinned the pre-v3 rule to the v3 one: a machine with no Team session (added at join, or under
       `SWARM_TEAM_ACCOUNT_REQUIRED=1`) reads `teamWork` allowed. Watch them fail.

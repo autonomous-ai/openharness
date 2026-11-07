@@ -395,11 +395,11 @@ describe('one machine: a Mac and its Harness Team account', () => {
     const f = oneMachine()
     f.machine('mate-mac').observation = reading('computer')
     f.machine('mate-team').observation = reading('team', FAILED)
-    expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, ['mate-team'])).toBeNull()
-    expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, ['mate-team'], ['mate-team'])).toBeNull()
-    expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, [])).toBeNull()
+    expect(machineTeamWork(f.machine('mate-mac'), NOW, ['mate-team'])).toBeNull()
+    expect(machineTeamWork(f.machine('mate-mac'), NOW, ['mate-team'], ['mate-team'])).toBeNull()
+    expect(machineTeamWork(f.machine('mate-mac'), NOW, [])).toBeNull()
     // The account itself reads as itself.
-    expect(machineTeamWork(f.state, f.machine('mate-team'), NOW, ['mate-team'])?.code).toBe('PRIVACY_CHECK_FAILED')
+    expect(machineTeamWork(f.machine('mate-team'), NOW, ['mate-team'])?.code).toBe('PRIVACY_CHECK_FAILED')
   })
 
   it('takes nothing in its Team account, whether its account row is still listed or not', () => {
@@ -408,7 +408,7 @@ describe('one machine: a Mac and its Harness Team account', () => {
       expect(refusal(() => f.run({ type: 'agent.start', request: { ...f.request(group, 'mate-team'), cwd: '/team-swarm/lead' } }, mate,
         { ...f.pooled('mate-team'), teamMachines }))?.code).toBe('TEAM_ACCOUNTS_REMOVED')
     }
-    expect(machineTeamWork(f.state, f.machine('mate-team'), NOW, [])?.code).toBe('TEAM_ACCOUNT_REQUIRED')
+    expect(machineTeamWork(f.machine('mate-team'), NOW, [])?.code).toBe('TEAM_ACCOUNT_REQUIRED')
     expect(f.state.starts ?? []).toEqual([])
   })
 
@@ -516,8 +516,8 @@ describe('one machine: a Mac whose Harness Team account was made again', () => {
 describe('a Team machine serving more than one Workspace', () => {
   it('shows routing the reason, like any other refusal', () => {
     const f = swarm()
-    expect(teamWorkRefusal(f.machine('mate-team'), NOW, true, true, true)?.code).toBe('MACHINE_IN_OTHER_WORKSPACE')
-    expect(teamWorkRefusal(f.machine('mate-team'), NOW, true, true, false)).toBeNull()
+    expect(teamWorkRefusal(f.machine('mate-team'), NOW, true, true)?.code).toBe('MACHINE_IN_OTHER_WORKSPACE')
+    expect(teamWorkRefusal(f.machine('mate-team'), NOW, true, false)).toBeNull()
   })
 })
 
@@ -546,8 +546,8 @@ describe('a machine added as its person joined', () => {
     const f = swarm()
     f.run(joined, mate, contribution)
     f.machine('joined-mac').observation = reading('computer')
-    expect(machineTeamWork(f.state, f.machine('joined-mac'), NOW, [])).toBeNull()
-    expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, [])).toBeNull()
+    expect(machineTeamWork(f.machine('joined-mac'), NOW, [])).toBeNull()
+    expect(machineTeamWork(f.machine('mate-mac'), NOW, [])).toBeNull()
   })
 
   it('keeps the rule when its settings are saved again, which sends the contribution without it', () => {

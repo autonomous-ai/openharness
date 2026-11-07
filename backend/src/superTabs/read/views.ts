@@ -45,8 +45,6 @@ export interface ReadExtras {
   teamAccountsIdle?: boolean
   /** Each contributed machine's CLI version as its daemon last connected (store.ts machineFacts). */
   machineVersions?: Record<string, string>
-  /** Macs whose owner's Harness Team account on them is not listed yet (store.ts joiningTeams). */
-  joiningTeams?: string[]
   /** A person's open mentions, counted by the store. */
   mentionsWaiting?: number
   /** Which ones they are, as a digest (mentions.ts). */
@@ -187,7 +185,7 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
   const slots = slotCounter(state)
   const machine = (pool: ContributedMachine) => {
     const stored = state.machines!.find(m => m.machineId === pool.machineId)!
-    const refusal = machineTeamWork(state, stored, now, extras.teamMachines, extras.otherWorkspaceMachines ?? [], extras.joiningTeams ?? [])
+    const refusal = machineTeamWork(stored, now, extras.teamMachines, extras.otherWorkspaceMachines ?? [])
     const version = extras.machineVersions?.[pool.machineId]
     const suspended = suspendedEngines(stored, now)
     const machineSuspended = machineSuspensionReason(stored, now)
