@@ -12,6 +12,7 @@ import 'controller.dart';
 import 'buddy_machines.dart';
 import 'buddy_model.dart';
 import 'buddy_engine.dart';
+import 'buddy_restart.dart' show readerBuddy;
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'model.dart';
@@ -312,34 +313,122 @@ Future<void> confirmRemoveBuddy(
   SuperTabController c,
   String projectId, {
   String? conversationId,
-}) async {
-  final remove = await showAppDialog<bool>(
+}) {
+  final chat = conversationId == null
+      ? null
+      : c.snapshot?.conversation(conversationId);
+  final buddy = chat == null
+      ? readerBuddy(c, projectId)
+      : chat.agentIds
+            .map((id) => c.snapshot?.agent(id))
+            .whereType<SuperTabAgent>()
+            .where((a) => a.isMainBuddy)
+            .firstOrNull;
+  return showAppDialog<void>(
     context: context,
     builder: (context) => _BuddyDialogScope(
       controller: c,
       projectId: projectId,
-      child: AlertDialog(
-        title: const Text('Remove Buddy?'),
-        content: Text(
-          'Its session stops. Your chat stays, and adding a Buddy here again '
-          'picks it up.',
-          style: DesktopChrome.text(),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Remove'),
-          ),
-        ],
+      child: _RemoveBuddyDialog(
+        controller: c,
+        projectId: projectId,
+        conversationId: conversationId,
+        // Named as the dialog opens: once removed, the Buddy is gone.
+        name: buddy == null ? null : buddy.displayName ?? buddy.name,
       ),
     ),
   );
-  if (remove == true) {
-    await c.removeBuddy(projectId, conversationId: conversationId);
+}
+
+class _RemoveBuddyDialog extends StatefulWidget {
+  const _RemoveBuddyDialog({
+    required this.controller,
+    required this.projectId,
+    required this.conversationId,
+    required this.name,
+  });
+  final SuperTabController controller;
+  final String projectId;
+  final String? conversationId;
+
+  /// The Buddy's shown name; null when it is not known.
+  final String? name;
+
+  @override
+  State<_RemoveBuddyDialog> createState() => _RemoveBuddyDialogState();
+}
+
+class _RemoveBuddyDialogState extends State<_RemoveBuddyDialog> {
+  SuperTabController get c => widget.controller;
+  bool _busy = false;
+  String? _error;
+
+  Future<void> _remove() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final removed = await c.removeBuddy(
+      widget.projectId,
+      conversationId: widget.conversationId,
+    );
+    if (!mounted) return;
+    if (removed) {
+      Navigator.pop(context);
+      return;
+    }
+    setState(() {
+      _busy = false;
+      _error = c.operationError ?? "Couldn't remove the Buddy. Try again.";
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final name = widget.name;
+    return PopScope(
+      canPop: !_busy,
+      child: AlertDialog(
+        title: Text('Remove ${name ?? 'your Buddy'}?'),
+        content: SizedBox(
+          width: 400,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${name ?? 'Your Buddy'} stops. Your chat stays, and your '
+                'next Buddy here picks it up.',
+                style: DesktopChrome.text(),
+              ),
+              if (_error case final error?) ...[
+                const SizedBox(height: 12),
+                Text(
+                  error,
+                  key: const ValueKey('super-buddy-remove-error'),
+                  style: DesktopChrome.control(
+                    color: grid.AppPalette.dangerFill,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: _busy ? null : () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: grid.dangerButtonStyle(),
+            onPressed: _busy ? null : () => unawaited(_remove()),
+            child: Text(_busy ? 'Removing…' : 'Remove'),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -500,7 +589,13 @@ class _RenameBuddyDialogState extends State<_RenameBuddyDialog> {
               ),
               if (_error case final error?) ...[
                 const SizedBox(height: 12),
-                Text(error, style: DesktopChrome.control()),
+                Text(
+                  error,
+                  // The Buddy card's error colour.
+                  style: DesktopChrome.control(
+                    color: grid.AppPalette.dangerFill,
+                  ),
+                ),
               ],
             ],
           ),
