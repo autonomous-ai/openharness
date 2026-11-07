@@ -49,8 +49,9 @@ void main() {
   Future<TasksFixture> mount(
     WidgetTester t,
     Brightness brightness,
-    int count,
-  ) async {
+    int count, {
+    double width = windowWidth,
+  }) async {
     final f = TasksFixture();
     addTearDown(f.controller.dispose);
     f.rows
@@ -59,7 +60,7 @@ void main() {
     await f.controller.refresh();
     final app = createApp();
     addTearDown(app.dispose);
-    t.view.physicalSize = const Size(windowWidth, windowHeight);
+    t.view.physicalSize = Size(width, windowHeight);
     t.view.devicePixelRatio = 1;
     addTearDown(t.view.reset);
     grid.AppTheme.brightness.value = brightness;
@@ -93,10 +94,28 @@ void main() {
     return f;
   }
 
-  Color surface(WidgetTester t) =>
-      Theme.of(t.element(find.byType(SuperTabPersonalTasksPane)))
-          .colorScheme
-          .surface;
+  /// The Swarm's one surface: the left, middle and right panes share it (anh Dee's six rules, task #4465).
+  Color surface(WidgetTester t) => grid.AppPalette.swarmField;
+
+  Future<List<List<int>>> pixelRow(WidgetTester t, int y) async {
+    final row = <List<int>>[];
+    await t.runAsync(() async {
+      final view = t.binding.renderViews.first;
+      final image = await (view.debugLayer! as OffsetLayer).toImage(
+        Offset.zero & view.size,
+        pixelRatio: 1,
+      );
+      final data = (await image.toByteData(
+        format: ui.ImageByteFormat.rawRgba,
+      ))!;
+      for (var x = 0; x < image.width; x++) {
+        final i = (y * image.width + x) * 4;
+        row.add([for (var k = 0; k < 4; k++) data.getUint8(i + k)]);
+      }
+      image.dispose();
+    });
+    return row;
+  }
 
   /// The pane's pixels down a strip no row reaches: every one must be the
   /// pane's surface, fully opaque.
@@ -183,6 +202,50 @@ void main() {
           'tasks-surface-${brightness.name}-$count',
         );
       });
+    }
+  }
+
+  for (final brightness in Brightness.values) {
+    for (final width in [880.0, 1600.0]) {
+      testWidgets(
+        'the three panes are one surface split by hairlines: ${brightness.name}, $width wide',
+        (t) async {
+          await mount(t, brightness, 0, width: width);
+          expect(t.takeException(), isNull);
+          // Below the left pane's rows and the chat's messages, above the composer: only grounds and dividers.
+          final y = (windowHeight * .7).round();
+          final want = surface(t);
+          int byte(double channel) => (channel * 255).round();
+          final field = [byte(want.r), byte(want.g), byte(want.b), 255];
+          final row = await pixelRow(t, y);
+          final runs = <String>[];
+          for (var x = 0; x < row.length; x++) {
+            if (row[x].join(',') == field.join(',')) continue;
+            var end = x;
+            while (end + 1 < row.length &&
+                row[end + 1].join(',') != field.join(',')) {
+              end++;
+            }
+            runs.add('x=$x..$end ${row[x]}');
+            x = end;
+          }
+          // Two 1-point hairlines between three panes, and nothing else.
+          expect(
+            runs.where((r) {
+              final m = RegExp(r'x=(\d+)\.\.(\d+)').firstMatch(r)!;
+              return int.parse(m[2]!) - int.parse(m[1]!) > 0;
+            }),
+            isEmpty,
+            reason: '$runs',
+          );
+          expect(runs.length, lessThanOrEqualTo(2), reason: '$runs');
+          await captureWindow(
+            t,
+            shots,
+            'one-surface-${brightness.name}-${width.round()}',
+          );
+        },
+      );
     }
   }
 
