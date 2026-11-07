@@ -12,8 +12,9 @@ run-name: Desktop ${{ inputs.prepare_only && 'candidate' || inputs.test_candidat
 # The Flutter project lives under desktop/: the jobs that touch the tree run with
 # working-directory: desktop, and `desktop/scripts/...` below is what `scripts/...` used to mean.
 #
-# macOS, both Linux architectures and both Windows architectures build in parallel. The macOS coordinator compiles one
-# universal app, derives both renderer bundles, and packages/notarizes/uploads them in parallel.
+# macOS, both Linux architectures and both Windows architectures build in parallel. build-macos compiles one
+# universal app and derives both renderer bundles, unsigned; sign-macos, in the `release` environment (main and
+# v*_desktop tags only), signs, notarizes and uploads them in parallel without building anything.
 # Each variant writes its own scratch manifest under harness/desktop/.ci/<run id>/.
 # The publish job combines every platform's parts with a generation-conditional write and verifies every
 # public download while holding the publication lock. Different releases may build concurrently.

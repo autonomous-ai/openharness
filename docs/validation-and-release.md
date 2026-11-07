@@ -255,16 +255,21 @@ or use `--deleted-branch NAME`; `--apply` performs the selected cleanup.
 
 ### Package Desktop while final checks run
 
-When the final implementation is pushed, start `make release-desktop ARGS="--prepare"`
-on that PR branch alongside its required tests and review. While Windows signing is required, the
-`release` environment must allow that branch, or `sign-windows` fails and no candidate is made
-([Windows code signing](windows-code-signing.md#2-github-repository-admin)). This chooses the next
+When the final implementation is pushed, `make release-desktop ARGS="--prepare"`
+on that PR branch is an unsigned build check alongside its required tests and review: macOS,
+Linux and Windows build with the release toolchain, and nothing is kept for reuse. Signing runs
+only in the `release` environment, which takes `main` and `v*_desktop` tags, so a branch's code
+never runs beside the Apple or Windows signing material (`sign-macos` and `sign-windows` are
+skipped there). The release then builds and signs from its tag.
+
+On `main`, `--prepare` makes a reusable candidate. It chooses the next
 version using the same tags/live-manifest rules as a release, then dispatches a
 candidate build. Use an explicit version with `--prepare` when preparing a minor
 bump. The candidate uses the release's normal macOS, Linux and Windows build, signing and
 notarization steps and production updater settings. It writes only to a random
 candidate prefix, verifies all nine downloads, and retains a small receipt in
 GitHub Actions. It neither tags nor updates the product manifest or Release page.
+A real release or a metadata-test dry run starts only from `main` or a `v*_desktop` tag.
 
 After validation and review pass, merge and release that version normally. The
 workflow automatically looks for a candidate with the same version and Desktop
@@ -305,7 +310,7 @@ the newly selected version instead.
 Unused candidates expire after seven days; a daily job deletes only recognized
 old candidate objects at their listed generations. Failed candidates and consumed
 candidates are removed by their owning workflow. For process maintenance, dispatch
-`test_candidate_reuse=true` for the same branch/version after its candidate passes:
+`test_candidate_reuse=true` for the same version after a `main` candidate passes:
 it requires reuse, promotes to disposable paths, verifies all nine downloads, then
 removes those objects and the consumed candidate. It cannot publish a product.
 
