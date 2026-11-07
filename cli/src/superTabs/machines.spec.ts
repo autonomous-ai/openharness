@@ -3291,6 +3291,25 @@ describe('a Member\'s task sessions on this machine', () => {
     expect((other.f.start.mock.calls as unknown[][])[0]![0]).not.toHaveProperty('memberFolder')
   })
 
+  // Review of #3553: a worktree that went (deleted, or no longer provably the Member's) left its record, so every later start
+  // made another one and none was reused, dropped or reported. A start that made a new one now takes the record over.
+  it('records the new worktree a start makes after the held one went, so the next start works in it', async () => {
+    const m = member()
+    git(m.clone, 'worktree', 'remove', '--force', m.path)
+    const made = join(dirname(m.path), 'p-old-start')
+    git(m.clone, 'worktree', 'add', '-q', '-b', 'm/p-old-start', made)
+    m.request({ memberProject: { id: 'p-old', name: 'old' } })
+    m.f.start.mockResolvedValue({ ok: true, harnessId: 'h-new' } as never)
+    ;(m.f.core.agents.byAgent as ReturnType<typeof vi.fn>).mockImplementation((id: string) => id === 'h-new' ? { agentId: id, cwd: made } as never : undefined)
+    await m.f.machine.tick()
+    expect((m.f.start.mock.calls as unknown[][])[0]![0]).not.toHaveProperty('memberFolder')
+    expect(readMemberWorktrees(m.file)).toEqual([expect.objectContaining({ projectId: 'p-old', startId: 'start', path: made })])
+    Object.assign(m.f.pool, { starts: [{ id: 'start-2', dispatched: false, request: { memberOf: 'member-1', memberProject: { id: 'p-old', name: 'old' }, worktree: true, cwd: m.clone } }] })
+    m.f.step(5_000)
+    await m.f.machine.tick()
+    expect((m.f.start.mock.calls as unknown[][]).at(-1)![0]).toMatchObject({ startId: 'start-2', memberFolder: made })
+  })
+
   it('removes the project folder its start drops when clean, and fails the start, making nothing, when it holds work', async () => {
     const dirty = member()
     writeFileSync(join(dirty.path, 'unpushed.txt'), 'work')
