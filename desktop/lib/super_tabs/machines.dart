@@ -2850,7 +2850,6 @@ String? superMachineAllowanceNote(Iterable<String> lines) {
 String? superTabTeammatesPaused(Object? code) {
   final why = switch (code) {
     'MACHINE_OFFLINE' => 'Harness Team account offline',
-    'TEAM_ACCOUNT_REQUIRED' => 'not set up',
     // Its owner's Harness Team account is on it and joins on the Mac's next poll (backend machines.ts, #3122).
     'TEAM_ACCOUNT_JOINING' => 'Harness Team is joining',
     'PRIVACY_UNCHECKED' => 'privacy not checked yet',
