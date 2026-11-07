@@ -258,13 +258,9 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
           // Members draws the crew, free or not, though no task is open.
           child: _layout == _Layout.members
               ? _membersView(project, board, now)
+              // Empty means empty (anh Dee's rule 7, task #4465).
               : empty
-              ? Center(
-                  child: Text(
-                    'No tasks yet',
-                    style: DesktopChrome.control(color: DesktopChrome.muted),
-                  ),
-                )
+              ? const SizedBox.shrink()
               : hidden
               ? _noMatch()
               : _layout == _Layout.list
