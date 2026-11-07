@@ -22,6 +22,10 @@ _spec = importlib.util.spec_from_file_location("ci_evidence", Path(__file__).wit
 ci = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ci)
 
+_local_spec = importlib.util.spec_from_file_location("local_checks", Path(__file__).with_name("local-checks.py"))
+local_checks = importlib.util.module_from_spec(_local_spec)
+_local_spec.loader.exec_module(local_checks)
+
 
 CORE = {"cli", "desktop", "tui", "backend", "companions"}
 EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons", "pty"}
@@ -565,7 +569,11 @@ def main_planner(root, base):
     import tempfile
     try:
         with tempfile.TemporaryDirectory(prefix="main-ci-plan-") as folder:
-            for name in ("ci-plan.py", "record-ci-validation.py"):
+            names = ["ci-plan.py", "record-ci-validation.py"]
+            # Older reviewed bases predate the local-receipt module.
+            if git(root, "ls-tree", sha(base), "--", "scripts/local-checks.py"):
+                names.append("local-checks.py")
+            for name in names:
                 data = subprocess.check_output(["git", "show", f"{sha(base)}:scripts/{name}"], cwd=root,
                                                stderr=subprocess.PIPE, timeout=15)
                 (Path(folder) / name).write_bytes(data)
@@ -708,6 +716,7 @@ def make_plan(root, event_name, event, scope="full", source=None, evidence=None)
     return dict(schema=1, kind="ci-plan", event=event_name, head=head, base=base, draft=draft,
                 tree=git(root, "rev-parse", "HEAD^{tree}"), paths=paths, reasons=reasons,
                 suites=sorted(suites), required_jobs=sorted(required), reused=reused, reuse=reuse,
+                local_checks=local_checks.required_checks(paths) if event_name == "pull_request" else [],
                 manual_acceptance="Review still selects relevant native, real-engine, hardware and visual acceptance.")
 
 
@@ -739,10 +748,17 @@ def verify(plan, needs, source):
     for job, result in needs.items():
         if result.get("result") not in {"success", "skipped"}:
             raise ValueError(f"CI job did not complete successfully: {job}")
+    required_local = local_checks.planned_checks(plan)
+    try:
+        receipts = json.loads(needs.get("process-checks", {}).get("outputs", {}).get("local_receipts", "[]"))
+    except (ValueError, TypeError):
+        raise local_checks.missing(required_local) from None
+    receipts = local_checks.validate_receipts(required_local, receipts, plan["head"])
     return dict(schema=1, kind="ci-required", status="passed", source_sha=plan["head"],
                 source_tree=plan["tree"], event=plan["event"], base=plan["base"],
                 suites=suites, required_jobs=sorted(expected), results={k: v["result"] for k, v in needs.items()},
                 reused=reused, reuse=plan.get("reuse"),
+                local_receipts=receipts,
                 run_id=int(os.environ.get("GITHUB_RUN_ID", "0")), run_attempt=int(os.environ.get("GITHUB_RUN_ATTEMPT", "0")))
 
 
@@ -804,6 +820,8 @@ def main():
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
         summary.write(f"Source: `{record.get('head', record.get('source_sha'))}`\n\n")
         summary.write("Automatic suites: " + ", ".join(record["suites"] or ["repository process checks"]) + ".\n")
+        if record.get("local_checks"):
+            summary.write("\nRequired local receipts: " + ", ".join(record["local_checks"]) + ".\n")
         for suite, reused in sorted((record.get("reused") or {}).items()):
             summary.write(f"\nReused `{suite}` from [run {reused['run_id']}]({reused['run_url']}) "
                           f"(attempt {reused['run_attempt']}, `{reused['origin_sha']}`): {reused['reason']}.\n")

@@ -144,3 +144,15 @@ it('a new backend gets profileId, and any other failure is thrown, not remembere
   await expect(sender.post(observation)).rejects.toThrow('bad')
   expect(bad).toHaveBeenCalledTimes(4)
 })
+
+it('rebinds a Swarm Buddy under its stable identity without inventing a project', async () => {
+  const f = fixture()
+  await recordReplacement(f.core, f.payload)
+  const row = { tabId: 'tab', buddyConversationId: 'private-chat', agent: { id: 'buddy', harnessId: 'old', machineId: 'machine',
+    buddyScope: 'swarm', buddyOf: { personId: 'owner', generation: 'g' } } }
+  const observations = await replacementObservations(f.core, 'machine', [row])
+  expect(observations).toHaveLength(1)
+  expect(observations[0].body).toMatchObject({ asAgentId: 'buddy', command: {
+    type: 'agent.rebind', agentId: 'buddy', machineId: 'machine', previousHarnessId: 'old', harnessId: 'new' } })
+  expect(observations[0].body.command).not.toHaveProperty('projectId')
+})

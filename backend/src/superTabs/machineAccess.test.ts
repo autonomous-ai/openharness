@@ -71,7 +71,8 @@ function swarm() {
   const group = (projectId = 'lead', actor: Actor = owner, requires?: Record<string, unknown>) => String(run({ type: 'conversation.create', projectId, title: 'Work',
     ...(requires ? { task: { goal: 'Test on a lamp.', changes: 'Firmware.', constraints: 'None.', owns: ['fw'], requires } } : { brief: 'Build it.' }),
     checks: [] } as Command, actor).result.conversationId)
-  const start = (conversationId: string, actor: Actor = owner, projectId = 'lead') =>
+  /** Gray's start on Gray's own Mac: Swarm v3 starts a new agent only on its own person's computer (task #4120). */
+  const start = (conversationId: string, actor: Actor = gray, projectId = 'lead') =>
     run({ type: 'agent.start', request: { conversationId, machineId: 'gray-mac', engine: 'codex', name: 'Builder', cwd: `/swarm/${projectId}`, worktree: true,
       requirements } }, actor, joined)
   return { run, machine, access, add, entry, agent, group, start, joined, grays, leadActor, generation, get state() { return state }, set state(s) { state = s } }
@@ -345,10 +346,10 @@ describe('requires.access and the start check (design section 3)', () => {
     expect(f.state.starts ?? []).toEqual([])
   })
 
-  it('never counts the owner\'s unshared own-account entry for a teammate\'s task, nor the Team account for it', () => {
+  it('never counts the owner\'s unshared own-account entry for a teammate\'s task', () => {
     const f = swarm()
     f.add('Lamp')
-    // The Swarm owner's project is a teammate's on Gray's Mac: it runs in the Team account, which has no Lamp.
+    // The Swarm owner's project is a teammate's on Gray's Mac: Gray's own Lamp serves it only once Gray shares it.
     const work = f.group('lead', owner, { access: ['Lamp'] })
     expect(refusal(() => f.start(work))).toMatchObject({ code: 'ACCESS_MISSING', message: 'Lamp is in gray\'s own account, not shared with teammates.' })
   })
@@ -361,32 +362,19 @@ describe('requires.access and the start check (design section 3)', () => {
     const started = f.start(work)
     expect(lastStart(f).machineId).toBe('gray-mac')
     expect(started.result.moved).toBeUndefined()
-    // A task that needs nothing shared still goes to the Team account, as before.
+    // A task that needs nothing stays on the Mac too: no start moves to a Team account any more (task #4120).
     f.start(f.group('lead', owner))
-    expect(lastStart(f).machineId).toBe('gray-team')
-  })
-
-  it('starts a recorded route\'s Mac candidate on the Mac only for a task that names the shared entry (security review 2)', () => {
-    const f = swarm()
-    const id = f.add('Lamp')
-    f.access({ action: 'change', entryId: id, teammates: true })
-    const named = f.group('lead', owner, { access: ['Lamp'] })
-    const routed = f.run({ type: 'route.record', conversationId: named, decision: record([candidate('c0', 'gray-mac')]) } as Command, owner)
-    expect(routed.routeDecisions[0]).toMatchObject({ op: 'create', record: { candidates: [{ id: 'c0' }], excluded: [] } })
-    f.start(named)
     expect(lastStart(f).machineId).toBe('gray-mac')
-    // Named in the route alone, not the task: the start goes to the Team account, which the route offers in its place.
-    f.start(f.group('lead', owner))
-    expect(lastStart(f).machineId).toBe('gray-team')
   })
 
-  it('sends Team-written code to the Team account even for a shared entry, and refuses it there', () => {
+  // Swarm v3 (task #4120, the PM's ruling): code a Team agent wrote runs only on its project owner's own computer.
+  it('runs Team-written code only on the project owner\'s own computer, even for a shared entry', () => {
     const f = swarm()
     const id = f.add('Lamp')
     f.access({ action: 'change', entryId: id, teammates: true })
     const work = f.group('lead', owner, { access: ['Lamp'] })
     f.state.conversations.find(c => c.id === work)!.teamWritten = true
-    expect(refusal(() => f.start(work))?.code).toBe('ACCESS_MISSING')
+    expect(refusal(() => f.start(work))?.code).toBe('TEAM_WRITTEN_WORK')
     expect(f.state.starts ?? []).toEqual([])
   })
 
@@ -400,9 +388,9 @@ describe('requires.access and the start check (design section 3)', () => {
 
   it('refuses an entry waiting for its owner to confirm', () => {
     const f = swarm()
-    f.add('Lamp', { account: 'team', askedIn: { conversationId: 'lead', messageId: 'm-1' } }, f.leadActor, said('owner'))
-    const work = f.group('lead', owner, { access: ['Lamp'] })
-    expect(refusal(() => f.start(work))).toMatchObject({ code: 'ACCESS_MISSING', message: 'Lamp on Gray\'s Mac is waiting for gray to confirm.' })
+    f.add('Lamp', { askedIn: { conversationId: 'lead', messageId: 'm-1' } }, f.leadActor, said('owner'))
+    const work = f.group(f.grays, gray, { access: ['Lamp'] })
+    expect(refusal(() => f.start(work, gray, f.grays))).toMatchObject({ code: 'ACCESS_MISSING', message: 'Lamp on Gray\'s Mac is waiting for gray to confirm.' })
   })
 
   it('refuses the owner\'s own task needing a Team-account entry: that account runs only teammates\' work', () => {
@@ -428,21 +416,25 @@ describe('requires.access and the start check (design section 3)', () => {
 
   it('matches names without case or spacing, and leaves a start with no requirement as it was', () => {
     const f = swarm()
-    f.add('Lamp', { account: 'team' })
-    f.start(f.group('lead', owner, { access: ['  lamp '] }))
-    expect(lastStart(f).machineId).toBe('gray-team')
+    f.add('Lamp')
+    f.start(f.group(f.grays, gray, { access: ['  lamp '] }), gray, f.grays)
+    expect(lastStart(f).machineId).toBe('gray-mac')
     const g = swarm()
     g.start(g.group('lead', owner))
-    expect(g.state.starts!.at(-1)!.request.machineId).toBe('gray-team')
+    expect(g.state.starts!.at(-1)!.request.machineId).toBe('gray-mac')
   })
 
   it('leaves a machine without the access out of a recorded route, and refuses it as the only choice', () => {
     const f = swarm()
     const work = f.group('lead', owner, { access: ['Lamp'] })
-    f.add('Lamp', { account: 'team' })
+    const id = f.add('Lamp')
+    f.access({ action: 'change', entryId: id, teammates: true })
     expect(refusal(() => f.run({ type: 'route.record', conversationId: work, decision: record([candidate('c0', 'owner-mac')]) } as Command, owner)))
       .toMatchObject({ code: 'ACCESS_MISSING', message: 'No Lamp here. Route again.' })
-    const routed = f.run({ type: 'route.record', conversationId: work, decision: record([candidate('c0', 'owner-mac'), candidate('c1', 'gray-mac')]) } as Command, owner)
+    // Gray's own agent on Gray's Mac, where Gray shared the Lamp: it stays (a new agent there is Gray's alone to start, task #4120).
+    f.agent('gray-builder', 'gray-mac')
+    const member = { ...candidate('c1', 'gray-mac'), kind: 'member', agentId: 'gray-builder' }
+    const routed = f.run({ type: 'route.record', conversationId: work, decision: record([candidate('c0', 'owner-mac'), member]) } as Command, owner)
     expect(routed.routeDecisions[0]).toMatchObject({ op: 'create', record: { candidates: [{ id: 'c1' }],
       excluded: [{ title: 'c0 on owner-mac', reason: 'No Lamp here.' }] } })
   })

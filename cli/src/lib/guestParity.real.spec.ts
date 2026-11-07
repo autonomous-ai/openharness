@@ -86,7 +86,7 @@ real('a guest\'s harness against an owner\'s', () => {
     // As a guest's Claude Code is started (guestPaneCommand, set on its pane as guestCreate does): the variables it is
     // given, through the helper, as the guest, in the guest's workspace. Only the program is the probe.
     const account = { user: guestUser!, home: join(guestHomeRoot(), guestUser!), workspace: work }
-    const env = guestPaneCommand({ account, engine: 'claude', relayUrl: 'http://127.0.0.1:9', token: 'parity', bypassPermission: true }).env
+    const env = guestPaneCommand({ account, engine: 'claude', bypassPermission: true }).env
     given = Object.keys(env)
     const guest = guestRunCommand(guestUser!, work, env, [NODE, join(dir, 'probe.js')])
     const guestPane = await server.run('new-window', '-d', '-P', '-F', '#{pane_id}', '-t', 'parity', '-c', dir,
@@ -116,7 +116,7 @@ real('a guest\'s harness against an owner\'s', () => {
       expect(owner, key).toContain(key)
       expect(guest, key).not.toContain(key)
     }
-    // Exactly what it was given (guestPaneCommand: TERM, COLORTERM, LANG, the relay's) and what starting as the guest
+    // Exactly what it was given (guestPaneCommand: TERM, COLORTERM, LANG) and what starting as the guest
     // sets (measured: macOS 26, sudo -u … env -i), and nothing of the owner's.
     const login = ['HOME', 'LOGNAME', 'OLDPWD', 'PATH', 'PWD', 'SHELL', 'SHLVL', 'USER', '__CF_USER_TEXT_ENCODING']
     expect(guest).toEqual([...new Set([...given, ...login])].sort())
