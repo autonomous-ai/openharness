@@ -652,6 +652,10 @@ export function machineContribution(state: SuperTabState, machineId: string) {
   const pool = state.machines?.find(m => m.machineId === machineId)
   if (!pool) return null
   const contributor = person(state, pool.contributorId)
+  // Its person left and came back while their host still removes what the Swarm had there (task #4252): that ends by itself.
+  if (contributor.role !== 'viewer' && contributor.generation !== pool.membershipGeneration && pool.removal) {
+    fail('MACHINE_CLEANING', `${pool.name ?? 'This machine'} is still cleaning up after you left. Try again once that finishes, in a minute or two.`)
+  }
   if (contributor.role === 'viewer' || contributor.generation !== pool.membershipGeneration) {
     fail('CONTRIBUTION_REVOKED', 'This machine contribution was withdrawn.', 403)
   }
