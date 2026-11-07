@@ -41,7 +41,7 @@ this spec). Code review stays a pull request review on GitHub, tied to a commit,
   public repository the issue is created at Accept, not at creation. An issue can't be unpublished, and these protect
   security work and people's names. Ownrev6's review asked for this.
 - **On a public repository, nothing is published until it is marked.** The PM or the requester marks each task
-  publishable, and P0 and security work are never published. openharness is public, so its tasks need that mark to
+  publishable. P0 and security work is never published, on any repository. openharness is public, so its tasks need that mark to
   reach GitHub. The server can't tell security work from a brief, and an issue can't be taken back, so the default
   fails closed (Ownrev2's security review). Private repositories publish by default.
 
@@ -68,21 +68,29 @@ gets. So the server decides before it creates an issue, and these tasks never ge
 
 - **Tasks not marked for publishing.** `conversation.create` takes an optional `publish`, and its default depends on
   the repository:
-  - **Private repository: `publish` defaults to true.** The PM sends `publish: false` for security work (an unfixed
-    hole, an incident's details) and for any brief that quotes a person's private chat; the PM's skill text says so.
+  - **Private repository: `publish` defaults to true.** The PM sends `publish: false` for an incident's details and
+    for any brief that quotes a person's private chat; the PM's skill text says so. P0 and security work is withheld
+    by code (below).
   - **Public repository: `publish` defaults to false.** A task stays in Harness until the PM or its requester marks it
     publishable (`task.publish`, allowed only for those two). The server can't tell security work reliably on a public
     repository, so forgetting the mark keeps a task in Harness rather than putting an unfixed hole on GitHub. A
     withheld task shows no issue number, so the gap is visible.
-  - **Public repository, never published:** a P0 task, and a task whose brief asks for a security review or that has a
-    security review step, refuse `publish` for their whole life (`PUBLISH_REFUSED_SECURITY`). A security review step
-    added after the issue exists can't unpublish it, so the PM is told at once to ask a repository admin.
+  - **Never published, on any repository:** a P0 task, and a task whose brief asks for a security review or that has
+    a security review step, refuse `publish` for their whole life (`PUBLISH_REFUSED_SECURITY`). The server enforces
+    this in code, public or private, so it never rests on the PM remembering. A private repository's readers can be
+    wider than the project (see Design 7), so an unfixed hole stays in Harness there too. A task that becomes P0, or
+    gains a security review step, after its issue exists can't unpublish it. From then on Harness writes nothing more
+    to that issue (no title, body or label change), and the PM is told at once to ask a repository admin.
   - Turning `publish` off once the issue exists is refused with `ISSUE_ALREADY_PUBLISHED`, and the PM is told that only
     a repository admin can delete the issue.
 - **On a public repository, a brief that names someone.** Before publishing, the server runs the title and brief through
   `redactCredentials`, and checks them for any email address and any person, machine or account name from the Swarm's
   roster. On a match the task stays in Harness, and the PM is told which kind of name stopped it (never the name
   itself). Editing the brief clears the hold, and the issue is created then.
+- **Every later write is checked the same way, not only the first.** Before the sync pass writes a title or body to an
+  existing issue (a rename or `work.define`), it runs the same checks again: the name check on a public repository,
+  and the never-published rule everywhere. A write that fails them isn't sent to GitHub. The Harness edit stays in
+  Harness, the issue keeps its last published text, and the PM is told which check held it.
 - **Steps** (review, security review, test), as they aren't tasks of their own.
 - **Open tasks on a public repository at migration.** Their briefs were written for Harness, not for the public, so they
   finish in Harness (Design 6). Only tasks created after the project becomes a GitHub project get issues.
@@ -351,7 +359,7 @@ Order:
 
   | Harness project | Repository | GitHub project? |
   | --- | --- | --- |
-  | Private (members only) | Private | Yes |
+  | Private (members only) | Private | Yes, for tasks that aren't withheld. Who reads its issues is GitHub's list, not Harness's: the repository's collaborators (outside collaborators included), organisation members whose base permission or team grants read, and organisation owners. The approver who links the project accepts that audience; P0 and security work never goes there. |
   | Public (the whole Swarm) | Public | Yes, with the public-repository holds ("Tasks that stay in Harness") |
   | Private | Public | No. Members-only tasks would be published to the world. |
   | Private | Internal | No. The tasks would reach the whole GitHub organisation. |
@@ -383,7 +391,12 @@ Order:
   account from the roster, or holding an email, is held back by the server. No chat text leaves.
 - **Whose edits on GitHub direct agents:** GitHub lets only an issue's author (the app's bot) and people with write access
   edit its body. So the people who can change a task's brief on GitHub are the people who can already push to the
-  repository. Comments are never read, so outside people on a public repository can't reach an agent through an issue.
+  repository.
+- **The bot is not proof of Harness.** Agent tokens are minted by the same app, so before task 4 an agent could edit an
+  issue as `harness[bot]`. A bot-authored change is Harness's own only if it matches a write the sync pass recorded:
+  the issue, the field and the `updated_at` GitHub answered. Any other bot edit is untrusted. It is shown, the PM is
+  told, and it reaches no agent as task text until the PM accepts it. Agent tokens lose `issues` in task 4, before the
+  first issue exists, so this only catches what slips past that. Comments are never read, so outside people on a public repository can't reach an agent through an issue.
 - **Whose close or reopen moves work:** only someone with write access. For a close or reopen, the receiver reads the
   webhook's sender's permission (`GET /repos/{owner}/{repo}/collaborators/{user}/permission`, with the sync token,
   cached 10 minutes). Below write, the change is shown and the PM is told, but nothing starts or stops. If the read
@@ -470,17 +483,19 @@ spec.
    - `issueKey` index.
    - Creating the issue for a new task (marker, adopt on retry).
    - What stays in Harness: `publish` with its per-repository default, `task.publish`, the never-published rule for
-     security work on public repositories, steps, and the name check. The PM's skill text names `publish`.
+     P0 and security work on every repository, steps, and the name check. The checks run on every title and body write,
+     not only at creation. The PM's skill text names `publish`.
+   - Agent tokens drop `issues` on GitHub projects. This ships in this task, before the first issue is created.
+   - Bot edits are trusted only when they match a recorded server write.
    - Applying `issues` webhooks to the copy, with the newer-`updated_at` rule.
    - "The issue changed on GitHub" messages.
    - Two security reviews (server token permissions; private repositories). This must ship before any issue content
      enters Harness.
-5. **Status, owner and agent labels, and agent tokens lose `issues`** (M, backend).
+5. **Status, owner and agent labels** (M, backend).
    - The pending-write sync pass, its write budget and backoff.
    - The status and agent labels and the assignee.
    - `ISSUE_CHANGED_ON_GITHUB`.
    - GitHub-side close and reopen acting on the task.
-   - Agent tokens drop `issues` on GitHub projects.
    - Security review.
 6. **Close on a green merge** (M, backend and the CLI hook). The close note (PR link and check names only, capped). The
    three closing-word guards: the commit hook rewrite, the PR-body rewrite and train refusal, and the receiver's reopen of
