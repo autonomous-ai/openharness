@@ -97,6 +97,17 @@ describe('harness team', () => {
 })
 
 describe('harness team setup', () => {
+  it('refuses before any prompt, in words and in JSON: Swarm v3 has no Team accounts (#4221)', async () => {
+    const f = fake({ statusAfter: reported })
+    expect(await teamCommand(['setup'], f.deps)).toBe(1)
+    expect(f.err.join('\n')).toContain('Swarm v3 has no Team accounts')
+    const json = fake({ statusAfter: reported })
+    expect(await teamCommand(['setup', '--json'], json.deps)).toBe(1)
+    expect(JSON.parse(json.out[0]!)).toMatchObject({ ok: false, code: 'TEAM_ACCOUNTS_REMOVED' })
+    expect(f.admin).not.toHaveBeenCalled()
+    expect(json.admin).not.toHaveBeenCalled()
+  })
+
   it('copies the engines this Mac already has into the team account, instead of downloading them (#3169)', async () => {
     const codex = { packageName: '@openai/codex', dir: `${OWNER_HOME}/.local/lib/node_modules/@openai/codex`, bin: 'codex', binPath: 'bin/codex.js' }
     const f = fake({ statusAfter: reported })
