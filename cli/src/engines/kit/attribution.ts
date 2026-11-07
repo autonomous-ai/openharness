@@ -37,14 +37,14 @@ export function instructionsArgsIn(contract: InstructionAttribution, instruction
   return instructions.length ? instructionArgs(contract, instructions, files) : []
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
+export const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 
 /** A later file's value over an earlier one's, objects merged key by key: how Claude Code merges its settings files. */
-const merged = (into: unknown, value: unknown): unknown => isRecord(into) && isRecord(value)
+export const merged = (into: unknown, value: unknown): unknown => isRecord(into) && isRecord(value)
   ? { ...into, ...Object.fromEntries(Object.entries(value).map(([key, child]) => [key, merged(into[key], child)])) }
   : value
 
-function jsonObject(text: string | null): Record<string, unknown> | null {
+export function jsonObject(text: string | null): Record<string, unknown> | null {
   if (text === null) return null
   try {
     const value: unknown = JSON.parse(text)

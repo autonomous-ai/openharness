@@ -1,3 +1,4 @@
+import { proposalNotices } from './proposalCards.js'
 /**
  * Releases scheduled by the Swarm (task #3405, anh Dee's Swarm redesign, 2026-11-05: the server does the routine). A merge
  * recorded on a task puts it on its project's release list; the worker (releaseWatch.ts) reads GitHub for each component's
@@ -60,7 +61,10 @@ export const backendPaused = (rules: ReleaseRules, now: number): boolean =>
  *  request's files, and `sha` until it found the merge's commit on main (its own merge commit, or the batch's that closed
  *  it); `shippedIn` names, per component, the verified release that carries it. */
 export interface PendingRelease { groupId: string; url: string; mergedAt: number; components?: ReleaseComponentId[]; sha?: string
-  shippedIn?: Partial<Record<ReleaseComponentId, string>> }
+  shippedIn?: Partial<Record<ReleaseComponentId, string>>
+  /** Per component, the newest verified release this merge was compared with and found not in it (task #3586): it is compared
+   *  once with each release, so one cut before the merge was recorded still ships it, and one that does not hold it is not read again. */
+  checked?: Partial<Record<ReleaseComponentId, string>> }
 /** A component's newest verified release: its tag, the tag's commit, and when its release ran (the pace counts from it). */
 export interface VerifiedRelease { tag: string; sha: string; at: number }
 
@@ -81,7 +85,10 @@ export interface ReleaseStep { groupId: string; at: number; endedAt?: number }
 export interface ReleaseLedger { pending: PendingRelease[]; last?: Partial<Record<ReleaseComponentId, VerifiedRelease>>; steps?: Partial<Record<ReleaseComponentId, ReleaseStep>>
   /** Tasks the cap pushed off the list with no other merge left on it: the merge's write may not hold them, so the next settle
    *  loads them and clears their `releasing` (review of #3267). */
-  leaving?: string[] }
+  leaving?: string[]
+  /** When each component's release may next open (nextReleaseAt): 0 for now, absent for one left to people. Written by the settle
+   *  only when it changes, and sent to readers in `derived.releaseTimes` for the board's Merged cards (task #3827). */
+  nextAt?: Partial<Record<ReleaseComponentId, number>> }
 
 /** The groups a settle of [ledger] loads: the tasks waiting, the open release steps, the tasks leaving. */
 export const ledgerGroupIds = (ledger: ReleaseLedger): string[] =>
@@ -105,6 +112,35 @@ export function releaseDue(ledger: ReleaseLedger, component: ReleaseComponentId,
   if (backendPaused(rules, now)) return false
   const last = ledger.last?.backend
   return !last || now - last.at >= rules.releasePace.backendEveryMinutes * 60_000
+}
+
+const minutesOf = (time: string): number => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5))
+/** Minutes from the clock time [from] to the next [to], 0 to 1439. */
+const minutesUntil = (from: string, to: string): number => (minutesOf(to) - minutesOf(from) + 1440) % 1440
+
+/**
+ * When a release of [component] may next open, as the board's Merged cards say it (task #3827): 0 when it may now (so the read
+ * does not change with the clock), else the minute it may, in ms; null for the apps when the pace leaves them to people. It is
+ * [releaseDue] without the waiting change and the open step: a merged task waits by definition. The backend's pace counts from
+ * its last verified release, and every component waits for the window, the backend also for its pause to end. The clock's own
+ * minutes carry it past a boundary; a zone that shifts its clock may need another look, so a few rounds settle it.
+ */
+export function nextReleaseAt(ledger: ReleaseLedger, component: ReleaseComponentId, now: number, rules: ReleaseRules): number | null {
+  if (component !== 'backend' && !rules.releasePace.appsAfterVisibleBatch) return null
+  let at = now
+  if (component === 'backend') {
+    const last = ledger.last?.backend
+    if (last) at = Math.max(at, last.at + rules.releasePace.backendEveryMinutes * 60_000)
+  }
+  const pause = component === 'backend' ? rules.releasePace.backendPause : null
+  for (let round = 0; round < 4; round++) {
+    const time = clock(rules, at)
+    if (!within(time, rules.releaseWindow)) at += minutesUntil(time, rules.releaseWindow.start) * 60_000
+    else if (pause && within(time, pause)) at += minutesUntil(time, pause.end) * 60_000
+    else break
+  }
+  at -= at % 60_000
+  return at <= now ? 0 : at
 }
 
 /** Whether every release [entry] needs carries it: none for a change that only tests or documents. */
@@ -146,7 +182,7 @@ export interface ReleaseFacts {
   resolved: Array<{ groupId: string; url: string; components?: ReleaseComponentId[]; sha?: string }>
   /** Each component's newest verified release on main, with the entries whose merge commits GitHub says its tag contains
    *  (pendingKey). A component GitHub could not read or compare is absent, and nothing of it changes. */
-  releases: Partial<Record<ReleaseComponentId, VerifiedRelease & { carries: string[] }>>
+  releases: Partial<Record<ReleaseComponentId, VerifiedRelease & { carries: string[]; compared?: string[] }>>
 }
 /** What a settle did: rows to write, the tasks it marked released, the release step it opened, the entries it dropped. */
 export interface SettledReleases { messages: MessageDraft[]; shipped: string[]; opened: string | null; dropped: PendingRelease[] }
@@ -197,9 +233,11 @@ export function settleReleases(state: SuperTabState, projectId: string, facts: R
     // A re-run of an older tag's workflow is no newer release; the same tag read again only carries merges resolved since.
     const order = read && known ? compareTags(read.tag, known.tag) : 1
     if (!read || order < 0) continue
-    const { carries: keys, ...release } = read
+    const { carries: keys, compared, ...release } = read
     const carried = waitingFor(ledger, component.id).filter(e => keys.includes(pendingKey(e)))
     for (const entry of carried) (entry.shippedIn ??= {})[component.id] = release.tag
+    // Compared and not held: not compared with this release again (task #3586).
+    for (const entry of waitingFor(ledger, component.id)) if (compared?.includes(pendingKey(entry)) && !keys.includes(pendingKey(entry))) (entry.checked ??= {})[component.id] = release.tag
     if (order === 0) continue
     ;(ledger.last ??= {})[component.id] = release
     const step = ledger.steps?.[component.id]
@@ -239,12 +277,28 @@ export function settleReleases(state: SuperTabState, projectId: string, facts: R
     else delete group.releasing
   }
 
+
+  if (lead) for (const id of new Set(outcome.shipped)) {
+    const group = state.conversations.find(c => c.id === id)
+    if (!group?.proposal || group.releasing) continue
+    const sender = { kind: 'agent' as const, id: lead.id, name: lead.name, membershipGeneration: lead.membershipGeneration }
+    outcome.messages.push(...proposalNotices(state, group as Conversation & { proposal: NonNullable<Conversation['proposal']> },
+      'shipped', `${group.title} shipped.`, sender, stableId(group.id, 'shipped', String(group.released!.at))))
+  }
+
   for (const component of RELEASE_COMPONENTS) {
     const step = ledger.steps?.[component.id]
     if (!step || !ended(state.conversations.find(c => c.id === step.groupId))) continue
     step.endedAt ??= now
     if (now - step.endedAt >= STEP_GRACE_MS) delete ledger.steps![component.id]
   }
+
+  const nextAt: Partial<Record<ReleaseComponentId, number>> = {}
+  for (const component of RELEASE_COMPONENTS) {
+    const at = nextReleaseAt(ledger, component.id, now, rules)
+    if (at !== null) nextAt[component.id] = at
+  }
+  if (JSON.stringify(ledger.nextAt) !== JSON.stringify(nextAt)) ledger.nextAt = nextAt
 
   const due = RELEASE_COMPONENTS.filter(c => releaseDue(ledger, c.id, now, rules))
   if (!due.length || state.paused) return outcome

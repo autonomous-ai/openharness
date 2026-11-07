@@ -3,7 +3,6 @@ import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
 import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 import { REPOSITORY_UNREACHABLE, repositoryReachOf, type RepositoryReach } from './repositoryReach.js'
-import { TEAM_WRITTEN_WORK } from './teamWritten.js'
 
 // 11-05, Huy's groupme (task #3266): the Harness GitHub App was not on ngochuy13/groupme, so a Reviewer in the Mac's Team
 // account, which reaches GitHub only through the app, failed to start twice and Claude was suspended there. Such a start
@@ -50,60 +49,27 @@ const refused = (body: () => unknown): SuperTabError | null => {
 }
 
 describe('a start whose account cannot reach the project repository', () => {
-  it('is refused at once in a Team account where the app is not installed, naming the repository and the install, and nothing is queued', () => {
-    const f = swarm(), review = f.group({ reviewOf: f.group(), step: 'Review' })
-    const error = refused(() => f.start(review, 'mac-team', { repositoryReach: notInstalled }))
-    expect(error?.code).toBe(REPOSITORY_UNREACHABLE)
-    expect(error?.status).toBe(409)
-    expect(error?.message).toBe('An agent in this account reaches ngochuy13/groupme only through the Harness GitHub App, which is not installed on it. '
-      + `An owner of ngochuy13 installs it (${INSTALL}), then start or assign it again.`)
-    expect(f.state.starts ?? []).toEqual([])
-  })
-
-  it('says to approve it when the app is installed but nobody approved the repository for this project', () => {
-    const f = swarm(), review = f.group({ reviewOf: f.group(), step: 'Review' })
-    const error = refused(() => f.start(review, 'mac-team', { repositoryReach: notApproved }))
-    expect(error?.code).toBe(REPOSITORY_UNREACHABLE)
-    expect(error?.message).toBe('An agent in this account reaches ngochuy13/groupme only through the Harness GitHub App, and nobody who can push to it '
-      + 'has approved it for this project. Someone who can push to it approves it in Harness (Project details, GitHub access), then start or assign it again.')
-  })
-
-  it('is refused where a start on the Mac moves into its Team account', () => {
-    const f = swarm(), task = f.group()
-    f.run({ type: 'work.assign', conversationId: task, agentId: f.member('team-builder', 'mac-team') })
-    const review = f.group({ reviewOf: task, step: 'Review' })
-    expect(refused(() => f.start(review, 'mac', { repositoryReach: notInstalled }))?.code).toBe(REPOSITORY_UNREACHABLE)
-  })
-
-  it('starts as before when the app covers it, when the read could not say, or with no read', () => {
-    for (const repositoryReach of [{ state: 'covered', repository: 'ngochuy13/groupme' }, { state: 'unknown', repository: 'ngochuy13/groupme' }, undefined] as const) {
-      const f = swarm(), review = f.group({ reviewOf: f.group(), step: 'Review' })
-      f.start(review, 'mac-team', repositoryReach ? { repositoryReach } : {})
-      expect(f.state.starts!.at(-1)!.request.machineId).toBe('mac-team')
-    }
-  })
-
   it('starts the owner\'s own work in their own account, which uses their own GitHub login', () => {
     const f = swarm()
     f.start(f.group(), 'mac', { repositoryReach: notInstalled, pushOrigin: 'clean' })
     expect(f.state.starts!.at(-1)!.request.machineId).toBe('mac')
   })
 
-  it('names the install when it holds an own-account start for want of knowing who pushed', () => {
+  // Swarm v3 has no Team account to hold it (task #4120, the PM's ruling): code nobody can place runs on the project owner's own
+  // computer, which reaches the repository with the owner's own GitHub login.
+  it('starts work whose pusher GitHub cannot show on the project owner\'s own computer', () => {
     const f = swarm(), review = f.group({ reviewOf: f.group(), step: 'Review' })
-    const error = refused(() => f.start(review, 'mac', { repositoryReach: notInstalled, pushOrigin: 'unknown' }))
-    expect(error?.code).toBe(TEAM_WRITTEN_WORK)
-    expect(error?.message).toBe('GitHub cannot show who pushed this task\'s code because the Harness GitHub App is not installed on ngochuy13/groupme, '
-      + 'so it may run only in a Team account, and a Team account reaches the repository only through that app. '
-      + `An owner of ngochuy13 installs it (${INSTALL}); then it runs in your own account.`)
+    f.start(review, 'mac', { repositoryReach: notInstalled, pushOrigin: 'unknown' })
+    expect(f.state.starts!.at(-1)!.request.machineId).toBe('mac')
   })
 })
 
 describe('an assignment whose agent cannot reach the project repository', () => {
+  // A Team account's agent takes no new work at all in Swarm v3 (task #4120).
   it('is refused for a Team agent, and taken by the owner\'s agent in their own account', () => {
     const f = swarm(), task = f.group()
-    expect(refused(() => f.run({ type: 'work.assign', conversationId: task, agentId: f.member('team-builder', 'mac-team') }, { repositoryReach: notInstalled }))?.code)
-      .toBe(REPOSITORY_UNREACHABLE)
+    expect(refused(() => f.run({ type: 'work.assign', conversationId: task, agentId: f.member('team-builder', 'mac-team') }))?.code)
+      .toBe('TEAM_ACCOUNTS_REMOVED')
     expect(f.state.conversations.find(c => c.id === task)!.assignment).toBeNull()
     f.run({ type: 'work.assign', conversationId: task, agentId: f.member('own-builder', 'mac') }, { repositoryReach: notInstalled })
     expect(f.state.conversations.find(c => c.id === task)!.assignment?.agentId).toBe('own-builder')

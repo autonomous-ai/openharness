@@ -1350,6 +1350,7 @@ model SuperTabSweepCursor {
 
 /// A question to one person, with options and a recommendation (backend/src/superTabs/decisions.ts). Kept out of the tab
 /// state, as mentions are: an asking agent and the asked person read it, and the person answers it once.
+/// writeDecisions removes answered rows older than LEDGER_WEEKS on the next ask; Swarm purge removes all its rows.
 model SuperTabDecision {
   id             String    @id @map("_id")
   tabId          String
@@ -1364,6 +1365,10 @@ model SuperTabDecision {
   question       String
   options        String[]
   recommended    Int
+  /// Optional recommendation deadline; absent on legacy questions, which keep their 24-hour fallback.
+  defaultAt      DateTime?
+  /// The server applied the recommendation at defaultAt; never a person’s choice or a legacy overdue answer.
+  defaulted      Boolean?
   unblocks       String
   createdAt      DateTime
   answeredAt     DateTime?
@@ -1388,6 +1393,8 @@ model SuperTabDecision {
   @@index([tabId, conversationId])
   /// The hourly overdue sweep reads only the waiting decisions of the last 8 days through it (superTabs/overdueDecisions.ts).
   @@index([answeredAt, createdAt], map: "decision_waiting_created")
+  /// Explicit deadlines use their own range so long-lived questions are not missed by the legacy creation window.
+  @@index([answeredAt, defaultAt], map: "decision_waiting_default")
 }
 
 /// One uploaded file, which one message of the actor that uploaded it can send once.
@@ -1501,6 +1508,8 @@ model SuperTabDelivery {
   // A row gathered for its PM's inbox rather than the notice digest (inbox.ts, task #3545): "people" or "crew". At idle the
   // inbox goes at once only for these; unset on notices and on older rows.
   inboxSection          String?
+  /// Server-derived proposal priority, 0 first. Absent on rows before proposal cards; retained until existing delivery compaction.
+  inputPriority         Int?
   // A queued delivery whose claims keep answering SWARM_BUSY (prod 10-30, v1.3.71): written outside the failed claim, unset by
   // the claim that gets in. The settle pass alarms on them and page reads show the sender (store.ts recordFailedClaim).
   claimFailingSince     DateTime?
@@ -1513,6 +1522,7 @@ model SuperTabDelivery {
   updatedAt             DateTime @updatedAt
 
   @@index([tabId, agentId, status, createdAt])
+  @@index([tabId, agentId, status, inputPriority, createdAt])
   @@index([machineId, status])
   // A page of messages reads its deliveries by message (pageReads.ts).
   @@index([tabId, messageId])
@@ -1967,6 +1977,8 @@ model SwarmGroup {
   messageSeq         Int       @default(0)
   reportSeq          Int       @default(0)
   lastActivityAt     DateTime
+  /// Next proposal deadline/revisit; null once none is due. Existing card history lives until project/Swarm deletion.
+  proposalDueAt      DateTime?
   /// The machines whose hosts this group's last write concerned: its agents' and its work's, before and after (host reads).
   hostMachineIds     String[]  @default([])
   /// A short hash of the fields host rows read (read/hostRows.ts); a post leaves it. Missing on a part written before it.
@@ -1978,6 +1990,7 @@ model SwarmGroup {
   /// Not indexed on `data.kind` (Atlas advisor, 2026-11-04, task #2841): no backend read filters by it, the only one that
   /// does is the rollback script scripts/buddy-sessions/end-all.ts, across every Swarm; and every hot read keeps its plan
   /// with such an index (the numbers are in task #2841's pull request). The top-level `kind` holds the same value.
+  @@index([deleted, proposalDueAt, tabId, key])
   @@unique([tabId, key])
   @@index([tabId, changedAt])
   @@index([tabId, dormant, changedAt])

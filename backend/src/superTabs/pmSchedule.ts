@@ -5,23 +5,37 @@ import { digestOf, localNow } from './digest.js'
 import { DEFAULT_TIME_ZONE } from './costs/reflection.js'
 import { taskLiveness } from './liveness.js'
 import { archivable } from './tidy.js'
+import { isRebasedSwarm, processLines, unconfirmedNote } from './processNotes.js'
+import { SEED_RULES, type ProjectRules } from './policy.js'
+import { switched } from './boardRights.js'
 
 // Every project's coordinator runs the same built-in schedule, woken by the Swarm on its own poll instead of a timer of its
 // own (Ken, 2026-11-04; docs/plans/2026-11-04-pm-built-in-schedule-design.md): a Codex PM may have no timer, and a restart
 // lost one. A line in the project's own instructions about the same job wins; the coordinator, which reads both, judges that.
 
+type ReleaseWindow = ProjectRules['releaseWindow']
+
 /** The heading of the built-in section, which no saved document may hold (commands.ts instructions.save). */
 export const BUILT_IN_HEADING = '## Built-in PM schedule (from the Swarm)'
 
-/** What the coordinator reads after its project's instructions (store.ts instructions, cli swarmInstructionsSkill.ts). */
-export const PM_SCHEDULE_TEXT = `## Swarm process v2 (from the Swarm, 2026-11-06): this replaces every process line in your project's instructions. Follow this, not them; your instructions keep only your project's own facts.
+/** The release window as a PM reads it: the zone by its plain name where it has one (the seed's, so the rebased Swarm's text
+ *  stays as it was), else its IANA name. */
+const ZONE_NAMES: Readonly<Record<string, string>> = { 'Asia/Ho_Chi_Minh': 'Vietnam' }
+const releaseHours = (window: ReleaseWindow): string => `${window.start}-${window.end} ${ZONE_NAMES[window.timeZone] ?? window.timeZone} time`
+
+/** The Swarm v2 process, for the Swarms whose instructions moved onto the base (migration/rebase.ts REBASE_SWARMS): there it
+ *  replaces their process lines (anh Dee, #3603). Elsewhere a project's own lines and people's rules keep their force (#4097). */
+const v2Section = (window: ReleaseWindow): string => `## Swarm process v2 (from the Swarm, 2026-11-06): this replaces every process line in your project's instructions. Follow this, not them; your instructions keep only your project's own facts.
 - Keep a standing crew. Mark agents as crew once, each with its role and area (backend, CLI, Desktop, mobile, docs: only the areas your project has), plus reviewers and a tester. Start a new agent only to replace a broken one or to fill an area that has none.
 - Give each task its area, or let its files choose it. A free crew member takes the next task in its area by itself. Review and test steps open by themselves when a pull request is ready; don't open them by hand.
 - Answer each person's message once, in its place. Your inbox lists every unanswered message until it is answered.
 - A rule a program can check belongs in code, not in your instructions. Your instructions keep only judgment and your project's own facts.
-- Releases run 09:00-18:00 Vietnam time. Sign-in, tokens, access, encryption, the Buddy guard, device links and deleting data get two security reviews.
+- Releases run ${releaseHours(window)}. Sign-in, tokens, access, encryption, the Buddy guard, device links and deleting data get two security reviews.
 
-${BUILT_IN_HEADING}
+`
+
+/** The built-in schedule every coordinator reads, as before the v2 section (#3299). */
+const BUILT_IN_SECTION = `${BUILT_IN_HEADING}
 
 The Swarm wakes you for these jobs with a message that names them. Set no timer of your own for them, and delete one you set
 before. A line in this project's instructions above about the same job wins: follow it, and skip that job when the Swarm's
@@ -40,9 +54,10 @@ message names it. This section is not part of the project's document: never save
   date that passed), or a person's rule that is gone: restore that one or ask its person. Never drop or weaken a person's
   rule on your own judgment, even one you think cannot be done: ask that person, and keep the rule until they answer. After
   the save, compare it with the previous revision. A tidy counts only when its save, marked as the tidy, is made.
-- When the Swarm says a task's agent is lost, the task goes to a new agent with its pushed branch. When it says a task is
-  stalled, read the task's thread first, and send it back to its agent only when the thread shows it waits on nothing (a
-  review, CI, a person). When it says an agent is idle, stop it unless work is coming for it.
+- Lost, stalled and idle notices are information: the Swarm hands lost work to a free project worker with its recorded
+  pushed work, nudges workers waiting on nothing, and requests idle Engineers' stops. It keeps Reviewers and Testers and
+  preserves standing crew's sleep/wake lifecycle. Do not repeat those actions by hand. If no eligible worker is free,
+  the task stays queued until one is available.
 
 How you work:
 
@@ -84,6 +99,24 @@ What people teach you:
   if it is missing. Count repeats by person, and give the day's count in your nightly reflection, or in the next morning
   digest when the project has no reflection.`
 
+/** What the rebased Swarm's coordinator reads after its project's instructions, for the seed's release window (store.ts
+ *  instructions, cli swarmInstructionsSkill.ts); the newest note for PMs pins it (processNotes.ts). */
+export const PM_SCHEDULE_TEXT = v2Section(SEED_RULES.releaseWindow) + BUILT_IN_SECTION
+
+/** The built-in text's inbox line, which a project switched to the Board way of working drops (task #3819): its PM answers no
+ *  one in the chat, and nothing is owed to it there. */
+const INBOX_LINE = '- Answer each person\'s message once, in its place. Your inbox lists every unanswered message until it is answered.\n'
+if (!PM_SCHEDULE_TEXT.includes(INBOX_LINE)) throw new Error('pmSchedule.ts: the built-in text lost its inbox line; update INBOX_LINE')
+
+/** The built-in text [project]'s coordinator reads in [swarm], with the project's release window from its rules (policy.ts):
+ *  the v2 section in a rebased Swarm alone, without its inbox line once the project is switched (boardRights.ts); elsewhere
+ *  the release window and the built-in schedule (Diego 11-06, #4097). */
+export function pmScheduleText(swarm: Pick<SuperTabState, 'id'>, project: Pick<SwarmProject, 'boardMode'>, window: ReleaseWindow = SEED_RULES.releaseWindow): string {
+  if (!isRebasedSwarm(swarm)) return `Releases run ${releaseHours(window)}, by this project's rules.\n\n${BUILT_IN_SECTION}`
+  const text = v2Section(window) + BUILT_IN_SECTION
+  return switched(project) ? text.replace(INBOX_LINE, '') : text
+}
+
 /** The schedule's clock: slot n starts at n * 30 minutes, in UTC. */
 export const SCHEDULE_SLOT_MS = 30 * 60_000
 export const scheduleSlot = (now: number): number => Math.floor(now / SCHEDULE_SLOT_MS)
@@ -103,7 +136,8 @@ export function sweepDue(state: SuperTabState, projectId: string, now: number): 
       const task = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
       return archivable(state, group, now) && !group.pullRequestUrls?.length && !task?.pullRequestUrls?.length
     }
-    if (group.reviewOf) return false
+    // A paused task waits on whoever paused it, not on the PM (boardRights.ts, task #3819).
+    if (group.reviewOf || group.paused) return false
     if (!group.assignment) return true
     const liveness = taskLiveness(state, group, now)
     return liveness?.state === 'orphaned' || (liveness?.state === 'waiting' && (liveness.why === 'person' || liveness.why === 'blocked'))
@@ -112,28 +146,31 @@ export function sweepDue(state: SuperTabState, projectId: string, now: number): 
 
 /** The jobs a wake carries: the open-task sweep, and what people taught the coordinator since its last wake. The daily tidy
  *  is its own message (tidyRequest). */
-export type ScheduleJob = 'sweep' | 'heard'
+export type ScheduleJob = 'sweep' | 'heard' | 'process'
 
 const JOB_LINES: Record<ScheduleJob, string> = {
   sweep: '- Open-task sweep: every open task ends with an owner, a question to a person with a default and a time, or a close with its reason; '
     + 'then archive the finished groups the Swarm left open (see the built-in PM schedule in your instructions).',
   heard: '- What people taught you: read only what people sent you since the last wake, and save each correction or lasting rule the '
     + 'instructions don\'t have yet, naming who said it.',
+  process: '- What changed for PMs: read the note below, work by it, and confirm it (task #3581).',
 }
 
 /** The wake's words: the slot's local time, the jobs due, and that the project's own schedule wins. It names no reread of the
  *  instructions (anh Dee, 11-05, #3387, undoing #3151's 7-9k tokens a wake): the CLI tells the coordinator when they change
  *  (cli swarmInstructionsSkill.ts). */
-export function scheduleText(project: SwarmProject, slot: number, jobs: readonly ScheduleJob[] = ['sweep']): string {
+export function scheduleText(project: SwarmProject, slot: number, jobs: readonly ScheduleJob[] = ['sweep'], owed: readonly string[] = []): string {
   const zone = digestOf(project)?.timeZone ?? DEFAULT_TIME_ZONE
   return [`Built-in schedule, ${localNow(zone, slot * SCHEDULE_SLOT_MS).time} (${zone}). This is a scheduled request from the Swarm, not a new task.`,
     ...jobs.map(job => JOB_LINES[job]),
+    // What the PM owes about the process (processNotes.ts, task #3581): a note to confirm, a project with no crew.
+    ...owed,
     // Said here too: a CLI older than the built-in section shows its PM only this message.
     'Skip a job your project\'s instructions schedule on their own clock. Set no timer of your own for this one, and delete one you set before.'].join('\n')
 }
 
 /** What a due wake asks of the coordinator: its slot, its jobs and its message. */
-export interface ScheduledWake { slot: number; jobs: ScheduleJob[]; draft: MessageDraft }
+export interface ScheduledWake { slot: number; jobs: ScheduleJob[]; draft: MessageDraft; processNote?: string }
 
 /** The coordinator's slot and its wake, when a slot is due and a job has something to do: the sweep has a task to settle
  *  (sweepDue), a person wrote to the coordinator since its last wake (parts/commit.ts heardAt on the chat written to: who
@@ -151,13 +188,17 @@ export function scheduleRequest(state: SuperTabState, target: Agent, now: number
   // The chats of its project the poll loaded, each marked where a person wrote to the coordinator (parts/commit.ts).
   const since = schedule?.heardAt ?? 0
   const heard = state.conversations.some(c => !c.archived && (c.heardAt ?? 0) > since && (c.id === project.leadConversationId || inProject(c, project.id)))
+  // A what-changed note the PM has not confirmed wakes it once (task #3581); after that it rides on the wakes due anyway.
+  const note = unconfirmedNote(state, project)
+  const tell = !!note && project.processNote?.told !== note.id
   const jobs: ScheduleJob[] = [
     ...sweepDue(state, project.id, now) ? ['sweep' as const] : [],
     ...heard ? ['heard' as const] : [],
+    ...tell ? ['process' as const] : [],
   ]
   if (!jobs.length) return null
-  return { slot, jobs, draft: { id: scheduleMessageId(state.id, project.id, slot), conversationId: project.leadConversationId,
-    author: author(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }), text: scheduleText(project, slot, jobs),
+  return { slot, jobs, ...tell ? { processNote: note!.id } : {}, draft: { id: scheduleMessageId(state.id, project.id, slot), conversationId: project.leadConversationId,
+    author: author(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }), text: scheduleText(project, slot, jobs, processLines(state, project)),
     replyTo: null, recipients: [target.id], source: { kind: 'schedule-request', projectId: project.id, slot } } }
 }
 
@@ -171,6 +212,7 @@ export function recordWake(project: SwarmProject, wake: ScheduledWake, now: numb
     return
   }
   project.schedule = { ...before, lastSlot: wake.slot, wakeId, ...wake.jobs.includes('heard') ? { heardAt: now } : {} }
+  if (wake.processNote) project.processNote = { ...project.processNote, told: wake.processNote }
 }
 
 /**

@@ -184,11 +184,20 @@ void main() {
         'preview',
         'third',
       ]);
-      expect(_cardsIn(tester, 'working'), ['crash', 'tag']);
-      // The badge leads the caption, which keeps its words.
+      expect(_cardsIn(tester, 'working'), ['crash', 'test-copy', 'tag']);
+      // The badge leads the quiet line, at the card's left; the agent's avatar is bottom right (task #3869).
       expect(
         tester.getTopLeft(_in(_card('crash'), 'P0')).dx,
-        lessThan(tester.getTopLeft(_in(_card('crash'), 'Finch2')).dx),
+        lessThan(
+          tester
+              .getTopLeft(
+                find.descendant(
+                  of: _card('crash'),
+                  matching: find.byKey(const ValueKey('super-card-agent')),
+                ),
+              )
+              .dx,
+        ),
       );
     });
 

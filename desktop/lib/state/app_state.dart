@@ -198,10 +198,24 @@ class RestartAgentResult {
   final bool resumed;
   final bool retryable;
 
+  /// The daemon restarted without the requested launch flags and said nothing of them: it is older
+  /// than the field. Never set by a status check, which does not echo them.
+  final bool launchArgsIgnored;
+
+  /// The daemon refused the requested launch flags (`INVALID_LAUNCH_ARGS`); [error] is its detail.
+  final bool launchArgsRefused;
+
+  /// The daemon answered but the engine did not come back (`unconfirmed`, `RESTART_FAILED` or
+  /// `RESUME_UNCONFIRMED`). With launch flags in the request, the likeliest cause is the flags.
+  final bool engineNotStarted;
+
   const RestartAgentResult({
     this.error,
     this.resumed = true,
     this.retryable = true,
+    this.launchArgsIgnored = false,
+    this.launchArgsRefused = false,
+    this.engineNotStarted = false,
   });
 }
 
@@ -1595,6 +1609,7 @@ class AppNotifier extends ChangeNotifier {
       deviceHosts.clear();
       _deviceReads.clear();
       // Names and membership belong to the account that discovered them.
+      _openedInRun.clear();
       _superTabNames = {};
     }
     _currentUser = profile;
@@ -1959,7 +1974,10 @@ class AppNotifier extends ChangeNotifier {
       // new here (task #3160).
       _addMachineWhereNew(
         [for (final tab in tabs) tab.id],
-        {for (final swarm in swarms) ?swarm.superTabId, ...hidden},
+        {
+          for (final swarm in swarms) ?swarm.superTabId,
+          ...hidden,
+        }.difference(_openedInRun),
       );
       var changed = false;
       // Membership and names for the closed list: a tab hidden before a
@@ -1978,6 +1996,7 @@ class AppNotifier extends ChangeNotifier {
             changed = true;
           }
         } else if (!hidden.contains(tab.id)) {
+          _openedInRun.add(tab.id);
           swarms.add(
             Swarm(
               id: newDeskId(),
@@ -2746,12 +2765,6 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  final StreamController<SwarmJoinedMachine> _joinedMachines =
-      StreamController<SwarmJoinedMachine>.broadcast();
-
-  /// This computer, added to a Swarm as its person joined it
-  /// ([addMachineOnJoin]): the screen shows a note, with Pause and Remove.
-  Stream<SwarmJoinedMachine> get joinedMachines => _joinedMachines.stream;
   final _joinAdding = <String>{};
 
   /// The Swarms the join's add already ran or was decided for, per account on
@@ -2773,6 +2786,16 @@ class AppNotifier extends ChangeNotifier {
   /// (review of #3115).
   final _joinPassed = <String>{};
 
+  /// The Swarms that became open on this computer during this run: joined in
+  /// the dialog, opened by the person, or added by discovery. The update's
+  /// baseline ([SwarmJoinSeen.fresh]) takes the Swarms a long-time member had
+  /// open or hidden here as seen, never these: a new member's Swarm is open
+  /// by the time the first pass that can add runs (this computer's own row,
+  /// or Swarm mode, was not ready at sign-in), and counting it with the ones
+  /// they had skipped the add and the account choice (task #3791). A Swarm the
+  /// person had hidden and reopens stays known.
+  final _openedInRun = <String>{};
+
   /// The pass discovery started last, for tests to wait on.
   @visibleForTesting
   Future<void> get joinAddPassForTest => _joinPass ?? Future.value();
@@ -2783,17 +2806,15 @@ class AppNotifier extends ChangeNotifier {
   SwarmJoinAccountRequest? get joinAccountRequest =>
       _joinAccountRequests.where((r) => !r.answered).firstOrNull;
 
-  /// Adds a new collaborator's computer, using the choice made on the join
-  /// surface or asking before contribution. Existing members/viewers and
-  /// systems without local Team accounts are left alone.
+  /// Offers a new collaborator their Buddy after a successful membership join.
+  /// Existing members and viewers never enter the bring-agent flow here.
   Future<void> addMachineOnJoin(
     String tabId, {
     required String role,
     bool alreadyMember = false,
-    bool? ownAccount,
   }) async {
     if (alreadyMember || role != 'collaborator') return;
-    await _addMachineToSwarm(tabId, joined: true, ownAccount: ownAccount);
+    await _offerBringAgent(tabId);
   }
 
   /// Swarm discovery's list ([listed]), however each was joined: a domain
@@ -2811,13 +2832,17 @@ class AppNotifier extends ChangeNotifier {
       try {
         final fresh = await record.fresh(account, listed, knownHere: knownHere);
         for (final tabId in fresh) {
-          if (_disposed ||
-              currentUser?.id != account ||
-              _teamAccountHere() == null) {
+          if (_disposed || currentUser?.id != account) {
             return;
           }
           if (_joinPassed.contains('$account/$tabId')) continue;
-          await _addMachineToSwarm(tabId, joined: false);
+          // Discovery already knows the owner; only new collaborators need
+          // the offer, without opening an owner's other Swarms to find out.
+          if (superTabs.ownerOf(tabId) == account) {
+            _joinPassed.add('$account/$tabId');
+            continue;
+          }
+          await _offerBringAgent(tabId);
         }
       } catch (error) {
         appLog.info('super-tabs', 'joined Swarms not checked: $error');
@@ -2827,120 +2852,68 @@ class AppNotifier extends ChangeNotifier {
     }();
   }
 
-  /// The join's add for one Swarm this account is in. The person's role is
-  /// read from the Swarm itself: a viewer's Swarm is neither added nor
-  /// recorded, so it is asked about again; an owner's is recorded and left.
-  /// A step that fails for a collaborator shows them a note saying what to do
-  /// (task #3160). [joined]: they joined it at this computer just now, so
-  /// they are known to be one before the Swarm is read; a Swarm only listed
-  /// that cannot be read says nothing yet, since they may be a viewer, and is
-  /// asked about again on the next discovery.
-  Future<void> _addMachineToSwarm(
-    String tabId, {
-    required bool joined,
-    bool? ownAccount,
-  }) async {
-    final here = _teamAccountHere();
+  /// Offers the new collaborator their own Buddy on this computer. Discovery
+  /// remembers the offer so reconnects do not reopen a dismissed prompt.
+  Future<void> _offerBringAgent(String tabId) async {
     final accountId = currentUser?.id;
-    if (here == null || accountId == null || !_joinAdding.add(tabId)) return;
+    if (accountId == null || !_joinAdding.add(tabId)) return;
     bool current() =>
         !_disposed &&
         status == AppStatus.authenticated &&
         currentUser?.id == accountId;
-    final machineName = stateOf(here)?.machine.displayName ?? 'This computer';
-    // Opened only for this add: let go after it, unless the person went to it
-    // meanwhile, so it does not keep polling unseen (review of #3115).
     final openedHere = superTabs.peek(tabId) == null;
-    var collaborator = joined;
-    void failed(String problem) {
-      if (!collaborator || !current()) return;
-      _joinedMachines.add(
-        SwarmJoinedMachine(
-          tabId: tabId,
-          swarmName: superTabName(tabId) ?? 'the Swarm',
-          machineId: here,
-          machineName: machineName,
-          problem: problem,
-        ),
-      );
-    }
-
     try {
       final c = await superTabs.open(tabId);
       if (!current()) return;
-      await c.refresh();
+      // Reuse the state already read for an open Swarm. Discovery must not
+      // add a second read when the connection comes back.
+      if (c.snapshot == null) await c.refresh();
       if (!current()) return;
       final snapshot = c.snapshot;
       if (snapshot == null) {
-        appLog.info('super-tabs', 'machine not added on join: unread Swarm');
-        if (!collaborator) _joinPassed.add('$accountId/$tabId');
-        failed('Could not reach the Swarm. Add this computer from Machines.');
+        appLog.info('super-tabs', 'bring-agent join deferred: org unreadable');
         return;
       }
       final role = snapshot.people
           .where((p) => p.id == accountId)
           .firstOrNull
           ?.role;
-      if (role == null || role == 'viewer') {
+      if (role != 'collaborator') {
         _joinPassed.add('$accountId/$tabId');
         return;
       }
-      collaborator = role == 'collaborator';
       await _joinRecord?.mark(accountId, tabId);
-      if (!collaborator) return;
-      if (!snapshot.teamAccounts ||
-          !c.canWrite ||
-          snapshot.machines.any((m) => m['machineId'] == here) ||
-          snapshot.removedMachines.any((id) => sameMachineId(id, here))) {
+      if (!c.canWrite ||
+          snapshot.agents.any(
+            (agent) => agent.isMainBuddy && agent.buddyOf == accountId,
+          )) {
         return;
       }
-      if (ownAccount == null) {
-        final request = SwarmJoinAccountRequest(snapshot.name, accountId);
-        _joinAccountRequests.add(request);
-        notifyListeners();
-        try {
-          ownAccount = await request.answer.timeout(
-            const Duration(minutes: 15),
-            onTimeout: () {
-              appLog.info('super-tabs', 'join account choice expired');
-              return null;
-            },
-          );
-        } finally {
-          request.complete(null);
-          _joinAccountRequests.remove(request);
-          if (!_disposed) notifyListeners();
-        }
-        if (!current()) return;
-        if (ownAccount == null) {
-          failed('Add it from Machines.');
-          return;
-        }
+      final request = SwarmJoinAccountRequest(
+        snapshot.name,
+        accountId,
+        tabId: tabId,
+      );
+      _joinAccountRequests.add(request);
+      notifyListeners();
+      try {
+        await request.answer.timeout(
+          const Duration(minutes: 15),
+          onTimeout: () {
+            appLog.info('super-tabs', 'bring-agent join prompt expired');
+            return null;
+          },
+        );
+      } finally {
+        request.complete(null);
+        _joinAccountRequests.remove(request);
+        if (!_disposed) notifyListeners();
       }
-      final note =
-          await SwarmJoinMachine(
-            machineRequest: superTabMachineRequest,
-            readResources: readMachineResources,
-            wake: wakeSuperTabHost,
-          ).add(
-            c,
-            machineId: here,
-            machineName: machineName,
-            current: current,
-            ownAccount: ownAccount,
-          );
-      if (note == null || !current()) return;
-      _joinedMachines.add(note);
-      // Joined by the person at this computer: the system asks once for the
-      // Harness Team account (cli/src/team/autoSetup.ts).
-      if (!note.added || ownAccount) return;
-      if (!await offerTeamAccount('join', tabId: tabId) && current()) {
-        _joinedMachines.add(note.withoutTeamOffer());
-      }
-    } catch (error) {
-      appLog.info('super-tabs', 'machine not added on join: $error');
-      if (!collaborator) _joinPassed.add('$accountId/$tabId');
-      failed('Could not add this computer. Add it from Machines.');
+    } catch (_) {
+      appLog.info(
+        'super-tabs',
+        'bring-agent join deferred: org request failed',
+      );
     } finally {
       _joinAdding.remove(tabId);
       if (openedHere &&
@@ -2993,6 +2966,7 @@ class AppNotifier extends ChangeNotifier {
   /// Reopen later cannot add a second view.
   void openSuperTab(String tabId, String name, {String? intoSwarmId}) {
     enterSuperTabs();
+    _noteOpenedInRun(tabId);
     _rememberSuperTabVisibility(tabId, true);
     _closedHistory.removeWhere(
       (entry) => entry is ClosedSwarm && entry.superTabId == tabId,
@@ -3019,12 +2993,24 @@ class AppNotifier extends ChangeNotifier {
     bindSuperTab(activeSwarmId, tabId, name);
   }
 
+  /// Notes that Swarm [tabId] is about to open on this computer for the first
+  /// time in this run ([_openedInRun]). Read before the visibility is saved:
+  /// showing a Swarm clears its hidden state at once, and one the person had
+  /// hidden and reopens is still one they had.
+  void _noteOpenedInRun(String tabId) {
+    if (!swarms.any((s) => s.superTabId == tabId) &&
+        !superTabs.hiddenIds.contains(tabId)) {
+      _openedInRun.add(tabId);
+    }
+  }
+
   /// Shows Swarm [tabId] in the Swarm tab [swarmId] in place of the Swarm it
   /// shows, from the Swarm dropdown: the tab keeps its place and its name
   /// follows. A Swarm already open in another tab is selected there instead,
   /// so no tab is added or closed. The Swarm the tab showed is hidden here as
   /// a closed one is, and let go, which keeps its draft for its return.
   void showSuperTabIn(String swarmId, String tabId, String name) {
+    _noteOpenedInRun(tabId);
     final tab = swarms.where((s) => s.id == swarmId).firstOrNull;
     final previous = tab?.superTabId;
     if (tab == null || previous == null || previous == tabId) return;
@@ -5944,6 +5930,22 @@ class AppNotifier extends ChangeNotifier {
                   FileSystemEntityType.notFound;
         };
 
+  /// Whether the CLI's own sign-in file is on this computer (task #3561). Looked at, never read: this app holds no
+  /// token. `harness logout` deletes it, so a sign-out in a terminal while the app was closed waits for the signed-in
+  /// check as before. Product installs keep it at `~/.harness/auth/session.json`; tests answer no.
+  @visibleForTesting
+  bool Function() cliSessionOnDisk = kUnderTest
+      ? () => false
+      : () {
+          final home = maybeHomeDir();
+          if (home == null) return false;
+          final sep = Platform.pathSeparator;
+          return FileSystemEntity.typeSync(
+                '$home$sep.harness${sep}auth${sep}session.json',
+              ) ==
+              FileSystemEntityType.file;
+        };
+
   TerminalPane? get focusedPane {
     final id = focusedPaneId;
     if (id == null) return null;
@@ -7534,6 +7536,7 @@ class AppNotifier extends ChangeNotifier {
   /// load and update-check startup, which already ran on the launch that got stuck here.
   Future<void> _continueAfterEnvironmentReady({
     Future<CliAuthStatus?>? early,
+    bool fromKept = true,
   }) async {
     agentPrefetch?.setupRunning = false;
     final revision = _authRevision;
@@ -7550,6 +7553,11 @@ class AppNotifier extends ChangeNotifier {
     // refreshes it itself. This app never reads, stores, or refreshes a token of its own; it just
     // asks the CLI whether this computer is currently signed in.
     try {
+      if (early != null &&
+          fromKept &&
+          await _openFromKeptSignIn(early, revision)) {
+        return;
+      }
       final authStatus = await early ?? await cliLogin.checkStatus();
       _markStartup('signed-in check');
       if (!_authWorkCurrent(revision)) return;
@@ -7586,6 +7594,98 @@ class AppNotifier extends ChangeNotifier {
       }
       notifyListeners();
     }
+  }
+
+  /// Opens the window as the account this computer was last proven signed in as, while `harness auth status` still
+  /// runs (task #3561: 245 ms of a launch, a Node start). What is stored is the kept profile ([ProfileCache]): written
+  /// only once the CLI named its machine and the server named the account, and cleared by every sign-out this app sees
+  /// and every signed-out launch. With none kept, or no CLI sign-in file, the launch waits for the check as before.
+  /// Whatever the check then says, [_confirmKeptSignIn] ends the launch where a launch that waited would have ended.
+  Future<bool> _openFromKeptSignIn(
+    Future<CliAuthStatus?> check,
+    int revision,
+  ) async {
+    if (viewer != null || !cliSessionOnDisk()) return false;
+    final kept = await _profileCache.readKept();
+    if (kept == null || !_authWorkCurrent(revision)) return false;
+    signedIn = true;
+    // Shown, not proven: nothing is kept and no picture is claimed under it until the check names this machine.
+    _provenMachineId = null;
+    _keptProfileId = kept.profile.id;
+    _profileConfirmed = false;
+    currentUser = kept.profile;
+    status = AppStatus.bootstrapping;
+    notifyListeners();
+    _launchProof = (revision: revision, settled: Completer<void>());
+    unawaited(_confirmKeptSignIn(check, kept.machineId, revision));
+    await _finishBootstrapSignedIn();
+    unawaited(_offerPhoneAtLaunch(revision));
+    return true;
+  }
+
+  /// Settles once the check behind a window [_openFromKeptSignIn] opened has answered. Until then the window shows only
+  /// this computer's restored desk: the account's work (its profile, devices, machine list and desk) waits for it, since
+  /// the CLI may be signed in as someone else and that work would run through their session (review of #3293).
+  ({int revision, Completer<void> settled})? _launchProof;
+  bool _layoutSaveHeld = false;
+
+  /// The signed-in check behind a window [_openFromKeptSignIn] opened. The same machine: proven, as
+  /// [_useKeptProfile] would have proven it. Signed out: the sign-in page, as when a sign-out elsewhere is noticed.
+  /// Another account, or no answer: the launch starts again from the CLI's answer, as one with nothing kept does.
+  Future<void> _confirmKeptSignIn(
+    Future<CliAuthStatus?> check,
+    String keptMachineId,
+    int revision,
+  ) async {
+    CliAuthStatus? answer;
+    try {
+      answer = await check ?? await cliLogin.checkStatus();
+    } catch (error) {
+      debugPrint('bootstrap: signed-in check failed behind the window: $error');
+    }
+    _markStartup('signed-in check');
+    // Each branch below decides synchronously, so the account work waiting on this resumes under its outcome: proven,
+    // or invalidated.
+    final proof = _launchProof;
+    final held = _layoutSaveHeld;
+    if (proof != null && proof.revision == revision) {
+      _launchProof = null;
+      _layoutSaveHeld = false;
+      proof.settled.complete();
+    }
+    if (!_authWorkCurrent(revision)) return;
+    if (answer != null &&
+        answer.loggedIn &&
+        answer.machineId == keptMachineId) {
+      _provenMachineId = keptMachineId;
+      unawaited(superTabImageCache.claim(keptMachineId));
+      if (held) _persistLayout();
+      return;
+    }
+    if (answer != null && !answer.loggedIn) {
+      _signedOutAtRuntime(_signedOutMessage);
+      return;
+    }
+    final again = _invalidateAuthWork();
+    currentUser = null;
+    _provenMachineId = null;
+    _keptProfileId = null;
+    _profileConfirmed = false;
+    _clearAccountWorkspace();
+    status = AppStatus.checkingEnvironment;
+    notifyListeners();
+    // Gone before the launch starts again, so it cannot open from it a second time.
+    await _profileCache.clear();
+    if (!_authWorkCurrent(again)) return;
+    if (_workspaceCleanup case final cleanup?) {
+      await cleanup;
+      if (!_authWorkCurrent(again)) return;
+    }
+    // Never from the kept record again: a delete that failed leaves it readable (review of #3293).
+    await _continueAfterEnvironmentReady(
+      early: answer == null ? null : Future.value(answer),
+      fromKept: false,
+    );
   }
 
   void showEnvironmentReview() {
@@ -7866,6 +7966,12 @@ class AppNotifier extends ChangeNotifier {
     appLog.info('startup', startupLogLine(_startupTimings));
     _startupClock.stop();
     notifyListeners();
+    // A window opened from the kept sign-in asks nothing of the account until the check proves it ([_launchProof]).
+    final proof = _launchProof;
+    if (proof != null && proof.revision == revision) {
+      await proof.settled.future;
+      if (!_authWorkCurrent(revision)) return;
+    }
     // The CLI has confirmed daemon readiness. Display-name/avatar metadata is
     // independent of machine discovery and must not delay work — and a guest
     // has no profile to load.
@@ -15596,25 +15702,15 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// What every connected REMOTE machine's agent accounts have spent, asked in
-  /// parallel and read there with that machine's own credentials (`usage_read`).
-  ///
-  /// This computer's own accounts are not asked here — the app reads those
-  /// directly, the Keychain included. A remote machine may be signed in to a
-  /// different subscription, and a rate limit belongs to an account rather than
-  /// a computer, so the only honest way to show that one is to ask the machine
-  /// that holds it.
-  ///
-  /// ⚠️ **A machine whose CLI predates `usage_read` does not refuse it — it goes
-  /// silent.** The frame reaches it as an E2EE envelope it does not know to
-  /// open, so the requestId inside is never read and nothing replies. That is a
-  /// timeout, not an `UNSUPPORTED`, which is why this asks with a short one and
-  /// treats every failure alike: a machine that cannot say has nothing to add,
-  /// and it must never hold up the figures of the ones that can.
+  /// through their own CLI rate-limit reports. This computer uses the same
+  /// transport: Desktop never opens a vendor credential or usage endpoint.
   Future<List<MachineUsage>> readRemoteUsage() async {
     final remotes = [
       for (final machine in machineStates.values)
-        if (!machine.isLocalMachine &&
-            machine.connectionStatus == ConnectionStatus.connected)
+        if (machine.connectionStatus == ConnectionStatus.connected &&
+            !machine.needsLink &&
+            !machine.belongsToOtherAccount &&
+            !machine.machine.isTeamAccount)
           machine,
     ];
     final answers = await Future.wait([
@@ -15848,6 +15944,7 @@ class AppNotifier extends ChangeNotifier {
       if (readings.isEmpty) return null;
       return MachineUsage(
         machineName: machine.machine.displayName,
+        isLocal: machine.isLocalMachine,
         readings: readings,
       );
     } catch (_) {
@@ -17961,9 +18058,16 @@ class AppNotifier extends ChangeNotifier {
         (!beforeSend || current.sessionId == agent.sessionId);
   }
 
-  AgentRestartAttempt restartAttempt(String machineId, String agentId) {
+  /// [fresh] starts a new intent with its own receipt, even while an earlier attempt is pending or
+  /// awaiting confirmation; the earlier one keeps running on its own object.
+  AgentRestartAttempt restartAttempt(
+    String machineId,
+    String agentId, {
+    bool fresh = false,
+  }) {
     final previous = _agentRestarts[(machineId, agentId)];
-    if (previous != null &&
+    if (!fresh &&
+        previous != null &&
         _restartCurrent(
           previous,
           beforeSend: !previous.busy && !previous.awaitingConfirmation,
@@ -18090,6 +18194,7 @@ class AppNotifier extends ChangeNotifier {
     String machineId,
     String agentId, {
     AgentRestartAttempt? attempt,
+    String? launchArgs,
   }) {
     final operation = attempt ?? restartAttempt(machineId, agentId);
     if (operation.result case final result? when result.error == null) {
@@ -18097,7 +18202,7 @@ class AppNotifier extends ChangeNotifier {
     }
     if (operation.pending case final pending?) return pending;
     late final Future<RestartAgentResult> request;
-    request = _runAgentRestart(machineId, agentId, operation)
+    request = _runAgentRestart(machineId, agentId, operation, launchArgs)
         .then((result) {
           operation.result = result;
           return result;
@@ -18114,6 +18219,7 @@ class AppNotifier extends ChangeNotifier {
     String machineId,
     String agentId,
     AgentRestartAttempt attempt,
+    String? launchArgs,
   ) async {
     final machine = attempt._machine;
     if (machine == null) {
@@ -18193,6 +18299,7 @@ class AppNotifier extends ChangeNotifier {
         ProductFlow.resumeRecovery,
       );
     }
+    final sendsLaunchArgs = launchArgs != null && !checking;
     RestartAgentResult refused(String code, Object? detail) {
       attempt._awaitingConfirmation = false;
       if (resuming && code == 'AGENT_BUSY') {
@@ -18208,6 +18315,7 @@ class AppNotifier extends ChangeNotifier {
       _measurementResumes.remove(measurementKey)?.call(ProductOutcome.failed);
       return RestartAgentResult(
         error: _restartFailure(code, detail, resuming: resuming),
+        launchArgsRefused: code == 'INVALID_LAUNCH_ARGS',
       );
     }
 
@@ -18215,6 +18323,10 @@ class AppNotifier extends ChangeNotifier {
       error: resuming
           ? 'Still waiting for the Open response. Select the harness again to check status.'
           : 'The restart is not confirmed yet. Check status, or close this prompt to inspect the terminal before restarting again.',
+    );
+    final notStarted = RestartAgentResult(
+      error: unknown.error,
+      engineNotStarted: true,
     );
     Map<String, dynamic> result;
     try {
@@ -18224,7 +18336,11 @@ class AppNotifier extends ChangeNotifier {
             : resuming
             ? 'agent_resume'
             : 'agent_restart',
-        payload: {'creationId': attempt._id, if (!checking) 'agentId': agentId},
+        payload: {
+          'creationId': attempt._id,
+          if (!checking) 'agentId': agentId,
+          if (sendsLaunchArgs) 'launchArgs': launchArgs,
+        },
       );
       if (checking &&
           resuming &&
@@ -18239,7 +18355,11 @@ class AppNotifier extends ChangeNotifier {
         checking = false;
         result = await _conn(machineId).request(
           'agent_resume',
-          payload: {'creationId': attempt._id, 'agentId': agentId},
+          payload: {
+            'creationId': attempt._id,
+            'agentId': agentId,
+            'launchArgs': ?launchArgs,
+          },
         );
       }
     } on WsRequestFailure catch (failure) {
@@ -18268,12 +18388,10 @@ class AppNotifier extends ChangeNotifier {
       return unknown;
     }
     if (result['error'] case final String code) {
-      if (checking ||
-          [
-            'INTERNAL',
-            'CREATION_STORAGE_FAILED',
-            'RESTART_FAILED',
-          ].contains(code)) {
+      if (code == 'RESTART_FAILED' || code == 'RESUME_UNCONFIRMED') {
+        return notStarted;
+      }
+      if (checking || ['INTERNAL', 'CREATION_STORAGE_FAILED'].contains(code)) {
         return unknown;
       }
       return refused(code, result['detail']);
@@ -18286,8 +18404,9 @@ class AppNotifier extends ChangeNotifier {
               : 'The machine is still restarting the harness. Check again in a moment.',
         );
       case 'missing':
-      case 'unconfirmed':
         return unknown;
+      case 'unconfirmed':
+        return notStarted;
       case 'unavailable':
         attempt._awaitingConfirmation = false;
         return const RestartAgentResult(
@@ -18359,6 +18478,8 @@ class AppNotifier extends ChangeNotifier {
     }
     return RestartAgentResult(
       resumed: result['resumed'] is bool ? result['resumed'] as bool : true,
+      // Only a fresh restart is echoed; a status check never carries the words.
+      launchArgsIgnored: sendsLaunchArgs && result['launchArgs'] == null,
     );
   }
 
@@ -22245,6 +22366,12 @@ class AppNotifier extends ChangeNotifier {
     _announceVisibleAgents();
     _freezeDeskLayouts();
     _deskQueueDiff();
+    // Saved with an owner, so never under an account the signed-in check has not proven yet ([_launchProof]): held, and
+    // saved once it is (review of #3293).
+    if (_launchProof != null) {
+      _layoutSaveHeld = true;
+      return;
+    }
     final saved = swarms.where((swarm) => !isDraftSwarm(swarm.id)).toList();
     if (saved.isEmpty) return;
     final savedActive = isDraftSwarm(activeSwarmId)
@@ -24165,7 +24292,6 @@ class AppNotifier extends ChangeNotifier {
       request.complete(null);
     }
     unawaited(_teamSetupAsks.close());
-    unawaited(_joinedMachines.close());
     super.dispose();
   }
 }

@@ -71,6 +71,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.machineName,
     this.reply,
     this.replyAuthor,
+    this.quoteThreadReply = false,
     this.replyGone = false,
     this.grouped = false,
     this.onReply,
@@ -160,6 +161,10 @@ class SuperTabMessageRow extends StatefulWidget {
   final String? machineName;
   final SuperTabMessage? reply;
   final String? replyAuthor;
+
+  /// A thread reply in a flat chat (Desktop, task #3787) says what it answers, as an older reply does: it does not
+  /// sit under its root there.
+  final bool quoteThreadReply;
 
   /// The original [reply] would show is no longer in the conversation.
   final bool replyGone;
@@ -789,8 +794,10 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                 ),
                               // A thread reply sits under its root, so it
                               // quotes nothing; an older reply keeps its quote.
-                              if (message.replyTo != null &&
-                                  !message.threadReply)
+                              if ((message.replyTo != null &&
+                                      !message.threadReply) ||
+                                  (widget.quoteThreadReply &&
+                                      widget.reply != null))
                                 Padding(
                                   padding: const EdgeInsets.only(bottom: 8),
                                   child: SuperTabReplyPreview(

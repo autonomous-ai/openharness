@@ -13,7 +13,7 @@ import {
  * secret without holding one, and ordinary prose in any language pass unchanged.
  */
 export type CredentialKind = 'private-key' | 'jwt' | 'harness' | 'github' | 'anthropic' | 'openai' | 'aws-key-id' | 'aws-secret'
-  | 'slack' | 'google' | 'password' | 'link-token'
+  | 'slack' | 'google' | 'stripe' | 'gitlab' | 'npm' | 'password' | 'link-token'
 
 /** What the sender is told was removed. */
 export const CREDENTIAL_LABELS: Record<CredentialKind, string> = {
@@ -27,6 +27,9 @@ export const CREDENTIAL_LABELS: Record<CredentialKind, string> = {
   'aws-secret': 'AWS secret access key',
   slack: 'Slack token',
   google: 'Google API key',
+  stripe: 'Stripe secret key',
+  gitlab: 'GitLab token',
+  npm: 'npm token',
   password: 'password or secret',
   'link-token': 'Harness join or link token',
 }
@@ -112,6 +115,13 @@ const RULES: Rule[] = [
   { kind: 'slack', pattern: /(?<![A-Za-z0-9_-])xox[abprs]-\d{6,}-[A-Za-z0-9-]{8,}(?![A-Za-z0-9_-])/dg, accept: token => random(token) },
   // Base64 data cannot be next to it, so a long image never holds one by chance.
   { kind: 'google', pattern: /(?<![A-Za-z0-9_\-+/])AIza[A-Za-z0-9_-]{35}(?![A-Za-z0-9_\-+/])/dg, accept: token => random(token.slice(4)) },
+  // Secret and restricted keys, live and test: a test key still reads and writes the account's test data.
+  { kind: 'stripe', pattern: /(?<![A-Za-z0-9_])[sr]k_(?:live|test)_[A-Za-z0-9]{24,}(?![A-Za-z0-9_])/dg, accept: token => random(token.slice(8)) },
+  // GitLab's token prefixes (personal, OAuth, deploy, runner, CI job, trigger, feed, incoming mail, agent, service account,
+  // feature flags), and the routable .xx.yyyyyyyyy suffix of new tokens.
+  { kind: 'gitlab', accept: token => random(token.slice(token.indexOf('-') + 1)),
+    pattern: /(?<![A-Za-z0-9_-])gl(?:pat|oas|dt|rt|rtr|cbt|ptt|ft|imt|agent|soat|ffct)-[A-Za-z0-9_-]{20,}(?:\.[0-9a-z]{2}\.[0-9a-z]{9})?(?![A-Za-z0-9_-])/dg },
+  { kind: 'npm', pattern: /(?<![A-Za-z0-9_])npm_[A-Za-z0-9]{36}(?![A-Za-z0-9_])/dg, accept: token => random(token.slice(4)) },
   // Authorization: Bearer|Basic|Token …, which may be letters only (Basic is base64 of user:password).
   { kind: 'password', group: 1, accept: value => secretValue(value, 12, true),
     pattern: /(?<![A-Za-z0-9_-])Authorization["']?\s*[:=]\s*["']?(?:Bearer|Basic|Token|Bot)\s+([A-Za-z0-9._~+/=-]{12,})/dgi },

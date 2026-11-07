@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { latestProcessNote } from '../src/superTabs/processNotes.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
@@ -65,11 +66,14 @@ async function swarm({ fresh = false, told }: { fresh?: boolean; told?: string[]
   const harnessOf = new Map<string, string>()
   const add = async (conversationId: string, machineId: string, name: string, lead = false) => {
     const harnessId = randomUUID()
-    const agentId = String((await execute({ type: 'agent.add', conversationId, machineId, harnessId, name, configuration: config, lead })).result.agentId)
+    // Added by the host, whose machines they run on: an agent is its own person's, on their own computer (task #4120).
+    const agentId = String((await execute({ type: 'agent.add', conversationId, machineId, harnessId, name, configuration: config, lead }, host)).result.agentId)
     harnessOf.set(machineId, harnessId)
     return agentId
   }
   const lead = await add('lead', 'lead-host', 'Lead', true)
+  // Its PM confirmed the newest note for PMs, which would otherwise wake it and head its inbox (processNotes.ts, task #3581).
+  await execute({ type: 'process.confirm', projectId: 'lead', noteId: latestProcessNote()!.id }, host, lead)
   const group = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief: 'Implement it',
     checks: [] })).result.conversationId)
   const worker = await add(group, 'test-host', 'Worker')

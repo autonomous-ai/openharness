@@ -3,11 +3,14 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
+import { SEED_RULES, type ProjectRules } from '../src/superTabs/policy.js'
 import { DISPATCH_RETRY_MS, SuperTabStore } from '../src/superTabs/store.js'
 import { noteChange, swarmTransaction } from '../src/superTabs/cache.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { Agent, Conversation } from '../src/superTabs/model.js'
 import { planDatabase } from './plans.test-support.js'
+import { poolRows } from './hostRows.test-support.js'
+import { logger } from '../src/utils/logger.js'
 
 // The Swarm hands the next task to a free crew member by itself (task #3400). A fresh loopback replica set; never DATABASE_URL.
 let replica: MongoMemoryReplSet
@@ -83,6 +86,210 @@ async function readGroup(tabId: string, groupId: string): Promise<Conversation> 
 }
 
 describe('the crew dispatch pass', () => {
+  const save = (s: Awaited<ReturnType<typeof swarm>>, revision: number, change: Partial<ProjectRules>) => s.execute({
+    type: 'rules.set', projectId: 'lead', baseRevision: revision, rules: { ...structuredClone(SEED_RULES), ...change }, summary: 'Project dispatch policy',
+  })
+
+  /** Two projects, so a broken lead policy cannot hide a healthy project's work. */
+  async function twoProjects() {
+    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/a.ts' })
+    const other = String((await s.execute({ type: 'project.create', name: 'Phone', visibility: 'public', brief: '' })).result.projectId)
+    const head = (await db.swarmHead.findUniqueOrThrow({ where: { tabId_key: { tabId: s.tab, key: 'head' } } })).data as unknown as { projects: { id: string; leadConversationId: string }[] }
+    const chat = head.projects.find(p => p.id === other)!.leadConversationId
+    await s.execute({ type: 'agent.add', conversationId: chat, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Phone PM', configuration: config, lead: true })
+    const worker = String((await s.execute({ type: 'agent.add', conversationId: chat, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Phone worker', configuration: config, lead: false })).result.agentId)
+    await s.execute({ type: 'crew.add', agentId: worker, lane: 'mobile', role: 'Engineer' })
+    const phone = String((await s.execute({ type: 'conversation.create', projectId: other, title: 'Phone', checks: [], task: { goal: 'Phone.', changes: 'Change.', constraints: 'None.', owns: ['mobile/a.dart'] } })).result.conversationId)
+    const fast = { ...structuredClone(SEED_RULES), dispatch: { ...SEED_RULES.dispatch, nudgeAfterMs: 60_000, returnAfterMs: 120_000 } }
+    await save(s, 0, fast)
+    await s.execute({ type: 'rules.set', projectId: other, baseRevision: 0, rules: fast, summary: 'Fast phone clock' })
+    const corrupt = () => db.superTabProjectRules.updateMany({ where: { tabId: s.tab, projectId: 'lead' }, data: { rules: { ...fast, dispatch: { ...fast.dispatch, maxHanded: 0 } } } })
+    return { ...s, other, worker, phone, corrupt }
+  }
+
+  it('isolates invalid project rules from another project’s dispatch', async () => {
+    const s = await twoProjects()
+    await s.corrupt()
+    const errors = vi.spyOn(logger, 'error')
+    try {
+      expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
+      expect((await readGroup(s.tab, s.tasks.Api!)).assignment).toBeNull()
+      expect((await readGroup(s.tab, s.phone)).assignment?.agentId).toBe(s.worker)
+      expect(errors.mock.calls).toContainEqual([expect.any(String), expect.anything(), expect.objectContaining({ tabId: s.tab, projectId: 'lead' })])
+    } finally { errors.mockRestore() }
+  })
+
+  it('keeps host reports and the lead sweep working when one project’s rules are invalid', async () => {
+    const s = await twoProjects()
+    await s.execute({ type: 'machine.contribute', machineId: 'owner-mac', name: 'Mac', cwd: '/repo', engines: ['claude'], maxAgents: 8 })
+    await s.execute({ type: 'work.assign', conversationId: s.tasks.Api!, agentId: s.crew.Ash! })
+    await s.execute({ type: 'work.assign', conversationId: s.phone, agentId: s.worker })
+    const pool = (await poolRows(s.store, owner, 'owner-mac')).find(p => p.tabId === s.tab)!.machine
+    const agents = (await db.swarmAgent.findMany({ where: { tabId: s.tab } })).map(row => row.data as unknown as Agent)
+    await s.corrupt()
+    s.advance(60_000)
+    const report = () => s.store.observeMachine(owner, s.tab, 'owner-mac', { generation: pool.generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null }, quotas: [], tools: {},
+      runningHarnessIds: agents.map(a => a.harnessId), stoppedHarnessIds: [] })
+    await report()
+    const messages = (await s.store.messages(owner, s.tab, s.phone, {}, s.worker)).messages
+    expect(messages.filter(m => (m.source as { kind?: string })?.kind === 'crew-nudge')).toHaveLength(1)
+    s.advance(3 * 3_600_000)
+    await report()
+    await s.store.runTimeChecks(s.tab)
+    expect((await readGroup(s.tab, s.phone)).assignment?.status).toBe('lost')
+    expect((await readGroup(s.tab, s.tasks.Api!)).assignment?.status).toBe('working')
+    expect((await readGroup(s.tab, s.tasks.Api!)).assignment?.nudgedAt).toBeUndefined()
+  })
+
+  it('lets a review step open under invalid rules but refuses new tasks with a repair instruction', async () => {
+    const s = await twoProjects()
+    await s.corrupt()
+    const step = await s.execute({ type: 'conversation.create', title: 'Review', brief: 'Review the change.', reviewOf: s.tasks.Api!, step: 'Review', checks: [] })
+    expect((await readGroup(s.tab, String(step.result.conversationId))).reviewOf).toBe(s.tasks.Api)
+    await expect(s.execute({ type: 'conversation.create', title: 'New task', brief: 'A new task.', checks: [] })).rejects.toMatchObject({
+      code: 'RULES_INVALID', message: expect.stringMatching(/lead.*repair.*rules/i),
+    })
+  })
+
+  it('uses custom lanes for crew, work.lane, stamps and dispatch while another project retains mobile', async () => {
+    const s = await swarm({ Ash: null }, { Board: 'devices/main.c' })
+    await save(s, 0, { lanes: [{ name: 'firmware', owns: ['devices/'] }] })
+    expect((await readGroup(s.tab, s.tasks.Board!)).handOutLane).toBe('firmware')
+    await s.execute({ type: 'crew.add', agentId: s.crew.Ash!, lane: 'Firmware', role: 'Engineer' })
+    await s.execute({ type: 'work.lane', conversationId: s.tasks.Board!, lane: 'FIRMWARE' })
+    expect((await readGroup(s.tab, s.tasks.Board!)).lane).toBe('firmware')
+    await expect(s.execute({ type: 'crew.add', agentId: s.crew.Ash!, lane: 'mobile' })).rejects.toMatchObject({ code: 'LANE_UNKNOWN' })
+    await expect(s.execute({ type: 'work.lane', conversationId: s.tasks.Board!, lane: 'mobile' })).rejects.toMatchObject({ code: 'LANE_UNKNOWN' })
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
+    expect(await s.holders()).toEqual({ Board: 'Ash' })
+    const other = await swarm({ Birch: 'mobile' }, { Phone: 'mobile/lib/app.dart' })
+    expect(await other.store.dispatchCrew(other.tab)).toMatchObject({ assigned: 1 })
+    expect(await other.holders()).toEqual({ Phone: 'Birch' })
+  })
+
+  it('does not dispatch removed lanes even with old crew marks', async () => {
+    const s = await swarm({ Ash: 'mobile', Birch: null }, { Phone: 'mobile/lib/app.dart' })
+    await s.execute({ type: 'work.lane', conversationId: s.tasks.Phone!, lane: 'mobile' })
+    await save(s, 0, { lanes: [{ name: 'firmware', owns: ['devices/'] }] })
+    expect((await readGroup(s.tab, s.tasks.Phone!)).handOutLane).toBeNull()
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 0 })
+    expect(await s.holders()).toEqual({ Phone: null })
+  })
+
+  it('rechecks project lane policy inside an automatic assignment', async () => {
+    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
+    const store = s.store as unknown as { pushOriginFor: (...args: unknown[]) => Promise<unknown> }
+    vi.spyOn(store, 'pushOriginFor').mockImplementationOnce(async () => {
+      await save(s, 0, { lanes: [] })
+      return undefined
+    })
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 0, skipped: { DISPATCH_STALE: 1 } })
+    expect(await s.holders()).toEqual({ Api: null })
+  })
+
+  it('rechecks a reduced handed-work cap inside an automatic assignment', async () => {
+    const s = await swarm({ Ash: 'backend' }, { First: 'backend/src/a.ts', Next: 'backend/src/b.ts' })
+    await s.execute({ type: 'work.assign', conversationId: s.tasks.First!, agentId: s.crew.Ash! })
+    const id = (await readGroup(s.tab, s.tasks.First!)).assignment!.id
+    await s.execute({ type: 'work.status', conversationId: s.tasks.First!, assignmentId: id, status: 'review', result: 'Ready at abc1234.' }, s.crew.Ash)
+    const store = s.store as unknown as { pushOriginFor: (...args: unknown[]) => Promise<unknown> }
+    vi.spyOn(store, 'pushOriginFor').mockImplementationOnce(async () => {
+      await save(s, 0, { dispatch: { ...SEED_RULES.dispatch, maxHanded: 1 } })
+      return undefined
+    })
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 0, skipped: { DISPATCH_STALE: 1 } })
+    expect(await s.holders()).toEqual({ First: 'Ash', Next: null })
+  })
+
+  it('honors periodic project cadence while direct work events bypass it', async () => {
+    const s = await swarm({ Ash: 'backend' }, { First: 'backend/a.ts', Next: 'backend/b.ts', Third: 'backend/c.ts' })
+    await save(s, 0, { dispatch: { ...SEED_RULES.dispatch, everyMs: 60_000 } })
+    expect(await s.store.dispatchCrew(s.tab, true)).toMatchObject({ assigned: 1 })
+    const first = (await readGroup(s.tab, s.tasks.First!)).assignment!.id
+    await s.execute({ type: 'work.status', conversationId: s.tasks.First!, assignmentId: first, status: 'review', result: 'Ready at abc1234.' }, s.crew.Ash)
+    s.advance(30_000)
+    expect(await s.store.dispatchCrew(s.tab, true)).toMatchObject({ assigned: 0 })
+    s.advance(30_000)
+    expect(await s.store.dispatchCrew(s.tab, true)).toMatchObject({ assigned: 1 })
+    const next = (await readGroup(s.tab, s.tasks.Next!)).assignment!.id
+    await s.execute({ type: 'work.status', conversationId: s.tasks.Next!, assignmentId: next, status: 'review', result: 'Ready at abc1234.' }, s.crew.Ash)
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
+    expect(await s.holders()).toEqual({ First: 'Ash', Next: 'Ash', Third: 'Ash' })
+  })
+
+  it('upgrades a pending periodic pass when a work event arrives', async () => {
+    const s = await swarm({ Ash: 'backend' }, { First: 'backend/a.ts', Next: 'backend/b.ts' })
+    await save(s, 0, { dispatch: { ...SEED_RULES.dispatch, everyMs: 60_000 } })
+    const automatic = new SuperTabStore(db, () => NOW, null, { dispatch: true })
+    await automatic.dispatchCrew(s.tab, true)
+    const id = (await readGroup(s.tab, s.tasks.First!)).assignment!.id
+    await s.execute({ type: 'work.status', conversationId: s.tasks.First!, assignmentId: id, status: 'review', result: 'Ready at abc1234.' }, s.crew.Ash)
+    const schedule = automatic as unknown as { dispatchSoon(tabId: string, periodic: boolean): void }
+    const passes = vi.spyOn(automatic, 'dispatchCrew')
+    schedule.dispatchSoon(s.tab, true)
+    await vi.waitFor(() => expect(passes.mock.results.length).toBe(1), { timeout: 5_000, interval: 100 })
+    await passes.mock.results[0]!.value
+    expect((await readGroup(s.tab, s.tasks.Next!)).assignment).toBeNull()
+    schedule.dispatchSoon(s.tab, true)
+    await automatic.execute(owner, s.tab, { operationId: randomUUID(), command: { type: 'work.queue', conversationId: s.tasks.Next!, after: null } })
+    await vi.waitFor(async () => expect((await readGroup(s.tab, s.tasks.Next!)).assignment?.agentId).toBe(s.crew.Ash), { timeout: 5_000, interval: 100 })
+  })
+
+  it('uses each project’s progress clock without changing another project’s seed', async () => {
+    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/a.ts' })
+    const other = String((await s.execute({ type: 'project.create', name: 'Phone', visibility: 'public', brief: '' })).result.projectId)
+    const projects = (await db.swarmHead.findUniqueOrThrow({ where: { tabId_key: { tabId: s.tab, key: 'head' } } })).data as unknown as { projects: { id: string; leadConversationId: string }[] }
+    const chat = projects.projects.find(p => p.id === other)!.leadConversationId
+    const mobile = String((await s.execute({ type: 'agent.add', conversationId: chat, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Phone worker', configuration: config, lead: false })).result.agentId)
+    await s.execute({ type: 'crew.add', agentId: mobile, lane: 'mobile', role: 'Engineer' })
+    const phone = String((await s.execute({ type: 'conversation.create', projectId: other, title: 'Phone', checks: [], task: { goal: 'Phone.', changes: 'Change.', constraints: 'None.', owns: ['mobile/a.dart'] } })).result.conversationId)
+    await save(s, 0, { lanes: [{ name: 'firmware', owns: ['backend/'] }], dispatch: { ...SEED_RULES.dispatch, nudgeAfterMs: 60_000, returnAfterMs: 120_000 } })
+    await s.execute({ type: 'work.assign', conversationId: s.tasks.Api!, agentId: s.crew.Ash! })
+    await s.execute({ type: 'work.assign', conversationId: phone, agentId: mobile })
+    s.advance(60_000)
+    await s.store.runTimeChecks(s.tab)
+    const messages = (await s.store.messages(owner, s.tab, s.tasks.Api!, {}, s.crew.Ash)).messages
+    expect(messages.filter(m => (m.source as { kind?: string })?.kind === 'crew-nudge')).toHaveLength(1)
+    s.advance(60_000)
+    await s.store.runTimeChecks(s.tab)
+    expect((await readGroup(s.tab, s.tasks.Api!)).assignment?.status).toBe('lost')
+    expect((await readGroup(s.tab, phone)).assignment?.status).toBe('working')
+    expect((await readGroup(s.tab, phone)).handOutLane).toBe('mobile')
+  })
+
+  // Task #3964: the store reads the project's machine rules for a start, an assignment and the dispatch pass.
+  it('follows the project\'s machine rules from its record in a start, an assignment and the dispatch pass', async () => {
+    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
+    await save(s, 0, { machines: [{ machineIds: ['owner-mac'], why: 'This Mac takes no new work for now', noEngines: ['claude'] }] })
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 0 })
+    await expect(s.execute({ type: 'work.assign', conversationId: s.tasks.Api!, agentId: s.crew.Ash! }, s.pm))
+      .rejects.toMatchObject({ code: 'MACHINE_RULE', message: 'This Mac takes no new work for now' })
+    await s.execute({ type: 'machine.contribute', machineId: 'owner-mac', name: 'Owner Mac', cwd: '/swarm', scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 4 })
+    const generation = (await poolRows(s.store, owner, 'owner-mac')).find(p => p.tabId === s.tab)!.machine.generation
+    await s.store.observeMachine(owner, s.tab, 'owner-mac', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 64e9, memoryUsedBytes: 4e9,
+      diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Desktop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+    quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [] })
+    const request = (engine: string) => ({ conversationId: s.tasks.Api!, machineId: 'owner-mac', engine, name: 'Builder', cwd: '/swarm/lead', worktree: false,
+      requirements: { memoryBytes: 1e9, diskBytes: 1e9, maxCpuPercent: 90, tools: [], devices: [], quotaRequired: false } })
+    await expect(s.execute({ type: 'agent.start', request: request('claude') })).rejects.toMatchObject({ code: 'MACHINE_RULE' })
+    expect((await s.execute({ type: 'agent.start', request: request('codex') })).result.startId).toBeTruthy()
+    // Cleared by the people who set it: the member takes the task again.
+    await save(s, 1, { machines: [] })
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
+    expect(await s.holders()).toEqual({ Api: 'Ash' })
+  })
+
+  // Security review 1 of #3964: a record broken elsewhere still applies the machine rules it holds that pass.
+  it('applies the machine rules of a record that fails the schema elsewhere, to an assignment', async () => {
+    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
+    const rule = { machineIds: ['owner-mac'], why: 'This Mac takes no new work for now', noEngines: ['claude' as const] }
+    await save(s, 0, { machines: [rule] })
+    await db.superTabProjectRules.updateMany({ where: { tabId: s.tab, projectId: 'lead' },
+      data: { rules: { ...structuredClone(SEED_RULES), dispatch: { ...SEED_RULES.dispatch, maxHanded: 0 }, machines: [rule] } } })
+    await expect(s.execute({ type: 'work.assign', conversationId: s.tasks.Api!, agentId: s.crew.Ash! }, s.pm))
+      .rejects.toMatchObject({ code: 'MACHINE_RULE', message: 'This Mac takes no new work for now' })
+  })
+
   it('hands a free member its pinned task first, then its lane\'s top task, as the PM, through work.assign', async () => {
     const s = await swarm({ Ash: 'backend', Birch: 'desktop' }, { Api: 'backend/src/a.ts', Store: 'backend/src/b.ts', Board: 'desktop/lib/c.dart' })
     await editGroup(s.tab, s.tasks.Store!, group => ({ ...group, pin: { agentId: s.crew.Ash!, why: 'ci', at: NOW } }))
@@ -111,7 +318,7 @@ describe('the crew dispatch pass', () => {
     expect(['Cedar', 'Dune']).toContain(held[0])
   })
 
-  it('leaves a project without crew to its PM', async () => {
+  it('leaves never-assigned work to the PM route in a project without crew', async () => {
     const s = await swarm({}, { Api: 'backend/src/a.ts' })
     await s.execute({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'Plain', configuration: config, lead: false })
     expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 0 })
@@ -130,7 +337,7 @@ describe('the crew dispatch pass', () => {
     }
   })
 
-  it('runs by itself a second after a write that opens a task, only in a Swarm with a crew', async () => {
+  it('runs by itself a second after a write that opens a task for a project worker', async () => {
     const s = await swarm({ Ash: 'backend' }, {}, true)
     const id = String((await s.execute({ type: 'conversation.create', title: 'Api', checks: [],
       task: { goal: 'Api.', changes: 'The change.', constraints: 'None.', owns: ['backend/src/a.ts'] } })).result.conversationId)
@@ -144,18 +351,30 @@ describe('the crew dispatch pass', () => {
     await s.execute({ type: 'work.status', conversationId: id, assignmentId, status: 'review', result: 'Ready at abc1234.' }, s.crew.Ash)
     expect(s.store.dispatchScheduled(s.tab)).toBe(true)
 
-    // In a Swarm without a crew, no write schedules one.
+    // With only a PM, no write schedules one.
     const plain = await swarm({}, {}, true)
     await plain.execute({ type: 'conversation.create', title: 'Api', checks: [],
       task: { goal: 'Api.', changes: 'The change.', constraints: 'None.', owns: ['backend/src/a.ts'] } })
     expect(plain.store.dispatchScheduled(plain.tab)).toBe(false)
   })
 
-  it('does not assign a member taken out of the crew while the pass read GitHub', async () => {
+  it('automatically recovers lost work without any crew', async () => {
+    const s = await swarm({}, { Api: 'backend/src/a.ts' }, true)
+    const old = String((await s.execute({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'Old', configuration: config, lead: false })).result.agentId)
+    const plain = String((await s.execute({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'Plain', configuration: config, lead: false })).result.agentId)
+    const id = s.tasks.Api!
+    await s.execute({ type: 'work.assign', conversationId: id, agentId: old })
+    await editGroup(s.tab, id, group => ({ ...group, assignment: { ...group.assignment!, status: 'lost', lost: { reason: 'its session stopped', at: NOW } },
+      lostAttempt: { id: group.assignment!.id, agentId: old } }))
+    await s.execute({ type: 'work.queue', conversationId: id, after: null })
+    await vi.waitFor(async () => expect((await readGroup(s.tab, id)).assignment?.agentId).toBe(plain), { timeout: 5_000, interval: 200 })
+  })
+
+  it('does not assign a worker stopped while the pass read GitHub', async () => {
     const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
     const store = s.store as unknown as { pushOriginFor: (...args: unknown[]) => Promise<unknown> }
     vi.spyOn(store, 'pushOriginFor').mockImplementationOnce(async () => {
-      await editAgent(s.tab, s.crew.Ash!, agent => { const { crew: _crew, ...rest } = agent; return rest as Agent })
+      await editAgent(s.tab, s.crew.Ash!, agent => ({ ...agent, workDecision: 'stop' }))
       return undefined
     })
     await s.store.dispatchCrew(s.tab)
@@ -206,21 +425,6 @@ describe('the crew dispatch pass', () => {
     expect(await s.holders()).toEqual({ Api: 'Ash' })
   })
 
-  it('assigns within the short retry once the repository is approved, and not before it', async () => {
-    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
-    // Ash runs in a Team account, which reaches the repository only through the GitHub App (repositoryReach.ts).
-    await editAgent(s.tab, s.crew.Ash!, agent => ({ ...agent, teamAccount: true }))
-    const store = s.store as unknown as { repositoryReachFor: (...args: unknown[]) => Promise<unknown> }
-    vi.spyOn(store, 'repositoryReachFor').mockResolvedValueOnce({ state: 'not-approved', repository: 'owner/repo' })
-    const refused = await s.store.dispatchCrew(s.tab)
-    expect(refused).toMatchObject({ assigned: 0, skipped: { REPOSITORY_UNREACHABLE: 1 } })
-    // Approved now, in the same round. The pick waits its short retry, then goes.
-    expect(await s.store.dispatchCrew(s.tab)).toEqual({ assigned: 0, skipped: {} })
-    s.advance(DISPATCH_RETRY_MS)
-    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
-    expect(await s.holders()).toEqual({ Api: 'Ash' })
-  })
-
   it('does not assign a task postponed while the pass read GitHub', async () => {
     const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
     // Between the pass's read and its write: a person moves the task to tomorrow.
@@ -246,12 +450,12 @@ describe('the crew dispatch pass', () => {
     expect(second.status).toBe('working')
   })
 
-  it('skips a task the member may not take (Team-written code, main account) and gives it its next one', async () => {
+  // Swarm v3 (task #4120, the PM's ruling): Team-written code goes only to the project owner's own agent, as Ash is here.
+  it('gives Team-written code to the project owner\'s own agent', async () => {
     const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts', Store: 'backend/src/b.ts' })
-    // Team-written code goes only to a Team account's agent: Ash runs in the main account.
     await editGroup(s.tab, s.tasks.Api!, group => ({ ...group, teamWritten: true }))
     const done = await s.store.dispatchCrew(s.tab)
     expect(done.assigned).toBe(1)
-    expect(await s.holders()).toEqual({ Api: null, Store: 'Ash' })
+    expect(await s.holders()).toEqual({ Api: 'Ash', Store: null })
   })
 })

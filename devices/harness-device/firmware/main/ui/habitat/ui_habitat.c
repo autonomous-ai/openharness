@@ -243,6 +243,7 @@ static EXT_RAM_BSS_ATTR struct {
     uint32_t voice_wait_until;
     hit_t hits[24];
     ht_rect_t caption_arc;
+    ht_rect_t recap_card;   // a Swarm face's recap on the glass (its card, padded), for a hold; empty on any other face
     int hit_count, pressed;
     bool touch_down, touch_cancelled;
     bool touch_brake, coasting;
@@ -884,6 +885,15 @@ static void tabs_open(void)
     if (s.view != TABS) return;
     ht_tab_carousel_reset(&tab_carousel, tabs_total(), tab_index_here());
 }
+// A hold on the face: on a Swarm face's recap, the Personal | Team picker when the dial has both (Diego, 2026-11-06: the
+// name stays the project list); anywhere else, or with no picker, the tabs.
+static void face_hold(void)
+{
+    ht_rect_t r = s.recap_card;
+    bool on_recap = r.w && s.start_x >= r.x && s.start_x < r.x + r.w && s.start_y >= r.y && s.start_y < r.y + r.h;
+    if (on_recap && swarm_pick_open()) return;
+    tabs_open();
+}
 static void workspace_failed(const char *message)
 {
     ht_workspace_cancel_request(&workspace);
@@ -1343,7 +1353,7 @@ static void surface_tick(uint32_t now)
         pressed_action.kind == A_PET && !gesture.moved && held >= 650 && held < 5000) {
         // Enter directly. The opening contact is consumed until a real release,
         // so lifting or sliding after the hold cannot also select a tab.
-        tabs_open();
+        face_hold();
         return;
     }
     ht_character_mood_t mood = s.view == VOICE ?
@@ -1517,16 +1527,56 @@ static void swarm_pair(ht_scene_t *f, bool buddy)
     s.hits[s.hit_count++] = (hit_t){{X - 40, 382, HALF + 40, HT_HEIGHT - 382}, A_SIDE_PM, 0, true};
     s.hits[s.hit_count++] = (hit_t){{X + HALF, 382, HALF + 40, HT_HEIGHT - 382}, A_SIDE_BUDDY, 0, true};
 }
-// The Personal | Team picker: "Swarm" on the top arc and one 200 x 44 pill at y 211, the half of the Swarm on the face filled.
+/*
+ * The Personal | Team picker, option B (Diego, 2026-11-06: the 200 x 44 pill sat small in an empty glass). "Swarm" on the
+ * top arc and two rows of 340 x 104 px: Personal over Team, each with its icon, its name in Inter 30 and where it lands in
+ * Inter 20 (Personal: its project count; Team: the Swarm it opens), the one on the face filled with a green check.
+ */
+// 12 x 12 cells of 3 px, '#' ink: one person for Personal, and two (the second smaller, behind) for Team.
+static const ht_cell_frame_t *pick_icon(int which, bool on)
+{
+    static const char *const ME[12] = {
+        "....####....", "...######...", "...######...", "...######...", "....####....", "............",
+        "..########..", ".##########.", ".##########.", ".##########.", ".##########.", "............"};
+    static const char *const TEAM[12] = {
+        "...##.......", "..####..##..", "..####.####.", "..####.####.", "...##...##..", "............",
+        ".######.###.", "########.###", "########.###", "########.###", "########....", "............"};
+    static uint8_t cells[2][12 * 12];
+    static uint16_t palette[2][2][2];
+    static ht_cell_frame_t frames[2][2];
+    const char *const *art = which ? TEAM : ME;
+    for (int y = 0; y < 12; y++) for (int x = 0; x < 12; x++) cells[which][y * 12 + x] = art[y][x] == '#';
+    uint16_t c = color(on ? 0xffffff : 0x9a9ca3);
+    palette[which][on][0] = 0; palette[which][on][1] = (uint16_t)(c << 8 | c >> 8);   // panel order
+    frames[which][on] = (ht_cell_frame_t){.cols = 12, .rows = 12, .cell = 3, .palette = palette[which][on], .cells = cells[which]};
+    return &frames[which][on];
+}
+static void pick_row(ht_scene_t *f, int y, int which, const char *name, const char *detail, bool on)
+{
+    enum { X = 63, W = 340, H = 104, R = 28, ICON = 36 };
+    uint16_t fill = color(on ? 0x2b2d33 : 0x141518), edge = color(on ? 0x2b2d33 : 0x2e3035);
+    ht_box(f, X, y, W, H, R, fill, edge);
+    ht_cell_sprite(f, X + 26, y + (H - ICON) / 2, pick_icon(which, on));
+    const ht_font_t *big = &ht_lv_inter_30.base, *small = &ht_lv_inter_20.base;
+    int tx = X + 26 + ICON + 18, tw = W - (tx - X) - 26 - (on ? ht_done_28.width + 10 : 0);
+    ht_text(f, tx, y + 18, tw, big, on ? color(0xffffff) : color(0x9a9ca3), fill, name);
+    ht_text(f, tx, y + 18 + big->height + 4, tw, small, on ? color(0xc9cbd1) : color(0x9a9ca3), fill, detail);
+    if (on) ht_text(f, X + W - 26 - ht_done_28.width, y + (H - ht_done_28.height) / 2, ht_done_28.width, &ht_done_28,
+                    color(0x1fd13c), fill, HT_DONE);
+}
 static void render_swarm_pick(ht_scene_t *f)
 {
-    enum { X = 133, Y = 211, W = 200, H = 44, HALF = W / 2 };
-    const ht_supertab_t *t = swarm_here();
+    const ht_supertab_t *t = swarm_here(), *mine = swarm_pick_target(false), *team = swarm_pick_target(true);
+    bool personal = t && t->personal;
     ht_arc_title_face(f, FG, "Swarm", &ht_arc_inter_prop);
-    pill2(f, X, Y, W, H, "Personal", "Team", !(t && t->personal));
-    // A thumb's targets: each half 30 px wider and 40 px taller each way than it is drawn.
-    s.hits[s.hit_count++] = (hit_t){{X - 30, Y - 40, HALF + 30, H + 80}, A_PICK_PERSONAL, 0, true};
-    s.hits[s.hit_count++] = (hit_t){{X + HALF, Y - 40, HALF + 30, H + 80}, A_PICK_TEAM, 0, true};
+    char projects[32];
+    int n = mine ? mine->lead_n : 0;
+    snprintf(projects, sizeof projects, "%d project%s", n, n == 1 ? "" : "s");
+    pick_row(f, 120, 0, "Personal", projects, personal);
+    pick_row(f, 242, 1, "Team", team ? team->name : "", !personal);
+    // A thumb's targets: each row and half the gaps around it, meeting at y 233.
+    s.hits[s.hit_count++] = (hit_t){{43, 96, 380, 137}, A_PICK_PERSONAL, 0, true};
+    s.hits[s.hit_count++] = (hit_t){{43, 233, 380, 137}, A_PICK_TEAM, 0, true};
 }
 /*
  * Desktop's agent pattern (avatar_art.dart superTabAgentPattern; the daemon sends its 15 half bits and colour): mirrored on
@@ -1754,6 +1804,29 @@ static void render_swarm_face(ht_scene_t *f)
         ht_rect_t r = ht_run_bounds(&f->runs[i]);
         s.caption_arc = (ht_rect_t){r.x - 14, r.y - 14, r.w + 28, r.h + 28};
         break;
+    }
+    // The recap's place, for a hold (face_hold): its card, or on a skin with none the box of its lines.
+    if (recap && *recap) {
+        ht_rect_t u = {0};
+        for (int i = 0; i < f->count; i++) {
+            const ht_run_t *r = &f->runs[i];
+            if (r->box.h >= 40 && r->w >= 280 && r->y > 120 && r->y < 380) { u = (ht_rect_t){r->x, r->y, r->w, (int16_t)r->box.h}; break; }
+        }
+        for (int i = 0; !u.w && i < f->count; i++) {
+            const ht_run_t *r = &f->runs[i];
+            if (!r->text[0] || r->arc || r->box.h || r->y < 140 || r->y > 380) continue;
+            ht_rect_t b = ht_run_bounds(r);
+            for (int j = i; j < f->count; j++) {
+                const ht_run_t *q = &f->runs[j];
+                if (!q->text[0] || q->arc || q->box.h || q->y < 140 || q->y > 380) continue;
+                ht_rect_t c = ht_run_bounds(q);
+                int x0 = c.x < b.x ? c.x : b.x, y0 = c.y < b.y ? c.y : b.y;
+                int x1 = c.x + c.w > b.x + b.w ? c.x + c.w : b.x + b.w, y1 = c.y + c.h > b.y + b.h ? c.y + c.h : b.y + b.h;
+                b = (ht_rect_t){x0, y0, x1 - x0, y1 - y0};
+            }
+            u = b;
+        }
+        if (u.w) s.recap_card = (ht_rect_t){u.x - 12, u.y - 12, u.w + 24, u.h + 24};
     }
     // With the badge, the companion and its badge are the inbox's target; the rest of the face still talks.
     if (badge) s.hits[s.hit_count++] = (hit_t){{pet.x - 16, pet.y - 24, pet.w + 48, pet.h + 40}, A_PET_INBOX, 0, true};
@@ -2786,6 +2859,7 @@ bool habitat_scene_take(ht_scene_t *f)
     s.dirty = false;
     s.notice_frame = 0;
     s.hit_count = 0;
+    s.recap_card = (ht_rect_t){0};
     // The custom pets' memory (pet_store.c): a pack dropped or replaced since the last scene was built is freed here.
     // The render task is the only caller, and it paints each scene before it takes the next (display_habitat.c), so
     // nothing drawn from those packs is still being rasterised. The scene it keeps as `front` (for the next damage
@@ -3133,7 +3207,6 @@ static void dispatch(action_t a)
         view(HOME);
         break;
     case A_AGENTS: {
-        if (swarm_pick_open()) break;   // a Swarm face with a Personal and a Team card: the picker, else PANES
         view(AGENTS);
         if (swarm_here()) { ht_tab_carousel_reset(&pane_carousel, swarm_here()->lead_n, sw.at); break; }
         ht_tab_carousel_reset(&pane_carousel, s.count, s.active >= 0 && s.active < s.count ? s.active : 0);
@@ -3974,7 +4047,9 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 dispatch((action_t){.kind = A_VOICE_STOP, .value = 1});
             } else if (s.view == DRAFT && pressed_action.kind == A_DRAFT_EDIT) {
                 pressed_action.kind = A_DRAFT_OPTIONS; dispatch(pressed_action);
-            } else if (surface && (pressed_action.kind == A_PET || pressed_action.kind == A_PET_INBOX))
+            } else if (surface && pressed_action.kind == A_PET)
+                face_hold();
+            else if (surface && pressed_action.kind == A_PET_INBOX)
                 tabs_open();
         } else if (result == HT_TOUCH_TAP) {
             if (pressed_action.kind == A_PET) {
@@ -5587,7 +5662,9 @@ void ui_supertab_focus(const char *tab, const char *lead)
     const ht_supertab_t *t = ht_supertabs_find(&swarm, tab);
     int i = swarm_lead_index(t, lead);
     // As `focus` today: never while talking, nor over a question or a form.
-    bool free = !s.voice_open && !question_view(s.view) && s.view != FORM && s.view != DRAFT && s.view != DRAFT_OPTIONS;
+    // Nor over the Personal | Team picker: the desktop's focus closed it under a thumb, whose tap then talked (Diego's dial,
+    // 2026-11-06); the pick itself moves the desktop.
+    bool free = !s.voice_open && !question_view(s.view) && s.view != FORM && s.view != DRAFT && s.view != DRAFT_OPTIONS && s.view != SWARM_PICK;
     sw.pending[0] = 0;
     // The app is on another Lead of the Swarm coming back: the face comes back on that one.
     if (i >= 0 && !strcmp(sw.lost.tab, tab)) COPY(sw.lost.lead, lead);

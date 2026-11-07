@@ -1,3 +1,4 @@
+import { personalTasksFor } from './personalTasks.js'
 /**
  * The read API by parts (design section 4; shapes in contract.ts). Every read takes its time `T0` before any query and
  * makes the next cursor from it, so a write that commits late, inside the overlap, is still seen by the next poll.
@@ -28,7 +29,7 @@ import { canReadGroup, canReadProject, projectsOf, readConversation, readProject
 import { isBuddyReader } from '../buddies.js'
 import { workspacesRequired } from '../workspaceStore.js'
 import type { Leaderboard } from '../leaderboard/contract.js'
-import { profileNames, readableWeek, recentDormantGroups } from '../leaderboard/read.js'
+import { profileNames, readableWeek, recentDormantGroups, weeklyBoard } from '../leaderboard/read.js'
 import { LEDGER_WEEKS } from '../leaderboard/record.js'
 import type { PeriodName } from '../leaderboard/rolling.js'
 import { leaderboard } from '../leaderboard/stats.js'
@@ -45,6 +46,7 @@ import { decodeDormantPage, encodeDormantPage } from './dormantPage.js'
 import { moveChatMark } from './threadMarkSeeds.js'
 import { ServedTops } from './servedTops.js'
 import { memberSwarms } from '../swarmRows.js'
+import { isPersonalSwarm } from '../deletion.js'
 
 type LoadOptions = NonNullable<Parameters<typeof parts.loadActive>[2]>
 type Loader = (view: CacheView, tabId: string, opts: LoadOptions) => Promise<SwarmParts>
@@ -132,6 +134,7 @@ export class SwarmReads {
       return { format: READ_FORMAT, tabId, cursor: cursorFor(t0, loaded.visibilityEpoch), serverTime: t0, lastChangedAt, epoch: loaded.visibilityEpoch,
         // This backend opens steps (task steps design): a newer CLI sends `step` only to a backend that says so.
         ...(this.options.githubApp ? { githubApp: true as const } : {}), steps: true as const, ...view.parts,
+        ...read.actor.kind === 'person' ? { personalTasks: personalTasksFor(loaded.groups, view, read.actor, true) } : {},
         ...stamped({ ...await this.withAvatars(view, t0), ...readableMarks(read, await this.marksOf(tx, tabId, read.actor),
           await this.threadMarksOf(tx, tabId, read.actor), await this.settingsOf(tx, tabId, read.actor)) }) }
     })
@@ -218,6 +221,7 @@ export class SwarmReads {
       if (!asAgentId) sent.groups = await this.servedTops.served(tabId, read.view.state, sent.groups)
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
         epoch: read.parts.visibilityEpoch, ...sent,
+        ...read.actor.kind === 'person' ? { personalTasks: personalTasksFor(changed, read.view, read.actor, false) } : {},
         ...stamped({ ...await this.withAvatars(read.view, t0), ...readableMarks(read, marks, threadMarks, settings) }, options.derivedEtag) }
     })
   }
@@ -505,21 +509,34 @@ export class SwarmReads {
   async leaderboard(user: AuthUser, tabId: string, projectId: string, week?: number, period?: PeriodName, allProjects = false): Promise<Leaderboard> {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const now = this.now(), start = readableWeek(week, now)
-    return this.read(user, tabId, async (tx, cached) => {
+    const began = performance.now()
+    const result = await this.read(user, tabId, async (tx, cached) => {
       const state = parts.reassemble(await readParts(tx, cached, tabId), { share: true })
       const actor = await this.store.actor(tx, user, state)
       readProject(state, actor, projectId)
       // Every project this reader reads, by the same check as the one asked for; what they may not read is never loaded.
       const readable = allProjects ? projectsOf(state).filter(p => canReadProject(state, actor, p)).map(p => p.id) : undefined
-      const dormant = await recentDormantGroups(tx, cached, tabId, readable ?? projectId, now - LEDGER_WEEKS * WEEK_MS)
-      const groups = [...state.conversations.filter(g => !g.dormant), ...dormant].filter(g => !isLeads(g) && canReadGroup(state, actor, g))
-      // Names change rarely and show on a board: read on the secondary (task #2970).
-      const names = await profileNames(this.store.replica, state.people.map(p => p.id))
-      // Which machines the reader sees, with the daily rows no other read carries.
-      const machines = (visibleState(state, actor, now).machines ?? [])
-        .map(m => ({ ...m, lentDays: state.machines?.find(own => own.machineId === m.machineId)?.lentDays }))
-      return leaderboard({ state, groups, machines, projectId, week: start, now, period, allProjects: readable, names })
+      const load = async () => {
+        const dormant = await recentDormantGroups(tx, cached, tabId, readable ?? projectId, now - LEDGER_WEEKS * WEEK_MS)
+        const groups = [...state.conversations.filter(g => !g.dormant), ...dormant].filter(g => !isLeads(g) && canReadGroup(state, actor, g))
+        // Names change rarely and show on a board: read on the secondary (task #2970).
+        const names = await profileNames(this.store.replica, state.people.map(p => p.id))
+        const visible = visibleState(state, actor, now)
+        // Count only agents this reader sees, keeping ownership before presentation redaction (Buddy rows).
+        const agentIds = new Set(visible.agents.map(a => a.id))
+        const visibleAgents = state.agents.filter(a => agentIds.has(a.id))
+        const machines = (visible.machines ?? [])
+          .map(m => ({ ...m, lentDays: state.machines?.find(own => own.machineId === m.machineId)?.lentDays }))
+        return leaderboard({ state, groups, machines, visibleAgents, projectId, week: start, now, period, allProjects: readable, names })
+      }
+      // Access is resolved afresh above, even when the aggregate is held. Include the current audience in the key.
+      return allProjects && !period
+        ? weeklyBoard(cached, tabId, JSON.stringify([actor, readable]), projectId, start, now, load)
+        : load()
     })
+    const elapsedMs = performance.now() - began
+    if (allProjects && !period && elapsedMs > 100) logger.warn('[weekly-leaderboard] slow read', { elapsedMs: Math.round(elapsedMs) })
+    return result
   }
 
   /** The stored scorecard days (scorecard/rows.ts) of one project, or of every project the reader reads (`allProjects`),
@@ -579,7 +596,11 @@ export class SwarmReads {
     return { tabs: page.map(row => {
       const head = (heads.get(row.id)?.[0]?.data ?? legacy.find(l => l.id === row.id)?.state) as { name: string; paused: boolean }
       const tags = mentions?.get(row.id)
+      // Only the reader's own Personal Swarm is marked (a round dial's Personal | Team picker); another person's is not theirs
+      // to be told apart. Its id is derived from its owner and environment (deletion.ts), so no read is needed.
+      const personal = row.ownerId === user.sub && isPersonalSwarm({ id: row.id, environment: user.autonomousEnv, ownerId: row.ownerId })
       return { id: row.id, name: head.name, ownerId: row.ownerId, workspaceId: row.workspaceId, paused: head.paused, lastChangedAt: newest.get(row.id) ?? null,
+        ...personal ? { personal: true as const } : {},
         ...tags ? { mentionsWaiting: tags.count, mentionsDigest: tags.digest } : {} }
     }), next: rows.length > 100 ? rows[99]!.id : null }
   }

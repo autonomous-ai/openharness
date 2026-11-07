@@ -9,6 +9,9 @@ import 'package:harness/super_tabs/agent_details.dart';
 import 'package:harness/super_tabs/roster.dart';
 import 'package:harness/super_tabs/agent_line.dart';
 
+import 'dart:io';
+
+import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
 import 'support/super_tab_members.dart';
 
@@ -80,6 +83,7 @@ Future<ConversationServer> _swarm(
   List<Map<String, dynamic>> tasks = const [],
   List<Map<String, dynamic>> starts = const [],
   String account = 'owner',
+  Brightness brightness = Brightness.dark,
 }) async {
   final server = ConversationServer();
   if (account != 'owner') {
@@ -102,7 +106,7 @@ Future<ConversationServer> _swarm(
   addTearDown(() => tester.binding.setSurfaceSize(null));
   await tester.pumpWidget(
     MaterialApp(
-      theme: grid.buildAppTheme(brightness: Brightness.dark),
+      theme: grid.buildAppTheme(brightness: brightness),
       home: Scaffold(
         body: SuperTabRoster(
           controller: c,
@@ -131,6 +135,8 @@ Finder _line(String id, String text) => find.ancestor(
 );
 
 void main() {
+  final captureDir = Platform.environment['HARNESS_AGENT_LINE_CAPTURE_DIR'];
+  setUpAll(() => loadCaptureFonts(captureDir));
   group('an agent row', () {
     testWidgets(
       'says in one line its state, its machine, and its model and effort',
@@ -174,6 +180,95 @@ void main() {
       expect(line(HarnessActivity.idle), 'Assigned · Mac Studio · Opus · high');
       expect(line(null), 'Assigned · Mac Studio · Opus · high');
     });
+
+    test(
+      'reads the current task, never an older lost one (task #3649)',
+      () async {
+        // Gray, 2026-11-06: Lamp showed "Lost" on an old task while the Swarm had it working on another.
+        Map<String, dynamic> task(String id, String title, String status) => {
+          ...conversationFixture(id, title),
+          'leadId': 'Lead',
+          'agentIds': ['Lead', 'Lamp'],
+          'assignment': {'id': 'as-$id', 'agentId': 'Lamp', 'status': status},
+        };
+        final server = ConversationServer();
+        server.state['machines'] = [_machine('m1', 'Mac Studio')];
+        server.state['agents'] = [_agent('Lamp', 'm1')];
+        // The lost one comes first, as an older task does in the Swarm's list.
+        (server.state['conversations'] as List)
+          ..add(task('old', 'First customers', 'lost'))
+          ..add(task('now', 'Move the guide link', 'working'));
+        final c = server.controller();
+        addTearDown(c.dispose);
+        await c.refresh();
+        final info = SuperTabAgentInfo(
+          c,
+          null,
+          c.snapshot!.agent('Lamp')!,
+          activity: HarnessActivity.working,
+        );
+        expect(
+          superTabAgentGlance(info).line,
+          'Working · Mac Studio · Opus · high',
+        );
+        expect(info.status, 'Working on "Move the guide link"');
+        // With no other task, the lost one is still the agent's state.
+        server.state['conversations'] = [
+          ...(server.state['conversations'] as List).where(
+            (g) => g['id'] != 'now',
+          ),
+        ];
+        await c.refresh();
+        expect(
+          superTabAgentGlance(
+            SuperTabAgentInfo(c, null, c.snapshot!.agent('Lamp')!),
+          ).label,
+          'Lost',
+        );
+      },
+    );
+
+    for (final brightness in Brightness.values)
+      testWidgets(
+        'the row of an agent with a lost older task shows the current one (${brightness.name})',
+        (tester) async {
+          Map<String, dynamic> task(String id, String title, String status) => {
+            ...conversationFixture(id, title),
+            'leadId': 'Lead',
+            'agentIds': ['Lead', 'Lamp'],
+            'assignment': {'id': 'as-$id', 'agentId': 'Lamp', 'status': status},
+          };
+          await _swarm(
+            tester,
+            brightness: brightness,
+            agents: [_agent('Lamp', 'm1')],
+            tasks: [
+              task('old', 'First customers: run 1', 'lost'),
+              task('now', 'Mobile: move the app guide link', 'working'),
+            ],
+          );
+          expect(
+            _line('Lamp', 'Assigned · Mac Studio · Opus · high'),
+            findsOneWidget,
+          );
+          final tip = tester
+              .widgetList<Tooltip>(
+                find.ancestor(of: _row('Lamp'), matching: find.byType(Tooltip)),
+              )
+              .single
+              .message!;
+          expect(
+            tip,
+            contains('Assigned to "Mobile: move the app guide link"'),
+          );
+          expect(tip, isNot(contains('Lost')));
+          await captureWindow(
+            tester,
+            captureDir,
+            'agent-lost-older-task-${brightness.name}',
+          );
+        },
+      );
 
     testWidgets(
       'names each state in a word: waiting, lost, down, kept (closed), limited, stuck, in review',

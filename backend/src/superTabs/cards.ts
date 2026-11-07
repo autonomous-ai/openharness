@@ -12,6 +12,9 @@ export interface GroupCards {
   task?: string
   /** Each linked pull request's card: the first main-chat message that linked it, and when a merge was recorded. */
   pullRequests?: PullRequestCard[]
+  /** Pull requests only a merge record linked as the task's code, none of its own words (commands.ts conversation.merged, #3574): the
+   *  record never makes one the task's own, so recording it again closes nothing. */
+  recorded?: string[]
   /** Its one line in its project chat and what it last showed (taskLine.ts). */
   line?: import('./taskLine.js').TaskLine
 }
@@ -31,7 +34,7 @@ export function bindTaskCard(group: Conversation, brief: MessageDraft): void {
 export function bindPullRequestCards(group: Conversation, message: MessageDraft, repositoryUrl?: string | null): void {
   if (message.thread || agentOnly(message.source, message.recipients) || !cardable(message)) return
   const known = new Set(group.cards?.pullRequests?.map(card => card.url))
-  const fresh = pullRequestLinks(message.text, repositoryUrl).filter(url => !known.has(url))
+  const fresh = pullRequestLinks(message.text, repositoryUrl).filter(url => !known.has(url) && !group.unlinkedPullRequests?.some(entry => entry.url === url))
   if (fresh.length) group.cards = { ...group.cards, pullRequests: [...group.cards?.pullRequests ?? [], ...fresh.map(url => ({ url, messageId: message.id }))] }
 }
 

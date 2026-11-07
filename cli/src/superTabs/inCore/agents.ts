@@ -9,7 +9,7 @@ import { PURGE_RECORD_UNREADABLE } from './teamPurge.js'
 
 export function createSwarmAgents({ byAgent, stoppedIds, closeAgent, resumeAgent, creationStatus, members, purgeEnded }: SwarmAgentDeps & {
   /** The Leads and crew (`leads`) and members this machine's Super Tab host keeps (superTabs/retention.ts). */
-  members: { leads(): Set<string>; harnesses(): Set<string> }
+  members: { leads(): Set<string>; harnesses(): Set<string>; sleepingBuddies?(): Set<string> }
   /** On a Team daemon, deletes the session data of a confidential member the Swarm ended (inCore/teamApps.ts); absent elsewhere. */
   purgeEnded?: (agentId: string) => Promise<Record<string, unknown>>
 }): SwarmAgents {
@@ -68,6 +68,16 @@ export function createSwarmAgents({ byAgent, stoppedIds, closeAgent, resumeAgent
         member = creation?.state === 'created' && creation.agentId === agentId
       }
       if (!member) return { error: 'NOT_A_MEMBER' }
+      // A server-managed Buddy sleeps only while the latest roster still asks, under the close service's idle fences.
+      // This function stays in the core: no window or wire request can supply the non-serializable permit.
+      if (members.sleepingBuddies?.().has(agentId)) {
+        let revoked = false
+        const buddySleep = () => {
+          if (!members.sleepingBuddies?.().has(agentId)) revoked = true
+          return !revoked
+        }
+        return closeAgent({ agentId, sessionId: session.sessionId, createdAt: new Date(session.registeredAt).toISOString(), mode: 'idle', buddySleep })
+      }
       // The close itself refuses a session that changed during the receipt read.
       const closed = await closeAgent({ agentId, sessionId: session.sessionId, createdAt: new Date(session.registeredAt).toISOString(), mode: 'now' })
       return 'closed' in closed && closed.closed ? ended(agentId, closed) : closed

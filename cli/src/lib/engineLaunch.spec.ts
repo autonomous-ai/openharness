@@ -970,6 +970,21 @@ describe('a model and effort on launch', () => {
   })
 })
 
+describe('the owner\'s own launch words', () => {
+  it('go last: after the extra arguments, the model and the first prompt, so a trailing flag cannot swallow Harness\'s own', () => {
+    const argv = buildEngineCommandArgv('claude', {
+      extraArgs: ['--append-system-prompt', 'be brief'], launchModel: { model: 'opus', effort: null }, firstPrompt: 'go', ownerArgs: ['--chrome', '--add-dir'],
+    })
+    expect(argv).toEqual([engineBin('claude'), '--append-system-prompt', 'be brief', '--model', 'opus', 'go', '--chrome', '--add-dir'])
+    expect(buildEngineCommandArgv('claude', { ownerArgs: [] })).toEqual([engineBin('claude')])
+  })
+
+  it('reach the pane\'s command line through the shell wrapper as separate items', () => {
+    const argv = buildEngineLaunchArgv('claude', { cwd: '/work', ownerArgs: ['--add-dir', 'a b'] })
+    expect(argv.slice(-2)).toEqual(['--add-dir', 'a b'])
+  })
+})
+
 describe('a first prompt on launch', () => {
   const PROMPT = 'Start a local model on this machine'
 

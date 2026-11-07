@@ -94,24 +94,28 @@ class _SuperTabThreadsPageState extends State<SuperTabThreadsPage> {
         onOpenThread: widget.onOpenThread,
         message: widget.message,
       );
-      return LaidOutListView(
-        key: const ValueKey('super-threads-list'),
-        padding: const EdgeInsets.only(bottom: grid.AppDesktop.groupGap),
-        children: [
-          if (attention.error case final error?)
-            superTabPageError(error, () => unawaited(attention.load())),
-          if (unread.isEmpty && read.isEmpty)
-            superTabPageEmpty('No threads yet')
-          else ...[
-            for (final t in unread) card(t),
-            for (final t in read) card(t),
-            if (attention.canReadMore)
-              SuperTabReadMore(
-                key: const ValueKey('super-threads-more'),
-                onShown: attention.readMore,
-              ),
+      // As in the chat and the thread pane, a message's text can be selected
+      // and copied (task #3751); a tap on a card's title still opens it.
+      return SelectionArea(
+        child: LaidOutListView(
+          key: const ValueKey('super-threads-list'),
+          padding: const EdgeInsets.only(bottom: grid.AppDesktop.groupGap),
+          children: [
+            if (attention.error case final error?)
+              superTabPageError(error, () => unawaited(attention.load())),
+            if (unread.isEmpty && read.isEmpty)
+              superTabPageEmpty('No threads yet')
+            else ...[
+              for (final t in unread) card(t),
+              for (final t in read) card(t),
+              if (attention.canReadMore)
+                SuperTabReadMore(
+                  key: const ValueKey('super-threads-more'),
+                  onShown: attention.readMore,
+                ),
+            ],
           ],
-        ],
+        ),
       );
     },
   );
@@ -313,12 +317,14 @@ class _ThreadCardState extends State<_ThreadCard> {
           ),
         ),
         if (attention.followSupported)
-          quietDecisionAction(
-            key: ValueKey('super-thread-card-unfollow:$_key'),
-            label: 'Unfollow',
-            onPressed: attention.following.contains(_key)
-                ? null
-                : () => unawaited(attention.setFollow(t, false)),
+          SelectionContainer.disabled(
+            child: quietDecisionAction(
+              key: ValueKey('super-thread-card-unfollow:$_key'),
+              label: 'Unfollow',
+              onPressed: attention.following.contains(_key)
+                  ? null
+                  : () => unawaited(attention.setFollow(t, false)),
+            ),
           ),
       ],
     );
@@ -365,10 +371,11 @@ class _ThreadCardState extends State<_ThreadCard> {
         ),
       ];
     }
-    final shown = card.replies.length > 2
+    // Expanded (Show N more replies, task #3619): every reply, in the card.
+    final shown = !card.expanded && card.replies.length > 2
         ? card.replies.sublist(card.replies.length - 2)
         : card.replies;
-    final hidden = card.count - shown.length;
+    final hidden = card.expanded ? 0 : card.count - shown.length;
     final fresh = attention.isNew(t)
         ? attention.newCount(t).clamp(0, shown.length)
         : 0;
@@ -387,17 +394,32 @@ class _ThreadCardState extends State<_ThreadCard> {
             ),
           ],
         ),
-      if (hidden > 0)
-        Align(
-          alignment: Alignment.centerLeft,
-          child: TextButton(
-            key: ValueKey('super-thread-card-more:$_key'),
-            onPressed: () => widget.onOpenThread(t.conversationId, t.rootId),
-            child: Text(
-              hidden == 1 ? 'Show 1 more reply' : 'Show $hidden more replies',
+      if (hidden > 0) ...[
+        if (card.olderFailed)
+          Text(
+            SuperTabThreadCards.olderFailedText,
+            key: ValueKey('super-thread-card-older-failed:$_key'),
+            style: DesktopChrome.control(),
+          ),
+        SelectionContainer.disabled(
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              key: ValueKey('super-thread-card-more:$_key'),
+              onPressed: card.loadingOlder
+                  ? null
+                  : () => unawaited(widget.cards.expand(t)),
+              child: Text(
+                card.loadingOlder
+                    ? 'Loading replies…'
+                    : hidden == 1
+                    ? 'Show 1 more reply'
+                    : 'Show $hidden more replies',
+              ),
             ),
           ),
         ),
+      ],
       for (final (index, reply) in shown.indexed) ...[
         if (fresh > 0 && index == shown.length - fresh) _newLine(),
         widget.message(reply),
@@ -467,7 +489,9 @@ class _ThreadCardState extends State<_ThreadCard> {
                 children: [
                   ..._messages(card),
                   const SizedBox(height: grid.AppDesktop.controlGap),
-                  _replyBox(),
+                  // What was said is selectable; the card's controls are not
+                  // (task #3751), as the chat's composer is outside its selection.
+                  SelectionContainer.disabled(child: _replyBox()),
                   if (_alsoOffered)
                     Padding(
                       padding: const EdgeInsets.only(
@@ -475,14 +499,16 @@ class _ThreadCardState extends State<_ThreadCard> {
                       ),
                       child: Align(
                         alignment: Alignment.centerLeft,
-                        child: SuperTabComposerToggle(
-                          key: ValueKey('super-thread-card-also:$_key'),
-                          on: _alsoSend,
-                          label: _alsoLabel,
-                          hint: '$_alsoLabel as well as this thread',
-                          onChanged: _writable
-                              ? (on) => setState(() => _alsoSend = on)
-                              : null,
+                        child: SelectionContainer.disabled(
+                          child: SuperTabComposerToggle(
+                            key: ValueKey('super-thread-card-also:$_key'),
+                            on: _alsoSend,
+                            label: _alsoLabel,
+                            hint: '$_alsoLabel as well as this thread',
+                            onChanged: _writable
+                                ? (on) => setState(() => _alsoSend = on)
+                                : null,
+                          ),
                         ),
                       ),
                     ),

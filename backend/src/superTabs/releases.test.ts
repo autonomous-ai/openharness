@@ -3,7 +3,7 @@ import type { Agent, Conversation, SuperTabState } from './model.js'
 import type { SwarmProject } from './projects.js'
 import { missingContract } from './taskContract.js'
 import { backendPaused, compareTags, componentsOf, inReleaseWindow, isReleaseTag, notePendingRelease, PENDING_MAX, RELEASE_COMPONENTS, RELEASE_RULES,
-  ledgerGroupIds, pendingKey, releaseDue, settleReleases, PENDING_MS, shipped, waitingFor, type PendingRelease, type ReleaseLedger } from './releases.js'
+  ledgerGroupIds, nextReleaseAt, pendingKey, releaseDue, settleReleases, PENDING_MS, shipped, waitingFor, type PendingRelease, type ReleaseLedger } from './releases.js'
 
 /** A time in Vietnam (UTC+7, no daylight saving) on 6 November 2026. */
 const vn = (hour: number, minute = 0) => Date.UTC(2026, 10, 6, hour - 7, minute)
@@ -84,6 +84,41 @@ describe('releaseDue', () => {
   it('leaves the apps to people when the pace says so', () => {
     const rules = { ...RELEASE_RULES, releasePace: { ...RELEASE_RULES.releasePace, appsAfterVisibleBatch: false } }
     expect(releaseDue(ledger(), 'desktop', vn(11), rules)).toBe(false)
+  })
+})
+
+describe('nextReleaseAt', () => {
+  const DAY = 24 * 60 * MINUTE
+  const backendLast = (at: number): ReleaseLedger => ledger({ pending: [entry({ components: ['backend'] })], last: { backend: { tag: 'v1.4.16_backend', sha: 'abc', at } } })
+
+  it('is 0 when a release may open now, so the read does not change with the clock', () => {
+    expect(nextReleaseAt(ledger(), 'desktop', vn(11), RELEASE_RULES)).toBe(0)
+    expect(nextReleaseAt(ledger(), 'backend', vn(11), RELEASE_RULES)).toBe(0)
+  })
+
+  it('is the window\'s start before it, and the next day\'s after it', () => {
+    expect(nextReleaseAt(ledger(), 'desktop', vn(8, 30), RELEASE_RULES)).toBe(vn(9))
+    expect(nextReleaseAt(ledger(), 'desktop', vn(18), RELEASE_RULES)).toBe(vn(9) + DAY)
+    expect(nextReleaseAt(ledger(), 'cli', vn(23, 15), RELEASE_RULES)).toBe(vn(9) + DAY)
+  })
+
+  it('moves the backend out of its pause, and past its pace after its last release', () => {
+    expect(nextReleaseAt(ledger(), 'backend', vn(9, 30), RELEASE_RULES)).toBe(vn(10))
+    expect(nextReleaseAt(backendLast(vn(11)), 'backend', vn(11, 30), RELEASE_RULES)).toBe(vn(13))
+    // 16:00 + 120 minutes is 18:00, outside the window: the next day's window opens at 09:00 into the pause, so 10:00.
+    expect(nextReleaseAt(backendLast(vn(16)), 'backend', vn(16, 30), RELEASE_RULES)).toBe(vn(10) + DAY)
+    // Before the window the backend waits for the pause to end too.
+    expect(nextReleaseAt(ledger(), 'backend', vn(8), RELEASE_RULES)).toBe(vn(10))
+  })
+
+  it('is null for the apps when the pace leaves them to people', () => {
+    const rules = { ...RELEASE_RULES, releasePace: { ...RELEASE_RULES.releasePace, appsAfterVisibleBatch: false } }
+    expect(nextReleaseAt(ledger(), 'desktop', vn(11), rules)).toBeNull()
+    expect(nextReleaseAt(ledger(), 'backend', vn(11), rules)).toBe(0)
+  })
+
+  it('answers on the minute', () => {
+    expect(nextReleaseAt(ledger(), 'desktop', vn(8, 30) + 41_000, RELEASE_RULES)).toBe(vn(9))
   })
 })
 
@@ -170,6 +205,18 @@ describe('settleReleases', () => {
   const webRelease = { tag: 'v1.3.98_web', sha: 'w1', at: T - 5 * MINUTE, carries: [key12] }
   const noFacts = { resolved: [], releases: {} }
 
+  it('records when each component may next release, and changes nothing when that has not changed (task #3827)', () => {
+    const state = swarm([entry({ groupId: 'g12', mergedAt: vn(8), components: ['desktop', 'backend'] })])
+    settleReleases(state, 'p1', noFacts, vn(8, 30))
+    expect(ledgerOf(state).nextAt).toEqual({ backend: vn(10), cli: vn(9), desktop: vn(9), web: vn(9) })
+    const before = JSON.stringify(ledgerOf(state))
+    settleReleases(state, 'p1', noFacts, vn(8, 45))
+    expect(JSON.stringify(ledgerOf(state))).toBe(before)
+    // Inside the window the apps may go at once: 0, and the backend after its pause.
+    settleReleases(state, 'p1', noFacts, vn(9, 30))
+    expect(ledgerOf(state).nextAt).toEqual({ backend: vn(10), cli: 0, desktop: 0, web: 0 })
+  })
+
   it('marks a task released once every release it needs carries it, and takes it off the list', () => {
     const state = swarm([entry({ groupId: 'g12', mergedAt: T - 20 * MINUTE, components: ['desktop', 'web'] })])
     const group = () => state.conversations.find(c => c.id === 'g12')!
@@ -193,6 +240,16 @@ describe('settleReleases', () => {
     settleReleases(state, 'p1', noFacts, vn(18, 30))
     expect(ledgerOf(state).pending[0]!.shippedIn).toBeUndefined()
     expect(state.conversations.find(c => c.id === 'g12')!.released).toBeUndefined()
+  })
+
+  // Task #3586: a merge compared with a release and not carried is not compared with it again; the next release that holds it ships it.
+  it('marks a merge compared with a release that does not hold it, and ships it with the release that does', () => {
+    const state = swarm([entry({ groupId: 'g12', mergedAt: T - 5 * MINUTE, components: ['desktop'], sha: 'm12' })])
+    settleReleases(state, 'p1', { resolved: [], releases: { desktop: { ...desktopRelease([]), compared: [key12] } } }, T)
+    expect(ledgerOf(state).pending[0]!.checked).toEqual({ desktop: 'v1.3.78_desktop' })
+    const later = settleReleases(state, 'p1', { resolved: [], releases: { desktop: { ...desktopRelease([key12], 'v1.3.79_desktop'), compared: [key12] } } }, T + MINUTE)
+    expect(later.shipped).toEqual(['g12'])
+    expect(state.conversations.find(c => c.id === 'g12')!.released).toMatchObject({ tags: ['v1.3.79_desktop'] })
   })
 
   it('ships work that changed no released part at its merge', () => {

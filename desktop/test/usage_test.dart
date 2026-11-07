@@ -1,90 +1,11 @@
-import 'dart:convert';
-import 'dart:io';
-
-import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/usage/claude_usage_source.dart';
-import 'package:harness/usage/codex_usage_source.dart';
-import 'package:harness/usage/usage_credentials.dart';
+import 'package:harness/usage/claude_usage_report.dart';
+import 'package:harness/usage/codex_usage_report.dart';
 import 'package:harness/usage/usage_controller.dart';
 import 'package:harness/usage/usage_source.dart';
 import 'package:harness/usage/usage_window.dart';
-import 'package:harness/usage/usage_account_key.dart';
-
-/// A Dio that answers every request with one canned payload, so a source can be
-/// exercised without a socket or a credential.
-Dio _dioAnswering(Object? body, {int status = 200}) {
-  final dio = Dio(
-    BaseOptions(validateStatus: (s) => s != null && s >= 200 && s < 600),
-  );
-  dio.interceptors.add(
-    InterceptorsWrapper(
-      onRequest: (options, handler) => handler.resolve(
-        Response<Object?>(
-          requestOptions: options,
-          statusCode: status,
-          data: body,
-        ),
-      ),
-    ),
-  );
-  return dio;
-}
-
-/// Credentials backed by a throwaway home directory, read the same way on
-/// every platform this app ships to.
-///
-/// The token goes in the FILE, never through the stubbed keychain. An earlier
-/// version supplied it as fake `security` output, which passed here and failed
-/// on the Linux CI: `UsageCredentials` reads the Keychain only on macOS, so on
-/// Linux the stub was never called and every one of these tests saw an account
-/// with no session. Linux is a released target, not a second-class one, and a
-/// helper that only works on the author's laptop hides exactly this.
-///
-/// The keychain stub stays, and always fails, for the opposite reason: without
-/// it a macOS run would shell out to the real `security` and read whoever is
-/// signed in on the machine.
-UsageCredentials _creds({
-  String? claudeJson,
-  String? claudeProfile,
-  String? codexJson,
-}) {
-  final dir = Directory.systemTemp.createTempSync('harness-usage-test');
-  addTearDown(() => dir.deleteSync(recursive: true));
-  void write(String folder, String file, String body) {
-    Directory('${dir.path}/$folder').createSync();
-    File('${dir.path}/$folder/$file').writeAsStringSync(body);
-  }
-
-  if (claudeJson != null) write('.claude', '.credentials.json', claudeJson);
-  if (claudeProfile != null)
-    File('${dir.path}/.claude.json').writeAsStringSync(claudeProfile);
-  if (codexJson != null) write('.codex', 'auth.json', codexJson);
-  return UsageCredentials(
-    home: dir.path,
-    runProcess: (_, _) async => ProcessResult(0, 1, '', ''),
-  );
-}
 
 void main() {
-  group('whose computer is read (P3)', () {
-    test('Desktop reads this computer\'s Claude and Codex accounts', () {
-      final usage = UsageController(autoStart: false);
-      addTearDown(usage.dispose);
-      expect(
-        usage.readings.map((r) => r.provider),
-        [UsageProvider.claude, UsageProvider.codex],
-      );
-    });
-
-    test('a viewer build has no agent CLI here: no reading of its own', () {
-      final usage = UsageController(autoStart: false, readsThisComputer: false);
-      addTearDown(usage.dispose);
-      expect(usage.readings, isEmpty);
-      expect(usage.accounts.where((a) => a.isLocal), isEmpty);
-    });
-  });
-
   group('reset timestamps', () {
     test('seconds and milliseconds are told apart by magnitude', () {
       final seconds = parseResetTimestamp(1770000000);
@@ -166,106 +87,47 @@ void main() {
     expect(reading.tightest?.label, 'Weekly');
   });
 
-  group('Claude source', () {
-    test('maps the three windows the CLI itself shows', () async {
-      final source = ClaudeUsageSource(
-        dio: _dioAnswering({
+  group('CLI-reported windows', () {
+    test('maps Claude windows and preserves CLI account identity', () {
+      final reading = claudeUsageFromAnswer(
+        statusCode: 200,
+        account: 'opaque-account',
+        email: 'dev@example.com',
+        body: {
           'five_hour': {'utilization': 2, 'resets_at': 1770000000},
           'seven_day': {'used_percentage': 16},
           'fable_weekly': {'utilization': 0},
-        }),
-        credentials: _creds(
-          claudeJson: '{"claudeAiOauth":{"accessToken":"t"}}',
-          claudeProfile: '{"oauthAccount":{"accountUuid":"acct-123","emailAddress":"dev@example.com"}}',
-        ),
+        },
       );
-      final reading = await source.read();
-
       expect(reading.status, UsageStatus.ok);
+      expect(reading.account, 'opaque-account');
       expect(reading.email, 'dev@example.com');
-      expect(
-        reading.account,
-        usageAccountKey(UsageProvider.claude, 'acct-123'),
-      );
       expect(
         reading.windows.map((w) => '${w.label} ${w.usedPercent.round()}'),
         ['Session 2', 'Weekly 16', 'Fable 0'],
       );
-      // Shortest window first, because that is the one about to bite.
-      expect(reading.windows.first.label, 'Session');
     });
-
-    test('Fable is found under any of the three names it has had', () async {
+    test('maps every reported Fable spelling', () {
       for (final key in [
         'fable_weekly',
         'fable_seven_day',
         'seven_day_fable',
       ]) {
-        final source = ClaudeUsageSource(
-          dio: _dioAnswering({
-            key: {'utilization': 7},
-          }),
-          credentials: _creds(
-            claudeJson: '{"claudeAiOauth":{"accessToken":"t"}}',
-          ),
+        expect(
+          claudeUsageFromAnswer(
+            statusCode: 200,
+            body: {
+              key: {'utilization': 7},
+            },
+          ).windows.single.label,
+          'Fable',
         );
-        final reading = await source.read();
-        expect(reading.windows.single.label, 'Fable', reason: key);
       }
     });
-
-    test('no credential is a sign-in, not a failure', () async {
-      final reading = await ClaudeUsageSource(
-        dio: _dioAnswering(const {}),
-        credentials: _creds(),
-      ).read();
-      // Retrying a sign-out fails identically forever, so the two states must
-      // not render the same.
-      expect(reading.status, UsageStatus.signedOut);
-    });
-
-    test(
-      'an expired token is spent as a sign-in, not as a round trip',
-      () async {
-        var called = false;
-        final dio = _dioAnswering(const {});
-        dio.interceptors.add(
-          InterceptorsWrapper(
-            onRequest: (o, h) {
-              called = true;
-              h.next(o);
-            },
-          ),
-        );
-        final reading = await ClaudeUsageSource(
-          dio: dio,
-          credentials: _creds(
-            claudeJson: '{"claudeAiOauth":{"accessToken":"t","expiresAt":1}}',
-          ),
-        ).read();
-
-        expect(reading.status, UsageStatus.signedOut);
-        expect(called, isFalse);
-      },
-    );
-
-    test('a 401 is a sign-in and a 500 is a failure', () async {
-      Future<UsageStatus> statusFor(int code) async => (await ClaudeUsageSource(
-        dio: _dioAnswering(const {}, status: code),
-        credentials: _creds(
-          claudeJson: '{"claudeAiOauth":{"accessToken":"t"}}',
-        ),
-      ).read()).status;
-
-      expect(await statusFor(401), UsageStatus.signedOut);
-      expect(await statusFor(500), UsageStatus.failed);
-    });
-  });
-
-  group('Codex source', () {
-    test('names each window by how long it actually is', () async {
-      final source = CodexUsageSource(
-        dio: _dioAnswering({
+    test('names Codex windows from reported durations', () {
+      final reading = codexUsageFromAnswer(
+        statusCode: 200,
+        body: {
           'rate_limit': {
             'primary_window': {
               'used_percent': 9,
@@ -276,54 +138,31 @@ void main() {
               'limit_window_seconds': 604800,
             },
           },
-        }),
-        credentials: _creds(
-          codexJson: jsonEncode({
-            'tokens': {
-              'access_token': 't',
-              'account_id': 'acct',
-              'id_token':
-                  'e30.${base64Url.encode(utf8.encode(jsonEncode({'email': 'codex@example.com'}))).replaceAll('=', '')}.signature',
-            },
-          }),
-        ),
+        },
       );
-      final reading = await source.read();
-
-      expect(reading.status, UsageStatus.ok);
-      expect(reading.email, 'codex@example.com');
-      expect(reading.account, usageAccountKey(UsageProvider.codex, 'acct'));
-      // 18000s is 5h; 604800s is the week, which earns the name rather than
-      // the arithmetic "7d".
       expect(reading.windows.map((w) => w.label), ['5h', 'Weekly']);
       expect(reading.windows.first.usedPercent, 9);
-    });
-
-    test(
-      'a window whose duration was never sent is not given a made-up one',
-      () async {
-        final reading = await CodexUsageSource(
-          dio: _dioAnswering({
+      expect(
+        codexUsageFromAnswer(
+          statusCode: 200,
+          body: {
             'rate_limit': {
               'primary_window': {'used_percent': 9},
             },
-          }),
-          credentials: _creds(
-            codexJson: '{"tokens":{"access_token":"t","account_id":"acct"}}',
-          ),
-        ).read();
-
-        // A confident "5h" beside a real percentage would be read as measured.
-        expect(reading.windows.single.label, 'Limit');
-      },
-    );
-
-    test('no auth.json is a sign-in, not a failure', () async {
-      final reading = await CodexUsageSource(
-        dio: _dioAnswering(const {}),
-        credentials: _creds(),
-      ).read();
-      expect(reading.status, UsageStatus.signedOut);
+          },
+        ).windows.single.label,
+        'Limit',
+      );
+    });
+    test('reported sign-out and failure stay distinct', () {
+      expect(
+        claudeUsageFromAnswer(statusCode: 401, body: {}).status,
+        UsageStatus.signedOut,
+      );
+      expect(
+        codexUsageFromAnswer(statusCode: 500, body: {}).status,
+        UsageStatus.failed,
+      );
     });
   });
 
