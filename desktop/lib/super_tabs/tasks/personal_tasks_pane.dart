@@ -210,9 +210,10 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
       };
       // One filled box as large as the slot, under a see-through Material that
       // only carries the rows' ink: a Material's own surface was drawn only as
-      // far as the rows, and the window's backing showed below them.
+      // far as the rows, and the window's backing showed below them. It is the
+      // Swarm's one surface, shared with the left and middle panes (#4465).
       return ColoredBox(
-        color: Theme.of(context).colorScheme.surface,
+        color: AppPalette.swarmField,
         child: SizedBox.expand(
           child: Material(
             type: MaterialType.transparency,
@@ -332,16 +333,9 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                   )
                 else
                   Expanded(
+                    // Empty means empty (anh Dee's rule 7, task #4465).
                     child: tasks!.rows.isEmpty
-                        ? const Center(
-                            child: Padding(
-                              padding: EdgeInsets.all(AppDesktop.groupGap),
-                              child: Text(
-                                'No tasks yet. Tasks your agents start or propose show here.',
-                                textAlign: TextAlign.center,
-                              ),
-                            ),
-                          )
+                        ? const SizedBox.shrink()
                         : NotificationListener<ScrollNotification>(
                             onNotification: _onScroll,
                             child: LaidOutListView.builder(

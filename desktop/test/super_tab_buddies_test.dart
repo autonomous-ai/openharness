@@ -1105,7 +1105,7 @@ void main() {
         await tester.tap(buddyEntry);
         await tester.pumpAndSettle();
 
-        final text = tester.getRect(find.textContaining('Only you and Wren'));
+        final text = tester.getRect(find.textContaining('Say what to build'));
         final composer = tester.getRect(
           find.byKey(const ValueKey('super-message-composer-row')),
         );
@@ -1123,7 +1123,7 @@ void main() {
       });
 
       testWidgets(
-        'an empty Buddy chat says who reads it and how to reach the coordinator',
+        'an empty Buddy chat says, in one line, how to reach the coordinator (anh Dee\'s copy rules, #4465)',
         (tester) async {
           final server = buddySwarm();
           giveBuddy(server);
@@ -1132,9 +1132,7 @@ void main() {
           await tester.pumpAndSettle();
 
           expect(
-            find.text(
-              "Only you and Wren read this chat. Say what you want to build; say 'send to the Product Manager' when it's ready.",
-            ),
+            find.text("Say what to build, then 'send to the Product Manager'."),
             findsOneWidget,
           );
           await close(tester, c);
@@ -1150,9 +1148,7 @@ void main() {
           await tester.tap(buddyEntry);
           await tester.pumpAndSettle();
           expect(
-            find.text(
-              "Only you and Wren read this chat. Say what you want to build; say 'send to the Coordinator' when it's ready.",
-            ),
+            find.text("Say what to build, then 'send to the Coordinator'."),
             findsOneWidget,
           );
           await close(tester, c);
