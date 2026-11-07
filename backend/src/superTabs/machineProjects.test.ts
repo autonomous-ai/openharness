@@ -46,8 +46,9 @@ function swarm() {
   const requirements = { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false }
   const request = (conversationId: string, machineId: string, projectId: string) =>
     ({ conversationId, machineId, engine: 'codex', name: 'Builder', cwd: `/swarm/${projectId}`, worktree: true, requirements })
+  // A new agent starts only on its own person's computer, as them (task #4120): the machine's person starts it.
   const start = (conversationId: string, machineId: string, projectId: string) => run({ type: 'agent.start', request: request(conversationId, machineId, projectId) },
-    owner, { contribution: { machineOwnerId: machine(machineId).contributorId, contributorId: machine(machineId).contributorId, hostGrant: null } })
+    machine(machineId).contributorId === 'tony' ? tony : owner, { contribution: { machineOwnerId: machine(machineId).contributorId, contributorId: machine(machineId).contributorId, hostGrant: null } })
   /** An agent already in the Swarm on [machineId], of [projectId]. */
   const member = (id: string, machineId: string, projectId: string) => {
     const contributorId = machine(machineId).contributorId
@@ -160,21 +161,19 @@ describe('a machine kept for some projects', () => {
     const f = swarm()
     f.limit(['lead'])
     const work = f.group(f.lampos)
-    const effects = f.run({ type: 'route.record', conversationId: work, decision: record([candidate('c0', 'owner-mac'), candidate('c1', 'tony-mac')]) } as Command)
+    // Tony's own agent there: a new agent would start only on its starter's own computer (task #4120).
+    const tonys = { kind: 'member', agentId: f.member('tonys', 'tony-mac', f.lampos) }
+    const effects = f.run({ type: 'route.record', conversationId: work, decision: record([candidate('c0', 'owner-mac'), candidate('c1', 'tony-mac', tonys)]) } as Command)
     expect(effects.routeDecisions[0]).toMatchObject({ op: 'create', record: { candidates: [{ id: 'c0' }],
       excluded: [{ title: 'c1 on tony-mac', reason: 'MacBook Pro runs only Pilot.' }] } })
-    expect(refusal(() => f.run({ type: 'route.record', conversationId: f.group(f.lampos), decision: record([candidate('c0', 'tony-mac')]) } as Command))).toMatchObject({ code: 'MACHINE_PROJECTS', message: 'MacBook Pro runs only Pilot. Route again.' })
+    expect(refusal(() => f.run({ type: 'route.record', conversationId: f.group(f.lampos), decision: record([candidate('c0', 'tony-mac', tonys)]) } as Command))).toMatchObject({ code: 'MACHINE_PROJECTS', message: 'MacBook Pro runs only Pilot. Route again.' })
   })
 
-  it('holds for its Mac\'s Harness Team account too', () => {
+  // A Team account takes no new start at all now (task #4120, teamAccountsRemoved.test.ts); the list stays the Mac's own.
+  it('is set on the Mac, never on its Harness Team account', () => {
     const f = swarm()
     f.state.machines!.push(f.pool('tony-team', 'tony', 'MacBook Pro · Team', { hostMachineId: 'tony-mac',
       observation: { ...f.machine('tony-mac').observation!, sessionKind: 'team', privacy: { mode: 'dedicated', seenAt: NOW } } }))
-    f.limit(['lead'])
-    const theirs = f.group(f.lampos), ours = f.group('lead')
-    expect(refusal(() => admitMachineStart(f.state, f.request(theirs, 'tony-team', f.lampos), NOW, undefined, ['tony-team']))?.code).toBe('MACHINE_PROJECTS')
-    expect(admitMachineStart(f.state, f.request(ours, 'tony-team', 'lead'), NOW, undefined, ['tony-team'])?.machineId).toBe('tony-team')
-    // It is set on the Mac, never on its account.
     expect(refusal(() => f.limit(['lead'], 'tony-team'))?.code).toBe('NOT_FOUND')
   })
 

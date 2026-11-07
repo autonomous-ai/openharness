@@ -3,10 +3,10 @@ import { applyCommand, commandSchema, type Command, type CommandContext } from '
 import { machineTeamWork, teamWorkRefusal, type ContributedMachine, type MachinePrivacy } from './machines.js'
 import { createSuperTab, SuperTabError, visibleState, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 
-// Task #2806 (Scholes, 11-04): a Mac added as its person joined runs teammates' work only in its Harness Team account
-// (teamAccountOnly). The lampOS mobile team needs it in the owner's own account on Gray's Mac (Flutter and the phone signing
-// are there). The machine's owner, and nobody else, may say that teammates' work may run in their own account; the default
-// stays Team-account-only. Everything here runs with Team accounts required everywhere, the strictest setting.
+// Task #2806 (Scholes, 11-04): the machine's owner, and nobody else, records whether teammates' work may run in their own
+// account. Swarm v3 has no Team accounts (task #4120): a person's own agent works any project they read in their own account,
+// and no start moves to a Team account, so the choice no longer moves a start. What stays here is the choice itself, who may
+// set it and how routing reads it. Everything runs with Team accounts required everywhere, the strictest setting.
 beforeEach(() => { process.env.SWARM_TEAM_ACCOUNT_REQUIRED = '1' })
 afterEach(() => { delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED })
 
@@ -75,21 +75,18 @@ function swarm() {
 }
 
 describe('teammates\' work in a Mac owner\'s own account', () => {
-  it('is off by default: a teammate\'s start on a Mac added as its person joined goes to its Team account', () => {
+  it('is off by default, and a teammate\'s own start on their own Mac stays there, never moved to its Team account (task #4120)', () => {
     const f = swarm()
     expect(f.machine('gray-mac').ownAccountChoice).toBeUndefined()
-    f.start(f.group())
-    expect(f.state.starts![0]!.request).toMatchObject({ machineId: 'gray-team', cwd: '/team-swarm/lead' })
+    f.start(f.group(), gray)
+    expect(f.state.starts![0]!.request).toMatchObject({ machineId: 'gray-mac', cwd: '/swarm/lead' })
   })
 
-  it('is turned on by the machine\'s owner, recording who and when, and then a teammate\'s start runs on the Mac itself', () => {
+  it('is turned on by the machine\'s owner, recording who and when', () => {
     const f = swarm()
     f.choose(true)
     expect(f.machine('gray-mac').ownAccountChoice).toEqual({ allowed: true, by: 'gray', at: new Date(NOW).toISOString() })
-    // The Team account rule stays: only the move to the Team account is off.
     expect(f.machine('gray-mac').teamAccountOnly).toBe(true)
-    f.start(f.group())
-    expect(f.state.starts![0]!.request).toMatchObject({ machineId: 'gray-mac', cwd: '/swarm/lead' })
     // Routing reads it as a machine that takes a teammate's work.
     expect(teamWorkRefusal(f.machine('gray-mac'), NOW)).toBeNull()
     expect(machineTeamWork(f.state, f.machine('gray-mac'), NOW, ['gray-team'])).toBeNull()
@@ -127,13 +124,6 @@ describe('teammates\' work in a Mac owner\'s own account', () => {
     // With the message it passed on, so an audit reads the words behind it (security review 1 of #2981).
     expect(f.machine('gray-mac').ownAccountChoice).toEqual({ allowed: false, by: 'gray', at: new Date(NOW).toISOString(),
       askedIn: { conversationId: 'lead', messageId: 'm-gray' } })
-  })
-
-  it('counts only a choice recorded as the machine owner\'s', () => {
-    const f = swarm()
-    f.machine('gray-mac').ownAccountChoice = { allowed: true, by: 'mate', at: new Date(NOW).toISOString() }
-    f.start(f.group())
-    expect(f.state.starts![0]!.request.machineId).toBe('gray-team')
   })
 
   it('reads the Mac itself, not its Team account, for routing once it is on', () => {
@@ -192,17 +182,12 @@ describe('teammates\' work in a Mac owner\'s own account', () => {
     expect(f.machine('gray-mac').ownAccountChoice).toBeUndefined()
   })
 
-  it('turned back off, moves the next start to the Team account again and says why; agents already running stay', () => {
+  it('turned back off, is recorded as off, and agents already running stay', () => {
     const f = swarm()
     f.choose(true)
-    f.start(f.group())
     const running = f.agent('running', { projectId: 'lead' })
     f.choose(false)
     expect(f.machine('gray-mac').ownAccountChoice).toEqual({ allowed: false, by: 'gray', at: new Date(NOW).toISOString() })
-    const moved = f.start(f.group())
-    expect(f.state.starts!.at(-1)!.request).toMatchObject({ machineId: 'gray-team' })
-    // The choice is per Swarm: the note says where this Swarm's is (task #2993: Gray turned it on in another Swarm).
-    expect(moved.result.moved).toBe('Gray\'s Mac runs teammates\' work in its Harness Team account in this Swarm. Its owner can change that in this Swarm\'s Manage > Machines.')
     expect(f.state.agents.find(a => a.id === (running as { agentId: string }).agentId)!.machineId).toBe('gray-mac')
   })
 
@@ -213,98 +198,21 @@ describe('teammates\' work in a Mac owner\'s own account', () => {
     expect(own.result.moved).toBeUndefined()
   })
 
-  it('still sends code a Team agent wrote to the Team account', () => {
-    const f = swarm()
-    f.choose(true)
-    const group = f.group()
-    const conversation = f.state.conversations.find(c => c.id === group)!
-    Object.assign(conversation, { teamWritten: true })
-    const result = refusal(() => f.start(group))
-    // Moved or refused, never run as Gray.
-    expect(result === null ? f.state.starts!.at(-1)!.request.machineId : result.code).not.toBe('gray-mac')
-  })
-
-  it('says a Team-written start moved for its code, not for a choice its owner can change (task #2993)', () => {
+  it('never runs code a Team agent wrote on a teammate\'s Mac, whatever its owner chose: only the project owner\'s own agent (task #4120)', () => {
     const f = swarm()
     f.choose(true)
     const group = f.group()
     Object.assign(f.state.conversations.find(c => c.id === group)!, { teamWritten: true })
-    const moved = f.start(group)
-    expect(f.state.starts!.at(-1)!.request).toMatchObject({ machineId: 'gray-team' })
-    expect(moved.result.moved).toBe('A Harness Team agent wrote this task\'s code, so it runs in the Harness Team account on Gray\'s Mac.')
+    expect(refusal(() => f.start(group, gray))?.code).toBe('TEAM_WRITTEN_WORK')
   })
 
   it('is kept per Swarm: turning it on in one Swarm leaves another Swarm\'s entry for the same Mac as it was (task #2993)', () => {
     const ours = swarm(), theirs = swarm()
     ours.choose(true)
     expect(theirs.machine('gray-mac').ownAccountChoice).toBeUndefined()
-    const moved = theirs.start(theirs.group())
-    expect(theirs.state.starts!.at(-1)!.request).toMatchObject({ machineId: 'gray-team' })
-    expect(moved.result.moved).toContain('in this Swarm\'s Manage > Machines')
   })
 })
 
-// Task #3060 (Scholes, 11-05): on 11-04 a lamp start named Gray's Team account entry itself, not the Mac, after Gray had
-// turned own-account work on. Both entries were named 'Gray.local', and the server placed it as named, with no note. A
-// start that names the Team entry for a teammate's work no Team agent wrote is refused, with a pointer to the Mac's own
-// entry: moving it would put the work in a person's own account when the start named the isolated one.
-describe('a start that names a Mac\'s Team account entry while its owner runs teammates\' work in their own account', () => {
-  const startOnTeam = (f: ReturnType<typeof swarm>, group: string, actor: Actor = f.leadActor, projectId = 'lead') =>
-    f.run({ type: 'agent.start', request: { ...f.request(group, 'gray-team', projectId), cwd: `/team-swarm/${projectId}` } }, actor, f.joined)
-
-  it('is refused for a teammate\'s task, pointing at the Mac\'s own entry, and nothing starts', () => {
-    const f = swarm()
-    f.choose(true)
-    const result = refusal(() => startOnTeam(f, f.group()))
-    expect(result?.code).toBe('OWN_ACCOUNT_WORK')
-    expect(result?.message).toContain('Gray\'s Mac')
-    expect(result?.message).toContain('gray-mac')
-    expect(f.state.starts ?? []).toHaveLength(0)
-  })
-
-  it('is refused for a person\'s start too', () => {
-    const f = swarm()
-    f.choose(true)
-    expect(refusal(() => startOnTeam(f, f.group(), owner))?.code).toBe('OWN_ACCOUNT_WORK')
-  })
-
-  it('still starts work a Team agent wrote in the Team account', () => {
-    const f = swarm()
-    f.choose(true)
-    const group = f.group()
-    Object.assign(f.state.conversations.find(c => c.id === group)!, { teamWritten: true })
-    startOnTeam(f, group)
-    expect(f.state.starts!.at(-1)!.request).toMatchObject({ machineId: 'gray-team', cwd: '/team-swarm/lead' })
-  })
-
-  // Security review 2 of #3081: a branch GitHub cannot place runs only in a Team account (commands.ts failPushUnknown), so it
-  // is not sent to the Mac, which would refuse it in turn.
-  it('still starts work whose push GitHub cannot place in the Team account, as Team-written work', () => {
-    const f = swarm()
-    f.choose(true)
-    f.run({ type: 'agent.start', request: { ...f.request(f.group(), 'gray-team'), cwd: '/team-swarm/lead' } }, f.leadActor, { ...f.joined, pushOrigin: 'unknown' })
-    expect(f.state.starts!.at(-1)!.request).toMatchObject({ machineId: 'gray-team', cwd: '/team-swarm/lead' })
-  })
-
-  it('starts there as before when its owner has not turned own-account work on, or turned it off', () => {
-    const f = swarm()
-    startOnTeam(f, f.group())
-    expect(f.state.starts!.at(-1)!.request).toMatchObject({ machineId: 'gray-team' })
-    f.choose(true)
-    f.choose(false)
-    startOnTeam(f, f.group())
-    expect(f.state.starts!.at(-1)!.request).toMatchObject({ machineId: 'gray-team' })
-  })
-
-  it('leaves a choice recorded by someone other than the owner unread, as ownAccountWork does', () => {
-    const f = swarm()
-    f.machine('gray-mac').ownAccountChoice = { allowed: true, by: 'mate', at: new Date(NOW).toISOString() }
-    startOnTeam(f, f.group())
-    expect(f.state.starts!.at(-1)!.request).toMatchObject({ machineId: 'gray-team' })
-  })
-})
-
-// Task #3060: both of Gray's entries were named 'Gray.local', so whoever picked one could not tell the Team account from the Mac.
 describe('a Mac\'s Team account entry, as every read shows it', () => {
   it('goes by its Mac\'s name and "· Team account", while the Mac keeps its own name', () => {
     const f = swarm()

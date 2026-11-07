@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { PM_ACCOUNT_NOTE } from './pmAccounts.js'
 import { ELSEWHERE, heldByStarts, heldLocalModels, leftOut, localProbes, NO_SWARM_AGENTS_ON, noteClause, offlineModels, routeAnswer, routeTask, routingSection, servedModels, STALL_RETRY_MS, stalled } from './routeCommand.js'
 import type { describeScmProject } from '../scm/scmProjects.js'
-import { admission, quotaOf, RELAYED_QUOTA, USED_UP_WINDOW } from './capacity.js'
+import { admission, quotaOf, USED_UP_WINDOW } from './capacity.js'
 import { NONE_COVERS, OTHER_REPOSITORY, type Catalog, type Probe, type RoutePlugin } from './route.js'
 import { MAKER_TIMEOUT_MS, type PluginInput, type PluginMaker } from './routePlugins.js'
 import { placedHeavyWork } from './machineFit.js'
@@ -57,8 +57,9 @@ async function withBlocked(os: string, body: () => Promise<void>) {
   blocked.push(os)
   try { await body() } finally { blocked.splice(blocked.indexOf(os), 1) }
 }
-function scoped(answers: { record?: Answer; tab?: unknown; context?: Answer; history?: Answer; instructions?: Answer; historyHangs?: boolean; recordThrows?: boolean; policy?: typeof policy } = {}) {
+function scoped(answers: { record?: Answer; tab?: unknown; context?: Answer; history?: Answer; instructions?: Answer; historyHangs?: boolean; recordThrows?: boolean; policy?: typeof policy; machineRules?: Answer } = {}) {
   return vi.fn(async (payload: Record<string, any>): Promise<Record<string, unknown>> => {
+    if (payload.action === 'machineRules') return answers.machineRules ?? { ok: true, value: { projectId: payload.projectId, revision: 0, machines: [] } }
     if (payload.action === 'routeContext') return answers.context ?? { ok: true, value: { agentId: 'lead', tab: answers.tab ?? tab(), policy: { policy: answers.policy ?? policy, warnings: ['w'] }, machines: [{ machineId: 'm1', name: 'remote-1' }, { machineId: 'm2', name: 'mac' }] } }
     if (payload.action === 'routeHistory') return answers.historyHangs ? new Promise(() => {}) : answers.history ?? { ok: true, value: { decisions: [], attempts: [] } }
     if (payload.action === 'instructions') return answers.instructions ?? { ok: true, value: { projectId: 'p1', revision: 2, hash: 'h', text: 'Work by this.', template: false, coordinatorName: 'Ana', notes: [{ id: 'n1', text: 'Be quick', askedBy: 'Ken', at: 't', expiresAt: null }] } }
@@ -113,7 +114,7 @@ describe('routeTask', () => {
     const s = scoped()
     const result = await routeTask(input, s, where as never, opener(), () => 'op')
     expect(result).toMatchObject({ ok: true, routeDecisionId: 'd1', via: 'order', p: null, candidates: expect.arrayContaining([expect.objectContaining({ id: 'c0' })]), warnings: ['w'] })
-    expect(s.mock.calls.map(c => c[0].action)).toEqual(['routeContext', 'routeHistory', 'instructions', 'command'])
+    expect(s.mock.calls.map(c => c[0].action)).toEqual(['routeContext', 'routeHistory', 'instructions', 'machineRules', 'command'])
     expect(recorded(s).command.decision).not.toHaveProperty('context')
     const record = recorded(s)
     expect(record).toMatchObject({ operationId: 'route-op', command: { type: 'route.record', conversationId: 'g1' } })
@@ -938,8 +939,8 @@ describe('route answers with the pick (task #3576, after #2901)', () => {
     expect(hint).not.toHaveProperty('overrideReason')
     expect(next).toContain(`the pick (${(answer.pick as { id: string }).id})`)
     expect(next).toMatch(/another candidate.*overrideReason/)
-    // Until the machine rules are in the rules record, the pick does not apply them: the instructions' Machines section still does (review 2 of #3296).
-    expect(next).toMatch(/Machines rules.*still apply.*pick that breaks one.*overrideReason/s)
+    // The pick applies the project's machine rules from its record (#3964): no line asks the PM to apply them by hand.
+    expect(next).not.toMatch(/still apply/)
   })
 })
 
@@ -1816,12 +1817,12 @@ describe('routing contributed capacity', () => {
       expect(candidates.map(c => c.title)).toContain('New agent · Claude opus high · MacBook Pro')
     })
 
-    // 2026-10-30 overnight: Codex in Tony's team account was never offered for reviews. The account spends Tony's own
-    // subscription through the relay, so it reads its quota as unknown, and the route dropped every unknown candidate while
-    // another machine's quota fit. The Mac's own reading is that subscription's.
-    describe('a team account that spends its Mac\'s subscription through the relay', () => {
-      const relayed = (why = RELAYED_QUOTA) => ({ ...team(), observation: { ...team().observation, quotas: [{ engine: 'claude', known: false, windows: [] }],
-        quotaReasons: { claude: why } } })
+    // 2026-10-30 overnight: Codex in Tony's team account was never offered for reviews: its quota read as unknown, and the
+    // route dropped every unknown candidate while another machine's quota fit. Its allowance is its own CLIs' report now
+    // (#4137): nothing spends the Mac's subscription, so nothing borrows the Mac's reading.
+    describe('a team account whose allowance is unknown', () => {
+      const relayed = (why = 'No subscription sign-in is stored on this machine.') => ({ ...team(), observation: { ...team().observation,
+        quotas: [{ engine: 'claude', known: false, windows: [] }], quotaReasons: { claude: why } } })
       // Full readings, both windows, as every Claude account reports them.
       const full = <T extends ReturnType<typeof healthy>>(pool: T): T => ({ ...pool, observation: { ...pool.observation, quotas: [{ engine: 'claude', known: true,
         windows: [{ name: '5-hour', usedPercent: 20, resetsAt: Date.now() + 3_600_000 }, { name: 'weekly', usedPercent: 30, resetsAt: Date.now() + 4 * 86_400_000 }] }] } })
@@ -1838,12 +1839,11 @@ describe('routing contributed capacity', () => {
         return { answer: await routeTask(input, s, where, opener()), s }
       }
 
-      it('reads the Mac\'s quota for it, on the Mac\'s account, and says so in its line', async () => {
-        const { s } = await routeWith([fullMac(), relayed(), other()])
+      it('never reads the Mac\'s quota for it, even from a daemon that still says the account spends the Mac\'s subscription', async () => {
+        const { s } = await routeWith([fullMac(), relayed("This account runs on its owner's subscription; its allowance is read on the owner's machine."), other()])
         const row = fit(s, 'm1-team')
-        expect(row).toMatchObject({ fit: { status: 'fits', account: 'm1:claude' } })
-        expect(row!.label).toContain('quota read on MacBook Pro, whose subscription this account spends')
-        expect(row!.label).toContain('5-hour 80% left')
+        expect(row).toMatchObject({ fit: { status: 'unknown' } })
+        expect(row!.label).not.toContain('quota read on')
         expect(recorded(s).command.decision.excluded).not.toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('MacBook Pro') })]))
       })
 
@@ -1866,15 +1866,6 @@ describe('routing contributed capacity', () => {
         expect(none.answer.leftOut).toEqual(expect.arrayContaining([{ machine: 'MacBook Pro', reasons: [reason] }]))
         // A machine with a row offered is not left out, though its other rows were.
         expect((await routeWith([fullMac(), relayed(), other()])).answer.leftOut).toEqual([])
-      })
-
-      it('borrows nothing from a Mac whose reading is stale or that another person contributed', async () => {
-        const stale = fullMac(); stale.observation = { ...stale.observation, receivedAt: 0 }
-        for (const host of [stale, { ...fullMac(), contributorId: 'someone-else' }]) {
-          const { s } = await routeWith([host, relayed(), other()])
-          expect(fit(s, 'm1-team')).toMatchObject({ fit: { status: 'unknown' } })
-          expect(fit(s, 'm1-team')!.label).not.toContain('quota read on')
-        }
       })
     })
   })
@@ -2498,3 +2489,67 @@ describe('the route answer an agent reads (task #3294)', () => {
   })
 })
 
+
+// Task #3964 (part 2 of #3576): the route applies the project's machine rules from its rules record, by machine id.
+describe('the project\'s machine rules in the route', () => {
+  const weekly = { providers: [{ provider: 'claude', outcome: 'answered', httpStatus: 200, account: 'acct', body: {
+    five_hour: { utilization: 40, resets_at: new Date(Date.now() + 3 * 3_600_000).toISOString() },
+    seven_day: { utilization: 25, resets_at: new Date(Date.now() + 4 * 86_400_000).toISOString() } } }] }
+  const open = () => opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], usage: weekly }))
+  type Row = { id: string; machineId: string; title: string }
+  const rulesAnswer = (machines: unknown[]) => ({ ok: true, value: { projectId: 'lead', revision: 1, machines } })
+  const route = async (machines: unknown[] | null, more: { assessment?: Record<string, unknown>; tab?: unknown } = {}) => {
+    const s = scoped({ machineRules: machines ? rulesAnswer(machines) : { error: 'SWARM_BUSY', detail: 'Busy' }, ...more.tab ? { tab: more.tab } : {} })
+    const answer = await routeTask({ ...input, assessment: { ...input.assessment, ...more.assessment } }, s, where as never, open(), () => 'op')
+    return { answer, s, rows: answer.candidates as Row[], machinesOf: () => new Set((answer.candidates as Row[]).map(r => r.machineId)) }
+  }
+  // Every day, all day: the rule holds whenever the spec runs.
+  const always = { days: [0, 1, 2, 3, 4, 5, 6], windows: [['00:00', '23:59']], timeZone: 'UTC' }
+
+  it('reads the rules of the task\'s own project', async () => {
+    const { s } = await route([])
+    expect(s.mock.calls.find(c => c[0].action === 'machineRules')![0]).toMatchObject({ projectId: 'lead' })
+  })
+
+  it('leaves out a machine while it is away, with the rule\'s why', async () => {
+    const before = await route([])
+    expect(before.machinesOf()).toEqual(new Set(['m1', 'm2']))
+    const { answer, machinesOf } = await route([{ machineIds: ['m2'], why: 'Away while its owner travels', away: always }])
+    expect(machinesOf()).toEqual(new Set(['m1']))
+    expect(answer.leftOut).toEqual(expect.arrayContaining([{ machine: 'mac', reasons: expect.arrayContaining([expect.stringContaining('Away while its owner travels')]) }]))
+  })
+
+  it('leaves out an engine a machine refuses, and keeps the others there', async () => {
+    const { rows } = await route([{ machineIds: ['m1'], why: 'No Claude there', noEngines: ['claude'] }])
+    expect(rows.filter(r => r.machineId === 'm1')).toEqual([])
+    expect(rows.some(r => r.machineId === 'm2')).toBe(true)
+  })
+
+  it('leaves out a machine where no Reviewer runs for a review, and only for a review', async () => {
+    const rule = [{ machineIds: ['m1'], why: 'Its Codex defaults to a local model', noReviews: true }]
+    expect((await route(rule, { assessment: { kind: 'review' } })).machinesOf().has('m1')).toBe(false)
+    expect((await route(rule, { assessment: { kind: 'test' } })).machinesOf().has('m1')).toBe(true)
+    expect((await route(rule)).machinesOf().has('m1')).toBe(true)
+  })
+
+  it('picks a lane\'s first machine over an equal other, and says so', async () => {
+    const plain = await route([])
+    const picked = (a: Answer) => (a.candidates as Row[]).find(r => r.id === (a.pick as { id: string }).id)!.machineId
+    const other = picked(plain.answer) === 'm1' ? 'm2' : 'm1'
+    const phone = { revision: 3, state: { id: 'tab', agents, conversations: conversations().map(c => c.id === 'g1' ? { ...c, handOutLane: 'mobile' } : c) } }
+    const { answer } = await route([{ machineIds: [other], why: 'The phone setup is there', first: { lanes: ['mobile'] } }], { tab: phone })
+    expect(picked(answer)).toBe(other)
+    expect((answer.reasons as string[])[0]).toContain('The phone setup is there')
+    // Another lane's task is not moved.
+    expect(picked((await route([{ machineIds: [other], why: 'The phone setup is there', first: { lanes: ['mobile'] } }])).answer)).toBe(picked(plain.answer))
+  })
+
+  it('says the instructions\' Machines rules still apply when the rules cannot be read, and no longer when they are', async () => {
+    const unread = await route(null)
+    expect(unread.machinesOf()).toEqual(new Set(['m1', 'm2']))
+    expect(unread.answer.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/machine rules could not be read.*Machines rules.*still apply/)]))
+    expect(String(unread.answer.next)).toMatch(/Machines rules.*still apply/s)
+    const read = await route([])
+    expect(String(read.answer.next)).not.toMatch(/still apply/)
+  })
+})

@@ -356,7 +356,7 @@ void main() {
     expect(_member('finch'), findsNothing);
     expect(_unassigned(), findsNothing);
     final pills = [
-      for (final key in ['board', 'list', 'members'])
+      for (final key in ['list', 'members'])
         tester.getTopLeft(find.byKey(ValueKey('super-tasks-layout-$key'))).dx,
     ];
     expect(pills, orderedEquals([...pills]..sort()));
@@ -566,7 +566,8 @@ void main() {
     c = await _show(tester, _server(), storage: storage, members: false);
     expect(_member('finch'), findsOneWidget);
     expect(find.byKey(const ValueKey('super-tasks-board')), findsNothing);
-    await tester.tap(find.byKey(const ValueKey('super-tasks-layout-board')));
+    // Members is a toggle back to the Board.
+    await tester.tap(find.byKey(const ValueKey('super-tasks-layout-members')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('super-tasks-board')), findsOneWidget);
     await _close(tester, c);

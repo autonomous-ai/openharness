@@ -88,6 +88,15 @@ export const launch: EngineLaunch = {
       + 'after any other attribution line: `{line}` It says another agent started this session in Harness. Do not add it '
       + 'to commit messages.',
   },
+  /**
+   * Harness's status line, which records the rate limits Claude Code reports to it and then shows the person's own
+   * (kit/statusLine.ts). Theirs is read from the files Claude Code reads it from, a later one over an earlier.
+   */
+  statusLine: {
+    home: { variable: 'CLAUDE_CONFIG_DIR', otherwise: { folder: '.claude' } }, file: 'settings.json',
+    folder: ['.claude/settings.json', '.claude/settings.local.json'],
+    key: 'statusLine', type: 'command', args: ['--settings', '{settings}'],
+  },
   // Recorded with the rest of the system prompt on the conversation's first request and kept on every resume
   // (`--system-prompt-snapshot`, on by default), so it is given at each launch and read once.
   harnessInstructions: { kind: 'append', args: ['--append-system-prompt', '{text}'] },

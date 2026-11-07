@@ -5,13 +5,14 @@
  * the decision in the tab. */
 import { randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
-import { RELAYED_QUOTA, requiredToolReason, startRequirements, USED_UP_WINDOW } from './capacity.js'
+import { requiredToolReason, startRequirements, USED_UP_WINDOW } from './capacity.js'
 import { START_DEADLINE_MS, START_WINDOW_MS } from './reservations.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
 import { withPmAccounts } from './pmAccounts.js'
 import { accountOf, API_BUILDERS, bytes, machineBrief, catalogFrom, catalogRow, choose, decideByOrder, gridStrength, parseAssessment, OLD_RECORD_MAX, quotaBrief, quotaLine, quotaOf2, recentStartNotes, UNRATED, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type Shown, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
 import { pickByOrder } from './routePick.js'
+import { firstMachines, machineRuleRefusal } from './machineRules.js'
 import { makePlugins, ROUTE_PLUGIN_MAKERS, type PluginMaker } from './routePlugins.js'
 import { CI_HOLD_OPENING, CI_RETRY_MINUTES, heavyOfStart, MACHINE_FIT_MAKER } from './machineFit.js'
 import { stat } from 'node:fs/promises'
@@ -24,6 +25,8 @@ const ENGINES = ['claude', 'codex']
 const TRANSPORT = new Set(['AGENT_UNAVAILABLE', 'SUPER_TAB_UNAVAILABLE', 'BACKEND_UNAVAILABLE', 'BACKEND_TIMEOUT', 'BACKEND_UNREACHABLE'])
 const MACHINES_UNREADABLE = "The account's machine list could not be read; only known machines were considered."
 /** An unreadable catalog reads as an empty one (route.ts catalogFrom), which offers no new agent: said, never silent (final review). */
+/** The project's machine rules could not be read (task #3964): the route applies none, so the PM still does. */
+export const MACHINE_RULES_UNREAD = 'The project\'s machine rules could not be read: the instructions\' Machines rules still apply, and a pick that breaks one is not used.'
 export const CATALOG_UNREADABLE = 'The model catalog could not be read, or lists no models: no new agent on Claude Code or Codex is offered, only agents already in the Swarm and models served on its grid.'
 const DISK_UNVERIFIED = 'Project disk space could not be verified.'
 const NO_PROJECT_FOLDER = 'This machine does not have the project folder. Add it to the Swarm so it can clone the project.'
@@ -203,19 +206,6 @@ export function unreadyPool(pool: Json, project: Json | undefined, projectId: st
   ]
   const app = githubApp && projectOwner !== pool.contributorId
   return { all, engines, push: !app && checkout?.push === false ? NO_PUSH : null }
-}
-/** A Harness Team account's engines that spend its Mac owner's subscription through the owner's relay, each with the Mac's
- *  fresh reading of that subscription: the account itself holds no sign-in to read, so it reports its allowance unknown,
- *  and the route left out every such candidate while another machine's quota fit. Codex in Tony's team account was never
- *  offered for reviews on 2026-10-30 overnight, while all other Codex reviewers were out of quota. Only an engine the
- *  account says is relayed (capacity.ts RELAYED_QUOTA), and only from its own Mac under the same contribution. */
-export function relayedReadings(pool: Json, pools: Json[], now = Date.now()): { relayedQuotas?: Record<string, Json> } {
-  const host = typeof pool.hostMachineId === 'string' ? pools.find(m => m.machineId === pool.hostMachineId && m.contributorId === pool.contributorId) : undefined
-  const reading = object(host?.observation), reasons = object(object(pool.observation).quotaReasons)
-  if (!host || !finite(reading.receivedAt) || now - reading.receivedAt >= 45_000) return {}
-  const relayed = Object.fromEntries(list(reading.quotas).filter(q => q.known === true && reasons[String(q.engine)] === RELAYED_QUOTA)
-    .map(q => [String(q.engine), { quota: q, from: String(host.name), account: `${String(host.machineId)}:${String(q.engine)}` }]))
-  return Object.keys(relayed).length ? { relayedQuotas: relayed } : {}
 }
 /** A running member keeps its engine and memory, but still needs a live terminal and the task's tools and devices. Its
  *  allowance is information ([usedUp]). */
@@ -405,7 +395,6 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
       ...(keptFor(original) ? { keptForOthers: keptFor(original) } : {}),
       ...(original.scope === 'swarm' && repository.machineId !== original.machineId && typeof repository.repositoryUrl !== 'string'
         ? { repositoryUnavailable: true } : {}),
-      ...relayedReadings(original, list(state.machines)),
     }
     machines.set(String(pool.machineId), { name: String(pool.name), status: 'contributed', account: false, pool,
       unready: unreadyPool(original, project, projectId, object(value.tab).githubApp === true, projectOwner) })
@@ -448,7 +437,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // member is in the task's repository, what it did before) is joined afterwards.
   // The plug-ins' makers start here too: each piece's outside read runs beside the probes, and they share the history read.
   const historyRead = within(scoped({ action: 'routeHistory', conversationId: input.conversationId }))
-  const [probed, read, history, instructed, made] = await Promise.all([
+  const [probed, read, history, instructed, made, ruleRead] = await Promise.all([
     Promise.all([...machines].map(([machineId, machine]) =>
       probeMachine(machineId, machine, members.filter(m => m.machineId === machineId), rows, catalog, assessment, where, open))),
     cwd ? within(readFolder(cwd, reader)) : null,
@@ -456,7 +445,10 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     // The project's instructions ride on the answer: the agent routes by them. A backend without them is an unreadable read.
     within(scoped({ action: 'instructions', projectId })),
     makePlugins(makers, { conversationId: input.conversationId, assessment, read: value, catalog, history: historyRead, request: scoped }),
+    // The project's machine rules from its record (task #3964); unreadable, the route says the instructions' still apply.
+    within(scoped({ action: 'machineRules', projectId })),
   ])
+  const machineRules = ruleRead?.ok === true && Array.isArray(object(ruleRead.value).machines) ? list(object(ruleRead.value).machines) : null
   const written = object(instructed?.ok === true ? instructed.value : {})
   const instructions = typeof written.text === 'string' ? { revision: written.revision, text: written.text, notes: Array.isArray(written.notes) ? written.notes : [] } : null
   const folder: TaskFolder | null = !cwd ? null : read ?? { cwd, kind: 'unknown', name: null, root: null, remote: null }
@@ -514,8 +506,18 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // A model a host now offline served is left out with that reason, and a person naming it gets no stand-in (route.ts choose).
   const offline = offlineModels(state)
   const now = Date.now()
+  // What the server refuses by the project's machine rules is left out with the rule's why, on the machine named or its Mac.
+  const review = /(^|-)review(-|$)/.test(assessment.kind ?? '')
+  for (const [i, p] of probes.entries()) {
+    const why = [p.machineId, macOf.get(p.machineId)].flatMap(machineId => machineId ? [machineRuleRefusal(machineRules ?? [], { machineId, engine: p.engine, review }, now)] : [])
+      .find(w => w !== null)
+    if (why) probes[i] = { ...p, refusals: [...p.refusals, why] }
+  }
+  // A lane's work goes first to its machines: the task's own lane, or a step's task's.
+  const ownTask = group.reviewOf ? conversations.find(c => c.id === group.reviewOf) : group
+  const first = firstMachines(machineRules ?? [], text(group.handOutLane) ?? text(ownTask?.handOutLane) ?? null)
   const choice = choose(probes, catalog, { ...assessment, ended: endedAttempts(group, attempts) }, now, working, heldLocalModels(state), offline, made.plugins)
-  const skipped = [...made.warnings, ...(choice.warnings ?? [])]
+  const skipped = [...made.warnings, ...(choice.warnings ?? []), ...(machineRules ? [] : [MACHINE_RULES_UNREAD])]
   choice.excluded.push(...offline, ...(catalog.models.length ? [] : [{ title: 'New agents', reason: CATALOG_UNREADABLE }]))
   // The task stays in the agent's queue rather than going where it cannot be done.
   // Work that starts heavy CI while the account is at its limit waits, and says when to route it again (machineFit.ts), so the
@@ -526,7 +528,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     ...ciHeld ? { waiting: true, retryAfterMinutes: CI_RETRY_MINUTES, detail: ciHeld.reason.slice(MACHINE_FIT_MAKER.name.length + 2) } : {} }
   // The pick by the project's Routing order (routePick.ts, task #3576): the recorded candidate that start or assignment follows.
   const verdict = decideByOrder(choice, pickByOrder({ shown: choice.shown, catalog, assessment: { ...assessment, ended: endedAttempts(group, attempts) }, now,
-    conversationId: input.conversationId }))
+    conversationId: input.conversationId, ...first ? { first: { machines: new Set([...first.machines, ...[...macOf].filter(([, mac]) => first.machines.has(mac)).map(([id]) => id)]), why: first.why } } : {} }))
   const operationId = `route-${newId()}`
   // The rows recorded are the rows offered: the agent choosing assigns by a recorded candidate.
   let offered = choice.shown
@@ -576,20 +578,22 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
       ...(catalog.models.length ? [] : [CATALOG_UNREADABLE]),
       ...(choice.shown.some(p => p.kind === 'member' && p.terminalUnverified) ? ["A member's terminal could not be verified from its machine's snapshot. Check it before assignment."] : []),
       ...(choice.short ? [choice.short] : []), ...skipped],
-    next: nextOf(shownRows, input.conversationId, typeof routeDecisionId === 'string' ? routeDecisionId : undefined, !!instructions, assessment.needs, verdict.pick),
+    next: nextOf(shownRows, input.conversationId, typeof routeDecisionId === 'string' ? routeDecisionId : undefined, !!instructions, assessment.needs, verdict.pick, !!machineRules),
   }
 }
 
 /** How to act on the route: the candidates are in no order of merit (task #2901), so it names none. A member is assigned, a new
  *  agent started, each with the chosen row's own fields; RULE is the Routing rule that chose it, which the backend asks for
  *  with a decision that has no pick, and the start or assignment records the candidate it matches. */
-function nextOf(rows: Shown[], conversationId: string, routeDecisionId: string | undefined, instructions: boolean, needs: Assessment['needs'], pick?: string): string {
+function nextOf(rows: Shown[], conversationId: string, routeDecisionId: string | undefined, instructions: boolean, needs: Assessment['needs'], pick?: string,
+  machineRulesRead = false): string {
   // Said once and short (task #3294): it rode on every route, 467 a day in one PM's context.
   const choose = pick
     ? `Use the pick (${pick}), chosen by the project's Routing order: start or assign it as listed, with no overrideReason. `
-      + 'The pick does not apply the instructions\' Machines rules (hours a machine is off, phone work on the phone Mac, no Codex on a named Mac, no reviewing on a local-model Codex): '
-      + 'they still apply, and a pick that breaks one is not used; choose another candidate and give that rule as overrideReason. '
-      + 'For any other candidate, give the reason as overrideReason (urgency, context, a machine the work needs; "idle" is not one).'
+      // The pick applies the machine rules from the project's record (task #3964); unread, the instructions' still apply.
+      + (machineRulesRead ? '' : 'The project\'s machine rules could not be read, so the pick does not apply them: the instructions\' Machines rules '
+        + 'still apply, and a pick that breaks one is not used; choose another candidate and give that rule as overrideReason. ')
+      + 'For another candidate, give the reason as overrideReason (urgency, context, a machine the work needs; "idle" is not one).'
     : 'Not ranked: listed by machine name. Choose one by the project\'s Routing instructions (Order and quota), and give the rule that chose it as overrideReason.'
   const decided = routeDecisionId ? pick ? { routeDecisionId } : { routeDecisionId, overrideReason: 'RULE' } : {}
   const assign = `Assign a member: command OPERATION_ID ${JSON.stringify({ type: 'work.assign', conversationId, agentId: 'AGENT', ...decided })}`
@@ -753,9 +757,6 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     const quota = (engine: string): Probe['quota'] => {
       const q = quotas.find(q => q.engine === engine)
       if (!fresh || !q) return UNKNOWN_QUOTA
-      // A Harness Team account's engine on its Mac's subscription: that subscription's reading, on its account (relayedReadings).
-      const relayed = q.known !== true ? object(object(pool.relayedQuotas)[engine]) : {}
-      if (typeof relayed.from === 'string') return { ...read(object(relayed.quota), { account: String(relayed.account) }), from: relayed.from }
       return read(q, { why: text(object(observed.quotaReasons)[engine]) })
     }
     // What a new start can use, as its host admits it (reservations.ts): measured, less what starts still starting hold.

@@ -16,6 +16,7 @@ import { canReadGroup } from '../projects.js'
 import { promptWaits } from '../promptWaits.js'
 import { storedPulse, type Pulse } from '../pulse.js'
 import { coordinatorNameOf, roleNameOf } from '../instructions.js'
+import { agentChatId, agentKind, inMyAgents } from '../agentKind.js'
 import { withAvatarView } from '../profile.js'
 import { swarmUsernames } from '../usernames.js'
 import type { AgentView, Derived, GroupView, HeadView, LivePart, MachineView, MemberView, ProgressView, StartView } from './contract.js'
@@ -195,6 +196,8 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
       ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}), ...(machineSuspended ? { machineSuspended } : {}), ...(leads[pool.machineId] ? { lead: leads[pool.machineId] } : {}) }] as const
   }
   const pulse = pulses(state, visible, actor, isBuddyReader(state, actor))
+  // Each visible agent's stored row, looked up once rather than once per derived field.
+  const storedAgents = new Map(state.agents.map(a => [a.id, a]))
   // The next release times the settle recorded (releases.ts), for the projects this reader sees: the release list itself stays
   // the server's (task #3827).
   const releaseTimes = Object.fromEntries(visible.projects?.flatMap(seen => {
@@ -204,11 +207,18 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
   return {
     ...(pulse ? { pulse } : {}),
     ...(Object.keys(releaseTimes).length ? { releaseTimes } : {}),
-    agents: Object.fromEntries(visible.agents.map(seen => [seen.id, { downSince: seen.downSince ?? null, limitedUntil: seen.limitedUntil ?? null,
-      workDecision: seen.workDecision === 'awaiting' && state.agents.find(a => a.id === seen.id)!.workDecision !== 'awaiting' ? 'awaiting' as const : null,
-      roleId: seen.roleId ?? null,
-      // Derived on every read: who leads a project, and its role set, live outside the agent's own part.
-      roleName: roleNameOf(state, state.agents.find(a => a.id === seen.id)!) }])),
+    agents: Object.fromEntries(visible.agents.map(seen => {
+      const stored = storedAgents.get(seen.id)!
+      return [seen.id, { downSince: seen.downSince ?? null, limitedUntil: seen.limitedUntil ?? null,
+        workDecision: seen.workDecision === 'awaiting' && stored.workDecision !== 'awaiting' ? 'awaiting' as const : null,
+        roleId: seen.roleId ?? null,
+        // Derived on every read: who leads a project, and its role set, live outside the agent's own part.
+        roleName: roleNameOf(state, stored),
+        // What it is and where its person talks to it, for the left pane's "My agents" (agentKind.ts, task #4116).
+        kind: agentKind(state, stored), chatId: agentChatId(state, stored),
+        // Whether it is in this reader's My agents, decided here so every client lists the same (task #4192).
+        myAgent: inMyAgents(state, actor, stored) }]
+    })),
     machines: Object.fromEntries((visible.machines ?? []).map(machine)),
     ...(visible.otherProjectsWork ? { otherProjectsWork: visible.otherProjectsWork } : {}),
     ...(visible.pmAccounts ? { pmAccounts: visible.pmAccounts } : {}),

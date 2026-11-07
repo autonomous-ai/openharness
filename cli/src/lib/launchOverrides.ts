@@ -110,10 +110,6 @@ export interface LaunchOverridesDeps {
    * file. See `ownProvider` in `engines/codex/launch.ts`.
    */
   readCodexConfig?: (path: string) => string | null
-  /** In the Harness Team account, for an engine it has not signed in itself: the owner's subscription through the
-   *  owner's relay (team/relay.ts `teamRelayLaunch`), null otherwise. Absent ⇒ never. */
-  /** [codexHome]: the launch's own Codex home, whose sign-in and model list are its own (a Swarm Product Manager's). */
-  ownerRelay?: (engine: AgentEngine, codexHome?: string) => Promise<{ env: Record<string, string>; args: string[] } | { refused: string } | null>
   /** Prepare the saved harness context before restarting. Missing or broken packages refuse the
    * relaunch: starting a plain agent would silently change the user's chosen harness. */
   dshLaunch?: (dsh: string, workspace: string, engine: AgentEngine, runtimeKey: string) => Promise<DshLaunchAnswer>
@@ -384,20 +380,12 @@ async function prepareBaseLaunchOverrides(
     const restored = !launched.length ? remembered
       : source.launchModel?.model || !remembered ? { env: {}, args: launched }
       : { ...remembered, args: [...remembered.args, ...launched] }
-    // In the Harness Team account, an engine it has not signed in itself spends the owner's subscription through the
-    // owner's relay, on every relaunch as on its first: Codex keeps the relay's provider per thread, so it is named again
-    // here in place of its own login's (two `-c model_provider` would leave Codex to pick one).
-    const offered = await (engine === 'codex' && source.codexHome ? deps.ownerRelay?.(engine, source.codexHome) : deps.ownerRelay?.(engine)) ?? null
-    // A Codex home of its own the relay cannot sign in (a Product Manager's, its relay not yet published after a reboot): held
-    // with why, as a launch that waits is, never relaunched signed out (team/relay.ts).
-    if (offered && 'refused' in offered) return { ok: false, error: 'OWNER_RELAY_UNAVAILABLE', unavailable: 'native', detail: offered.refused }
-    const relay = offered
     // Ahead of the model on the command line: `-c` configures, `-m` selects, and Codex resolves the
     // model against the provider it has been given.
-    const provider = relay ? relay.args : ownLoginProviderArgs(engine, source.codexHome, { read: deps.readCodexConfig })
-    if (restored || provider.length || relay) {
+    const provider = ownLoginProviderArgs(engine, source.codexHome, { read: deps.readCodexConfig })
+    if (restored || provider.length) {
       ownLogin = {
-        env: { ...(relay?.env ?? {}), ...(restored?.env ?? {}) },
+        env: { ...(restored?.env ?? {}) },
         extraArgs: [...provider, ...(restored?.args ?? [])],
         clearEnv: [],
         ...(restored?.sessionModel ? { sessionModel: restored.sessionModel } : {}),

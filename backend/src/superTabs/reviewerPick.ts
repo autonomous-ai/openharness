@@ -1,7 +1,7 @@
 /**
  * Who may take a handed task's review, security review or test step (task #3401, anh Dee's Swarm redesign, 2026-11-05): a
- * free agent of the task's project that never worked on the task, runs no grid model, is at least as strong as its engineer,
- * and gave no verdict at this head. The project instructions' rules that the server now keeps: a Reviewer is never the
+ * free agent of the task's project that never worked on the task, runs no grid model, is at least as strong as its engineer
+ * (a test step's Tester: a mid-strength model or stronger, task #3774), and gave no verdict at this head. The project instructions' rules that the server now keeps: a Reviewer is never the
  * Engineer of the same task (Roles, Reviewer), two security reviews are independent (Rules for every agent), a model on the
  * grid is never offered for a review (route).
  */
@@ -9,7 +9,7 @@ import { isBuddy } from './buddies.js'
 import { MODEL_CATALOG, namedDefault } from './catalog.js'
 import { roleNameOf } from './instructions.js'
 import { activeWork, workerIndex, type Agent, type CheckVerdict, type Conversation, type SuperTabState } from './model.js'
-import { agentProjectId, groupProject } from './projects.js'
+import { agentProjectId, groupProject, onTeamAccount } from './projects.js'
 import { agentTarget, modelMatches } from './rules.js'
 import { canStart, standing } from './reviewSeats.js'
 import { stepsOf } from './steps.js'
@@ -40,6 +40,17 @@ export const strengthOf = (state: SuperTabState, agent: Agent): number | null =>
 
 /** The strongest the catalog rates: what an engineer of unknown strength is taken to be, so its reviewer is never weaker. */
 const TOP_STRENGTH = Math.max(...MODEL_CATALOG.models.map(row => row.strength))
+/** A test step's bar, whatever the engineer runs (task #3774, Ken's routing rule: "A Tester runs where the change runs: the machine
+ *  comes before the model, and a mid-strength model is enough for most testing"): the catalog's middle strength, Sonnet's and
+ *  above (Sol, Opus). On 11-06 four Linux test steps waited for an Opus Tester while Sonnet Testers sat idle on that machine. */
+export const TEST_STRENGTH = 2
+
+/** The rule [kind]'s pick applies to a model, as the PM's notice names it when a step stays open (commands.ts openReviewSteps). */
+export const STRENGTH_RULE: Record<StepKind, string> = {
+  review: 'runs a model at least as strong as its engineer and off the grid',
+  security: 'runs a model at least as strong as its engineer and off the grid',
+  test: 'runs a mid-strength model or stronger (Sonnet, Sol, Opus) off the grid, on the step\'s machine',
+}
 
 /** Roles with work of their own that never take a step (project instructions, Roles): the PM, its Guide and Integrator, a Buddy.
  *  By role name, and by the agent's own name too: on the live Swarm the Guides carry the role Reviewer and the Integrator none
@@ -63,15 +74,17 @@ export function reviewerCandidates(state: SuperTabState, task: Conversation, kin
   const index = workerIndex(state)
   const built = builtBy(task)
   const engineer = task.assignment ? state.agents.find(a => a.id === task.assignment!.agentId) : undefined
-  const bar = (engineer && strengthOf(state, engineer)) ?? TOP_STRENGTH
+  // A review or security review: at least the engineer's strength. A test: mid-strength or more, whoever built it.
+  const bar = kind === 'test' ? TEST_STRENGTH : (engineer && strengthOf(state, engineer)) ?? TOP_STRENGTH
   const steps = stepsOf(state, task.id)
   const holding = new Set(steps.filter(step => activeWork(step)).map(step => step.assignment!.agentId))
   const judged = new Set([task, ...steps].flatMap(group => group.checks.flatMap(check => check.verdicts ?? []))
     .filter(verdict => atHead(verdict, head)).map(verdict => verdict.by))
   const ranked = state.agents.flatMap(agent => {
     if (built.has(agent.id) || index.leaders.has(agent.id) || index.working.has(agent.id) || holding.has(agent.id)) return []
-    // One whose model keeps failing takes no step until it answers again (terminal.ts, task #4076).
-    if (isBuddy(agent) || agent.workDecision === 'stop' || agent.modelFailing || agentProjectId(state, agent) !== projectId) return []
+    // Nor a Team account's agent, which takes no new work (task #4120), nor one whose model keeps failing, until it answers again
+    // (terminal.ts, task #4076).
+    if (isBuddy(agent) || agent.workDecision === 'stop' || onTeamAccount(state, agent) || agent.modelFailing || agentProjectId(state, agent) !== projectId) return []
     if (judged.has(`agent:${agent.id}`)) return []
     const role = roleNameOf(state, agent)
     if (NEVER.test(role) || NEVER_NAMED.test(agent.name) || NEVER_NAMED.test(agent.displayName ?? '')) return []

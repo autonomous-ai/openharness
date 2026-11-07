@@ -6,6 +6,7 @@ import { createSuperTab, type Actor, type Agent, type Assignment, type Conversat
 import { PM_SCHEDULE_TEXT, recordWake, SCHEDULE_SLOT_MS, scheduleRequest } from './pmSchedule.js'
 import { latestProcessNote, PROCESS_NOTES } from './processNotes.js'
 import { projectPulse } from './pulse.js'
+import { REBASE_SWARMS } from './migration/rebase.js'
 
 // Task #3581 (anh Dee, 11-06): lamp's PM did not know the Swarm v2 process, and nothing told a running PM that a release changed
 // how PMs work. A release that changes the PM's text carries a "what changed" note: each PM is woken once for it, lists it as owed
@@ -20,10 +21,11 @@ const working: Assignment = { id: 'w', agentId: 'eng', status: 'working', config
 const task = (id: string, assignment: Assignment | null): Conversation => ({ id, projectId: 'p1', number: 1, title: 'Task', leadId: 'lead', agentIds: ['lead', 'eng'],
   archived: false, brief: 'Do it.', checks: [], assignment, lastMessageSequence: 1, lastActivityAt: new Date(T).toISOString() })
 
-/** One project led by `lead`, its one task worked on (nothing for the sweep), its Engineer crew unless [crew] is false. */
+/** One project led by `lead`, its one task worked on (nothing for the sweep), its Engineer crew unless [crew] is false. In the
+ *  rebased Swarm, which the newest note is for (processNotes.ts rebasedOnly, #4097). */
 function swarm(crew = true): SuperTabState {
   return {
-    version: 1, id: 'tab', name: 'Swarm', ownerId: 'owner', environment: 'prod', paused: false, invitations: [],
+    version: 1, id: REBASE_SWARMS[0]!.tabId, name: 'Swarm', ownerId: 'owner', environment: 'prod', paused: false, invitations: [],
     people: [{ id: 'owner', email: 'owner@example.com', role: 'owner', generation: 'g' }] as SuperTabState['people'],
     agents: [agent('lead'), agent('eng', crew ? { crew: { role: 'Engineer', lane: 'backend', at: T, by: 'owner' } } : {})],
     projects: [{ id: 'p1', name: 'lamp', ownerId: 'owner', leadConversationId: 'lead-p1', visibility: 'public', members: [], updateMinutes: 5 }],

@@ -1197,7 +1197,9 @@ export class BackendSocket {
           // A full probe starts interactive login shells and is intentionally detached from this
           // connection's ordered RPC chain. Request ids make its eventual reply safe to deliver out
           // of order; keeping it awaited here made a Create click sit behind an unrelated sweep.
-          void this.engineProbeProvider(asked && asked.length > 0 ? asked : undefined, { accounts: true })
+          // A guest starts agents on its own sign-in, so it needs only which engines are installed: the
+          // owner's sign-in and last use are never read for it (#4259, from #4216's security review).
+          void this.engineProbeProvider(asked && asked.length > 0 ? asked : undefined, { accounts: guest === undefined })
             .then((availability) => reply(type, requestId, {
               engines: availability.map((entry) => ({
                 engine: entry.engine,
