@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { appendPullRequestUrls, visibleState } from './model.js'
 import { projectOf } from './projects.js'
 import { PROJECT_STATUS_MAX } from './projects.js'
-import { cardText } from './statusCard.js'
+import { cardText, projectCard } from './statusCard.js'
 import { owner, stepsFixture } from './steps.test-support.js'
 import { usernameOf } from './usernames.js'
 
@@ -13,7 +13,7 @@ const PR = 'https://github.com/acme/app/pull/7'
 function cardFixture() {
   const f = stepsFixture()
   const chat = () => f.group('lead')
-  const lines = () => chat().card?.lines ?? []
+  const lines = () => projectCard(f.state, projectOf(f.state, 'lead')).lines
   const line = (id = f.task) => lines().find(l => l.id === id)
   const text = () => visibleState(f.state, owner).projects!.find(p => p.id === 'lead')!.status?.text
   const assignment = () => f.group(f.task).assignment!.id
@@ -123,6 +123,28 @@ describe('the status card the server writes (#3593)', () => {
     const twice = visibleState(once, owner)
     expect(twice.projects!.find(p => p.id === 'lead')!.status!.text).toBe(once.projects!.find(p => p.id === 'lead')!.status!.text)
     expect(twice.projects!.find(p => p.id === 'lead')!.status!.text).toContain('Freeze starts Friday.')
+  })
+
+  // Task #4419: the card on the project chat made every task-changing command write the chat, so the next one read it whole,
+  // 6-7 KB over #4368's budgets. Each task keeps its own line; a command writes only the lines that changed.
+  it('keeps each task\'s line on the task, writes only a changed one, and never a card on the project chat', () => {
+    const f = cardFixture()
+    const second = f.run({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits.', checks: [{ description: 'Saves', independent: true }],
+      priority: 'P2', requesterId: 'owner' }, f.as(f.lead)).result.conversationId as string
+    expect(f.group(f.task).statusLine).toEqual({ text: '#1 "Fix login": working. Waits on: nothing. Owner: Jules.', since: expect.any(Number) })
+    const kept = f.group(second).statusLine
+    f.work('review', `Ready for review: ${PR} at abc1234`)
+    expect(f.group(f.task).statusLine!.text).toContain('in review (PR #7)')
+    expect(f.group(second).statusLine).toEqual(kept)
+    expect(f.chat()).not.toHaveProperty('card')
+  })
+
+  it('leaves an ended task\'s line empty, dated, so a reader learns the card dropped it', () => {
+    const f = cardFixture()
+    f.tick(60_000)
+    f.work('done', 'Shipped without a pull request.')
+    expect(f.line()).toBeUndefined()
+    expect(f.group(f.task).statusLine).toEqual({ text: '', since: expect.any(Number) })
   })
 
   it('keeps the card within its limit, naming how many tasks the last line leaves out', () => {

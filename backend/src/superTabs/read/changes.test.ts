@@ -47,28 +47,29 @@ describe('changes since a cursor (design 4.4)', () => {
     expect(receive(parts, [head], peer).head).toMatchObject({ key: 'head', version: R + 1 })
   })
 
-  // Task #3593: the status card's lines live on the project chat's part, but readers get them in the head's project; a change poll
-  // that sent only the chat would leave Desktop and web on the old card until something else moved the head. The head goes only
-  // when the card changed since the reader's cursor: a chat changes with every message, and the head is large.
-  it('sends the head with a project chat\'s change that moved the status card since the cursor, so a live reader sees it move', () => {
+  // Tasks #3593, #4419: each task keeps its own status line, but readers get the card in the head's project; a change poll that
+  // sent only the task would leave Desktop and web on the old card until something else moved the head. The head goes only when
+  // a changed task's line moved since the reader's cursor: a task changes with every message, and the head is large.
+  it('sends the head with a task whose status line moved since the cursor, so a live reader sees the card move', () => {
     const { s, parts } = scene()
-    const lead = parts.head.data!.projects![0]!.leadConversationId
-    const text = '#1 "Web": working. Waits on: nothing. Owner: Ada. Since 07:00 UTC.'
-    const card = { lines: [{ id: s.web, text: '#1 "Web": working. Waits on: nothing. Owner: Ada.', since: NOW }], text, changedAt: NOW }
-    const changed = [write(parts, 'groups', lead, p => { (p.data as { card?: object }).card = card })]
+    const line = { text: '#1 "Web": working. Waits on: nothing. Owner: Ada.', since: NOW }
+    const changed = [write(parts, 'groups', s.web, p => { (p.data as { statusLine?: object }).statusLine = line })]
     const received = receive(parts, changed, owner, NOW - 1_000)
     expect(received.head).not.toBeNull()
-    expect(received.head!.data.projects!.find(p => p.leadConversationId === lead)!.status!.text).toContain('#1 "Web": working.')
-    // A task's own change does not resend the head.
-    expect(receive(parts, [write(parts, 'groups', s.web, p => { (p.data as { title: string }).title = 'Web 3' })], owner, NOW - 1_000).head).toBeNull()
+    expect(received.head!.data.projects![0]!.status!.text).toContain('#1 "Web": working.')
   })
 
-  it('leaves the head out for a project chat change that left the card as the reader already has it', () => {
+  it('sends the head with a task whose line left the card since the cursor', () => {
     const { s, parts } = scene()
-    const lead = parts.head.data!.projects![0]!.leadConversationId
-    // The card moved long before the reader's cursor; the chat changed since for another reason (a message, the pulse).
-    const card = { lines: [{ id: s.web, text: '#1 "Web": working. Waits on: nothing. Owner: Ada.', since: NOW - 3_600_000 }], text: '#1 "Web": working.', changedAt: NOW - 3_600_000 }
-    const changed = [write(parts, 'groups', lead, p => { (p.data as { card?: object }).card = card })]
+    const changed = [write(parts, 'groups', s.web, p => { (p.data as { statusLine?: object }).statusLine = { text: '', since: NOW } })]
+    expect(receive(parts, changed, owner, NOW - 1_000).head).not.toBeNull()
+  })
+
+  it('leaves the head out for a task change that left its line as the reader already has it', () => {
+    const { s, parts } = scene()
+    // The line moved long before the reader's cursor; the task changed since for another reason (a message, a title).
+    const line = { text: '#1 "Web": working. Waits on: nothing. Owner: Ada.', since: NOW - 3_600_000 }
+    const changed = [write(parts, 'groups', s.web, p => { (p.data as { statusLine?: object; title: string }).statusLine = line; (p.data as { title: string }).title = 'Web 3' })]
     expect(receive(parts, changed, owner, NOW - 1_000).head).toBeNull()
   })
 
