@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PM_ACCOUNT_NOTE } from './pmAccounts.js'
-import { ELSEWHERE, heldByStarts, heldLocalModels, leftOut, localProbes, NO_SWARM_AGENTS_ON, noteClause, offlineModels, routeAnswer, routeTask, routingSection, servedModels, STALL_RETRY_MS, stalled } from './routeCommand.js'
+import { ELSEWHERE, heldByStarts, heldLocalModels, leftOut, localProbes, NO_SWARM_AGENTS_ON, noteClause, offlineModels, routeAnswer, routeTask, routingSection, servedModels, STALL_RETRY_MS, faulted, stalled } from './routeCommand.js'
 import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf, USED_UP_WINDOW } from './capacity.js'
 import { NONE_COVERS, OTHER_REPOSITORY, type Catalog, type Probe, type RoutePlugin } from './route.js'
@@ -550,6 +550,36 @@ describe('routeTask', () => {
     expect(rows.filter(r => r.machineId === 'm1' && r.title.startsWith('New agent')).every(r => r.label.includes('last 2 starts'))).toBe(true)
     expect(rows.filter(r => r.machineId === 'm1' && r.title.startsWith('New agent'))).not.toHaveLength(0)
     expect(rows.find(r => r.title.startsWith('Multiply'))!.label).not.toContain('last 2 starts')
+  })
+  // Task #3861 (River, 11-06): a start that failed on this machine's own storage or clone sent the next one to the same machine, five
+  // times in a day. One such failure is enough to leave it out, with the reason, until it is fixed.
+  describe('a machine whose last start failed on its own storage or clone', () => {
+    const now = Date.parse('2026-11-06T10:00:00Z')
+    const fault = (id: string, error: string, at = now - 60_000, version?: string) => ({ id, request: { machineId: 'm1' }, harnessId: null, dispatched: true, error,
+      dispatchedAt: at, ...(version ? { dispatchedVersion: version } : {}) })
+    const storage = 'CREATION_STORAGE_FAILED: The creation folder ~/.harness/cli/data/agent-creations is not usable by this account (permissions). It must belong to this account with mode 700; the owner of this computer fixes that, Harness does not change it.'
+    const clone = "This machine could not clone the project repository with the Harness GitHub App's token: Cloning stopped making progress. Check the connection and retry."
+
+    it.each([[storage, 'creation folder'], [clone, 'clone the project repository']])('is left out by one such failure, with why (%#)', (error, said) => {
+      const reason = faulted([fault('s1', error)], 'm1', {}, now)
+      expect(reason).toContain(said)
+      expect(reason).toContain('30 minutes')
+    })
+    it('is not left out for any other failure, an older one, or one a later start got past', () => {
+      expect(faulted([fault('s1', 'The engine did not start.')], 'm1', {}, now)).toBeNull()
+      expect(faulted([fault('s1', storage, now - STALL_RETRY_MS - 1)], 'm1', {}, now)).toBeNull()
+      expect(faulted([fault('s1', storage), { ...fault('s2', ''), error: null, harnessId: 'h' }], 'm1', {}, now)).toBeNull()
+      expect(faulted([fault('s1', storage, now - 60_000, '0.5.1')], 'm1', { clientVersion: '0.5.6' }, now)).toBeNull()
+      expect(faulted([fault('s1', storage)], 'm2', {}, now)).toBeNull()
+    })
+    it('keeps the machine out of the route\'s new agents, naming the reason', async () => {
+      const t = tab(); Object.assign(t.state, { starts: [fault('s', clone, Date.now() - 60_000)] })
+      const s = scoped({ tab: t })
+      await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'high' } }, s, where, opener())
+      const decision = recorded(s).command.decision
+      expect(decision.candidates.some((c: { title: string; machineId: string }) => c.title.startsWith('New agent') && c.machineId === 'm1')).toBe(false)
+      expect(JSON.stringify(decision.excluded)).toContain('clone the project repository')
+    })
   })
   // Mac Auto, Swarm autonomous-harness, 2026-10-29: two starts failed on Harness bugs later fixed and released, and the machine
   // stayed out of every route until a person started an agent there by hand.

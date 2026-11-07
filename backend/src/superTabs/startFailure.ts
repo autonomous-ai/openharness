@@ -40,8 +40,18 @@ export const NO_PM_RELAY = 'The owner\'s subscription relay is not available on 
  *  2026-10-28, where "could not prepare or launch it" sent people looking for a fault). */
 const MEMORY_SHORT = /^Not enough free memory: (\d+(?:\.\d)? GiB) free, (\d+(?:\.\d)? GiB) needed\./
 
+/** Faults of the machine itself, in the fixed words this CLI writes (cli superTabs/start.ts, lib/agentCreationReceipt.ts,
+ *  superTabs/projectFolder.ts), told to every reader (task #3861): the creation folder, only under the home folder as `~/...` in plain
+ *  path characters and with nothing after the sentence, and a clone that failed, without whatever git said after. Anything else
+ *  a host adds is not told. */
+const CREATION_FOLDER = /^CREATION_STORAGE_FAILED: The creation folder (~\/[\w.-]+(?:\/[\w.-]+){0,6}) is not usable by this account \(permissions\)\. It must belong to this account with mode 700; the owner of this computer fixes that, Harness does not change it\.$/
+const CLONE_FAILED = /^This machine could not clone the project repository with the Harness GitHub App's token(?::|$)/
+
 export function publicReason(error: string): string {
   if (error === MACHINE_REMOVED || error === ABANDONED || error === NO_PM_RELAY) return error
+  const folder = CREATION_FOLDER.exec(error)
+  if (folder) return `Its machine's creation folder ${folder[1]} is not usable by its account (permissions): the owner of that computer fixes its owner and mode.`
+  if (CLONE_FAILED.test(error)) return "Its machine could not clone the project repository with the Harness GitHub App's token."
   const memory = MEMORY_SHORT.exec(error)
   if (memory) return `Its machine has only ${memory[1]} of memory free, and it needs ${memory[2]}.`
   if (LEAD_PICKUP.test(error)) return LEAD_NOT_PICKED
