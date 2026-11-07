@@ -4,7 +4,7 @@
  * reader's own by this, a crown beside a PM, each bold while its chat has news the reader has not read (their read marks).
  */
 import { isBuddy, isBuddyChat } from './buddies.js'
-import type { Actor, Agent, SuperTabState } from './model.js'
+import type { Actor, Agent, Conversation, SuperTabState } from './model.js'
 import { isAgentChat, ledProject, onTeamAccount, projectsOf } from './projects.js'
 
 export type AgentKind = 'buddy' | 'pm' | 'regular'
@@ -34,7 +34,13 @@ export function agentKind(state: SuperTabState, target: Agent): AgentKind {
  *  with no chat of its own yet; a client then opens a Lead's with agent.chat, and an older one its project chat. */
 export function agentChatId(state: SuperTabState, target: Agent): string | null {
   if (isBuddy(target)) return state.conversations.find(c => isBuddyChat(c) && c.agentIds.includes(target.id))?.id ?? null
-  return state.conversations.find(c => isAgentChat(c) && c.agentIds.includes(target.id))?.id ?? null
+  // Only one its person still reads: a chat opened at a membership they left is nobody's (projects.ts readsAgentChat), so after
+  // a rejoin agent.chat opens a new one (security review of #3570).
+  const current = (c: Conversation) => {
+    const owner = c.audience?.people[0]
+    return !!owner && state.people.some(p => p.id === owner.id && p.generation === owner.generation)
+  }
+  return state.conversations.find(c => isAgentChat(c) && c.agentIds.includes(target.id) && current(c))?.id ?? null
 }
 
 /** Whether [target] is in [actor]'s My agents (task #4192, anh Dee 11-07: his list showed about 30 rows, agents he never
