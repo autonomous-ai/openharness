@@ -35,7 +35,7 @@ var _paneIds = 7000;
 void _desk(SuperTabLaunchFixture f, {String? remote, required String cwd}) {
   f.app.machineStates['m']!.agents = [_agent('n1', remote: remote, cwd: cwd)];
   f.app.swarms.add(
-    Swarm(id: 'desk', name: 'Games')
+    Swarm(id: '0e5c0000000000000000000000000001', name: 'Games')
       ..panes.add(TerminalPane(id: _paneIds++, machineId: 'm', agentId: 'n1')),
   );
 }
