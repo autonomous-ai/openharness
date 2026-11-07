@@ -68,7 +68,6 @@ import { githubRepository } from '../github/repository.js'
 import { shippedAt } from './ship.js'
 import { notePendingRelease } from './releases.js'
 import { syncTaskLines } from './taskLine.js'
-import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, setTimeZone, statusSchema, type AvatarUpload } from './profile.js'
 import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './tidy.js'
@@ -2063,8 +2062,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       execution: { machineId: worker.machineId, harnessId: worker.harnessId, machineOwnerId: worker.machineOwnerId, contributorId: worker.contributorId }, result: null }
     renewLease(group.assignment, context.now)
     leadActed(group.id, 'assign')
-    // Its requester's Buddy hears of the task's first assignment only: a replacement agent is no news (task #4217).
-    const firstAssignment = group.ledger?.firstAssignedAt == null && !group.ledger?.runs?.length
     recordRun(state, group, group.assignment, worker, context.now)
     const others = othersWorkNotice(state, group, worker, context.now, ENGINE_NAMES[worker.configuration.engine] ?? worker.configuration.engine)
     if (others) effects.messages.push({ id: stableId(assignmentId, 'others-work-notice'), conversationId: others.conversationId, author: others.author,
@@ -2079,8 +2076,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       ...code ? [code] : [],
       ...group.checks.length ? [`Acceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`] : [],
       ...requestedBy ? [requestedBy] : []].join('\n\n'), [worker.id], null, SYSTEM_ROW, undefined, undefined, undefined, assignmentId)
-    const news = firstAssignment && assignedNotice(state, group, sender, assignmentId)
-    if (news) effects.messages.push(news)
   }
   /** The kind of a step already open on a task, by its name, so a step its Engineer opened is reused, not doubled. */
   const stepKind = (step: Conversation): StepKind | null => {
@@ -5354,8 +5349,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     const group = state.conversations.find(c => c.id === draft.conversationId)
     if (group) bindPullRequestCards(group, draft, groupRepositoryUrl(state, group))
   }
-  // A Buddy hears the project-chat rows about its person's proposals and requested work (buddyNews.ts).
-  for (const draft of effects.messages) tellBuddies(state, draft, draft.replyTo && draft.replyTo === context.reply?.id ? context.reply.threadSource ?? null : null)
   assertUniqueMessageIds(command.type, effects.messages)
   return effects
 }

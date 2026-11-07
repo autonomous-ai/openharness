@@ -7,7 +7,6 @@ import { CLOSED_CHAT_ANSWERED_NOTICE } from './decisions.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, defaultBuddy, defaultBuddyChat, ownAgentAuthor, refuseOthersInPrivateChat, shownBefore, swarmBuddyChatId } from './buddies.js'
 import { giveOwnBuddy } from './ownBuddy.test-support.js'
 import { isRoleName } from './agentNames.js'
-import { buddiesTold } from './buddyNews.js'
 import { sweepLiveness } from './liveness.js'
 import { hostTab } from './read/hostRows.js'
 import { groupView } from './read/views.js'
@@ -1736,15 +1735,6 @@ describe('several Buddies: where a person\'s lines go', () => {
     expect(f.run({ type: 'buddy.chat' }, peer).result.conversationId).toBe(second.chat)
   })
 
-  it('tells a proposal\'s news to the Buddy that sent it, and to the default once that one is removed', () => {
-    const { f, first, second } = two()
-    const answer = { id: 'm1', conversationId: f.app.conversationId, text: 'Accepted: next up.', replyTo: 'p1', recipients: [],
-      author: { kind: 'agent', id: f.pm, name: 'app-pm' } } as never
-    const proposal = { kind: 'buddy-proposal', personId: 'peer', buddyId: second.agentId }
-    expect(buddiesTold(f.state, answer, proposal)).toEqual([second.agentId])
-    f.run({ type: 'buddy.remove', conversationId: second.chat } as Command, peer)
-    expect(buddiesTold(f.state, answer, proposal)).toEqual([first.agentId])
-  })
 })
 
 // Task #3818: on its machine, each of a person's Buddies and its thread sessions are told their own chat, so the host ends a

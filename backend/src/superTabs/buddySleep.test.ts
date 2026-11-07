@@ -110,15 +110,15 @@ describe('server-owned Buddy sleep', () => {
 
 
 describe('authorized input wakes the same Buddy', () => {
-  it.each(['person', 'proposal-question'])('wakes only the intended Buddy for %s input before agent-only filtering', kind => {
+  // Task #4623: no project-chat news wakes a Buddy any more; its person's own input does.
+  it('wakes only the intended Buddy for its person\'s input', () => {
     const f = fixture()
     f.buddy.asleep = { since: NOW - 1_000 }
     const other = { ...structuredClone(f.buddy), id: 'other', harnessId: 'other-h' }
     f.state.agents.push(other)
-    const own = kind === 'person'
-    const message = { id: 'input', conversationId: own ? f.chat.id : 'lead', replyTo: null,
+    const message = { id: 'input', conversationId: f.chat.id, replyTo: null,
       author: { kind: 'person' as const, id: f.owner.id, name: f.owner.email, membershipGeneration: f.owner.generation },
-      recipients: own ? ['buddy'] : [], ...own ? {} : { buddyRecipients: ['buddy'], source: { kind: 'agent-only' } }, text: 'Please answer' }
+      recipients: ['buddy'], text: 'Please answer' }
     numberMessages(f.state, [message], NOW)
     expect(f.buddy.asleep).toBeUndefined()
     expect(f.buddy).toMatchObject({ keptAt: NOW, downSince: new Date(NOW).toISOString(), crewWaking: { at: NOW, conversationId: message.conversationId },

@@ -805,8 +805,6 @@ export interface MessageDraft {
   /** Explicit answer in main chat, without a thread. */
   answers?: string
   recipients: string[]
-  /** Buddies this row is news for (buddyNews.ts): a delivery each, never listed among its recipients. */
-  buddyRecipients?: string[]
   /** Structured row kind for clients; `native` is written by native.ts, `route`/`route-override` by commands. */
   source?: Record<string, unknown>
   attachments?: import('./attachments.js').Attachment[]

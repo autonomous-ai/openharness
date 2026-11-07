@@ -1,4 +1,3 @@
-import { shippedNotice } from './buddyNews.js'
 /**
  * Releases scheduled by the Swarm (task #3405, anh Dee's Swarm redesign, 2026-11-05: the server does the routine). A merge
  * recorded on a task puts it on its project's release list; the worker (releaseWatch.ts) reads GitHub for each component's
@@ -279,17 +278,8 @@ export function settleReleases(state: SuperTabState, projectId: string, facts: R
     else delete group.releasing
   }
 
-
-  // Shipped once a verified release holds all of it (task #4217: a merge alone is not shipped): a proposal's card says so, and only
-  // there (task #4558); a task's requester's Buddy hears it, by an id the release fixes, so a settle retried tells nobody twice.
-  if (lead) for (const id of new Set(outcome.shipped)) {
-    const group = state.conversations.find(c => c.id === id)
-    if (!group || group.releasing) continue
-    const sender = { kind: 'agent' as const, id: lead.id, name: lead.name, membershipGeneration: lead.membershipGeneration }
-    const once = stableId(group.id, 'shipped', String(group.released!.at))
-    const news = shippedNotice(state, group, sender, once)
-    if (news) outcome.messages.push(news)
-  }
+  // Shipped once a verified release holds all of it (task #4217: a merge alone is not shipped): its card says so (task #4547),
+  // and no agent relays it to its person (task #4623).
 
   for (const component of RELEASE_COMPONENTS) {
     const step = ledger.steps?.[component.id]

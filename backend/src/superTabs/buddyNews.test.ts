@@ -53,7 +53,7 @@ function setup() {
 // Task #4623 (anh Dee, 11-07): no agent relays news to its owner. Their card shows accepted, working and shipped, and every
 // question for them is a Decision, so a Buddy hears no project-chat line, assignment or release for its person.
 describe('no agent relays news to its owner', () => {
-  const hears = (messages: MessageDraft[]) => messages.filter(m => m.recipients.includes('buddy') || m.buddyRecipients?.includes('buddy'))
+  const hears = (messages: MessageDraft[]) => messages.filter(m => m.recipients.includes('buddy'))
 
   it('hears nothing when the PM answers its person’s proposal, in its thread too', () => {
     const f = setup(), sent = f.propose()
