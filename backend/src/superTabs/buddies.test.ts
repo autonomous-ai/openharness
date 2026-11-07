@@ -1512,7 +1512,8 @@ describe('naming a Buddy (Diego, 10-29)', () => {
 
   it('refuses another person\'s default Buddy name and a name chosen in another Buddy chat, one Buddy chat or older, quiet ones included', () => {
     const { f, chat, rename } = named()
-    expect(() => rename('owner\'s Buddy')).toThrow('taken')
+    // Refused for its shape before it is found taken (Mac test of #3560).
+    expect(() => rename('owner\'s Buddy')).toThrow('old default')
     const theirs = f.run({ type: 'buddy.chat' }, owner).result.conversationId as string
     f.run({ type: 'buddy.rename', conversationId: theirs, name: 'Moss' }, owner)
     expect(() => rename('moss')).toThrow('taken')
@@ -1531,7 +1532,7 @@ describe('naming a Buddy (Diego, 10-29)', () => {
   // Mac test of #3560: the old default shape reads as no name and is shown a member name, so nobody chooses it.
   it('refuses "<someone>\'s Buddy", the old default\'s shape', () => {
     const { rename } = named()
-    for (const name of ["peer's Buddy", "Sam's buddy", 'ken.tran\u2019s Buddy']) expect(() => rename(name)).toThrow(/role/)
+    for (const name of ["peer's Buddy", "Sam's buddy", 'ken.tran\u2019s Buddy']) expect(() => rename(name)).toThrow('old default')
   })
 
   it('reserves Buddy-only names such as Reviewer, without making them roles for other agents', () => {

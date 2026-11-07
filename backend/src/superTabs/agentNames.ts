@@ -31,18 +31,24 @@ const automatic = /^(?:claude|codex|pi|agent)-\d{4}-\d{2}-\d{2}(?:[-T].*)?$/i
 const engine = /^(?:claude(?: code)?|codex|opencode|pi)$/i
 /** Whether [name] is only an engine's ("Claude Code", "Codex"), which names no agent. */
 export const isEngineName = (name: string): boolean => engine.test(name.trim())
+/** The name every Buddy had before real names (task #4568), "dee's Buddy": no member's, so a Buddy started before them is
+ *  shown a member name at once rather than only once it restarts (Mac test of #3560). */
+const oldBuddy = /^\S+['\u2019]s buddy$/i
+export const isOldBuddyName = (name: string): boolean => oldBuddy.test(name.trim())
 /** The Reviewer role's name is no member's either (Dee, 2026-10-30: three "Reviewer" rows). Kept out of isRoleName, whose
  *  Buddy check reserves it on its own (buddies.ts BUDDY_RESERVED). */
 const reviewer = /^reviewer(?:[\s#-]+\d+)?$/i
 /** Whether [name] names a role or an automatic session rather than a member. */
-const unnamed = (name: string): boolean => defaults.test(name) || reviewer.test(name) || automatic.test(name) || engine.test(name)
+const unnamed = (name: string): boolean => defaults.test(name) || reviewer.test(name) || automatic.test(name) || engine.test(name) || oldBuddy.test(name)
+/** A stored shown name that is given a real one all the same: "Reviewer", an engine's, the old Buddy default. */
+const replaced = (name: string): boolean => reviewer.test(name) || engine.test(name) || oldBuddy.test(name)
 
 function chosen(agent: NamedAgent): string | undefined {
-  // Every Reviewer kept "Reviewer" as its member name until 2026-10-30, and a local Cmd-N Member its engine's until task
-  // #4568: those stored names are given real ones.
+  // Every Reviewer kept "Reviewer" as its member name until 2026-10-30, a local Cmd-N Member its engine's and a Buddy
+  // "<person>'s Buddy" until task #4568: those stored names are given real ones (replaced).
   // Any other stored name stays, even one that reads like a role (a Buddy may be named so).
   const shown = agent.displayName?.trim()
-  if (shown && !reviewer.test(shown) && !engine.test(shown)) return agent.displayName
+  if (shown && !replaced(shown)) return agent.displayName
   const name = agent.name.trim()
   return name && !unnamed(name) ? name : undefined
 }
@@ -82,7 +88,7 @@ export function freeAgentName(taken: (name: string) => boolean, seed: string): s
 export function agentDisplayName(agents: readonly NamedAgent[], id: string): string | undefined {
   const member = agents.find(agent => agent.id === id)
   if (!member) return undefined
-  if (member.displayName && !reviewer.test(member.displayName.trim()) && !engine.test(member.displayName.trim())) return member.displayName
+  if (member.displayName && !replaced(member.displayName.trim())) return member.displayName
   const named = agents.map(agent => ({ ...agent }))
   assignAgentDisplayNames(named)
   return named.find(agent => agent.id === id)!.displayName

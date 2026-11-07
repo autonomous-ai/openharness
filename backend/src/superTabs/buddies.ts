@@ -2,7 +2,7 @@
  *  read. When they ask, it posts one proposal in the project chat on their behalf; the PM assigns the work as usual. A Buddy
  *  reads what its person reads of its project but no private conversation (Ken, 10-29), and does nothing but post in its
  *  chat and propose. On in every Swarm: Buddies replaced Chat with PM (Ken, 10-29). */
-import { agentDisplayName, freeAgentName, isRoleName } from './agentNames.js'
+import { agentDisplayName, freeAgentName, isOldBuddyName, isRoleName } from './agentNames.js'
 import { fail, nextConversationNumber, person, stableId, type Actor, type Agent, type AgentStartRequest, type Author, type Conversation, type MessageDraft, type Person, type SuperTabState } from './model.js'
 
 export const isBuddy = (target: Pick<Agent, 'buddyOf'>): boolean => !!target.buddyOf
@@ -273,6 +273,8 @@ export function renameBuddy(state: SuperTabState, actor: Actor, chat: Conversati
       fail('INVALID_BUDDY_NAME', 'Use 2 to 32 letters, digits, single spaces, dots, dashes, underscores or apostrophes, starting with a letter or digit.', 400)
     }
     if (isRoleName(name) || reserved(name)) fail('BUDDY_NAME_ROLE', `${name} is a role's name. Choose another.`, 400)
+    // The old default's shape is shown a member name instead (agentNames.ts), so a Buddy named so would never show it.
+    if (isOldBuddyName(name)) fail('BUDDY_NAME_ROLE', `${name} looks like the old default name. Choose a name of its own.`, 400)
     if (nameTaken(state, chat, name, chosen)) fail('BUDDY_NAME_TAKEN', `${name} is taken in this Swarm. Choose another.`, 409)
     chat.buddyName = name
     chat.title = name
