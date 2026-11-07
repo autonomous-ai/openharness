@@ -66,6 +66,10 @@ abstract final class AppIcons {
   static const circleMinus = LucideIcons.circleMinus400;
   static const circlePlus = LucideIcons.circlePlus400;
   static const circleSlash = LucideIcons.circleSlash400;
+
+  /// The Lead choice in New agent: a person in a ring, as a Lead wears its
+  /// gold ring; the crown is only the leaderboard's number one (task #4461).
+  static const circleUser = LucideIcons.circleUser400;
   static const circleX = LucideIcons.circleX400;
   static const clipboardPaste = LucideIcons.clipboardPaste400;
   static const clock = LucideIcons.clock400;
