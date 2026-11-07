@@ -2818,6 +2818,10 @@ describe('cancelling work', () => {
       expect(tasksNamedIn('Duplicate: merged in PR #3529 and pull request #3530', 1)).toEqual([])
       for (const reason of ['Not needed', 'Waiting on #4434', 'Not needed; see #4400 for context']) expect(tasksNamedIn(reason, 1)).toEqual([])
       expect(tasksNamedIn(`Split into ${Array.from({ length: 20 }, (_, i) => `#${i + 100}`).join(' ')}`, 1)).toHaveLength(10)
+      // The phrase goes with the numbers after it in its own sentence (review 2 of #3534).
+      expect(tasksNamedIn('Duplicate of #4421; waiting on #4434', 1)).toEqual([4421])
+      expect(tasksNamedIn('A duplicate. Waiting on #4434 anyway', 1)).toEqual([])
+      expect(tasksNamedIn('Merged #3471', 1)).toEqual([])
     })
     it('links an unassigned proposal or live work to the real tasks it names, and keeps it', () => {
       const f = fixture(), dup = f.group(), real = f.group(), plain = f.group(), other = f.group()
@@ -2850,6 +2854,12 @@ describe('cancelling work', () => {
       expect(task(f, dup).foldedInto).toEqual([real])
       // Naming no task, a closed one stays closed, as before.
       expect(() => f.run({ ...link, reason: 'Duplicate' } as Command)).toThrow(expect.objectContaining({ code: 'ARCHIVED' }))
+      // Naming one the Swarm does not hold now (mistyped, or quiet for a day), it says which (review 2 of #3534).
+      const unknown = f.group()
+      f.run({ type: 'work.cancel', conversationId: unknown, assignmentId: 'current', reason: 'Duplicate' })
+      expect(() => f.run({ ...link, conversationId: unknown, reason: 'Duplicate of #999' } as Command))
+        .toThrow(expect.objectContaining({ code: 'FOLD_TARGET', message: expect.stringContaining('#999') }))
+      expect(task(f, unknown).foldedInto).toBeUndefined()
       const { f: g, group, leadActor, cancel } = active(), other = g.group()
       g.run(cancel, leadActor)
       g.run({ ...cancel, reason: `Duplicate of #${task(g, other).number}` } as Command, leadActor)
