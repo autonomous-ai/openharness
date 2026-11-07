@@ -14,7 +14,12 @@ class SuperTabPersonalTask {
   bool get suggested => json['suggested'] == true;
   bool get canApprove => json['canApprove'] == true;
   String? get reason => json['reason'] as String?;
-  Map<String, dynamic> get agent => superTabMap(json['agent']);
+
+  /// A task nobody works on yet is sent with `agent: null`: no agent, not a
+  /// malformed reply (building its row threw, and a release build drew the
+  /// error as a grey box over the rest of the list).
+  Map<String, dynamic> get agent =>
+      json['agent'] == null ? const {} : superTabMap(json['agent']);
   String? get agentId => agent['id'] as String?;
 }
 

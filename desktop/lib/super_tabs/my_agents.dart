@@ -1,15 +1,17 @@
 import 'model.dart';
 
-/// The agents [accountId] brought to the Swarm, for the left pane's My agents (Swarm v3, task #4118): their Buddy first,
-/// then the others by name. Only the person's own: another person's agent, and another person's Buddy, never appear.
+/// The agents in [accountId]'s My agents, for the left pane (Swarm v3, task #4118): their Buddy first, then the others by
+/// name. The server says which (task #4192: their own account's, running and not finished), so every client lists the same.
+/// An older backend says nothing: then every agent the person brought, and only their own Buddy (this can go 2026-12-07).
 List<SuperTabAgent> superTabMyAgents(
   SuperTabSnapshot snapshot,
   String accountId,
 ) {
   final own = [
     for (final agent in snapshot.agents)
-      if (agent.contributorId == accountId &&
-          (agent.buddyOf == null || agent.buddyOf == accountId))
+      if (agent.myAgent ??
+          (agent.contributorId == accountId &&
+              (agent.buddyOf == null || agent.buddyOf == accountId)))
         agent,
   ];
   String name(SuperTabAgent agent) =>
