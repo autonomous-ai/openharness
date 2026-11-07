@@ -105,7 +105,7 @@ describe('Swarm sessions without skill files (task #4673)', () => {
   })
 
   it('tells a Buddy to ask its owner in their Decisions, settle answers given in chat, and send through a Send decision (task #4525)', () => {
-    const text = readFileSync(prepareSwarmSkill(fixture(), { role: 'buddy', key: 'buddy-session' }).file, 'utf8')
+    const text = readFileSync(prepareBuddy(fixture(), { role: 'buddy', key: 'buddy-session' }).file, 'utf8')
     expect(text).toContain('## Ask your owner')
     expect(text).toContain('{"type":"decision.ask","conversationId":"CHAT","questions":[{"question":')
     expect(text).toContain('{"type":"decision.answer","decisionId":"ID","choice":N,"ownerMessageId":"MESSAGE"}')
