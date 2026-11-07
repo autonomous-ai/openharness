@@ -282,10 +282,17 @@ void main() {
       'merged',
       'shipped',
     ]) {
-      // 1400 is under six minimums, so each takes the least a column does (task #3869).
+      // Done and Merged are empty, slim lanes (finding 5 of #4211); the four
+      // with cards share what is left of 1400.
       expect(
         tester.getSize(_column(name)).width,
-        SuperTabTasksView.minColumnWidth,
+        name == 'done' || name == 'merged'
+            ? SuperTabTasksView.slimColumnWidth
+            : (1400 -
+                      2 * grid.AppDesktop.groupGap -
+                      2 * SuperTabTasksView.slimColumnWidth -
+                      5 * grid.AppDesktop.groupGap) /
+                  4,
         reason: name,
       );
       final panel = tester.widget<DecoratedBox>(_column(name));
@@ -568,6 +575,24 @@ void main() {
       'shipped',
     ];
     final board = find.byKey(const ValueKey('super-tasks-board'));
+    // A card in every column, so none is a slim lane.
+    ConversationServer full() {
+      final server = tasksServer();
+      (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+        taskFixture('repair', 'Repair the notes', 20, status: 'done'),
+        taskFixture(
+          'releasing',
+          'Waits for its release',
+          21,
+          status: 'done',
+          pullRequest: 2871,
+          merged: true,
+          releasing: ['desktop'],
+        ),
+      ]);
+      return server;
+    }
+
     List<double> widths(WidgetTester tester) => [
       for (final name in names) tester.getSize(_column(name)).width,
     ];
@@ -581,7 +606,7 @@ void main() {
       testWidgets(
         'at $width the six columns are equal and reach the pane\'s edge',
         (tester) async {
-          final c = await _show(tester, tasksServer(), size: Size(width, 900));
+          final c = await _show(tester, full(), size: Size(width, 900));
           final all = widths(tester);
           expect(
             all.every((w) => (w - all.first).abs() < .5),
@@ -603,16 +628,22 @@ void main() {
       );
     }
 
+    // Whole columns at rest, not six at the minimum with the fifth cut
+    // mid-word (finding 5 of #4211).
     testWidgets(
-      'at 1280 they keep their minimum and the Board scrolls sideways',
+      'at 1280 as many whole columns as fit share it and the Board scrolls '
+      'sideways',
       (tester) async {
-        final c = await _show(
-          tester,
-          tasksServer(),
-          size: const Size(1280, 900),
-        );
+        final c = await _show(tester, full(), size: const Size(1280, 900));
         final all = widths(tester);
-        expect(all.every((w) => (w - 240).abs() < .5), isTrue, reason: '$all');
+        expect(
+          all.every((w) => (w - all.first).abs() < .5),
+          isTrue,
+          reason: '$all',
+        );
+        expect(all.first, greaterThanOrEqualTo(240));
+        expect(tester.getTopRight(_column('done')).dx, lessThanOrEqualTo(1280));
+        expect(tester.getTopLeft(_column('merged')).dx, greaterThan(1279.5));
         expect(position(tester).maxScrollExtent, greaterThan(0));
         await _close(tester, c);
       },
@@ -901,30 +932,26 @@ void main() {
     await _close(tester, c);
   });
 
-  testWidgets('an empty column says No tasks in the caption color', (
+  // A slim lane says it is empty with its 0, not a full panel saying No tasks
+  // (finding 5 of #4211).
+  testWidgets('an empty column is a slim lane saying 0 in the caption color', (
     tester,
   ) async {
     final c = await _show(tester, tasksServer());
-    final empty = find.descendant(
-      of: _column('done'),
-      matching: find.text('No tasks'),
-    );
-    expect(empty, findsOneWidget);
-    expect(
-      find.descendant(of: _column('merged'), matching: find.text('No tasks')),
-      findsOneWidget,
-    );
-    expect(
-      tester.widget<Text>(empty).style?.color,
-      grid.AppPalette.textSecondary,
-    );
-    for (final name in ['proposals', 'nextUp', 'working', 'shipped']) {
+    for (final name in ['done', 'merged']) {
       expect(
-        find.descendant(of: _column(name), matching: find.text('No tasks')),
-        findsNothing,
+        tester.getSize(_column(name)).width,
+        SuperTabTasksView.slimColumnWidth,
+        reason: name,
+      );
+      final zero = find.descendant(of: _column(name), matching: find.text('0'));
+      expect(
+        tester.widget<Text>(zero).style?.color,
+        grid.AppPalette.textSecondary,
         reason: name,
       );
     }
+    expect(find.text('No tasks'), findsNothing);
     await _close(tester, c);
   });
 
