@@ -314,7 +314,7 @@ void main() {
       ('planned', 'Planned', HarnessActivity.starting),
       ('working', 'Working', HarnessActivity.working),
       ('needs_human', 'Needs a human', HarnessActivity.needsInput),
-      ('blocked', 'Stuck', HarnessActivity.failed),
+      ('blocked', 'Stuck', null),
       ('review', 'Ready for review', HarnessActivity.needsInput),
       ('done', 'Done', HarnessActivity.done),
       ('stopped', 'Stopped', HarnessActivity.paused),
@@ -359,6 +359,11 @@ void main() {
         expect(mark.activity, activity, reason: status);
       }
     }
+    // Its own icon (task #4461): no ActivityMark, so no terminal ✗.
+    expect(
+      inCard('blocked', find.byIcon(AppIcons.triangleAlert)),
+      findsOneWidget,
+    );
   });
   group('a refused change unlocks the pane and says why (finding 3)', () {
     FilledButton approve(String id) =>
