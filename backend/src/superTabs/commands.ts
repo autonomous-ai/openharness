@@ -1059,12 +1059,13 @@ function proposalRequester(state: SuperTabState, project: SwarmProject, personId
 /** Who may cancel a lost or stopped task, and a live one (work.cancel), for the refusals that name them. */
 const WHO_CANCELS_ENDED = 'Only the person who asked for this task, its project\'s owner, the Swarm owner or an agent of this project can cancel it.'
 const WHO_CANCELS_LIVE = 'Only an agent of this project or the Swarm owner can cancel work in progress. Ask the project\'s coordinator.'
-/** The task numbers a cancel's reason says its work goes on in ("Duplicate of #4421", "Being done inside #4445", "Split into
- *  #4465 to #4468"; task #4462). A mere mention ("Waiting on #4434"), a pull request's number ("PR #12") and its own name none. */
+/** The task numbers a cancel's reason says its work goes on in, by the agreed phrases only: "Duplicate of #4421", "Being done
+ *  inside #4445", "Split into #4465 to #4468", "Folded into #12" (tasks #4462, #4480). A loose phrase ("will look into #4421",
+ *  "Part of the cause is #4421"), a mere mention ("Waiting on #4434"), a pull request's number ("PR #12") and its own name none. */
 export function tasksNamedIn(reason: string, self: number | undefined): number[] {
   // Each sentence or clause on its own: its numbers count once its phrase came before them (review 2 of #3534).
   const named = reason.split(/;|[.!?]\s+/).flatMap(clause => {
-    const phrase = /\b(duplicates?|dup(e)?|inside|into|split|same as|covered by|part of|replaced by|superseded by)\b/i.exec(clause)
+    const phrase = /\b(duplicate of|being done inside|split into|folded into)\b/i.exec(clause)
     return phrase ? [...clause.slice(phrase.index).matchAll(/(?<!\b(?:PR|pull request)\s*)#([1-9][0-9]{0,8})\b/gi)].map(m => Number(m[1])) : []
   }).filter(n => n !== self)
   return [...new Set(named)].slice(0, 10)
