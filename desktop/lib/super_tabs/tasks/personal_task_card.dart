@@ -105,9 +105,12 @@ class SuperTabPersonalTaskCard extends StatelessWidget {
                         ],
                         const Spacer(),
                         if (waiting) ...[
+                          // Plain text: only Approve, the main action, is a capsule.
                           TextButton(
                             onPressed: onReject,
                             style: TextButton.styleFrom(
+                              backgroundColor: Colors.transparent,
+                              side: BorderSide.none,
                               visualDensity: VisualDensity.compact,
                               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                               padding: _buttonPadding,
