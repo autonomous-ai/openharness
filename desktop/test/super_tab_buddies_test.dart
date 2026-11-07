@@ -1096,15 +1096,61 @@ void main() {
         },
       );
 
+      testWidgets('the empty Buddy chat text keeps the pane\'s side padding', (
+        tester,
+      ) async {
+        final server = buddySwarm();
+        giveBuddy(server);
+        final c = await show(tester, server);
+        await tester.tap(buddyEntry);
+        await tester.pumpAndSettle();
+
+        final text = tester.getRect(find.textContaining('Say what to build'));
+        final composer = tester.getRect(
+          find.byKey(const ValueKey('super-message-composer-row')),
+        );
+        // The composer row spans the pane; its field is inset by the panel
+        // padding, and so is the empty text.
+        expect(
+          text.left,
+          greaterThanOrEqualTo(composer.left + grid.AppDesktop.panelPadding),
+        );
+        expect(
+          text.right,
+          lessThanOrEqualTo(composer.right - grid.AppDesktop.panelPadding),
+        );
+        await close(tester, c);
+      });
+
       testWidgets(
-        'an empty Buddy chat shows no line (anh Dee, 11-07, rule 7)',
+        'an empty Buddy chat says, in one line, how to reach the coordinator (anh Dee\'s copy rules, #4465)',
         (tester) async {
           final server = buddySwarm();
           giveBuddy(server);
-          final c = await show(tester, server);
+          var c = await show(tester, server);
           await tester.tap(buddyEntry);
           await tester.pumpAndSettle();
-          expect(find.textContaining('Say what you want to build'), findsNothing);
+
+          expect(
+            find.text("Say what to build, then 'send to the Product Manager'."),
+            findsOneWidget,
+          );
+          await close(tester, c);
+
+          // Called what its project calls it.
+          server.state['projects'] = [
+            {
+              ...projectFixture('lead', 'openharness', 'lead'),
+              'coordinatorName': 'Coordinator',
+            },
+          ];
+          c = await show(tester, server);
+          await tester.tap(buddyEntry);
+          await tester.pumpAndSettle();
+          expect(
+            find.text("Say what to build, then 'send to the Coordinator'."),
+            findsOneWidget,
+          );
           await close(tester, c);
         },
       );
