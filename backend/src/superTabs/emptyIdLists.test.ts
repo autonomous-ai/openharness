@@ -31,7 +31,7 @@ describe('reads of machines, users and SuperTab with nothing to look up', () => 
     const queries: Query[] = []
     const reads = new HostReads(new SuperTabStore(recordingDb([]) as PrismaClient))
 
-    const lookups = await reads['lookups'](recordingDb(queries) as never, { id: 't1', people: [], agents: [], environment: 'prod' } as never, [], new GrantReads({} as never))
+    const lookups = await reads['lookups'](recordingDb(queries) as never, { id: 't1', people: [], agents: [], conversations: [], environment: 'prod' } as never, 'm1', [], new GrantReads({} as never))
 
     expect(lookups.people).toEqual([])
     expect(queries.filter(q => q.model === 'user')).toEqual([])

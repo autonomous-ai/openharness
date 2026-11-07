@@ -5,7 +5,7 @@
  * Everything here is the stored state, the same for every reader: permissions are applied after (read/views.ts).
  */
 import type { Prisma, PrismaClient } from '@prisma/client'
-import { stableId, type AgentStart } from './model.js'
+import { stableId, type Agent, type AgentStart } from './model.js'
 import { CacheView } from './cache.js'
 import { accessRule, baseRule, dormantAgentRule, dormantProjectRule, dormantRule, FEED_MAIN_KINDS, feedRule, finishedStartsRule, groupRule, lightDormantAgentRule, machineFeedRule,
   machinesRule } from './cachePatch.js'
@@ -157,15 +157,26 @@ export async function readLight(db: Db, view: CacheView, tabId: string, opts: Om
  * (`machineId`, read/host.ts hostParts), its agents' dormant conversations from `dormant:agent:{id}` plus its starts'
  * conversations and their projects. Reads Mongo only for entries that miss.
  */
+/**
+ * Whose conversations a machine's host state reads by membership: only its Buddies', for the Buddy chat each is in. Another
+ * agent's membership is answered by the running work and Lead conversations, or one quiet conversation (read/host.ts
+ * quietMembers): the PM is in nearly every conversation, and reading them all was prod's top slow query (task #4560). A task an
+ * agent lost to a usage limit is read by id, for its resume (hostRows.ts).
+ */
+export function hostMembers(agents: ReadonlyArray<{ key: string; data?: Agent | null }>): { buddies: string[]; lost: string[] } {
+  return { buddies: agents.filter(a => a.data?.buddyOf).map(a => a.key), lost: agents.flatMap(a => a.data?.lostTask ? [a.data.lostTask.conversationId] : []) }
+}
+
 export async function deriveLight(db: Db, view: CacheView, tabId: string, opts: SelectOptions & { machineId?: string }): Promise<Omit<SwarmParts, 'machines'>> {
   const [active] = await base(db, view, tabId)
   const machineId = opts.machineId
   const starts = machineId ? active.starts.filter(s => s.data!.request.machineId === machineId) : active.starts
-  const agentIds = machineId ? active.agents.filter(a => (a.data as { machineId?: string }).machineId === machineId).map(a => a.key) : opts.agentIds ?? []
+  const members = machineId ? hostMembers(active.agents.filter(a => (a.data as { machineId?: string }).machineId === machineId) as Array<{ key: string; data?: Agent | null }>) : null
+  const agentIds = members ? members.buddies : opts.agentIds ?? []
   const groupIds = machineId ? [...new Set(starts.map(s => s.data!.request.conversationId))] : opts.groupIds ?? []
   const awake = active.groups.map(projectLightGroup)
   const held = new Set(awake.map(g => g.key))
-  const named = lightKeys(active.head, active.starts, { ...opts, groupIds }).filter(id => !held.has(id))
+  const named = lightKeys(active.head, active.starts, { ...opts, groupIds: [...groupIds, ...members?.lost ?? []] }).filter(id => !held.has(id))
   // Its agents' quiet conversations light, as the host rows read them: whole, one Lead's were 3.6 MB a read on prod (B4, #2597).
   const [byId, ...dormant] = await Promise.all([readLightGroups(db, view, tabId, named),
     ...agentIds.map(id => view.get(tabId, `light-dormant:agent:${id}`, 'main',
@@ -175,7 +186,7 @@ export async function deriveLight(db: Db, view: CacheView, tabId: string, opts: 
   // A machine's host state also lists every conversation of a project it has a start in (read/host.ts hostParts).
   const projectIds = machineId ? [...new Set(groupIds.flatMap(id => { const g = candidates.get(id); return g ? [g.data!.projectId ?? 'lead'] : [] }))]
     : opts.projectIds ?? []
-  return lightSelect({ ...active, groups: [...candidates.values()] }, { groups: opts.groups, groupIds, agentIds, projectIds })
+  return lightSelect({ ...active, groups: [...candidates.values()] }, { groups: opts.groups, groupIds: [...groupIds, ...members?.lost ?? []], agentIds, projectIds })
 }
 
 /** Light conversations by id (parts/light.ts loadLightGroups), dormant ones too, in the order named: each held at the

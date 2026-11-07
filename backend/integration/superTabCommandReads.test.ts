@@ -196,3 +196,61 @@ describe('a slow command names its phases', () => {
     }
   })
 })
+
+// Task #4560 (Ken's 20:20 VN scan): the host poll's SwarmGroup aggregate is prod's top slow query, and each poll grew from 60 to
+// 76 KB. On the PM's machine it read every conversation the PM is in, which is nearly every one, to say whether each agent is
+// still in one that is not archived. It reads the running work and Lead conversations, and asks that one question per idle agent.
+describe('a host poll on the PM\'s machine', () => {
+  const groupReads = (entries: ProfileEntry[]) => entries.filter(e => e.ns.endsWith('.SwarmGroup') && ['query', 'command', 'getmore'].includes(e.op))
+  /** The reads by membership: conversations an agent of this machine is in (the `agents` index), not running work or the undecided. */
+  const byMembership = (entries: ProfileEntry[]) => groupReads(entries).filter(e => {
+    const match = (e.command?.pipeline as Array<{ $match?: Record<string, unknown> }> | undefined)?.[0]?.$match
+    return !!match && 'agentIds' in match
+  })
+  const docs = (entries: ProfileEntry[]) => byMembership(entries).reduce((n, e) => n + (e.docsExamined ?? 0), 0)
+
+  it.each([['without', false], ['with', true]] as const)('reads a few conversations, never every one its agents are in (%s cache patching)', async (_label, patching) => {
+    const { HostReads } = await import('../src/superTabs/read/host.js')
+    const { configureSwarmStamps } = await import('../src/superTabs/cache.js')
+    const { MemoryStamps } = await import('../src/superTabs/cache.test-support.js')
+    const { readDelta } = await import('../src/superTabs/cachedReads.js')
+    configureSwarmStamps(new MemoryStamps(), patching ? { delta: readDelta(db) } : {})
+    try {
+      const s = await swarm()
+      // An agent here whose only conversation went quiet is still in it; one whose only conversation was archived is not.
+      const only = async (name: string) => {
+        const conversationId = await s.task(name)
+        const agentId = String((await s.execute({ type: 'agent.add', conversationId, machineId: 'mac-0', harnessId: randomUUID(), name,
+          configuration: config, lead: false })).result.agentId)
+        await s.execute({ type: 'conversation.agent', conversationId: 'lead', agentId, present: false, lead: false })
+        return { conversationId, agentId }
+      }
+      const quiet = await only('Quiet agent'), archived = await only('Archived agent'), secret = await only('Private agent')
+      await s.execute({ type: 'conversation.archive', conversationId: archived.conversationId, archived: true } as Command)
+      const row = await db.swarmGroup.findFirstOrThrow({ where: { tabId: s.tab, key: quiet.conversationId } })
+      await db.swarmGroup.update({ where: { id: row.id }, data: { dormant: true, data: { ...row.data as object, dormant: true } } })
+      // Review of #3573 (Mactest5): an agent whose only conversation is a quiet private chat stays confidential on its host row.
+      const generation = (await db.swarmMember.findFirstOrThrow({ where: { tabId: s.tab, key: owner.sub } }).then(m => m.data as { generation: string })).generation
+      const privateRow = await db.swarmGroup.findFirstOrThrow({ where: { tabId: s.tab, key: secret.conversationId } })
+      await db.swarmGroup.update({ where: { id: privateRow.id }, data: { dormant: true,
+        data: { ...privateRow.data as object, dormant: true, audience: { people: [{ id: owner.sub, generation }] } } } })
+      const hosts = new HostReads(s.store, { now: () => Date.now() })
+      let polled: Awaited<ReturnType<typeof hosts.changes>> | undefined
+      const read = await profiled(db, async () => { polled = await hosts.changes(owner, 'mac-0', { full: true }) })
+      // Each read by membership examines one conversation at most (a quiet or private one of an agent the loaded state cannot
+      // answer for), never the 200 the PM is in.
+      const examined = byMembership(read).map(e => e.docsExamined ?? 0)
+      expect(Math.max(0, ...examined), JSON.stringify(byMembership(read).map(e => [e.docsExamined, e.command?.pipeline]))).toBeLessThanOrEqual(1)
+      expect(docs(read)).toBeLessThan(40)
+      const roster = polled!.tabs.flatMap(t => 'roster' in t ? (t.roster as Array<{ agent: { id: string }; active: boolean; confidential: boolean }>) : [])
+      const rows = new Map(roster.map(r => [r.agent.id, r.active]))
+      expect(rows.get(s.lead)).toBe(true)
+      expect(rows.get(quiet.agentId)).toBe(true)
+      expect(rows.get(archived.agentId)).toBe(false)
+      expect(roster.find(r => r.agent.id === secret.agentId)).toMatchObject({ active: true, confidential: true })
+      expect(roster.find(r => r.agent.id === quiet.agentId)).toMatchObject({ confidential: false })
+    } finally {
+      configureSwarmStamps(new MemoryStamps())
+    }
+  }, 600_000)
+})

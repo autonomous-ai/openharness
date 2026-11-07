@@ -232,11 +232,23 @@ describe('light and host state derived from held entries (spec 2026-11-02 poll c
     expect(light.groups.find(x => x.key === 'run')!.data!.brief).toBe('')
   })
 
-  it('host state takes the machine\'s agents\' dormant conversations from light-dormant:agent entries (B4)', async () => {
-    const { view, names } = stub({ 'light-dormant:agent:a1': [g('old', { agentIds: ['a1'] }, true)] })
-    const light = await deriveLight(db, view, 't', { groups: 'working', machineId: 'm1' })
-    expect(names).toContain('light-dormant:agent:a1')
-    expect(light.groups.map(x => x.key).sort()).toEqual(['idle', 'old', 'run'])
+  // Task #4560: the PM is in nearly every conversation, and reading them all for its host was prod's top slow query. Only a
+  // Buddy's quiet conversations are read by membership (light-dormant:agent entries, B4), for its chat; a lost task's by id.
+  it('host state reads quiet conversations by membership only for the machine\'s Buddies, and a lost task\'s by id', async () => {
+    const buddy = { kind: 'agent', key: 'b1', version: 1, changedAt: 1, ordinal: 1,
+      data: { id: 'b1', machineId: 'm1', buddyOf: { personId: 'p', generation: 'g' }, buddyScope: 'swarm', workDecision: 'stop' } }
+    const lost = { ...base.agents[0]!, data: { ...base.agents[0]!.data, lostTask: { conversationId: 'lost1', assignmentId: 'w0', at: 1, resumeAt: 2 } } }
+    const saved = base.agents
+    base.agents = [lost, base.agents[1]!, buddy] as typeof base.agents
+    try {
+      const { view, names } = stub({ 'light-dormant:agent:b1': [g('chat', { agentIds: ['b1'], kind: 'swarm-buddy' }, true)], 'light-group:lost1': g('lost1', { agentIds: ['a1'] }, true) })
+      const light = await deriveLight(db, view, 't', { groups: 'working', machineId: 'm1' })
+      expect(names).toContain('light-dormant:agent:b1')
+      expect(names).not.toContain('light-dormant:agent:a1')
+      expect(light.groups.map(x => x.key).sort()).toEqual(['chat', 'lost1', 'run'])
+    } finally {
+      base.agents = saved
+    }
   })
 
   it('readLight derives on a cache miss instead of reading Mongo', async () => {
