@@ -23,6 +23,9 @@ class SuperTabWeeklyLeaderboardPage extends StatefulWidget {
 
 class _WeeklyBoardState extends State<SuperTabWeeklyLeaderboardPage> {
   static const _rowHeight = 56.0;
+
+  /// The places that carry a mark, as their mark says them.
+  static const _places = {1: 'one', 2: 'two', 3: 'three'};
   SuperTabLeaderboard? _board;
   String? _error;
   (int?, (bool, String?))? _stamp;
@@ -265,55 +268,87 @@ class _WeeklyBoardState extends State<SuperTabWeeklyLeaderboardPage> {
                     final person = c.snapshot?.people
                         .where((p) => p.id == score.personId)
                         .firstOrNull;
-                    return _line([
-                      SizedBox(
-                        width: 40,
-                        child: score.rank == 1 && score.points > 0
-                            ? Icon(
-                                AppIcons.trophy,
-                                size: 18,
-                                color: grid.AppPalette.swarmAccent,
-                              )
-                            : Text(
+                    // By account, never by name: two teammates can share one.
+                    final own = score.personId == c.accountId;
+                    return _line(
+                      key: ValueKey('weekly-row-${score.personId}'),
+                      own: own,
+                      [
+                        SizedBox(
+                          width: 40,
+                          child: Row(
+                            children: [
+                              Text(
                                 '${score.rank}',
                                 style: DesktopChrome.metadata(
                                   color: DesktopChrome.muted,
                                 ),
                               ),
-                      ),
-                      Expanded(
-                        child: Row(
-                          children: [
-                            if (person != null)
-                              SuperTabAvatar.person(person, size: 28),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                score.displayName ??
-                                    person?.shownName ??
-                                    'Teammate',
-                                key: ValueKey(
-                                  'weekly-person-${score.personId}',
+                              // The top three's mark sits beside their place,
+                              // never in place of it (Team and celebration,
+                              // design system); the numeral says which.
+                              if (_places[score.rank] case final place?
+                                  when score.points > 0) ...[
+                                const SizedBox(width: 4),
+                                Icon(
+                                  AppIcons.trophy,
+                                  size: 14,
+                                  color: score.rank == 1
+                                      ? grid.AppPalette.swarmAccent
+                                      : DesktopChrome.muted,
+                                  semanticLabel:
+                                      'Number $place ${score.spanName}',
                                 ),
-                                overflow: TextOverflow.ellipsis,
-                                style: DesktopChrome.text(
-                                  medium: score.rank == 1 && score.points > 0,
+                              ],
+                            ],
+                          ),
+                        ),
+                        Expanded(
+                          child: Row(
+                            children: [
+                              if (person != null)
+                                SuperTabAvatar.person(person, size: 28),
+                              const SizedBox(width: 10),
+                              Flexible(
+                                child: Text(
+                                  score.displayName ??
+                                      person?.shownName ??
+                                      'Teammate',
+                                  key: ValueKey(
+                                    'weekly-person-${score.personId}',
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                  style: DesktopChrome.text(
+                                    medium: score.rank == 1 && score.points > 0,
+                                  ),
                                 ),
                               ),
-                            ),
-                          ],
+                              if (own) ...[
+                                const SizedBox(width: 8),
+                                Text(
+                                  'You',
+                                  style: DesktopChrome.metadata(
+                                    color: DesktopChrome.muted,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
                         ),
-                      ),
-                      _cell('${score.shipped}', strong: true),
-                      _cell('${score.accepted}'),
-                      _cell('${score.unblocked}'),
-                      _cell('${score.streakDays}d'),
-                      _cell(
-                        '${score.agentsBrought}',
-                        key: ValueKey('weekly-agents-${score.personId}'),
-                      ),
-                      _cell('${score.points}', strong: true),
-                    ]);
+                        _cell('${score.shipped}', strong: true),
+                        _cell('${score.accepted}'),
+                        _cell('${score.unblocked}'),
+                        // No streak is no number, not "0d".
+                        _cell(
+                          score.streakDays == 0 ? '–' : '${score.streakDays}d',
+                        ),
+                        _cell(
+                          '${score.agentsBrought}',
+                          key: ValueKey('weekly-agents-${score.personId}'),
+                        ),
+                        _cell('${score.points}', strong: true),
+                      ],
+                    );
                   },
                 ),
               ),
@@ -345,12 +380,21 @@ class _WeeklyBoardState extends State<SuperTabWeeklyLeaderboardPage> {
     ),
   );
 
-  Widget _line(List<Widget> children, {bool heading = false}) => Container(
+  /// A row of the table; the reader's [own] wears the selected-row fill
+  /// (Numbers and rankings, design system).
+  Widget _line(
+    List<Widget> children, {
+    Key? key,
+    bool heading = false,
+    bool own = false,
+  }) => Container(
+    key: key,
     height: heading ? 36 : _rowHeight,
     padding: const EdgeInsets.symmetric(
       horizontal: DesktopChrome.panelPadding / 2,
     ),
     decoration: BoxDecoration(
+      color: own ? grid.AppSurface.selectedFill : null,
       border: Border(bottom: BorderSide(color: grid.AppPalette.divider)),
     ),
     child: Row(children: children),

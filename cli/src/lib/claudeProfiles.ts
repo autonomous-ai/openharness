@@ -16,6 +16,7 @@ import { closeSync, constants, fchmodSync, fsyncSync, openSync, readdirSync, rea
 import { homedir } from 'os'
 import { basename, join, resolve, sep } from 'path'
 import { env } from '../config/env.js'
+import { homeIsAbsolute } from '../engines/kit/homeAdoption.js'
 import { offeredFolders, recordOffer } from './accountOffers.js'
 import { defaultCodexHome, listCodexProfiles, resolveCodexProfilePath } from './codexProfiles.js'
 import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory } from './secureState.js'
@@ -104,7 +105,7 @@ function writeLinkedPaths(paths: Set<string>): void {
 
 /** Validate + resolve a folder path the same way for linking and for re-checking a saved one. */
 function resolveFolder(path: string): string | ClaudeProfileError {
-  if (!path.startsWith('/') || path.length > 4096 || CONTROL_CHARS_RE.test(path)) return { error: 'INVALID_PATH' }
+  if (!homeIsAbsolute(path) || path.length > 4096 || CONTROL_CHARS_RE.test(path)) return { error: 'INVALID_PATH' }
   try {
     if (!statSync(path).isDirectory()) return { error: 'NOT_FOUND' }
     const resolved = realpathSync(path)
@@ -191,7 +192,7 @@ export function offerAccount(
   engine: string, path: string, offered: boolean, options: { home?: string; environment?: Record<string, string | undefined> } = {},
 ): { offered: boolean } | { error: 'INVALID_ENGINE' | 'INVALID_PATH' | 'NOT_FOUND' | 'DEFAULT_ACCOUNT' | 'TOO_MANY' } {
   if (engine !== 'claude' && engine !== 'codex') return { error: 'INVALID_ENGINE' }
-  if (!path.startsWith('/') || path.length > 4096 || CONTROL_CHARS_RE.test(path)) return { error: 'INVALID_PATH' }
+  if (!homeIsAbsolute(path) || path.length > 4096 || CONTROL_CHARS_RE.test(path)) return { error: 'INVALID_PATH' }
   const home = options.home ?? homedir()
   const found = engine === 'claude' ? resolveFolder(path) : (() => { const r = resolveCodexProfilePath(path); return 'error' in r ? r : r.path })()
   if (typeof found !== 'string') {

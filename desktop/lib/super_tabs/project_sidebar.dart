@@ -693,6 +693,7 @@ class ProjectSidebar extends StatelessWidget {
     return SuperTabBuddyRow(
       key: ValueKey('super-agent-${agent.id}'),
       agentId: agent.id,
+      agent: agent,
       name: name,
       tooltip: chat != null
           ? name

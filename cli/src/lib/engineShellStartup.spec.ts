@@ -38,7 +38,8 @@ export HARNESS_RC_LOADED=yes
   const binary = join(dir, "engine with 'quotes")
   const result = join(dir, 'result.json')
   writeFileSync(binary, `#!${process.execPath}
-const fs = require('node:fs');
+// Node 26 runs an extensionless script as an ES module, where require is undefined; this works as either.
+const fs = process.getBuiltinModule('node:fs');
 if (process.argv.includes('--help')) { console.log('--no-daemon --auto'); process.exit(0); }
 fs.writeFileSync(${JSON.stringify(result)}, JSON.stringify({
   args: process.argv.slice(2), cwd: process.cwd(),

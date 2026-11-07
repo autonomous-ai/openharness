@@ -10,6 +10,7 @@
 
 import { existsSync, openSync, closeSync, readSync, readdirSync, realpathSync, statSync } from 'fs'
 import { join } from 'path'
+import { homeIsAbsolute } from '../engines/kit/homeAdoption.js'
 
 const MAX_FILE_BYTES = 64 * 1024
 const MAX_FILES = 256
@@ -67,7 +68,7 @@ class CodexProfileDiscovery {
       if (value.startsWith('/') || key === 'PATH') variables[key] = value
     }
     const inherited = this.environment.CODEX_HOME
-    if (inherited && inherited.startsWith('/')) this.paths.add(inherited)
+    if (inherited && homeIsAbsolute(inherited)) this.paths.add(inherited)
     const config = this.environment.XDG_CONFIG_HOME || join(this.home, '.config')
     this.conventionalHomes(this.home)
     this.conventionalHomes(config)
