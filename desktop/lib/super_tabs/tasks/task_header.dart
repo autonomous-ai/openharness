@@ -34,6 +34,14 @@ class SuperTabTaskHeader extends StatelessWidget {
         .firstOrNull;
     final agent = snapshot?.agent(task.agentId ?? '');
     final pr = task.pullRequestUrl;
+    // Merged once the task's own card of that pull request says so (as the Board's Merged lane reads it).
+    final merged =
+        snapshot
+            ?.conversation(task.id)
+            ?.cards
+            .pullRequests
+            .any((card) => card.url == pr && card.merged) ??
+        false;
     const avatar = 18.0;
     Widget fact(List<Widget> children) => Row(
       mainAxisSize: MainAxisSize.min,
@@ -124,7 +132,7 @@ class SuperTabTaskHeader extends StatelessWidget {
                   onTap: () => unawaited(openInBrowser(Uri.parse(pr))),
                   child: fact([
                     SvgPicture.asset(
-                      pullRequestIconAsset('Open'),
+                      pullRequestIconAsset(merged ? 'Merged' : 'Open'),
                       width: 14,
                       height: 14,
                       colorFilter: ColorFilter.mode(
