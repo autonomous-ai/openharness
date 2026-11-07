@@ -173,3 +173,15 @@ describe('personal Tasks summaries', () => {
     expect(personalTasksFor([row], s.view(), peer)!.removed).toEqual([row.key])
   })
 })
+
+// Task #4538: nothing cancelled stays in a person's Tasks (a duplicate the Lead closed, an ask it took on a task of its own).
+describe('a cancelled task leaves the Tasks feed', () => {
+  it('is gone from a change poll, from a page, and names nobody', () => {
+    const s = scene(), row = s.stored.groups.find(g => g.key === s.f.web)!
+    const cancelled = { ...row, data: { ...row.data!, assignment: { ...row.data!.assignment!, status: 'cancelled', result: 'Duplicate' } } } as typeof row
+    expect(personalTasksFor([cancelled], s.view(), peer)).toMatchObject({ upserts: [], removed: [row.key] })
+    expect(feedIdsOf(cancelled.data!)).toEqual([])
+    const working = personalTasksFor([row], s.view(), peer)!
+    expect(working.upserts).toEqual([expect.objectContaining({ id: row.key, status: 'working' })])
+  })
+})
