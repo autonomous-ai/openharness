@@ -103,12 +103,13 @@ Swarm and machine settings (each refused unless you may change that setting; a p
 - Start or assign the candidate you chose with the decision's \`routeDecisionId\` and \`overrideReason\`: the Routing rule that chose it, in one sentence. The decision records the candidate the start or assignment matches.
 - \`plan [JSON]\` places all open groups at once on machines and models (needs Python 3 and OR-Tools; without them it says how to install). JSON optional: \`{"groups":{"GROUP":{"difficulty":"...","risk":"...","size":"...","kind":"optional","after":["GROUP"]}}}\`. It records nothing: route each group, then start the plan's pick with the route's \`routeDecisionId\`.
 - \`capacity MACHINE_ID JSON\` inspects a machine's, engine's and quota headroom (JSON: the start fields). Unknown allowances are not reported as free tokens.
-- \`start OPERATION_ID JSON\` creates one agent in a conversation on a machine in the Swarm's Machines list; it does not assign work. JSON:
-  \`{"conversationId":"GROUP","machineId":"MACHINE","engine":"codex","name":"AGENT NAME","cwd":"/absolute/repo/on/that/machine","worktree":true,"branchRef":"refs/remotes/origin/BASE_BRANCH","model":"opus","effort":"high","routeDecisionId":"DECISION","roleName":"optional"}\`
-  - \`worktree: true\` starts from the repository's default branch, fetched first; \`branchRef\` (refs/heads/BRANCH, or refs/remotes/origin/BRANCH to fetch it first) starts from another branch, such as the one the work builds on.
-  - \`roleName\` (optional): the role it starts in, from the project's instructions, up to 40 characters. An older Swarm refuses the key: start again without it.
-  - Start only on the Swarm's listed machines; to use another, a person adds it first. \`resume START_ID\` finishes a pending start without creating another agent; repeat \`start\` with the same id after an interruption. Two failed starts in a row suspend the engine on that machine; the route says so.
-  - A start that fails is reported (\`START_FAILED\`, with why) and moved nowhere: you decide what next, and the project's coordinator is told too.
+- \`start OPERATION_ID JSON\` creates one agent in a conversation on a machine in the Swarm's Machines list. JSON:
+  \`{"conversationId":"GROUP","machineId":"MACHINE","engine":"codex","name":"AGENT NAME","cwd":"/absolute/repo/on/that/machine","worktree":true,"branchRef":"refs/remotes/origin/BASE_BRANCH","model":"opus","effort":"high","routeDecisionId":"DECISION","roleName":"optional","assign":{"message":"brief"}}\`
+  - \`worktree: true\` starts from the repository's default branch, fetched first; \`branchRef\` (refs/heads/BRANCH, or refs/remotes/origin/BRANCH, fetched first) another branch.
+  - \`assign\` (coordinator only): once ready, the server assigns it this task and sends it \`message\`: no resume or assign call.
+  - \`roleName\` (optional): its role, from the project's instructions, up to 40 characters. An older Swarm refuses the key.
+  - Start only on the Swarm's listed machines; to use another, a person adds it first. \`resume START_ID\` finishes a pending start without creating another agent; repeat \`start\` with the same id after an interruption. Two failed starts in a row suspend that engine there.
+  - A start that fails is reported (\`START_FAILED\`, with why) and moved nowhere: you decide; the coordinator is told too.
   - Starts can be refused when too many starts are pending.
 - Add a step to a task: create a conversation with \`reviewOf\` set to the task and \`step\` set to the step's name from your project's instructions, then assign it. A step's status reaches the task's assignee.
 - Any group created with \`reviewOf\` is a step of that task, with or without a \`step\` name: its status and its posts that name no one reach the task's assignee. A \`review\` status wakes nobody by itself: when the work is ready for review, name the reviewing agent with \`--to\` in your post.

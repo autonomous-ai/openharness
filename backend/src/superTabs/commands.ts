@@ -172,6 +172,8 @@ export const startRequestSchema = z.object({
   gridModel: z.string().min(1).max(2048).optional(), gridName: z.string().min(1).max(2048).optional(),
   // The heavy work the task declared (model.ts AgentStartRequest.heavy). An older client sends none.
   heavy: z.array(z.enum(['build', 'e2e'])).min(1).max(2).refine(h => new Set(h).size === h.length, 'Name each kind of heavy work once.').optional(),
+  // What the agent is for (model.ts AgentStartRequest.assign): its task is the conversation named here. An older client sends none.
+  assign: z.object({ message: z.string().trim().min(1).max(8000).optional() }).strict().optional(),
   requirements: z.object({ memoryBytes: z.number().int().nonnegative().safe(), diskBytes: z.number().int().nonnegative().safe(),
     maxCpuPercent: z.number().min(0).max(100), tools: z.array(z.string().regex(/^[A-Za-z0-9_.+-]{1,80}$/)).max(20),
     devices: z.array(path).max(20), quotaRequired: z.boolean() }).strict(),
@@ -543,7 +545,7 @@ export const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'agent.rename': ['name'],
   'crew.add': ['role', 'lane'],
   'work.lane': ['lane'],
-  'agent.start': ['request.name', 'request.roleName', 'overrideReason'],
+  'agent.start': ['request.name', 'request.roleName', 'request.assign.message', 'overrideReason'],
   'agent.startFailed': ['error'],
   'agent.switchResult': ['error'],
   'agent.screenResult': ['error'],
@@ -2010,6 +2012,32 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     const news = firstAssignment && assignedNotice(state, group, sender, assignmentId)
     if (news) effects.messages.push(news)
   }
+  /** A settled start that names its task (AgentStartRequest.assign): its agent takes the task and gets the brief, from the project's
+   *  coordinator who made the start. What cannot be done is told to the coordinator once, in the task. */
+  const startAssignment = (start: AgentStart) => {
+    const wanted = start.request.assign!
+    delete start.request.assign
+    const group = state.conversations.find(c => c.id === start.request.conversationId)
+    const worker = state.agents.find(a => a.machineId === start.request.machineId && a.harnessId === start.harnessId)
+    const leadId = group && conversation(state, groupProject(state, group).leadConversationId).leadId
+    const lead = leadId ? state.agents.find(a => a.id === leadId) : undefined
+    const from = lead ? author(state, { kind: 'agent', agentId: lead.id, machineOwnerId: lead.machineOwnerId }) : sender
+    const tell = (why: string) => {
+      if (group) effects.messages.push({ id: stableId(start.id, 'assign-refused'), conversationId: group.id, author: from,
+        text: `${start.request.name} is ready, but this task could not be assigned to it: ${why}`, replyTo: null, recipients: lead ? [lead.id] : [], source: forRecipients(SYSTEM_ROW) })
+    }
+    if (!group || !worker) { tell('its task or its agent is gone.'); return }
+    if (group.archived) { tell('the task is archived.'); return }
+    try { assignRefusal(group, worker) } catch (error) {
+      if (!(error instanceof SuperTabError)) throw error
+      tell(error.message)
+      return
+    }
+    assignTo(group, worker, stableId(start.id, 'assignment'))
+    // The store does around this what it does around a work.assign: the agent's run record, its progress mark, the tags it settles.
+    result.startAssigned = { conversationId: group.id, assignmentId: stableId(start.id, 'assignment') }
+    if (wanted.message) effects.messages.push({ id: stableId(start.id, 'brief'), conversationId: group.id, author: from, text: wanted.message, replyTo: null, recipients: [worker.id] })
+  }
   /** The kind of a step already open on a task, by its name, so a step its Engineer opened is reused, not doubled. */
   const stepKind = (step: Conversation): StepKind | null => {
     const name = stepName(step)
@@ -3360,6 +3388,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A coordinator starts there through lead.start alone.
       projectChatJoin(open(state, command.request.conversationId), null, command.request.name)
       const home = groupProject(state, open(state, command.request.conversationId))
+      // A start that names its task has the coordinator's brief and assignment done for it: its coordinator alone starts so, or a
+      // person or another agent would put words in the coordinator's name and hand out work as it (review of #3334).
+      if (command.request.assign && !(actor.kind === 'agent' && ledProject(state, actor.agentId)?.id === home.id)) {
+        fail('FORBIDDEN', `Only this project's ${coordinatorNameOf(home)} starts an agent with its assignment. Start it without assign, then assign it.`, 403)
+      }
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
       pausedTask(open(state, command.request.conversationId))
       if (!['claude', 'codex'].includes(command.request.engine)) {
@@ -3831,17 +3864,25 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           ? `${start.request.name}: ${command.warning}`
           : start.request.buddyOf ? buddyReady(start.request.name) : `${start.request.name} is ready for an assignment.`, [], null,
           command.warning ? SYSTEM_ROW : bookkeeping(start.request.conversationId, SYSTEM_ROW))
+        const firstSettle = !start.poolSettled
         start.poolSettled = true
+        // A start that names its task assigns and briefs its agent now, as its coordinator would have (task #3614); the coordinator
+        // hears only when it cannot be done.
+        if (firstSettle && start.request.assign) startAssignment(start)
         break
       }
       if (command.type === 'agent.startFailed') {
         if (start.harnessId) fail('ALREADY_STARTED', 'This agent already started.')
         // Only its first failure counts against its engine: the server may have timed it out before its host said so (liveness.ts).
         const counted = !start.error
+        // The same failure said again (its host retrying) is not told again; a different one, such as the host's own after the server
+        // timed the start out, still is (task #3614).
+        const repeated = start.error === command.error
         start.error = command.error
         // A crew member's move that did not start leaves it where it was, for the keeper's next pass (crewKeep.ts).
         if (start.request.crewMoveOf) crewMoveFailed(state, start, context.now)
         const suspended = counted ? noteStartFailed(state, start, context.now) : null
+        if (repeated) break
         // A thread session's says so in its thread (buddySessions.ts), and frees its place.
         if (start.request.buddySession) {
           const chat = conversation(state, start.request.conversationId)
@@ -3990,6 +4031,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         const starter = actorLabel(state, start.actorKey)
         const joined = starter ? `${starter} added ${quotedName(start.request.name)}.` : `${quotedName(start.request.name)} joined.`
         message(group.id, `${joined} ${start.poolGeneration ? 'Preparing its model.' : 'Ready for an assignment.'}`, [], null, bookkeeping(group.id, SYSTEM_ROW))
+        // A machine with no pool never settles: it is ready as it joins, so its task is assigned now (a pooled one's, at its settle).
+        if (!start.poolGeneration && start.request.assign) startAssignment(start)
       }
       break
     }

@@ -1495,6 +1495,17 @@ describe('a start that fails before its agent exists', () => {
     expect(b.of('route.record')).toEqual([])
   })
 
+  // Task #3614 (Rowtest, Mac): a start that names its task is not watched. The server assigns the agent when its host reports it
+  // ready and tells the coordinator if the start fails, so the PM's call returns the receipt at once (it took 20 s and 11 reads).
+  it('returns a start that names its task at once, without watching it', async () => {
+    const b = backend({ fails: [] })
+    const named = { ...b.first, request: { ...b.first.request, assign: { message: 'Fix the login.' } } }
+    expect(await b.lead(named)).toMatchObject({ ok: true, queued: true, startId: 'first-start' })
+    expect(b.pause).not.toHaveBeenCalled()
+    // The request still carries it to the server, which does the assigning.
+    expect(b.of('agent.start')[0]).toMatchObject({ request: { assign: { message: 'Fix the login.' } } })
+  })
+
   it('reports the same on the host side, and for a start that was not routed', async () => {
     const b = backend()
     await b.lead(b.first)
