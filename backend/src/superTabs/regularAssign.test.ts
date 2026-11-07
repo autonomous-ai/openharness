@@ -4,6 +4,7 @@ import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, typ
 import type { ContributedMachine } from './machines.js'
 import { agentProjectId, canReadAgent, canReadGroup, NO_PROJECT, projectOf } from './projects.js'
 import { DISPATCH_RULES, dispatchPlan, freeCrew } from './dispatch.js'
+import { closedAgents, STOPPED_REMOVE_MS } from './closedAgents.js'
 
 // Task #4116 (Swarm v3, anh Dee 11-07): "A Regular agent isn't tied to a project; the task decides where it works." Its PM gives
 // it a task only in a project its person can read, so nothing reaches its person that they could not read anyway; while it
@@ -238,5 +239,17 @@ describe('the automatic picks and an idle Regular agent', () => {
     f.agent(f.ada).privateProjectId = 'elsewhere'
     pin(f, app.task)
     expect(freeCrew(f.state, app.projectId, DISPATCH_RULES, NOW).map(a => a.id)).not.toContain(f.ada)
+  })
+})
+
+// Task #4218: a closed session removed its Regular agent, and nothing brought it back: its own chat made it count as
+// confidential, and it has no project to restore into. It is its person's, as a Buddy is: it stays, shown closed, in its chat.
+describe('a Regular agent whose session closed', () => {
+  it('stays listed in its own chat, to come back when its session runs again', () => {
+    const f = swarm()
+    f.agent(f.ada).downSince = new Date(NOW - 10 * STOPPED_REMOVE_MS).toISOString()
+    const report = { runningHarnessIds: ['h-other'], stoppedHarnessIds: ['h-ada'] }
+    expect(closedAgents(f.state, 'mate-mac', report, NOW)).toEqual([])
+    expect(f.state.conversations.some(c => c.kind === 'agent-chat' && c.agentIds.includes(f.ada))).toBe(true)
   })
 })
