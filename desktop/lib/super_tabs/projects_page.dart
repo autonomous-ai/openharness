@@ -64,8 +64,14 @@ class _SuperTabProjectsPageState extends State<SuperTabProjectsPage> {
   var _query = '';
   var _sort = SuperTabProjectSort.recent;
 
-  /// The project ids the activity was last read for: a new or removed project reads it again.
-  String? _readFor;
+  /// The project ids the activity was last read for: a new or removed project reads it again at once.
+  String? _readIds;
+
+  /// Each project's latest message when the activity was last read: a move reads it again, at most every
+  /// [_activityEvery], so Updated, Recent and the sparkline follow the work while the page is open.
+  String? _readMoves;
+  DateTime? _readAt;
+  static const _activityEvery = Duration(seconds: 30);
 
   @override
   void dispose() {
@@ -73,11 +79,27 @@ class _SuperTabProjectsPageState extends State<SuperTabProjectsPage> {
     super.dispose();
   }
 
+  /// Reads the activity again when a project comes or goes, or when one's latest message moves and the last read is
+  /// [_activityEvery] old. Driven by the Swarm's own pushes, so nothing polls; a move inside the wait is read on the
+  /// next push after it.
   void _readActivity(List<SuperTabProject> projects) {
-    final ids = (projects.map((p) => p.id).toList()..sort()).join(',');
-    if (ids == _readFor) return;
-    _readFor = ids;
     if (projects.isEmpty) return;
+    final ids = (projects.map((p) => p.id).toList()..sort()).join(',');
+    final moves = [
+      for (final project in projects)
+        widget.controller
+            .projectConversations(project.id)
+            .fold(0, (at, g) => math.max(at, g.lastMessageSequence)),
+    ].join(',');
+    final now = clock.now();
+    final due =
+        ids != _readIds ||
+        (moves != _readMoves &&
+            (_readAt == null || now.difference(_readAt!) >= _activityEvery));
+    if (!due) return;
+    _readIds = ids;
+    _readMoves = moves;
+    _readAt = now;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _activity.refresh();
     });
@@ -516,6 +538,7 @@ class _ProjectRow extends StatelessWidget {
               size: _faceSize,
               engineBadge: false,
               radius: 4,
+              faceCorner: 4,
             ),
             const SizedBox(width: grid.AppDesktop.controlGap - 2),
             Flexible(child: text(lead.displayName ?? lead.name)),
