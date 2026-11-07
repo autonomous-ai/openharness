@@ -12,7 +12,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import { noteChange, swarmTransaction } from '../src/superTabs/cache.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
-import type { Command } from '../src/superTabs/commands.js'
+import { commandSchema, type Command } from '../src/superTabs/commands.js'
 import { appendRouting, FIRST_INSTRUCTIONS, instructionsHash } from '../src/superTabs/instructions.js'
 import { stableId } from '../src/superTabs/model.js'
 import { roleVersion } from '../src/superTabs/projects.js'
@@ -38,6 +38,18 @@ const host: AuthUser = { sub: '100000000000000000000003', email: 'host@example.c
 const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 const run = (tab: string, command: Command, user = owner, asAgentId?: string) =>
   store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
+/** [user]'s own Buddy, on a machine of theirs: it writes the server's notices in their private chat, where only they and it post
+ *  (task #4558). */
+async function ownBuddy(tab: string, user: AuthUser) {
+  const machineId = `${user.email.split('@')[0]}-mac`
+  await db.machine.upsert({ where: { machineId }, update: {}, create: { machineId, userId: user.sub, apiKey: `fixture-${randomUUID()}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+  const added = await run(tab, { type: 'buddy.create', machineId, engine: 'codex', setup: { name: 'Fixture Mac', cwd: '/fixture', engines: ['codex'] } }, user)
+  const startId = String(added.result.startId)
+  const onHost = (command: unknown) => store.execute(user, tab, { operationId: randomUUID(), command: commandSchema.parse(command) }, undefined, machineId)
+  await onHost({ type: 'agent.startDispatch', startId })
+  await onHost({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config })
+  await onHost({ type: 'agent.startSettled', startId, warning: null })
+}
 async function invite(tab: string) {
   const invitation = await run(tab, { type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' })
   await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, peer)
@@ -143,6 +155,7 @@ describe('configured rule approvals through the store', () => {
     await invite(tab)
     const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
     await run(tab, { type: 'invite.accept', inviteId: String(invitation.result.inviteId) }, host)
+    for (const account of [owner, host, peer]) await ownBuddy(tab, account)
     await run(tab, { type: 'rules.set', projectId: 'lead', baseRevision: 0, rules: { ...structuredClone(SEED_RULES),
       instructionApprovals: { topDeciderId: peer.sub, people: [{ name: 'Ken', accountIds: [owner.sub, host.sub] }] } }, summary: 'Explicit approval authority' })
     const text = '# Rules\n\n- Always test before merging (Ken, 2026-11-04).'
@@ -166,7 +179,8 @@ describe('configured rule approvals through the store', () => {
       expect(read.returned).toBe(1)
     }
     const notices = await db.superTabMessage.findMany({ where: { tabId: tab, text: { contains: 'approved by peer' } } })
-    // Dee's approval tells the decider and both affected author accounts, through each person's two private Buddy chats.
+    // Dee's approval tells the decider and both affected author accounts, through each person's two private Buddy chats, each
+    // line written by that person's own Buddy (task #4558).
     expect(notices).toHaveLength(6)
     for (const account of [owner, host, peer]) {
       const visible = new Set((await store.read(account, tab)).state.conversations.map(c => c.id))
@@ -189,6 +203,7 @@ describe('a person\'s rules in a save', () => {
   it('refuses the PM\'s drop, then saves it on the person\'s own approval and tells them privately', async () => {
     const { tab, lead } = await withLead()
     await invite(tab)
+    await ownBuddy(tab, peer)
     const rule = 'A bug that reaches stable is promoted back within the hour (peer, 2026-11-04).'
     expect((await run(tab, save(1, `# Rules\n\n- ${rule}\n- Tests run first (owner, 4 Nov).`), peer)).result.revision).toBe(2)
     const asLead = (approvals?: string[]) => store.execute(host, tab, { operationId: randomUUID(), command: { ...save(2, '# Rules\n\n- Tests run first (owner, 4 Nov).',

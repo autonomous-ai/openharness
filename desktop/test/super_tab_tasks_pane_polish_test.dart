@@ -91,44 +91,37 @@ void main() {
     matching: find.byType(CircularProgressIndicator),
   );
 
-  testWidgets(
-    'the pressed Approve spins; the other buttons say why they wait',
-    (t) async {
-      await mount(t);
-      f.hold = Completer<void>();
-      await t.tap(inCard('new', find.text('Approve')));
-      await t.pump();
-      expect(
-        spinnerIn(inCard('new', find.byType(FilledButton))),
-        findsOneWidget,
-      );
-      expect(spinnerIn(inCard('new', find.byType(TextButton))), findsNothing);
-      expect(
-        inCard('old', find.byType(CircularProgressIndicator)),
-        findsNothing,
-      );
-      // Every disabled decision names what it waits on.
-      expect(inCard('old', find.byTooltip(_waiting)), findsNWidgets(2));
-      f.hold!.complete();
-      await t.pumpAndSettle();
-      expect(find.byType(CircularProgressIndicator), findsNothing);
-      expect(find.byTooltip(_waiting), findsNothing);
-    },
-  );
-
-  testWidgets('the pressed Reject spins while its rejection is confirmed', (
+  testWidgets('the pressed Accept spins; the other buttons say why they wait', (
     t,
   ) async {
     await mount(t);
     f.hold = Completer<void>();
-    await t.tap(inCard('new', find.text('Reject')));
+    await t.tap(inCard('new', find.text('Accept')));
+    await t.pump();
+    expect(spinnerIn(inCard('new', find.byType(FilledButton))), findsOneWidget);
+    expect(spinnerIn(inCard('new', find.byType(TextButton))), findsNothing);
+    expect(inCard('old', find.byType(CircularProgressIndicator)), findsNothing);
+    // Every disabled decision names what it waits on.
+    expect(inCard('old', find.byTooltip(_waiting)), findsNWidgets(2));
+    f.hold!.complete();
+    await t.pumpAndSettle();
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.byTooltip(_waiting), findsNothing);
+  });
+
+  testWidgets('the pressed Decline spins while its decline is confirmed', (
+    t,
+  ) async {
+    await mount(t);
+    f.hold = Completer<void>();
+    await t.tap(inCard('new', find.text('Decline')));
     await t.pumpAndSettle();
     await t.enterText(
       find.byKey(const ValueKey('task-reject-reason')),
       'Too much scope',
     );
     await t.pump();
-    await t.tap(find.text('Reject task').last);
+    await t.tap(find.text('Decline').last);
     await t.pump();
     await t.pump(const Duration(milliseconds: 300));
     expect(spinnerIn(inCard('new', find.byType(TextButton))), findsOneWidget);
@@ -139,18 +132,19 @@ void main() {
   });
 
   testWidgets(
-    'Auto approve and Review are the app select, saying what each does',
+    'Accept all and Ask me are the app dropdown, plain until hover, saying what each does',
     (t) async {
       await mount(t);
       final mode = find.byKey(const ValueKey('tasks-approval-mode'));
-      expect(t.widget(mode), isA<AppSelectField<String>>());
+      // Plain text at rest (#4468); the menu is the app's one dropdown (#3532).
+      expect(find.byType(AppSelectField<String>), findsNothing);
       expect(find.byType(DropdownButton<String>), findsNothing);
       await t.tap(mode);
       await t.pumpAndSettle();
       // Each says what it does, whole, in the pane's 340.
       for (final detail in [
-        'Tasks you ask for start right away.',
-        'Tasks you ask for wait until you approve them.',
+        'Your tasks start right away.',
+        'Your tasks wait for you to accept them.',
       ]) {
         expect(
           t.renderObject<RenderParagraph>(find.text(detail)).didExceedMaxLines,
@@ -158,7 +152,7 @@ void main() {
           reason: detail,
         );
       }
-      await t.tap(find.text('Review').last);
+      await t.tap(find.text('Ask me').last);
       await t.pumpAndSettle();
       expect(f.commands.single, {
         'type': 'member.approvalMode',
@@ -175,15 +169,14 @@ void main() {
     expect(find.text('Loading Tasks…'), findsNothing);
   });
 
-  testWidgets('the empty pane says what will show there', (t) async {
+  // Empty means empty (anh Dee, 11-07; #4468): no words under the header.
+  testWidgets('the empty pane shows nothing under its header', (t) async {
     f = TasksFixture()..rows = [];
     addTearDown(() => f.controller.dispose());
     await f.controller.refresh();
     await pumpPane(t);
-    expect(
-      find.text('No tasks yet. Tasks your agents start or propose show here.'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('No tasks yet'), findsNothing);
+    expect(find.byType(SkeletonBlock), findsNothing);
   });
 
   for (final merged in [false, true]) {

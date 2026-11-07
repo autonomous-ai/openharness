@@ -11,7 +11,7 @@ import { SuperTabStore, type Polled, type SuperTabStoreHooks } from '../src/supe
 import { SWEEP_EVERY_MS } from '../src/superTabs/liveness.js'
 import { DOWN_REMOVE_MS } from '../src/superTabs/closedAgents.js'
 import { stableId } from '../src/superTabs/model.js'
-import type { Command } from '../src/superTabs/commands.js'
+import { commandSchema, type Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js'
@@ -2136,6 +2136,14 @@ describe('the morning digest', () => {
     const f = await swarm()
     const WORK = 'a'.repeat(16)
     const reading = { capabilities: ['leadSwitch'], profiles: [{ engine: 'codex' as const, id: WORK, label: 'Work', leftPercent: 80, resetsAt: null }] }
+    // The machine owner's own Buddy writes the notice: only they and it post in their private chat (task #4558).
+    await f.observe('test-host', [f.harness.worker], { capabilities: ['buddySessions', 'swarmBuddy'] })
+    const added = await f.execute({ type: 'buddy.create', machineId: 'test-host', engine: 'codex' }, host)
+    const startId = String(added.result.startId)
+    const onHost = (command: unknown) => f.timed.execute(host, f.tab, { operationId: randomUUID(), command: commandSchema.parse(command) }, undefined, 'test-host')
+    await onHost({ type: 'agent.startDispatch', startId })
+    const buddyId = String((await onHost({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config })).result.agentId)
+    await onHost({ type: 'agent.startSettled', startId, warning: null })
     await f.observe('lead-host', [f.harness.lead], reading)
     const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
     const notices = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => (m.source as { kind?: string } | null)?.kind === 'pm-switch-notice')
@@ -2151,6 +2159,7 @@ describe('the morning digest', () => {
     await move(f.harness.lead, 'second-session')
     const [first] = await notices()
     expect(first!.text).toContain('your Codex account "Work"')
+    expect(first!.author).toMatchObject({ kind: 'agent', id: buddyId })
     await db.swarmGroup.update({ where: { id: `${f.tab}:${first!.conversationId}` }, data: { dormant: true } })
     await f.observe('lead-host', ['second-session'], reading)
     await move('second-session', 'third-session')

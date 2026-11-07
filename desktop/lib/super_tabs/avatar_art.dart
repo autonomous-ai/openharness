@@ -2,8 +2,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/swarm_palette.dart';
-
 import '../widgets/desktop_chrome.dart';
 import 'profile_model.dart';
 
@@ -115,7 +115,10 @@ class SuperTabAvatarFace extends StatelessWidget {
   );
 
   Widget _initial(BuildContext context) {
-    final color = _tone(context, _hue(identity));
+    // People are grey: colour is only on agent faces (task #4466).
+    final color = identity.startsWith('person:')
+        ? grid.AppPalette.textSecondary
+        : _tone(context, _hue(identity));
     final words = name
         .trim()
         .split(RegExp(r'[\s@._-]+'))

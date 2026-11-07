@@ -120,6 +120,8 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     // head guards the claim, as agent.start and agent.add touch it, so of two claims at once one retries and is refused
     // (review of #2094).
     case 'buddy.rename':
+    // A new agent's free name is picked against every name in the Swarm (agentRename.ts newAgentName, review of #3560).
+    case 'agent.new':
       head()
       break
     case 'project.report': case 'project.repository':

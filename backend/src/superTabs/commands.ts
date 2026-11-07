@@ -1,6 +1,6 @@
 import { authorizeTaskApproval, pendingTaskApproval, personalApprovalCommand, rejectTaskApproval, reopenTaskApproval, REQUESTER_LEFT, requireTaskApproval, stageTaskApproval, undecidedProposal } from './taskApproval.js'
 import type { PullRequestFilesRead } from './pullRequestFiles.js'
-import { legacyProposalId, migrateLegacyProposals, type LegacyProposalAsk, pmAcceptsMessage, applyProposalAction, authorizeProposalAction, authorizePersonProposal, cardPriority, createPersonProposal, createProposalCard, proposalCreateSchema, proposalFields, proposalNotices, proposalRoot, type ProposalRecord } from './proposalCards.js'
+import { legacyProposalId, migrateLegacyProposals, type LegacyProposalAsk, pmAcceptsMessage, applyProposalAction, authorizeProposalAction, authorizePersonProposal, cardPriority, createPersonProposal, createProposalCard, proposalCreateSchema, proposalFields, proposalRoot } from './proposalCards.js'
 import { handoffAsk, pulseProjectOf, recordPulse, owe, settleDeleted, settleReaction, settleReply, settleRequest } from './pulse.js'
 import { linesOf } from './statusCard.js'
 import { applyPushOrigin, barredFromTeamWritten, failPushUnknown, failTeamWritten, mainAccountMembers, markTeamWritten, mayName, ownersOwnAgent, ownersOwnMachine, requireTeamWrittenAccount, requireTeamWrittenMachine, stepMark, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
@@ -11,7 +11,7 @@ import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from 
 import { admitByRoom, admitMachineStart, AGENT_MEMORY_BYTES, noRepositoryStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamAccountPool, teamPoolsOf, teamWorkCheck, TEAM_ACCOUNTS_GONE, NOT_YOUR_COMPUTER, type ContributedMachine } from './machines.js'
 import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
-import { addedAgentName, renameAgentTo } from './agentRename.js'
+import { addedAgentName, newAgentName, renameAgentTo } from './agentRename.js'
 import { addCrew, CREW_ROLE_MAX, removeCrew } from './crew.js'
 import { noteIndex } from './processNotes.js'
 import { ownsBoard, readsProject, requireCanChat, requirePriorityRight, steers } from './boardRights.js'
@@ -77,7 +77,7 @@ import { recordClosing, sessionClosed } from './closedAgents.js'
 import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
 import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liveSessions, mainBuddyOf, MAX_SESSION_WAITING, requireChatOwner, SESSION_ENDED_KIND, sessionAgentsOf, sessionOf, setSessions, type SessionEndReason } from './buddySessions.js'
-import { BUDDY_REQUIREMENTS, buddyCapOf, buddyCapRefusal, buddyChatId, buddyChatOf, buddyChatsOf, buddyCount, defaultBuddy, defaultBuddyChat, hasBuddy, dropBuddyChat, MAX_BUDDY_CAP, openNewBuddyChat, setDefaultBuddy, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, okayedWords, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalBrief, proposalSentText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
+import { BUDDY_REQUIREMENTS, buddyCapOf, buddyCapRefusal, buddyChatId, buddyChatOf, buddyChatsOf, buddyCount, defaultBuddy, defaultBuddyChat, hasBuddy, dropBuddyChat, MAX_BUDDY_CAP, openNewBuddyChat, setDefaultBuddy, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, okayedWords, openBuddyChat, openSwarmBuddyChat, ownAgentAuthor, PRIVATE_CHAT_REFUSAL, refuseOthersInPrivateChat, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalBrief, proposalSentText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
 import { askBuddyEngine, buddyEngineChat, buddyEngineName, checkBuddyRebind } from './buddyEngine.js'
@@ -1120,6 +1120,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   let sender: Author | undefined
   try { sender = author(effects.state, actor) } catch { sender = undefined }
   syncTaskLines(original, effects, sender, stableId(original.id, actorKey(actor), context.operationId))
+  refuseOthersInPrivateChat(effects.state, effects.messages, original)
   for (const row of effects.messages) row.recipients = row.recipients.filter(id => pmAcceptsMessage(effects.state, id, row.source))
   // Every open group is loaded for a command (parts/load.ts): the board's pulse is worked out on it (pulse.ts), for the project
   // of the conversation the command names when it names one (it moves no other), else for every project.
@@ -2043,7 +2044,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     const firstAssignment = group.ledger?.firstAssignedAt == null && !group.ledger?.runs?.length
     recordRun(state, group, group.assignment, worker, context.now)
     const others = othersWorkNotice(state, group, worker, context.now, ENGINE_NAMES[worker.configuration.engine] ?? worker.configuration.engine)
-    if (others) effects.messages.push({ id: stableId(assignmentId, 'others-work-notice'), conversationId: others.conversationId, author: sender,
+    if (others) effects.messages.push({ id: stableId(assignmentId, 'others-work-notice'), conversationId: others.conversationId, author: others.author,
       replyTo: null, recipients: [], source: { kind: 'others-work-notice', machineId: others.machineId }, text: others.text })
     group.checks.forEach(c => { c.evidence = null; c.passedBy = null; delete c.verdicts })
     // The brief (a task with none: its title), and its acceptance checks when it has some: checks are information. Then
@@ -2289,6 +2290,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (profileId !== defaultProfileId(destination.machineId, command.engine) && !destination.observation!.profiles?.some(p => p.engine === command.engine && p.id === profileId)) {
         fail('PROFILE_UNKNOWN', `That account isn’t on ${destination.name} any more.`, 409)
       }
+      // Another person's move onto the machine owner's other account is told to the owner by their own Buddy (agent.switchResult):
+      // with none to tell them, their quota is never used without their knowing (security review of #4558).
+      const machineOwner = state.people.find(p => p.id === pm.machineOwnerId)
+      if (machineOwner && machineOwner.id !== actor.userId && profileId !== defaultProfileId(destination.machineId, command.engine)
+        && !ownAgentAuthor(state, machineOwner)) {
+        fail('OWNER_NOT_TOLD', `${usernameOf(state, machineOwner.id) ?? 'The machine\'s owner'} has no Buddy to tell them the ${name} runs on their account. Ask them to move it, or to add a Buddy first.`, 409)
+      }
       if (destination.machineId !== pool.machineId) {
         const start = state.starts!.find(candidate => candidate.request.leadFor?.switchId === operationId)!
         start.request.profileId = profileId
@@ -2452,14 +2460,16 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // The coordinator's save that says it is the tidy is that tidy done (pmSchedule.ts tidyRequest); a correction it saves
       // meanwhile is not (review of #3112).
       if (actor.kind === 'agent' && command.tidy) tidySaved(projectOf(state, project.id), current + 1)
-      // Approvers and authors affected by a decider's override hear privately, in their one Buddy chat and older one here.
+      // Approvers and authors affected by a decider's override hear privately, in their one Buddy chat and older one here, from
+      // their own agent: only they and it post there (task #4558). Without one, the Instructions history records the drop.
       for (const [personId, rules] of told) {
-        const to = person(state, personId)
+        const to = person(state, personId), ownVoice = ownAgentAuthor(state, to)
+        if (!ownVoice) continue
         const text = approvedDropNotice(who, project, rules, deciderId ? agentWrittenNameOf(state, deciderId) ?? 'the project top decider' : undefined)
         const id = stableId(operationId, 'rule-approved', personId)
-        message(defaultBuddyChat(state, to).id, text, [], null, { kind: PM_LINE_KIND, projectId: project.id }, undefined, undefined, undefined, id)
-        Object.assign(effects.messages.at(-1)!, { buddyProject: project.id })
-        effects.messages.push({ id: stableId(id, 'project-chat'), conversationId: openBuddyChat(state, project.id, to).id, author: sender, text, replyTo: null, recipients: [] })
+        effects.messages.push({ id, conversationId: defaultBuddyChat(state, to).id, author: ownVoice, text, replyTo: null, recipients: [],
+          source: { kind: 'rule-approved', projectId: project.id }, buddyProject: project.id },
+        { id: stableId(id, 'project-chat'), conversationId: openBuddyChat(state, project.id, to).id, author: ownVoice, text, replyTo: null, recipients: [] })
       }
       break
     }
@@ -3608,10 +3618,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (mirror?.proposal && !mirror.proposal.mergedInto) {
         mirror.archived = true
         mirror.proposal.decision = { kind: 'no', reason: command.reason, at: context.now, by: sender.id }
-        // Its person hears it through their Buddy, as a board decision tells them (proposalCards.ts), unless they closed it.
-        const card = mirror as Conversation & { proposal: ProposalRecord }
-        effects.messages.push(...proposalNotices(state, card, 'decided', `${mirror.title}: no. ${command.reason}`, sender, operationId,
-          card.proposal.senders.filter(s => actor.kind !== 'person' || s.personId !== actor.userId)))
       }
       effects.closedProposal = { messageId, conversationId: project.leadConversationId, reason: command.reason }
       result.proposalId = messageId
@@ -3672,8 +3678,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // The machines a line names leave a Buddy's read of it (store.ts withoutMachineNames): a Buddy reads no machines.
       buddyModelResult(state, actor, command, context.now).forEach((line, i) => {
         const source = { ...SYSTEM_ROW, ...(line.machines.length ? { machines: line.machines } : {}) }
-        if (i === 0) message(line.conversationId, line.text, [], null, source)
-        else effects.messages.push({ id: stableId(operationId, 'buddy-model', String(i)), conversationId: line.conversationId, author: sender,
+        if (i === 0) { message(line.conversationId, line.text, [], null, source); return }
+        // Another member's line, in their private chat: written by their own agent, as only they and it post there (task #4558).
+        const chat = state.conversations.find(c => c.id === line.conversationId), member = chat && chatOwner(chat)
+        const ownVoice = member && ownAgentAuthor(state, member)
+        if (ownVoice) effects.messages.push({ id: stableId(operationId, 'buddy-model', String(i)), conversationId: line.conversationId, author: ownVoice,
           text: line.text, replyTo: null, recipients: [], source })
       })
       break
@@ -3706,14 +3715,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         crewNeed(projectChat, pmInstead, { personIds: [to.id], conversationId: projectChat.id }, command.text)
         break
       }
-      // To nobody: the person reads it; their Buddy, if they have one, is not asked to answer for them. In their one Buddy chat,
-      // marked with its project so it hides once they lose it (buddies.ts hiddenProjectRow), and in their older chat there,
-      // which older apps and the phone still show (spec: Older apps).
-      message(defaultBuddyChat(state, to).id, command.text, [], null, { kind: PM_LINE_KIND, projectId: project.id })
-      Object.assign(effects.messages.at(-1)!, { buddyProject: project.id })
-      effects.messages.push({ id: stableId(operationId, 'project-chat'), conversationId: openBuddyChat(state, project.id, to).id, author: sender,
-        text: command.text, replyTo: null, recipients: [] })
-      break
+      // The PM's private line went in the person's private chat with their own agent, where only they and it post (anh Dee,
+      // 11-07, task #4558): the PM tags them in the project chat instead.
+      fail('PRIVATE_CHAT', PRIVATE_CHAT_REFUSAL, 403)
     }
     case 'buddy.create': {
       if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person adds their own Buddy.', 403)
@@ -3776,7 +3780,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A slot for its person's Buddy there and its sessions: it takes nothing else.
       if (pool.buddyOnly) pool.maxAgents = machineSlots(state, pool) + 1
       const contributor = person(state, grant.contributorId)
-      const named = chosenBuddyName(state, chat, me, context.buddyNames)
+      const named = chosenBuddyName(state, chat, context.buddyNames)
       // Never moved to the Mac's Team account, as a teammate's project otherwise is (machines.ts teamStartRequest).
       const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
         ...(command.model ? { model: command.model } : {}), name: named.name, cwd: buddyHomeFolder(pool, me), worktree: false,
@@ -3815,8 +3819,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // computer nor a host that runs Regular starts is needed; agent.add then brings the running session into the chat.
       if (command.local) {
         if (command.kind !== 'regular') fail('LOCAL_MEMBER_ONLY', 'A Lead started on your computer starts its project with project.create.', 400)
-        const name = command.name ?? fail('AGENT_NAME_REQUIRED', 'Name your agent.', 400)
-        result.conversationId = openAgentChat(me, name)
+        result.conversationId = openAgentChat(me, newAgentName(state, actor, command.name, operationId))
         break
       }
       // A Buddy-only record is not the computer in the Swarm: its person adds it first (Desktop does, with no screen).
@@ -3834,7 +3837,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         break
       }
       // A Regular agent: in no project, in a chat of its own with its person, which nobody else reads (projects.ts readsAgentChat).
-      const name = command.name ?? fail('AGENT_NAME_REQUIRED', 'Name your agent.', 400)
+      // Its own name, or a real one picked for it (task #4568).
+      const name = newAgentName(state, actor, command.name, operationId)
       // Only a host that says it runs one gets its start (read/hostRows.ts regularStarts): an older one would leave it waiting.
       if (!pool.observation?.capabilities?.includes(REGULAR_AGENT_CAPABILITY)) fail('HOST_OUTDATED', `Update Harness on ${pool.name ?? 'your computer'} to start this agent there.`, 409)
       const chatId = openAgentChat(me, name)
@@ -4268,10 +4272,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           : `Couldn't switch the PM: ${error || 'it failed'}. ${command.down ? `It has not come back on ${engine} yet; its machine keeps trying.` : `It is back on ${engine}.`}` })
       // The machine owner hears when their non-default account runs another person's PM; the project line may be out of their reach.
       const owner = state.people.find(p => p.id === target.machineOwnerId), pool = state.machines?.find(m => m.machineId === target.machineId)
-      if (moved && label && asked && owner && asked !== owner.id) {
+      // Written by the owner's own agent: only they and it post in their private chat (task #4558).
+      const ownVoice = owner && ownAgentAuthor(state, owner)
+      if (moved && label && asked && owner && ownVoice && asked !== owner.id) {
         // The owner's Buddy reads it: by name, never email (review of #2954).
         const who = agentWrittenNameOf(state, asked) ?? 'Someone'
-        effects.messages.push({ id: stableId(operationId, 'pm-switch-notice'), conversationId: defaultBuddyChat(state, owner).id, author: sender, replyTo: null, recipients: [],
+        effects.messages.push({ id: stableId(operationId, 'pm-switch-notice'), conversationId: defaultBuddyChat(state, owner).id, author: ownVoice, replyTo: null, recipients: [],
           source: { kind: 'pm-switch-notice', machineId: target.machineId },
           text: `${who} moved the PM of ${project.name} on ${pool?.name ?? target.machineId} to your ${engine} account "${label}".` })
       }

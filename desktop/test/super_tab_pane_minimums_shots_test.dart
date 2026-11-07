@@ -50,7 +50,6 @@ void main() {
         account: 'owner',
         initial: {
           'tabId': 'tab',
-          'projectsGroupOpen': true,
           'accountId': 'owner',
           'selectedId': 'buddy-owner-lead',
         },
@@ -74,6 +73,9 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      // A project's Board opens from the Projects grid (task #4466).
+      await tester.tap(find.byKey(const ValueKey('super-projects')));
+      await tester.pump();
       await tester.tap(find.byKey(const ValueKey('super-group-lead')));
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
@@ -118,7 +120,7 @@ void main() {
       await t.tap(find.text('Add the project export'));
       await t.pumpAndSettle();
       await captureWindow(t, shots, 'tasks-open-row-${brightness.name}');
-      await t.tap(find.text('Reject'));
+      await t.tap(find.text('Decline'));
       await t.pumpAndSettle();
       expect(t.takeException(), isNull);
       await captureWindow(t, shots, 'reject-dialog-${brightness.name}');
