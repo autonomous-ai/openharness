@@ -2707,7 +2707,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// loaded. Only this conversation's own pages are read, so the original is
   /// one the reader may read, or it is not found.
   Future<void> _openOriginal(SuperTabMessage reply, BuildContext row) async {
-    final id = c.selectedId, original = reply.replyTo;
+    final id = c.selectedId, original = reply.answers ?? reply.replyTo;
     final top = _topInList(row);
     if (original == null || top == null) return;
     final request = ++_jumpRequest;
@@ -5007,7 +5007,10 @@ class _SuperTabViewState extends State<SuperTabView>
     // In a flat chat a thread reply answers the message it names, else its thread's root (task #3787).
     final flatReply =
         _flatChat && message.threadReply && message.thread != message.id;
-    final answers = message.replyTo ?? (flatReply ? message.thread : null);
+    final answers =
+        message.answers ??
+        message.replyTo ??
+        (flatReply ? message.thread : null);
     // An original outside the pages read is read by itself for its quote.
     final quoted = answers == null || byId.containsKey(answers)
         ? null
