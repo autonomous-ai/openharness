@@ -2208,11 +2208,19 @@ export class SuperTabStore {
       if (decisionId) context.routeDecision = await readDecision(tx, tabId, decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
       if (command.type === 'project.boardMode' && command.on) context.legacyProposals = await this.legacyProposalBodies(tx, original, command.projectId)
       const effects = applyCommand(original, actor, command, context)
-      // As the 30-second sweep decides (sweep, below): a free worker with a task for it in a project whose PM is not waiting.
-      // Before, every freeing write in a Swarm with any worker started a pass, which read the whole Swarm on the primary to
-      // find nothing when nobody was free or nothing waited (Ken's scan on v1.4.20). What it skips, the sweep still sees.
-      dispatches = !!this.hooks.dispatch && freesOrOpens(command) && projectsOf(effects.state).some(p => !this.pmWaiting(tabId, effects.state, p, context.now)
-        && dispatchPlan(effects.state, p.id, DISPATCH_RULES, context.now, this.refusedSkip(tabId, effects.state, context.now)).length > 0)
+      // As the 30-second sweep decides (sweep, below): a free worker with a task for it, under its project's own rules, in a
+      // project whose PM is not waiting. Before, every freeing write in a Swarm with any worker started a pass, which read the
+      // whole Swarm on the primary to find nothing when nobody was free or nothing waited (Ken's scan on v1.4.20). Only a project
+      // with an open task reads its rules: one indexed read. What it skips, the sweep still sees.
+      dispatches = false
+      if (this.hooks.dispatch && freesOrOpens(command)) {
+        const skip = this.refusedSkip(tabId, effects.state, context.now)
+        for (const p of projectsOf(effects.state)) {
+          if (this.pmWaiting(tabId, effects.state, p, context.now) || !openTasks(effects.state, p.id, context.now).length) continue
+          const rules = await this.dispatchPolicy(tx, tabId, p.id)
+          if (rules && dispatchPlan(effects.state, p.id, rules, context.now, skip).length) { dispatches = true; break }
+        }
+      }
       // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
       const shown = effects.messages.filter(message => !agentOnly(message.source, message.recipients))
       for (const group of effects.state.conversations) {
