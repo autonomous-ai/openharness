@@ -525,27 +525,48 @@ describe('the merge train says why it passes over a done task\'s pull request (t
   const doneTask = (swarm: ReturnType<typeof fakeSwarm>, pull: FakePull) => { swarm.approve(pull); swarm.tasks.get(`task-${pull.number}`)!.task.done = true }
   const unpassedCheck: Check = { id: 'c0', description: 'A widget test per first-join path', independent: false, evidence: null, passedBy: null }
 
-  it('writes the rule once after two passes in a row, as for #3367: the steps passed but the task\'s own check never did', async () => {
+  // Task #4561: #3540 and #3545 waited, like #3367 before them, with every step Yes at the head and CI green, as their own check
+  // was unpassed and nobody could record it once Done. Their steps stand in for it now, and the task hears so once.
+  it('merges a Done task whose steps said Yes at its head while its own check was unpassed, and says so on the task once', async () => {
+    const { repo, swarm, pass } = setup()
+    const a = repo.addPull(7, ['backend/src/a.ts']), d = repo.addPull(9, ['docs/a.md'])
+    for (const pull of [a, d]) { doneTask(swarm, pull); swarm.tasks.get(`task-${pull.number}`)!.task.checks = [unpassedCheck] }
+    await pass()
+    const batch = repo.batches()[0]!
+    repo.state.ci.set(batch.head, 'success')
+    await pass(); await pass()
+    expect(swarm.merged.map(m => m.taskId).sort()).toEqual(['task-7', 'task-9'])
+    const stood = swarm.told.filter(t => t.key.startsWith('train-stood-in:'))
+    expect(stood.map(t => [t.taskId, t.key])).toEqual(expect.arrayContaining([['task-7', `train-stood-in:${a.head}`], ['task-9', `train-stood-in:${d.head}`]]))
+    expect(stood).toHaveLength(2)
+    expect(stood[0]!.text).toContain('A widget test per first-join path')
+    expect(stood[0]!.text).toContain('every step said Yes')
+  })
+
+  it('says nothing of the kind for a task whose own check was passed', async () => {
+    const { repo, swarm, pass } = setup()
+    const d = repo.addPull(9, ['docs/a.md'])
+    doneTask(swarm, d)
+    await pass()
+    expect(swarm.merged.map(m => m.taskId)).toEqual(['task-9'])
+    expect(swarm.told).toEqual([])
+  })
+
+  it('writes the rule once after two passes in a row, and again only when the reason changes', async () => {
     const { repo, swarm, pass } = setup()
     const a = repo.addPull(7, ['desktop/lib/a.dart'])
     doneTask(swarm, a)
-    swarm.tasks.get('task-7')!.task.checks = [unpassedCheck]
+    // A Reviewer failed the task's own check at the head: that still holds it, Done or not.
+    swarm.tasks.get('task-7')!.task.checks = [{ ...unpassedCheck, verdicts: [{ by: 'agent:reviewer', passed: false, evidence: 'no', at: 1, pullRequest: a.url,
+      head: a.head, base: 'main' }] } as Check]
     await pass()
     expect(swarm.told).toEqual([])
     await pass()
     expect(swarm.told).toEqual([expect.objectContaining({ taskId: 'task-7', key: expect.stringContaining('train-skip:'), text: expect.stringContaining('for 2 passes in a row') })])
-    expect(swarm.told[0]!.text).toContain('the task\'s check "A widget test per first-join path": nobody has passed it yet')
+    expect(swarm.told[0]!.text).toContain('the task\'s check "A widget test per first-join path": a failed verdict counts at this head')
     await pass(); await pass()
     expect(swarm.told).toHaveLength(1)
     expect(repo.batches()).toEqual([])
-  })
-
-  it('writes again only when the reason changes', async () => {
-    const { repo, swarm, pass } = setup()
-    const a = repo.addPull(7, ['desktop/lib/a.dart'])
-    doneTask(swarm, a)
-    swarm.tasks.get('task-7')!.task.checks = [unpassedCheck]
-    await pass(); await pass()
     a.labels = ['hold']
     await pass()
     expect(swarm.told).toHaveLength(1)

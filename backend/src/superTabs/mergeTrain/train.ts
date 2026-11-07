@@ -14,7 +14,7 @@
  */
 import { TrainReadError, type TrainGitHub, type TrainPull } from '../../github/train.js'
 import { NOT_MERGEABLE_BY_TOKEN, TRAIN_BRANCH_PREFIX, TRAIN_CI_TIMEOUT_MS, TRAIN_MAX_BATCH } from './config.js'
-import { eligible, headReads, laneOf, skipReason, splitRed, type Ineligible, type TrainTask } from './plan.js'
+import { eligible, headReads, laneOf, skipReason, splitRed, standsIn, type Ineligible, type TrainTask } from './plan.js'
 import { requiredReads, type ProjectRules } from '../policy.js'
 
 /** A task's linked pull request, as the Swarm holds it: what headReads reads. */
@@ -92,6 +92,15 @@ export async function trainPass(input: { projectId: string; github: TrainGitHub;
     const verdict = eligible(candidate, reads, required)
     return { member: { number, url: linked.url, head: pull.head, title: pull.title, files, taskId: linked.taskId }, verdict, reads, required, lane,
       skip: verdict.ok ? null : skipReason(verdict.why, candidate, typeof reads === 'string' ? reads : '') }
+  }
+
+  /** A Done task merged on its steps alone, its own checks unpassed (task #4561): it hears so, once per head. */
+  const toldStoodIn = async (member: Member) => {
+    const linked = taskOf.get(member.url), checks = linked ? standsIn(linked.task, member.url) : []
+    if (!checks.length) return
+    await swarm.tell(member.taskId, member.url, `train-stood-in:${member.head}`, `The merge train merged your pull request #${member.number} at ${member.head.slice(0, 7)} `
+      + `on its steps: every step said Yes at that head and ci/required was green, so they stood in for the task's own check `
+      + `${checks.map(c => `"${c.slice(0, 60)}"`).join(', ')}, which nobody else could record once the task was Done. ${member.url}`)
   }
 
   const closeBatch = async (number: number, branch: string, why: string) => {
@@ -176,7 +185,9 @@ export async function trainPass(input: { projectId: string; github: TrainGitHub;
         try {
           await swarm.merged(member.taskId, member.url, now)
           line.merged++
-        } catch { line.unrecorded++ }
+        } catch { line.unrecorded++; continue }
+        // Its line is a Swarm write like the merge's own: one that fails is counted with them, and the merge stands.
+        await toldStoodIn(member).catch(() => { line.unrecorded++ })
       }
       for (const member of batch.members) {
         await github.comment(member.number, `Merged into main in ${sha} by the merge train, in batch ${batch.url}.`)
@@ -224,6 +235,7 @@ export async function trainPass(input: { projectId: string; github: TrainGitHub;
       const { member } = fast
       await github.squash(member.number, member.head, `${member.title} (#${member.number})`, `Merged by the merge train (fast lane).`)
       await swarm.merged(member.taskId, member.url, now)
+      await toldStoodIn(member)
       waits.set(member.url, null)
       line.merged++
     }
