@@ -133,6 +133,14 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
     expect(has(touches, 'machine', 'host')).toBe(true)
     expect(has(touches, 'head', 'head')).toBe(true)
   })
+
+  // Review of #3560: + New agent picks a name free across the Swarm, so two at once must meet, as Buddy names do.
+  it('makes two new agents meet on the head, where their names are claimed', () => {
+    const f = swarm()
+    const { touches } = f.run({ type: 'agent.new', kind: 'regular', machineId: 'host', engine: 'claude', local: true }, owner,
+      { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
+    expect(has(touches, 'head', 'head')).toBe(true)
+  })
 })
 
 

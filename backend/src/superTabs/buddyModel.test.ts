@@ -189,7 +189,7 @@ describe('the Buddy\'s machine reporting the switch', () => {
     const effects = f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId, ok: true }, f.buddy())
     const read = effects.messages.map(m => withoutMachineNames(m as unknown as Parameters<typeof withoutMachineNames>[0]).text)
     expect(read).toEqual(['Your Buddy now runs on DeepSeek 4.1 Flash, served by a machine.',
-      "peer's Buddy now runs on DeepSeek 4.1 Flash, which your machine serves."])
+      "peer's agent now runs on DeepSeek 4.1 Flash, which your machine serves."])
   })
 
   // Task #3810 (Diego, 11-06): a thread session the daemon refused to move was recorded on the model anyway, so costs and the
@@ -285,13 +285,13 @@ describe('the member who serves the model', () => {
   it('is told, in their own Buddy chat, whose Buddy now runs on their machine\'s model', () => {
     const { effects } = landed()
     expect(effects.messages.filter(m => m.conversationId === ownerChat).map(m => m.text))
-      .toEqual(["peer's Buddy now runs on DeepSeek 4.1 Flash, which your machine serves."])
+      .toEqual(["peer's agent now runs on DeepSeek 4.1 Flash, which your machine serves."])
   })
 
   it('is told when it is their saved API', () => {
     const { effects } = landed('gpt-6.1-sol')
     expect(effects.messages.filter(m => m.conversationId === ownerChat).map(m => m.text))
-      .toEqual(["peer's Buddy now runs on gpt-6.1-sol, on your saved API."])
+      .toEqual(["peer's agent now runs on gpt-6.1-sol, on your saved API."])
   })
 
   it('is not told about their own Buddy', () => {

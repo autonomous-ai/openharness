@@ -1176,7 +1176,8 @@ describe('a person\'s Buddy chat before any Buddy (Lead, 10-29)', () => {
     const opened = f.run({ type: 'buddy.chat' }, peer)
     const chat = group(f, opened.result.conversationId as string)
     expect(chat.id).toBe(peerSwarmChat)
-    expect(chat).toMatchObject({ kind: 'swarm-buddy', title: 'peer\'s Buddy', leadId: null, agentIds: [], archived: false,
+    // Before its agent has a name, the chat reads as the person's agent (review of #3560), never "peer's Buddy".
+    expect(chat).toMatchObject({ kind: 'swarm-buddy', title: 'Your agent', leadId: null, agentIds: [], archived: false,
       audience: { people: [{ id: 'peer', generation: 'first' }] } })
     expect(chat.projectId).toBeUndefined()
     expect(opened.messages).toEqual([])
