@@ -3865,6 +3865,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     final search = source == _NewHarnessSource.workspace ? _search : null;
+    // Nothing but "a new agent here": Cmd-N, File ▸ New Agent, search.
+    final plain =
+        source == _NewHarnessSource.workspace &&
+        !newSwarmProject &&
+        superTabConversationId == null &&
+        (split ?? search?.split) == null &&
+        (placement ?? search?.placement) == null &&
+        engine == null &&
+        folder == null &&
+        projectName == null &&
+        (search == null || _superTabAddTarget == null);
     // A pane never lands in the store tab: New Harness from there goes to
     // the empty starter tab (or a fresh one), the way New Tab does.
     placement ??= search?.placement;
@@ -3876,6 +3887,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final superTab = app.swarms
         .where((s) => s.id == target && s.isSuperTab)
         .firstOrNull;
+    // Where the left pane offers + New agent, a plain new agent is that one
+    // (audit 1.3.89 finding 11), and a reader it is hidden from gets nothing.
+    final board = superTab?.superTabId == null || kIsWeb
+        ? null
+        : app.superTabs.peek(superTab!.superTabId!);
+    if (plain && board != null) {
+      if (!board.canWrite) return;
+      newSwarmAgent = true;
+    }
     final conversation =
         superTabConversationId ??
         (superTab?.superTabId == null
