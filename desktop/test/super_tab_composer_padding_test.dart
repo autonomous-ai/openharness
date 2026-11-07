@@ -15,7 +15,8 @@ import 'support/super_tab_fixture.dart';
 /// the bottom as the text sits down from the top, and the corners are Cmd-N's
 /// field's (anh Dee, 11-07, #4467).
 void main() {
-  const top = 12.0, side = 16.0, rowGap = 12.0, radius = 12.0;
+  const top = 12.0, side = 16.0, rowGap = 12.0;
+  const radius = grid.AppDesktop.composerRadius;
 
   ConversationServer buddyChat() {
     final server = ConversationServer()..threads = true;
@@ -59,7 +60,9 @@ void main() {
       tester.getRect(find.descendant(of: button, matching: find.byIcon(icon)));
 
   for (final brightness in Brightness.values) {
-    for (final scene in ['chat', 'thread', 'web-phone']) {
+    // The chat's own composer is a pill now, at any width (#4529,
+    // super_tab_chat_pill_test.dart); the thread's box keeps this.
+    for (final scene in ['thread']) {
       testWidgets('the $scene composer has room inside its box '
           '(${brightness.name})', (tester) async {
         final thread = scene == 'thread', phone = scene == 'web-phone';

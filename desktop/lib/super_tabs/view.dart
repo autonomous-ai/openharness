@@ -3410,7 +3410,9 @@ class _SuperTabViewState extends State<SuperTabView>
                   constraints: BoxConstraints(
                     minHeight: grid.AppControl.heightFieldScaled,
                   ),
+                  // A long draft keeps its buttons by its last line.
                   child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       attach,
                       Expanded(child: field),
