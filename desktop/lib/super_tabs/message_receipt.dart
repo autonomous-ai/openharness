@@ -206,8 +206,9 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
       }
     } else if (delivery == null &&
         c.selected?.leadId == null &&
-        // A Buddy chat has no Lead: its Buddy takes the message.
-        c.selected?.isBuddyChat != true) {
+        // A Buddy chat has no Lead: its Buddy takes the message, and so does an agent's own chat its agent.
+        c.selected?.isBuddyChat != true &&
+        c.selected?.isAgentChat != true) {
       // In a Personal Swarm this Desktop starts the project's Lead, which the
       // server keeps the message for (task #2633); else, or when it could
       // not start, Add a Lead.

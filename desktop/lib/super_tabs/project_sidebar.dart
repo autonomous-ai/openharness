@@ -17,6 +17,7 @@ import 'attention.dart';
 import 'controller.dart';
 import 'buddies.dart';
 import 'model.dart';
+import 'my_agents.dart';
 import 'personal_projects.dart' show PersonalProjects;
 import 'places.dart';
 import 'buddy_rows.dart';
@@ -62,6 +63,8 @@ class ProjectSidebar extends StatelessWidget {
     this.onOpenBuddyChat,
     this.compact = false,
     this.board = false,
+    this.onNewAgent,
+    this.onOpenAgentChat,
   });
   final SuperTabController controller;
 
@@ -70,6 +73,13 @@ class ProjectSidebar extends StatelessWidget {
 
   /// Desktop's Board layout (anh Dee, task #3787): no Threads row and no Buddy entry, the Buddy being the right pane.
   final bool board;
+
+  /// + New agent (Swarm v3, task #4118): opens the creation dialog, where Regular or PM is chosen. Without it the section
+  /// has no + .
+  final VoidCallback? onNewAgent;
+
+  /// Opens the chat of an agent chosen in My agents in the middle; [onSelect] when not given.
+  final ValueChanged<String>? onOpenAgentChat;
   final ValueChanged<String> onSelect;
   final AppNotifier? app;
   final VoidCallback? onNewProject;
@@ -94,8 +104,9 @@ class ProjectSidebar extends StatelessWidget {
   /// Mentions read what the server says waits, and Threads nothing.
   final SuperTabActivity? activity;
 
-  /// The reader's places, for the back and forward arrows at the top;
-  /// without it there are none.
+  /// The reader's places, for the back and forward arrows at the top of a
+  /// layout that is not the Desktop's; without it there are none. The
+  /// Desktop has none (anh Dee, task #4192): ⌘[ and ⌘] still step.
   final SuperTabPlaces? places;
 
   /// What needs the reader, as Slack shows it: each row's red number counts
@@ -580,6 +591,26 @@ class ProjectSidebar extends StatelessWidget {
     // (Tony, 11-02: it vanished from the latest Desktop under the filter).
     final agent = controller.buddy(key);
     final busy = controller.saving || controller.hasPendingAction;
+    // The Desktop's My agents draws it as every agent, its face and name, never the robot icon (anh Dee, task #4192).
+    if (board) {
+      final muted =
+          chat != null && controller.notifyOf(chat.id) == SuperTabNotify.muted;
+      return SuperTabBuddyRow(
+        key: const ValueKey('super-swarm-buddy'),
+        agentId: agent?.id,
+        name: 'Buddy',
+        tooltip: 'Your Buddy',
+        status: agent == null ? null : _buddyMark(agent),
+        selected:
+            chat != null && !_paneCovered && controller.selectedId == chat.id,
+        unread: chat != null && !muted && controller.unreadShown(chat),
+        onTap: switch (chat) {
+          null when busy => null,
+          null => () => _openBuddyChat(key),
+          final chat => () => (onOpenAgentChat ?? onSelect)(chat.id),
+        },
+      );
+    }
     return _drawRow(
       chat ?? _unopenedSwarmBuddyChat,
       label: 'Buddy',
@@ -591,6 +622,66 @@ class ProjectSidebar extends StatelessWidget {
       trailing: agent == null ? null : _buddyMark(agent),
       onTap: chat == null ? () => _openBuddyChat(key) : null,
       tappable: chat != null || !busy,
+    );
+  }
+
+  /// My agents (Swarm v3, task #4118): the person's Buddy first, then the agents they brought, each with its face and name,
+  /// a crown after a PM's, the name bold while its chat has unread, and + New agent in the heading.
+  List<Widget> _myAgents(
+    BuildContext context,
+    SuperTabSnapshot? snapshot,
+    _SidebarReading reading,
+  ) {
+    if (snapshot == null) return const [];
+    final mine = [
+      for (final agent in superTabMyAgents(snapshot, controller.accountId))
+        if (agent.buddyOf == null) agent,
+    ];
+    return [
+      SuperTabSectionHeading(
+        key: const ValueKey('project-sidebar-agents'),
+        'My agents',
+        titleStyle: _headingStyle,
+        endInset: 0,
+        // It folds as Projects does, remembered (task #4192).
+        collapsed: !controller.agentsGroupOpen,
+        onToggleCollapsed: controller.toggleAgentsGroup,
+      ),
+      if (controller.agentsGroupOpen) ...[
+        if (controller.oneBuddy)
+          ?_swarmBuddyRow()
+        else
+          ..._buddies([...snapshot.projects], reading),
+        for (final agent in mine) _agentRow(snapshot, agent),
+        // The last row opens the creation dialog, where Regular or PM is chosen.
+        if (controller.canWrite && onNewAgent != null)
+          _navigationRow(
+            key: 'super-new-agent-row',
+            label: 'New agent',
+            icon: AppIcons.plus,
+            onTap: onNewAgent,
+          ),
+      ],
+      const SizedBox(height: 16),
+    ];
+  }
+
+  Widget _agentRow(SuperTabSnapshot snapshot, SuperTabAgent agent) {
+    final chat = superTabAgentChat(snapshot, agent);
+    final name = snapshot.agentName(agent.id, fallback: agent.name);
+    return SuperTabBuddyRow(
+      key: ValueKey('super-agent-${agent.id}'),
+      agentId: agent.id,
+      name: name,
+      tooltip: chat == null ? '$name · no chat yet' : name,
+      crownKey: superTabAgentIsPm(snapshot, agent)
+          ? ValueKey('super-agent-crown-${agent.id}')
+          : null,
+      status: _buddyMark(agent),
+      selected:
+          chat != null && !_paneCovered && controller.selectedId == chat.id,
+      unread: chat != null && controller.unreadShown(chat),
+      onTap: chat == null ? null : () => (onOpenAgentChat ?? onSelect)(chat.id),
     );
   }
 
@@ -695,6 +786,27 @@ class ProjectSidebar extends StatelessWidget {
     final decisions = activity?.needsCount ?? snapshot?.decisionsWaiting ?? 0;
     final mentions = activity?.mentionsCount ?? snapshot?.mentionsWaiting ?? 0;
     final threads = activity?.threadsCount ?? 0;
+    final switcher = switch ((app, onNewSwarm)) {
+      (final app?, final onNewSwarm?) => SwarmSwitcher(
+        app: app,
+        controller: controller,
+        onNewSwarm: onNewSwarm,
+        row:
+            ({
+              required label,
+              required icon,
+              required onTap,
+              required trailing,
+            }) => _navigationRow(
+              key: 'super-swarm-switcher',
+              label: label,
+              icon: icon,
+              onTap: onTap,
+              trailing: trailing,
+            ),
+      ),
+      _ => null,
+    };
     return Material(
       // The page's color: the rule at its edge is what separates them. A
       // theme may give the sidebar its own (Plum's plum).
@@ -707,26 +819,14 @@ class ProjectSidebar extends StatelessWidget {
             child: LaidOutListView(
               padding: const EdgeInsets.all(8),
               children: [
-                if (places case final places?) _arrows(places),
-                if ((app, onNewSwarm) case (final app?, final onNewSwarm?))
-                  SwarmSwitcher(
-                    app: app,
-                    controller: controller,
-                    onNewSwarm: onNewSwarm,
-                    row:
-                        ({
-                          required label,
-                          required icon,
-                          required onTap,
-                          required trailing,
-                        }) => _navigationRow(
-                          key: 'super-swarm-switcher',
-                          label: label,
-                          icon: icon,
-                          onTap: onTap,
-                          trailing: trailing,
-                        ),
-                  ),
+                // The Desktop's org switcher is the first thing in the pane (Swarm v3 spec), with no arrows under it
+                // (task #4192); elsewhere it follows the back and forward arrows.
+                if (board)
+                  ?switcher
+                else ...[
+                  if (places case final places?) _arrows(places),
+                  ?switcher,
+                ],
                 // Three rows, each one thing, in anh Dee's order (11-05, task
                 // #2996): bold when something waits, grey when not, and no
                 // numbers (task #3128). The Swarm switcher stands apart from
@@ -742,14 +842,25 @@ class ProjectSidebar extends StatelessWidget {
                     icon: AppIcons.flag,
                     waiting: decisions,
                   ),
-                  _pageRow(
-                    onPage,
-                    target: SwarmPage.mentions,
-                    key: 'super-mentions',
-                    label: 'Mentions',
-                    icon: AppIcons.atSign,
-                    waiting: mentions,
-                  ),
+                  if (board)
+                    _pageRow(
+                      onPage,
+                      target: SwarmPage.leaderboard,
+                      key: 'super-leaderboard',
+                      label: 'Leaderboard',
+                      icon: AppIcons.trophy,
+                      waiting: 0,
+                    ),
+                  // Mentions goes from the Desktop's left pane (Swarm v3, anh Dee 11-07).
+                  if (!board)
+                    _pageRow(
+                      onPage,
+                      target: SwarmPage.mentions,
+                      key: 'super-mentions',
+                      label: 'Mentions',
+                      icon: AppIcons.atSign,
+                      waiting: mentions,
+                    ),
                   if (!board)
                     _pageRow(
                       onPage,
@@ -761,6 +872,7 @@ class ProjectSidebar extends StatelessWidget {
                     ),
                 ],
                 const SizedBox(height: 20),
+                if (board) ..._myAgents(context, snapshot, reading),
                 SuperTabSectionHeading(
                   key: const ValueKey('project-sidebar-projects'),
                   'Projects',
@@ -780,12 +892,18 @@ class ProjectSidebar extends StatelessWidget {
                   onAdd: controller.canWrite ? onNewProject : null,
                   addTooltip: 'New project',
                   endInset: 0,
+                  // The Desktop folds Projects: closed while the person has an agent (Swarm v3, #4118).
+                  collapsed: board ? !controller.projectsOpen : null,
+                  onToggleCollapsed: board
+                      ? controller.toggleProjectsGroup
+                      : null,
                 ),
                 // The reader's one Buddy, the first item under Projects (anh
                 // Dee, 11-05).
                 if (controller.oneBuddy && !board) ?_swarmBuddyRow(),
-                for (final (_, channel) in _channels(snapshot, reading))
-                  channel,
+                if (!board || controller.projectsOpen)
+                  for (final (_, channel) in _channels(snapshot, reading))
+                    channel,
                 const SizedBox(height: 16),
                 // Buddies replaced Chat with PM in every Swarm (Ken, 10-29); where the
                 // server gives one Buddy for the whole Swarm, it is # buddy above.
