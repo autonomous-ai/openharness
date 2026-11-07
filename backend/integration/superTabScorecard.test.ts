@@ -108,6 +108,7 @@ describe('the nightly scorecard', () => {
     expect(row).toMatchObject({ tabId: f.tab, projectId: 'lead', on: '2026-11-05', timeZone: 'Asia/Ho_Chi_Minh' })
     expect(row!.figures as unknown as ScorecardFigures).toMatchObject({
       asksShipped: 1, askToShipMedianMinutes: 180,
+      pmAnswer: { count: 1, medianSeconds: 600, slowestSeconds: 600 },
       unansweredAsks: 1, oldestUnansweredAskMinutes: 17 * 60,
       // 02:00-03:00 the task waited for its agent; from 06:00 the second one waits to midnight.
       idleMinutes: 60 + 18 * 60,

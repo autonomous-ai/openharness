@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/widgets/desktop_chrome.dart';
@@ -11,8 +14,10 @@ import 'package:harness/super_tabs/model.dart' show SuperTabAgent;
 import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/widgets/harness_activity_mark.dart' show ActivityMark;
 
 import 'super_tab_activity_lists_test.dart' show load, swarm;
+import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show createApp;
 
@@ -33,8 +38,16 @@ Map<String, dynamic> _agent(
   'configuration': {'engine': 'codex'},
 };
 
+final shots = Platform.environment['HARNESS_SUPER_TAB_CAPTURE'];
+
 void main() {
   Finder key(String k) => find.byKey(ValueKey(k));
+  Finder crown(String agent) => find.descendant(
+    of: key('super-agent-$agent'),
+    matching: find.byIcon(AppIcons.crown),
+  );
+  Finder text(String agent, String text) =>
+      find.descendant(of: key('super-agent-$agent'), matching: find.text(text));
 
   Future<void> settle(WidgetTester tester) async {
     for (var i = 0; i < 3; i++) {
@@ -52,6 +65,9 @@ void main() {
     void Function(ConversationServer server)? setup,
     List<String>? selected,
     List<String>? created,
+    List<String>? terminals,
+    double width = 300,
+    Brightness brightness = Brightness.light,
   }) async {
     final server = swarm();
     if (agents != null) server.state['agents'] = agents;
@@ -60,11 +76,16 @@ void main() {
     final c = activity.controller;
     final AppNotifier app = createApp();
     addTearDown(app.dispose);
-    await tester.binding.setSurfaceSize(const Size(300, 900));
+    // The design tokens follow the app's brightness, which main.dart sets from the theme.
+    final previous = grid.AppTheme.brightness.value;
+    grid.AppTheme.brightness.value = brightness;
+    addTearDown(() => grid.AppTheme.brightness.value = previous);
+    await tester.binding.setSurfaceSize(Size(width, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.light),
+        debugShowCheckedModeBanner: false,
+        theme: grid.buildAppTheme(brightness: brightness),
         home: Scaffold(
           // The view rebuilds the sidebar as the controller changes.
           body: ListenableBuilder(
@@ -77,6 +98,7 @@ void main() {
                 c.select(id);
               },
               onNewAgent: () => created?.add('new'),
+              onOpenAgentTerminal: (agent) => terminals?.add(agent.id),
               places: SuperTabPlaces.of(c),
               onNewSwarm: () {},
               onNewProject: () {},
@@ -151,6 +173,24 @@ void main() {
         agents: [_agent('tuan-agent', 'Tuan agent', contributor: 'tuan')],
       );
       expect(key('super-project-lead'), findsOneWidget);
+    });
+
+    // Task #4220: the Desktop has no Mentions row, so a tag in a folded project's chat showed nowhere.
+    testWidgets('folded, it still lists a project whose chat tags you, with '
+        'its number', (tester) async {
+      await show(
+        tester,
+        setup: (server) => server.tag('message-1', conversationId: 'lead'),
+      );
+      expect(find.byTooltip('Expand Projects'), findsOneWidget);
+      expect(key('super-project-lead'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: key('super-project-lead'),
+          matching: key('super-mentions-lead'),
+        ),
+        findsOneWidget,
+      );
     });
 
     testWidgets('its heading opens and closes it', (tester) async {
@@ -254,22 +294,93 @@ void main() {
       expect(key('super-agent-fir'), findsNothing);
     });
 
-    testWidgets('a PM has a crown right after its name, a Regular agent '
-        'none', (tester) async {
-      await show(tester, agents: mine, setup: agents);
-      expect(key('super-agent-crown-orion'), findsOneWidget);
-      expect(key('super-agent-crown-kestrel'), findsNothing);
-      final name = find.descendant(
-        of: key('super-agent-orion'),
-        matching: find.text('Orion'),
+    // Task #4220: the row drew its status only beside a detail line, and My agents rows have none.
+    testWidgets('each row shows its status, quietly, at its end', (
+      tester,
+    ) async {
+      // The person's one running Buddy, of no project.
+      await show(
+        tester,
+        agents: [
+          {...buddy}..remove('projectId'),
+          ...mine.skip(1),
+        ],
+        setup: agents,
       );
-      final crown = tester.getRect(key('super-agent-crown-orion'));
-      expect(crown.left - tester.getRect(name).right, inInclusiveRange(0, 12));
-      expect(
-        (crown.center.dy - tester.getRect(name).center.dy).abs(),
-        lessThan(4),
-      );
+      for (final row in ['super-swarm-buddy', 'super-agent-kestrel']) {
+        final mark = find.descendant(
+          of: key(row),
+          matching: find.byType(ActivityMark),
+        );
+        expect(mark, findsOneWidget, reason: row);
+        // At the row's end, in the column the unread state is heard in.
+        expect(
+          tester.getRect(mark).left,
+          greaterThan(tester.getRect(key(row)).right - 64),
+          reason: row,
+        );
+      }
     });
+
+    // Task #4421 (anh Dee 11-07): "let's just put a leader crown on the avatar. it's too much." and "let's put the project
+    // name next to the one that it leads".
+    testWidgets('a PM wears its crown on its avatar and names the project it '
+        'leads after its name; a Regular agent neither', (tester) async {
+      await show(tester, agents: mine, setup: agents);
+      expect(crown('orion'), findsOneWidget);
+      final avatar = tester.getRect(
+        find.descendant(
+          of: key('super-agent-orion'),
+          matching: find.byType(SuperTabAvatar),
+        ),
+      );
+      final badge = tester.getRect(crown('orion'));
+      // On the avatar's top right corner, not after the name.
+      expect(badge.center.dx, greaterThan(avatar.center.dx));
+      expect(badge.center.dy, lessThan(avatar.center.dy));
+      expect(badge.left, lessThan(avatar.right));
+      final name = tester.getRect(text('orion', 'Orion'));
+      expect(badge.right, lessThan(name.left));
+      final project = tester.getRect(text('orion', 'web-project'));
+      expect(project.left, greaterThan(name.right));
+      expect((project.center.dy - name.center.dy).abs(), lessThan(4));
+      expect(
+        tester.widget<Text>(text('orion', 'web-project')).style?.color,
+        grid.SidebarInk.muted(tester.element(key('super-agent-orion'))),
+      );
+      expect(crown('kestrel'), findsNothing);
+      expect(text('kestrel', 'web-project'), findsNothing);
+    });
+
+    testWidgets('in a narrow pane the project name is cut before the agent\'s '
+        'name', (tester) async {
+      await show(
+        tester,
+        agents: [
+          buddy,
+          {..._agent('orion', 'Orion Lead'), 'kind': 'pm'},
+        ],
+        setup: agents,
+        width: 280,
+      );
+      bool cut(String shown) => tester
+          .renderObject<RenderParagraph>(text('orion', shown))
+          .didExceedMaxLines;
+      expect(cut('web-project'), isTrue);
+      expect(cut('Orion Lead'), isFalse);
+    });
+
+    testWidgets('screenshots of My agents, light and dark', (tester) async {
+      await tester.runAsync(() => loadCaptureFonts(shots));
+      for (final (brightness, name) in [
+        (Brightness.light, 'light'),
+        (Brightness.dark, 'dark'),
+      ]) {
+        await show(tester, agents: mine, setup: agents, brightness: brightness);
+        await captureWindow(tester, shots, 'my-agents-pm-crown-$name');
+        await tester.pumpWidget(const SizedBox());
+      }
+    }, skip: shots == null);
 
     testWidgets('unread is a bold name, with no dot and no number', (
       tester,
@@ -316,10 +427,9 @@ void main() {
       await tester.runAsync(c.flush);
     });
 
-    testWidgets('an agent with no chat yet opens nothing and says why', (
-      tester,
-    ) async {
-      final selected = <String>[];
+    // Task #4220: an agent from before its own chat (#4116), with no open task, was a row that did nothing.
+    testWidgets('an agent with no chat opens its terminal', (tester) async {
+      final selected = <String>[], terminals = <String>[];
       await show(
         tester,
         agents: mine,
@@ -330,11 +440,13 @@ void main() {
               .remove('assignment');
         },
         selected: selected,
+        terminals: terminals,
       );
       await tester.tap(key('super-agent-kestrel'));
       await tester.pump();
       expect(selected, isEmpty);
-      expect(find.byTooltip('Kestrel · no chat yet'), findsOneWidget);
+      expect(terminals, ['kestrel']);
+      expect(find.byTooltip('Kestrel · opens its terminal'), findsOneWidget);
     });
 
     testWidgets('+ New agent is the last row, below the agents, and hands on '
@@ -833,8 +945,8 @@ void main() {
           ],
           selected: selected,
         );
-        expect(key('super-agent-crown-zed'), findsOneWidget);
-        expect(key('super-agent-crown-amy'), findsNothing);
+        expect(crown('zed'), findsOneWidget);
+        expect(crown('amy'), findsNothing);
         await tester.tap(key('super-agent-zed'));
         await tester.pump();
         expect(selected, ['offline']);
@@ -852,7 +964,7 @@ void main() {
                       .firstWhere((g) => g['id'] == 'lead')['leadId'] =
                   'orion',
         );
-        expect(key('super-agent-crown-orion'), findsNothing);
+        expect(crown('orion'), findsNothing);
       });
     },
   );

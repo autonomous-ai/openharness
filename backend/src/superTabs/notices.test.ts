@@ -87,8 +87,8 @@ describe('the notices the Swarm writes into a chat', () => {
     // the Shipped line, now the task's own line (taskLine.ts; Quiet Swarm, Dee, 2026-11-02), people; a machine's removal ending,
     // no longer said in any chat (anh Dee, 11-04, #2742), nobody; a task's own row under its requester's name, now only a person's
     // own message (anh Dee, 11-04, 'bot messages', #2925), people; an instructions save's line, now only in the Instructions
-    // history (Dee and Ken, 11-05, #3132), people.
-    const retired = ['idle-stop', 'project-report', 'ship', 'machine-left', 'task-line', 'routing-reflection', 'instructions']
+    // history (Dee and Ken, 11-05, #3132), people; the card wake-up, now written by the server (anh Dee, 11-06, #3593), the Lead.
+    const retired = ['idle-stop', 'project-report', 'ship', 'machine-left', 'task-line', 'routing-reflection', 'instructions', 'update-request']
     expect(Object.keys(NOTICE_READERS).filter(kind => !written.has(kind) && !retired.includes(kind))).toEqual([])
     expect(retired.filter(kind => written.has(kind))).toEqual([])
   })
