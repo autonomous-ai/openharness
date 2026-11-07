@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../../config/env.js'
@@ -85,6 +85,24 @@ describe('hook/statusline.mjs', () => {
   it('names the report after the config folder, and the default folder after the empty string', () => {
     run(['--data', data], STATUS, { CLAUDE_CONFIG_DIR: '' })
     expect(existsSync(reportPath(data, ''))).toBe(true)
+  })
+
+  // One key rule on both sides (lib/quotaReports.ts claudeReportKey, #4252): the daemon reads the folder its launch
+  // environment names, which may spell it otherwise than the shell the session ran in.
+  it('names the default folder after the empty string however it is written', () => {
+    const home = join(root, 'home')
+    for (const dir of [join(home, '.claude'), join(home, '.claude') + sep]) {
+      rmSync(data, { recursive: true, force: true })
+      run(['--data', data], STATUS, { HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: dir })
+      expect(existsSync(reportPath(data, '')), dir).toBe(true)
+    }
+  })
+
+  it('names a moved folder by its real path, so the daemon finds it however either side spells it', () => {
+    mkdirSync(configDir)
+    run(['--data', data], STATUS, { CLAUDE_CONFIG_DIR: configDir + sep })
+    expect(readClaudeReport(data, configDir)?.five_hour).toEqual(STATUS.rate_limits.five_hour)
+    expect(readClaudeReport(data, configDir + sep)?.five_hour).toEqual(STATUS.rate_limits.five_hour)
   })
 
   it('leaves out a window Claude Code did not report, and one whose percentage is not one', () => {
