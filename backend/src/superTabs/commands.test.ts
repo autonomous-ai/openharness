@@ -2813,10 +2813,13 @@ describe('cancelling work', () => {
     it('reads the task numbers a reason says the work goes on in, never itself, a pull request or a mere mention', () => {
       expect(tasksNamedIn('Duplicate of #4421', 4420)).toEqual([4421])
       expect(tasksNamedIn('Being done inside #4445.', 4455)).toEqual([4445])
-      expect(tasksNamedIn('Accepted and split by area: #4465, #4466 to #4468', 4464)).toEqual([4465, 4466, 4468])
+      expect(tasksNamedIn('Accepted and split into #4465, #4466 to #4468', 4464)).toEqual([4465, 4466, 4468])
       expect(tasksNamedIn('Folded into #12 and #12 (this is #7)', 7)).toEqual([12])
       expect(tasksNamedIn('Duplicate: merged in PR #3529 and pull request #3530', 1)).toEqual([])
       for (const reason of ['Not needed', 'Waiting on #4434', 'Not needed; see #4400 for context']) expect(tasksNamedIn(reason, 1)).toEqual([])
+      // Only the agreed phrases link: a loose one names a task it does not go on in (Mactest3's test of #3534, task #4480).
+      for (const reason of ['will look into #4421 later', 'Part of the cause is #4421', 'Inside #4421', 'Same as #4421', 'Covered by #4421',
+        'Replaced by #4421', 'Superseded by #4421', 'Dup #4421', 'Duplicates #4421', 'Accepted and split by area: #4465']) expect(tasksNamedIn(reason, 1), reason).toEqual([])
       expect(tasksNamedIn(`Split into ${Array.from({ length: 20 }, (_, i) => `#${i + 100}`).join(' ')}`, 1)).toHaveLength(10)
       // The phrase goes with the numbers after it in its own sentence (review 2 of #3534).
       expect(tasksNamedIn('Duplicate of #4421; waiting on #4434', 1)).toEqual([4421])
