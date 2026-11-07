@@ -54,6 +54,7 @@ import { recordReload } from './retryStats.js'
 import { buddyChatId, isSwarmBuddyChat, shownBefore, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
 import { cleanPullRequestLinks } from './cards.js'
 import { accountOf, wordsOf, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, groupProject, ledProject, onTeamAccount, ownerAccount, ownsProject, admitPerson, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, repositoryCreator, type SwarmProject } from './projects.js'
+import { taskProcess } from './process.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
 import { DELETED_TEXT, type MessageChangeTarget } from './messageEdits.js'
@@ -81,12 +82,13 @@ import { RefusalMemory } from './dispatchRefusals.js'
 import { tasksHoldingMoves } from './ruleGuard.js'
 import { candidatesFor, dispatchRules, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type DispatchLookup, type DispatchRules, type Skip } from './dispatch.js'
 import { buddySleepCandidates, sleepBuddies } from './buddySleep.js'
+import { openWaitingSteps } from './linuxSteps.js'
 import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, recordTaskState, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
 import { owedAsk } from './timeChecks.js'
 import { ledgerGroupIds, settleReleases, type ReleaseFacts, type ReleaseRules, type SettledReleases } from './releases.js'
 import { groupsOf, archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
-import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadNamed, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
+import { clock, insertParts, loadActive, loadGroups, loadGroupsByKey, loadLightGroups, loadMachineParts, loadNamed, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { autoJoinSwarms, machineSwarms, memberSwarms } from './swarmRows.js'
 import type { MachineRename } from './machineRenames.js'
@@ -1049,12 +1051,23 @@ export class SuperTabStore {
   private async ensure(tx: Transaction, loaded: Loaded, named: Named): Promise<Loaded> {
     const has = (ids: string[] | undefined, present: (id: string) => boolean) => (ids ?? []).every(present)
     const { state } = loaded
-    if (!named.allGroups && has(named.groupIds, id => state.conversations.some(c => c.id === id)) && has(named.startIds, id => !!state.starts?.some(s => s.id === id))
+    if (has(named.groupIds, id => state.conversations.some(c => c.id === id)) && has(named.startIds, id => !!state.starts?.some(s => s.id === id))
       && !named.agentIds?.length && !named.projectIds?.length && !named.startAgentIds?.length) return loaded
     recordReload()
-    // Every live group, dormant ones too, is the rare whole read; any other name adds only what it names to this load.
-    if (named.allGroups) return loadRow(tx, loaded.row, { ...named, groupIds: [...new Set([...named.groupIds ?? [], ...loaded.parts.groups.filter(g => g.dormant).map(g => g.key)])] })
+    // A name adds only what it names to this load.
     return loadedFrom(loaded.row, await loadNamed(tx, loaded.parts, named))
+  }
+
+  /**
+   * The Swarm a caller may address with only its head and the conversations a command names, each step's task too: what the
+   * GitHub reads before a command look up (a conversation's project and pull requests). Each loaded the whole Swarm, so a
+   * work.assign read it three times and a Ready five (task #4368). They authorize nothing; the command's own load does.
+   */
+  private async factsLoad(tx: Transaction, user: AuthUser, tabId: string, command: unknown): Promise<Loaded> {
+    const row = await this.row(tx, user, tabId)
+    const parts = await loadGroupsByKey(tx, row.id, namedFor(command as Command).groupIds ?? [])
+    const tasks = parts.groups.flatMap(g => g.data?.reviewOf ? [g.data.reviewOf] : [])
+    return loadedFrom(row, tasks.length ? await loadNamed(tx, parts, { groupIds: tasks }) : parts)
   }
 
   /** A Swarm with one start loaded even when finished, and the start's group even when dormant. */
@@ -1717,7 +1730,7 @@ export class SuperTabStore {
       if (typeof ref === 'string' && this.hooks.branchPushOrigin) {
         const branch = ref.replace(/^refs\/(heads|remotes\/origin)\//, '')
         const repositoryUrl = await transaction(this.db, async tx => {
-          const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
+          const { state } = await this.factsLoad(tx, user, tabId, command)
           if (asked.type === 'lead.start') return projectsOf(state).find(p => p.id === asked.projectId)?.repository?.repositoryUrl ?? null
           const group = state.conversations.find(c => c.id === asked.request?.conversationId)
           return group ? groupProject(state, group).repository?.repositoryUrl ?? null : undefined
@@ -1727,7 +1740,7 @@ export class SuperTabStore {
       const reads = asked.type === 'work.assign' || asked.type === 'work.teamWritten' || (asked.type === 'conversation.agent' && asked.present === true) || (asked.type === 'work.status' && asked.status === 'review')
       if (!hook || typeof asked.conversationId !== 'string' || !reads) return undefined
       const facts = await transaction(this.db, async tx => {
-        const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
+        const { state } = await this.factsLoad(tx, user, tabId, command)
         const group = state.conversations.find(c => c.id === asked.conversationId)
         if (!group) return null
         const task = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
@@ -1777,7 +1790,7 @@ export class SuperTabStore {
     if (!hook || typeof conversationId !== 'string') return undefined
     try {
       const project = await transaction(this.db, async tx => {
-        const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
+        const { state } = await this.factsLoad(tx, user, tabId, command)
         const group = state.conversations.find(c => c.id === conversationId)
         return group ? groupProject(state, group) : undefined
       })
@@ -1802,9 +1815,9 @@ export class SuperTabStore {
     let facts: { repositoryUrl: string | null; urls: string[] } | null = null
     try {
       facts = await transaction(this.db, async tx => {
-        const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
+        const { state } = await this.factsLoad(tx, user, tabId, command)
         const group = state.conversations.find(c => c.id === asked.conversationId)
-        if (!group || group.reviewOf) return null
+        if (!group || group.reviewOf || taskProcess(groupProject(state, group), group) === 'simple') return null
         const repositoryUrl = groupProject(state, group).repository?.repositoryUrl ?? null
         const urls = [...group.pullRequestUrls ?? [], ...[typeof asked.result === 'string' ? asked.result : '', group.brief]
           .flatMap(text => text ? pullRequestsIn(text, repositoryUrl) : [])]
@@ -2559,7 +2572,7 @@ export class SuperTabStore {
       const same = (sha: string) => sha.toLowerCase() === head.toLowerCase()
       if (!task || !url || (known && (same(known.head) || known.carries?.some(same)) && (base === undefined || base === known.base))) return null
       return { task, urls: [url] }
-    }, [command.conversationId])
+    })
   }
 
   /** After a task's Ready, the heads of the pull requests it names that the task links, else its newest link (task #3628). */
@@ -2572,21 +2585,19 @@ export class SuperTabStore {
       const named = typeof command.result === 'string' ? pullRequestsIn(command.result, groupProject(state, task).repository?.repositoryUrl ?? null) : []
       const urls = linked.filter(url => named.includes(url))
       return { task, urls: urls.length ? urls : linked.slice(-1) }
-    }, [])
+    })
   }
 
   /** [pick]'s pull requests of a task read from GitHub now and recorded (pullRequestEvents.ts readPullRequestsNow), outside any
    *  command's transaction, as GitHub may take seconds. A failure leaves the record as it was and is logged: the command is
-   *  judged on the record then, as before. [groups]: the command's groups whose task, when they are a step, is loaded too. */
+   *  judged on the record then, as before. */
   private async headsReadNow(user: AuthUser, tabId: string, command: Command,
-    pick: (state: SuperTabState) => { task: Conversation; urls: string[] } | null, groups: string[]): Promise<void> {
+    pick: (state: SuperTabState) => { task: Conversation; urls: string[] } | null): Promise<void> {
     let picked: { task: TaskHeads; urls: string[] } | null = null
     try {
       picked = await transaction(this.db, async tx => {
-        const loaded = await this.load(tx, user, tabId, namedFor(command))
-        // A step's task may be dormant: loaded by its id.
-        const reviewOf = groups.map(id => loaded.state.conversations.find(c => c.id === id)?.reviewOf).filter((id): id is string => !!id)
-        const { state } = reviewOf.length ? await this.ensure(tx, loaded, { groupIds: [...groups, ...reviewOf] }) : loaded
+        // A step's task, dormant ones too, is loaded with it.
+        const { state } = await this.factsLoad(tx, user, tabId, command)
         const chosen = pick(state)
         return chosen && chosen.urls.length ? { task: { key: chosen.task.id, heads: chosen.task.pullRequestHeads ?? null,
           steps: chosen.task.stepIds ?? null }, urls: chosen.urls } : null
@@ -5617,7 +5628,8 @@ export class SuperTabStore {
       if (chats.length) loaded = await this.ensure(tx, loaded, { groupIds: [...loaded.state.conversations.map(c => c.id), ...chats] })
       const state = cloneData(loaded.state), now = this.now()
       const rulesFor = await this.projectDispatch(tx, state)
-      const written = [...sweepForLead(state, now, rulesFor), ...advanceProposalCards(state, now)]
+      // A Linux test step that waited for a Linux machine opens once one is there (linuxSteps.ts, task #4278).
+      const written = [...sweepForLead(state, now, rulesFor), ...advanceProposalCards(state, now), ...openWaitingSteps(state, now)]
       for (const [id, bodies] of migration) written.push(...migrateLegacyProposals(state, projectsOf(state).find(p => p.id === id)!, bodies, now))
       // What waits for each agent: an agent with a delivery open is not idle. Only loaded groups' active work keeps an agent
       // from being idle (project instructions, phase 4).
@@ -5911,7 +5923,8 @@ export class SuperTabStore {
       await recordAttempts(tx, tabId, { ...state, conversations: before.conversations }, state, this.now())
       await recordEvidence(tx, tabId, { ...state, conversations: before.conversations }, state, this.now())
       await this.writeMessages(tx, tabId, state, notices, sequences)
-      if (!prior) await tx.superTabStopReceipt.create({ data: { id, tabId, assignmentId, ...execution, receipt } })
+      if (!prior) await tx.superTabStopReceipt.create({ data: { id, tabId, assignmentId, machineId: execution.machineId, harnessId: execution.harnessId,
+        machineOwnerId: execution.machineOwnerId, receipt } })
       ended = endedHolds(before, state)
       return { confirmed: true }
     })

@@ -275,7 +275,7 @@ void main() {
       }
       await withClock(Clock.fixed(_now), () async {
         await show(tester, await loaded(tester, server));
-        expect(find.text('Nothing needs you'), findsOneWidget);
+        expect(find.text('All clear'), findsOneWidget);
         expect(
           find.text('Product Manager handled 2 for you today'),
           findsOneWidget,
@@ -416,7 +416,7 @@ void main() {
         final hold = server.holdDecisions = Completer<void>();
         await show(tester, await _unread(tester, server));
         expect(_key('super-activity-skeleton'), findsOneWidget);
-        expect(find.text('Nothing needs you'), findsNothing);
+        expect(find.text('All clear'), findsNothing);
         await tester.runAsync(() async {
           hold.complete();
           await Future<void>.delayed(const Duration(milliseconds: 80));
@@ -427,8 +427,8 @@ void main() {
       });
     });
 
-    testWidgets('a failed decisions read says so with Retry, not "Nothing '
-        'needs you"', (tester) async {
+    testWidgets('a failed decisions read says so with Retry, not "All '
+        'clear"', (tester) async {
       await withClock(Clock.fixed(_now), () async {
         final server = swarm()..followedThreads = null;
         server.ask(['Late?']);
@@ -438,7 +438,7 @@ void main() {
           find.text('Could not load decisions. Try again.'),
           findsOneWidget,
         );
-        expect(find.text('Nothing needs you'), findsNothing);
+        expect(find.text('All clear'), findsNothing);
         expect(_key('super-activity-skeleton'), findsNothing);
         server.failDecisions = false;
         await _tapSending(tester, find.text('Retry'));
@@ -453,7 +453,7 @@ void main() {
         final server = swarm()..followedThreads = null;
         final activity = await loaded(tester, server);
         await show(tester, activity, brightness: brightness);
-        expect(find.text('Nothing needs you'), findsOneWidget);
+        expect(find.text('All clear'), findsOneWidget);
         expect(_key('super-activity-decide-all'), findsNothing);
       });
     }
