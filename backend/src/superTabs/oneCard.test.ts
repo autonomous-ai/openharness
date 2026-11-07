@@ -68,14 +68,34 @@ describe('a person\'s ask is one card from Proposal to shipped', () => {
     expect(f.card(id).assignment).toMatchObject({ id: assignment.id, status: 'working' })
   })
 
-  it('changes nothing else about cancels: a cancel naming no task, and a task that is no proposal, work as before', () => {
-    const f = fixture(), id = f.propose(), other = f.state.conversations.find(c => c.id === f.web)!
-    f.run({ type: 'work.cancel', conversationId: id, assignmentId: 'current', reason: 'Not needed after all' }, f.pm)
-    expect(f.card(id)).toMatchObject({ archived: true })
+  it('refuses the Lead\'s cancel of a card nobody decided yet, whatever its reason, and points to decline or merge (review of #3558)', () => {
+    const f = fixture(), id = f.propose()
+    for (const reason of ['Doing it in a new task', 'Not needed after all']) {
+      expect(() => f.run({ type: 'work.cancel', conversationId: id, assignmentId: 'current', reason }, f.pm))
+        .toThrow(expect.objectContaining({ code: 'USE_PROPOSAL_COMMAND', message: expect.stringMatching(/proposal\.decide.*decline.*proposal\.merge/s) }))
+    }
+    expect(f.card(id)).toMatchObject({ archived: false, assignment: null })
+    // Declining it is the Lead's way, and the person sees it as rejected, with the reason.
+    f.decide(id, 'no')
+    expect(f.card(id)).toMatchObject({ archived: true, proposal: { decision: { kind: 'no' } } })
+  })
+
+  it('changes nothing else about cancels: the person\'s own, a task that is no proposal, and the work of an accepted card', () => {
+    const f = fixture(), mine = f.propose(owner)
+    // A person (here the Swarm owner) cancels their own undecided ask as before.
+    f.run({ type: 'work.cancel', conversationId: mine, assignmentId: 'current', reason: 'Not needed after all' }, owner)
+    expect(f.card(mine)).toMatchObject({ archived: true })
+    // A task that is no proposal is cancelled by the Lead as before, even naming the task its work goes on in.
     const own = f.state.conversations.find(c => c.id === f.web)!
     expect(own.proposal).toBeUndefined()
-    f.run({ type: 'work.cancel', conversationId: own.id, assignmentId: own.assignment!.id, reason: `Duplicate of #${f.state.conversations.find(c => c.id === f.secretGroup)?.number ?? other.number}` }, f.pm)
+    f.run({ type: 'work.cancel', conversationId: own.id, assignmentId: own.assignment!.id, reason: 'Duplicate of another task' }, f.pm)
     expect(f.card(own.id).assignment).toMatchObject({ status: 'cancelled' })
+    // The work of an accepted card can be cancelled when it names no other task (its builder is down: cancel, route, assign again).
+    const id = f.propose()
+    f.decide(id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm)
+    f.run({ type: 'work.cancel', conversationId: id, assignmentId: f.card(id).assignment!.id, reason: 'Its builder is down' }, f.pm)
+    expect(f.card(id).assignment).toMatchObject({ status: 'cancelled' })
   })
 
   it('proposal.merge works on a person\'s own Review card, so the Lead has a command for a duplicate', () => {
