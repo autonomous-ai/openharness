@@ -3699,8 +3699,7 @@ class NewHarnessController extends ChangeNotifier {
     ])
       if (!machine.machine.isShared &&
           (integration?.ownMachinesOnly != true ||
-              !machine.belongsToOtherAccount &&
-                  !machine.machine.isTeamAccount))
+              !machine.belongsToOtherAccount && !machine.machine.isTeamAccount))
         NewHarnessOption(
           id: machine.machine.machineId,
           title: machine.machine.displayName,
@@ -4565,7 +4564,7 @@ class NewHarnessController extends ChangeNotifier {
       warn('Linking the profile. You can close once it is done.');
       return false;
     }
-    if (busy) {
+    if (busy && integration?.stopBuddy?.call() != true) {
       warn('Still working on it. You can close once it is done.');
       return false;
     }
