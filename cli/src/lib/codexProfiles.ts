@@ -14,6 +14,7 @@ import { randomUUID } from 'crypto'
 import { homedir } from 'os'
 import { join } from 'path'
 import { env } from '../config/env.js'
+import { homeIsAbsolute } from '../engines/kit/homeAdoption.js'
 import { discoverCodexProfiles } from './codexProfileDiscovery.js'
 import { offeredFolders } from './accountOffers.js'
 import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory } from './secureState.js'
@@ -75,7 +76,7 @@ function writeLinkedPaths(paths: Set<string>): void {
 
 /** Validate + resolve a folder path the same way for both linking and re-checking a saved one. */
 export function resolveCodexProfilePath(path: string): CodexProfile | CodexProfileError {
-  if (!path.startsWith('/') || path.length > 4096 || CONTROL_CHARS_RE.test(path)) {
+  if (!homeIsAbsolute(path) || path.length > 4096 || CONTROL_CHARS_RE.test(path)) {
     return { error: 'INVALID_PATH' }
   }
   let st

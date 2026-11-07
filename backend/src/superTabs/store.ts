@@ -54,6 +54,7 @@ import { recordReload } from './retryStats.js'
 import { buddyChatId, isSwarmBuddyChat, shownBefore, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
 import { cleanPullRequestLinks } from './cards.js'
 import { accountOf, wordsOf, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, groupProject, ledProject, onTeamAccount, ownerAccount, ownsProject, admitPerson, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, repositoryCreator, type SwarmProject } from './projects.js'
+import { taskProcess } from './process.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
 import { DELETED_TEXT, type MessageChangeTarget } from './messageEdits.js'
@@ -1799,7 +1800,7 @@ export class SuperTabStore {
       facts = await transaction(this.db, async tx => {
         const { state } = await this.factsLoad(tx, user, tabId, command)
         const group = state.conversations.find(c => c.id === asked.conversationId)
-        if (!group || group.reviewOf) return null
+        if (!group || group.reviewOf || taskProcess(groupProject(state, group), group) === 'simple') return null
         const repositoryUrl = groupProject(state, group).repository?.repositoryUrl ?? null
         const urls = [...group.pullRequestUrls ?? [], ...[typeof asked.result === 'string' ? asked.result : '', group.brief]
           .flatMap(text => text ? pullRequestsIn(text, repositoryUrl) : [])]
