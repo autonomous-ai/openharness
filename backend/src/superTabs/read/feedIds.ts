@@ -29,7 +29,7 @@ type Stored = { _id: string; tabId: string; data?: FeedFields }
  *  Remove it, and its call in worker.ts, after 2026-12-07: by then every Swarm's rows carry the column (its unindexed match reads
  *  the whole collection on each start).
  *  An assignment from before its agent's login was stored takes it from the agent's row while that row (or its tombstone) is
- *  there. Every later write sets the column itself. Returns how many it set. */
+ *  there. Every later write sets the column itself. Returns how many it set; throws when the database refuses any write. */
 export async function markFeedIds(db: PrismaClient): Promise<number> {
   let set = 0
   for (;;) {
@@ -42,11 +42,13 @@ export async function markFeedIds(db: PrismaClient): Promise<number> {
     const agents = named.length ? await db.swarmAgent.aggregateRaw({ pipeline: [{ $match: { _id: { $in: named } } }, { $project: { contributorId: 1 } }] }) as
       unknown as Array<{ _id: string; contributorId?: string }> : []
     const contributors = new Map(agents.map(a => [a._id, a.contributorId]))
-    await db.$runCommandRaw({ update: 'SwarmGroup', updates: rows.map(row => {
+    const reply = await db.$runCommandRaw({ update: 'SwarmGroup', updates: rows.map(row => {
       const data = row.data ?? {} as FeedFields, contributorId = contributors.get(agentOf(row) ?? '')
       const filled = contributorId ? { ...data, assignment: { ...data.assignment!, execution: { ...data.assignment!.execution, contributorId } } } : data
       return { q: { _id: row._id }, u: { $set: { feedIds: feedIdsOf(filled) } } }
-    }) })
+    }) }) as { writeErrors?: unknown[] }
+    // A refused row would come back in the next batch, and that batch again, for ever.
+    if (reply.writeErrors?.length) throw new Error(`The database refused ${reply.writeErrors.length} of ${rows.length} Tasks feed id writes`)
     set += rows.length
     if (rows.length < BATCH) return set
   }

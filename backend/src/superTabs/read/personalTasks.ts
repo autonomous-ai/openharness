@@ -38,7 +38,7 @@ export interface PersonalTasks {
 }
 
 /** Who reads a feed: the person and their own agents, those running under their login (Desktop's My agents), never by
- *  machine owner and never another person's Buddy; the newest FEED_IDS − 1 of them. */
+ *  machine owner and never another person's Buddy; the newest FEED_IDS − 2 of them, after the person's own two keys. */
 interface Reader { actor: Actor; member: Person; agents: Set<string>; view: ReaderView }
 
 function readerOf(view: ReaderView, actor: Actor): Reader | undefined {
@@ -46,7 +46,7 @@ function readerOf(view: ReaderView, actor: Actor): Reader | undefined {
   const member = view.state.people.find(p => p.id === actor.userId)
   if (!member) return undefined
   const own = view.state.agents.filter(a => a.contributorId === member.id && (!a.buddyOf || a.buddyOf.personId === member.id))
-  return { actor, member, view, agents: new Set(own.slice(-(FEED_IDS - 1)).map(a => a.id)) }
+  return { actor, member, view, agents: new Set(own.slice(-(FEED_IDS - 2)).map(a => a.id)) }
 }
 
 /** The keys a page of the reader's feed reads by (read/feedIds.ts): theirs at this membership, their id and their own agents. */
