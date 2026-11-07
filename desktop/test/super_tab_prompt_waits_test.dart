@@ -156,7 +156,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(_key('super-activity-row-prompt:wren'), findsNothing);
       expect(activity.needsCount, 0);
-      expect(find.text('Nothing needs you'), findsOneWidget);
+      expect(find.text('All clear'), findsOneWidget);
     });
   });
 

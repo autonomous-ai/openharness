@@ -1,4 +1,4 @@
-import { authorizeTaskApproval, pendingTaskApproval, personalApprovalCommand, requireTaskApproval, stageTaskApproval } from './taskApproval.js'
+import { authorizeTaskApproval, pendingTaskApproval, personalApprovalCommand, reopenTaskApproval, requireTaskApproval, stageTaskApproval, undecidedProposal } from './taskApproval.js'
 import type { PullRequestFilesRead } from './pullRequestFiles.js'
 import { legacyProposalId, migrateLegacyProposals, type LegacyProposalAsk, pmAcceptsMessage, applyProposalAction, authorizeProposalAction, authorizePersonProposal, cardPriority, createPersonProposal, createProposalCard, proposalCreateSchema, proposalFields, proposalRoot } from './proposalCards.js'
 import { pulseProjectOf, recordPulse, owe, settleDeleted, settleReaction, settleReply, settleRequest } from './pulse.js'
@@ -515,31 +515,52 @@ export type Command = z.infer<typeof commandSchema>
 export const operationSchema = z.object({ operationId: id, command: commandSchema }).strict()
 
 /** The words in each command that people and agents read in the Swarm: messages, briefs and tasks, results, evidence,
- *  reasons, errors and names. `[]` is each item of a list. Not `agent.input`: its host types the exact text, and only its
- *  chat row is redacted (terminal.ts). Not a role's skill text, which only its project's owner, Lead and hosts read. */
-const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
+ *  reasons, errors and names. `[]` is each item of a list. Every other string a command takes is listed, with why, as not
+ *  words in commands.test.ts, whose walk of commandSchema fails on a string in neither (task #4340). */
+export const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'message.send': ['text'],
   // An edit is a new text in a row everyone reads: cleaned as a send is (security review 2 of #2967).
   'message.edit': ['text'],
-  'buddy.propose': ['text', 'title', 'goal', 'scope'],
+  'buddy.propose': ['text', 'title', 'goal', 'scope', 'why', 'doneWhen', 'evidence[]'],
+  'proposal.create': ['title', 'text', 'goal', 'why', 'doneWhen', 'evidence[]'],
   'member.status': ['status.text'],
-  'agent.add': ['name', 'initialMessage'],
+  'member.name': ['name'],
+  // A username with a credential in it then fails its shape and is refused (usernames.ts).
+  'member.username': ['username'],
+  'agent.add': ['name', 'initialMessage', 'roleName'],
+  'agent.new': ['name', 'projectName'],
+  'buddy.create': ['name', 'setup.name'],
   'agent.rename': ['name'],
-  'crew.add': ['role'],
-  'agent.start': ['request.name', 'overrideReason'],
+  'crew.add': ['role', 'lane'],
+  'work.lane': ['lane'],
+  'agent.start': ['request.name', 'request.roleName', 'overrideReason'],
   'agent.startFailed': ['error'],
   'agent.switchResult': ['error'],
+  'agent.screenResult': ['error'],
+  'agent.inputResult': ['error'],
   'buddy.modelResult': ['error'],
   'agent.switchHandoff': ['note'],
   'agent.startSettled': ['warning'],
-  'conversation.create': ['title', 'brief', 'noRequesterReason', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'task.review.focus', 'checks[].description'],
+  'conversation.create': ['title', 'brief', 'noRequesterReason', 'step', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]',
+    'task.requires.access[]', 'task.review.focus', 'checks[].description'],
   'conversation.rename': ['title'],
   'buddy.rename': ['name'],
   'proposal.close': ['reason'],
+  // A proposal's ruling reaches its people's Buddy chats, its questions and answers its card (review of #3310 at c91dc2489).
+  'proposal.decide': ['reason', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'task.requires.access[]', 'task.review.focus',
+    'checks[].description'],
+  'proposal.ask': ['question', 'defaultAnswer'],
+  'proposal.answer': ['text'],
+  'proposal.merge': ['reason'],
+  'work.pause': ['reason'],
+  'decision.ask': ['questions[].question', 'questions[].options[]', 'questions[].unblocks'],
+  'decision.answer': ['note'],
+  'person.tell': ['text'],
   'task.reject': ['reason'],
-  'work.define': ['brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'task.review.focus', 'checks[].description'],
+  'work.define': ['brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'task.requires.access[]', 'task.review.focus',
+    'checks[].description'],
   'work.assign': ['overrideReason'],
-  'work.status': ['result'],
+  'work.status': ['result', 'ask.options[]', 'ask.unblocks'],
   'work.cancel': ['reason'],
   'conversation.unlink': ['reason'],
   'work.check': ['evidence'],
@@ -550,12 +571,21 @@ const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'note.add': ['text'],
   'project.coordinatorName': ['name'],
   'rule.set': ['text'],
-  'rules.set': ['summary'],
+  'rules.set': ['summary', 'rules.instructionApprovals.people[].name', 'rules.reviews.rows[].area', 'rules.reviews.rows[].paths[]',
+    'rules.reviews.test[].where', 'rules.reviews.test[].paths[]', 'rules.reviews.untested[]', 'rules.caps[].name', 'rules.paths[].name',
+    'rules.paths[].path', 'rules.crew[].role', 'rules.crew[].names[]', 'rules.lanes[].name', 'rules.lanes[].owns[]', 'rules.machines[].why',
+    'rules.machines[].first.lanes[]'],
+  'project.role.set': ['role.name'],
+  'project.roles.create': ['roles[].name'],
+  'project.roles.reset': ['roles[].name'],
+  'tab.routingPolicy': ['policy.notes'],
   'route.record': ['decision.assessment.why', 'decision.why', 'decision.excluded[].title', 'decision.excluded[].reason',
-    'decision.candidates[].title', 'decision.candidates[].label'],
+    'decision.candidates[].title', 'decision.candidates[].label', 'decision.context.missing[]'],
   'route.override': ['reason'],
   'tab.rename': ['name'],
   'machine.contribute': ['name'],
+  // Compared with the Swarm's name, which its rename cleaned the same way.
+  'swarm.delete': ['name'],
   'localModels.status': ['error'],
 }
 
@@ -1843,7 +1873,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
    *  caller trying candidates in turn (openReviewSteps) catches the refusal and tries the next. */
   const assignRefusal = (group: Conversation, worker: Agent, suggestion = false) => {
     if (!suggestion) requireTaskApproval(group, worker.id)
-    if (!suggestion && group.proposal && !['accept', 'reshape'].includes(group.proposal.decision?.kind ?? '')) fail('PROPOSAL_UNDECIDED', 'The PM must accept or reshape this proposal before assigning work.', 409)
+    if (!suggestion && undecidedProposal(group)) fail('PROPOSAL_UNDECIDED', 'The PM must accept or reshape this proposal before assigning work.', 409)
     if (state.starts?.some(s => s.poolGeneration && !s.poolSettled && s.request.machineId === worker.machineId && s.harnessId === worker.harnessId)) {
       fail('START_PENDING', 'Wait for the host to finish this agent’s launch and model selection.')
     }
@@ -2872,8 +2902,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         const mirror = state.conversations.find(c => c.id === legacyProposalId(project.id, proposal.messageId))
         if (mirror?.proposal?.mergedInto) fail('PROPOSAL_DECIDED', 'This proposal already became a task.', 409)
         if (mirror?.taskApproval) {
-          if (requesterId !== mirror.taskApproval.personId) fail('TASK_APPROVAL_FORBIDDEN', 'Keep the proposal’s requesting person.', 403)
-          created.taskApproval = { ...mirror.taskApproval }
+          const { personId, generation } = mirror.taskApproval
+          if (requesterId !== personId) fail('TASK_APPROVAL_FORBIDDEN', 'Keep the proposal’s requesting person.', 403)
+          // The person approves this task as the PM shaped it: never the card's decision or chosen agent (#4249).
+          created.taskApproval = { personId, generation, state: 'proposal', createdAt: context.now }
         }
         if (mirror?.proposal) { mirror.proposal.mergedInto = created.id; mirror.archived = true }
       }
@@ -4552,6 +4584,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       group.briefAt = context.now
       stampLane(group, (context.projectRules?.rules ?? SEED_RULES).lanes)
       group.checks = storedChecks(command.checks, operationId)
+      reopenTaskApproval(group)
       message(group.id, group.brief, [], null, SYSTEM_ROW)
       bindTaskCard(group, effects.messages.at(-1)!)
       break
@@ -4581,6 +4614,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         approval.state = 'proposal'
         delete approval.decidedAt
       } else {
+        if (command.type === 'task.approve' && undecidedProposal(group))
+          fail('PROPOSAL_UNDECIDED', 'Approve the task once the PM has accepted or reshaped this proposal.', 409)
         approval.state = command.type === 'task.approve' ? 'approved' : 'rejected'
         approval.decidedAt = context.now
         if (command.type === 'task.reject') approval.reason = command.reason

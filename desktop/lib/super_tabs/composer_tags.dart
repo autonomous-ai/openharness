@@ -70,6 +70,10 @@ List<SuperTabComposerChoice> superTabTagChoices(
   if (snapshot == null) return const [];
   final project = snapshot.projectFor(group.id);
   bool reads(SuperTabPerson person) => switch (group) {
+    // A person's chat with an agent of theirs: they and the agent alone read
+    // it (backend projects.ts readsAgentChat), with or without an audience
+    // sent, so nobody else is offered (audit finding 12 of task #4211).
+    _ when group.isAgentChat => false,
     SuperTabConversation(:final audience?) => audience.contains(person.id),
     _ when group.buddyOwnerId != null => person.id == group.buddyOwnerId,
     _ =>
