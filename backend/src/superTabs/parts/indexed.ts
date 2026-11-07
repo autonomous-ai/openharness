@@ -17,6 +17,8 @@ export const GROUP_INDEX = {
   key: { tabId: 1, key: 1 },
   running: { tabId: 1, executionMachineId: 1 },
   agents: { tabId: 1, agentIds: 1 },
+  /** A person's Tasks feed pages, newest activity first (read/personalTasks.ts, task #4203). */
+  feed: { tabId: 1, feedIds: 1, lastActivityAt: 1, key: 1 },
   project: { tabId: 1, projectId: 1, dormant: 1, lastActivityAt: 1, key: 1 },
   dormancy: { tabId: 1, dormant: 1, changedAt: 1 },
   /** Groups active since a time, in every Swarm: the scorecard's projects with a day to count (scorecard/job.ts). */
