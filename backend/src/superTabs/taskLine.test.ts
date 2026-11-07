@@ -91,6 +91,21 @@ describe('ordinary task messages and progress replies', () => {
     expect(thread(f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR }), root)).toEqual([])
   })
 
+  // Task #4410, River's ruling 11-07: an owed Windows check does not hold the merge, and is never silent. The merge reply says
+  // it, and the task keeps it after the merge, for the release that ships it to list (releases.ts).
+  it('says at the merge that a Windows check is owed while its Windows test step waits, and keeps it owed', () => {
+    const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
+    const builder = f.add('Kai', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: builder })
+    f.status(id, builder, 'review', `Ready: ${PR}`)
+    f.task(id).waitingWindowsStep = { step: { name: 'Test on a Windows machine', kind: 'test', areas: [], where: ['The CLI on a Windows machine'], os: 'windows' },
+      pulls: [{ url: PR, head: 'a'.repeat(40) }] }
+    f.status(id, builder, 'done', `Checks passed: ${PR}`)
+    const merged = f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR })
+    expect(thread(merged, root)).toEqual(['Merged: PR #7. Ships in the next release. Windows check owed: no Windows machine took its test step.'])
+    expect(f.task(id).waitingWindowsStep).toBeDefined()
+  })
+
   it('keeps agents\' posts in the task\'s own conversation and repeats no unchanged status', () => {
     const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
     const builder = f.add('Kai', id)

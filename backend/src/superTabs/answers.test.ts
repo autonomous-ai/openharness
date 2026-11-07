@@ -120,3 +120,51 @@ describe('the PM\'s answer', () => {
     expect(answered.map(a => a.id)).toEqual(asks.slice(2))
   })
 })
+
+// Task #3747 (anh Dee, 11-06: "i don't know which one you reply to which... why don't you answer in those replies as threads?"):
+// answers right below their asks stacked in the main chat and lost their questions. A project can answer every person's
+// message in its thread instead.
+describe('in a project that answers people in threads', () => {
+  function threaded() {
+    const s = setup()
+    const projectId = s.f.group('lead').projectId ?? 'lead'
+    s.f.run({ type: 'project.answers', projectId, inThread: true } as Command, s.f.as(s.f.lead))
+    return { ...s, projectId }
+  }
+
+  it('puts a plain answer and an answer to a person\'s main-chat message in its thread, and settles it', () => {
+    const { f, ask, answer, owed } = threaded()
+    const question = ask('Can the board show who works?')
+    const { sent } = answer(f.lead, question, 'Yes, from tonight.', { plain: true })
+    expect(sent.replyTo).toBe(question.id)
+    expect(owed()).toEqual([])
+    const second = ask('And the costs?')
+    const { sent: answered } = answer(f.lead, second, 'Tomorrow.')
+    expect(answered.replyTo).toBe(second.id)
+    expect(f.group('lead').answered?.find(a => a.id === second.id)).toMatchObject({ answerId: answered.id, thread: second.id })
+  })
+
+  it('leaves a post that answers nothing in the main chat, and an answer to an agent below it', () => {
+    const { f } = threaded()
+    const news = f.run({ type: 'message.send', conversationId: 'lead', text: 'v1.4.23 is out.', replyTo: null, recipientIds: [] }, f.as(f.lead))
+    expect(news.messages.find(m => m.text === 'v1.4.23 is out.')).toMatchObject({ replyTo: null })
+    const agent = { kind: 'agent', id: f.dev, name: 'dev' } as Author
+    const effects = f.run({ type: 'message.send', conversationId: 'lead', text: 'The login fix ships tonight.', replyTo: null, recipientIds: [], answers: 'agent-line' } as Command,
+      f.as(f.lead), { reply: { id: 'agent-line', conversationId: 'lead', author: agent, createdAt: 0, thread: null } })
+    expect(effects.messages.find(m => m.text === 'The login fix ships tonight.')!.replyTo).toBeNull()
+  })
+
+  it('is set by the project\'s coordinator or a person who manages it, and turned off again; nobody else', () => {
+    const { f, projectId, refusal } = threaded()
+    expect(f.state.projects?.find(p => p.id === projectId)?.answersInThread).toBe(true)
+    expect(refusal(() => f.run({ type: 'project.answers', projectId, inThread: false } as Command, f.as(f.dev)))?.code).toBe('COORDINATOR_REQUIRED')
+    f.run({ type: 'project.answers', projectId, inThread: false } as Command, owner)
+    expect(f.state.projects?.find(p => p.id === projectId)?.answersInThread).toBeUndefined()
+  })
+
+  it('other projects answer right below, as before', () => {
+    const { f, ask, answer } = setup()
+    const question = ask('Can the board show who works?')
+    expect(answer(f.lead, question, 'Yes.', { plain: true }).sent.replyTo).toBeNull()
+  })
+})
