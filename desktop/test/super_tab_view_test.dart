@@ -253,46 +253,47 @@ void main() {
     controller.dispose();
   });
 
-  testWidgets('an archived duplicate opens the task its work goes on in (#4480)', (
-    tester,
-  ) async {
-    final server = ConversationServer();
-    final conversations = server.state['conversations'] as List;
-    conversations[1]['archived'] = true;
-    conversations[1]['foldedInto'] = ['real'];
-    conversations.add({
-      ...conversationFixture('real', 'Real offline work'),
-      'dormant': true,
-    });
-    final controller = server.controller();
-    await controller.refresh();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SuperTabView(
-            controller: controller,
-            onInvite: () {},
-            onAddAgent: (_) {},
-            onOpenTerminal: (_) {},
-            machineName: (_) => 'Test Mac',
+  testWidgets(
+    'an archived duplicate opens the task its work goes on in (#4480)',
+    (tester) async {
+      final server = ConversationServer();
+      final conversations = server.state['conversations'] as List;
+      conversations[1]['archived'] = true;
+      conversations[1]['foldedInto'] = ['real'];
+      conversations.add({
+        ...conversationFixture('real', 'Real offline work'),
+        'dormant': true,
+      });
+      final controller = server.controller();
+      await controller.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabView(
+              controller: controller,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Test Mac',
+            ),
           ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Project options'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(AppMenuItem, 'Project settings…'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Archived conversations'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Offline editing'));
-    await tester.pumpAndSettle();
-    expect(controller.selectedId, 'real');
-    await tester.pumpWidget(const SizedBox());
-    await controller.flush();
-    controller.dispose();
-  });
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Project options'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(AppMenuItem, 'Project settings…'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Archived conversations'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Offline editing'));
+      await tester.pumpAndSettle();
+      expect(controller.selectedId, 'real');
+      await tester.pumpWidget(const SizedBox());
+      await controller.flush();
+      controller.dispose();
+    },
+  );
 
   testWidgets('large text and a short window preserve group navigation', (
     tester,
