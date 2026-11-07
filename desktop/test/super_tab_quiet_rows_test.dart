@@ -51,7 +51,18 @@ void main() {
         ),
       ]);
       expect(SuperTabQuietRow.height, 30);
-      expect(tester.getSize(find.byKey(const ValueKey('a'))).height, 30);
+      // The fill is 30; the 2 under it keeps two lit rows apart.
+      expect(
+        tester
+            .getSize(
+              find.descendant(
+                of: find.byKey(const ValueKey('a')),
+                matching: find.byType(InkWell),
+              ),
+            )
+            .height,
+        30,
+      );
       expect(
         tester.getTopLeft(find.text('River')).dx,
         tester.getTopLeft(find.text('New agent')).dx,

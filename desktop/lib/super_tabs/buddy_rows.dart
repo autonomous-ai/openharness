@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import 'buddy_chat.dart';
@@ -37,6 +38,189 @@ class SuperTabCountBadge extends StatelessWidget {
       ),
     );
     return tooltip == null ? badge : Tooltip(message: tooltip!, child: badge);
+  }
+}
+
+/// One line of the Desktop's left pane (task #4466, anh Dee 11-07): a face or an icon in a fixed column, so every name
+/// starts on one line, the name, and at most one quiet detail on the right. 13 names, 12 details; a read name is
+/// secondary, an unread one semibold primary, the open row a neutral fill. No marks, badges or colour of its own.
+class SuperTabQuietRow extends StatelessWidget {
+  const SuperTabQuietRow({
+    super.key,
+    required this.leading,
+    required this.name,
+    required this.onTap,
+    this.detail,
+    this.selected = false,
+    this.unread = false,
+    this.tooltip,
+  });
+
+  static const double height = 30;
+  static const double faceSize = 20;
+
+  /// Where the face's left edge, and so the headings' text, starts.
+  static double get faceInset =>
+      _leadingStart + SuperTabSectionHeading.actionWidth / 2 - faceSize / 2;
+  static double get _leadingStart => SuperTabSectionHeading.indentFor(0);
+
+  /// The face (20) or the icon, centred in its column.
+  final Widget leading;
+  final String name;
+
+  /// The one quiet word on the right: the project a Lead leads, "offline", a person's points, a count.
+  final String? detail;
+  final bool selected, unread;
+  final String? tooltip;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final strong = unread || selected;
+    final row = ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: height),
+      child: Row(
+        children: [
+          SizedBox(width: _leadingStart),
+          SizedBox(
+            width: SuperTabSectionHeading.actionWidth,
+            child: Center(child: leading),
+          ),
+          Expanded(
+            child: Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.control(
+                color: strong
+                    ? grid.SidebarInk.foreground(context)
+                    : grid.SidebarInk.muted(context),
+              ).copyWith(fontWeight: unread ? grid.AppFont.semibold : null),
+            ),
+          ),
+          if (detail case final detail?) ...[
+            const SizedBox(width: grid.AppDesktop.controlGap),
+            Text(
+              detail,
+              maxLines: 1,
+              textAlign: TextAlign.right,
+              style: DesktopChrome.metadata(
+                color: grid.SidebarInk.faint(context),
+              ).copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
+            ),
+          ],
+          const SizedBox(width: grid.AppDesktop.controlGap),
+        ],
+      ),
+    );
+    return Padding(
+      padding: const EdgeInsets.only(bottom: grid.AppDesktop.listRowGap),
+      child: Material(
+        color: selected
+            ? grid.SidebarInk.selectedFill(context)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+        clipBehavior: Clip.antiAlias,
+        child: Semantics(
+          button: true,
+          selected: selected,
+          label: [name, ?detail, if (unread) 'unread'].join(', '),
+          excludeSemantics: true,
+          child: InkWell(
+            onTap: onTap,
+            hoverColor: grid.SidebarInk.hoverFill(context),
+            focusColor: grid.SidebarInk.hoverFill(context),
+            borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+            child: tooltip == null
+                ? row
+                : Tooltip(message: tooltip!, child: row),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A heading of the Desktop's left pane (task #4466): 12 and secondary, its text level with the faces' left edge. A
+/// group that folds ([collapsed] given) shows its chevron only while hovered or focused, as every dropdown does;
+/// [SuperTabQuietHeading.org] is the org name, semibold 13 primary, whose chevron opens the Swarm menu.
+class SuperTabQuietHeading extends StatefulWidget {
+  const SuperTabQuietHeading(
+    this.title, {
+    super.key,
+    required this.onTap,
+    this.collapsed,
+  }) : _org = false;
+
+  const SuperTabQuietHeading.org(this.title, {super.key, required this.onTap})
+    : collapsed = false,
+      _org = true;
+
+  final String title;
+  final VoidCallback? onTap;
+
+  /// Whether a group that folds is folded; null for a heading that only opens a page, which has no chevron.
+  final bool? collapsed;
+  final bool _org;
+
+  @override
+  State<SuperTabQuietHeading> createState() => _SuperTabQuietHeadingState();
+}
+
+class _SuperTabQuietHeadingState extends State<SuperTabQuietHeading> {
+  bool _hovered = false, _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final org = widget._org;
+    final style = org
+        ? DesktopChrome.control(color: grid.SidebarInk.foreground(context))
+              .copyWith(fontWeight: grid.AppFont.semibold)
+        : DesktopChrome.metadata(color: grid.SidebarInk.muted(context));
+    final collapsed = widget.collapsed;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: Semantics(
+        button: widget.onTap != null,
+        expanded: org || collapsed == null ? null : !collapsed,
+        child: InkWell(
+          onTap: widget.onTap,
+          onFocusChange: (focused) => setState(() => _focused = focused),
+          hoverColor: Colors.transparent,
+          focusColor: grid.SidebarInk.hoverFill(context),
+          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              minHeight: SuperTabQuietRow.height,
+            ),
+            child: Row(
+              children: [
+                SizedBox(width: SuperTabQuietRow.faceInset),
+                Flexible(
+                  child: Text(
+                    widget.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: style,
+                  ),
+                ),
+                if (collapsed != null && (_hovered || _focused)) ...[
+                  const SizedBox(width: grid.AppDesktop.listRowGap * 2),
+                  Icon(
+                    collapsed ? AppIcons.chevronRight : AppIcons.chevronDown,
+                    size: AppIcons.closeSize,
+                    color: grid.SidebarInk.muted(context),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
