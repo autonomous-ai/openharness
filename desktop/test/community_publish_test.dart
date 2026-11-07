@@ -288,7 +288,10 @@ void main() {
       expect(files.where((f) => f['path'] == 'preview.html'), hasLength(1));
       expect(draft['cover'], 'data:image/jpeg;base64,SNAPSHOT');
       expect(draft['harnessId'], 'autonomous/typst');
-      expect(draft['contextNote'], contains('a picture of your viewer'));
+      expect(
+        draft['contextNote'],
+        contains('a picture of your viewer. A fork opens the viewer itself.'),
+      );
 
       await file('preview.html', '<h1>My own page</h1>');
       final own = await buildPublicationDraft(

@@ -789,12 +789,8 @@ void main() {
       await tester.pumpAndSettle();
       app.publishCatalog([]);
       await tester.pumpAndSettle();
-      expect(
-        find.text(
-          'Recorded runs will appear here when they are available in your catalog.',
-        ),
-        findsOneWidget,
-      );
+      expect(find.text('Featured harnesses'), findsOneWidget);
+      expect(find.textContaining('Recorded runs'), findsNothing);
       expect(tester.takeException(), isNull);
     },
   );
@@ -1270,12 +1266,8 @@ void main() {
         'does-not-exist',
       );
       await tester.pumpAndSettle();
-      expect(
-        find.text(
-          'No matching harnesses. Try a name or something you want to make.',
-        ),
-        findsOneWidget,
-      );
+      expect(find.text('0 results'), findsOneWidget);
+      expect(find.textContaining('No matching harnesses'), findsNothing);
       await tester.tap(find.byTooltip('Clear search'));
       await tester.pumpAndSettle();
       expect(

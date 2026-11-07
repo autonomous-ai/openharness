@@ -76,12 +76,16 @@ void main() {
     expect(find.textContaining('Running low'), findsOneWidget);
   });
 
-  testWidgets('with none yet, says so instead of an empty box', (
+  testWidgets('with none yet, says what fills it instead of an empty box', (
     tester,
   ) async {
     await mount(tester, const []);
+    expect(find.widgetWithText(EmptyState, 'No subscriptions'), findsOneWidget);
     expect(
-      find.widgetWithText(EmptyState, 'No subscriptions yet'),
+      find.widgetWithText(
+        EmptyState,
+        'Sign in to Claude Code or Codex on a computer that’s online.',
+      ),
       findsOneWidget,
     );
     expect(find.textContaining('Start your first harness'), findsNothing);

@@ -122,7 +122,7 @@ void main() {
       ];
       app.notifyListeners();
       await tester.pump();
-      expect(find.textContaining('is starting'), findsOneWidget);
+      expect(find.text('3D Viewer is starting.'), findsOneWidget);
       state.agents = [
         const Agent(
           id: 'blender',

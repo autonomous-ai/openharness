@@ -125,13 +125,11 @@ void main() {
     expect(find.text('No matches'), findsOneWidget);
   });
 
-  testWidgets('an empty log says nothing has been logged, not "no matches"', (
-    tester,
-  ) async {
+  testWidgets('an empty log stays empty, not "no matches"', (tester) async {
     await pumpDebug(tester, LogStream());
 
-    expect(find.text('Nothing logged yet'), findsOneWidget);
-    expect(find.byType(EmptyState), findsOneWidget);
+    expect(find.byType(EmptyState), findsNothing);
+    expect(find.text('No matches'), findsNothing);
   });
 
   testWidgets('Clear empties the list, and is dead while it is empty', (
