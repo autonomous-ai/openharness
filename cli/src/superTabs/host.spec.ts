@@ -4715,6 +4715,22 @@ describe('keeping a crew member alive', () => {
     expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
   })
 
+  // Task #4698: a Member sleeps between tasks with its folder kept; woken, it is reopened in that folder as crew is.
+  it('reopens a woken Member in place, and closes it while it sleeps', async () => {
+    const rows = [crewRow({ crew: undefined, member: { projectId: 'project-1' }, asleep: { since: 1 } })]
+    const t = lifeFixture(rows)
+    withTask(t, rows)
+    t.keepLeadAlive.mockResolvedValue({ ok: true })
+    t.live(true)
+    await t.poll()
+    expect(t.closeMember).toHaveBeenCalledWith('harness')
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    rows[0] = crewRow({ crew: undefined, member: { projectId: 'project-1' } })
+    t.live(false)
+    await t.poll(1_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
+  })
+
   it('reopens no ordinary agent, nor a crew member asleep or moved', async () => {
     for (const row of [crewRow({ crew: undefined }), crewRow({ asleep: { since: 1 } }), crewRow({ movedTo: 'agent-2' })]) {
       const t = lifeFixture([row])
