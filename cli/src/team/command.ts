@@ -13,15 +13,12 @@
  * Nothing here falls back to the owner: a team account that is missing, signed out or not private is reported, and
  * team work does not run as the owner instead.
  */
-import { spawnSync } from 'node:child_process'
 import type { AgentTmpState } from '../lib/agentTmp.js'
 import { sameSignIn, type AuthSession } from '../lib/authSession.js'
 import { SIGN_OUT_BUTTON_FLAG, type SignOutAsked } from '../lib/signOut.js'
 import { psQuote, type RunAdmin } from './admin.js'
 import type { TeamConfig } from './config.js'
-import { engineLines, type TeamEngines } from './engines.js'
-import { teamModelSet } from './model.js'
-import type { TeamModelHandoff } from './modelHandoff.js'
+import type { TeamEngines } from './engines.js'
 import { handedTeamSignInEpoch, mintTeamConversion, mintTeamHandoff, redeemTeamHandoff, revokeHarnessRefresh, teamSession, TeamSignInError, type Delete, type Get, type Post } from './handoff.js'
 import {
   SENTINEL_NAME, TEAM_PORT, TEAM_REAL_NAME, TEAM_STATUS_FILE,
@@ -57,15 +54,12 @@ function teamHere(platform: NodeJS.Platform): TeamHere | null {
 }
 
 export const TEAM_USAGE = [
-  'Usage: harness team <status | model | logs | sign-in | remove | on | off> [--json]',
+  'Usage: harness team <status | logs | remove | on | off> [--json]',
   '',
   '  A Harness Team account was a separate user made for Swarm work before Swarm v3, which has none: `setup` makes no new',
   '  one. Its daemon stops once no agent runs in it.',
-  '  status    whether the account exists and runs, its sign-in, privacy check and engines, and everything setup made',
-  '  model     the team account\'s own model API instead of your subscription: `harness team model set <provider> --model <id>`',
-  '            (asks for the key, hidden; --clear undoes it)',
+  '  status    whether the account and its daemon are still there, its privacy check, and everything setup made',
   '  logs      the team daemon\'s last 40 lines (--lines N): what its agents are doing',
-  '  sign-in   sign its Claude Code or Codex in, here in this terminal: harness team sign-in claude',
   '  remove    delete the account, its home folder and its daemon; your home stays private. Run it in Terminal: sudo',
   '            asks for your password, and macOS asks once to let Terminal administer your computer, which it needs',
   '  on        for a computer used only for agents (a Mac mini, a Linux or Windows box): sign it in for team work',
@@ -168,8 +162,6 @@ export interface TeamCommandDeps {
   handOver?(code: string): void
   /** Windows: asks Task Scheduler to start the team daemon's task; false when it would not. */
   startTeamTask?(): Promise<boolean>
-  /** Windows: leaves a model API for the Team daemon (./modelHandoff.ts); a spec names its own. */
-  handModel?(handoff: TeamModelHandoff): void
 }
 
 export async function teamCommand(argv: string[], deps: TeamCommandDeps): Promise<number> {
@@ -183,11 +175,9 @@ export async function teamCommand(argv: string[], deps: TeamCommandDeps): Promis
   }
   try {
     switch (verb) {
-      case 'setup': return setup(deps, json)
+      case 'setup': case 'model': case 'sign-in': return removed(deps, json)
       case 'status': return await status(deps, json)
-      case 'model': return await teamModelSet(deps, words, flags, json)
       case 'logs': return await teamLogs(deps, words, flags, json)
-      case 'sign-in': return await teamSignIn(deps, words)
       case 'remove': return await remove(deps, json)
       case 'on': return await teamOn(deps, json, flags.includes('--yes'))
       case 'off': return await teamOff(deps, json, flags)
@@ -278,8 +268,9 @@ function byHandLines({ layout, mac, windows }: TeamHere, owner: string, ownerHom
 const sentence = (text: string): string => /[.!?]$/.test(text) ? text : `${text}.`
 
 
-/** Swarm v3 has no Team accounts (anh Dee, 2026-11-07): nothing makes one now. `harness team remove` deletes one made before. */
-function setup(deps: TeamCommandDeps, json: boolean): number {
+/** Swarm v3 has no Team accounts (anh Dee, 2026-11-07): nothing makes one, signs its engines in or gives it a model now.
+ *  `harness team remove` deletes one made before. */
+function removed(deps: TeamCommandDeps, json: boolean): number {
   return fail(deps, json, 'TEAM_ACCOUNTS_REMOVED', 'Swarm v3 has no Team accounts: Swarm work runs in your own account. '
     + 'To delete one made before: harness team remove.')
 }
@@ -328,6 +319,7 @@ async function status(deps: TeamCommandDeps, json: boolean): Promise<number> {
   }
   const now = deps.now()
   deps.out(`Harness Team account · ${config?.realName ?? TEAM_REAL_NAME} (${user})`)
+  deps.out('  Swarm v3 has no Team accounts: its daemon stops once no agent runs in it. harness team remove deletes the account, its home and its daemon.')
   deps.out(`  account     ${exists ? '● exists' : '○ missing'}`)
   deps.out(`  daemon      ${job.pid !== null ? `● running (pid ${job.pid})` : job.loaded ? `◍ loaded, not running${job.state ? ` (${job.state})` : ''}` : plistPresent ? '○ installed, stopped · harness team remove removes it' : '○ not installed · harness team remove removes what is left'}`)
   const signIn = report?.signIn
@@ -347,7 +339,6 @@ async function status(deps: TeamCommandDeps, json: boolean): Promise<number> {
       : agentTmp.state === 'private' ? 'mode 700 ✓'
       : `${agentTmp.mode === null ? 'not a private folder' : `mode ${agentTmp.mode.toString(8)}`} ✗ your agents may use the shared /tmp: your next agent makes it private, or says why not in the daemon's log`}`)
   }
-  for (const line of engineLines(report?.engines, (at) => ago(now, at), deps.platform)) deps.out(line)
   for (const line of purgeLines(report?.purges, (at) => ago(now, at))) deps.out(line)
   deps.out('')
   deps.out('  What setup made:')
@@ -694,37 +685,3 @@ async function teamLogs(deps: TeamCommandDeps, words: readonly string[], flags: 
   deps.out(result.stdout.replace(/\n$/, ''))
   return 0
 }
-
-/**
- * `harness team sign-in [claude|codex]`: the vendor's own sign-in as the team account, in the terminal the person is
- * already in. On a server there is no Harness app to open a terminal on that account (headless run, 2026-11-03).
- */
-async function teamSignIn(deps: TeamCommandDeps, words: readonly string[]): Promise<number> {
-  const where = deps.platform === 'darwin' ? 'this Mac' : 'this computer'
-  const config = deps.readConfig()
-  if (!config) return fail(deps, false, 'NO_ACCOUNT', `No Harness Team account on ${where}.`)
-  if (deps.platform === 'win32') {
-    deps.err('✗ On Windows, sign in from Harness: harness team status shows the command for that account.')
-    return 1
-  }
-  if (!deps.interactive) {
-    deps.err('✗ Run it in a terminal: the engine asks its questions there.')
-    return 1
-  }
-  const asked = words[1]
-  if (asked && asked !== 'claude' && asked !== 'codex') {
-    deps.err('✗ Name claude or codex: harness team sign-in claude')
-    return 1
-  }
-  const engine = asked ?? 'claude'
-  const command = engine === 'claude' ? 'claude' : 'codex login --device-auth'
-  deps.out(`Signing ${engine === 'claude' ? 'Claude Code' : 'Codex'} in as ${config.user} (the Harness Team account)...`)
-  const result = spawnSync('sudo', ['-u', config.user, '-H', 'bash', '-lc', command], { stdio: 'inherit' })
-  if (result.status === 0) {
-    deps.out('Signed in. harness team status shows it.')
-    return 0
-  }
-  deps.err('✗ The sign-in did not finish.')
-  return 1
-}
-

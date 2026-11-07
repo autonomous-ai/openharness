@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readTeamConfig, type TeamConfig } from './config.js'
-import { checkTeamEngines, engineLines, ownerEngineCopies, realEngineCheckDeps, teamEngineBin, teamEngineReporter, TeamEngineReporter, type TeamEngines } from './engines.js'
+import { checkTeamEngines, ownerEngineCopies, realEngineCheckDeps, teamEngineBin, teamEngineReporter, TeamEngineReporter, type TeamEngines } from './engines.js'
 import { readTeamStatus, type TeamStatus } from './privacy.js'
 
 vi.mock('./config.js', async (original) => ({ ...await original<typeof import('./config.js')>(), readTeamConfig: vi.fn(() => null) }))
@@ -62,37 +62,6 @@ describe('the team account\'s engines', () => {
     expect(result.claude.installed).toBe(false)
   })
 
-  it('are said plainly in status, with exactly how to sign in the ones that are not', () => {
-    const ago = (at: number) => `${at}s ago`
-    const lines = engineLines(engines({ claude: { installed: true, signedIn: false }, codex: { installed: false, signedIn: null } }), ago).join('\n')
-    expect(lines).toContain('Claude Code ✓ installed · ✗ not signed in')
-    expect(lines).toContain('Codex       ✗ not installed')
-    expect(lines).toContain('open a terminal on this Mac\'s Harness Team machine')
-    // Off a Mac the computer is not a Mac (seen in `harness team setup` on Linux, 2026-10-28).
-    const linux = engineLines(engines({ claude: { installed: true, signedIn: false }, codex: { installed: true, signedIn: false } }), ago, 'linux').join('\n')
-    expect(linux).toContain('open a terminal on this computer\'s Harness Team machine')
-    expect(linux).not.toContain('Mac')
-    // A computer used over a terminal has no Harness app to open a terminal in (headless run, 2026-11-03): the same
-    // sign-in, from the terminal the person is already in.
-    expect(linux).toContain('Or from a terminal on this computer, as harnessteam:')
-    expect(linux).toContain('sudo -u harnessteam -H bash -lc claude')
-    expect(lines).toContain('Or from a terminal on this Mac, as harnessteam:')
-    // Windows has no sudo: its sign-in stays the Harness terminal's.
-    expect(engineLines(engines({ claude: { installed: true, signedIn: false } }), ago, 'win32').join('\n')).not.toContain('sudo -u')
-    // Nothing is lent: the owner's subscription is never used for the account (task #4137).
-    expect(linux).not.toContain('nothing to lend')
-    expect(lines).toContain('    claude                      Claude Code')
-    expect(lines).not.toContain('codex login')
-    expect(lines).toContain('Your own sign-ins are not copied into the team account')
-    const unknown = engineLines(engines({ codex: { installed: true, signedIn: null } }), ago).join('\n')
-    expect(unknown).toContain('Codex       ✓ installed · ? sign-in unknown')
-    expect(unknown).toContain('    codex login --device-auth   Codex')
-    const ready = engineLines(engines(), ago).join('\n')
-    expect(ready).toContain('✓ installed · ✓ signed in')
-    expect(ready).toContain('(checked 1000s ago)')
-    expect(ready).not.toContain('To sign')
-    expect(engineLines(undefined, ago)).toEqual(['  engines     ? not reported yet: the team daemon reports them once it runs'])
-  })
 })
 
 describe('TeamEngineReporter', () => {

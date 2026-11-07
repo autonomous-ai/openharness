@@ -221,7 +221,7 @@ Machine:
                                flasher: --detect-only, --port, --version, --yes, --erase-nvs
 
 Team account (the separate "harnessteam" user made for Swarm work before Swarm v3, which has none):
-  harness team status          whether it exists and runs, its sign-in, privacy check and engines
+  harness team status          whether it is still there, its daemon (which stops once no agent runs), and how to delete it
   harness team on | off        a computer used only for agents runs Swarm work only (on), or signs back in as
                                your own computer (off)
   harness team remove          delete the account, its home folder and its daemon
