@@ -268,3 +268,90 @@ describe('decisions left to the PM after 24 hours', () => {
     expect(OVERDUE_DECISION_MS).toBe(DAY)
   })
 })
+
+// Task #3826: in a switched project an agent asks the person directly, always with a default and a time. Past the time the
+// default applies, unless the ask says the person must agree: then it waits for them, and the PM is told once.
+describe('a switched project’s direct asks at their default time', () => {
+  const at = (delta: number) => new Date(NOW + delta).toISOString()
+
+  /** A switched project with its PM and a worker on a task, asking peer directly; `ask` dates the decision `age` ago. */
+  async function direct() {
+    const f = await swarm()
+    const app = (await f.execute({ type: 'project.create', name: 'App', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
+    await f.execute({ type: 'project.boardMode', projectId: app.projectId, on: true })
+    const add = async (name: string, lead: boolean) => String((await f.execute({ type: 'agent.add', conversationId: app.conversationId, machineId: 'owner-mac',
+      harnessId: randomUUID(), name, configuration: config, lead })).result.agentId)
+    const pm = await add('Lead', true)
+    const worker = await add('Builder', false)
+    const task = String((await f.execute({ type: 'conversation.create', projectId: app.projectId, title: 'Copy', brief: '', checks: [] })).result.conversationId)
+    await f.execute({ type: 'conversation.agent', conversationId: task, agentId: worker, present: true, lead: false })
+    const ask = async (age: number, extra: Record<string, unknown>) => {
+      const asked = await new SuperTabStore(db, () => NOW - age).execute(owner, f.tab, { operationId: randomUUID(), command: { type: 'decision.ask', conversationId: task,
+        personId: peer.sub, questions: [{ question: `Ship how ${randomUUID()}?`, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release', ...extra }] } as Command }, worker)
+      const id = String((asked.result.decisionIds as string[])[0])
+      await db.superTabDecision.update({ where: { id }, data: { createdAt: new Date(NOW - age) } })
+      return id
+    }
+    const told = async (id: string, agentId: string) => (await f.store.messages(owner, f.tab, task, {}, agentId)).messages
+      .filter(m => (m.source as { decisionId?: string } | null)?.decisionId === id && m.recipientIds.includes(agentId))
+    return { ...f, pm, worker, task, ask, told }
+  }
+
+  it('notifies the default Buddy only once when decision.ask repeats an open question', async () => {
+    const f = await direct()
+    const chat = String((await f.execute({ type: 'buddy.chat' }, peer)).result.conversationId)
+    const command: Command = { type: 'decision.ask', conversationId: f.task, personId: peer.sub,
+      questions: [{ question: 'Ship this copy?', options: ['Yes', 'No'], recommended: 0, unblocks: 'Release', defaultAt: at(HOUR) }] }
+    const first = await f.execute(command, owner, f.worker)
+    const repeated = await f.execute(command, owner, f.worker)
+    expect(repeated.result.decisionIds).toEqual(first.result.decisionIds)
+    const lines = (await f.store.messages(peer, f.tab, chat, {})).messages.filter(m => (m.source as { kind?: string })?.kind === 'decision-asked')
+    expect(lines).toHaveLength(1)
+    expect(lines[0]!.source).toMatchObject({ decisionId: (first.result.decisionIds as string[])[0] })
+  })
+
+  it.each([false, true])('keeps a changed agreement requirement distinct (original mustAgree: %s)', async firstMustAgree => {
+    const f = await direct()
+    const question = { question: 'Authorize the release?', options: ['Yes', 'No'], recommended: 0, unblocks: 'Release', defaultAt: at(HOUR) }
+    const ask = async (mustAgree: boolean) => (await f.execute({ type: 'decision.ask', conversationId: f.task, personId: peer.sub,
+      questions: [{ ...question, ...(mustAgree ? { mustAgree: true as const } : {}) }] }, owner, f.worker)).result.decisionIds as string[]
+    const first = await ask(firstMustAgree)
+    const changed = await ask(!firstMustAgree)
+    expect(changed).not.toEqual(first)
+    expect((await f.row(changed[0]!)).mustAgree === true).toBe(!firstMustAgree)
+  })
+
+  it('never tells the person the PM can take over a required agreement', async () => {
+    const f = await direct()
+    const id = await f.ask(HOUR, { defaultAt: at(0), mustAgree: true })
+    const row = (await f.store.decisions(peer, f.tab, 'open')).decisions.find(d => d.id === id)!
+    expect(row.pmTakesOver).toBe(false)
+  })
+
+  it('applies the recommendation at its time, and the asking agent hears it', async () => {
+    const f = await direct()
+    const id = await f.ask(HOUR, { defaultAt: at(0) })
+    expect(await f.store.leaveOverdueDecisions(NOW)).toEqual({ answered: 1, skipped: 0, failed: 0 })
+    expect(await f.row(id)).toMatchObject({ choice: 0, delegated: true, defaulted: true })
+    expect(await f.told(id, f.worker)).toHaveLength(1)
+  })
+
+  it('waits for a person who must agree: the PM is told once, no later pass or the 24-hour sweep answers, and the person still can', async () => {
+    const f = await direct()
+    const id = await f.ask(HOUR, { defaultAt: at(0), mustAgree: true })
+    expect(await f.row(id)).toMatchObject({ mustAgree: true })
+    // Not answered: the sweep skips it, once.
+    expect(await f.store.leaveOverdueDecisions(NOW)).toEqual({ answered: 0, skipped: 1, failed: 0 })
+    expect(await f.row(id)).toMatchObject({ answeredAt: null, choice: null, defaulted: null })
+    const pmTold = await f.told(id, f.pm)
+    expect(pmTold).toHaveLength(1)
+    expect(pmTold[0]).toMatchObject({ source: { kind: 'decision-must-agree' } })
+    expect(pmTold[0]!.text).not.toContain('To everyone')
+    expect(await f.store.leaveOverdueDecisions(NOW + 1)).toEqual({ answered: 0, skipped: 0, failed: 0 })
+    expect(await new SuperTabStore(db, () => NOW + 2 * DAY).leaveOverdueDecisions(NOW + 2 * DAY)).toEqual({ answered: 0, skipped: 0, failed: 0 })
+    expect(await f.told(id, f.pm)).toHaveLength(1)
+    expect((await f.store.decisions(peer, f.tab, 'open')).decisions.map(d => d.id)).toContain(id)
+    await f.execute({ type: 'decision.answer', decisionId: id, choice: 1 }, peer)
+    expect(await f.row(id)).toMatchObject({ choice: 1, delegated: null })
+  })
+})

@@ -164,7 +164,7 @@ void main() {
         ),
       );
       await t.pumpAndSettle();
-      f.refusal = const SuperTabFailure(
+      f.refuse = const SuperTabFailure(
         'CONFLICT',
         'The suggested agent changed. Read the task again.',
         statusCode: 409,

@@ -25,8 +25,8 @@ class TasksFixture {
   final store = MemoryKeyValueStore();
   bool supported = true, fail = false;
 
-  /// Thrown by the next commands, as the server's refusal.
-  Object? refusal;
+  /// The server's answer to the next command: refused, as a 4xx.
+  SuperTabFailure? refuse;
 
   /// Change reads, so a test sees the pane read its tasks again.
   int reads = 0;
@@ -66,7 +66,7 @@ class TasksFixture {
         commands.add(command);
         await hold?.future;
         if (fail) throw StateError('fixture private payload');
-        if (refusal case final refusal?) throw refusal;
+        if (refuse case final refusal?) throw refusal;
         if (command['type'] == 'member.approvalMode') {
           mode = command['mode'] as String;
         }
@@ -379,7 +379,7 @@ void main() {
         t,
       ) async {
         await mount(t);
-        f.refusal = SuperTabFailure(code, sentence, statusCode: status);
+        f.refuse = SuperTabFailure(code, sentence, statusCode: status);
         final before = f.reads;
         await t.tap(inCard('new', find.text('Approve')));
         await t.pumpAndSettle();
@@ -388,7 +388,7 @@ void main() {
         expect(approve('old').onPressed, isNotNull);
         expect(approve('new').onPressed, isNotNull);
         expect(f.reads, greaterThan(before), reason: 'reads the task again');
-        f.refusal = null;
+        f.refuse = null;
         await t.tap(inCard('old', find.text('Approve')));
         await t.pumpAndSettle();
         expect(f.commands.length, 2);
@@ -405,7 +405,7 @@ void main() {
       expect(approve('old').onPressed, isNull);
       f
         ..fail = false
-        ..refusal = const SuperTabFailure(
+        ..refuse = const SuperTabFailure(
           'CONFLICT',
           'This task is archived.',
           statusCode: 409,
@@ -418,7 +418,7 @@ void main() {
     });
     testWidgets('an update required says so, with no Retry', (t) async {
       await mount(t);
-      f.refusal = const SuperTabFailure(
+      f.refuse = const SuperTabFailure(
         'UPDATE_REQUIRED',
         'fixture private payload',
         statusCode: 426,
@@ -431,7 +431,7 @@ void main() {
     });
     testWidgets('a refused mode change unlocks the cards', (t) async {
       await mount(t);
-      f.refusal = const SuperTabFailure(
+      f.refuse = const SuperTabFailure(
         'FORBIDDEN',
         'Only members choose how their tasks are approved.',
         statusCode: 403,
@@ -447,6 +447,34 @@ void main() {
       expect(find.text('Retry'), findsNothing);
       expect(approve('new').onPressed, isNotNull);
     });
+  });
+  // Task #4220: the controller drops a refused change, but the pane kept it, so Tasks stayed disabled and its Retry sent
+  // the refused change again.
+  testWidgets('a refused change says the server\'s reason and Tasks works '
+      'again', (t) async {
+    await mount(t);
+    f.refuse = const SuperTabFailure(
+      'FORBIDDEN',
+      'Only the project\'s owner changes this.',
+      statusCode: 403,
+    );
+    await t.tap(find.byKey(const ValueKey('tasks-approval-mode')));
+    await t.pumpAndSettle();
+    await t.tap(find.text('Review').last);
+    await t.pumpAndSettle();
+    expect(
+      find.text('Only the project\'s owner changes this.'),
+      findsOneWidget,
+    );
+    expect(find.text('Retry'), findsNothing);
+    f.refuse = null;
+    await t.tap(find.byKey(const ValueKey('tasks-approval-mode')));
+    await t.pumpAndSettle();
+    await t.tap(find.text('Review').last);
+    await t.pumpAndSettle();
+    expect(f.commands.length, 2);
+    expect(f.operations.toSet().length, 2);
+    expect(f.controller.personalTasks!.mode, 'review');
   });
   testWidgets('old backend has no approval controls', (t) async {
     await mount(t);

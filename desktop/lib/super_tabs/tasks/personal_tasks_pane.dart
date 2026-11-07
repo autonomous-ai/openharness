@@ -103,7 +103,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
           if (answer == null) {
             _error = updateRequired
                 ? 'Update Harness to change Tasks.'
-                : refusal ?? 'The change was not made.';
+                : refusal ?? 'The change was refused.';
           }
         }
       });
@@ -263,12 +263,12 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                             color: Theme.of(context).colorScheme.error,
                           ),
                         ),
-                        // Only a lost answer has something to check again.
-                        if (_action != null)
+                        // Only a change whose answer was lost is retried: a refused one would be refused again.
+                        if (_action case final action?)
                           TextButton(
                             onPressed: _sending
                                 ? null
-                                : () => _send(_action!, retry: true),
+                                : () => _send(action, retry: true),
                             child: const Text('Retry'),
                           ),
                       ],

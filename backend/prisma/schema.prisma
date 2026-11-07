@@ -1118,6 +1118,8 @@ model SuperTabMessage {
   /// Files posted with the message (superTabs/attachments.ts); the bytes live in the attachments bucket.
   attachments     Json?
   replyTo         String?
+  /// Explicit answer below a message in main chat; kept with the message, without opening a thread (#3609).
+  answers         String?
   recipientIds    String[]
   /// People a Lead tagged (superTabs/mentions.ts); absent on older rows.
   mentions        String[]
@@ -1369,6 +1371,9 @@ model SuperTabDecision {
   defaultAt      DateTime?
   /// The server applied the recommendation at defaultAt; never a person’s choice or a legacy overdue answer.
   defaulted      Boolean?
+  /// A rule says the person must agree (task #3826): no default applies. At defaultAt the PM is told once and defaultAt is
+  /// cleared, and the 24-hour sweep never takes it, so it waits for the person. Absent on every other decision.
+  mustAgree      Boolean?
   unblocks       String
   createdAt      DateTime
   answeredAt     DateTime?

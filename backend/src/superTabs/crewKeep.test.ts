@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand } from './commands.js'
 import { crewKeep, crewNeedsMachine, type CrewDeps } from './crewKeep.js'
+import { recordAgentPresence } from './machines.js'
 import { config, fixture, GB, machine, NOW, person } from './crewKeep.test-support.js'
 import * as crewRules from './crewRules.js'
 import type { MachineRule } from './policy.js'
@@ -227,5 +228,67 @@ describe('crewKeep: machine rules apply to moves, read from the project rules re
   it('an awake member with no work stays when its machine goes offline: it moves once it holds work', () => {
     const f = fixture([machine('mac', { receivedAt: NOW - MOVE_OFFLINE_MS - 1 }), machine('mini')], SLEEP_IDLE_MS - 60_000)
     expect(kinds(f.state)).toEqual([])
+  })
+})
+
+// Task #3662 (anh Dee, 11-06): Wren stopped three times in an hour on an account with about 10% weekly quota left, and Aspen on one
+// at about 12%; the keeper reopened Wren each time and its task waited 5 minutes per stop. A member on an account below the routing
+// quota floor moves to the best fallback instead of reopening in place, and one that keeps stopping is moved too.
+describe('crewKeep: low quota and a member that keeps stopping (#3662)', () => {
+  const moveOf = (state: SuperTabState, deps = everywhere) => crewKeep(state, NOW, deps).find(a => a.kind === 'move')
+  const stuckOf = (state: SuperTabState) => crewKeep(state, NOW, everywhere).find(a => a.kind === 'stuck')
+
+  it('moves a member off an account that runs the PM when its weekly quota is below 20%, not above it', () => {
+    // The PM runs on 'mac', Ada with it: 10% left is under the 20% an account running a PM keeps.
+    expect(moveOf(fixture([machine('mac', { usedPercent: 90 }), machine('mini')]).state)).toMatchObject({ toMachineId: 'mini', reason: 'quota-low' })
+    expect(moveOf(fixture([machine('mac', { usedPercent: 70 }), machine('mini')]).state)).toBeUndefined()
+  })
+
+  it('moves a member off any other account below 5%, and keeps it above', () => {
+    const onMini = (used: number) => {
+      const f = fixture([machine('mac'), machine('mini', { usedPercent: used })])
+      f.state.agents.find(a => a.id === f.ada.id)!.machineId = 'mini'
+      return f.state
+    }
+    expect(moveOf(onMini(96))).toMatchObject({ toMachineId: 'mac', reason: 'quota-low' })
+    expect(moveOf(onMini(90))).toBeUndefined()
+  })
+
+  it('never picks a fallback that is itself below its floor', () => {
+    const f = fixture([machine('mac', { usedPercent: 90 }), machine('mini', { signedIn: false })])
+    f.state.agents.find(a => a.id === f.ada.id)!.machineId = 'mini'
+    // Ada's own machine is signed out; the only other one runs the PM with 10% left, under its 20%.
+    expect(moveOf(f.state)).toBeUndefined()
+    expect(stuckOf(f.state)).toMatchObject({ reason: 'signed-out' })
+  })
+
+  it('says nothing of a quota it cannot read', () => {
+    expect(moveOf(fixture([machine('mac', { usedPercent: 99, known: false }), machine('mini')]).state)).toBeUndefined()
+  })
+
+  it('moves a member that stopped three times in the last hour, not two, and counts only the last hour', () => {
+    const stopped = (times: number[]) => {
+      const f = fixture()
+      f.state.agents.find(a => a.id === f.ada.id)!.stops = times
+      return f.state
+    }
+    expect(moveOf(stopped([NOW - 50 * 60_000, NOW - 30 * 60_000, NOW - 5 * 60_000]))).toMatchObject({ toMachineId: 'mini', reason: 'unstable' })
+    expect(moveOf(stopped([NOW - 30 * 60_000, NOW - 5 * 60_000]))).toBeUndefined()
+    expect(moveOf(stopped([NOW - 61 * 60_000, NOW - 30 * 60_000, NOW - 5 * 60_000]))).toBeUndefined()
+  })
+
+  it('records a stop when a reading first shows the session gone, once however long it stays down', () => {
+    const f = fixture()
+    recordAgentPresence(f.state, 'mac', [], NOW)
+    recordAgentPresence(f.state, 'mac', [], NOW + 30_000)
+    const ada = () => f.state.agents.find(a => a.id === f.ada.id)!
+    expect(ada().stops).toEqual([NOW])
+    recordAgentPresence(f.state, 'mac', [ada().harnessId], NOW + 60_000)
+    recordAgentPresence(f.state, 'mac', [], NOW + 90_000)
+    expect(ada().stops).toEqual([NOW, NOW + 90_000])
+    // Only the last hour is kept, and at most a few.
+    recordAgentPresence(f.state, 'mac', [ada().harnessId], NOW + 2 * 3_600_000)
+    recordAgentPresence(f.state, 'mac', [], NOW + 2 * 3_600_000 + 1_000)
+    expect(ada().stops).toEqual([NOW + 2 * 3_600_000 + 1_000])
   })
 })
