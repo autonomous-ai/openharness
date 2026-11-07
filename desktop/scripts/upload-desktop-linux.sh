@@ -13,6 +13,10 @@
 #                                                       # e.g. 2.0.0, is also forced)
 #   bash scripts/upload-desktop-linux.sh --no-bump     # keep the current published version, build + upload
 #   bash scripts/upload-desktop-linux.sh --no-build    # upload the existing build/ artifact as-is
+#   bash scripts/upload-desktop-linux.sh 1.3.0 --no-upload    # build and package only; no cloud call
+#   bash scripts/upload-desktop-linux.sh 1.3.0 --upload-only  # upload the AppImage --no-upload left in build/
+#   (release-desktop.yml packages in build-linux, which runs the ref's code with no cloud identity, and
+#   uploads from upload-linux in the `release` environment.)
 #   TARGET_ARCH=arm64 bash scripts/upload-desktop-linux.sh
 #   TARGET_ARCH=amd64 bash scripts/upload-desktop-linux.sh  # amd64 is normalized to x64
 #   GCS_BUCKET=other bash scripts/upload-desktop-linux.sh   # env overrides (see below)
@@ -97,17 +101,25 @@ NEW_VER=""
 DO_BUMP=1
 DO_FORCE=0
 DO_BUILD=1
+DO_PACKAGE=1
+DO_UPLOAD=1
 for arg in "$@"; do
   case "$arg" in
     --force)       DO_FORCE=1 ;;
     --no-bump)     DO_BUMP=0 ;;
     --no-build)    DO_BUILD=0 ;;
+    --no-upload)   DO_UPLOAD=0 ;;
+    --upload-only) DO_BUILD=0; DO_PACKAGE=0 ;;
     -*)            echo "error: unknown flag '$arg'" >&2; exit 1 ;;
     *)             NEW_VER="$arg" ;;
   esac
 done
 if [ "$DO_FORCE" -eq 1 ] && [ "$DO_BUMP" -eq 0 ]; then
   echo "error: --force and --no-bump contradict each other" >&2
+  exit 1
+fi
+if [ "$DO_PACKAGE" -eq 0 ] && [ "$DO_UPLOAD" -eq 0 ]; then
+  echo "error: --upload-only and --no-upload leave nothing to do" >&2
   exit 1
 fi
 
@@ -124,14 +136,17 @@ fi
 # external-account (federated) credential Workload Identity Federation issues, so every call fails
 # under WIF while the identical `gcloud storage` call works — it is the same gcloud binary that
 # performed the token exchange. Every release path here runs on WIF now. Do not reintroduce it.
-command -v gcloud >/dev/null 2>&1 || {
-  echo "error: gcloud not found — install/authenticate the gcloud SDK" >&2
-  exit 1
-}
-gcloud storage --help >/dev/null 2>&1 || {
-  echo "error: this gcloud is too old for 'gcloud storage' — update the gcloud SDK" >&2
-  exit 1
-}
+if [ "$DO_UPLOAD" -eq 1 ]; then
+  command -v gcloud >/dev/null 2>&1 || {
+    echo "error: gcloud not found — install/authenticate the gcloud SDK" >&2
+    exit 1
+  }
+  gcloud storage --help >/dev/null 2>&1 || {
+    echo "error: this gcloud is too old for 'gcloud storage' — update the gcloud SDK" >&2
+    exit 1
+  }
+  command -v sha256sum >/dev/null 2>&1 || { echo "error: sha256sum not found" >&2; exit 1; }
+fi
 
 # gcs_cp <src> <dst> [cache-control] [content-type] [generation-match].
 gcs_cp() {
@@ -157,10 +172,13 @@ gcs_refuse_republish() {
   fi
 }
 command -v python3 >/dev/null 2>&1 || { echo "error: python3 not found" >&2; exit 1; }
-command -v flutter >/dev/null 2>&1 || { echo "error: flutter not found" >&2; exit 1; }
-command -v sha256sum >/dev/null 2>&1 || { echo "error: sha256sum not found" >&2; exit 1; }
-: "${APPIMAGETOOL:?set APPIMAGETOOL to a path to an appimagetool-<x86_64|aarch64>.AppImage binary}"
-[ -x "$APPIMAGETOOL" ] || { echo "error: APPIMAGETOOL ($APPIMAGETOOL) is not executable" >&2; exit 1; }
+if [ "$DO_BUILD" -eq 1 ]; then
+  command -v flutter >/dev/null 2>&1 || { echo "error: flutter not found" >&2; exit 1; }
+fi
+if [ "$DO_PACKAGE" -eq 1 ]; then
+  : "${APPIMAGETOOL:?set APPIMAGETOOL to a path to an appimagetool-<x86_64|aarch64>.AppImage binary}"
+  [ -x "$APPIMAGETOOL" ] || { echo "error: APPIMAGETOOL ($APPIMAGETOOL) is not executable" >&2; exit 1; }
+fi
 
 cleanup() { rm -f "${SRC:-}" "${DST:-}"; rm -rf "${STAGE_ROOT:-}"; }
 trap cleanup EXIT
@@ -192,7 +210,10 @@ else
   VER="$CUR"                                       # --no-bump: keep current
 fi
 echo ">> releasing version: $VER"
+OUTPUT="$APP_DIR/build/Harness-linux-${RELEASE_ARCH}-$VER.AppImage"
 
+# Steps 2 and 3 (build and package) run unless --upload-only; left unindented around the heredoc below.
+if [ "$DO_PACKAGE" -eq 1 ]; then
 # --- Step 2: build ---
 if [ "$DO_BUILD" -eq 1 ]; then
   echo ">> building release $VER"
@@ -239,12 +260,18 @@ StartupWMClass=com.autonomous.harness
 EOF
 
 APPIMAGE_ARCH="$([ "$RELEASE_ARCH" = "arm64" ] && echo aarch64 || echo x86_64)"
-OUTPUT="$APP_DIR/build/Harness-linux-${RELEASE_ARCH}-$VER.AppImage"
 rm -f "$OUTPUT"
 echo ">> packaging $OUTPUT"
 ARCH="$APPIMAGE_ARCH" "$APPIMAGETOOL" --appimage-extract-and-run "$APPDIR" "$OUTPUT" \
   || { echo "error: appimagetool failed" >&2; exit 1; }
 chmod +x "$OUTPUT"
+fi
+
+if [ "$DO_UPLOAD" -eq 0 ]; then
+  echo ">> --no-upload: packaged $OUTPUT"
+  exit 0
+fi
+[ -f "$OUTPUT" ] || { echo "error: AppImage missing: $OUTPUT — package it with --no-upload first" >&2; exit 1; }
 
 # --- Step 4: upload the artifact + merge the manifest ---
 GCS_PATH="${GCS_PATH:-harness/desktop/${VER}/Harness-linux-${RELEASE_ARCH}.AppImage}"
