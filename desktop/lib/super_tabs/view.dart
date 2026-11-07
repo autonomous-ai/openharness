@@ -5116,6 +5116,36 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
+  /// What the Swarm cannot read, with Retry, over whatever the middle holds: a chat, a Board or a page (audit finding 7
+  /// of task #4211; it was drawn in the chat column only, so the Board and the pages looked live while offline).
+  Widget _connectionLine(SuperTabController c) {
+    if (c.error == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+      child: Row(
+        children: [
+          // A Swarm that was read and now cannot be (a backend or this
+          // computer's Harness restarting) keeps what it shows and says
+          // so quietly; it reads again by itself (task #2647).
+          Expanded(
+            child: c.backendUnreachable && c.snapshot != null
+                ? Text(
+                    'Reconnecting…',
+                    key: const ValueKey('super-reconnecting'),
+                    style: DesktopChrome.metadata(),
+                  )
+                : Text(c.error!, style: DesktopChrome.control()),
+          ),
+          if (!c.accessRevoked)
+            TextButton(
+              onPressed: () => unawaited(c.retryRead()),
+              child: const Text('Retry'),
+            ),
+        ],
+      ),
+    );
+  }
+
   /// On the web a conversation is read before anything else is drawn
   /// ([WorkspaceChrome.superTabRecovers]); Desktop keeps "Loading" meanwhile.
   bool get _readsFirst => WorkspaceChrome.of(context).superTabRecovers;
@@ -5545,31 +5575,7 @@ class _SuperTabViewState extends State<SuperTabView>
             focus: _findFocus,
             onClose: _closeFind,
           ),
-        if (c.error != null && !unread)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-            child: Row(
-              children: [
-                // A Swarm that was read and now cannot be (a backend or this
-                // computer's Harness restarting) keeps what it shows and says
-                // so quietly; it reads again by itself (task #2647).
-                Expanded(
-                  child: c.backendUnreachable && c.snapshot != null
-                      ? Text(
-                          'Reconnecting…',
-                          key: const ValueKey('super-reconnecting'),
-                          style: DesktopChrome.metadata(),
-                        )
-                      : Text(c.error!, style: DesktopChrome.control()),
-                ),
-                if (!c.accessRevoked)
-                  TextButton(
-                    onPressed: () => unawaited(c.retryRead()),
-                    child: const Text('Retry'),
-                  ),
-              ],
-            ),
-          ),
+        if (!unread) _connectionLine(c),
         if (group != null && decisions != null && !c.isEarlierBuddyChat(group))
           // The list stops at an edge under the Buddy's line, as it does under
           // the header: without one, a message scrolled up to the line read as
@@ -6485,6 +6491,23 @@ class _SuperTabViewState extends State<SuperTabView>
         },
         onClose: _closeRoster,
       );
+      final pagesIndex = boardProject != null
+          ? 5
+          : _devicesVisible
+          ? 1
+          : _manageVisible
+          ? 4
+          : _notificationsVisible
+          ? 3
+          : c.snapshot?.projects.isEmpty == true
+          ? 0
+          : _terminalsVisible
+          ? 1
+          : _showPullRequests
+          ? 2
+          : _showTasks
+          ? 5
+          : 0;
       final view = Focus(
         canRequestFocus: false,
         skipTraversal: true,
@@ -6553,25 +6576,15 @@ class _SuperTabViewState extends State<SuperTabView>
                                 onChoose: _chooseManageTab,
                               ),
                             ),
+                          // The chat draws the line itself, and a terminal's chat beside it answers for the terminal's own
+                          // connection; every other surface in the middle gets it here.
+                          if (pagesIndex != 0 &&
+                              !_terminalsVisible &&
+                              !(_readsFirst && c.snapshot == null))
+                            _connectionLine(c),
                           Expanded(
                             child: SuperTabPages(
-                              index: boardProject != null
-                                  ? 5
-                                  : _devicesVisible
-                                  ? 1
-                                  : _manageVisible
-                                  ? 4
-                                  : _notificationsVisible
-                                  ? 3
-                                  : c.snapshot?.projects.isEmpty == true
-                                  ? 0
-                                  : _terminalsVisible
-                                  ? 1
-                                  : _showPullRequests
-                                  ? 2
-                                  : _showTasks
-                                  ? 5
-                                  : 0,
+                              index: pagesIndex,
                               children: [
                                 chatBeside || boardProject != null
                                     ? const SizedBox.shrink()
