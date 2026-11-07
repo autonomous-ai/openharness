@@ -184,6 +184,26 @@ describe('a handed task opens its review steps', () => {
     expect(f.group(one).assignment).toMatchObject({ agentId: third, status: 'working' })
   })
 
+  // Task #4534: Ownrev6 held Security review 1 of #3545 after doing review 2, said so, and only a cancel by the PM moved it.
+  it('a security review stuck on the other one\'s reviewer moves to a free Reviewer without a cancel', () => {
+    const { f, one, second, third } = otherDone()
+    // As before #4534: the other review's reviewer holds this one, and reports that it cannot take it.
+    const held = f.group(one).assignment!
+    Object.assign(held, { agentId: second })
+    f.run({ type: 'work.status', conversationId: one, assignmentId: held.id, status: 'blocked', result: 'I did Security review 2: give this to another Reviewer' } as Command, f.as(second))
+    const moved = f.run({ type: 'work.assign', conversationId: one, agentId: third } as Command, f.as(f.dev))
+    expect(f.group(one).assignment).toMatchObject({ agentId: third, status: 'working' })
+    expect(moved.messages.some(m => m.recipients.includes(second) && /moved to rev-/.test(m.text))).toBe(true)
+    expect(f.state.agents.find(a => a.id === second)!.workDecision).toBe('awaiting')
+  })
+
+  it('a blocked step whose reviewer is independent stays its reviewer\'s', () => {
+    const { f, one, first, third } = otherDone()
+    f.run({ type: 'work.status', conversationId: one, assignmentId: f.group(one).assignment!.id, status: 'blocked', result: 'Waiting on CI' } as Command, f.as(first))
+    expect(() => f.run({ type: 'work.assign', conversationId: one, agentId: third } as Command, f.as(f.dev))).toThrow(expect.objectContaining({ code: 'WORK_ACTIVE' }))
+    expect(f.group(one).assignment!.agentId).toBe(first)
+  })
+
   // Review of #3227 (Digest): a second Ready at the same head re-assigned a review that had passed there, and cleared its verdict.
   it('a repeated Ready at the same head keeps a review that passed at that head', () => {
     const f = fixture()
