@@ -139,6 +139,19 @@ describe('the status card the server writes (#3593)', () => {
     expect(f.chat()).not.toHaveProperty('card')
   })
 
+  // Tasks stored before #4419 keep no line: the first command after the release must not write every one of them (prod's busiest
+  // project has ~180 open, one transaction), so a line is written only by a command that moves it, and the card builds the rest.
+  it('writes no line for a task stored without one that a command does not move, and still shows it on the card', () => {
+    const f = cardFixture()
+    delete f.group(f.task).statusLine
+    f.run({ type: 'message.send', conversationId: 'lead', text: 'tick', replyTo: null, recipientIds: [] })
+    expect(f.group(f.task).statusLine).toBeUndefined()
+    expect(f.text()).toBe('#1 "Fix login": working. Waits on: nothing. Owner: Jules.')
+    // The command that moves it writes it.
+    f.work('review', `Ready for review: ${PR} at abc1234`)
+    expect(f.group(f.task).statusLine).toEqual({ text: '#1 "Fix login": in review (PR #7). Waits on: a review. Owner: Jules.', since: expect.any(Number) })
+  })
+
   it('leaves an ended task\'s line empty, dated, so a reader learns the card dropped it', () => {
     const f = cardFixture()
     f.tick(60_000)
