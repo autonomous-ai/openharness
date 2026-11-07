@@ -179,6 +179,8 @@ describe('work that loses its owner', () => {
     const other = await f.add(group, 'test-host', f.harness.other, 'Other')
     await f.observe('test-host', [f.harness.worker, f.harness.other])
     await f.execute({ type: 'agent.alert', agentId: other, alert: 'model', active: true }, host, other)
+    // A model-failing agent takes no new work until it answers (task #4076): its own post does, while the alert is still on.
+    await f.execute({ type: 'message.send', conversationId: group, text: 'Back.', replyTo: null, recipientIds: [] }, host, other)
     await f.execute({ type: 'work.assign', conversationId: group, agentId: other })
     // The Lead's poll reads the alert as on; just before it writes the loss, the host reports the model answering again.
     let raced = false
