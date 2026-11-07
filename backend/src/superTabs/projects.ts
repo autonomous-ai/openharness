@@ -327,6 +327,17 @@ export function requestedByLine(state: SuperTabState, project: SwarmProject, gro
   return requester?.email ? `Start each pull request body with: Requested by ${agentWrittenNameOf(state, requester.id)} through Harness.` : null
 }
 
+/** Where Regular agent [worker] finds [project]'s code, for its task's message. It starts in its own empty folder, in no project
+ *  (task #4116), and nothing prepares a checkout when it is given a task, so the message says where the code is (task #4218):
+ *  the GitHub repository to clone with its own person's git, or the checkout on its own computer. A checkout's folder is
+ *  named only on that computer, its person's own. */
+export function regularCodeLine(project: SwarmProject, worker: Agent): string {
+  const repository = project.repository
+  if (repository?.repositoryUrl) return `This project's code is ${repository.repositoryUrl}. Clone it into a folder inside your own folder and work on a branch there, with the git and gh signed in on this computer.`
+  if (repository && repository.machineId === worker.machineId) return `This project's code is checked out at ${repository.cwd} on this computer. Make a git worktree of it inside your own folder and work on a branch there.`
+  return 'This project has no code this computer can reach: it has no GitHub repository. Ask its PM before changing code.'
+}
+
 export function readProject(state: SuperTabState, actor: Actor, projectId: string): SwarmProject {
   author(state, actor)
   const project = projectOf(state, projectId)
@@ -640,7 +651,7 @@ export function readAgent(state: SuperTabState, actor: Actor, agentId: string): 
 /** Whether Regular agent [target] may take a task in [project]: its person reads it (it works only where they could read it
  *  themselves), and, once it has worked in a private project, it is that one: its one conversation holds that project's
  *  content, which no other project's members may hear from it (security review 2 of #4116). Public work moves on freely. */
-function regularMayWorkIn(state: SuperTabState, target: Agent, project: SwarmProject): boolean {
+export function regularMayWorkIn(state: SuperTabState, target: Agent, project: SwarmProject): boolean {
   const member = state.people.find(p => p.id === target.contributorId)
   return !!member && canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)
     && (!target.privateProjectId || target.privateProjectId === project.id)

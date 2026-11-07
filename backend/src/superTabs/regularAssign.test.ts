@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 import type { ContributedMachine } from './machines.js'
-import { agentProjectId, canReadAgent, canReadGroup, NO_PROJECT } from './projects.js'
+import { agentProjectId, canReadAgent, canReadGroup, NO_PROJECT, projectOf } from './projects.js'
+import { DISPATCH_RULES, dispatchPlan, freeCrew } from './dispatch.js'
+import { closedAgents, STOPPED_REMOVE_MS } from './closedAgents.js'
 
 // Task #4116 (Swarm v3, anh Dee 11-07): "A Regular agent isn't tied to a project; the task decides where it works." Its PM gives
 // it a task only in a project its person can read, so nothing reaches its person that they could not read anyway; while it
@@ -184,5 +186,70 @@ describe('a Regular agent and its task', () => {
     expect(canReadAgent(f.state, mate, f.agent(f.ada))).toBe(true)
     expect(canReadAgent(f.state, { kind: 'agent', agentId: f.ada, machineOwnerId: 'mate' }, f.agent(f.ada))).toBe(true)
     expect(canReadAgent(f.state, owner, f.agent(f.ada))).toBe(false)
+  })
+})
+
+// Task #4218 (anh Dee's Buddy's review): a Regular agent starts in its own empty folder, so its task tells it where the code is.
+describe('a Regular agent\'s task', () => {
+  const brief = (f: ReturnType<typeof swarm>, app: ReturnType<ReturnType<typeof swarm>['project']>) =>
+    f.run({ type: 'work.assign', conversationId: app.task, agentId: f.ada }, app.asPm).messages
+      .find(m => m.recipients.includes(f.ada))!.text
+
+  it('names its project\'s GitHub repository, to clone into its own folder', () => {
+    const f = swarm(), app = f.project('app', 'public')
+    projectOf(f.state, app.projectId).repository = { machineId: 'owner-mac', cwd: '/code/app', repositoryUrl: 'https://github.com/acme/app' }
+    const text = brief(f, app)
+    expect(text).toContain('https://github.com/acme/app')
+    expect(text).not.toContain('/code/app')
+  })
+
+  it('names its project\'s checkout when it is on the agent\'s own computer', () => {
+    const f = swarm(), app = f.project('app', 'public')
+    projectOf(f.state, app.projectId).repository = { machineId: 'mate-mac', cwd: '/code/app', repositoryUrl: null }
+    expect(brief(f, app)).toContain('/code/app')
+  })
+
+  it('says when its project has no code it can reach', () => {
+    const f = swarm(), app = f.project('app', 'public')
+    projectOf(f.state, app.projectId).repository = { machineId: 'owner-mac', cwd: '/code/app', repositoryUrl: null }
+    const text = brief(f, app)
+    expect(text).toContain('no code this computer can reach')
+    expect(text).not.toContain('/code/app')
+  })
+})
+
+// Task #4218: the automatic picks left out every idle Regular agent, which is in no project until a task places it, so a task
+// its PM routed (pinned) to one was never handed over.
+describe('the automatic picks and an idle Regular agent', () => {
+  const pin = (f: ReturnType<typeof swarm>, task: string) => { f.group(task).pin = { agentId: f.ada, why: 'findings', at: NOW } }
+
+  it('hand it a task pinned to it in a project its person reads', () => {
+    const f = swarm(), app = f.project('app', 'public')
+    pin(f, app.task)
+    expect(freeCrew(f.state, app.projectId, DISPATCH_RULES, NOW).map(a => a.id)).toContain(f.ada)
+    expect(dispatchPlan(f.state, app.projectId, DISPATCH_RULES, NOW)).toContainEqual(expect.objectContaining({ conversationId: app.task, agentId: f.ada }))
+  })
+
+  it('never in a project its person cannot read, nor outside the private project it worked in', () => {
+    const f = swarm(), secret = f.project('secret', 'private')
+    pin(f, secret.task)
+    expect(freeCrew(f.state, secret.projectId, DISPATCH_RULES, NOW).map(a => a.id)).not.toContain(f.ada)
+    expect(dispatchPlan(f.state, secret.projectId, DISPATCH_RULES, NOW)).toEqual([])
+    const app = f.project('app', 'public')
+    f.agent(f.ada).privateProjectId = 'elsewhere'
+    pin(f, app.task)
+    expect(freeCrew(f.state, app.projectId, DISPATCH_RULES, NOW).map(a => a.id)).not.toContain(f.ada)
+  })
+})
+
+// Task #4218: a closed session removed its Regular agent, and nothing brought it back: its own chat made it count as
+// confidential, and it has no project to restore into. It is its person's, as a Buddy is: it stays, shown closed, in its chat.
+describe('a Regular agent whose session closed', () => {
+  it('stays listed in its own chat, to come back when its session runs again', () => {
+    const f = swarm()
+    f.agent(f.ada).downSince = new Date(NOW - 10 * STOPPED_REMOVE_MS).toISOString()
+    const report = { runningHarnessIds: ['h-other'], stoppedHarnessIds: ['h-ada'] }
+    expect(closedAgents(f.state, 'mate-mac', report, NOW)).toEqual([])
+    expect(f.state.conversations.some(c => c.kind === 'agent-chat' && c.agentIds.includes(f.ada))).toBe(true)
   })
 })
