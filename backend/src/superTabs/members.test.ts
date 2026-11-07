@@ -103,7 +103,9 @@ describe('the first Accept', () => {
     const [start] = memberStarts(f)
     expect(memberStarts(f)).toHaveLength(1)
     expect(start).toMatchObject({ contributorId: 'kai', machineOwnerId: 'kai', hostGrant: null })
-    expect(start!.request).toMatchObject({ machineId: 'kai-mac', regular: true, mainProjectId: lamp, member: { projectId: lamp } })
+    // In its project's folder with a worktree, as any project agent's (#4698: a helper copies from it, sleep reopens it in place).
+    expect(start!.request).toMatchObject({ machineId: 'kai-mac', regular: true, mainProjectId: lamp, member: { projectId: lamp },
+      cwd: `/swarm/${lamp}`, worktree: true })
     expect(start!.request.name).toMatch(/^[A-Z][a-z]+ · lamp$/)
     expect(f.group(start!.request.conversationId)).toMatchObject({ kind: 'agent-chat', title: start!.request.name })
   })
