@@ -2103,8 +2103,10 @@ class _SuperTabViewState extends State<SuperTabView>
     c.select(selected);
   }
 
-  Widget _sidebar() => ProjectSidebar(
+  /// The left pane, lighting the row of [boardProjectId] while its Board holds the middle.
+  Widget _sidebar(String? boardProjectId) => ProjectSidebar(
     board: widget.board,
+    boardProjectId: boardProjectId,
     controller: c,
     compact: _phone,
     app: widget.app,
@@ -6329,7 +6331,7 @@ class _SuperTabViewState extends State<SuperTabView>
               child: SuperTabPaneLayout(
                 storage: widget.paneStore ?? widget.app?.localStore,
                 onLeave: _leaveResize,
-                left: narrow ? null : _sidebar(),
+                left: narrow ? null : _sidebar(boardProject),
                 // An open thread takes the roster's side, as in Slack.
                 right: !wide
                     ? null
@@ -6578,7 +6580,7 @@ class _SuperTabViewState extends State<SuperTabView>
                             child: Material(
                               color: grid.AppPalette.swarmSidebar,
                               elevation: 8,
-                              child: _sidebar(),
+                              child: _sidebar(boardProject),
                             ),
                           ),
                         ),
