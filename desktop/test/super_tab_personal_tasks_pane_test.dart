@@ -21,6 +21,9 @@ import 'support/memory_key_value_store.dart';
 class TasksFixture {
   final store = MemoryKeyValueStore();
   bool supported = true, fail = false;
+
+  /// The server's answer to the next command: refused, as a 4xx.
+  SuperTabFailure? refuse;
   Completer<void>? hold;
   String mode = 'autoApprove';
   final rows = [task('old', 1, 10), task('new', 1, 20)];
@@ -46,6 +49,7 @@ class TasksFixture {
         commands.add(command);
         await hold?.future;
         if (fail) throw StateError('fixture private payload');
+        if (refuse case final refusal?) throw refusal;
         if (command['type'] == 'member.approvalMode') {
           mode = command['mode'] as String;
         }
@@ -261,6 +265,34 @@ void main() {
     await t.pumpAndSettle();
     expect(f.operations.toSet().length, 1);
     expect(f.commands.length, 2);
+  });
+  // Task #4220: the controller drops a refused change, but the pane kept it, so Tasks stayed disabled and its Retry sent
+  // the refused change again.
+  testWidgets('a refused change says the server\'s reason and Tasks works '
+      'again', (t) async {
+    await mount(t);
+    f.refuse = const SuperTabFailure(
+      'FORBIDDEN',
+      'Only the project\'s owner changes this.',
+      statusCode: 403,
+    );
+    await t.tap(find.byKey(const ValueKey('tasks-approval-mode')));
+    await t.pumpAndSettle();
+    await t.tap(find.text('Review').last);
+    await t.pumpAndSettle();
+    expect(
+      find.text('Only the project\'s owner changes this.'),
+      findsOneWidget,
+    );
+    expect(find.text('Retry'), findsNothing);
+    f.refuse = null;
+    await t.tap(find.byKey(const ValueKey('tasks-approval-mode')));
+    await t.pumpAndSettle();
+    await t.tap(find.text('Review').last);
+    await t.pumpAndSettle();
+    expect(f.commands.length, 2);
+    expect(f.operations.toSet().length, 2);
+    expect(f.controller.personalTasks!.mode, 'review');
   });
   testWidgets('old backend has no approval controls', (t) async {
     await mount(t);
