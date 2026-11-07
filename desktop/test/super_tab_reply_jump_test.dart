@@ -276,9 +276,7 @@ void main() {
     expect(
       find.descendant(
         of: quoteIn(reply),
-        matching: find.text(
-          'The original message is no longer in this conversation.',
-        ),
+        matching: find.text('Original message removed'),
       ),
       findsOneWidget,
     );
@@ -315,9 +313,7 @@ void main() {
     expect(
       find.descendant(
         of: quoteIn('message-60'),
-        matching: find.text(
-          'The original message is no longer in this conversation.',
-        ),
+        matching: find.text('Original message removed'),
       ),
       findsOneWidget,
     );
@@ -327,10 +323,7 @@ void main() {
     await show(tester, chat(60, replyTo: 'message-gone'));
     await tester.tap(quoteIn('message-60'));
     await tester.pumpAndSettle();
-    expect(
-      note('The original message is no longer in this conversation.'),
-      findsOneWidget,
-    );
+    expect(note('Original message removed'), findsOneWidget);
     expect(row('message-60').hitTestable(), findsOneWidget);
     expect(find.byKey(const ValueKey('super-reply-back')), findsNothing);
   });
@@ -359,10 +352,7 @@ void main() {
     await tester.tap(quoteIn('message-60'));
     await tester.pumpAndSettle();
     expect(find.textContaining('Private plan'), findsNothing);
-    expect(
-      note('The original message is no longer in this conversation.'),
-      findsOneWidget,
-    );
+    expect(note('Original message removed'), findsOneWidget);
   });
 
   testWidgets('a failed page read says so and stops', (tester) async {

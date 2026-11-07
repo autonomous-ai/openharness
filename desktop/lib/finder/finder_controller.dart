@@ -119,7 +119,7 @@ class FinderController extends ChangeNotifier {
     return tabs.open(finderDiffTabId(change), () {
       final diff = FinderDiffDocument(
         change,
-        p.join(repository?.root ?? root, change.path),
+        repository?.pathOf(change) ?? p.normalize(p.join(root, change.path)),
         git.diff,
       );
       unawaited(diff.load());

@@ -7,17 +7,29 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
-import 'package:harness/state/harness_activity.dart';
 import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/state/harness_activity.dart';
+import 'package:harness/super_tabs/chat/chat_card.dart';
+import 'package:harness/super_tabs/chat/chat_time.dart';
+import 'package:harness/super_tabs/chat/composer_pill.dart';
+import 'package:harness/super_tabs/chat/fold.dart';
+import 'package:harness/super_tabs/chat/send_button.dart';
+import 'package:harness/super_tabs/swarm_type.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/shared/widgets/app_icon_button.dart';
+import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/buddy_card.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/chat/agent_chat_header.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/decisions.dart';
+import 'package:harness/super_tabs/decisions_view.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
 import 'package:harness/super_tabs/identity.dart';
+import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/reply_box.dart';
 import 'package:harness/super_tabs/tasks/personal_task_card.dart';
 import 'package:harness/super_tabs/tasks/personal_tasks.dart';
 import 'package:harness/super_tabs/tasks/tasks_pane_header.dart';
@@ -26,6 +38,7 @@ import 'package:harness/terminal/terminal_typography.dart';
 
 import 'super_tab_personal_tasks_pane_test.dart' show TasksFixture;
 import 'support/buddy_engine_fixture.dart';
+import 'support/super_tab_fixture.dart';
 
 /// The Swarm elements gallery (desktop-design-system.md, Swarm elements): every
 /// element drawn in light and dark against its checked-in image. A new or
@@ -91,6 +104,32 @@ void main() {
     });
   }
 
+  // Task #4645 (anh Dee 22:25): every row's right-side detail ends at one edge, in every section of the left pane, and
+  // the + on a heading ends there too.
+  testWidgets('the left pane\'s details end at one edge', (tester) async {
+    final bars = await _show(tester, Brightness.light);
+    final details = find.descendant(
+      of: find.byKey(_Gallery.leftPane),
+      matching: find.byWidgetPredicate(
+        (w) => w is Text && w.textAlign == TextAlign.right,
+      ),
+    );
+    final rights = {
+      for (final e in details.evaluate())
+        tester.getRect(find.byWidget(e.widget)).right,
+    };
+    expect(details.evaluate().length, greaterThan(2));
+    expect(rights, hasLength(1), reason: '$rights');
+    // The heading's +: its glyph's box ends on the same edge.
+    final plus = find.descendant(
+      of: find.byKey(_Gallery.leftPane),
+      matching: find.byIcon(AppIcons.plus),
+    );
+    expect(plus, findsOneWidget);
+    expect(tester.getRect(plus).right, moreOrLessEquals(rights.single));
+    await _close(tester, bars);
+  });
+
   // Review of task #4461: a whole-image tolerance let a changed element pass. Ellis has Kai's colour with another
   // tilt: only its eyes and smile move.
   testWidgets('one changed face fails the gallery', (tester) async {
@@ -137,7 +176,7 @@ Future<List<SuperTabController>> _show(
   await buddy.select('swarm-buddy-peer');
   await member.select('aeef');
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 1280);
+  tester.view.physicalSize = const Size(760, 1950);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -151,10 +190,14 @@ Future<List<SuperTabController>> _show(
           faces: faces,
           bars: [buddy, member],
           empty: empty,
+          // The decision cards read their answers' state from a reader's Decisions.
+          decisions: SuperTabDecisions.of(member),
         ),
       ),
     ),
   );
+  await tester.pump();
+  // A fold says More a frame after it measures what it holds.
   await tester.pump();
   expect(tester.takeException(), isNull);
   return [buddy, member, empty];
@@ -206,7 +249,6 @@ List<GalleryRegion> _regions(WidgetTester tester) {
     of: find.byType(SuperTabTaskStatusMark),
     matching: find.byType(Icon),
   );
-  final agentMarks = find.byType(SuperTabAgentMark);
   return [
     for (var i = 0; i < faces.evaluate().length; i++)
       if (tester.widget<SuperTabAvatarFace>(faces.at(i)) case final face)
@@ -234,13 +276,6 @@ List<GalleryRegion> _regions(WidgetTester tester) {
       (
         name: 'status mark ${tester.widget<Icon>(marks.at(i)).semanticLabel}',
         rect: tester.getRect(marks.at(i)),
-        limit: _glyph,
-      ),
-    for (var i = 0; i < agentMarks.evaluate().length; i++)
-      (
-        name:
-            'agent mark ${tester.widget<SuperTabAgentMark>(agentMarks.at(i)).activity.name}',
-        rect: tester.getRect(agentMarks.at(i)),
         limit: _glyph,
       ),
   ];
@@ -357,6 +392,26 @@ final _person = SuperTabPerson.fromJson({
   'role': 'owner',
 });
 
+/// A person's own Buddy's question, and a line it waits to post as them
+/// (task #4525), as the backend lists them.
+SuperTabDecision _decision(
+  String id,
+  String question,
+  List<String> options,
+  String unblocks, {
+  bool send = false,
+}) => SuperTabDecision.fromJson({
+  'id': id,
+  'conversationId': 'buddy',
+  'askerName': 'Buddy',
+  'question': question,
+  'options': options,
+  'recommended': send ? 0 : 1,
+  'unblocks': unblocks,
+  'fromBuddy': true,
+  'send': send,
+});
+
 /// A Tasks pane card as the pane draws it: the project's capsule, the mark, the title and two 18 faces.
 Widget _card(
   String title,
@@ -389,6 +444,7 @@ class _Gallery extends StatelessWidget {
     required this.faces,
     required this.bars,
     required this.empty,
+    required this.decisions,
   });
   final Brightness brightness;
   final List<String> faces;
@@ -398,6 +454,10 @@ class _Gallery extends StatelessWidget {
 
   /// A Swarm with no tasks: the Tasks pane empty.
   final SuperTabController empty;
+  static const leftPane = ValueKey('gallery-left-pane');
+
+  /// Whose answers the decision cards read.
+  final SuperTabDecisions decisions;
   static const boundary = ValueKey('swarm-elements-gallery');
 
   @override
@@ -484,10 +544,11 @@ class _Gallery extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   SizedBox(
+                    key: _Gallery.leftPane,
                     width: 280,
                     child: Column(
                       children: [
-                        // The Desktop left pane (task #4466).
+                        // The Desktop left pane (tasks #4466, #4645).
                         SuperTabQuietHeading.org('autonomous.ai', onTap: () {}),
                         SuperTabQuietRow(
                           leading: const Icon(
@@ -503,19 +564,16 @@ class _Gallery extends StatelessWidget {
                           'My agents',
                           collapsed: false,
                           onTap: () {},
+                          onAdd: () {},
+                          addTooltip: 'New agent',
                         ),
-                        for (final (name, lead, detail, mark, selected) in [
-                          ('River', true, 'harness', null, false),
-                          ('Quinn', false, null, null, true),
-                          ('Kai', false, null, HarnessActivity.working, false),
-                          (
-                            'Sage',
-                            false,
-                            'offline',
-                            HarnessActivity.needsInput,
-                            false,
-                          ),
-                          ('Lark', false, null, HarnessActivity.failed, false),
+                        // No status marks (task #4645): an agent with something new is its bold name.
+                        for (final (name, lead, detail, unread, selected) in [
+                          ('River', true, 'harness', false, false),
+                          ('Quinn', false, null, false, true),
+                          ('Kai', false, null, true, false),
+                          ('Sage', false, 'offline', false, false),
+                          ('Lark', false, null, false, false),
                         ])
                           SuperTabQuietRow(
                             leading: SuperTabAvatar.agent(
@@ -527,8 +585,7 @@ class _Gallery extends StatelessWidget {
                             name: name,
                             detail: detail,
                             selected: selected,
-                            mark: mark == null ? null : SuperTabAgentMark(mark),
-                            markColumn: true,
+                            unread: unread,
                             onTap: () {},
                           ),
                         SuperTabQuietHeading('Humans', onTap: () {}),
@@ -584,6 +641,80 @@ class _Gallery extends StatelessWidget {
                         ),
                       ],
                     ),
+                  ),
+                ],
+              ),
+              title('Chat: bubbles, a time after a pause, cards, a fold'),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 400,
+                    child: Column(
+                      children: [
+                        _message(
+                          'River',
+                          'New Project is in the sidebar now.',
+                          agent: _agent('River'),
+                          joinsBelow: true,
+                        ),
+                        _message(
+                          'River',
+                          'Press it and name the project.',
+                          agent: _agent('River'),
+                          id: 'm-River-2',
+                          grouped: true,
+                        ),
+                        SwarmChatTime(DateTime.utc(2026, 11, 7, 9, 12)),
+                        _message('dee', 'Found it, thanks!', person: _person),
+                      ],
+                    ),
+                  ),
+                  gap(),
+                  SizedBox(
+                    width: 300,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SwarmChatCard(
+                          icon: AppIcons.send,
+                          label: 'Sent to River',
+                          title: 'Everything waiting on me shows in Decisions',
+                          action: 'View brief',
+                          details: SizedBox.shrink(),
+                        ),
+                        const SizedBox(height: 8),
+                        const SwarmChatCard(
+                          icon: AppIcons.circleCheck,
+                          label: 'Shipped',
+                          title: 'Wake fix: the mic closes after 1 second',
+                          action: 'What changed',
+                          details: SizedBox.shrink(),
+                        ),
+                        const SizedBox(height: 8),
+                        SwarmFold(
+                          child: Text(
+                            [for (var i = 1; i <= 9; i++) 'Line $i of a plan.']
+                                .join('\n'),
+                            style: SwarmType.body(context),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              title('Chat composer: the pill empty and typed, a thread box'),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(width: 210, child: _pill(context, typed: false)),
+                  gap(),
+                  SizedBox(width: 210, child: _pill(context, typed: true)),
+                  gap(),
+                  const SizedBox(
+                    width: 250,
+                    child: _Composer('typed', 'Ship it'),
                   ),
                 ],
               ),
@@ -655,12 +786,158 @@ class _Gallery extends StatelessWidget {
                   onOpenTask: (_) {},
                 ),
               ),
+              title('Decision card: a Buddy question and a send line'),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 340,
+                    child: SuperTabDecisionCard(
+                      decisions: decisions,
+                      decision: _decision('d1', 'Keep the old flag a week?', [
+                        'Keep it',
+                        'Drop it',
+                      ], 'The cleanup'),
+                      onNotNow: () {},
+                    ),
+                  ),
+                  SizedBox(
+                    width: 340,
+                    child: SuperTabDecisionCard(
+                      decisions: decisions,
+                      decision: _decision(
+                        'd2',
+                        'Drop the old --legacy-sync flag from the CLI.',
+                        ['Send', 'Not now'],
+                        'Posts this in the harness chat as you.',
+                        send: true,
+                      ),
+                      onNotNow: () {},
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
         ),
       ),
     );
   }
+}
+
+/// A chat message row, as the chat draws one. Its time is words, which the
+/// comparison leaves out, so the image holds in every time zone.
+Widget _message(
+  String author,
+  String text, {
+  SuperTabAgent? agent,
+  SuperTabPerson? person,
+  String? id,
+  bool grouped = false,
+  bool joinsBelow = false,
+}) => SuperTabMessageRow(
+  grouped: grouped,
+  joinsBelow: joinsBelow,
+  message: SuperTabMessage.fromJson({
+    'id': id ?? 'm-$author',
+    'conversationId': 'lead',
+    'text': text,
+    'sequence': 1,
+    'createdAt': '2026-11-07T09:12:00Z',
+    'author': agent != null
+        ? {'kind': 'agent', 'id': agent.id, 'name': author}
+        : {'kind': 'person', 'id': person!.id, 'name': 'dee@example.com'},
+  }),
+  author: author,
+  agent: agent,
+  person: person,
+  receipts: const [],
+  onReturnToComposer: () {},
+  readerId: 'p1',
+);
+
+/// The chat's composer as it draws itself: the pill around the paperclip and
+/// the text, the mic beside it while empty, send once [typed].
+Widget _pill(BuildContext context, {required bool typed}) => Row(
+  crossAxisAlignment: CrossAxisAlignment.end,
+  children: [
+    Expanded(
+      child: SwarmComposerPill(
+        child: SizedBox(
+          height: grid.AppControl.heightFieldScaled,
+          child: Row(
+            children: [
+              const SizedBox(width: 10),
+              Icon(AppIcons.paperclip, size: 16, color: DesktopChrome.muted),
+              const SizedBox(width: 10),
+              Text(
+                typed ? 'Ship it' : 'Message #Pilot',
+                style: SwarmType.composer(
+                  context,
+                  color: typed ? null : DesktopChrome.hint,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+    const SizedBox(width: 8),
+    SizedBox(
+      height: grid.AppControl.heightFieldScaled,
+      child: Center(
+        child: typed
+            ? SwarmSendButton(tooltip: 'Send', onPressed: () {})
+            : Icon(AppIcons.mic, size: 16, color: DesktopChrome.muted),
+      ),
+    ),
+  ],
+);
+
+/// A thread's reply box ([SuperTabReplyBox]) holding
+/// [typed]: the round send grey while empty, blue once there is text.
+class _Composer extends StatefulWidget {
+  const _Composer(this.name, this.typed);
+  final String name, typed;
+
+  @override
+  State<_Composer> createState() => _ComposerState();
+}
+
+class _ComposerState extends State<_Composer> {
+  final SuperTabController controller = ConversationServer().controller();
+  late final text = TextEditingController(text: widget.typed);
+  final focus = FocusNode();
+  final files = HarnessAttachments();
+
+  @override
+  void dispose() {
+    text.dispose();
+    focus.dispose();
+    files.dispose();
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SuperTabReplyBox(
+    controller: controller,
+    text: text,
+    focus: focus,
+    files: files,
+    enabled: true,
+    writable: true,
+    busy: false,
+    error: null,
+    onEdited: (_) {},
+    onSend: () {},
+    onMic: () {},
+    hint: 'Message #Pilot',
+    surfaceKey: ValueKey('gallery-composer-${widget.name}'),
+    fieldKey: ValueKey('gallery-composer-field-${widget.name}'),
+    sendKey: ValueKey('gallery-composer-send-${widget.name}'),
+    micKey: ValueKey('gallery-composer-mic-${widget.name}'),
+  );
 }
 
 /// Matches when [galleryDifference] finds none. A mismatch fails with what

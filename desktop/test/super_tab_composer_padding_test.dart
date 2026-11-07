@@ -10,12 +10,13 @@ import 'support/super_tab_fixture.dart';
 
 /// Huy, 11-04: the composer was too tight, its hint and its row of actions
 /// against the box's edge. As on the phone and in Slack, the text sits 12 below
-/// the top and 16 in from each side, the + and the arrow's glyphs keep those
+/// the top and 16 in from each side, the paperclip and the arrow's glyphs keep those
 /// edges, the row has a little more air above it, the arrow sits as far up from
-/// the bottom as the text sits down from the top, and the corners are the
-/// phone's (SwarmComposer.cardRadius).
+/// the bottom as the text sits down from the top, and the corners are Cmd-N's
+/// field's (anh Dee, 11-07, #4467).
 void main() {
-  const top = 12.0, side = 16.0, rowGap = 12.0, radius = 24.0;
+  const top = 12.0, side = 16.0, rowGap = 12.0;
+  const radius = grid.AppDesktop.composerRadius;
 
   ConversationServer buddyChat() {
     final server = ConversationServer()..threads = true;
@@ -59,7 +60,9 @@ void main() {
       tester.getRect(find.descendant(of: button, matching: find.byIcon(icon)));
 
   for (final brightness in Brightness.values) {
-    for (final scene in ['chat', 'thread', 'web-phone']) {
+    // The chat's own composer is a pill now, at any width (#4529,
+    // super_tab_chat_pill_test.dart); the thread's box keeps this.
+    for (final scene in ['thread']) {
       testWidgets('the $scene composer has room inside its box '
           '(${brightness.name})', (tester) async {
         final thread = scene == 'thread', phone = scene == 'web-phone';
@@ -108,12 +111,7 @@ void main() {
         final plus = glyph(
           tester,
           find.descendant(of: surfaceKey, matching: key('new-harness-attach')),
-          AppIcons.plus,
-        );
-        final tag = glyph(
-          tester,
-          key(thread ? 'super-thread-tag' : 'super-composer-tag'),
-          AppIcons.atSign,
+          AppIcons.paperclip,
         );
         final mic = glyph(
           tester,
@@ -129,15 +127,18 @@ void main() {
         expect(field.top - surface.top, closeTo(top, .5), reason: 'top');
         expect(field.left - surface.left, closeTo(side, .5), reason: 'left');
         expect(surface.right - field.right, closeTo(side, .5), reason: 'right');
-        // The + under the text's first letter, the arrow at the text's right
-        // edge, and the mic as far from the arrow as @ is from +.
+        // The paperclip under the text's first letter, the arrow at the text's right
+        // edge.
         expect(plus.left, closeTo(field.left, .5), reason: '+ edge');
         expect(surface.right - send.right, closeTo(side, .5), reason: 'send');
+        // The mic right beside the round send: two touching targets apart
+        // (River, 11-07, #4467).
         expect(
           send.left - mic.right,
-          closeTo(tag.left - plus.right, .5),
-          reason: 'mic and send spacing',
+          closeTo(grid.AppControl.height - AppIcons.inlineSize, .5),
+          reason: 'mic beside send',
         );
+
         // The row's air over Desktop's 32pt targets, the same over a phone's
         // 44pt ones, which would otherwise push a short phone's box past the
         // keyboard.

@@ -892,6 +892,8 @@ export const NOTICE_READERS = {
   'decision-delegated': 'people', 'machine-removed': 'people', ship: 'people',
   // An agent's question to a person in a switched project, in their default Buddy chat (decisions.ts askedThroughBuddy, #3826).
   'decision-asked': 'people',
+  // A Buddy's question settled in its owner's Decisions, in their Buddy chat (decisions.ts settleBuddyDecision).
+  'decision-answered': 'people',
   // A decision its person must agree to reached its time unanswered, told to the PM alone (decisions.ts mustAgreePassed).
   'decision-must-agree': 'recipients',
   // A computer signed in as another account now, told to its old owner in their Buddy chat (commands.ts machine.moved, #3122).
@@ -999,6 +1001,8 @@ export interface CommandEffects {
   decisionAnswer?: import('./decisions.js').DecisionAnswer
   /** A must-agree decision past its time, kept waiting for its person (decisions.ts keepWaiting). */
   decisionKeptWaiting?: string
+  /** Decisions whose question was answered elsewhere, closed by the store (decisions.ts closeDecisions; task #4547). */
+  closedDecisions?: string[]
   /** Deliveries of messages already stored: a Buddy thread session's first messages, sent while it started (buddySessions.ts). */
   /** `lead`: a project's Lead hearing its person's messages sent while the chat had none (leadStart.ts leadArrived). */
   lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string }; lead?: true }>

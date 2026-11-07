@@ -21,7 +21,8 @@ class LocalFinderGit implements FinderGit {
     if (!await insideGitCheckout(folder)) return null;
     final top = await _git(folder, ['rev-parse', '--show-toplevel']);
     if (top.code != 0) return null;
-    final root = top.output.trim();
+    // Git answers `C:/Users/…` on Windows, where the tree lists `C:\Users\…`.
+    final root = p.normalize(top.output.trim());
     final (status, unstagedCounts, stagedCounts) = await (
       _git(folder, [
         '-c', 'core.quotePath=false', //
@@ -59,9 +60,16 @@ class LocalFinderGit implements FinderGit {
   ) async {
     if (entries.isEmpty) return const {};
     // A folder is asked with its trailing slash: `build/` in .gitignore
-    // matches only folders, and git does not look at the disk to tell.
-    String asked(FinderEntry entry) =>
-        entry.isDirectory ? '${entry.path}/' : entry.path;
+    // matches only folders, and git does not look at the disk to tell. Git
+    // quotes a path with a `\` in its answer, so a Windows path is asked
+    // with `/`, which Git reads the same.
+    String asked(FinderEntry entry) {
+      final path = p.style == p.Style.windows
+          ? entry.path.replaceAll(r'\', '/')
+          : entry.path;
+      return entry.isDirectory ? '$path/' : path;
+    }
+
     // One path a line: `-z` is for `--stdin` only, and quotePath off keeps
     // non-ASCII names as they are.
     final result = await _git(repository.root, [

@@ -463,7 +463,8 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
 - **Task status marks.** Proposal is Lucide `lightbulb`, Declined
   `thumbs-down`, Failed (Stuck) `triangle-alert` in the semantic error ink.
   The check, question mark and spinner stay, from the shared activity
-  vocabulary. No status in Flutter draws an X: an X means close. Terminal text
+  vocabulary. Shipped (a verified release holds the task, task #4547) wears
+  Done's check and says Shipped. No status in Flutter draws an X: an X means close. Terminal text
   and native tab marks may keep `✗`.
 - **Left pane row.** The left pane's row (`SuperTabQuietRow`,
   [Swarm left pane](#swarm-left-pane)) carries the elements above at its
@@ -482,12 +483,51 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   lines, and two 18 faces: who asked, then who is doing it. Only while the
   task waits for the reader: Decline as plain text and Accept as the blue
   capsule, on the right.
+- **Chat bubbles.** A chat reads like iMessage (anh Dee's mockup,
+  2026-11-07, task #4529). Your own messages are bubbles on the right in
+  `SwarmPalette.ownBubble` (#0A84FF) under white text (`onSelection`);
+  everyone else's on the left in grey (`field`). Radius 18, and 4 on the
+  sender's side where one sender's bubbles meet; a bubble takes at most three
+  quarters of the row (`SwarmBubble`, `super_tabs/chat/bubble.dart`). Between
+  you and a chat's own agent (a Buddy chat, an agent chat) there are no names
+  or faces; in a group chat a speaker's name sits over their first bubble in
+  13 plain secondary ink, and their round 28 face by their last. No engine
+  mark: colour is the face's. Text reads at 14 on 20 px lines (`SwarmType`).
+- **Chat times.** No time in a bubble's row. A time sits centered between
+  messages only after a pause of more than five minutes (`SwarmChatTime`);
+  a bubble's full date and time are on its tooltip.
+- **Chat cards.** A sent brief and a shipped note are compact cards
+  (`SwarmChatCard`): an icon and a small label (Sent to River, Shipped), one
+  title line, and one blue action (View brief, What changed) that shows the
+  rest in place. Never the whole brief inline. A task's live card under its
+  brief keeps its status and checks without repeating the title.
+- **Long messages.** An agent's message folds after about six lines, with
+  More (`SwarmFold`); a person's never does.
+- **Voice.** A voice message is its own bubble with play, waveform and
+  length, blue on your side; it plays only, with no words under it (anh Dee,
+  2026-11-04, again 2026-11-07).
+- **Chat composer.** The chat's composer is a pill (`SwarmComposerPill`,
+  radius 20, a hairline and the faint fill) holding the paperclip, the text
+  and its options; beside it the mic while there is nothing to send, and the
+  round send (`SwarmSendButton`, 28, blue) in its place once there is text or
+  a file. A thread's box keeps its row under the text, with a grey send until
+  there is something to send. No @ button: an @ typed tags.
+- **Blue.** Blue is for the main action and for your own bubbles, nothing
+  else.
+- **Decision card.** One question (`SuperTabDecisionCard`, in the Buddy chat
+  and Notifications; the Decisions page row uses the same buttons): the
+  question, `Unblocks:` line, one button per option with the recommended one
+  filled and marked `· Recommended`, then quiet `Let <coordinator> decide` and
+  Not now. A person's own Buddy's question has no Let decide: only they
+  answer it. A line their Buddy waits to post as them shows its exact words,
+  whole, with Send and Not now, neither marked; its Not now answers it, so the
+  quiet Not now that only folds a card is not shown (task #4525).
 - **Adding or changing one.** A new or changed element updates this section
   and the gallery, with its images, in the same pull request.
 
 ## Swarm left pane
 
-The Desktop's Swarm left pane (anh Dee, 2026-11-07, task #4466) follows the
+The Desktop's Swarm left pane (anh Dee, 2026-11-07, tasks #4466 and #4645) follows the
 Swarm's six rules: grey everywhere, colour only on agent faces; blue only for
 the main action, red only for failed; 14 chat, 13 names, 12 details, and in a
 list bold means unread; every row a face, a name and one quiet detail on the
@@ -498,21 +538,23 @@ decide. Top to bottom:
  autonomous.ai ⌄              org name, semibold 13 primary; ⌄ only on hover
  ⊡  Decisions              3  inbox icon; the waiting count is the detail
  ▦  Projects               1  grid icon; opens the grid; the detail counts tags of you
- My agents ⌄                  quiet heading; ⌄ only on hover; folds, remembered
- ◉  Buddy                  ⠋  the Buddy first, by its own name and face
- ◎  River        harness   ?  a Lead's detail is the project it leads
- ◉  Leftquiet    offline      a down agent's detail is "offline"
- +  New agent                 the last row, opens Cmd-N
+ My agents ⌄             +  quiet heading; ⌄ only on hover; folds, remembered; + opens Cmd-N
+ ◉  Buddy                     the Buddy first, by its own name and face
+ ◎  River           harness   a Lead's detail is the project it leads
+ ◉  Leftquiet       offline   a down agent's detail is "offline"
+ ◉  Kai                       bold: something new from it
+ +  New agent                 only while the person has no agents of their own; opens Cmd-N
  Humans                       quiet heading; opens the Leaderboard
- D  dee              120      the board's top 8 by points; a tap opens it
+ D  dee                 120   the board's top 8 by points; a tap opens it
  ⚙  Manage                    at the foot
 ```
 
 | Element | Implementation | Rule |
 | --- | --- | --- |
 | Quiet row | `SuperTabQuietRow` (`super_tabs/buddy_rows.dart`) | 30 high, 2 under it. A 20 face (`SuperTabQuietRow.faceSize`) or a 16 icon centred in the 32 column, so every name starts on one line. Name 13 (`DesktopChrome.control`): read `textSecondary` regular, unread `textPrimary` semibold, the open row `SidebarInk.selected` with a primary name. One detail, 12 (`DesktopChrome.metadata`) in the tertiary grey (`SidebarInk.faint`, `textFaint`), right-aligned, tabular figures, no brackets; it keeps up to 40% of a row whose name is long, and is cut first. |
-| Status mark | `SuperTabQuietRow.mark`, `superTabAgentMark` | My agents only, in one 20 column at the right edge after the detail, kept on every agent row so details line up. A mark only while the agent works (the spinner), needs you (`?`) or failed: grey, failed in the error ink. Idle and finished show nothing; a finished agent's unread reply is its semibold name. |
-| Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) only while hovered or focused. |
+| Shared edges | `SuperTabQuietRow`, gallery check "the left pane's details end at one edge" | Every section's rows share the left edge (the faces' and icons' column), the right edge (every detail ends `AppDesktop.controlGap` from the row's right, with no column kept for anything after it) and the baselines (30 high rows). A heading's + ends on that right edge. |
+| No status marks | — | The left pane draws no spinner, check, `?` or failed mark (anh Dee 22:25, task #4645): status lives on the Tasks cards. An agent with something new is its row's semibold primary name, like an unread Slack channel; read rows stay regular, and the open row keeps its fill. |
+| Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) only while hovered or focused. `onAdd` puts the `plus` button at its right, as on every section heading: My agents' opens New agent. |
 | Org name | `SuperTabQuietHeading.org` | Semibold 13 primary, no icon; its chevron only on hover; opens the Swarm menu. |
 | Person | `SuperTabAvatar.person` at 20 | A photo, or an initial on the neutral grey disc. |
 | Projects grid | `SuperTabProjectsPage` (`super_tabs/projects_page.dart`) | Every project as a card, as repositories under a GitHub org, most recent first (the latest message in its chat or tasks). Cards at least 260 wide with 12 between them, transparent with a hairline (`DesktopChrome.rim`) and the hover fill; the name semibold 13 primary, one line 12 tertiary: its repository's `owner/name`, or Private. New project is the page's one blue button. A card opens its project's Board, which lights Projects in the left pane. |

@@ -85,6 +85,7 @@ import 'message_link_swarms.dart';
 import 'message_link_preview.dart';
 import 'message_row.dart';
 import 'message_receipt.dart';
+import 'message_text.dart';
 import 'notifications.dart';
 import 'buddies.dart';
 import 'buddy_card.dart';
@@ -118,6 +119,10 @@ import 'buddy_rows.dart';
 import 'task_groups.dart';
 import 'tasks_view.dart';
 import 'chat/agent_chat_header.dart';
+import 'chat/chat_card.dart';
+import 'chat/chat_time.dart';
+import 'chat/composer_pill.dart';
+import 'chat/send_button.dart';
 import 'tasks/personal_tasks_pane.dart';
 import 'tasks/task_header.dart';
 import 'voice_length.dart';
@@ -1422,14 +1427,6 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  /// [path] as it goes into a message: as it is, or in double quotes when it
-  /// holds a space or anything else a shell reads specially, with `"`, `\`,
-  /// `$` and `` ` `` escaped, so it reads back as the same path.
-  static String _pathText(String path) =>
-      path.contains(RegExp(r'''[\s"'$`\\!*?\[\]{}()<>|&;]'''))
-      ? '"${path.replaceAllMapped(RegExp(r'["\\$`]'), (m) => '\\${m[0]}')}"'
-      : path;
-
   /// Puts dropped folders' paths into chat [id]'s message at the cursor,
   /// space-separated, as a terminal takes a dropped folder.
   void _pasteFolders(String id, List<String> paths) {
@@ -1443,7 +1440,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final after = text.substring(selection.end);
     final pasted =
         '${before.isEmpty || RegExp(r'\s$').hasMatch(before) ? '' : ' '}'
-        '${paths.map(_pathText).join(' ')}'
+        '${paths.map(folderPathText).join(' ')}'
         '${after.startsWith(RegExp(r'\s')) ? '' : ' '}';
     final next = before + pasted + after;
     c.setDraft(id, next);
@@ -1460,7 +1457,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The dropped folders whose paths are still in chat [id]'s message.
   List<String> _foldersInMessage(String id) => [
     for (final path in _droppedFolders[id] ?? const <String>[])
-      if (_composer.text.contains(_pathText(path))) path,
+      if (_composer.text.contains(folderPathText(path))) path,
   ];
 
   /// Whether an agent of [group] runs on another computer than this one,
@@ -1518,7 +1515,7 @@ class _SuperTabViewState extends State<SuperTabView>
     ];
     String withoutPaths(String text) {
       for (final folder in attached) {
-        final path = _pathText(folder);
+        final path = folderPathText(folder);
         text = text.contains('$path ')
             ? text.replaceFirst('$path ', '')
             : text.contains(' $path')
@@ -2732,11 +2729,7 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() => _finding = null);
     if (target == null) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        SnackBar(
-          content: Text(
-            note ?? 'The original message is no longer in this conversation.',
-          ),
-        ),
+        SnackBar(content: Text(note ?? 'Original message removed')),
       );
       return;
     }
@@ -3387,7 +3380,6 @@ class _SuperTabViewState extends State<SuperTabView>
     required double room,
     required Widget field,
     required Widget attach,
-    required Widget tag,
     required List<Widget> options,
     required List<Widget> trailing,
     required Widget send,
@@ -3395,10 +3387,70 @@ class _SuperTabViewState extends State<SuperTabView>
   }) {
     // Too little height for a second row (a phone on its side with its keyboard
     // up): the actions take the row's end. A narrow phone with so little
-    // height gets the squeezed row, which beats a composer that overflows; it
-    // has no room for @ Tag there, and an @ typed still opens the list.
+    // height gets the squeezed row, which beats a composer that overflows.
     final target = _phone ? kFingerTarget : grid.AppControl.height;
     final row = composerRowInsets(target: target);
+    // Desktop's composer is one pill row (anh Dee's mockup, 11-07, #4529):
+    // the paperclip, the text, and at its end the mic while there is nothing
+    // to send, send once there is.
+    // The paperclip stays at the pill's start: without it no file could be
+    // picked, only dropped or pasted.
+    if (!_phone && voice == null) {
+      return Row(
+        key: const ValueKey('super-message-composer-actions'),
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Expanded(
+            child: SwarmComposerPill(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  left: row.left,
+                  right: grid.AppDesktop.composerSide,
+                ),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minHeight: grid.AppControl.heightFieldScaled,
+                  ),
+                  // A long draft keeps its buttons by its last line.
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      attach,
+                      // One line centres on the buttons beside it.
+                      Expanded(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            minHeight: grid.AppControl.height,
+                          ),
+                          child: Align(
+                            alignment: AlignmentDirectional.centerStart,
+                            child: field,
+                          ),
+                        ),
+                      ),
+                      ...options,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: grid.AppDesktop.controlGap),
+          SizedBox(
+            height: grid.AppControl.heightFieldScaled,
+            child: Center(
+              child: ListenableBuilder(
+                listenable: Listenable.merge([_composer, _files]),
+                builder: (context, _) =>
+                    _composer.text.trim().isNotEmpty || !_files.isEmpty
+                    ? send
+                    : Row(mainAxisSize: MainAxisSize.min, children: trailing),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
     if (_phone && room < _phoneComposerTwoRowsFrom && voice == null) {
       return Padding(
         padding: EdgeInsets.only(
@@ -3438,8 +3490,9 @@ class _SuperTabViewState extends State<SuperTabView>
               Row(
                 key: const ValueKey('super-message-composer-actions'),
                 children: [
+                  // Only the paperclip on the left: an @ typed tags
+                  // (River, 11-07, #4467).
                   attach,
-                  tag,
                   Expanded(
                     child: Wrap(
                       crossAxisAlignment: WrapCrossAlignment.center,
@@ -3455,12 +3508,58 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  /// @ Tag: `@` at the caret, reported as an edit so the tag list opens.
-  void _promptTag() {
-    _composer.value = superTabTagPrompt(_composer.value);
-    _composerEdited(_composer.text);
-    _focus.requestFocus();
+  /// A task's brief as a card (anh Dee's mockup, 11-07, #4529): who it went
+  /// to and the task's title; View brief shows the whole brief in place.
+  Widget _briefCard(SuperTabConversation group, SuperTabMessage message) {
+    final agentId = group.assignment?['agentId'] as String?;
+    return SwarmChatCard(
+      icon: AppIcons.send,
+      label: agentId == null
+          ? 'Brief'
+          : 'Sent to ${c.snapshot!.agentName(agentId, fallback: 'its agent')}',
+      title: group.title,
+      action: 'View brief',
+      details: SuperTabMessageText(message.text),
+    );
   }
+
+  /// A decision asked of a person, or the one made, as a card (anh Dee's
+  /// mockup, 11-07, #4529): Decision or Decided, its question, and View for
+  /// the rest; null for any other message.
+  Widget? _decisionCard(SuperTabMessage message) {
+    final kind = message.source['kind'];
+    if (!_decisionKinds.contains(kind)) return null;
+    final first = message.text.trim().split('\n').first;
+    // "River asks dee (#12): Ship it?" reads as its question.
+    final asks = kind == 'decision-asked' ? first.indexOf(': ') : -1;
+    return SwarmChatCard(
+      icon: AppIcons.flag,
+      label: kind == 'decision-delegated' ? 'Decided' : 'Decision',
+      title: asks < 0 ? first : first.substring(asks + 2),
+      action: 'View',
+      details: SuperTabMessageText(message.text),
+    );
+  }
+
+  /// The backend's decision lines (superTabs/decisions.ts).
+  static const _decisionKinds = {
+    'decision-asked',
+    'decision-delegated',
+    'decision-must-agree',
+  };
+
+  /// Whether [message] is said between the two parties of a one-on-one chat
+  /// (a Buddy chat, an agent chat): the reader and that chat's own agent. Its
+  /// bubble carries no name or face (#4529); a line from anyone else there,
+  /// such as the PM's to the reader, keeps its name.
+  bool _oneOnOne(SuperTabMessage message) =>
+      switch (c.snapshot?.conversation(message.conversationId)) {
+        final group? when group.isBuddyChat || group.isAgentChat =>
+          message.fromAgent
+              ? group.agentIds.contains(message.authorId)
+              : message.authorId == c.accountId,
+        _ => false,
+      };
 
   /// Whether ⋮ carries the views a wider header draws as icons.
   bool get _menuNamesViews =>
@@ -4773,6 +4872,7 @@ class _SuperTabViewState extends State<SuperTabView>
     SuperTabOutgoing sent,
     Map<String, SuperTabMessage> byId, {
     required bool grouped,
+    bool joinsBelow = false,
   }) {
     final message = _outgoingMessage(sent);
     final person = c.snapshot?.people
@@ -4788,6 +4888,8 @@ class _SuperTabViewState extends State<SuperTabView>
         person: person,
         member: _member,
         grouped: grouped,
+        joinsBelow: joinsBelow,
+        oneOnOne: _oneOnOne(message),
         reply: reply,
         replyAuthor: reply == null ? null : _shownAuthor(c, reply),
         onReturnToComposer: _focus.requestFocus,
@@ -4859,6 +4961,7 @@ class _SuperTabViewState extends State<SuperTabView>
     Map<String, SuperTabMessage> byId, {
     bool showReceipt = false,
     bool inThread = false,
+    bool joinsBelow = false,
   }) {
     _index();
     if (SuperTabShipRow.shows(message)) {
@@ -4926,6 +5029,11 @@ class _SuperTabViewState extends State<SuperTabView>
         '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
       ),
       message: message,
+      joinsBelow: joinsBelow,
+      oneOnOne: _oneOnOne(message),
+      brief: card?.task == true
+          ? _briefCard(group!, message)
+          : _decisionCard(message),
       card: card == null
           ? null
           : SuperTabLiveCard(
@@ -4933,6 +5041,7 @@ class _SuperTabViewState extends State<SuperTabView>
               card: card,
               controller: c,
               facts: _facts,
+              titled: !card.task,
             ),
       author: _shownAuthor(c, message),
       // A person is found by their username, as they are tagged, and reads
@@ -5470,6 +5579,12 @@ class _SuperTabViewState extends State<SuperTabView>
       final joined =
           grouped.contains(message.id) &&
           previous?.conversationId == message.conversationId;
+      final next = index + 1 < messages.length ? messages[index + 1] : null;
+      final joinsBelow =
+          next != null &&
+          grouped.contains(next.id) &&
+          next.conversationId == message.conversationId &&
+          next.id != _unread.lineAt(c.selectedId);
       final time = message.createdAt;
       return SuperTabDayMark(
         key: ValueKey(_rowKey(c.messageIdentity(message.id))),
@@ -5483,6 +5598,11 @@ class _SuperTabViewState extends State<SuperTabView>
                   previous?.createdAt?.toLocal(),
                 ))
               _date(time),
+            if (time != null && SwarmChatTime.after(previous?.createdAt, time))
+              SwarmChatTime(
+                time,
+                key: ValueKey('swarm-chat-time-${message.id}'),
+              ),
             if (message.id == _unread.lineAt(c.selectedId))
               SuperTabNewMessagesLine(key: _unread.key),
             // The message itself is kept in place: its
@@ -5500,12 +5620,14 @@ class _SuperTabViewState extends State<SuperTabView>
                           pendingById[message.id]!,
                           byId,
                           grouped: joined,
+                          joinsBelow: joinsBelow,
                         )
                       : _message(
                           message,
                           joined,
                           byId,
                           showReceipt: message.id == latestOwn?.id,
+                          joinsBelow: joinsBelow,
                         ),
                 ),
               ),
@@ -6058,7 +6180,7 @@ class _SuperTabViewState extends State<SuperTabView>
                               bottom: grid.AppDesktop.controlGap,
                             ),
                             child: Text(
-                              'Your message starts its own thread and Buddy session',
+                              'Starts its own thread and Buddy session',
                               key: const ValueKey('super-chat-session-note'),
                               style: DesktopChrome.metadata(
                                 color: DesktopChrome.muted,
@@ -6112,14 +6234,15 @@ class _SuperTabViewState extends State<SuperTabView>
                 return KeyEventResult.handled;
               },
               child: DecoratedBox(
-                key: const ValueKey('super-message-composer-surface'),
-                decoration: BoxDecoration(
-                  color: DesktopChrome.field,
-                  borderRadius: BorderRadius.circular(
-                    grid.AppDesktop.composerRadius,
-                  ),
-                  border: Border.all(color: DesktopChrome.rim),
-                ),
+                // Desktop's pill is drawn around the text alone, with
+                // the mic or send beside it (#4529); a phone's box holds
+                // its whole row.
+                key: _phone
+                    ? const ValueKey('super-message-composer-surface')
+                    : null,
+                decoration: _phone
+                    ? SwarmComposerPill.decoration
+                    : const BoxDecoration(),
                 child: NewHarnessDropZone(
                   attachments: _files,
                   enabled: writable && !busy,
@@ -6198,14 +6321,6 @@ class _SuperTabViewState extends State<SuperTabView>
                               NewHarnessAttachButton(
                                 attachments: _files,
                                 enabled: writable && !busy,
-                                icon: AppIcons.plus,
-                              ),
-                            ),
-                            tag: fingerTarget(
-                              enabled: _phone,
-                              SuperTabComposerTagButton(
-                                key: const ValueKey('super-composer-tag'),
-                                onPressed: writable ? _promptTag : null,
                               ),
                             ),
                             options: [
@@ -6252,10 +6367,8 @@ class _SuperTabViewState extends State<SuperTabView>
                               listenable: Listenable.merge([_composer, _files]),
                               builder: (context, _) => fingerTarget(
                                 enabled: _phone,
-                                AppIconButton(
-                                  icon: AppIcons.arrowUp,
+                                SwarmSendButton(
                                   tooltip: 'Send message',
-                                  color: DesktopChrome.accent,
                                   onPressed:
                                       writable &&
                                           !c.uploading &&
@@ -6308,7 +6421,7 @@ class _SuperTabViewState extends State<SuperTabView>
               maintainAnimation: true,
               maintainState: true,
               child: Text(
-                'Your message starts its own thread and Buddy session',
+                'Starts its own thread and Buddy session',
                 key: const ValueKey('super-chat-session-note'),
                 style: DesktopChrome.metadata(color: DesktopChrome.muted),
               ),

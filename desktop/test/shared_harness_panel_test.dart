@@ -197,6 +197,8 @@ void main() {
                 hasAccess: hasAccess,
                 visible: true,
                 onClose: () => closePressed = true,
+                // The loopback daemon fixture; Windows otherwise dials only its pipe.
+                allowLocalTcpFixtureForTest: true,
               ),
             ),
           ),
@@ -453,6 +455,7 @@ void main() {
               hasAccess: true,
               visible: true,
               onClose: () {},
+              allowLocalTcpFixtureForTest: true,
             ),
           ),
         ),

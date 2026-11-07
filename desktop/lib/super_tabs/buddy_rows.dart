@@ -4,9 +4,8 @@ import 'package:flutter/material.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import '../state/harness_activity.dart';
+import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
-import '../widgets/harness_activity_mark.dart';
 import 'buddy_chat.dart';
 import 'identity.dart';
 import 'section_heading.dart';
@@ -56,8 +55,6 @@ class SuperTabQuietRow extends StatelessWidget {
     this.selected = false,
     this.unread = false,
     this.tooltip,
-    this.mark,
-    this.markColumn = false,
   });
 
   static const double height = 30;
@@ -93,20 +90,10 @@ class SuperTabQuietRow extends StatelessWidget {
   final String? tooltip;
   final VoidCallback? onTap;
 
-  /// An agent's status mark, after the detail (anh Dee 11-07): only while it works, needs you or failed.
-  final Widget? mark;
-
-  /// Whether the row keeps the marks' column at its right edge, so a list's marks and details line up.
-  final bool markColumn;
-
-  /// The marks' column.
-  static const double markWidth = AppIcons.controlSize;
-
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final strong = unread || selected;
-    final markColumn = this.markColumn || mark != null;
     final nameStyle = DesktopChrome.control(
       color: strong
           ? grid.SidebarInk.foreground(context)
@@ -132,8 +119,7 @@ class SuperTabQuietRow extends StatelessWidget {
               _leadingStart -
               SuperTabSectionHeading.actionWidth -
               gap -
-              (detail == null ? 0 : gap) -
-              (markColumn ? markWidth : 0),
+              (detail == null ? 0 : gap),
         );
         return ConstrainedBox(
           constraints: const BoxConstraints(minHeight: height),
@@ -168,11 +154,6 @@ class SuperTabQuietRow extends StatelessWidget {
                   ),
                 ),
               ],
-              if (markColumn)
-                SizedBox(
-                  width: markWidth,
-                  child: Center(child: mark),
-                ),
               // Unread is a semibold name, and heard in words: the row says what its face, name and detail say.
               if (unread) Semantics(label: 'unread'),
               const SizedBox(width: gap),
@@ -206,24 +187,6 @@ class SuperTabQuietRow extends StatelessWidget {
   }
 }
 
-/// An agent's status mark in the Desktop's My agents (anh Dee 11-07): the shared activity mark, grey, but failed in the
-/// error ink. Only working, needs you and failed are ever drawn (`superTabAgentMark`).
-class SuperTabAgentMark extends StatelessWidget {
-  const SuperTabAgentMark(this.activity, {super.key});
-  final HarnessActivity activity;
-
-  @override
-  Widget build(BuildContext context) {
-    grid.AppTheme.watch(context);
-    return ActivityMark(
-      activity: activity,
-      color: activity == HarnessActivity.failed
-          ? Theme.of(context).colorScheme.error
-          : grid.SidebarInk.muted(context),
-    );
-  }
-}
-
 /// A heading of the Desktop's left pane (task #4466): 12 and secondary, its text level with the faces' left edge. A
 /// group that folds ([collapsed] given) shows its chevron only while hovered or focused, as every dropdown does;
 /// [SuperTabQuietHeading.org] is the org name, semibold 13 primary, whose chevron opens the Swarm menu.
@@ -233,10 +196,16 @@ class SuperTabQuietHeading extends StatefulWidget {
     super.key,
     required this.onTap,
     this.collapsed,
+    this.onAdd,
+    this.addTooltip,
+    this.addKey,
   }) : _org = false;
 
   const SuperTabQuietHeading.org(this.title, {super.key, required this.onTap})
     : collapsed = false,
+      onAdd = null,
+      addTooltip = null,
+      addKey = null,
       _org = true;
 
   final String title;
@@ -244,6 +213,11 @@ class SuperTabQuietHeading extends StatefulWidget {
 
   /// Whether a group that folds is folded; null for a heading that only opens a page, which has no chevron.
   final bool? collapsed;
+
+  /// The + at the heading's right (task #4645), as on every section heading ([SuperTabSectionHeading.onAdd]).
+  final VoidCallback? onAdd;
+  final String? addTooltip;
+  final Key? addKey;
   final bool _org;
 
   @override
@@ -262,7 +236,8 @@ class _SuperTabQuietHeadingState extends State<SuperTabQuietHeading> {
               .copyWith(fontWeight: grid.AppFont.semibold)
         : DesktopChrome.metadata(color: grid.SidebarInk.muted(context));
     final collapsed = widget.collapsed;
-    return MouseRegion(
+    final onAdd = widget.onAdd;
+    final heading = MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: Semantics(
@@ -302,6 +277,19 @@ class _SuperTabQuietHeadingState extends State<SuperTabQuietHeading> {
           ),
         ),
       ),
+    );
+    if (onAdd == null) return heading;
+    // The + ends where the rows' details end, so the heading's right edge is theirs.
+    return Row(
+      children: [
+        Expanded(child: heading),
+        AppIconButton(
+          key: widget.addKey,
+          icon: AppIcons.plus,
+          tooltip: widget.addTooltip ?? widget.title,
+          onPressed: onAdd,
+        ),
+      ],
     );
   }
 }

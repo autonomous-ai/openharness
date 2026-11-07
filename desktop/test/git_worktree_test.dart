@@ -418,6 +418,27 @@ void main() {
       expect(await placeholder(), p.join(worktrees(), 'witty-finch'));
     });
 
+    // Windows refuses to delete a folder a process stands in: run inside the
+    // worktree, git emptied it and left the folder, and Cancel kept it.
+    test('git removes it from outside the folder', () async {
+      final path = await placeholder();
+      final from = <String>[];
+      Future<Process> start(List<String> argv, Map<String, String> env) {
+        if (argv.contains('remove')) from.add(argv[argv.indexOf('-C') + 1]);
+        return Process.start(
+          'git',
+          argv,
+          environment: env,
+          includeParentEnvironment: false,
+        );
+      }
+
+      expect(await discardPreparedWorktree(path, startProcess: start), isTrue);
+      expect(from, hasLength(1));
+      expect(p.equals(from.single, path), isFalse);
+      expect(p.isWithin(path, from.single), isFalse);
+    });
+
     test('a subfolder project removes the whole worktree', () async {
       final sub = await ProjectFolderRequest.worktree(
         p.join(repo, 'src'),

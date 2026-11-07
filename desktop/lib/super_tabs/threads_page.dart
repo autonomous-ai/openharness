@@ -445,7 +445,6 @@ class _ThreadCardState extends State<_ThreadCard> {
     surfaceKey: ValueKey('super-thread-card-surface:$_key'),
     fieldKey: ValueKey('super-thread-card-field:$_key'),
     sendKey: ValueKey('super-thread-card-send:$_key'),
-    tagKey: ValueKey('super-thread-card-tag:$_key'),
     micKey: ValueKey('super-thread-card-mic:$_key'),
   );
 

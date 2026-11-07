@@ -5,8 +5,8 @@ import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
 
-/// Huy (11-03): the chat and the thread draw avatars as Slack does, 36 px
-/// rounded squares, with more room above each new sender.
+/// The chat and the thread draw round faces at 28 (anh Dee, 11-07, #4467; Huy's 11-03 36 px rounded squares
+/// before), with more room above each new sender.
 SuperTabMessage _message(String id) => SuperTabMessage.fromJson({
   'id': id,
   'conversationId': 'lead',
@@ -36,30 +36,24 @@ Future<void> _show(WidgetTester tester, List<Widget> rows) => tester.pumpWidget(
   ),
 );
 
-/// The face's rounded-square fill: no circle, an 8-point corner.
-bool _roundedSquare(Widget w) =>
+/// The face's round fill.
+bool _round(Widget w) =>
     w is Container &&
     w.decoration is BoxDecoration &&
-    (w.decoration! as BoxDecoration).shape == BoxShape.rectangle &&
-    (w.decoration! as BoxDecoration).borderRadius == BorderRadius.circular(8);
+    (w.decoration! as BoxDecoration).shape == BoxShape.circle;
 
 void main() {
-  testWidgets('a message avatar is a 36-point rounded square', (tester) async {
+  testWidgets('a message avatar is a 28-point circle', (tester) async {
     await _show(tester, [_row(_message('m1'))]);
     final avatar = find.byType(SuperTabAvatar);
-    expect(tester.getSize(avatar), const Size.square(36));
+    expect(tester.getSize(avatar), const Size.square(28));
     expect(
-      find.descendant(
-        of: avatar,
-        matching: find.byWidgetPredicate(_roundedSquare),
-      ),
+      find.descendant(of: avatar, matching: find.byWidgetPredicate(_round)),
       findsOneWidget,
     );
   });
 
-  testWidgets('a message photo is clipped to the same rounded square', (
-    tester,
-  ) async {
+  testWidgets('a message photo is clipped to the same circle', (tester) async {
     await _show(tester, [
       SuperTabMessageRow(
         message: _message('m1'),
@@ -81,12 +75,12 @@ void main() {
     final avatar = find.byType(SuperTabAvatar);
     expect(
       find.descendant(of: avatar, matching: find.byType(ClipOval)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: avatar, matching: find.byType(ClipRRect)),
       findsNothing,
     );
-    final clip = tester.widget<ClipRRect>(
-      find.descendant(of: avatar, matching: find.byType(ClipRRect)),
-    );
-    expect(clip.borderRadius, BorderRadius.circular(8));
   });
 
   testWidgets('avatars outside messages stay round', (tester) async {
@@ -106,24 +100,32 @@ void main() {
     expect((fill.decoration! as BoxDecoration).shape, BoxShape.circle);
   });
 
-  testWidgets('a new sender starts a group gap and a control gap down', (
+  Finder bubble() => find.byKey(const ValueKey('swarm-bubble'));
+
+  testWidgets('a new sender starts a group gap down, its face by its bubble', (
     tester,
   ) async {
     await _show(tester, [_row(_message('m1'))]);
     final rowTop = tester.getTopLeft(find.byType(SuperTabMessageRow)).dy;
-    final avatarTop = tester.getTopLeft(find.byType(SuperTabAvatar)).dy;
     expect(
-      avatarTop - rowTop,
-      grid.AppDesktop.groupGap + grid.AppDesktop.controlGap,
+      tester.getTopLeft(find.text('ivy')).dy - rowTop,
+      grid.AppDesktop.groupGap,
+    );
+    // The face sits by the bottom of its sender's last bubble (#4529).
+    expect(
+      tester.getBottomLeft(find.byType(SuperTabAvatar)).dy,
+      tester.getBottomLeft(bubble()).dy,
     );
   });
 
-  testWidgets('a grouped follow-up line keeps today\'s tight spacing', (
+  testWidgets('a grouped follow-up bubble sits close under the one above', (
     tester,
   ) async {
     await _show(tester, [_row(_message('m2'), grouped: true)]);
     final rowTop = tester.getTopLeft(find.byType(SuperTabMessageRow)).dy;
-    final textTop = tester.getTopLeft(find.text('Shipped the fix')).dy;
-    expect(textTop - rowTop, 6);
+    expect(
+      tester.getTopLeft(bubble()).dy - rowTop,
+      SuperTabMessageRow.joinedGap,
+    );
   });
 }

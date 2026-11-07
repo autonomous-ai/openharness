@@ -59,6 +59,7 @@ Future<void> show(
   WidgetTester tester,
   ConversationServer server, {
   bool reduceMotion = false,
+  bool open = true,
 }) async {
   await tester.binding.setSurfaceSize(const Size(1200, 900));
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -81,6 +82,12 @@ Future<void> show(
       ),
     ),
   );
+  // A shipped card shows its credits and pull requests under What changed
+  // (#4529).
+  if (open) {
+    await tester.tap(find.text('What changed'));
+    await tester.pump();
+  }
 }
 
 void main() {
@@ -90,7 +97,7 @@ void main() {
     'a ship line names who asked, built and reviewed, each with an avatar',
     (tester) async {
       await show(tester, shipServer());
-      expect(find.text('Shipped: Avatars'), findsOneWidget);
+      expect(find.text('Avatars'), findsOneWidget);
       for (final words in [
         'Requested by',
         'owner',
@@ -121,19 +128,21 @@ void main() {
   testWidgets('a fresh celebration throws confetti once, then it is gone', (
     tester,
   ) async {
-    await show(tester, shipServer());
+    await show(tester, shipServer(), open: false);
     expect(find.byKey(const ValueKey('super-confetti')), findsOneWidget);
     await tester.pump(const Duration(seconds: 3));
     expect(find.byKey(const ValueKey('super-confetti')), findsNothing);
-    await show(tester, shipServer());
+    await show(tester, shipServer(), open: false);
     expect(find.byKey(const ValueKey('super-confetti')), findsNothing);
   });
 
-  testWidgets('a rebuild during the burst does not cut it short', (tester) async {
+  testWidgets('a rebuild during the burst does not cut it short', (
+    tester,
+  ) async {
     final server = shipServer();
-    await show(tester, server);
+    await show(tester, server, open: false);
     await tester.pump(const Duration(milliseconds: 500));
-    await show(tester, server);
+    await show(tester, server, open: false);
     await tester.pump(const Duration(milliseconds: 500));
     expect(find.byKey(const ValueKey('super-confetti')), findsOneWidget);
     await tester.pumpAndSettle();
@@ -142,7 +151,7 @@ void main() {
   testWidgets('reduced motion keeps the line still', (tester) async {
     await show(tester, shipServer(), reduceMotion: true);
     expect(find.byKey(const ValueKey('super-confetti')), findsNothing);
-    expect(find.text('Shipped: Avatars'), findsOneWidget);
+    expect(find.text('Avatars'), findsOneWidget);
   });
 
   testWidgets('an old celebration in the history throws none', (tester) async {
@@ -161,24 +170,30 @@ void main() {
     const own = 'https://github.com/autonomous-ai/openharness/pull/2527';
     const wrongOwner = 'https://github.com/openharness/openharness/pull/2527';
 
-    test('two links for one pull request are one link, whatever their case', () {
-      final links = superTabPullRequestLinks(
-        '$own https://github.com/Autonomous-AI/OpenHarness/pull/2527 $own '
-        'https://github.com/autonomous-ai/openharness/pull/2528',
-      );
-      expect([for (final l in links) l.pathSegments[3]], ['2527', '2528']);
-    });
+    test(
+      'two links for one pull request are one link, whatever their case',
+      () {
+        final links = superTabPullRequestLinks(
+          '$own https://github.com/Autonomous-AI/OpenHarness/pull/2527 $own '
+          'https://github.com/autonomous-ai/openharness/pull/2528',
+        );
+        expect([for (final l in links) l.pathSegments[3]], ['2527', '2528']);
+      },
+    );
 
-    test('a pull request elsewhere than the project\'s repository names it', () {
-      final links = superTabPullRequestLinks('$own $wrongOwner');
-      expect(
-        superTabPullRequestLabels(
-          links,
-          repositoryUrl: 'git@github.com:autonomous-ai/openharness.git',
-        ),
-        ['openharness · PR #2527', 'openharness/openharness · PR #2527'],
-      );
-    });
+    test(
+      'a pull request elsewhere than the project\'s repository names it',
+      () {
+        final links = superTabPullRequestLinks('$own $wrongOwner');
+        expect(
+          superTabPullRequestLabels(
+            links,
+            repositoryUrl: 'git@github.com:autonomous-ai/openharness.git',
+          ),
+          ['openharness · PR #2527', 'openharness/openharness · PR #2527'],
+        );
+      },
+    );
 
     test('the project\'s repository is read in every form git writes it', () {
       final links = superTabPullRequestLinks('$own $wrongOwner');
@@ -188,11 +203,10 @@ void main() {
         'git://github.com/autonomous-ai/openharness',
         'https://github.com/autonomous-ai/openharness.git/',
       ]) {
-        expect(
-          superTabPullRequestLabels(links, repositoryUrl: address),
-          ['openharness · PR #2527', 'openharness/openharness · PR #2527'],
-          reason: address,
-        );
+        expect(superTabPullRequestLabels(links, repositoryUrl: address), [
+          'openharness · PR #2527',
+          'openharness/openharness · PR #2527',
+        ], reason: address);
       }
     });
 
@@ -207,30 +221,32 @@ void main() {
       ]);
     });
 
-    testWidgets('a ship line with two links for one pull request has one chip', (
-      tester,
-    ) async {
-      await show(
-        tester,
-        shipServer(
-          source: {
-            'pullRequests': [
-              own,
-              'https://github.com/Autonomous-AI/openharness/pull/2527',
-              'https://github.com/autonomous-ai/openharness/pull/2528',
-            ],
-          },
-        )..state['project'] = {
-          'machineId': 'm',
-          'cwd': '/work',
-          'repositoryUrl': 'https://github.com/autonomous-ai/openharness',
-        },
-      );
-      expect(find.text('openharness · PR #2527'), findsOneWidget);
-      expect(find.text('openharness · PR #2528'), findsOneWidget);
-      expect(find.byType(OutlinedButton), findsNWidgets(2));
-      await tester.pumpAndSettle();
-    });
+    testWidgets(
+      'a ship line with two links for one pull request has one chip',
+      (tester) async {
+        await show(
+          tester,
+          shipServer(
+              source: {
+                'pullRequests': [
+                  own,
+                  'https://github.com/Autonomous-AI/openharness/pull/2527',
+                  'https://github.com/autonomous-ai/openharness/pull/2528',
+                ],
+              },
+            )
+            ..state['project'] = {
+              'machineId': 'm',
+              'cwd': '/work',
+              'repositoryUrl': 'https://github.com/autonomous-ai/openharness',
+            },
+        );
+        expect(find.text('openharness · PR #2527'), findsOneWidget);
+        expect(find.text('openharness · PR #2528'), findsOneWidget);
+        expect(find.byType(OutlinedButton), findsNWidgets(2));
+        await tester.pumpAndSettle();
+      },
+    );
 
     testWidgets('a link in another repository shows owner and repository', (
       tester,
@@ -238,14 +254,15 @@ void main() {
       await show(
         tester,
         shipServer(
-          source: {
-            'pullRequests': [own, wrongOwner],
+            source: {
+              'pullRequests': [own, wrongOwner],
+            },
+          )
+          ..state['project'] = {
+            'machineId': 'm',
+            'cwd': '/work',
+            'repositoryUrl': 'https://github.com/autonomous-ai/openharness',
           },
-        )..state['project'] = {
-          'machineId': 'm',
-          'cwd': '/work',
-          'repositoryUrl': 'https://github.com/autonomous-ai/openharness',
-        },
       );
       expect(find.text('openharness · PR #2527'), findsOneWidget);
       expect(find.text('openharness/openharness · PR #2527'), findsOneWidget);

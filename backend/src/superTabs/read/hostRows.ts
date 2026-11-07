@@ -12,15 +12,8 @@ import { hostLocalGrid, machineContribution, machineLimitReached, machineRoom, t
 import { agentProjectId, agentSetRole, canWatchAgent, confidentialSets, isConfidential, groupProject, ledProject, projectsOf, skillModeOf, startProject, skillSetOf, watchClosed, type ConfidentialSets } from '../projects.js'
 import type { HostAgentRow, HostPool, HostRosterRow, HostTabRows } from './contract.js'
 import { hostEtag } from './hostEtag.js'
-import { coordinatorNameOf, FIRST_INSTRUCTIONS, instructionsHash, roleNameOf } from '../instructions.js'
-import { PM_SCHEDULE_TEXT, pmScheduleText } from '../pmSchedule.js'
+import { coordinatorNameOf, FIRST_INSTRUCTIONS, roleNameOf } from '../instructions.js'
 import { PM_RESTART_AFTER_MS } from '../timeChecks.js'
-
-/** The built-in PM schedule's hash, once per text: it changes only with a backend release, and with a project's switch to the
- *  Board way of working (pmSchedule.ts pmScheduleText, task #3819). It is taken over the seed's release window: this read loads
- *  no project rules, so a window change reaches the PM at its next instructions read (#4097). */
-const BUILT_IN_HASHES = new Map<string, string>([[PM_SCHEDULE_TEXT, instructionsHash(PM_SCHEDULE_TEXT)]])
-const builtInHash = (text: string): string => BUILT_IN_HASHES.get(text) ?? (BUILT_IN_HASHES.set(text, instructionsHash(text)), BUILT_IN_HASHES.get(text)!)
 
 export interface HostLookups {
   /** The Swarm's people with their account emails (observers). */
@@ -106,7 +99,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     // running daemons read the text again (2026-11-02: agents kept the old routing after #2495, as revision 0 never moves).
     instructions: home ? { projectId: home.id, revision: home.instructionsRevision ?? 0,
       hash: home.instructionsHash ?? (home.instructionsRevision ? null : FIRST_INSTRUCTIONS.instructionsHash),
-      coordinatorName: coordinatorNameOf(home), ...ledProject(state, target.id)?.id === home.id ? { builtInHash: builtInHash(pmScheduleText(state, home)) } : {} } : null,
+      coordinatorName: coordinatorNameOf(home) } : null,
     ...(custom ? { role: chosen && { ...chosen, projectId: custom.id } } : {}),
     lead: !!ledProject(state, target.id),
     // What a PM owes people, and how long it may while it hangs: its host restarts it after that (timeChecks.ts, cli host.ts).
