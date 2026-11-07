@@ -4547,7 +4547,7 @@ class _SuperTabViewState extends State<SuperTabView>
       ],
       builder: (context, menu, _) => AppIconButton(
         key: const ValueKey('super-group-options'),
-        icon: AppIcons.ellipsisVertical,
+        icon: AppIcons.ellipsis,
         tooltip: _isBuddyChat(group) ? 'Buddy options' : 'Workgroup options',
         onPressed: () => menu.isOpen ? menu.close() : menu.open(),
       ),

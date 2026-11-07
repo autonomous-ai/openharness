@@ -1,19 +1,18 @@
 import 'package:flutter/material.dart';
 
-import '../../core/runtime_model_name.dart';
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../state/app_state.dart';
 import '../../widgets/desktop_chrome.dart';
-import '../../widgets/engine_identity.dart';
 import '../buddies.dart';
-import '../buddy_model.dart';
 import '../controller.dart';
 import '../identity.dart';
 import '../model.dart';
+import 'engine_model_line.dart';
 
-/// An agent's chat in the middle, under one row (anh Dee, #4204): its avatar and name on the left; its engine, its
-/// model and the chat's menu on the right; no other text. The reader's own Buddy switches engine and model there.
-/// The server switches no other agent, so theirs are named in the same place.
+/// An agent's chat in the middle, under one quiet 44-high bar that looks the same for every agent (anh Dee's six
+/// rules, task #4465): its 22 face and its name in semibold on the left; on the right one 12-point line with its
+/// engine and model, then the chat's ⋯ menu. The reader's own Swarm Buddy switches engine and model from that line;
+/// the server switches no other agent, so theirs is only named there. Nothing else: no subscription, machine or reach.
 class SuperTabAgentChatHeader extends StatelessWidget {
   const SuperTabAgentChatHeader({
     super.key,
@@ -24,16 +23,20 @@ class SuperTabAgentChatHeader extends StatelessWidget {
     this.title,
   });
 
+  /// The face's size in the bar.
+  static const faceSize = 22.0;
+
   final SuperTabController controller;
   final SuperTabConversation group;
 
-  /// The chat's ⋮ menu.
+  /// The chat's ⋯ menu.
   final Widget? menu;
 
-  /// For the model picker's line that asks to add the Buddy's machine to the Swarm.
+  /// For the menu's line that asks to add the Buddy's machine to the Swarm.
   final AppNotifier? app;
 
-  /// In place of the avatar and the name, given the name: the reader's own Buddy chat's Buddy card button (view.dart).
+  /// In place of the face and the name, given the name: the reader's own Buddy chat's Buddy card button (view.dart),
+  /// which draws the same face and name with the same inset.
   final Widget Function(String name)? title;
 
   @override
@@ -50,16 +53,24 @@ class SuperTabAgentChatHeader extends StatelessWidget {
         : group.isBuddyChat
         ? 'Your Buddy'
         : group.label;
-    final model = switch (agent?.configuration['model']) {
-      final String id when id.isNotEmpty && id != 'default' => modelDisplayName(
-        id,
-      ),
-      _ => null,
-    };
-    Widget label(String text) => Text(
-      text,
-      maxLines: 1,
-      style: DesktopChrome.metadata(color: DesktopChrome.foreground),
+    final identity = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (agent != null) ...[
+          SuperTabAvatar.agent(agent, size: faceSize, engineBadge: false),
+          const SizedBox(width: grid.AppDesktop.menuInset),
+        ],
+        Flexible(
+          child: Text(
+            name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: DesktopChrome.control().copyWith(
+              fontWeight: grid.AppFont.semibold,
+            ),
+          ),
+        ),
+      ],
     );
     return SizedBox(
       key: const ValueKey('super-agent-chat-header'),
@@ -67,43 +78,25 @@ class SuperTabAgentChatHeader extends StatelessWidget {
       child: Row(
         children: [
           const SizedBox(width: grid.AppDesktop.controlGap),
-          if (title case final title?)
-            Expanded(
-              child: Align(alignment: Alignment.centerLeft, child: title(name)),
-            )
-          else if (agent != null) ...[
-            SuperTabAvatar.agent(
-              agent,
-              size: SuperTabAvatar.rowSize,
-              engineBadge: false,
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child:
+                  title?.call(name) ??
+                  Padding(
+                    // The Buddy card button's inset, so every face sits in one place.
+                    padding: const EdgeInsets.all(grid.AppDesktop.menuInset),
+                    child: identity,
+                  ),
             ),
-            const SizedBox(width: grid.AppDesktop.menuInset),
-          ],
-          if (title == null)
-            Expanded(
-              child: Text(
-                name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: DesktopChrome.control().copyWith(
-                  fontWeight: grid.AppFont.semibold,
-                ),
-              ),
-            ),
-          if (buddy != null && group.isSwarmBuddyChat)
-            BuddyModelLine(
+          ),
+          if (agent != null)
+            SuperTabEngineModelLine(
               controller: c,
-              agent: buddy,
-              machine: buddyMachineName(c, buddy.machineId, app: app),
-            )
-          else if (agent != null) ...[
-            label(engineIdentity(agent.engine).label),
-            if (model != null) ...[
-              const SizedBox(width: grid.AppDesktop.controlGap),
-              label(model),
-            ],
-          ],
-          const SizedBox(width: grid.AppDesktop.menuInset),
+              agent: agent,
+              machine: buddyMachineName(c, agent.machineId, app: app),
+              switchable: buddy != null && group.isSwarmBuddyChat,
+            ),
           ?menu,
           const SizedBox(width: grid.AppDesktop.menuInset),
         ],

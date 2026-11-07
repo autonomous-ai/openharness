@@ -10,7 +10,6 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/super_tabs/zone_time.dart';
-import 'package:harness/widgets/engine_identity.dart';
 
 import 'super_tab_personal_tasks_pane_test.dart' show TasksFixture;
 import 'support/buddy_engine_fixture.dart';
@@ -164,7 +163,7 @@ void main() {
       t,
       identity: 'agent:0540',
       name: 'Hugo',
-      line: '${engineIdentity('claude').label} · ${modelDisplayName('opus')}',
+      line: 'Claude Code · ${modelDisplayName('opus')}',
     );
     // The server switches no other agent: its line opens nothing, even hovered.
     await hover(t, line);

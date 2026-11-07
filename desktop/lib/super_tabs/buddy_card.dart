@@ -64,6 +64,7 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
   List<String> _words = const [];
   String? _marked, _message;
   var _busy = false, _flagsFocused = false, _warning = false;
+  var _hover = false, _focus = false;
 
   SuperTabController get c => widget.controller;
   AppNotifier? get app => widget.app;
@@ -208,6 +209,8 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
         key: const ValueKey('super-board-buddy-button'),
         focusNode: _buttonFocus,
         borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+        onHover: (hover) => setState(() => _hover = hover),
+        onFocusChange: (focus) => setState(() => _focus = focus),
         onTap: () => _portal.isShowing ? _close() : _open(),
         child: Padding(
           padding: const EdgeInsets.all(_gap),
@@ -227,10 +230,14 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
                 ),
               ),
               const SizedBox(width: _gap),
-              Icon(
-                AppIcons.chevronDown,
-                size: AppIcons.inlineSize,
-                color: DesktopChrome.muted,
+              // Plain until hover (anh Dee's rule 5, task #4465); its room is kept, so hover never moves the name.
+              Opacity(
+                opacity: _hover || _focus || _portal.isShowing ? 1 : 0,
+                child: Icon(
+                  AppIcons.chevronDown,
+                  size: AppIcons.inlineSize,
+                  color: DesktopChrome.muted,
+                ),
               ),
             ],
           ),
