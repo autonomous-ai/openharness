@@ -747,7 +747,7 @@ it('prints the instructions as text with the header and the coordinator\'s notes
       notes: [{ id: 'n1', text: 'Use the staging branch', askedBy: '6a0000000000000000000001', askedByName: 'ken', at: Date.parse('2026-10-30T01:00:00Z'), expiresAt: Date.parse('2026-11-01T00:00:00Z') },
         { id: 'n2', text: 'Ask before merging', askedBy: '6a0000000000000000000002', at: Date.parse('2026-10-30T02:00:00Z'), expiresAt: null }] } },
     { ok: true, value: { projectId: 'p1', revision: 5, text: 'Plain.', template: false, coordinatorName: 'Ana' } },
-    { error: 'INSTRUCTIONS_UNAVAILABLE', detail: 'This Swarm has no project instructions yet: work by the swarm skill Harness gave you at start.' },
+    { error: 'INSTRUCTIONS_UNAVAILABLE', detail: 'This Swarm has no project instructions yet: ask its coordinator in your task chat what to work by.' },
   ]
   const request = vi.fn(async () => answers.shift()!)
   const deps = { where: () => where, pane: undefined, open: async () => ({ request, close, machineId: 'machine' }), print }
@@ -764,15 +764,15 @@ it('prints the instructions as text with the header and the coordinator\'s notes
   expect(JSON.parse(print.mock.calls.at(-1)![0])).toMatchObject({ error: 'INSTRUCTIONS_UNAVAILABLE' })
 })
 
-// 2026-11-04 PM schedule design: the coordinator's read carries the Swarm's built-in PM schedule, printed after the document so
-// a new PM session reads it at launch, and before the notes.
-it('prints the built-in schedule after the document', async () => {
+// Task #4673: an agent reads its project's instructions and nothing the Swarm adds. An older backend still sends the coordinator
+// a built-in schedule beside the document: it is not printed.
+it('prints the document and the notes, and no built-in text an older backend sends', async () => {
   const print = vi.fn(), close = vi.fn()
   const request = vi.fn(async () => ({ ok: true, value: { projectId: 'p1', revision: 2, text: 'Work by this.', template: false, coordinatorName: 'Ana',
     builtIn: '## Built-in PM schedule (from the Swarm)\n\nB', notes: [{ id: 'n1', text: 'Be quick', askedBy: 'ken', at: 0, expiresAt: null }] } }))
   const deps = { where: () => where, pane: undefined, open: async () => ({ request, close, machineId: 'machine' }), print }
   expect(await superTabCommand([...prefix, 'instructions'], deps)).toBe(0)
-  expect(print).toHaveBeenLastCalledWith(['Instructions of project p1, revision 2', '', 'Work by this.', '', '## Built-in PM schedule (from the Swarm)\n\nB', '',
+  expect(print).toHaveBeenLastCalledWith(['Instructions of project p1, revision 2', '', 'Work by this.', '',
     "Ana's notes:", '- Be quick (note n1, asked by ken, 1970-01-01T00:00:00.000Z)'].join('\n'))
 })
 
