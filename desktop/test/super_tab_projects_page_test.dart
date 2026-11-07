@@ -22,11 +22,11 @@ void main() {
       ..first['repository'] = {
         'repositoryUrl': 'https://github.com/autonomous-ai/openharness.git',
       }
-      ..addAll([
+      ..addAll(<Map<String, dynamic>>[
         projectFixture('api', 'api', 'api-lead'),
         projectFixture('docs', 'docs', 'docs-lead', visibility: 'private'),
       ]);
-    groups.addAll([
+    groups.addAll(<Map<String, dynamic>>[
       {
         ...conversationFixture('api-lead', 'api'),
         'projectId': 'api',

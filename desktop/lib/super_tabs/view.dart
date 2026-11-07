@@ -96,6 +96,7 @@ import 'thread_panel.dart';
 import 'work_details.dart';
 import 'manage_page.dart';
 import 'project_sidebar.dart';
+import 'projects_page.dart';
 import 'buddy_sessions.dart';
 import 'swarm_switcher.dart' show fallBackToPersonal;
 import 'project_options.dart';
@@ -6491,7 +6492,13 @@ class _SuperTabViewState extends State<SuperTabView>
                                       inThread: true,
                                     ),
                                   ),
-                                  SwarmPage.projects ||
+                                  SwarmPage.projects => SuperTabProjectsPage(
+                                    controller: c,
+                                    onOpen: _openBoard,
+                                    onNewProject: c.canWrite
+                                        ? widget.onNewProject
+                                        : null,
+                                  ),
                                   null => const SizedBox.shrink(),
                                 },
                                 _manageVisible
