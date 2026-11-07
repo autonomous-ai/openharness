@@ -163,6 +163,9 @@ export interface Agent {
    *  joined. Readers get it in the derived row, never in this part (read/views.ts), and only when they read that project. A
    *  Lead's is the project it leads, derived (agentKind.ts ledProjects). Cleared when the project is deleted. */
   mainProjectId?: string
+  /** The Member this helper helps (members.ts, task #4697): a helper takes its Member's person's tasks in that project, and
+   *  stops when none waits. */
+  helperOf?: string
   /** The private project a Regular agent first worked in: its one conversation holds that project's content, so it takes tasks
    *  only there from then on (projects.ts regularMayWorkIn; security review 2 of #4116). Set at its assignment, never cleared. */
   privateProjectId?: string
@@ -222,6 +225,14 @@ export interface AgentStartRequest {
   regular?: true
   /** The main project its person picked (agent.new, buddy.create; task #4540), kept on the agent when it starts. */
   mainProjectId?: string
+  /** A Member's own start (members.ts, task #4697): its host sets the project up once in this folder. Written by the server
+   *  alone, with `regular` and `mainProjectId`. */
+  member?: { projectId: string }
+  /** A helper's start (members.ts): made from its Member's ready setup on the Member's computer, for the task it starts
+   *  in. Written by the server alone. */
+  helperOf?: { agentId: string; harnessId: string }
+  /** The commands its Member recorded setting the project up (agent.setUp), for a helper's host to repeat. */
+  setUpSteps?: string[]
   /** A one-project Buddy's start (Agent.buddyNarrow), written by message.send alone. */
   buddyNarrow?: true
   /** The person's messages in an older project chat its start waits on, delivered when it joins (ids only). */

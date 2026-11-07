@@ -11,7 +11,7 @@ import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from 
 import { admitByRoom, admitMachineStart, AGENT_MEMORY_BYTES, noRepositoryStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamAccountPool, teamPoolsOf, teamWorkCheck, TEAM_ACCOUNTS_GONE, NOT_YOUR_COMPUTER, type ContributedMachine } from './machines.js'
 import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
-import { ACCEPT_ALL_REFUSAL, mayAcceptAll } from './members.js'
+import { ACCEPT_ALL_REFUSAL, mayAcceptAll, memberMachine, memberOf } from './members.js'
 import { addedAgentName, newAgentName, renameAgentTo } from './agentRename.js'
 import { addCrew, CREW_ROLE_MAX, removeCrew } from './crew.js'
 import { noteIndex } from './processNotes.js'
@@ -1837,6 +1837,37 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     state.conversations.push({ id: chatId, kind: 'agent-chat', title, leadId: null, agentIds: [], archived: false, brief: '', checks: [],
       assignment: null, lastMessageSequence: 0, audience: { people: [{ id: me.id, generation: me.generation }] } })
     return chatId
+  }
+  /** The first Accept of [personId] in [group]'s project starts their Member there (members.ts, task #4697): on their own
+   *  computer and account, named "<name> · <project>", in a chat of its own with them. With no such computer the task's chat
+   *  says so, and the task waits: nothing is refused, since the Accept stands. */
+  const startMember = (group: Conversation, personId: string) => {
+    const project = groupProject(state, group)
+    if (memberOf(state, personId, project.id)) return
+    const owner = person(state, personId)
+    const pool = memberMachine(state, personId, REGULAR_AGENT_CAPABILITY)
+    const who = owner.name ?? owner.email.split('@')[0]
+    const none = () => message(group.id, `${who} has no computer in this Swarm to run their agent for ${project.name}. This task waits until they open Harness on one.`, [], null, SYSTEM_ROW, undefined, undefined, undefined, stableId(operationId, 'member-line'))
+    if (!pool) return none()
+    const name = `${newAgentName(state, actor, undefined, stableId(operationId, 'member'))} · ${project.name}`
+    if ((state.starts ?? []).filter(s => !s.harnessId && !s.error).length >= 32) return none()
+    const chatId = openAgentChat(owner, name)
+    const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: pool.engines[0]!, name,
+      cwd: projectFolder(pool, project), worktree: true, requirements: { ...BUDDY_REQUIREMENTS, memoryBytes: AGENT_MEMORY_BYTES },
+      regular: true, mainProjectId: project.id, member: { projectId: project.id } }
+    let admitted: ReturnType<typeof admitMachineStart>
+    try { admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines, project) } catch (error) {
+      if (!(error instanceof SuperTabError)) throw error
+      // Refused: its chat goes with it, so nothing is left behind for a start that never was.
+      state.conversations = state.conversations.filter(c => c.id !== chatId)
+      return message(group.id, `Could not start ${who}'s agent for ${project.name}: ${error.message}`, [], null, SYSTEM_ROW, undefined, undefined, undefined,
+        stableId(operationId, 'member-line'))
+    }
+    state.starts ??= []
+    const id = stableId(operationId, 'member')
+    state.starts.push({ poolGeneration: admitted!.generation, id, creationId: `super-${id}`, actorKey: actorKey(actor), contributorId: owner.id,
+      membershipGeneration: owner.generation, machineOwnerId: owner.id, hostGrant: null, request, harnessId: null, dispatched: false, error: null,
+      requestedAt: context.now })
   }
   const addBuddyMachine = (machineId: string, setup: NonNullable<Extract<Command, { type: 'buddy.create' }>['setup']>, me: { id: string; generation: string }) => {
     // Its last Buddy's folders are still being deleted there: a new one would lose its own (machine.contribute does the same).
@@ -4864,6 +4895,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         else {
           approval.state = 'approved'
           approval.decidedAt = context.now
+          // Their first Accept in this project starts their Member there; it is assigned as any agent is (work.assign).
+          startMember(group, approval.personId)
         }
         // This decision releases the gate; the ordinary work.assign path alone launches work, with all of the
         // store's global session, repository, machine and account checks. Never introduce a second assignment path here.
