@@ -571,7 +571,16 @@ void main() {
         'email': 'ken@example.com',
         'role': 'collaborator',
       });
-      final now = DateTime.now().toUtc();
+      // The messages span 30 minutes back from now; run within that of local midnight, they fell on two days and a
+      // new day starts a new header (CI at 00:29 UTC). Move them back to the day before so they share one day.
+      var local = DateTime.now();
+      final sinceMidnight = local.difference(
+        DateTime(local.year, local.month, local.day),
+      );
+      if (sinceMidnight < const Duration(minutes: 31)) {
+        local = local.subtract(sinceMidnight + const Duration(minutes: 1));
+      }
+      final now = local.toUtc();
       void say(
         String text,
         Map<String, Object> author,
