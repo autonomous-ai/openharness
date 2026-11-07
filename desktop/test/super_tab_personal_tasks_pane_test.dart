@@ -281,6 +281,14 @@ void main() {
         inCard('new', find.widgetWithText(FilledButton, 'Approve')),
         findsOneWidget,
       );
+      // Reject is plain text: no fill and no rim over the theme's text button (#4468).
+      final reject = t
+          .widget<TextButton>(
+            inCard('new', find.widgetWithText(TextButton, 'Reject')),
+          )
+          .style!;
+      expect(reject.side?.resolve({}), BorderSide.none);
+      expect(reject.backgroundColor?.resolve({}), Colors.transparent);
       expect(find.text('Suggested'), findsNothing);
       await t.tap(inCard('new', find.text('Approve')));
       await t.pumpAndSettle();
