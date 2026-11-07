@@ -308,6 +308,24 @@ describe('the one Buddy sends a proposal to a project its person reads (Scholes,
     const read = (await f.store.messages(owner, f.tab, f.web.conversationId, {})).messages.find(m => m.id === sent)
     expect(read?.attachments?.map(a => a.name).sort()).toEqual(['main.log', 'plan.md'])
   })
+
+  it('carries a file it showed its person in its own part of the chat, never one another Buddy there showed (#4470)', async () => {
+    const f = await swarm()
+    const { chat, main } = await buddy(f)
+    const { thread, agentId: session } = await projectSession(f, chat, f.web.projectId, 'Let us plan the web board')
+    const mainShot = await upload(f, chat, 'main.png', main)
+    await send(f, chat, 'Here is a sketch', { attachmentIds: [mainShot] }, peer, main)
+    const sessionShot = await upload(f, chat, 'session.png', session)
+    await send(f, chat, 'Here is the mockup', { replyTo: thread, attachmentIds: [sessionShot] }, peer, session)
+    const threadAsk = async () => String((await send(f, chat, 'Send it to the PM', { replyTo: thread })).result.messageId)
+    // Each Buddy proposes only what it showed: the main Buddy not the session's picture, the session not the main Buddy's.
+    await expect(propose(f, chat, await ask(f, chat), f.web.projectId, main, { attachmentIds: [sessionShot] })).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
+    await expect(propose(f, chat, await threadAsk(), undefined, session, { text: 'Send it to the PM', attachmentIds: [mainShot] })).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
+    const fromSession = String((await propose(f, chat, await threadAsk(), undefined, session, { text: 'Send it to the PM', attachmentIds: [sessionShot] })).result.messageId)
+    const fromMain = String((await propose(f, chat, await ask(f, chat), f.web.projectId, main, { attachmentIds: [mainShot] })).result.messageId)
+    const read = (await f.store.messages(owner, f.tab, f.web.conversationId, {}, f.pms.web)).messages
+    expect([fromSession, fromMain].map(id => read.find(m => m.id === id)?.attachments?.map(a => a.name))).toEqual([['session.png'], ['main.png']])
+  })
 })
 
 describe('the main Buddy', () => {
