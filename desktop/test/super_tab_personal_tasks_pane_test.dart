@@ -2,6 +2,7 @@ import 'package:harness/super_tabs/zone_time.dart';
 
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -204,6 +205,49 @@ void main() {
       await t.pump();
       expect(opened, ['new', 'new']);
       expect(f.commands, isEmpty);
+    },
+  );
+  testWidgets(
+    'the header is quiet: Tasks in semibold, the choice plain text until hover',
+    (t) async {
+      await mount(t);
+      final title = t.widget<Text>(find.text('Tasks')).style!;
+      expect(title.fontSize, 13);
+      expect(title.fontWeight, FontWeight.w600);
+      expect(find.byType(DropdownButton<String>), findsNothing);
+      final choice = find.byKey(const ValueKey('tasks-approval-mode'));
+      final label = t
+          .widget<Text>(
+            find.descendant(of: choice, matching: find.text('Auto approve')),
+          )
+          .style!;
+      expect(label.fontSize, 12);
+      expect(label.color, DesktopChrome.muted);
+      double chevron() => t
+          .widget<Opacity>(
+            find
+                .ancestor(
+                  of: find.descendant(
+                    of: choice,
+                    matching: find.byIcon(AppIcons.chevronDown),
+                  ),
+                  matching: find.byType(Opacity),
+                )
+                .first,
+          )
+          .opacity;
+      final rest = t.getSize(choice);
+      expect(chevron(), 0);
+      final mouse = await t.createGesture(kind: PointerDeviceKind.mouse);
+      addTearDown(mouse.removePointer);
+      await mouse.addPointer(location: Offset.zero);
+      await mouse.moveTo(t.getCenter(choice));
+      await t.pump();
+      expect(chevron(), 1);
+      expect(t.getSize(choice), rest);
+      await mouse.moveTo(Offset.zero);
+      await t.pump();
+      expect(chevron(), 0);
     },
   );
   testWidgets('mode is saved by authenticated command and server read', (
