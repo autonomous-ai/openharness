@@ -493,7 +493,7 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       // (engines/codex/launch.ts).
       const pmHome = lead || projectSettingsOff ? pmEngineHome(String(request.engine), creationId, team || projectSettingsOff, homedir()) : null
       if (pmHome) {
-        // Codex refuses a CODEX_HOME that is not there; only the Team user reads it.
+        // Codex refuses a CODEX_HOME that is not there; only this machine's user reads it.
         mkdirSync(pmHome, { recursive: true, mode: 0o700 })
         // Off a Team daemon that home has no sign-in: Team accounts got theirs from the relay v3 removed. It takes the person's
         // own, from the Codex home this start would have used.
