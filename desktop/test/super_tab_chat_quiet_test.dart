@@ -62,7 +62,8 @@ void main() {
           of: find.byType(SuperTabMessageRow),
           matching: find.byType(SuperTabAvatarFace),
         );
-        expect(faces, findsNWidgets(4));
+        // Your own bubble wears no face; one sender's run, one face (#4529).
+        expect(faces, findsWidgets);
         for (final face in faces.evaluate()) {
           final widget = face.widget as SuperTabAvatarFace;
           expect(widget.radius, isNull, reason: 'round, not a rounded square');
@@ -97,7 +98,10 @@ void main() {
     void expectField(WidgetTester tester, String surface) {
       final box = tester.widget<DecoratedBox>(key(surface));
       final decoration = box.decoration as BoxDecoration;
-      expect(decoration.borderRadius, BorderRadius.circular(12));
+      expect(
+        decoration.borderRadius,
+        BorderRadius.circular(grid.AppDesktop.composerRadius),
+      );
       expect(decoration.border, Border.all(color: DesktopChrome.rim));
       expect(decoration.color, DesktopChrome.field);
       expect(
@@ -122,23 +126,24 @@ void main() {
         );
         const surface = 'super-message-composer-surface';
         expectField(tester, surface);
-        expectNeutral(sendFill(tester, surface));
+        // Nothing to send: no send at all, the mic's place (#4529).
+        expect(key('swarm-send-fill'), findsNothing);
         // Only the paperclip on the left; @ still tags when typed (River, 11-07).
         expect(key('super-composer-tag'), findsNothing);
 
         await tester.enterText(key('super-message-composer'), 'Ship it');
         await tester.pump();
-        expectBlue(sendFill(tester, surface));
+        expectBlue(sendFill(tester, 'super-message-composer-actions'));
 
         await tester.enterText(key('super-message-composer'), '');
         await tester.pump();
-        expectNeutral(sendFill(tester, surface));
+        expect(key('swarm-send-fill'), findsNothing);
 
         c.attachments('lead').add([
           HarnessAttachment('a.png', Uint8List.fromList([1, 2, 3])),
         ]);
         await tester.pump();
-        expectBlue(sendFill(tester, surface));
+        expectBlue(sendFill(tester, 'super-message-composer-actions'));
         c.attachments('lead').clear();
         // The typed draft's save waits on a timer: let it run.
         await tester.pumpWidget(const SizedBox());

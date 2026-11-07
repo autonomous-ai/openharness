@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/open_in_browser.dart';
+import 'package:harness/super_tabs/chat/bubble.dart';
 import 'package:harness/super_tabs/attachment_viewer.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_link.dart';
@@ -18,7 +19,6 @@ import 'package:harness/super_tabs/message_text.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/super_tabs/voice_bubble.dart';
 import 'package:harness/super_tabs/voice_length.dart';
-import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:video_player/video_player.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -388,13 +388,13 @@ void main() {
       expect(copy.existsSync(), isFalse);
     });
 
-    testWidgets('the played part of the waveform fills in the accent', (
-      tester,
-    ) async {
+    testWidgets('your own voice message is blue, its played part in full '
+        'white (#4529)', (tester) async {
       await show(tester, withVoice());
       final at = find.descendant(of: bubble, matching: bars);
+      final unplayed = SwarmBubble.ownInk.withValues(alpha: .55);
       expect(at.evaluate().map(colorOf).toSet(), {
-        DesktopChrome.muted,
+        unplayed,
       }, reason: 'nothing played yet');
       await tester.tap(find.byTooltip('Play'));
       await settleFiles(tester);
@@ -404,8 +404,8 @@ void main() {
       await tester.pump();
 
       final colors = at.evaluate().map(colorOf).toList();
-      expect(colors.take(19).toSet(), {DesktopChrome.accent});
-      expect(colors.skip(19).toSet(), {DesktopChrome.muted});
+      expect(colors.take(19).toSet(), {SwarmBubble.ownInk});
+      expect(colors.skip(19).toSet(), {unplayed});
       // Playing, it counts up.
       expect(
         find.descendant(of: bubble, matching: find.text('0:32')),

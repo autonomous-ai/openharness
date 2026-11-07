@@ -36,7 +36,7 @@
     "border-radius": 1
   },
   "desktop/lib/super_tabs/message_row.dart": {
-    "edge-insets": 4
+    "edge-insets": 3
   },
   "desktop/lib/super_tabs/notifications.dart": {
     "edge-insets": 8
@@ -72,8 +72,7 @@
     "edge-insets": 4
   },
   "desktop/lib/super_tabs/ship_row.dart": {
-    "font-size": 1,
-    "edge-insets": 2
+    "edge-insets": 1
   },
   "desktop/lib/super_tabs/terminal_row.dart": {
     "edge-insets": 2

@@ -30,17 +30,13 @@ void main() {
 
   /// The refused line's words sit a gap below the row, as any line under a
   /// composer's buttons does (Alder2878's review of 83e32f41a).
-  void expectGapUnder(WidgetTester tester, Finder send) {
+  void expectGapUnder(WidgetTester tester, Finder send, {double inset = 0}) {
     final words = tester.getRect(
       find.textContaining("Harness can't use the microphone"),
     );
     expect(
       words.top - tester.getRect(send).bottom,
-      greaterThanOrEqualTo(
-        composerRowInsets(target: grid.AppControl.height).bottom +
-            grid.AppDesktop.controlGap -
-            0.5,
-      ),
+      greaterThanOrEqualTo(inset + grid.AppDesktop.controlGap - 0.5),
     );
   }
 
@@ -177,7 +173,9 @@ void main() {
         find.textContaining("Harness can't use the microphone"),
         findsOneWidget,
       );
-      expectGapUnder(tester, find.byTooltip('Send message'));
+      // The chat's pill has its buttons beside it, so the gap is under the
+      // pill (#4529).
+      expectGapUnder(tester, key('super-message-composer-surface'));
       await tester.tap(key('super-voice-settings'));
       expect(opened, [superTabMicrophoneSettings]);
       await close(tester);
@@ -219,7 +217,11 @@ void main() {
       await tester.tap(key('super-thread-mic'));
       await tester.pumpAndSettle();
       expect(key('super-voice-refused'), findsOneWidget);
-      expectGapUnder(tester, key('super-thread-send'));
+      expectGapUnder(
+        tester,
+        key('super-thread-send'),
+        inset: composerRowInsets(target: grid.AppControl.height).bottom,
+      );
       await close(tester);
     });
 

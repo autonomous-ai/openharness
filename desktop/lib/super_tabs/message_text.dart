@@ -20,6 +20,7 @@ class SuperTabMessageText extends StatelessWidget {
     this.addresses = const {},
     this.labels = const {},
     this.taggedYou = false,
+    this.ink,
   });
   final String text;
   final Map<int, String> references;
@@ -41,6 +42,29 @@ class SuperTabMessageText extends StatelessWidget {
   /// The message tags the reader, so its row is washed in the accent: a tag
   /// takes the stronger accent in light, to stay 4.5:1 on its pill there.
   final bool taggedYou;
+
+  /// The text's colour where the ground is not the page's, such as white in
+  /// your own blue bubble; links take it too, underlined.
+  final Color? ink;
+
+  MarkdownStyleSheet _sheet(BuildContext context) {
+    final sheet = swarmMarkdownStyleSheet(context);
+    final ink = this.ink;
+    if (ink == null) return sheet;
+    TextStyle? inked(TextStyle? style) => style?.copyWith(color: ink);
+    return sheet.copyWith(
+      p: inked(sheet.p),
+      listBullet: inked(sheet.listBullet),
+      blockquote: inked(sheet.blockquote),
+      h1: inked(sheet.h1),
+      h2: inked(sheet.h2),
+      h3: inked(sheet.h3),
+      h4: inked(sheet.h4),
+      h5: inked(sheet.h5),
+      h6: inked(sheet.h6),
+      a: inked(sheet.a)?.copyWith(decoration: TextDecoration.underline),
+    );
+  }
 
   static Uri? webLink(String? href) {
     final uri = href == null ? null : Uri.tryParse(href);
@@ -108,7 +132,7 @@ class SuperTabMessageText extends StatelessWidget {
         ),
       },
       paddingBuilders: {'a': _CompactLinkLabel()},
-      styleSheet: swarmMarkdownStyleSheet(context),
+      styleSheet: _sheet(context),
       onTapLink: (_, href, _) {
         final number = href?.startsWith('workgroup:') == true
             ? int.tryParse(href!.substring(10))
