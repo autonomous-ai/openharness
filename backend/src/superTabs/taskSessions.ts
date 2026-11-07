@@ -12,8 +12,9 @@
  */
 import { BUDDY_REQUIREMENTS, isSwarmBuddy } from './buddies.js'
 import { admitMachineStart, AGENT_MEMORY_BYTES, machineContribution, MEMBER_PROJECTS_CAPABILITY, noRepositoryStart, projectFolder } from './machines.js'
-import { activeWork, fail, stableId, type Agent, type AgentStart, type AgentStartRequest, type Conversation, type SuperTabState } from './model.js'
-import { canReadProject, groupProject } from './projects.js'
+import { agentDisplayName } from './agentNames.js'
+import { activeWork, fail, stableId, type Agent, type AgentStart, type AgentStartRequest, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { canReadProject, groupProject, projectsOf } from './projects.js'
 
 /** A Member's task homes hold a worktree of at most this many projects; a sixth drops the one used longest ago. */
 export const MEMBER_PROJECTS_MAX = 5
@@ -112,3 +113,37 @@ export function taskSessionFailed(state: SuperTabState, start: AgentStart): void
 
 /** The operation id of a Member's task-session start, from the assignment's own. */
 export const taskSessionStartId = (operationId: string): string => stableId(operationId, 'task-session')
+
+/**
+ * [machineId]'s host reports, per Member, the projects its task home holds set up (machines.ts memberSetUp). Each one new to the
+ * list is said once, by its task session to its project's Lead, in the project's chat: "Ready to work on harness." One the list
+ * leaves out was dropped there, and leaves the Member's held projects, unless a task session of it is starting there again.
+ */
+export function applyMemberSetUp(state: SuperTabState, machineId: string, report: Record<string, string[]> | undefined, now: number): MessageDraft[] {
+  if (!report) return []
+  const rows: MessageDraft[] = []
+  const projects = projectsOf(state)
+  for (const member of state.agents.filter(a => a.machineId === machineId && isSwarmBuddy(a) && !a.buddySession && report[a.id])) {
+    const listed = [...new Set(report[member.id])].filter(id => projects.some(p => p.id === id)).slice(0, MEMBER_PROJECTS_MAX)
+    const before = member.setUp ?? []
+    const next = listed.map(id => before.find(e => e.projectId === id) ?? { projectId: id, at: now })
+    for (const entry of next.filter(e => !before.some(b => b.projectId === e.projectId))) {
+      const project = projects.find(p => p.id === entry.projectId)!
+      const session = state.agents.find(a => a.memberOf === member.id && a.projectId === project.id && a.workDecision !== 'stop')
+      const lead = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
+      if (!session) continue
+      rows.push({ id: stableId('member-ready', member.id, project.id, String(now)), conversationId: project.leadConversationId, replyTo: null,
+        author: { kind: 'agent', id: session.id, name: session.name, displayName: agentDisplayName(state.agents, session.id),
+          membershipGeneration: session.membershipGeneration },
+        text: `Ready to work on ${project.name}.`, recipients: lead ? [lead] : [] })
+    }
+    if (next.length) member.setUp = next
+    else delete member.setUp
+    const starting = new Set((state.starts ?? []).filter(s => s.request.memberOf === member.id && !s.harnessId && !s.error)
+      .map(s => s.request.memberProject!.id))
+    const held = (member.projectsHeld ?? []).filter(id => listed.includes(id) || starting.has(id))
+    if (held.length) member.projectsHeld = held
+    else delete member.projectsHeld
+  }
+  return rows
+}

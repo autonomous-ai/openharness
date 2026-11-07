@@ -10,6 +10,7 @@ import { isCrew } from './crew.js'
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
 import { phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
+import { applyMemberSetUp } from './taskSessions.js'
 import { admitMachineStart, accountMachineName, applyDiskReport, availableSlots, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, ownAccountWork, ownAccountNote, type MachineObservation } from './machines.js'
 import { expireAccess } from './machineAccess.js'
 import { authorForAgent, lazyUsernames, namesPerson, rowForAgent, shownNameOf } from './personNames.js'
@@ -4539,7 +4540,9 @@ export class SuperTabStore {
       const checked = [...failRefusedStarts(state, machineId, now), ...loseTasks(state, now, worker => worker.machineId === machineId, undefined, rulesFor),
         ...sweep ? sweepLiveness(state, now, rulesFor) : [], ...crew ? applyCrewKeep(state, now, crew) : [],
         // A woken crew member this reading shows running again: its wake's timing row (crewTimes.ts, task #3462).
-        ...finishedWakes(state, now)]
+        ...finishedWakes(state, now),
+        // A Member's projects its host reports set up, and the Lead hearing it is ready in a new one (taskSessions.ts, task #4543).
+        ...applyMemberSetUp(state, machineId, observation.memberSetUp, now)]
       const sleepy = observation.idleBuddyHarnessIds?.length ? buddySleepCandidates(state, now).filter(a => a.machineId === machineId) : []
       const busy = new Set<string>()
       for (const agent of sleepy) {

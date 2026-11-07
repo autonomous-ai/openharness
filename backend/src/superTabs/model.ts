@@ -182,6 +182,9 @@ export interface Agent {
   /** On a Member's chat session: the projects whose worktree its task home holds, the most recently used last, at most five
    *  (taskSessions.ts). Written by the server at each assignment and as a task session joins; ids only. */
   projectsHeld?: string[]
+  /** On a Member's chat session: the projects its host reports set up in its task home, each since when (taskSessions.ts
+   *  applyMemberSetUp), at most five. Replaced from each report that changes it. */
+  setUp?: Array<{ projectId: string; at: number }>
 }
 /** A thread session's thread root and the main chat's last sequence it may read (buddySessions.ts). A project session also
  *  names its project (buddies.ts; Dee, 10-31): it reads that project alone, and is the only Buddy that writes into it. */
@@ -1216,6 +1219,12 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   }
   // Rows by day and project that only the leaderboard read uses, and it takes them from the Swarm itself.
   for (const pool of visible.machines ?? []) delete pool.lentDays
+  // Which projects' files are on a computer, private ones among them, is the server's own check (machines.ts privateOnDisk, task
+  // #4543): no reader gets it, nor the host's lists it is made from.
+  for (const pool of visible.machines ?? []) {
+    delete pool.privateOnDisk
+    if (pool.observation) { delete pool.observation.projectsOnDisk; delete pool.observation.memberSetUp }
+  }
   // Where teammates' work ran was a Team-account choice; Swarm v3 runs every agent as its own person (#4120, #4289). It stays
   // stored for teamWorkRefusal until the Team entries go (#4290), and no reader gets it.
   for (const pool of visible.machines ?? []) delete pool.ownAccountChoice
