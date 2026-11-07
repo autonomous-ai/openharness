@@ -23,7 +23,7 @@ Future<Map<String, dynamic>?> showBringAgentForm(
   bool Function()? isCurrent,
 }) async {
   final accountId = app.currentUser?.id;
-  final here = app.machineStates.values
+  MachineState? thisComputer() => app.machineStates.values
       .where(
         (m) =>
             m.isLocalMachine &&
@@ -40,24 +40,14 @@ Future<Map<String, dynamic>?> showBringAgentForm(
       !controller.accessRevoked &&
       (isCurrent?.call() ?? true);
   if (!current()) return null;
-  if (here == null) {
-    await showAppDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Connect this computer'),
-        content: const Text(
-          'Wait for this computer’s Harness connection, then try bringing your agent again.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
-    );
-    return null;
-  }
+  // Before this computer's Harness connection is up, the box waits for it and goes on by itself (task #4220).
+  final here =
+      thisComputer() ??
+      await showAppDialog<MachineState>(
+        context: context,
+        builder: (_) => _ConnectThisComputer(app: app, find: thisComputer),
+      );
+  if (here == null || !context.mounted || !current()) return null;
   // One start per computer chosen, each keeping its receipt across retries.
   final launchers = <String, (SwarmAgentLauncher, String)>{};
   SwarmAgentLauncher launcherFor(String machineId) => SwarmAgentLauncher(
@@ -193,4 +183,70 @@ Future<Map<String, dynamic>?> showBringAgentForm(
     }
   }
   return current() ? result : null;
+}
+
+/// "Connect this computer": waits for this computer's Harness connection and closes with it once it is up, so the
+/// agent box goes on by itself; Open Machines is where a computer that needs its link is connected (task #4220).
+class _ConnectThisComputer extends StatefulWidget {
+  const _ConnectThisComputer({required this.app, required this.find});
+  final AppNotifier app;
+  final MachineState? Function() find;
+
+  @override
+  State<_ConnectThisComputer> createState() => _ConnectThisComputerState();
+}
+
+class _ConnectThisComputerState extends State<_ConnectThisComputer> {
+  bool _done = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.app.addListener(_follow);
+  }
+
+  @override
+  void dispose() {
+    widget.app.removeListener(_follow);
+    super.dispose();
+  }
+
+  void _follow() {
+    if (_done || !mounted) return;
+    if (widget.find() case final here?) _close(here);
+  }
+
+  void _close([MachineState? here]) {
+    _done = true;
+    Navigator.pop(context, here);
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Connect this computer'),
+    content: const Row(
+      children: [
+        SizedBox.square(
+          dimension: 16,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+        SizedBox(width: 12),
+        Flexible(
+          child: Text(
+            'Waiting for this computer’s Harness connection. This goes on by itself once it is up.',
+          ),
+        ),
+      ],
+    ),
+    actions: [
+      TextButton(onPressed: _close, child: const Text('Cancel')),
+      TextButton(
+        onPressed: () {
+          _close();
+          widget.app.requestMachines();
+        },
+        child: const Text('Open Machines'),
+      ),
+    ],
+  );
 }

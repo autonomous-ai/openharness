@@ -84,6 +84,20 @@ final scorecardRows = <SuperTabScorecardRow>[
     (d) => scorecardDuration(d.number('askToShipMedianMinutes')),
   ),
   SuperTabScorecardRow(
+    'pmAnswerMedian',
+    'PM first answer (median)',
+    (d) => scorecardSeconds(
+      (d.parts('pmAnswer')['medianSeconds'] as num?)?.round(),
+    ),
+  ),
+  SuperTabScorecardRow(
+    'pmAnswerSlowest',
+    'PM first answer (slowest)',
+    (d) => scorecardSeconds(
+      (d.parts('pmAnswer')['slowestSeconds'] as num?)?.round(),
+    ),
+  ),
+  SuperTabScorecardRow(
     'oldestUnansweredAskMinutes',
     'Oldest unanswered ask',
     (d) => scorecardDuration(d.number('oldestUnansweredAskMinutes')),
