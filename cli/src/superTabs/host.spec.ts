@@ -4727,6 +4727,8 @@ describe('keeping a crew member alive', () => {
     expect(t.keepLeadAlive).not.toHaveBeenCalled()
     rows[0] = crewRow({ crew: undefined, member: { projectId: 'project-1' } })
     t.live(false)
+    // Its folder is checked first (a dropped one comes back), then it is reopened, as a crew member's is.
+    await t.poll(1_000)
     await t.poll(1_000)
     expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
   })
