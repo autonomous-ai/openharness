@@ -63,6 +63,19 @@ describe('a Buddy asks its owner in Decisions', () => {
     expect(refused(() => f.run({ type: 'decision.ask', conversationId: f.peerBuddy.chat, personId: 'peer', projectId: 'nope', questions: [question] }, asAgent(f.peerBuddy.id)))).toBe('NOT_FOUND')
   })
 
+  it('asks its owner when it names nobody', () => {
+    const f = fixture()
+    const asked = f.run({ type: 'decision.ask', conversationId: f.peerBuddy.chat, questions: [question] }, asAgent(f.peerBuddy.id))
+    expect(asked.decisions![0]!.personId).toBe('peer')
+  })
+
+  it('still needs a project agent to name the person it asks', () => {
+    const f = fixture()
+    const group = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Copy', brief: '', checks: [] }).result.conversationId as string
+    f.run({ type: 'conversation.agent', conversationId: group, agentId: f.worker, present: true, lead: false })
+    expect(refused(() => f.run({ type: 'decision.ask', conversationId: group, questions: [question] }, onOwnersMachine(f.worker)))).toBe('INVALID_PERSON')
+  })
+
   it('refuses a Buddy asking anyone but its own owner', () => {
     const f = fixture()
     expect(refused(() => f.run({ type: 'decision.ask', conversationId: f.peerBuddy.chat, personId: 'owner', questions: [question] }, asAgent(f.peerBuddy.id)))).toBe('BUDDY_ASKS_OWNER')
