@@ -98,8 +98,9 @@ describe('the usage service', () => {
   // the report the status line wrote under that folder read as "not reported yet" for good (#4252).
   it('usage_read: the Claude folder the login shell sets outranks the daemon\'s own', async () => {
     vi.stubEnv('CLAUDE_CONFIG_DIR', '/fixture/claude-daemon')
-    report({ five_hour: { used_percentage: 1, resets_at: null } }, '/fixture/claude-daemon')
-    report({ five_hour: { used_percentage: 77, resets_at: null } }, '/fixture/claude-shell')
+    // The default deps read the real clock, so the reports are written now: older than an hour reads as stale (#4217).
+    report({ five_hour: { used_percentage: 1, resets_at: null } }, '/fixture/claude-daemon', Date.now())
+    report({ five_hour: { used_percentage: 77, resets_at: null } }, '/fixture/claude-shell', Date.now())
     shell.env = { CLAUDE_CONFIG_DIR: '/fixture/claude-shell' }
     // The default deps, with Codex left out by asking for the default Claude account alone.
     const requests = startUsage(fakeCore({ dataDir }))
