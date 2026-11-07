@@ -567,10 +567,10 @@ class ProjectSidebar extends StatelessWidget {
     final chat = reading.buddyChat;
     final agent = controller.buddy(project.id);
     // With no Buddy running it reads as the name the reader chose for it, or
-    // plain "Buddy" (its chat's default title names the owner, which the
-    // reader is): one name everywhere is the point of renaming (Lead, 10-29).
+    // "Your agent" (task #4568): one name everywhere is the point of renaming
+    // (Lead, 10-29).
     final name = agent == null
-        ? chat?.buddyName ?? 'Buddy'
+        ? chat?.buddyName ?? 'Your agent'
         : snapshot.agentName(agent.id, fallback: agent.name);
     return SuperTabBuddyRow(
       key: ValueKey('super-buddy-${project.id}'),
@@ -631,7 +631,7 @@ class ProjectSidebar extends StatelessWidget {
         agentId: agent?.id,
         agent: agent,
         name: agent == null
-            ? chat?.buddyName ?? 'Buddy'
+            ? chat?.buddyName ?? 'Your agent'
             : controller.snapshot!.agentName(agent.id, fallback: agent.name),
         tooltip: 'Your Buddy',
         compact: compact,
@@ -648,7 +648,7 @@ class ProjectSidebar extends StatelessWidget {
     }
     return _drawRow(
       chat ?? _unopenedSwarmBuddyChat,
-      label: 'Buddy',
+      label: 'Your agent',
       key: 'super-swarm-buddy',
       selected: _chatLit(chat),
       // Muted, it is greyed and never bold, as every chat (_drawRow).

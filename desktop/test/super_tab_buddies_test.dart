@@ -556,7 +556,8 @@ void main() {
         await tester.tap(buddyEntry);
         await tester.pumpAndSettle();
         // Named for its agent (task #4568): none runs here, so it reads as the person's agent.
-        expect(find.text('Your agent'), findsOneWidget);
+        // Its sidebar row and its header both say it (task #4568).
+        expect(find.text('Your agent'), findsWidgets);
         expect(find.textContaining("peer's Buddy"), findsNothing);
         await close(tester, c);
       },

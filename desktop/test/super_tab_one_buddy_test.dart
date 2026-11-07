@@ -150,7 +150,7 @@ void main() {
 
         expect(buddyRow, findsOneWidget);
         expect(
-          find.descendant(of: buddyRow, matching: find.text('Buddy')),
+          find.descendant(of: buddyRow, matching: find.text('Your agent')),
           findsOneWidget,
         );
         expect(

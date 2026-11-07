@@ -1048,7 +1048,7 @@ class _BuddyStartState extends State<_BuddyStart> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            'Start your Buddy to brainstorm here',
+            'Start your agent to brainstorm here',
             style: DesktopChrome.control(medium: true),
           ),
           const SizedBox(height: 8),
