@@ -1,9 +1,10 @@
 import { EventEmitter } from 'node:events'
-import { chmodSync, closeSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { placeNode } from '../testing/placeNode.js'
 import {
   LOG_TRIM_INTERVAL_MS, coreExecArgv, coreHandle, describeMasterStatus, heapLimitInArgv, masterDefaults, onProcessSignal, probeMaster, processExecve, processExit,
   readStatusFile, runMaster, supervisorOptions, trimLogEvery, writeStatusFile, type MasterStatusFile,
@@ -16,15 +17,6 @@ import {
 import { HARNESSD_PROTOCOL, LEAN_CORE_SCRIPT_ENV } from './protocol.js'
 import { DEFAULT_SUPERVISOR_OPTIONS, type ResumeState } from './supervisor.js'
 
-/** This test's Node at [path]: a hard link of the running one, or a copy where the temp folder is on
- *  another filesystem than the Node install (EXDEV: the Linux CI runner's toolcache, 2026-10-22). */
-function placeNode(path: string) {
-  try { linkSync(process.execPath, path) } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error
-    copyFileSync(process.execPath, path)
-    chmodSync(path, 0o755)
-  }
-}
 
 describe('supervisorOptions', () => {
   it('reads valid overrides and keeps the defaults for anything unset or invalid', () => {
