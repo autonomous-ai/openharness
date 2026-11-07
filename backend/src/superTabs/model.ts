@@ -11,6 +11,7 @@ import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
 import { FIRST_INSTRUCTIONS } from './instructions.js'
 import { visibleAccess } from './machineAccess.js'
+import { projectCard, withExtra } from './statusCard.js'
 import { processOf, projectColumns } from './process.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownerlessProjects, ownsProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
@@ -93,7 +94,12 @@ export interface Agent {
    *  window, the smallest any serving machine reported. One at a time; the result or the liveness sweep's lease drops it. */
   modelRequest?: { id: string; gridModel: string | null; gridName?: string; name?: string; servedBy?: string[]; machines?: string[]; contextWindow?: number; requestedBy: string; at: string
     /** Set when the Swarm sent the Buddy home by itself: the model hit a limit, kept failing, or nobody served it. */
-    reason?: 'limit' | 'failing' | 'gone' }
+    reason?: 'limit' | 'failing' | 'gone'
+    /** Only its thread sessions move: a move home left one on a shared model (buddyModel.ts, task #3810). */
+    sessionsOnly?: true }
+  /** A Buddy thread session that stayed on a shared model when its Buddy went home (task #3810): why it was sent home, and how
+   *  many times it stayed. The liveness sweep asks its machine to move it home again, three times at most (buddyModel.ts). */
+  homeOwed?: { reason?: 'limit' | 'failing' | 'gone'; tries: number }
   /** When the liveness sweep first found nobody serving the Buddy's `gridModel` (ms): two minutes on, it is sent home. */
   gridModelUnservedSince?: number
   /** The name its owner was shown for the Buddy's `gridModel`, for the lines after nobody serves it any more. */
@@ -483,9 +489,11 @@ export interface Conversation {
    *  pull request head re-derives the checks of, dormant ones included (#3394). Empty from a task's start; absent on a task
    *  from before, whose PR watch looks them up once (pullRequestEvents.ts listedSteps). */
   stepIds?: string[]
-  /** Its Linux test step, waiting for a Linux machine the project can test on (linuxSteps.ts, task #4278): set by a Ready that
+  /** Its Linux test step, waiting for a Linux machine the project can test on (osSteps.ts, task #4278): set by a Ready that
    *  found none, gone once the step opens. */
-  waitingLinuxStep?: import('./linuxSteps.js').WaitingStep
+  waitingLinuxStep?: import('./osSteps.js').WaitingStep
+  /** Its Windows test step, waiting likewise for a Windows machine (osSteps.ts, task #4410). */
+  waitingWindowsStep?: import('./osSteps.js').WaitingStep
   /** Its messages drawn as live cards: its task and each linked pull request (cards.ts). Absent until its first card. */
   cards?: import('./cards.js').GroupCards
   /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */
@@ -570,6 +578,9 @@ export interface Conversation {
   chatLimits?: import('./chatLimits.js').ChatLimits
   /** On a project's chat: its project's pulse as last worked out (pulse.ts recordPulse), which every read sends in `derived`. */
   pulse?: import('./pulse.js').Pulse
+  /** On a task: its line on its project's status card as the server last wrote it (statusCard.ts noteTaskLines, task #4419).
+   *  Readers get the lines in the project's `status` text (visibleState), never as a field. */
+  statusLine?: import('./statusCard.js').StatusLine
 }
 /** A step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed attempt left for
  *  the next one's brief; the failed start that caused it, if one did. */
@@ -1241,9 +1252,17 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     // loaded, by nobody.
     visible.projects = visible.projects.map(({ owed: _owed, ...p }) => {
       // What the PM owes is its host's alone (timeChecks.ts owedAsk): it may name a message in someone's private chat.
-      if (p.status === undefined) return p
       const chat = state.conversations.find(c => c.id === p.leadConversationId)
-      if (chat && canReadGroup(state, actor, chat)) return p
+      if (chat && canReadGroup(state, actor, chat)) {
+        // The server's lines, built from the tasks' own (statusCard.ts), then the coordinator's own; the stored status text is only
+        // the latter.
+        if (p.status?.shown) return p
+        const card = projectCard(state, p, now)
+        if (!card.text) return p
+        const lastChange = card.changedAt ?? Date.now()
+        return { ...p, status: { text: withExtra(card.text, p.status?.own ? p.status.text : null), at: new Date(lastChange).toISOString(), by: p.status?.by ?? chat.leadId ?? '', shown: true } }
+      }
+      if (p.status === undefined) return p
       const { status: _status, ...rest } = p
       return rest
     })
