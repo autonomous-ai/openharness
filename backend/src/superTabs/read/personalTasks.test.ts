@@ -142,7 +142,7 @@ describe('personal Tasks summaries', () => {
   })
   it('leaves out a proposal or task folded into another, and keeps the real task (task #4462)', () => {
     const s = scene(), row = s.stored.groups.find(g => g.key === s.f.web)!, real = s.stored.groups.find(g => g.key === s.f.secretGroup)!
-    const folded = { ...row, data: { ...row.data!, assignment: null, archived: true, foldedInto: real.key } }
+    const folded = { ...row, data: { ...row.data!, assignment: null, archived: true, foldedInto: [real.data!.number!] } }
     expect(personalTasksFor([folded, real], s.view(), peer)).toMatchObject({ upserts: [{ id: real.key }], removed: [row.key] })
     // No page reads it: its stored keys name nobody (read/feedIds.ts).
     expect(feedIdsOf(folded.data)).toEqual([])

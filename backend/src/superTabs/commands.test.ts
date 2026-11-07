@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { groupProject } from './projects.js'
 import { storeOldLeads } from './leads.test-support.js'
-import { applyCommand, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, WORDS, type Command, type CommandContext } from './commands.js'
+import { applyCommand, tasksNamedIn, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, WORDS, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { readsRawReason } from './startFailure.js'
 import { sweepLiveness } from './liveness.js'
@@ -2803,6 +2803,56 @@ describe('cancelling work', () => {
       const { f, leadActor, cancel } = unassigned()
       expect(() => f.run({ ...cancel, conversationId: 'lead' } as Command, leadActor)).toThrow('no longer the active assignment')
       expect(f.state.conversations.find(c => c.id === 'lead')!.archived).toBe(false)
+    })
+  })
+
+  // A duplicate, or work folded or split into others, names those tasks in its reason: it leaves people's Tasks and is kept
+  // (task #4462).
+  describe('naming where its work goes on', () => {
+    const task = (f: ReturnType<typeof fixture>, id: string) => f.state.conversations.find(c => c.id === id)!
+    it('reads the other tasks a reason names, never itself or a pull request', () => {
+      expect(tasksNamedIn('Duplicate of #4421', 4420)).toEqual([4421])
+      expect(tasksNamedIn('Being done inside #4445.', 4455)).toEqual([4445])
+      expect(tasksNamedIn('Accepted and split by area: #4465, #4466 to #4468', 4464)).toEqual([4465, 4466, 4468])
+      expect(tasksNamedIn('Same as #12 and #12, see #7 (this is #7)', 7)).toEqual([12])
+      expect(tasksNamedIn('Merged in PR #3529 and pull request #3530', 1)).toEqual([])
+      expect(tasksNamedIn('Not needed', 1)).toEqual([])
+      expect(tasksNamedIn(Array.from({ length: 20 }, (_, i) => `#${i + 100}`).join(' '), 1)).toHaveLength(10)
+    })
+    it('marks an unassigned proposal or live work cancelled into another task, and keeps it', () => {
+      const f = fixture(), dup = f.group(), plain = f.group()
+      f.run({ type: 'work.cancel', conversationId: dup, assignmentId: 'current', reason: 'Duplicate of #4421' })
+      f.run({ type: 'work.cancel', conversationId: plain, assignmentId: 'current', reason: 'Not needed' })
+      expect(task(f, dup)).toMatchObject({ foldedInto: [4421], archived: true })
+      expect(task(f, plain).foldedInto).toBeUndefined()
+      const { f: g, group, leadActor, cancel } = active()
+      g.run({ ...cancel, reason: 'Being done inside #4445' } as Command, leadActor)
+      expect(task(g, group)).toMatchObject({ foldedInto: [4445], assignment: { status: 'cancelled', result: 'Being done inside #4445' } })
+    })
+    it('links a task cancelled before, once, changing nothing else', () => {
+      const f = fixture(), dup = f.group()
+      f.run({ type: 'work.cancel', conversationId: dup, assignmentId: 'current', reason: 'Duplicate' })
+      const before = structuredClone(task(f, dup))
+      const link = { type: 'work.cancel', conversationId: dup, assignmentId: 'current', reason: 'Duplicate of #4421' } as Command
+      const effects = f.run(link)
+      expect(task(f, dup)).toEqual({ ...before, foldedInto: [4421] })
+      expect(effects.messages.map(m => [m.text, m.source])).toEqual([['owner noted where this task\'s work goes on: Duplicate of #4421.', { kind: 'system' }]])
+      expect(f.run({ ...link, reason: 'Duplicate of #4422' } as Command).messages).toHaveLength(0)
+      expect(task(f, dup).foldedInto).toEqual([4421])
+      // Naming no task, a closed one stays closed, as before.
+      expect(() => f.run({ ...link, reason: 'Duplicate' } as Command)).toThrow(expect.objectContaining({ code: 'ARCHIVED' }))
+      const { f: g, group, leadActor, cancel } = active()
+      g.run(cancel, leadActor)
+      g.run({ ...cancel, reason: 'Duplicate of #9' } as Command, leadActor)
+      expect(task(g, group)).toMatchObject({ foldedInto: [9], assignment: { status: 'cancelled', result: 'Duplicate of another task' } })
+    })
+    it('never marks finished work, and lets only who may cancel work link it', () => {
+      const { f, group, leadActor, assignmentId, cancel } = active()
+      expect(() => f.run({ ...cancel, reason: 'Duplicate of #9' } as Command, peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+      expect(task(f, group).foldedInto).toBeUndefined()
+      Object.assign(task(f, group), { archived: true, assignment: { ...task(f, group).assignment!, status: 'done' } })
+      expect(() => f.run({ type: 'work.cancel', conversationId: group, assignmentId, reason: 'Duplicate of #9' }, leadActor)).toThrow()
+      expect(task(f, group).foldedInto).toBeUndefined()
     })
   })
 })
