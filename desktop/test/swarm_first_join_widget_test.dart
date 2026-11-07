@@ -76,6 +76,8 @@ void main() {
           );
           await tester.pump();
         }
+        // Past the opened Swarm's view save.
+        await tester.pump(const Duration(seconds: 1));
         await tester.pumpAndSettle();
         expect(find.textContaining('still being prepared'), findsNothing);
         expect(find.byType(NewHarnessForm), findsNothing);

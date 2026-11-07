@@ -1,3 +1,5 @@
+import 'package:clock/clock.dart';
+
 /// Safe presentation text for a refused own-agent start. Never carries a raw
 /// daemon or network error, which can contain personal paths or content.
 class SwarmAgentLaunchFailure implements Exception {
@@ -45,10 +47,7 @@ class SwarmAgentLauncher {
     // A computer the Swarm does not list yet is recorded Buddy-only with its
     // folder and engines (backend buddy.create setup).
     if (!_listed) {
-      _prepared ??= await prepare(
-        '$operationId-prepare',
-      ).timeout(const Duration(seconds: 25));
-      _guard();
+      _prepared ??= await _prepareUntilReady('$operationId-prepare');
       _prepared = {
         ..._prepared!,
         'engines': [
@@ -66,5 +65,24 @@ class SwarmAgentLauncher {
     }, '$operationId-start').timeout(const Duration(seconds: 25));
     _guard();
     return result;
+  }
+
+  /// The computer answers "preparing" while it sets the folder up, which a
+  /// first ask always gets: ask again a second apart, as Add computer does
+  /// (machines.dart), for up to five minutes.
+  Future<Map<String, dynamic>> _prepareUntilReady(String operationId) async {
+    final deadline = clock.now().add(const Duration(minutes: 5));
+    while (true) {
+      final answer = await prepare(operationId)
+          .timeout(const Duration(seconds: 25));
+      _guard();
+      if (answer['state'] != 'preparing') return answer;
+      if (clock.now().isAfter(deadline)) {
+        throw SwarmAgentLaunchFailure(
+          '$machineName is still preparing your agent’s folder. Try again in a minute.',
+        );
+      }
+      await Future<void>.delayed(const Duration(seconds: 1));
+    }
   }
 }

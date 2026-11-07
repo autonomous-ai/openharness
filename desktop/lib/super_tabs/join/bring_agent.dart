@@ -78,11 +78,7 @@ Future<Map<String, dynamic>?> showBringAgentForm(
             'operationId': operation,
           })
           .timeout(const Duration(seconds: 20));
-      if (prepared['state'] == 'preparing') {
-        throw const SwarmAgentLaunchFailure(
-          'Your agent’s folder is still being prepared. Try again to check it.',
-        );
-      }
+      if (prepared['state'] == 'preparing') return prepared;
       if (prepared['state'] != 'ready' ||
           prepared['cwd'] is! String ||
           prepared['engines'] is! List) {
