@@ -136,7 +136,9 @@ Both use the existing Cmd-N form (`HarnessLaunchIntegration`, #4196), and only t
   (today's Bring agent, #4442). The agent becomes a Member of the project they pick. A person with no project to read
   sees only New project.
 - **What a project is:** the project's own one-line description. A project without one shows its repository's name.
-  The Lead or the project's owner sets the line in Project settings; it is plain text, at most 80 characters.
+  The Lead or the project's owner sets the line in Project settings; it is plain text, at most 80 characters. It goes
+  through the same credential check as other agent text (`WORDS` and `withoutCredentials` in `commands.ts`), so a key
+  pasted into it never reaches readers.
 
 ## 2. A Member's sessions and folders
 
@@ -294,8 +296,9 @@ Member's good behaviour.
 - Regular agents become Members too, but **a Regular agent's old session never becomes the chat session**: it has
   worked tasks that outside text could steer. It keeps its Regular scope, narrowed to the project of the task it holds:
   no person's chat, decisions, other projects or chat copies. It finishes that task there and then stops; an idle one
-  stops at once. The Member's chat session is a new one that has never run a task, started in the chat home; it reads
-  the Member's chat history as any chat session does. Its tasks start in new task sessions. A Regular agent working on
+  stops at once. The Member's chat session is a new one that has never run a task, started in the chat home. From
+  that chat's history it takes only its person's own messages as context; the old agent's posts were written by a
+  session that ran steerable tasks, so the new session never reads them (the person still sees the whole chat). Its tasks start in new task sessions. A Regular agent working on
   a task takes that task's project as its main project; an idle one asks like a Buddy. PM agents become Leads of their project,
   unchanged.
 - The person's first Member (the one they joined with, their old Buddy) is their **default Member**: the decisions,
@@ -376,8 +379,9 @@ private-folder check in `work.assign`, migrated sessions never doing tasks, the 
 project, attachment checks in the CLI. Security review 2 of 81687b4: the private check counts every private file
 Harness put on the computer, chat copies included (also any the host reports present), and Members are bounded
 per Swarm (1,000), with each computer's room deciding how many a person runs. Security review 2 of 8b0329f: a migrated
-Regular agent's old session keeps its Regular scope and stops after its task; the chat session is always new. Each line:
-answered.
+Regular agent's old session keeps its Regular scope and stops after its task; the chat session is always new. Security review 1 of 5b77ed4:
+that new chat session takes only its person's own messages from the old chat; the project line gets the credential
+check. Each line: answered.
 
 New data, all small and replaced in place, nothing appended per event:
 
@@ -525,7 +529,8 @@ stores a role.
      for tasks;
    - *sessions that ran tasks:* no session that has run a task ever gets a chat session's reads. A migrated Regular
      agent's old session keeps its Regular scope, narrowed to its task's project (no person's chat, decisions, other
-     projects or chat copies), until that task ends and it stops; the Member's chat session is new;
+     projects or chat copies), until that task ends and it stops; the Member's chat session is new, and from the old chat's history it takes only its person's own messages, never
+     the old agent's posts;
    - *the ask to start more* goes only to a computer owner who can read the project, in their own Tasks pane and chat,
      and names only the project and the count;
    - *attachments in a task thread* follow the thread's readers, and the CLI refuses files outside the project's
