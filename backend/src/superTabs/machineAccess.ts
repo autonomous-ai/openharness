@@ -200,16 +200,6 @@ const entryFor = (mac: ContributedMachine, name: string, account: AccessEntry['a
   mac.access?.find(e => e.account === account && sameAccessName(e.name, name))
 
 /**
- * Whether every name in [needed] is an own-account entry of [pool] its owner shared with teammates (`teammates`), ok: a
- * teammate's task that needs them runs in the owner's own account on that Mac, as with own-account work (design section 4).
- * Never for a Harness Team account's pool, which keeps no list, and never for a task that needs nothing.
- */
-export function sharedOwnAccess(pool: ContributedMachine | undefined, needed: readonly string[]): boolean {
-  if (!pool || pool.hostMachineId || pool.buddyOnly || !needed.length) return false
-  return needed.every(name => { const e = entryFor(pool, name, 'own'); return !!e && e.state === 'ok' && e.teammates === true })
-}
-
-/**
  * Why work for [project] that needs [needed] cannot run on [machineId], the pool it would run in (after teamMachineFor), or
  * null. It reads the entries of that account only: the Mac's own for the Mac, its Team account's for the Team pool. An entry
  * counts when it is ok, and an own-account one for a teammate's project only when its owner shared it or lets teammates'

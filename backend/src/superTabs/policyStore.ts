@@ -3,8 +3,8 @@
  * Every filter is an equality or a range on the indexed fields (tabId, projectId, revision): never `in` (hotFilters.test.ts).
  */
 import type { Prisma } from '@prisma/client'
-import { stableId } from './model.js'
-import { MAX_RULES_REVISIONS, projectRulesSchema, SEED_RULES, type ProjectRules, type RulesChange, type RulesWrite } from './policy.js'
+import { fail, stableId } from './model.js'
+import { MAX_RULES_REVISIONS, projectRulesSchema, seedRules, type ProjectRules, type RulesChange, type RulesWrite } from './policy.js'
 
 type Transaction = Prisma.TransactionClient
 
@@ -22,30 +22,33 @@ export interface RulesRevision {
   at: Date
 }
 
-/** The project's newest revision, or null when none is saved (the seed, revision 0). One indexed read. */
-export async function readRules(tx: Transaction, tabId: string, projectId: string): Promise<{ revision: number; rules: ProjectRules } | null> {
+/** The project's newest revision, or null when none is saved (the seed, revision 0). One indexed read.
+ * forEdit lets a rules save repair an invalid record; workers always require a valid one. */
+export async function readRules(tx: Transaction, tabId: string, projectId: string, forEdit = false): Promise<{ revision: number; rules: ProjectRules } | null> {
   const row = await tx.superTabProjectRules.findFirst({ where: { tabId, projectId }, orderBy: { revision: 'desc' }, select: { revision: true, rules: true } })
-  return row && { revision: row.revision, rules: row.rules as unknown as ProjectRules }
+  if (!row) return null
+  // Normalize legacy dispatch; only the repair path may read an invalid saved record.
+  const parsed = projectRulesSchema.safeParse(row.rules)
+  if (!parsed.success && !forEdit) fail('RULES_INVALID', `Project ${projectId} rules revision ${row.revision} does not pass the schema; repair the project rules by saving them again.`, 409)
+  return { revision: row.revision, rules: seedRules(tabId, projectId, parsed.success ? parsed.data : row.rules as unknown as ProjectRules) }
 }
 
 /** The record a project runs on now, for a server worker (the merge train, the release schedule): its newest revision, or
  *  the seed at revision 0. Takes the client or a transaction. */
 export async function currentRules(tx: Transaction, tabId: string, projectId: string): Promise<{ revision: number; rules: ProjectRules }> {
-  const saved = await readRules(tx, tabId, projectId)
-  if (!saved) return { revision: 0, rules: SEED_RULES }
-  // Checked again on the way out (SecAlder, review of #3250): a stored row the schema refuses (one with no read count, a
-  // pattern from a looser past schema) would read as fewer reads. It throws, and the caller holds: never a partial record.
-  const parsed = projectRulesSchema.safeParse(saved.rules)
-  if (!parsed.success) throw new Error(`project rules revision ${saved.revision} does not pass the schema; save the rules again`)
-  return { revision: saved.revision, rules: parsed.data }
+  return await readRules(tx, tabId, projectId) ?? { revision: 0, rules: seedRules(tabId, projectId) }
 }
 
-/** Every kept revision, newest first: at most MAX_RULES_REVISIONS rows of the same index. */
+/** Every kept revision, newest first: at most MAX_RULES_REVISIONS rows of the same index.
+ * Invalid history stays readable for repair; no worker runs on it. */
 export async function readRulesHistory(tx: Transaction, tabId: string, projectId: string): Promise<RulesRevision[]> {
   const rows = await tx.superTabProjectRules.findMany({ where: { tabId, projectId }, orderBy: { revision: 'desc' }, take: MAX_RULES_REVISIONS })
-  return rows.map(row => ({ revision: row.revision, rules: row.rules as unknown as ProjectRules, diff: row.diff as unknown as RulesChange[],
-    summary: row.summary, writtenBy: { kind: row.writtenByKind, id: row.writtenBy }, askedBy: row.askedBy,
-    askedIn: (row.askedIn ?? null) as RulesRevision['askedIn'], at: row.at }))
+  return rows.map(row => {
+    const parsed = projectRulesSchema.safeParse(row.rules)
+    return { revision: row.revision, rules: parsed.success ? parsed.data : row.rules as unknown as ProjectRules, diff: row.diff as unknown as RulesChange[],
+      summary: row.summary, writtenBy: { kind: row.writtenByKind, id: row.writtenBy }, askedBy: row.askedBy,
+      askedIn: (row.askedIn ?? null) as RulesRevision['askedIn'], at: row.at }
+  })
 }
 
 /** The new revision, created (never upserted: a second writer of the same revision meets the taken key and retries into

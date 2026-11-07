@@ -13,6 +13,7 @@ type Transaction = Prisma.TransactionClient
 
 /** The SwarmGroup indexes hot reads name, as prisma/schema.prisma declares them. */
 export const GROUP_INDEX = {
+  proposalDue: { deleted: 1, proposalDueAt: 1, tabId: 1, key: 1 },
   key: { tabId: 1, key: 1 },
   running: { tabId: 1, executionMachineId: 1 },
   agents: { tabId: 1, agentIds: 1 },
@@ -82,6 +83,7 @@ export const NAMED_INDEX = {
   SuperTabDelivery: {
     /** An agent's deliveries by status and age: its open ones, oldest first. */
     agentOpen: { tabId: 1, agentId: 1, status: 1, createdAt: 1 },
+    agentProposal: { tabId: 1, agentId: 1, status: 1, inputPriority: 1, createdAt: 1 },
     /** Finished deliveries by their last change: those old enough to compact (deliveryCompaction.ts). */
     compaction: { status: 1, updatedAt: 1 },
     /** Unfinished deliveries in id order, a page at a time (deliverySettle.ts). Named: with a fourth status Mongo planned the pass on

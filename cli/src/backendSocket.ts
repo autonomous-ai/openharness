@@ -265,7 +265,9 @@ export class BackendSocket {
   createProvider: ((payload: Record<string, unknown>, asker: Pick<Asker, 'local' | 'owner' | 'guest'>, reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
   createStatusProvider: ((payload: Record<string, unknown>, asker: Pick<Asker, 'local' | 'guest'>, reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
   cancelCreateProvider: ((payload: Record<string, unknown>, asker: Pick<Asker, 'local' | 'guest'>, reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
-  restartProvider: ((type: string, payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
+  /** `asker.ownerApp`: the request is from the machine owner's own app (the Desktop, a paired app or browser), not a
+   *  device, an agent's own CLI or a guest: only that one may change an agent's launch flags. */
+  restartProvider: ((type: string, payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void, asker: { ownerApp: boolean }) => Promise<void>) | null = null
   forkProvider: ((payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
   /** Opens a NEW agent that starts with `agentId`'s whole history (lib/forkAgent.ts), exactly as
    *  `agent_create` does, for the fork requests and the cable. `level` says what the new agent actually
@@ -1195,7 +1197,9 @@ export class BackendSocket {
           // A full probe starts interactive login shells and is intentionally detached from this
           // connection's ordered RPC chain. Request ids make its eventual reply safe to deliver out
           // of order; keeping it awaited here made a Create click sit behind an unrelated sweep.
-          void this.engineProbeProvider(asked && asked.length > 0 ? asked : undefined, { accounts: true })
+          // A guest starts agents on its own sign-in, so it needs only which engines are installed: the
+          // owner's sign-in and last use are never read for it (#4259, from #4216's security review).
+          void this.engineProbeProvider(asked && asked.length > 0 ? asked : undefined, { accounts: guest === undefined })
             .then((availability) => reply(type, requestId, {
               engines: availability.map((entry) => ({
                 engine: entry.engine,
@@ -1357,7 +1361,7 @@ export class BackendSocket {
         // A saved conversation resumed, or a live process relaunched in its pane (core/agents/launches.ts).
         case 'agent_resume':
         case 'agent_restart':
-          if (this.restartProvider) await this.restartProvider(type, payload, answer)
+          if (this.restartProvider) await this.restartProvider(type, payload, answer, { ownerApp: owner && !this.toolClients.has(connId) })
           else answer({ error: 'UNSUPPORTED_ON_REMOTE' })
           return
 

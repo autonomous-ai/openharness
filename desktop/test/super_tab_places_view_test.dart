@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -5,7 +6,7 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/view.dart';
 
-import 'super_tab_activity_lists_test.dart' show swarm;
+import 'super_tab_activity_lists_test.dart' show swarm, unreadThread;
 import 'support/super_tab_fixture.dart';
 
 /// The Swarm view of task #2996: the sidebar's three rows open their pages,
@@ -25,13 +26,16 @@ void main() {
   Finder key(String k) => find.byKey(ValueKey(k));
 
   Future<(SuperTabController, ConversationServer)> show(
-    WidgetTester tester,
-  ) async {
+    WidgetTester tester, {
+    void Function(ConversationServer server)? prepare,
+    bool board = false,
+  }) async {
     await tester.binding.setSurfaceSize(const Size(1300, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final server = swarm();
     server.append('A root to thread on');
     server.ask(['Ship it?']);
+    prepare?.call(server);
     final c = server.controller(
       account: 'owner',
       initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
@@ -42,6 +46,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.light),
         home: Scaffold(
           body: SuperTabView(
+            board: board,
             controller: c,
             onInvite: () {},
             onAddAgent: (_) {},
@@ -70,6 +75,7 @@ void main() {
 
   testWidgets('each row opens its page, named in the header', (tester) async {
     final (c, _) = await show(tester);
+    expect(key('super-leaderboard'), findsNothing);
     for (final (row, title, list) in [
       ('super-decisions', 'Decisions', 'super-decisions-list'),
       ('super-mentions', 'Mentions', 'super-mentions-list'),
@@ -80,6 +86,110 @@ void main() {
       expect(find.text(title), findsNWidgets(2), reason: '$row and header');
     }
     expect(find.text('Activity'), findsNothing);
+    await end(tester, c);
+  });
+
+  testWidgets(
+    'Leaderboard below Decisions opens this week and participates in Back and Forward',
+    (tester) async {
+      final (c, server) = await show(
+        tester,
+        board: true,
+        prepare: (server) {
+          server.leaderboard = {
+            'projectId': 'lead',
+            'allProjects': true,
+            'week': 1793577600000,
+            'people': [
+              {
+                'personId': 'owner',
+                'displayName': 'Owner',
+                'rank': 1,
+                'points': 4,
+                'shipped': {'count': 1},
+                'accepted': 1,
+                'unblocked': {'count': 0},
+                'agentsBrought': 2,
+                'streakDays': 1,
+              },
+            ],
+          };
+        },
+      );
+      expect(key('super-leaderboard'), findsOneWidget);
+      expect(
+        tester.getTopLeft(key('super-leaderboard')).dy,
+        greaterThanOrEqualTo(tester.getBottomLeft(key('super-decisions')).dy),
+      );
+      await tap(tester, 'super-decisions');
+      await tap(tester, 'super-leaderboard');
+      expect(find.text('This week'), findsOneWidget);
+      expect(key('weekly-person-owner'), findsOneWidget);
+      expect(
+        server.leaderboardReads.any((path) {
+          final query = Uri.parse(path).queryParameters;
+          return query['scope'] == 'all' && !query.containsKey('period');
+        }),
+        isTrue,
+      );
+      SuperTabPlaces.of(c).step(-1);
+      await _settle(tester);
+      expect(key('super-decisions-list'), findsOneWidget);
+      SuperTabPlaces.of(c).step(1);
+      await _settle(tester);
+      expect(find.text('This week'), findsOneWidget);
+      await end(tester, c);
+    },
+  );
+
+  // Tuan, task #3751: on the Threads page a card's #-link to a task changed the chat behind the page, so
+  // nothing on screen moved and the link read as dead.
+  testWidgets('a #-link in a Threads card opens its task, as in the chat', (
+    tester,
+  ) async {
+    final (c, _) = await show(
+      tester,
+      prepare: (server) {
+        (server.state['conversations'] as List)
+                .cast<Map<String, dynamic>>()
+                .firstWhere((g) => g['id'] == 'offline')['number'] =
+            42;
+        server.append('See #42 for the fix.');
+        final root = server.messages.last['id'] as String;
+        server.followedThreads = {
+          'unread': [
+            unreadThread(root, text: 'See #42 for the fix.')
+              ..['conversationId'] = 'lead',
+          ],
+          'read': [],
+          'more': false,
+        };
+      },
+    );
+    await tap(tester, 'super-threads');
+    expect(key('super-threads-list'), findsOneWidget);
+
+    TextSpan? link;
+    for (final text in tester.widgetList<RichText>(
+      find.descendant(
+        of: key('super-threads-list'),
+        matching: find.byType(RichText),
+      ),
+    )) {
+      text.text.visitChildren((span) {
+        if (span is TextSpan &&
+            span.text == '#42' &&
+            span.recognizer is TapGestureRecognizer) {
+          link = span;
+        }
+        return true;
+      });
+    }
+    expect(link, isNotNull, reason: 'the card shows #42 as a link');
+    (link!.recognizer! as TapGestureRecognizer).onTap!();
+    await _settle(tester);
+    expect(key('super-threads-list'), findsNothing);
+    expect(c.selectedId, 'offline');
     await end(tester, c);
   });
 

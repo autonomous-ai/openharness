@@ -1,13 +1,12 @@
 /**
  * The Windows pieces of the team daemon and of `harness team status` (docs/superpowers/plans/2026-10-28-harness-team-
  * account-windows.md, Tasks 4 and 5), as pure functions and PowerShell queries the platform code runs: the privacy
- * probes, the relay folder's ACL, the pinned gh zips, and what status asks Windows about the account and its task.
+ * probes, the pinned gh zips, and what status asks Windows about the account and its task.
  *
  * A query is a short script and its inputs, for lib/windows/powershell.ts `runPowershell`: the inputs travel in
  * environment variables, never in the script's text.
  */
 import { closeSync, lstatSync, openSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
-import { win32 } from 'node:path'
 import type { JobState } from './command.js'
 import type { TeamConfig } from './config.js'
 import type { GhBuild } from './gh.js'
@@ -141,36 +140,6 @@ export function windowsUserSid(stdout: string): string | null {
 /** The SIDs (the third column) of what `whoami /groups /fo csv /nh` printed. */
 export function windowsGroupSids(stdout: string): string[] {
   return stdout.split('\n').map((line) => line.trim()).filter(Boolean).map((line) => csvFields(line)[2] ?? '').filter((sid) => sid.startsWith('S-1-'))
-}
-
-// ── The relay folder ──────────────────────────────────────────────────────────────────────────
-
-const icacls = (env: NodeJS.ProcessEnv) => win32.join(env.SystemRoot ?? env.windir ?? 'C:\\Windows', 'System32', 'icacls.exe')
-const principal = (who: string) => who.startsWith('S-1-') ? `*${checkSid(who)}` : checkWindowsUser(who, 'team account')
-
-/**
- * What the owner's daemon runs on the relay folder, as an argument array, never a shell string: inheritance off, the
- * owner and SYSTEM full, the team account read, and nobody else. Administrators keep full control: an administrator
- * can take any file anyway, and it lets the elevated `harness team remove` delete the folder. `/grant:r` replaces
- * these principals' entries rather than adding to them, so each publish sets the same ACL again.
- */
-export function windowsRelayAclCommand(input: { dir: string; ownerSid: string; team: string }, env: NodeJS.ProcessEnv = process.env): { command: string; args: string[] } {
-  const dir = checkWindowsPath(input.dir, 'relay folder')
-  const owner = `*${checkSid(input.ownerSid, 'owner account')}`
-  return {
-    command: icacls(env),
-    args: [dir, '/inheritance:r', '/grant:r', `${owner}:(OI)(CI)F`, `${principal(input.team)}:(OI)(CI)R`, `*${SID.system}:(OI)(CI)F`,
-      `*${SID.administrators}:(OI)(CI)F`, '/q'],
-  }
-}
-
-/** A path's owner as a SID: the team side refuses a relay folder or file another account owns (Node's lstat has no
- *  owner on Windows). */
-export function windowsOwnerSidScript(path: string): PowershellQuery {
-  return {
-    script: '(Get-Acl -LiteralPath $env:HARNESS_PATH).GetOwner([Security.Principal.SecurityIdentifier]).Value',
-    inputs: { HARNESS_PATH: checkWindowsPath(path, 'path') },
-  }
 }
 
 // ── gh ────────────────────────────────────────────────────────────────────────────────────────

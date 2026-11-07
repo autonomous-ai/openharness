@@ -37,26 +37,29 @@ void main() {
     }
   });
 
-  test('watching the agent: the chime still comes, nothing is filed', () {
+  // Task #3607 (Tony, 2026-11-06): a finished turn is badge only.
+  test('watching the agent: nothing at all, not even a chime', () {
     final notice = decide(end(), watching: true);
-    expect(notice, AgentNotice.chime);
+    expect(notice, AgentNotice.none);
+    expect(notice.chimes, isFalse);
     expect(notice.marks, isFalse);
     expect(notice.alerts, isFalse);
   });
 
-  test('in front on another agent: marked and noticed, the banner over the app', () {
+  test('in front on another agent: a mark, no chime and no notice', () {
     final notice = decide(end());
-    expect(notice, AgentNotice.alert);
-    expect(notice.chimes, isTrue);
+    expect(notice, AgentNotice.filed);
+    expect(notice.chimes, isFalse);
     expect(notice.marks, isTrue);
-    expect(notice.alerts, isTrue);
+    expect(notice.alerts, isFalse);
   });
 
-  test('away: marked and noticed, whatever was on screen', () {
+  test('away: a mark and nothing louder, whatever was on screen', () {
     for (final watching in [true, false]) {
       final notice = decide(end(), inFront: false, watching: watching);
-      expect(notice, AgentNotice.alert);
+      expect(notice, AgentNotice.filed);
       expect(notice.marks, isTrue);
+      expect(notice.alerts, isFalse);
     }
   });
 
@@ -135,11 +138,7 @@ void main() {
           end(reply: '  ', tier: tier),
         ]) {
           for (final inFront in [true, false]) {
-            expect(
-              decide(e, inFront: inFront),
-              AgentNotice.none,
-              reason: '$e',
-            );
+            expect(decide(e, inFront: inFront), AgentNotice.none, reason: '$e');
           }
         }
       }
@@ -172,11 +171,11 @@ void main() {
       }
     });
 
-    test('alert: as far as the phone\'s place allows', () {
-      expect(decide(end(tier: NoticeTier.alert)), AgentNotice.alert);
+    test('alert: a mark like any other news, never a notice or a chime', () {
+      expect(decide(end(tier: NoticeTier.alert)), AgentNotice.filed);
       expect(
         decide(end(tier: NoticeTier.alert), inFront: false),
-        AgentNotice.alert,
+        AgentNotice.filed,
       );
     });
 
@@ -193,7 +192,7 @@ void main() {
     test('watching only counts in front', () {
       expect(
         decide(end(tier: NoticeTier.alert), inFront: false, watching: true),
-        AgentNotice.alert,
+        AgentNotice.filed,
       );
       expect(
         decide(end(tier: NoticeTier.list), inFront: false, watching: true),
