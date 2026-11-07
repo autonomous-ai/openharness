@@ -153,7 +153,7 @@ describe('Simple task lifecycle', () => {
   it('keeps Full review and test automation unchanged', () => {
     const f = fixture(), project = f.create('full'), task = f.task(project)
     task.status('review', ['backend/src/routes/auth.ts', 'desktop/lib/a.dart'])
-    expect(stepsOf(f.state, task.id).map(s => s.step)).toEqual(['Security review 1', 'Security review 2', 'Test'])
+    expect(stepsOf(f.state, task.id).map(s => s.step)).toEqual(['Security review 1', 'Security review 2', 'Test', 'Test on Windows'])
   })
 
   it.each(['Review', 'Test', 'Merge', 'Release'])('refuses a new explicit %s step for Simple work', step => {
@@ -180,7 +180,7 @@ describe('Simple task lifecycle', () => {
     expect(stepsOf(f.state, old.id)).toEqual([])
     const fresh = f.task(project)
     fresh.status('review', ['desktop/lib/a.dart'])
-    expect(stepsOf(f.state, fresh.id).map(s => s.step)).toEqual(['Review', 'Test'])
+    expect(stepsOf(f.state, fresh.id).map(s => s.step)).toEqual(['Review', 'Test', 'Test on Windows'])
   })
 
   it('does not change open steps or their evidence when switching Full to Simple', () => {
@@ -213,7 +213,7 @@ describe('Simple task lifecycle', () => {
     expect(stepsOf(f.state, old.id)).toEqual([])
     const fresh = f.task(project)
     fresh.status('review', ['desktop/lib/a.dart'])
-    expect(stepsOf(f.state, fresh.id).map(s => s.step)).toEqual(['Review', 'Test'])
+    expect(stepsOf(f.state, fresh.id).map(s => s.step)).toEqual(['Review', 'Test', 'Test on Windows'])
   })
 
   it('keeps an unnumbered dormant task Simple when its first later command gives it a number', () => {
@@ -241,7 +241,7 @@ describe('Simple task lifecycle', () => {
       expect(stepsOf(f.state, task.id)).toEqual([])
     }
     newest.status('review', ['desktop/lib/a.dart'])
-    expect(stepsOf(f.state, newest.id).map(s => s.step)).toEqual(['Review', 'Test'])
+    expect(stepsOf(f.state, newest.id).map(s => s.step)).toEqual(['Review', 'Test', 'Test on Windows'])
   })
 
   it('guards a Ready decision against a concurrent process change', () => {
