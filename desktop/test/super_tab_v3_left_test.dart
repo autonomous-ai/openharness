@@ -656,19 +656,6 @@ void main() {
       }
     });
 
-    // anh Dee 11-07 (1.3.90): idle showed a hollow circle and finished a check on every row.
-    test('a mark only while an agent works, needs you or failed', () {
-      for (final activity in HarnessActivity.values) {
-        expect(superTabAgentMark(activity), switch (activity) {
-          HarnessActivity.working ||
-          HarnessActivity.needsInput ||
-          HarnessActivity.failed => activity,
-          _ => null,
-        }, reason: '$activity');
-      }
-      expect(superTabAgentMark(null), isNull);
-    });
-
     // Audit finding 9 of task #4436 (task #4444): working, waiting, offline and starting all looked the same. Since
     // task #4466 a state is the row's one quiet word on the right, grey, with no coloured mark.
     testWidgets('a row says "offline" on the right when its agent is down, '
@@ -714,14 +701,17 @@ void main() {
         of: key('super-agent-kestrel'),
         matching: find.text('Kestrel Windows crew agent'),
       );
-      // No empty columns at the right: the name runs to the row's last 40 px (its mark and inset).
-      expect(tester.getRect(name).right, greaterThan(row.right - 40));
-      double? size(Finder f) => tester.widget<Text>(f).style?.fontSize;
-      final newAgent = find.descendant(
-        of: key('super-new-agent-row'),
-        matching: find.text('New agent'),
+      // No empty columns at the right: the name runs to the row's inset (task #4645: no marks' column).
+      expect(
+        tester.getRect(name).right,
+        greaterThan(row.right - grid.AppDesktop.controlGap - 1),
       );
-      expect(size(name), size(newAgent));
+      double? size(Finder f) => tester.widget<Text>(f).style?.fontSize;
+      final buddyName = find.descendant(
+        of: key('super-swarm-buddy'),
+        matching: find.text('Buddy'),
+      );
+      expect(size(name), size(buddyName));
       expect(tester.takeException(), isNull);
     });
 
@@ -838,31 +828,6 @@ void main() {
       expect(find.byTooltip('Kestrel'), findsNothing);
     });
 
-    testWidgets('+ New agent is the last row, below the agents, and hands on '
-        'to the creation dialog', (tester) async {
-      final created = <String>[];
-      await show(tester, agents: mine, setup: agents, created: created);
-      expect(find.byTooltip('New agent'), findsNothing);
-      expect(
-        top(tester, 'super-new-agent-row'),
-        greaterThan(top(tester, 'super-agent-orion')),
-      );
-      expect(
-        top(tester, 'super-new-agent-row'),
-        lessThan(top(tester, 'project-sidebar-humans')),
-      );
-      expect(
-        find.descendant(
-          of: key('super-new-agent-row'),
-          matching: find.text('New agent'),
-        ),
-        findsOneWidget,
-      );
-      await tester.tap(key('super-new-agent-row'));
-      await tester.pumpAndSettle();
-      expect(created, ['new']);
-    });
-
     // Task #4192: My agents folds with the same chevron as Projects, and the choice is remembered.
     testWidgets('its heading folds and unfolds it, and the choice is saved', (
       tester,
@@ -879,11 +844,7 @@ void main() {
       expect(key('super-agent-kestrel'), findsOneWidget);
       await tester.tap(key('project-sidebar-agents'));
       await tester.pump();
-      for (final row in [
-        'super-swarm-buddy',
-        'super-agent-kestrel',
-        'super-new-agent-row',
-      ]) {
+      for (final row in ['super-swarm-buddy', 'super-agent-kestrel']) {
         expect(key(row), findsNothing, reason: row);
       }
       expect(key('project-sidebar-agents'), findsOneWidget);
@@ -1095,13 +1056,11 @@ void main() {
       return c;
     }
 
-    testWidgets('the last row of My agents is + New agent, which opens Cmd-N', (
-      tester,
-    ) async {
+    testWidgets('the + on My agents opens Cmd-N', (tester) async {
       var opened = 0;
       final c = await view(tester, withApp: true, onNewAgent: () => opened++);
-      expect(key('super-new-agent-row'), findsOneWidget);
-      await tester.tap(key('super-new-agent-row'));
+      expect(key('project-sidebar-agents-add'), findsOneWidget);
+      await tester.tap(key('project-sidebar-agents-add'));
       await tester.pump();
       expect(opened, 1);
       expect(find.text('Create agent'), findsNothing);
@@ -1111,6 +1070,7 @@ void main() {
 
     testWidgets('without Cmd-N to open it has none', (tester) async {
       final c = await view(tester, withApp: true);
+      expect(key('project-sidebar-agents-add'), findsNothing);
       expect(key('super-new-agent-row'), findsNothing);
       await tester.pumpWidget(const SizedBox());
       c.dispose();
