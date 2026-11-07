@@ -13,10 +13,10 @@ import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/shared/widgets/app_icon_button.dart';
 import 'package:harness/super_tabs/buddy_card.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
-import 'package:harness/super_tabs/decisions.dart';
-import 'package:harness/super_tabs/decisions_view.dart';
 import 'package:harness/super_tabs/chat/agent_chat_header.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/decisions.dart';
+import 'package:harness/super_tabs/decisions_view.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -28,7 +28,6 @@ import 'package:harness/terminal/terminal_typography.dart';
 
 import 'super_tab_personal_tasks_pane_test.dart' show TasksFixture;
 import 'support/buddy_engine_fixture.dart';
-import 'support/super_tab_fixture.dart';
 
 /// The Swarm elements gallery (desktop-design-system.md, Swarm elements): every
 /// element drawn in light and dark against its checked-in image. A new or
@@ -142,9 +141,6 @@ Future<List<SuperTabController>> _show(
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = const Size(760, 1460);
   addTearDown(tester.view.reset);
-  // The decision cards read their answers' state from a reader's Decisions.
-  final reader = ConversationServer().controller(account: 'peer');
-  addTearDown(reader.dispose);
   await tester.pumpWidget(
     MaterialApp(
       debugShowCheckedModeBanner: false,
@@ -157,7 +153,8 @@ Future<List<SuperTabController>> _show(
           faces: faces,
           bars: [buddy, member],
           empty: empty,
-          decisions: SuperTabDecisions.of(reader),
+          // The decision cards read their answers' state from a reader's Decisions.
+          decisions: SuperTabDecisions.of(member),
         ),
       ),
     ),
@@ -427,7 +424,7 @@ class _Gallery extends StatelessWidget {
   /// A Swarm with no tasks: the Tasks pane empty.
   final SuperTabController empty;
 
-  /// The reader's Decisions, for the decision cards' answers.
+  /// Whose answers the decision cards read.
   final SuperTabDecisions decisions;
   static const boundary = ValueKey('swarm-elements-gallery');
 

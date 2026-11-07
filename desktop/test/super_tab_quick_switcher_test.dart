@@ -646,7 +646,8 @@ void main() {
           find.byKey(const ValueKey('swarm-quick-agent:wren')),
           findsNothing,
         );
-        expect(find.text('Your agent'), findsOneWidget);
+        // The agent's chat, and the reader's Buddy chat too, both read as the person's agent (task #4568).
+        expect(find.text('Your agent'), findsWidgets);
         await captureWindow(
           tester,
           shots,
