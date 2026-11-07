@@ -64,9 +64,10 @@ export function readClaudeReport(dataDir: string, configDir?: string): ClaudeRep
 
 function windowOf(raw: unknown): ClaudeReportWindow | null {
   const w = record(raw)
-  if (!w || !finite(w.used_percentage) || w.used_percentage < 0 || w.used_percentage > 100) return null
+  if (!w || !finite(w.used_percentage) || w.used_percentage < 0) return null
   if (w.resets_at !== null && w.resets_at !== undefined && !finite(w.resets_at)) return null
-  return { used_percentage: w.used_percentage, resets_at: finite(w.resets_at) ? w.resets_at : null }
+  // Above 100 is a window run past, so used up; a status line from before the clamp wrote it as is (#4252).
+  return { used_percentage: Math.min(w.used_percentage, 100), resets_at: finite(w.resets_at) ? w.resets_at : null }
 }
 
 const reportFile = (dataDir: string, key: string) => join(dataDir, 'quota', `claude-${createHash('sha256').update(key).digest('hex').slice(0, 16)}.json`)

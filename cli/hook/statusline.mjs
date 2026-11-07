@@ -66,8 +66,9 @@ function resetSeconds(value) {
 function windowOf(value) {
   if (!value || typeof value !== 'object') return null
   const used = value.used_percentage ?? value.utilization
-  if (typeof used !== 'number' || !Number.isFinite(used) || used < 0 || used > 100) return null
-  return { used_percentage: used, resets_at: resetSeconds(value.resets_at) }
+  if (typeof used !== 'number' || !Number.isFinite(used) || used < 0) return null
+  // A window Claude Code ran past reads above 100: used up, not unmeasured (#4252).
+  return { used_percentage: Math.min(used, 100), resets_at: resetSeconds(value.resets_at) }
 }
 
 /** The real path, in the case the file system keeps; the path itself while there is none. */
