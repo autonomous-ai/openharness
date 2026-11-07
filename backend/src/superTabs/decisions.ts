@@ -3,14 +3,13 @@
  *  with one tap, and the answer reaches the asking agent and the Lead in the conversation it came from. Decisions live in
  *  SuperTabDecision, never in the tab state, as mentions do. A decision is not a private channel: the PM's private lines go
  *  to the person's Buddy chat (buddies.ts). Called inside SuperTabStore's transactions. */
-import { defaultBuddy, defaultBuddyChat, isBuddy, isSwarmBuddy, openBuddyChat } from './buddies.js'
+import { defaultBuddyChat, isBuddy, isSwarmBuddy, openBuddyChat, ownAgentAuthor } from './buddies.js'
 import { switched } from './boardRights.js'
 import { usernameOf } from './usernames.js'
 import { agentWrittenNameOf } from './personNames.js'
 import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
-import { agentDisplayName } from './agentNames.js'
 import { AGENT_ONLY, fail, isLeads, person, stableId, type Actor, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, canReadGroup, groupProject, isClosedPmChat, ledProject, projectAgent, projectOf, projectsOf, readsRecordsIn } from './projects.js'
 import { LEDGER_WEEKS } from './leaderboard/record.js'
@@ -101,19 +100,21 @@ export function checkDirectAsk(questions: ReadonlyArray<{ defaultAt?: string }>)
 
 /** Each asked decision's line in its person's default Buddy chat, to their default Buddy, which brings it to them: the Buddy
  *  cannot answer it (answerable), the person answers in their Needs you list. Marked with its project, so it hides once they
- *  lose it (buddies.ts hiddenProjectRow). Written as [author], the agent that asked. */
-export function askedThroughBuddy(state: SuperTabState, group: Conversation, drafts: readonly DecisionDraft[], author: Author): MessageDraft[] {
-  return drafts.map(d => {
+ *  lose it (buddies.ts hiddenProjectRow). Written by that Buddy, naming [asker], the agent that asked: only the person and their
+ *  own agent post in their private chat (task #4558). With no Buddy there is no line; the ask waits in Needs you. */
+export function askedThroughBuddy(state: SuperTabState, group: Conversation, drafts: readonly DecisionDraft[], asker: Author): MessageDraft[] {
+  return drafts.flatMap(d => {
     const to = person(state, d.personId)
-    const buddy = defaultBuddy(state, to.id)
+    const author = ownAgentAuthor(state, to)
+    if (!author) return []
     const options = d.options.map((o, i) => i === d.recommended ? `${o} (recommended)` : o).join(' / ')
     const task = group.number ? ` on task #${group.number}` : ''
-    const text = `${author.displayName ?? author.name} asks ${usernameOf(state, to.id)}${task}: ${d.question}\n\nOptions: ${options}\n`
+    const text = `${asker.displayName ?? asker.name} asks ${usernameOf(state, to.id)}${task}: ${d.question}\n\nOptions: ${options}\n`
       + `Unblocks: ${d.unblocks}\n` + (d.mustAgree
         ? `No default applies: your agreement is required. At ${d.defaultAt}, the PM is told if you have not answered.`
         : `At ${d.defaultAt}, if not answered: ${d.options[d.recommended]!}.`)
-    return { id: stableId(d.id, 'buddy'), conversationId: defaultBuddyChat(state, to).id, author, text, replyTo: null,
-      recipients: buddy ? [buddy.id] : [], source: { kind: DECISION_ASKED_KIND, decisionId: d.id, projectId: d.projectId }, buddyProject: d.projectId }
+    return [{ id: stableId(d.id, 'buddy'), conversationId: defaultBuddyChat(state, to).id, author, text, replyTo: null,
+      recipients: [author.id], source: { kind: DECISION_ASKED_KIND, decisionId: d.id, projectId: d.projectId }, buddyProject: d.projectId }]
   })
 }
 export const DECISION_ASKED_KIND = 'decision-asked'
@@ -223,14 +224,13 @@ export function mustAgreePassed(state: SuperTabState, actor: Actor, decision: De
   return { noticeIn: noticeIn.id, text, recipients: lead && noticeIn.agentIds.includes(lead) ? [lead] : [], source: { kind: MUST_AGREE_KIND, decisionId: asked.id } }
 }
 
-/** The Lead's one line saying what it chose, in the person's own Buddy chat of that project: only they and their Buddy read
- *  it, and they were asked the question. Opened for the line when they have none (buddies.ts openBuddyChat), so it never
- *  drops: Buddies replaced Chat with PM (Ken, 10-29). */
+/** The one line saying what the Lead chose, in the person's own Buddy chat of that project: only they and their Buddy read
+ *  it, and they were asked the question. Opened for the line when they have none (buddies.ts openBuddyChat). */
 function delegatedLine(state: SuperTabState, projectId: string, leadId: string, asked: DecisionTarget, choice: number, defaulted = false) {
-  const lead = state.agents.find(a => a.id === leadId)
-  if (!lead) return null
   const to = person(state, asked.personId)
-  const author: Author = { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id), membershipGeneration: lead.membershipGeneration }
+  // Written by their own agent, as only they and it post in their private chat (task #4558); with none, Needs you shows it.
+  const author = state.agents.some(a => a.id === leadId) ? ownAgentAuthor(state, to) : undefined
+  if (!author) return null
   const question = asked.question.replace(/\s+/g, ' ')
   const text = `${defaulted ? `Default applied: ${asked.options[choice]!}` : answerText(asked.options[choice]!, true)} — ${question}`
   // In their one Buddy chat, marked with its project (Dee, 10-31), and in their older chat there for older apps.

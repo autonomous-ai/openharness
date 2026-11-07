@@ -75,6 +75,9 @@ Future<Opened> show(
           SwarmPage.leaderboard => throw UnimplementedError(
             'leaderboard has its own tests',
           ),
+          SwarmPage.projects => throw UnimplementedError(
+            'super_tab_projects_page_test.dart',
+          ),
         },
       ),
     ),

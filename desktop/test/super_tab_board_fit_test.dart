@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/tasks_view.dart';
+import 'package:harness/super_tabs/view.dart';
 
+import 'super_tab_activity_lists_test.dart' show swarm;
 import 'super_tab_tasks_view_test.dart' show taskFixture, tasksServer;
 import 'support/memory_key_value_store.dart';
 import 'support/super_tab_fixture.dart';
@@ -105,6 +108,115 @@ Future<void> _close(WidgetTester tester, SuperTabController c) async {
   await tester.pumpWidget(const SizedBox());
   await c.flush();
   c.dispose();
+}
+
+/// Audit finding 12 (task #4445): two proposals, two Next up, two Working, empty Done and Merged, one Shipped.
+ConversationServer crewServer() {
+  final server = swarm();
+  final now = DateTime.now();
+  server.proposals['lead'] = [
+    for (final (i, title) in [
+      'Rename a Swarm from the phone',
+      'Backlog shows nothing in Mine',
+    ].indexed)
+      {
+        'messageId': 'p-$i',
+        'title': title,
+        'personId': 'owner',
+        'at': now.subtract(Duration(hours: i + 1)).millisecondsSinceEpoch,
+      },
+  ];
+  final conversations = (server.state['conversations'] as List)
+      .cast<Map<String, dynamic>>();
+  conversations.removeWhere((g) => g['id'] == 'offline');
+  conversations.addAll([
+    taskFixture('hotfix', 'Sign-in loops forever after a token refresh', 30),
+    taskFixture('lanes', 'Document the crew lanes', 31),
+    taskFixture(
+      'composer',
+      'Composer keeps its draft across tabs',
+      32,
+      status: 'working',
+      agent: 'kestrel',
+    ),
+    taskFixture(
+      'machines',
+      'Machines list sorts by load',
+      33,
+      status: 'working',
+      agent: 'kestrel',
+    ),
+    taskFixture(
+      'invite',
+      'Invite link expires in a week',
+      34,
+      status: 'done',
+      agent: 'kestrel',
+      pullRequest: 3700,
+      merged: true,
+      shippedAt: now.subtract(const Duration(hours: 1)),
+    ),
+  ]);
+  return server;
+}
+
+/// The whole Desktop Swarm view in a [width] × 860 window, [server]'s project's Board open.
+Future<SuperTabController> showWindow(
+  WidgetTester tester,
+  ConversationServer server, {
+  double width = 1500,
+  Brightness brightness = Brightness.light,
+}) async {
+  await tester.binding.setSurfaceSize(Size(width, 860));
+  addTearDown(() => tester.binding.setSurfaceSize(null));
+  final previous = grid.AppTheme.brightness.value;
+  grid.AppTheme.brightness.value = brightness;
+  addTearDown(() => grid.AppTheme.brightness.value = previous);
+  final c = server.controller(
+    account: 'owner',
+    initial: {
+      'tabId': 'tab',
+      'projectsGroupOpen': true,
+      'accountId': 'owner',
+      'selectedId': 'lead',
+    },
+  );
+  await tester.runAsync(c.refresh);
+  await tester.pumpWidget(
+    MaterialApp(
+      debugShowCheckedModeBanner: false,
+      theme: grid.buildAppTheme(brightness: brightness),
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(disableAnimations: true),
+        child: child!,
+      ),
+      home: Scaffold(
+        body: SuperTabView(
+          controller: c,
+          onInvite: () {},
+          onAddAgent: (_) {},
+          onOpenTerminal: (_) {},
+          machineName: (_) => 'Mac Studio',
+          paneStore: MemoryKeyValueStore(),
+          board: true,
+        ),
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+  // A project's Board opens from the Projects grid (task #4466).
+  await tester.tap(_key('super-projects'));
+  await tester.pumpAndSettle();
+  await tester.tap(_key('super-group-lead'));
+  await tester.pumpAndSettle();
+  expect(_key('super-tasks-lead'), findsOneWidget);
+  return c;
+}
+
+Future<void> closeWindow(WidgetTester tester, SuperTabController c) async {
+  await tester.pumpWidget(const SizedBox());
+  c.dispose();
+  await tester.pump(const Duration(seconds: 5));
 }
 
 const _names = ['proposals', 'nextUp', 'working', 'done', 'merged', 'shipped'];
@@ -257,5 +369,68 @@ void main() {
       );
     }
     await _close(tester, c);
+  });
+
+  testWidgets('a 1500 window shows Proposal, Next up and Working whole, the '
+      'empty lanes after Working at the edge, never cut', (tester) async {
+    final c = await showWindow(tester, crewServer());
+    final view = tester.getRect(_board);
+    for (final name in ['proposals', 'nextUp', 'working']) {
+      final rect = tester.getRect(_column(name));
+      expect(rect.left, greaterThanOrEqualTo(view.left - .5), reason: name);
+      expect(rect.right, lessThanOrEqualTo(view.right + .5), reason: name);
+      expect(
+        rect.width,
+        greaterThanOrEqualTo(SuperTabTasksView.minColumnWidth),
+        reason: name,
+      );
+    }
+    _expectWhole(tester);
+    expect(
+      find.descendant(
+        of: _key('super-tasks-board-more-right'),
+        matching: find.text('Shipped 1'),
+      ),
+      findsOneWidget,
+    );
+    await closeWindow(tester, c);
+  });
+
+  testWidgets('at 880 the Board folds the left pane into its drawer, which '
+      'the header opens and Esc or a click outside closes', (tester) async {
+    final c = await showWindow(tester, crewServer(), width: 880);
+    expect(_key('super-left-pane'), findsNothing);
+    final menu = find.descendant(
+      of: _key('super-board-header'),
+      matching: find.byTooltip('Conversations'),
+    );
+    expect(menu, findsOneWidget);
+    // The Board's own bar is one row in the wider middle.
+    final bar = tester.getCenter(_key('super-tasks-layout-list')).dy;
+    expect(tester.getCenter(_key('super-tasks-search')).dy, closeTo(bar, 1));
+    expect(tester.getCenter(_key('super-tasks-mine')).dy, closeTo(bar, 1));
+    await tester.tap(menu);
+    await tester.pumpAndSettle();
+    expect(_key('super-projects'), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(_key('super-projects'), findsNothing);
+    expect(_key('super-tasks-lead'), findsOneWidget, reason: 'the Board stays');
+    await tester.tap(menu);
+    await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(860, 430));
+    await tester.pumpAndSettle();
+    expect(_key('super-projects'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await closeWindow(tester, c);
+  });
+
+  testWidgets('at 1100 the Board keeps the left pane, with no menu button', (
+    tester,
+  ) async {
+    final c = await showWindow(tester, crewServer(), width: 1100);
+    expect(_key('super-left-pane'), findsOneWidget);
+    expect(find.byTooltip('Conversations'), findsNothing);
+    await closeWindow(tester, c);
   });
 }

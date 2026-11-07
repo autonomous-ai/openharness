@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { opendir } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
 import type { LaunchModel } from './launchModel.js'
@@ -59,9 +60,22 @@ function validOutcome(outcome: AgentCreationOutcome | undefined): outcome is Age
 }
 
 export class AgentCreationReceiptError extends Error {
-  constructor(readonly code: 'INVALID_CREATION_ID' | 'CREATION_CONFLICT' | 'CREATION_STORAGE_FAILED') {
+  /** `detail`: for a storage failure that is a permissions problem, the folder and what its owner does (task #3861). Never a secret. */
+  constructor(readonly code: 'INVALID_CREATION_ID' | 'CREATION_CONFLICT' | 'CREATION_STORAGE_FAILED', readonly detail?: string) {
     super(code)
   }
+}
+
+/** A storage failure of the folder [directory]: with the folder and the fix when the account is refused it or does not own it
+ *  (stone7890's Mac, 11-06: root-owned, so every start waited for hours on a bare code). Harness never changes a person's folder
+ *  permissions: the owner of this computer does, and the words say how. */
+function storageFailure(directory: string, error: unknown): AgentCreationReceiptError {
+  const { code, message } = error as { code?: string; message?: string }
+  const permissions = code === 'EACCES' || code === 'EPERM' || /unsafe owner|writable/.test(message ?? '')
+  if (!permissions) return new AgentCreationReceiptError('CREATION_STORAGE_FAILED')
+  const home = homedir(), shown = directory === home || directory.startsWith(`${home}/`) ? `~${directory.slice(home.length)}` : directory
+  return new AgentCreationReceiptError('CREATION_STORAGE_FAILED',
+    `The creation folder ${shown} is not usable by this account (permissions). It must belong to this account with mode 700; the owner of this computer fixes that, Harness does not change it.`)
 }
 
 export function validCreationId(value: unknown): value is string {
@@ -396,7 +410,7 @@ export class AgentCreationReceipts {
       }
       this.syncDirectory()
       return true
-    } catch { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }
+    } catch (error) { throw error instanceof AgentCreationReceiptError ? error : storageFailure(this.directory, error) }
     finally { if (opened) rmSync(temporary, { force: true }) }
   }
 
@@ -476,7 +490,7 @@ export class AgentCreationReceipts {
     try { secureStateDirectory(this.directory, false) }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !completedIntent) return null
-      throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED')
+      throw storageFailure(this.directory, error)
     }
     try {
       const value = JSON.parse(readPrivateStateFile(file, 262_144)) as Partial<Receipt> | Partial<IntentReceipt>
@@ -505,7 +519,7 @@ export class AgentCreationReceipts {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !completedIntent
         && !this.readIntentPart(this.intentFile(id, 'claim')) && !this.readIntentPart(this.intentFile(id, 'result'))) return null
-      throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED')
+      throw storageFailure(this.directory, error)
     }
   }
 

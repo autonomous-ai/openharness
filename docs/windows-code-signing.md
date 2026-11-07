@@ -12,7 +12,7 @@ and Windows ships unsigned, exactly as before this change.
 
 | Release | Job | Files |
 | --- | --- | --- |
-| Desktop (`release-desktop.yml`) | `sign-windows` | every `.exe` and `.dll` in `Harness-windows-x64.zip` and `Harness-windows-arm64.zip` (`Harness.exe`, `harness-desktop.exe`, `harness_pipe_io.dll`, Flutter's and the plugins' DLLs), and `harness-install.exe` |
+| Desktop (`release-desktop.yml`) | `sign-windows` | every `.exe` and `.dll` in `Harness-windows-x64.zip` and `Harness-windows-arm64.zip` (`Harness.exe`, `harness-desktop.exe`, `harness_pipe_io.dll`, Flutter's and the plugins' DLLs), then `app/<version>/harness-desktop.cat`, a catalog of every file in the version folder, and `harness-install.exe` |
 | CLI (`release.yml`) | `pty-sign` | `harness-pty.exe`, `harness-launch.exe`, `harness.exe`, `harness-serial.exe` for x64 and arm64 |
 
 A file that already carries a valid signature keeps it: Microsoft's `conpty.dll` and `OpenConsole.exe` are not
@@ -37,6 +37,10 @@ pty-build (x64, arm64) ──> pty-sign (x64 only) ──────> windows-s
   4. Verify every `.exe` and `.dll` with `Get-AuthenticodeSignature`. Each needs status Valid and a timestamp, and
      each one we signed must name `WINDOWS_SIGNING_PUBLISHER`. The check uses the publisher name, not a thumbprint,
      because the certificate changes every few days.
+- **The Desktop catalog.** `data/app.so` (the Dart code), `icudtl.dat` and `flutter_assets/` cannot carry an
+  Authenticode signature, so after the programs are signed `New-FileCatalog -CatalogVersion 2.0` lists every file of
+  `app/<version>/` by hash in `harness-desktop.cat`, a second pass of the action signs it, and `Test-FileCatalog` must
+  say Valid. The updater refuses a version folder without it (`desktop/lib/update/update_signature.dart`).
 - **Desktop zips are opened, signed and written again** with the entries `package-windows.ps1` writes, under the same
   artifact names (`overwrite: true`). `upload-windows` and `check-windows-zip.py` are unchanged. The manifest's
   sha256 is the hash of the signed bytes.
@@ -148,8 +152,8 @@ unsigned again. Files already published stay validly signed, because each signat
 
 ## Not covered yet
 
-- **The updater and `harness-install.exe` do not check the publisher** of what they download; they rely on sha256
-  from the manifest. Requiring an AUTONOMOUS INC. signature there is a separate change for after signing is live.
+- **`harness-install.exe` does not check the publisher** of the zip it downloads; it relies on sha256 from the manifest.
+  The Desktop updater does (#4435): it installs a version only when it is signed like the running app.
 - **`windows-desktop.yml`'s staging release mode** builds unsigned staging packages. Add the same signing job there
   if staging E2E should cover signed files.
 - **The Windows Node runtime** (`release-node-runtime-windows.yml`) republishes nodejs.org's `node.exe`, which the

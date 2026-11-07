@@ -107,7 +107,7 @@ void main() {
         onNewProject: () => made++,
       );
       final sentence = find.text('Create a project to get started.');
-      final button = find.widgetWithText(FilledButton, 'New project');
+      final button = find.widgetWithText(TextButton, 'New project');
       expect(sentence, findsOneWidget);
       expect(button, findsOneWidget);
       expect(
@@ -126,7 +126,7 @@ void main() {
       server.state['projects'] = <dynamic>[];
       await show(tester, chrome: _recovers, server: server);
       expect(find.text('Create a project to get started.'), findsOneWidget);
-      expect(find.widgetWithText(FilledButton, 'New project'), findsNothing);
+      expect(find.widgetWithText(TextButton, 'New project'), findsNothing);
     });
   });
 
@@ -163,7 +163,7 @@ void main() {
       server.state['projects'] = <dynamic>[];
       await show(tester, chrome: null, server: server, onNewProject: () {});
       expect(find.text('Create a project to get started.'), findsOneWidget);
-      expect(find.widgetWithText(FilledButton, 'New project'), findsNothing);
+      expect(find.widgetWithText(TextButton, 'New project'), findsNothing);
     });
   });
 }

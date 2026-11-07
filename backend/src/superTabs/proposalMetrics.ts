@@ -2,7 +2,7 @@ import { Counter, Histogram } from 'prom-client'
 import { metrics } from '../lib/metrics.js'
 import type { MessageDraft, SuperTabState } from './model.js'
 
-type Event = 'created' | 'decided' | 'answered' | 'defaulted' | 'overdue' | 'revisited' | 'merged' | 'shipped'
+type Event = 'created' | 'decided' | 'answered' | 'defaulted' | 'revisited' | 'merged'
 interface Measure { event: Event; seconds?: number }
 const events = new Counter({ name: 'swarm_proposal_events_total', help: 'Committed proposal transitions', labelNames: ['event'] as const, registers: [metrics.registry] })
 const waits = new Histogram({ name: 'swarm_proposal_wait_seconds', help: 'Proposal decision and answer waits', labelNames: ['event'] as const,
@@ -17,8 +17,6 @@ export function proposalMeasures(values: Measure[]): void {
 }
 export function proposalMessageMeasures(state: SuperTabState, messages: MessageDraft[], now: number): Measure[] {
   return messages.flatMap<Measure>(m => {
-    if (m.source?.kind === 'proposal-overdue') return [{ event: 'overdue' }]
-    if (m.source?.kind === 'proposal-notice' && m.source.moment === 'shipped') return [{ event: 'shipped' }]
     const record = state.conversations.find(c => c.id === m.conversationId)?.proposal
     if (!record) return []
     const source = m.source, kind = source?.kind

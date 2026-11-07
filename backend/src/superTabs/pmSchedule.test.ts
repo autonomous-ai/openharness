@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Agent, Assignment, Conversation, SuperTabState, WorkStatus } from './model.js'
 import { BUILT_IN_HEADING, PM_SCHEDULE_TEXT, pmScheduleText, recordTidy, recordWake, SCHEDULE_SLOT_MS, scheduleMessageId, scheduleRequest, scheduleSlot, tidyMessageId, tidyRequest, tidySaved } from './pmSchedule.js'
 import { ARCHIVE_QUIET_MS } from './tidy.js'
-import { latestProcessNote } from './processNotes.js'
+import { latestProcessNote, PROCESS_NOTES } from './processNotes.js'
 import { REBASE_SWARMS } from './migration/rebase.js'
 import { SEED_RULES } from './policy.js'
 
@@ -392,12 +392,17 @@ describe('the built-in PM text by Swarm', () => {
   })
 
   it('wakes no PM outside the rebased Swarm for the v2 text note; the rebased Swarm\'s PM still hears it', () => {
+    const v2 = PROCESS_NOTES.find(note => note.id === '2026-11-06-v2-text')!
     const outside = swarm()
     outside.projects![0]!.processNote = { confirmed: '2026-11-06-crew' }
+    // A later note for every PM (#4459) wakes it, without the v2 text.
+    expect(wake(outside)?.processNote).toBe('2026-11-07-mktemp')
+    expect(wake(outside)?.draft.text).not.toContain(v2.text)
+    outside.projects![0]!.processNote = { confirmed: '2026-11-07-mktemp' }
     expect(wake(outside)).toBeNull()
     const rebased = { ...swarm(), id: REBASED }
     rebased.projects![0]!.processNote = { confirmed: '2026-11-06-crew' }
     expect(wake(rebased)?.jobs).toEqual(['process'])
-    expect(wake(rebased)?.processNote).toBe('2026-11-06-v2-text')
+    expect(wake(rebased)?.draft.text).toContain(v2.text)
   })
 })

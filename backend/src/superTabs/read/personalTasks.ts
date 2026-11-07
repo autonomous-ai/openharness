@@ -77,7 +77,7 @@ function summary(part: Part, reader: Reader): PersonalTask | 'gone' | null {
   // reader's login, closed since (read/feedIds.ts).
   const worker = group.assignment?.agentId ?? approval?.suggestedAgentId
   const own = asked || (!!worker && reader.agents.has(worker)) || group.assignment?.execution?.contributorId === member.id
-  if (part.deleted || group.proposal?.mergedInto || !own) return 'gone'
+  if (part.deleted || group.proposal?.mergedInto || group.foldedInto || !own) return 'gone'
   const agent = view.parts.agents.find(a => a.key === worker)?.data
   const asker = group.requesterId ? view.state.people.find(p => p.id === group.requesterId) : undefined
   const askerName = asker && (asker.name ?? asker.username)
