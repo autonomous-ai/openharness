@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'support/open_harness.dart';
 import 'support/launch_menu.dart';
 
@@ -179,16 +181,7 @@ Future<void> loadPreviewFonts({
     await load(family, ['/System/Library/Fonts/Menlo.ttc']);
   }
   await load('MaterialIcons', ['$materialFonts/MaterialIcons-Regular.otf']);
-  final home = Platform.environment['HOME'] ?? '';
-  final lucideRoot = Directory('$home/.pub-cache/hosted/pub.dev')
-      .listSync()
-      .whereType<Directory>()
-      .where((dir) => dir.path.contains('/lucide_icons_flutter-'))
-      .map((dir) => dir.path)
-      .fold<String?>(
-        null,
-        (best, path) => best == null || path.compareTo(best) > 0 ? path : best,
-      );
+  final lucideRoot = _packageRoot('lucide_icons_flutter');
   if (lucideRoot != null) {
     await load('packages/lucide_icons_flutter/Lucide', [
       '$lucideRoot/assets/lucide.ttf',
@@ -199,6 +192,25 @@ Future<void> loadPreviewFonts({
       ]);
     }
   }
+}
+
+/// Where pub put [package], from the package config `flutter test` runs with,
+/// so it is found on every OS: Windows keeps the pub cache under
+/// `%LOCALAPPDATA%\Pub\Cache` and has no `HOME` (run 42364609130). Read
+/// synchronously, since widget tests call this inside their fake clock.
+String? _packageRoot(String package) {
+  final config = File('.dart_tool/package_config.json');
+  if (!config.existsSync()) return null;
+  final packages =
+      (jsonDecode(config.readAsStringSync()) as Map)['packages'] as List;
+  for (final entry in packages.cast<Map>()) {
+    if (entry['name'] != package) continue;
+    return Directory.current.uri
+        .resolve('.dart_tool/')
+        .resolve(entry['rootUri'] as String)
+        .toFilePath();
+  }
+  return null;
 }
 
 void main() {

@@ -102,7 +102,7 @@ class _FinderChangesViewState extends State<FinderChangesView> {
 
   Widget _row(GitChanges repository, GitChange change) {
     final area = change.area;
-    final path = p.join(repository.root, change.path);
+    final path = repository.pathOf(change);
     return FinderChangeRow(
       key: ValueKey('finder-change-${area.name}-${change.path}'),
       change: change,

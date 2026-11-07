@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/harness_cli_runner.dart';
+import 'package:harness/core/hidden_process.dart';
 import 'package:harness/core/windows_layout.dart';
 import 'package:path/path.dart' as p;
 
@@ -282,9 +283,12 @@ void main() {
         r'ends\',
         '',
       ];
+      // The product's own runHidden, passed in: the runner refuses to spawn with no process
+      // functions under flutter test, and harnessHome is a scratch profile with an echo cli.js.
       final result = await HarnessCliRunner(
         harnessHome: harnessHome,
         environment: {...Platform.environment, 'USERPROFILE': profile.path},
+        runProcess: runHidden,
       ).run(arguments);
       expect(result.exitCode, 0, reason: '${result.stderr}');
       expect(jsonDecode('${result.stdout}'.trim()), arguments);

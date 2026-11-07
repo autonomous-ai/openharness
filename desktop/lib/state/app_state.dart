@@ -2667,13 +2667,18 @@ class AppNotifier extends ChangeNotifier {
     // Nothing will start for these either: a cancel that went through (its
     // journal delete did not), or a harness that started and stopped again.
     // Read as pending, Check status repeated "not started yet" forever.
-    if (result['creationId'] == creationId &&
-        (result['state'] == 'cancelled' || result['state'] == 'unavailable')) {
-      throw SuperTabFailure(
+    if (result['creationId'] == creationId && result['state'] == 'cancelled') {
+      throw const SuperTabFailure(
         'CREATION_FAILED',
-        result['state'] == 'cancelled'
-            ? 'This startup request was cancelled. Try again to start this project.'
-            : 'The harness started and then stopped. Try again to start this project.',
+        'This startup request was cancelled. Try again to start this project.',
+      );
+    }
+    // Its own code, so the request that started it can say what to do (hotfix #4709).
+    if (result['creationId'] == creationId &&
+        result['state'] == 'unavailable') {
+      throw const SuperTabFailure(
+        'CREATION_STOPPED',
+        'The harness started and then stopped. Start it again.',
       );
     }
     if (result['creationId'] != creationId ||
