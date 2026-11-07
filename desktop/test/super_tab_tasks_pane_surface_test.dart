@@ -157,7 +157,8 @@ void main() {
         final pane = t.getRect(find.byType(SuperTabPersonalTasksPane));
         expect(pane.size, const Size(340, windowHeight));
         if (count == 0) {
-          expect(find.text('No tasks yet'), findsOneWidget);
+          // Empty means empty (anh Dee, 11-07): no words under the header.
+          expect(find.text('No tasks yet'), findsNothing);
         } else {
           expect(find.text('Task number 0'), findsOneWidget);
           // The card with no agent is on screen, as the person's own task, with no agent avatar (#4204's cards

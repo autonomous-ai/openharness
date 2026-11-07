@@ -250,6 +250,37 @@ void main() {
       expect(chevron(), 0);
     },
   );
+  testWidgets(
+    'empty means empty: no tasks, or still loading, shows only the header',
+    (t) async {
+      List<String> words() => [
+        for (final text in t.widgetList<Text>(
+          find.descendant(
+            of: find.byType(SuperTabPersonalTasksPane),
+            matching: find.byType(Text),
+          ),
+        ))
+          text.data ?? '',
+      ];
+      Widget pane(SuperTabController c) => MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 340,
+            child: SuperTabPersonalTasksPane(controller: c, onOpenTask: (_) {}),
+          ),
+        ),
+      );
+      final loading = TasksFixture();
+      addTearDown(() => loading.controller.dispose());
+      await t.pumpWidget(pane(loading.controller));
+      expect(words(), ['Tasks']);
+      final empty = TasksFixture()..rows = [];
+      addTearDown(() => empty.controller.dispose());
+      await empty.controller.refresh();
+      await t.pumpWidget(pane(empty.controller));
+      expect(words(), ['Tasks', 'Accept all']);
+    },
+  );
   testWidgets('mode is saved by authenticated command and server read', (
     t,
   ) async {
