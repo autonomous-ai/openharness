@@ -5689,7 +5689,8 @@ export class SuperTabStore {
             ...earlier.filter(a => a.conversationId === group.id).map(a => a.agentId)].filter((id): id is string => typeof id === 'string' && !!id))]
             .map(id => `agent:${id}`)
           entry.pulls.push({ taskId: group.id, url: own, task: { checks: group.checks,
-            pullRequestHeads: (group as { pullRequestHeads?: TrainTask['pullRequestHeads'] }).pullRequestHeads, steps, builders } })
+            pullRequestHeads: (group as { pullRequestHeads?: TrainTask['pullRequestHeads'] }).pullRequestHeads, steps, builders,
+            done: group.assignment?.status === 'done' } })
         }
       }
       projects.push(...found.values())
