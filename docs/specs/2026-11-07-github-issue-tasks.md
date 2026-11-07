@@ -149,7 +149,21 @@ Harness acts on these changes made on GitHub:
 **The close note.** When a PR merges with CI green, Harness posts one comment and closes the issue. The comment says what
 changed (the PR's title and link) and how it was tested (the names of the checks green at the merged head, and of the
 review steps that said Yes). It carries no evidence text, so no machine name, path or agent output reaches GitHub. It is
-capped at 2,000 characters. It is the only comment Harness writes on an issue. PR bodies say `Refs #N`, never `Closes #N`, so GitHub doesn't close an issue on a red merge.
+capped at 2,000 characters. It is the only comment Harness writes on an issue, apart from the reopen line below.
+
+**No close without green checks.** GitHub closes an issue on merge when a PR body or a commit message on the default
+branch says `Closes`, `Fixes` or `Resolves #N`, whatever the checks. Agents write both, so a line in the PR template
+isn't enough. Three guards cover it:
+
+1. **Commits:** the `commit-msg` hook Harness already installs for agent sessions (`docs/swarm-github-app.md`,
+   Attribution) rewrites a closing word before the task's issue number to `Refs`. Commits made outside Harness's hooks
+   are caught by guard 3.
+2. **PR bodies:** the server's PR watch rewrites the same words to `Refs` in the body of a task's PR, through the app.
+   The merge train refuses a PR whose body or commits still close a linked issue, with `ISSUE_CLOSING_KEYWORD`.
+3. **The receiver:** when a linked issue closes and Harness didn't close it, the receiver reads the issue's latest
+   `closed` event. If GitHub closed it from a commit or a merged PR (the event carries a `commit_id` or a PR source),
+   and Harness hasn't seen green checks at that merged head, Harness reopens it once. It adds one line: "Reopened by
+   Harness: checks weren't green at the merge." The PM is told. A close by a person with write access is never reopened.
 
 **The owner.** The issue's assignee starts as the task's requester. Ownership on GitHub is shown, not obeyed: Accept,
 Decline and every other authority stay with the Harness requester and the existing server checks. A person links their
@@ -373,9 +387,12 @@ Order:
   cached 10 minutes). Below write, the change is shown and the PM is told, but nothing starts or stops. If the read
   fails, it is treated as below write.
 - **The webhook route** (`POST /api/github/webhook`) is the only new unauthenticated route:
-  - It checks `X-Hub-Signature-256` with a constant-time compare before parsing.
+  - It checks `X-Hub-Signature-256` with a constant-time compare over the exact bytes received, before any parsing
+    (the route takes the raw body, never a re-serialised one).
   - It takes at most 1 MB.
   - It accepts only `issues`, `repository`, `installation` and `installation_repositories` events.
+  - It applies a delivery only when its `installation.id` and `repository.id` are the ones recorded on the linked
+    project. Any other delivery is answered `204` and changes nothing.
   - It answers within 10 s. A busy store answers `503`, and the redelivery pass picks the delivery up.
 
 ### 8. Identity
@@ -405,6 +422,7 @@ Order:
 | Assignee dropped by GitHub (no repository access) | Sync pass | PM: "<person> can't be assigned on GitHub" | Owner kept in Harness; issue unassigned |
 | Repository and project audiences stop matching (either side changed) | Receiver, or the visibility read before a create | Project owner: one line naming the side to change; sync stops | Match them again; sync resumes and reads each issue again |
 | Merged with CI red | Merge path | PM: the issue stays `in review` | A green fix-forward merge closes it |
+| GitHub auto-closed the issue from a commit or PR at a head that wasn't green | Receiver | The issue is reopened with one line, and the PM is told | A green fix-forward merge closes it |
 | Issue deleted or transferred | Receiver | PM, and the task loses its number | The task goes on in Harness |
 | Rate budget full | Sync pass | "Syncing to GitHub"; the wait histogram rises | Writes drain in order as the budget allows |
 | Brief names a person, machine or account, or holds an email (public repository) | Server, before creating the issue | PM: which kind of name held it back (never the name) | Edit the brief; the issue is created then. Until then the task works in Harness |
@@ -413,7 +431,8 @@ Order:
 ### 10. Platforms
 
 - The backend (Linux) does all GitHub work. No daemon, CLI core or PTY change, so macOS, Windows and Linux machines
-  behave alike, and no process starts.
+  behave alike, and no process starts. The one machine-side change is the closing-word rewrite in the `commit-msg` hook
+  (Swarm code in the CLI, not core). It runs through Git for Windows as on a Mac and is tested on both (build task 6).
 - Desktop (macOS, Windows, Linux) and web show the number in the card task, tested offscreen in light and dark.
 - iOS and Android ignore the field until their own task.
 - The CLI prints the URL, the same on every platform.
@@ -459,8 +478,9 @@ spec.
    - GitHub-side close and reopen acting on the task.
    - Agent tokens drop `issues` on GitHub projects.
    - Security review.
-6. **Close on a green merge** (S, backend). The close note (PR link and check names only, capped), `Refs #N` in the PR line, and red merges
-   left `in review`.
+6. **Close on a green merge** (M, backend and the CLI hook). The close note (PR link and check names only, capped). The
+   three closing-word guards: the commit hook rewrite, the PR-body rewrite and train refusal, and the receiver's reopen of
+   an automatic close at a head that wasn't green. Red merges stay `in review`.
 7. **Issue number on the task card** (S, Desktop and web). Takes the mockup from its own task. Adds `issue` to
    `personalTasks` and group views. Design system doc and gallery updated in the same PR.
 8. **Migrate open tasks** (M, backend job). Dry run per project, then the run with Ken's go, project by project,
