@@ -28,7 +28,7 @@ import { jobKindOf } from './evidence/jobKind.js'
 import { endSteps, listStep, stepEndedRows, isStep, stepName, stepsOf, taskOwner } from './steps.js'
 import { closeMerged } from './mergedTasks.js'
 import { noteWriter } from './stuck.js'
-import { reviewPlan, refreshStepBrief, stepOsRefusal, type PlannedStep, type StepKind } from './reviewTable.js'
+import { reviewPlan, refreshStepBrief, stepOs, stepOsRefusal, type PlannedStep, type StepKind } from './reviewTable.js'
 import { openReviewStep, type StepPull } from './stepOpen.js'
 import { stopWaiting, testsOn, WAIT_LINE, waitFor, waits } from './osSteps.js'
 import { builtBy, reviewerCandidates, STRENGTH_RULE } from './reviewerPick.js'
@@ -419,6 +419,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('agent.startSettled'), startId: id, warning: z.string().max(2000).nullable(),
     configuration: configuration.optional() }).strict(),
   z.object({ type: z.literal('agent.startFailed'), startId: id, error: text }).strict(),
+  // Why its machine holds a start it has not launched, told once per reason (cli superTabs/machines.ts): shown on the start until it ends.
+  z.object({ type: z.literal('agent.startWaiting'), startId: id, reason: text }).strict(),
   z.object({ type: z.literal('agent.stopLease'), agentId: id, releaseId: id }).strict(),
   z.object({ type: z.literal('agent.switchClaim'), agentId: id, switchId: id }).strict(),
   // The source PM's host sends the prepared handoff to the candidate start; it is not a general chat message or visible to readers.
@@ -546,6 +548,7 @@ export const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'work.lane': ['lane'],
   'agent.start': ['request.name', 'request.roleName', 'overrideReason'],
   'agent.startFailed': ['error'],
+  'agent.startWaiting': ['reason'],
   'agent.switchResult': ['error'],
   'agent.screenResult': ['error'],
   'agent.inputResult': ['error'],
@@ -2062,7 +2065,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     const pulls = read.heads ?? read.urls.map((url, i) => ({ url, head: i === 0 ? read.head : null }))
     for (const planned of reviewPlan(read.files, context.projectRules?.rules)) {
       const free = (step: Conversation) => !taken.has(step.id)
-      let step = existing.find(s => free(s) && stepName(s) === planned.name) ?? existing.find(s => free(s) && stepKind(s) === planned.kind)
+      let step = existing.find(s => free(s) && stepName(s) === planned.name) ?? existing.find(s => {
+        if (!free(s) || stepKind(s) !== planned.kind) return false
+        // A named OS step keeps its identity: adding a Mac test must not consume Windows through the kind fallback (#3778).
+        const os = planned.kind === 'test' ? stepOs(s) : undefined
+        return !os || os === planned.os
+      })
       if (step) {
         taken.add(step.id)
         step.brief = refreshStepBrief(step.brief ?? '', planned, { number: task.number!, title: task.title, pulls })
@@ -3822,10 +3830,17 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'agent.startDispatch':
     case 'agent.started':
     case 'agent.startSettled':
+    case 'agent.startWaiting':
     case 'agent.startFailed': {
       const start = state.starts?.find(s => s.id === command.startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
       if (!mayResumeStart(state, actor, start)) fail('FORBIDDEN', 'Only whoever made this start, or its project\'s coordinator, carries it on.', 403)
       if (person(state, start.contributorId).generation !== start.membershipGeneration) fail('FORBIDDEN', 'This contribution was withdrawn.', 403)
+      if (command.type === 'agent.startWaiting') {
+        // A start that ended says so itself; a late report changes nothing. A reason told again keeps when it was first told.
+        if (!start.harnessId && !start.error && start.waiting?.reason !== command.reason) start.waiting = { reason: command.reason, at: context.now }
+        break
+      }
+      delete start.waiting
       if (command.type === 'agent.startDispatch') {
         if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
         if (!['claude', 'codex'].includes(start.request.engine)) {
