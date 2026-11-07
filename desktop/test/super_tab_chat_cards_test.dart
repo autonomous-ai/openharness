@@ -76,6 +76,20 @@ void main() {
       expect(inCard('Built by'), findsOneWidget);
       expect(inCard('app · PR #7'), findsOneWidget);
     });
+
+    testWidgets('is as wide as its words, as a brief\'s card is', (
+      tester,
+    ) async {
+      await showView(tester, shipServer());
+      final ship = find.byType(SuperTabShipRow);
+      final card = tester.getRect(
+        find.descendant(
+          of: ship,
+          matching: find.byKey(const ValueKey('swarm-chat-card')),
+        ),
+      );
+      expect(card.width, lessThan(tester.getSize(ship).width / 2));
+    });
   });
 
   group('a long message', () {
@@ -93,6 +107,22 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('More'), findsNothing);
       expect(find.text('Line 14 of the plan.').hitTestable(), findsOneWidget);
+    });
+
+    testWidgets('fades out above More, so no line shows cut in half', (
+      tester,
+    ) async {
+      final server = ConversationServer()..append(long, agent: true);
+      await showView(tester, server);
+      final fade = find.byKey(const ValueKey('swarm-fold-fade'));
+      expect(fade, findsOneWidget);
+      expect(
+        tester.getBottomLeft(fade).dy,
+        lessThanOrEqualTo(tester.getTopLeft(find.text('More')).dy),
+      );
+      await tester.tap(find.text('More'));
+      await tester.pumpAndSettle();
+      expect(fade, findsNothing);
     });
 
     testWidgets('from a person is never folded', (tester) async {
