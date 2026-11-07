@@ -11,6 +11,7 @@ import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from 
 import { admitByRoom, admitMachineStart, AGENT_MEMORY_BYTES, noRepositoryStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamAccountPool, teamPoolsOf, teamWorkCheck, TEAM_ACCOUNTS_GONE, NOT_YOUR_COMPUTER, type ContributedMachine } from './machines.js'
 import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
+import { agentChatId, inMyAgents } from './agentKind.js'
 import { addedAgentName, renameAgentTo } from './agentRename.js'
 import { addCrew, CREW_ROLE_MAX, removeCrew } from './crew.js'
 import { noteIndex } from './processNotes.js'
@@ -417,6 +418,8 @@ export const commandSchema = z.discriminatedUnion('type', [
     mainProjectId: id.optional(),
     // A Member its person's Desktop starts itself through Cmd-N (task #4196): only its chat opens here; agent.add brings in the session.
     local: z.literal(true).optional() }).strict(),
+  // A person's private chat with their own Lead (task #4664): opened once, the same chat after.
+  z.object({ type: z.literal('agent.chat'), agentId: id }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
   z.object({ type: z.literal('agent.started'), startId: id, harnessId: id, configuration,
     startedSession: z.object({ sessionId: id, createdAt: z.iso.datetime() }).strict().optional() }).strict(),
@@ -3873,6 +3876,27 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         contributorId: me.id, membershipGeneration: me.generation, machineOwnerId: grant.machineOwnerId, hostGrant: null, request,
         harnessId: null, dispatched: false, error: null, requestedAt: context.now })
       Object.assign(result, { conversationId: chatId, startId: operationId })
+      break
+    }
+    case 'agent.chat': {
+      // My agents opens every agent's private chat with its person (task #4664, anh Dee 11-07): an agent is a direct message, a
+      // project a group chat. Only they and that Lead read it (projects.ts readsAgentChat); the Lead still posts in its project chat.
+      if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person opens a chat with their own agent.', 403)
+      const me = person(state, actor.userId)
+      const target = state.agents.find(a => a.id === command.agentId)
+      if (!target || !inMyAgents(state, actor, target)) fail('NOT_FOUND', 'This agent is unavailable.', 404)
+      // A Member's chat opens with it (agent.new); a Lead's opens here, once.
+      if (!ledProject(state, target.id)) fail('AGENT_CHAT_LEAD_ONLY', 'Only a Lead opens its chat here. A Member has its own.', 400)
+      // The chat's readers are its person and their agent on their own computer: a Lead elsewhere could not read it.
+      if (target.machineOwnerId !== me.id) fail('AGENT_OWN_MACHINE', 'This Lead runs on another computer. Open its project chat.', 403)
+      const existing = agentChatId(state, target)
+      if (existing) {
+        result.conversationId = existing
+        break
+      }
+      const chatId = openAgentChat(me, agentDisplayName(state.agents, target.id) ?? target.name)
+      conversation(state, chatId).agentIds.push(target.id)
+      result.conversationId = chatId
       break
     }
     case 'agent.startDispatch':

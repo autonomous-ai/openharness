@@ -3,6 +3,7 @@ import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
 import { createSuperTab, SuperTabError, type Actor, type SuperTabState } from './model.js'
 import { agentChatId } from './agentKind.js'
+import { agentDisplayName } from './agentNames.js'
 import { ledProject, readConversation } from './projects.js'
 
 // Task #4664 (anh Dee 11-07, 21:23): clicking his Lead in My agents opened its project chat, a Member a private chat. One rule,
@@ -22,7 +23,7 @@ const code = (body: () => unknown): string | null => {
 }
 const say = (chat: string, text: string) => ({ type: 'message.send', conversationId: chat, text, replyTo: null, recipientIds: [] }) as Command
 
-/** Mate's Lead Faye of project Lamp, started and running on mate's own computer, and mate's Member Ada in her own chat. */
+/** Mate's Lead (Faye here) of project Lamp, started and running on mate's own computer, and mate's Member Ada in her own chat. */
 function swarm() {
   let state: SuperTabState = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
   let sequence = 0
@@ -57,7 +58,9 @@ describe('a Lead\'s private chat with its person', () => {
     expect(agentChatId(f.state, f.state.agents.find(a => a.id === f.faye)!)).toBeNull()
     const chat = f.open(f.faye)
     expect(chat).not.toBe(f.projectChat)
-    expect(f.state.conversations.find(c => c.id === chat)).toMatchObject({ kind: 'agent-chat', title: 'Faye', agentIds: [f.faye],
+    // Named as My agents names it: its display name.
+    const name = agentDisplayName(f.state.agents, f.faye)
+    expect(f.state.conversations.find(c => c.id === chat)).toMatchObject({ kind: 'agent-chat', title: name, agentIds: [f.faye],
       audience: { people: [{ id: 'mate' }] } })
     expect(agentChatId(f.state, f.state.agents.find(a => a.id === f.faye)!)).toBe(chat)
     // A second click, or a second window, opens the same chat.
@@ -93,7 +96,7 @@ describe('a Lead\'s private chat with its person', () => {
     expect(code(() => f.open(f.faye, owner))).toBe('NOT_FOUND')
     expect(code(() => f.open(f.faye, { kind: 'agent', agentId: f.faye, machineOwnerId: 'mate' }))).toBe('HUMAN_REQUIRED')
     expect(code(() => f.open(f.ada))).toBe('AGENT_CHAT_LEAD_ONLY')
-    expect(code(() => f.open('nobody'))).toBe('NOT_FOUND')
+    expect(code(() => f.open('nobody'))).toBe('AGENT_UNAVAILABLE')
     expect(f.state.conversations.filter(c => c.kind === 'agent-chat')).toHaveLength(1)
   })
 
