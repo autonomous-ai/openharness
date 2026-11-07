@@ -374,6 +374,8 @@ export interface HostPool {
   capabilitiesWanted?: true
   /** Asks for positive idle Buddy activity in fresh machine readings (#3824). */
   buddySleepWanted?: true
+  /** Asks the host for its disk's projects and its Members' set-ups (machines.ts projectsOnDisk, memberSetUp; task #4543). */
+  memberProjectsWanted?: true
 }
 
 /** HTTP 426 on GET /api/super-tabs, /:tabId, /hosts/:m, /hosts/:m/pools and /hosts/:m/assignments. */

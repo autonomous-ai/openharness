@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 // The login shell's environment is captured once and kept for minutes: each test here moves the engine homes in its own process.env.
 vi.mock('../engines/kit/launchExecutable.js', async (original) => ({ ...await original<object>(),
   launchEnvironment: async () => Object.fromEntries(['HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME'].filter(k => process.env[k] !== undefined).map(k => [k, process.env[k]])) }))
-import { BUDDY_COPIES_FILE, buddyProjectsOf, folderName, prepareBuddyHome, pruneBuddyHome, buddyHomeDue, refreshBuddyHome, removeBuddyHome, trustBuddyHome } from './buddyHome.js'
+import { BUDDY_COPIES_FILE, buddyHomesProjectIds, buddyProjectsOf, folderName, prepareBuddyHome, pruneBuddyHome, buddyHomeDue, refreshBuddyHome, removeBuddyHome, trustBuddyHome } from './buddyHome.js'
 
 /** A link to a folder: a junction on Windows, which needs no Developer Mode or administrator (Window of Tim, #3815) and which
  *  lstat reads as a link exactly as the Buddy folder's checks do; a symbolic link elsewhere. */
@@ -104,6 +104,14 @@ describe('a person\'s one Buddy\'s folder', { timeout: GIT_TIMEOUT }, () => {
     expect(await prepareBuddyHome(home, [{ id: 'web', name: 'Web', cwd: web }])).toEqual({ ready: ['Web'], missing: [] })
   })
 
+  // Task #4543: every copy here counts as that project's files on this computer, whose private ones keep Members' public tasks off it.
+  it('says which projects every Buddy home on this machine holds a copy of', async () => {
+    const r = root(), web = checkout(r, 'web-src'), app = checkout(r, 'app-src'), homes = join(r, 'buddy-home')
+    await prepareBuddyHome(join(homes, 'one'), [{ id: 'web', name: 'Web', cwd: web }, { id: 'far', name: 'Far', cwd: join(r, 'not-cloned') }])
+    await prepareBuddyHome(join(homes, 'two'), [{ id: 'app', name: 'App', cwd: app }, { id: 'web', name: 'Web', cwd: web }])
+    expect(buddyHomesProjectIds(homes).sort()).toEqual(['app', 'web'])
+    expect(buddyHomesProjectIds(join(r, 'none'))).toEqual([])
+  })
   it('takes out a project its person no longer reads, and only that one', async () => {
     const r = root(), web = checkout(r, 'web-src'), secret = checkout(r, 'secret-src'), home = join(r, 'home')
     await prepareBuddyHome(home, [{ id: 'web', name: 'Web', cwd: web }, { id: 'secret', name: 'Secret', cwd: secret }])

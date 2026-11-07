@@ -13,6 +13,8 @@ import { createSwarmAgents } from './inCore/agents.js'
 import { createConfidentialPurge, purgeRecord } from './inCore/teamPurge.js'
 import { PM_HOMES } from './teamDaemon.js'
 import { startAgent } from './start.js'
+import { memberWorktreesFile, readMemberWorktrees, writeMemberWorktrees } from './memberHome.js'
+import { projectsRoot } from '../lib/projectFolder.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { HostFeed } from './hostFeed.js'
 import { recordCleanupClose } from './cleanupCloses.js'
@@ -417,7 +419,7 @@ describe('contributed machine executor', () => {
     Object.assign(f.pool, { capabilitiesWanted: true })
     await f.machine.tick()
     const posted = (g: typeof f) => g.backend.mock.calls.filter(c => c[1] === 'POST').map(c => c[3] as Record<string, unknown>)
-    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy', 'regularAgent', 'leadSwitch', 'buddyModel', 'buddyEngine', 'turnInbox'] })
+    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy', 'regularAgent', 'leadSwitch', 'buddyModel', 'buddyEngine', 'turnInbox', 'memberProjects'] })
     // A backend from before them does not ask, and would refuse the field.
     const older = fixture()
     await older.machine.tick()
@@ -3253,5 +3255,69 @@ describe('a Regular agent\'s start', () => {
     pool.starts = []
     await f.machine.tick()
     expect(f.start).toHaveBeenCalledTimes(1)
+  })
+})
+
+// Task #4543 (spec #4489 section 2): a Member's task session for a project works in that Member's own worktree of it, made at its
+// first set-up and kept for every later task there; its host reports which it holds, and removes one only for a sixth project.
+describe('a Member\'s task sessions on this machine', () => {
+  const roots: string[] = []
+  afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'init.defaultBranch=main', ...args], { cwd, stdio: 'pipe' }).toString()
+  /** The fixture with a data folder of its own, a project clone, and Member member-1's worktree of project p-old there. */
+  function member() {
+    const f = fixture()
+    const data = mkdtempSync(join(tmpdir(), 'member-data-')); roots.push(data)
+    Object.assign(f.core, { dataDir: data })
+    const clone = join(data, 'clone'); mkdirSync(clone); git(clone, 'init', '-q'); git(clone, 'commit', '-q', '--allow-empty', '-m', 'init')
+    const path = join(projectsRoot(), 'worktrees', 'clone', 'm-p-old-old-star'); roots.push(path)
+    git(clone, 'worktree', 'add', '-q', '-b', 'm/p-old-old-star', path)
+    const file = memberWorktreesFile(data, 'host')
+    writeMemberWorktrees(file, [{ tabId: 'tab', memberId: 'member-1', projectId: 'p-old', startId: 'old-start', source: clone, path }])
+    const request = (extra: Record<string, unknown> = {}) => Object.assign(f.pool.starts[0]!, { request: { memberOf: 'member-1', memberProject: { id: 'p-new', name: 'new' },
+      worktree: true, cwd: clone, ...extra } })
+    const commands = () => f.backend.mock.calls.filter(c => c[1] === 'POST').map(c => object(object(c[3]).command)).filter(c => typeof c.type === 'string')
+    return { f, data, clone, path, file, request, commands }
+  }
+
+  it('starts in the worktree it already holds for that Member and project, and in a new one otherwise', async () => {
+    const m = member()
+    m.request({ memberProject: { id: 'p-old', name: 'old' } })
+    await m.f.machine.tick()
+    expect((m.f.start.mock.calls as unknown[][])[0]![0]).toMatchObject({ startId: 'start', memberFolder: m.path })
+    const other = member()
+    other.request()
+    await other.f.machine.tick()
+    expect((other.f.start.mock.calls as unknown[][])[0]![0]).not.toHaveProperty('memberFolder')
+  })
+
+  it('removes the project folder its start drops when clean, and fails the start, making nothing, when it holds work', async () => {
+    const dirty = member()
+    writeFileSync(join(dirty.path, 'unpushed.txt'), 'work')
+    dirty.request({ dropProjectId: 'p-old' })
+    await dirty.f.machine.tick()
+    expect(dirty.f.start).not.toHaveBeenCalled()
+    expect(dirty.commands()).toContainEqual(expect.objectContaining({ type: 'agent.startFailed', startId: 'start', error: 'The oldest project folder still has unpushed work.' }))
+    expect(existsSync(dirty.path)).toBe(true)
+    const clean = member()
+    clean.request({ dropProjectId: 'p-old' })
+    await clean.f.machine.tick()
+    expect(existsSync(clean.path)).toBe(false)
+    expect(readMemberWorktrees(clean.file)).toEqual([])
+    expect(clean.f.start).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports its Members\' set-up projects and every project on its disk, to a backend that asks, and to no other', async () => {
+    const m = member()
+    Object.assign(m.f.pool, { capabilitiesWanted: true, memberProjectsWanted: true, starts: [] })
+    await m.f.machine.tick()
+    const posted = (g: typeof m.f) => g.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
+    // A machine for one project holds that project's folder, 'lead', besides its Members' worktrees.
+    expect(posted(m.f)[0]).toMatchObject({ memberSetUp: { 'member-1': ['p-old'] }, projectsOnDisk: ['lead', 'p-old'] })
+    const older = member()
+    Object.assign(older.f.pool, { capabilitiesWanted: true, starts: [] })
+    await older.f.machine.tick()
+    expect(posted(older.f)[0]).not.toHaveProperty('memberSetUp')
+    expect(posted(older.f)[0]).not.toHaveProperty('projectsOnDisk')
   })
 })
