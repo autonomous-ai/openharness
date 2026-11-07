@@ -94,7 +94,12 @@ export interface Agent {
    *  window, the smallest any serving machine reported. One at a time; the result or the liveness sweep's lease drops it. */
   modelRequest?: { id: string; gridModel: string | null; gridName?: string; name?: string; servedBy?: string[]; machines?: string[]; contextWindow?: number; requestedBy: string; at: string
     /** Set when the Swarm sent the Buddy home by itself: the model hit a limit, kept failing, or nobody served it. */
-    reason?: 'limit' | 'failing' | 'gone' }
+    reason?: 'limit' | 'failing' | 'gone'
+    /** Only its thread sessions move: a move home left one on a shared model (buddyModel.ts, task #3810). */
+    sessionsOnly?: true }
+  /** A Buddy thread session that stayed on a shared model when its Buddy went home (task #3810): why it was sent home, and how
+   *  many times it stayed. The liveness sweep asks its machine to move it home again, three times at most (buddyModel.ts). */
+  homeOwed?: { reason?: 'limit' | 'failing' | 'gone'; tries: number }
   /** When the liveness sweep first found nobody serving the Buddy's `gridModel` (ms): two minutes on, it is sent home. */
   gridModelUnservedSince?: number
   /** The name its owner was shown for the Buddy's `gridModel`, for the lines after nobody serves it any more. */

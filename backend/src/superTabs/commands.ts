@@ -294,6 +294,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('note.remove'), projectId: id, noteId: id }).strict(),
   // What the project calls its coordinator, as its instructions say (instructions.ts coordinatorNameOf).
   z.object({ type: z.literal('project.coordinatorName'), projectId: id, name: roleNameSchema }).strict(),
+  // Whether its agents answer each person's message in that message's thread (projects.ts answersInThread, task #3747).
+  z.object({ type: z.literal('project.answers'), projectId: id, inThread: z.boolean() }).strict(),
   z.object({ type: z.literal('lead.start'), projectId: id, machineId: id.nullable(), engine: swarmEngine,
     model: z.string().trim().min(1).max(200).optional(), effort: z.string().trim().min(1).max(80).optional(),
     branchRef: z.string().max(1024).regex(/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/).optional(), repositoryUrl: repositoryUrl.optional() }).strict(),
@@ -386,7 +388,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('buddy.model'), gridModel: z.string().trim().min(1).max(200).nullable(), conversationId: id.optional() }).strict(),
   // What the Buddy's machine reports once it carried the request out: `fresh` when the conversation was too long for the model.
   z.object({ type: z.literal('buddy.modelResult'), agentId: id, requestId: id, ok: z.boolean(), fresh: z.boolean().optional(),
-    error: z.string().max(300).optional() }).strict(),
+    // The thread sessions its machine could not move, by harness id: they run where they were (buddyModel.ts, task #3810).
+    error: z.string().max(300).optional(), stayed: z.array(id).max(64).optional() }).strict(),
   z.object({ type: z.literal('buddy.sessionEnd'), conversationId: id, thread: id, reason: z.enum(['ended', 'idle', 'stopped', 'maintenance']) }).strict(),
   // The PM's private line to one person, in their Buddy chat of its project: Buddies replaced Chat with PM (Ken, 10-29).
   z.object({ type: z.literal('person.tell'), personId: id, text: z.string().trim().min(1).max(32_000) }).strict(),
@@ -404,7 +407,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   // person's own listed computer and account.
   z.object({ type: z.literal('agent.new'), kind: z.enum(['regular', 'pm']), machineId: id, engine: swarmEngine,
     model: z.string().trim().min(1).max(200).optional(), name: z.string().trim().min(1).max(80).optional(), projectName: title.optional(),
-    repositoryUrl: repositoryUrl.optional() }).strict(),
+    repositoryUrl: repositoryUrl.optional(),
+    // A Member its person's Desktop starts itself through Cmd-N (task #4196): only its chat opens here; agent.add brings in the session.
+    local: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
   z.object({ type: z.literal('agent.started'), startId: id, harnessId: id, configuration,
     startedSession: z.object({ sessionId: id, createdAt: z.iso.datetime() }).strict().optional() }).strict(),
@@ -1090,11 +1095,23 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
 
 /** An answer (answers.ts) to a reply inside a thread goes in that thread: a reply to it, never right below it in the main chat.
  *  Worked out before anything reads where the post goes, so it routes, settles and threads as that reply would. */
-function placeAnswer(command: Command, context: CommandContext): Command {
-  if (command.type !== 'message.send' || !command.answer) return command
-  if (!command.answers || command.replyTo) fail('VALIDATION_ERROR', 'An answer names the message it answers, and nothing else to reply to.', 400)
+function placeAnswer(command: Command, context: CommandContext, state: SuperTabState): Command {
+  if (command.type !== 'message.send') return command
+  // In a project that answers people in threads (task #3747), any post naming a person's message in the main chat goes in its
+  // thread, whatever the client sent: an older host's --answers, or an agent that skipped its reply line. A post naming
+  // nothing stays in the main chat, and an agent's message is answered as before.
   const reply = context.reply
+  if (command.answers && !command.replyTo && reply?.id === command.answers && reply.author.kind === 'person' && !inThread(reply)
+    && answersInThread(state, command.conversationId)) return { ...command, replyTo: command.answers, answers: undefined }
+  if (!command.answer) return command
+  if (!command.answers || command.replyTo) fail('VALIDATION_ERROR', 'An answer names the message it answers, and nothing else to reply to.', 400)
   return reply && reply.id === command.answers && inThread(reply) ? { ...command, replyTo: command.answers, answers: undefined } : command
+}
+
+/** Whether [conversationId]'s project answers people in threads. Never throws: a conversation outside every project does not. */
+function answersInThread(state: SuperTabState, conversationId: string): boolean {
+  const group = state.conversations.find(c => c.id === conversationId)
+  try { return !!group && groupProject(state, group).answersInThread === true } catch { return false }
 }
 
 /** The project `project.closeTab` may close (task #3929): a no-repo tab's, in the caller's own Personal Swarm, by that person.
@@ -1113,7 +1130,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   // A credential someone pasted, or an agent echoed from its terminal, is gone before anything is stored or delivered
   // (Oct 2026: a Harness access token in a shared Lead chat). The sender's result says what went.
   const removed: CredentialKind[] = []
-  const command = placeAnswer(withoutCredentials(commandSchema.parse(input), removed), context)
+  const command = placeAnswer(withoutCredentials(commandSchema.parse(input), removed), context, original)
   const state = cloneData(original)
   numberConversations(state)
   placeRules(state)
@@ -1774,6 +1791,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     return project
   }
 
+  /** A Regular agent's chat with its person, which nobody else reads (projects.ts readsAgentChat), for this command's agent. */
+  const openAgentChat = (me: { id: string; generation: string }, title: string): string => {
+    const chatId = stableId('agent-chat', me.id, me.generation, operationId)
+    state.conversations.push({ id: chatId, kind: 'agent-chat', title, leadId: null, agentIds: [], archived: false, brief: '', checks: [],
+      assignment: null, lastMessageSequence: 0, audience: { people: [{ id: me.id, generation: me.generation }] } })
+    return chatId
+  }
   const addBuddyMachine = (machineId: string, setup: NonNullable<Extract<Command, { type: 'buddy.create' }>['setup']>, me: { id: string; generation: string }) => {
     // Its last Buddy's folders are still being deleted there: a new one would lose its own (machine.contribute does the same).
     if (state.machineCleanups?.some(c => c.machineId === machineId)) {
@@ -2485,6 +2509,17 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const stored = projectOf(state, project.id)
       // Confirming an older note after a newer one never brings the newer back.
       if (noteIndex(command.noteId) > noteIndex(stored.processNote?.confirmed)) stored.processNote = { ...stored.processNote, confirmed: command.noteId }
+      break
+    }
+    case 'project.answers': {
+      // As its coordinator's name: the coordinator sets it, or a person who manages the project.
+      const project = readProject(state, actor, command.projectId)
+      if (actor.kind === 'agent') coordinatorOf(project)
+      else manageProject(state, actor, project.id)
+      mutableProjects(state)
+      const stored = projectOf(state, project.id)
+      if (command.inThread) stored.answersInThread = true
+      else delete stored.answersInThread
       break
     }
     case 'project.digest': {
@@ -3206,6 +3241,29 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person adds a session already running. Start a new agent instead.', 403)
       const addedName = addedAgentName(state, actor, command.name)
       const group = open(state, command.conversationId)
+      // A Member's own chat (local agent.new, task #4196) takes the one session its person started for it on their own computer,
+      // in their own account, as a Regular agent in no project: as agent.started records a server-started one.
+      if (isAgentChat(group)) {
+        readConversation(state, actor, group.id)
+        const me = person(state, actor.userId)
+        if (me.role === 'viewer') fail('READ_ONLY', 'A viewer cannot contribute agents.', 403)
+        const grant = context.contribution ?? fail('HOST_REQUIRED', 'Choose your own computer.', 403)
+        if (grant.machineOwnerId !== me.id || grant.contributorId !== me.id || grant.hostGrant || grant.hostMachineId || grant.teamSession) {
+          fail('AGENT_OWN_MACHINE', 'A new agent runs only on your own computer, in your own account.', 403)
+        }
+        if (command.lead) fail('AGENT_CHAT_LEAD', 'An agent\'s own chat has no lead.', 400)
+        if (group.agentIds.length) fail('AGENT_CHAT_TAKEN', 'This chat already has its agent.', 409)
+        const agentId = stableId(command.machineId, command.harnessId)
+        if (state.agents.some(a => a.id === agentId)) fail('ALREADY_SHARED', 'This native harness is already in the tab.')
+        reserveHarnessSlot(state, command.machineId, command.harnessId, operationId)
+        state.agents.push({ id: agentId, machineId: command.machineId, harnessId: command.harnessId, regular: true,
+          machineOwnerId: me.id, contributorId: me.id, membershipGeneration: me.generation, hostGrant: null, name: addedName,
+          configuration: command.configuration, configurationVersion: operationId })
+        group.agentIds.push(agentId)
+        result.agentId = agentId
+        if (command.initialMessage) message(group.id, command.initialMessage)
+        break
+      }
       const project = groupProject(state, group)
       if (state.projects && group.id === project.leadConversationId && command.lead && command.project) {
         project.repository ??= { machineId: command.machineId, ...command.project }
@@ -3668,6 +3726,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (grant.machineOwnerId !== me.id || grant.contributorId !== me.id || grant.hostGrant || grant.hostMachineId || grant.teamSession) {
         fail('AGENT_OWN_MACHINE', 'A new agent runs only on your own computer, in your own account.', 403)
       }
+      // A Member started through Cmd-N (task #4196, anh Dee 11-07): a server start waited on its host (p50 18 s, p95 4 min), so
+      // its person's Desktop starts it on their own computer at once. Only its chat opens here, with no start, so neither a listed
+      // computer nor a host that runs Regular starts is needed; agent.add then brings the running session into the chat.
+      if (command.local) {
+        if (command.kind !== 'regular') fail('LOCAL_MEMBER_ONLY', 'A Lead started on your computer starts its project with project.create.', 400)
+        const name = command.name ?? fail('AGENT_NAME_REQUIRED', 'Name your agent.', 400)
+        result.conversationId = openAgentChat(me, name)
+        break
+      }
       // A Buddy-only record is not the computer in the Swarm: its person adds it first (Desktop does, with no screen).
       const pool = state.machines?.find(m => m.machineId === command.machineId && m.contributorId === me.id && !m.buddyOnly && !m.removal)
         ?? fail('MACHINE_NOT_LISTED', 'Add this computer to the Swarm first.', 403)
@@ -3684,9 +3751,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const name = command.name ?? fail('AGENT_NAME_REQUIRED', 'Name your agent.', 400)
       // Only a host that says it runs one gets its start (read/hostRows.ts regularStarts): an older one would leave it waiting.
       if (!pool.observation?.capabilities?.includes(REGULAR_AGENT_CAPABILITY)) fail('HOST_OUTDATED', `Update Harness on ${pool.name ?? 'your computer'} to start this agent there.`, 409)
-      const chatId = stableId('agent-chat', me.id, me.generation, operationId)
-      state.conversations.push({ id: chatId, kind: 'agent-chat', title: name, leadId: null, agentIds: [], archived: false, brief: '', checks: [],
-        assignment: null, lastMessageSequence: 0, audience: { people: [{ id: me.id, generation: me.generation }] } })
+      const chatId = openAgentChat(me, name)
       const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
         ...(command.model ? { model: command.model } : {}), name, cwd: buddyHomeFolder(pool, me), worktree: false, requirements: BUDDY_REQUIREMENTS, regular: true }
       const admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)!

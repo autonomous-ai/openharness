@@ -442,10 +442,13 @@ void main() {
     });
   });
 
-  group('the view offers + New agent only with an app', () {
+  // Task #4196: + New agent opens the workspace's Cmd-N form, so the view
+  // offers it only when its workspace can open one.
+  group('the view offers + New agent only with Cmd-N to open', () {
     Future<SuperTabController> view(
       WidgetTester tester, {
       required bool withApp,
+      VoidCallback? onNewAgent,
     }) async {
       final server = swarm()..state['agents'] = [_agent('kestrel', 'Kestrel')];
       final c = server.controller(
@@ -471,6 +474,7 @@ void main() {
               app: app,
               onInvite: () {},
               onAddAgent: (_) {},
+              onNewAgent: onNewAgent,
               onOpenTerminal: (_) {},
               machineName: (_) => 'Mac Studio',
               board: true,
@@ -482,17 +486,22 @@ void main() {
       return c;
     }
 
-    testWidgets('with an app the last row of My agents is + New agent', (
+    testWidgets('the last row of My agents is + New agent, which opens Cmd-N', (
       tester,
     ) async {
-      final c = await view(tester, withApp: true);
+      var opened = 0;
+      final c = await view(tester, withApp: true, onNewAgent: () => opened++);
       expect(key('super-new-agent-row'), findsOneWidget);
+      await tester.tap(key('super-new-agent-row'));
+      await tester.pump();
+      expect(opened, 1);
+      expect(find.text('Create agent'), findsNothing);
       await tester.pumpWidget(const SizedBox());
       c.dispose();
     });
 
-    testWidgets('without one it has none', (tester) async {
-      final c = await view(tester, withApp: false);
+    testWidgets('without Cmd-N to open it has none', (tester) async {
+      final c = await view(tester, withApp: true);
       expect(key('super-new-agent-row'), findsNothing);
       await tester.pumpWidget(const SizedBox());
       c.dispose();

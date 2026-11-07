@@ -414,6 +414,34 @@ void main() {
     );
   }
 
+  // anh Dee, 11-07 (#4196): the task starts three rows tall and grows to seven
+  // as it is typed; #2947 had cut the empty box to one row.
+  testWidgets('the task opens three rows tall and grows to seven', (
+    tester,
+  ) async {
+    await _mount(tester);
+    Future<double> heightWith(int lines) async {
+      await tester.enterText(
+        _task,
+        List.generate(lines, (i) => 'line $i').join('\n'),
+      );
+      await tester.pumpAndSettle();
+      return tester.getSize(_task).height;
+    }
+
+    final empty = tester.getSize(_task).height;
+    final three = await heightWith(3);
+    final four = await heightWith(4);
+    final seven = await heightWith(7);
+    final ten = await heightWith(10);
+    final one = await heightWith(1);
+    expect(three, empty, reason: 'An empty task is three rows tall');
+    expect(one, empty, reason: 'One row typed keeps three rows');
+    expect(four, greaterThan(three), reason: 'It grows past three rows');
+    expect(ten, seven, reason: 'It stops growing at seven rows');
+    expect(seven - three, closeTo((four - three) * 4, 1));
+  });
+
   testWidgets(
     'footer controls show their purpose and keep stable focus geometry',
     (tester) async {
