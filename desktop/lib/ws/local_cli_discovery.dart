@@ -13,6 +13,7 @@ import '../core/config.dart';
 import '../core/harness_cli_runner.dart';
 import '../core/harness_file_store.dart';
 import '../core/models.dart';
+import '../core/test_run.dart';
 import 'local_daemon_transport.dart';
 
 const localWsProtocolVersion = 1;
@@ -226,7 +227,8 @@ class LocalCliDiscovery {
     Future<void> Function()? spawnCommand,
     Future<void> Function()? stopCommand,
     LocalDaemonTransport? transport,
-  }) : identity = identity ?? LocalMachineIdentity(),
+  }) : _realMachine = dio == null && identity == null && transport == null,
+       identity = identity ?? LocalMachineIdentity(),
        transport =
            transport ??
            LocalDaemonTransport.detect(Uri.parse(config.localCliBaseUrl)),
@@ -241,6 +243,12 @@ class LocalCliDiscovery {
                sendTimeout: const Duration(milliseconds: 400),
              ),
            );
+
+  /// Whether [probe] would read this computer's own identity and dial its own daemon: nothing was
+  /// given in their place. Under flutter test it answers down instead (task #3724): on a computer
+  /// running Harness a test reached the real daemon, found it not ready and waited out
+  /// [defaultReadyTimeout], as [HarnessCliRunner] refuses the real CLI there.
+  final bool _realMachine;
 
   Future<String?> computerId() => identity.computerId();
 
@@ -510,6 +518,11 @@ class LocalCliDiscovery {
       (await probe(expectedComputerId: expectedComputerId)).endpoint;
 
   Future<LocalCliProbe> probe({String? expectedComputerId}) async {
+    if (_realMachine && kUnderTest) {
+      return const LocalCliProbe.down(
+        'the real daemon is never probed under flutter test',
+      );
+    }
     final localComputerId = await computerId();
     if (localComputerId == null) {
       return const LocalCliProbe.down(

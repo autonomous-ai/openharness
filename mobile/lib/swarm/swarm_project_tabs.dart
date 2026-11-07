@@ -20,8 +20,10 @@ import 'swarm_unread.dart';
 /// A project's tabs: as B2 draws them (Tony, 2026-10-29), its chat with
 /// everyone, the person's Buddy chat, its tasks and its leaderboard
 /// ([homeB]). Swarm Home C (Tony, 2026-10-30) has its chat alone, with no tab
-/// bar ([homeC]): its leaderboard and team open from a menu.
+/// bar ([homeC]): its leaderboard and team open from a menu. The Board
+/// (task #3821) is the project's other tab beside the chat ([current]).
 enum SwarmProjectTab {
+  board('Board'),
   chat('Chat'),
   buddy('Buddy'),
   tasks('Tasks'),
@@ -34,10 +36,11 @@ enum SwarmProjectTab {
   static const homeB = [chat, buddy, tasks, leaderboard];
   static const homeC = [chat];
 
-  /// The tabs a project opens with: Swarm Home C's, the phone's Swarm Home
-  /// since #2262 (Tony, 2026-10-30). Every way into a project takes these
-  /// ([SwarmProjectPage]'s default), so none opens direction B's by mistake.
-  static const current = homeC;
+  /// The tabs a project opens with: its Board and its chat, under Swarm Home
+  /// C's header, the phone's Swarm Home since #2262 (Tony, 2026-10-30). Every
+  /// way into a project takes these ([SwarmProjectPage]'s default), so none
+  /// opens direction B's by mistake.
+  static const current = [board, chat];
 }
 
 /// The row of a project's [tabs] under its header: each an equal share of the
