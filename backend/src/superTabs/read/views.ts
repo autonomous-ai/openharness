@@ -45,8 +45,6 @@ export interface ReadExtras {
   teamAccountsIdle?: boolean
   /** Each contributed machine's CLI version as its daemon last connected (store.ts machineFacts). */
   machineVersions?: Record<string, string>
-  /** Macs whose owner's Harness Team account on them is not listed yet (store.ts joiningTeams). */
-  joiningTeams?: string[]
   /** A person's open mentions, counted by the store. */
   mentionsWaiting?: number
   /** Which ones they are, as a digest (mentions.ts). */
@@ -72,7 +70,7 @@ export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, d
 /** A group as readers get it: its message counter, a dormant flag only when dormant, never the store's bookkeeping or the
  *  leaderboard's (the leaderboard read sums it), except when it shipped. */
 export function groupView(group: Conversation, seenMachines: ReadonlySet<string>): GroupView {
-  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, proposals: _proposals, owed: _owed, answered: _answered, chatLimits: _chatLimits, talkedAt: _talkedAt, pulse: _pulse, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
+  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, proposals: _proposals, owed: _owed, answered: _answered, chatLimits: _chatLimits, talkedAt: _talkedAt, pulse: _pulse, statusLine: _statusLine, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
   // A Buddy chat names its owner instead of an audience: an app from before Buddies takes a private chat of the reader
   // alone for their Chat with PM, and would send what they write for the PM to their Buddy instead (buddies.ts).
   const readers = isBuddyChat(group) ? { buddyOwnerId: audience!.people[0]!.id } : audience ? { audience } : {}
@@ -187,7 +185,7 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
   const slots = slotCounter(state)
   const machine = (pool: ContributedMachine) => {
     const stored = state.machines!.find(m => m.machineId === pool.machineId)!
-    const refusal = machineTeamWork(state, stored, now, extras.teamMachines, extras.otherWorkspaceMachines ?? [], extras.joiningTeams ?? [])
+    const refusal = machineTeamWork(stored, now, extras.teamMachines, extras.otherWorkspaceMachines ?? [])
     const version = extras.machineVersions?.[pool.machineId]
     const suspended = suspendedEngines(stored, now)
     const machineSuspended = machineSuspensionReason(stored, now)

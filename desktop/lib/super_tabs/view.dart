@@ -63,7 +63,6 @@ import 'crew_panel.dart';
 import 'instructions_panel.dart';
 import 'project_rules.dart';
 import 'model.dart';
-import 'join/new_agent_dialog.dart';
 import 'agent_details.dart';
 import 'identity.dart' show superTabMachineName;
 import 'identity_card.dart';
@@ -86,6 +85,7 @@ import 'message_row.dart';
 import 'message_receipt.dart';
 import 'notifications.dart';
 import 'buddies.dart';
+import 'buddy_card.dart';
 import 'buddy_restart.dart';
 import 'decisions.dart';
 import 'day_pill.dart';
@@ -140,6 +140,7 @@ class SuperTabView extends StatefulWidget {
     this.terminalsVisible = false,
     this.app,
     this.onNewProject,
+    this.onNewAgent,
     this.rightPane,
     this.onNewSwarm,
     this.onChooseAgentTerminal,
@@ -170,6 +171,10 @@ class SuperTabView extends StatefulWidget {
   final bool terminalsVisible;
   final AppNotifier? app;
   final VoidCallback? onNewProject;
+
+  /// + New agent (task #4196): opens the workspace's Cmd-N form with Member or
+  /// Lead. Null shows no + New agent.
+  final VoidCallback? onNewAgent;
 
   /// The Desktop's right pane (Swarm v3's Tasks, task #4119): always shown, never collapsing, in the pane layout's right
   /// slot. Given, the chat of the selected agent or project is in the middle; without it the right pane keeps the Board's
@@ -261,6 +266,18 @@ class _SuperTabViewState extends State<SuperTabView>
       _taskInMiddle = null;
     });
     c.select(id);
+    _closeSidebar();
+  }
+
+  /// Opens the terminal of an agent chosen in My agents that has no chat to open (task #4220), as Members opens one.
+  void _openAgentTerminal(SuperTabAgent agent) {
+    setState(() {
+      _showPullRequests = _showTasks = false;
+      _rosterOpen = false;
+      _showManage = false;
+      _page = null;
+    });
+    (widget.onChooseAgentTerminal ?? widget.onOpenTerminal)(agent);
     _closeSidebar();
   }
 
@@ -2098,14 +2115,17 @@ class _SuperTabViewState extends State<SuperTabView>
     c.select(selected);
   }
 
-  Widget _sidebar() => ProjectSidebar(
+  /// [boardProjectId]: the project whose Board holds the middle, whose row is then lit.
+  Widget _sidebar({String? boardProjectId}) => ProjectSidebar(
     board: widget.board,
+    boardProjectId: boardProjectId,
     controller: c,
     compact: _phone,
     app: widget.app,
     onNewProject: widget.onNewProject,
-    onNewAgent: widget.app == null ? null : _newAgent,
+    onNewAgent: widget.onNewAgent,
     onOpenAgentChat: _openAgentChat,
+    onOpenAgentTerminal: _openAgentTerminal,
     onNewSwarm: widget.onNewSwarm,
     page: _pageShown,
     places: SuperTabPlaces.of(c),
@@ -2135,15 +2155,6 @@ class _SuperTabViewState extends State<SuperTabView>
     },
     onOpenBuddyChat: (projectId) => unawaited(_openBuddyChat(projectId)),
   );
-
-  /// + New agent (Swarm v3, task #4118): the creation dialog, where Regular or PM is chosen and the agent starts on this
-  /// computer. It needs the app: a view without one has no +.
-  void _newAgent() {
-    final app = widget.app;
-    if (app != null) {
-      unawaited(showSwarmNewAgentDialog(context, controller: c, app: app));
-    }
-  }
 
   /// Opens the reader's Buddy chat in [projectId] in front of Notifications,
   /// pull requests and a terminal, opening it on the server when they have
@@ -3678,6 +3689,17 @@ class _SuperTabViewState extends State<SuperTabView>
             group: group,
             menu: _options(group),
             app: widget.app,
+            // The reader's own Buddy chat: its name opens the Buddy card (Restart with launch flags, Rename, Remove),
+            // which nothing else here reaches.
+            title: _isBuddyChat(group)
+                ? (name) => BuddyCardButton(
+                    key: ValueKey(group.id),
+                    controller: c,
+                    projectId: group.projectId,
+                    app: widget.app,
+                    label: name,
+                  )
+                : null,
           )
         else
           const SizedBox(height: 44),
@@ -3691,6 +3713,8 @@ class _SuperTabViewState extends State<SuperTabView>
     final group = c.selected;
     final project = c.snapshot?.projectById(_boardProjectId ?? '');
     final onBuddy = group?.isBuddyChat == true;
+    // The Buddy card opens only on the reader's own Buddy chat.
+    final ownBuddy = group != null && _isBuddyChat(group);
     // A card's task in a project on the Board: its priority and pause, by role (#3820).
     final steered =
         group != null &&
@@ -3727,16 +3751,28 @@ class _SuperTabViewState extends State<SuperTabView>
                   icon: const Icon(AppIcons.arrowLeft, size: 16),
                   label: const Text('Your Buddy'),
                 ),
-              Expanded(
-                child: Text(
-                  onBuddy ? 'Your Buddy' : (group?.label ?? ''),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: DesktopChrome.control().copyWith(
-                    fontWeight: grid.AppFont.semibold,
+              if (ownBuddy) ...[
+                Flexible(
+                  child: BuddyCardButton(
+                    key: ValueKey(group.id),
+                    controller: c,
+                    projectId: group.projectId,
+                    app: widget.app,
+                    label: 'Your Buddy',
                   ),
                 ),
-              ),
+                const Spacer(),
+              ] else
+                Expanded(
+                  child: Text(
+                    onBuddy ? 'Your Buddy' : (group?.label ?? ''),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.control().copyWith(
+                      fontWeight: grid.AppFont.semibold,
+                    ),
+                  ),
+                ),
               const SizedBox(width: 8),
             ],
           ),
@@ -4438,26 +4474,35 @@ class _SuperTabViewState extends State<SuperTabView>
         if (_isBuddyChat(group)) ...[
           // A Buddy chat is the reader's own: the Buddy itself to name, any
           // time, and to remove. Nothing to archive, and no way to a Chat with
-          // PM (Ken, 10-28).
-          if (editable)
-            item(
-              'Rename Buddy…',
-              () => unawaited(showRenameBuddy(context, c, group.projectId)),
-            ),
-          if (editable &&
-              (c.buddy(group.projectId)?.harnessId.isNotEmpty ?? false) &&
-              c.buddy(group.projectId)!.machineId.isNotEmpty)
-            item(
-              'Restart Buddy…',
-              () => unawaited(
-                showRestartBuddy(context, c, group.projectId, app: widget.app),
+          // PM (Ken, 10-28). The Board gives the Buddy chat its card, which
+          // holds these three, so its menu does not repeat them (#4328).
+          if (!widget.board) ...[
+            if (editable)
+              item(
+                'Rename Buddy…',
+                () => unawaited(showRenameBuddy(context, c, group.projectId)),
               ),
-            ),
-          if (editable && c.buddy(group.projectId) != null)
-            item(
-              'Remove Buddy',
-              () => unawaited(confirmRemoveBuddy(context, c, group.projectId)),
-            ),
+            if (editable &&
+                (c.buddy(group.projectId)?.harnessId.isNotEmpty ?? false) &&
+                c.buddy(group.projectId)!.machineId.isNotEmpty)
+              item(
+                'Restart Buddy…',
+                () => unawaited(
+                  showRestartBuddy(
+                    context,
+                    c,
+                    group.projectId,
+                    app: widget.app,
+                  ),
+                ),
+              ),
+            if (editable && c.buddy(group.projectId) != null)
+              item(
+                'Remove Buddy',
+                () =>
+                    unawaited(confirmRemoveBuddy(context, c, group.projectId)),
+              ),
+          ],
           // The one Buddy's chat lists the person's older chats in projects
           // they still read, each read only (spec: history).
           if (group.isSwarmBuddyChat)
@@ -5151,7 +5196,8 @@ class _SuperTabViewState extends State<SuperTabView>
     if ((!widget.board || c.selected == null) &&
         c.snapshot?.projects.isEmpty == true &&
         !c.accessRevoked) {
-      final newAgent = widget.board && widget.app != null ? _newAgent : null;
+      // The same + New agent as the left pane's: the Cmd-N form (task #4196).
+      final newAgent = widget.board ? widget.onNewAgent : null;
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -6201,15 +6247,24 @@ class _SuperTabViewState extends State<SuperTabView>
           !_terminalsVisible &&
           !_showPullRequests &&
           _pageShown == null;
+      // The Desktop's Tasks pane stays on the right under a page or Manage too, unless a thread or Members takes that
+      // side (task #4220).
+      final tasksStay =
+          widget.board &&
+          hasTasksPane &&
+          thread == null &&
+          !_rosterOpen &&
+          !_terminalsVisible;
+      final fixedSides = boardLayout || tasksStay;
       // The fixed layout never drops a side pane; every other surface keeps
       // its own width rules.
       final narrow =
-          !boardLayout &&
+          !fixedSides &&
           constraints.maxWidth < MediaQuery.textScalerOf(context).scale(720);
       // Wide enough for a right column beside the chat; it shows only an
       // open thread or Members, closed at rest (Quiet Swarm, 2026-11-02).
       final wide =
-          boardLayout ||
+          fixedSides ||
           constraints.maxWidth >= MediaQuery.textScalerOf(context).scale(1080);
       final threadDrawer = thread != null && !wide;
       // A terminal on screen keeps its chat beside it, in the right pane, as
@@ -6294,11 +6349,11 @@ class _SuperTabViewState extends State<SuperTabView>
               child: SuperTabPaneLayout(
                 storage: widget.paneStore ?? widget.app?.localStore,
                 onLeave: _leaveResize,
-                left: narrow ? null : _sidebar(),
+                left: narrow ? null : _sidebar(boardProjectId: boardProject),
                 // An open thread takes the roster's side, as in Slack.
                 right: !wide
                     ? null
-                    : boardLayout
+                    : fixedSides
                     ? widget.rightPane?.call(context) ??
                           (c.personalTasks?.supported == true
                               ? SuperTabPersonalTasksPane(
@@ -6316,14 +6371,14 @@ class _SuperTabViewState extends State<SuperTabView>
                               : chatBeside
                               ? chat
                               : null),
-                rightDefault: boardLayout
+                rightDefault: fixedSides
                     ? SuperTabPaneLayout.boardRightWidth
                     : !boardLayout && thread == null && !chatBeside
                     ? SuperTabPaneLayout.rightWidth
                     : SuperTabPaneLayout.threadWidth,
                 // The Desktop's right pane is the Tasks pane's 340, giving back only to keep two Board columns
-                // in a small window (River, Swarm v3; #4211).
-                rightFixed: boardLayout,
+                // in a small window (River, Swarm v3; #4211). It stays under a page or Manage too (#4220).
+                rightFixed: fixedSides,
                 // Over the chat, beside an open thread, as in Slack.
                 over: wide ? viewer : null,
                 // A project's own chat keeps its header and tabs (Project options, Tasks): the full chat view.

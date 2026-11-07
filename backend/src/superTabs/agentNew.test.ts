@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import type { ContributedMachine } from './machines.js'
+import { AGENT_MEMORY_BYTES, type ContributedMachine } from './machines.js'
 import { createSuperTab, SuperTabError, type Actor, type SuperTabState } from './model.js'
 import { agentKind } from './agentKind.js'
 import { hostTab } from './read/hostRows.js'
@@ -69,6 +69,12 @@ describe('+ New agent, Regular', () => {
     expect(start.request).toMatchObject({ machineId: 'mate-mac', conversationId: chat.id, engine: 'claude', name: 'Ada', regular: true })
     expect(start).toMatchObject({ contributorId: 'mate', machineOwnerId: 'mate' })
     expect((f.state.projects ?? []).filter(p => p.id !== 'lead')).toHaveLength(0)
+  })
+
+  it('asks an agent\'s memory, not a Buddy\'s smaller one: it takes tasks (#3738)', () => {
+    const f = swarm()
+    const made = f.add({ kind: 'regular', name: 'Ada' })
+    expect(f.state.starts!.find(s => s.id === made.result.startId)!.request.requirements.memoryBytes).toBe(AGENT_MEMORY_BYTES)
   })
 
   it('once started, is a Regular agent in its own chat', () => {
@@ -226,5 +232,59 @@ describe('a Regular agent\'s start on its computer', () => {
       expect(refusal).toMatchObject({ code: 'HOST_CONNECTING', message: expect.stringContaining('connecting') })
     }
     expect(f.state.starts ?? []).toEqual([])
+  })
+})
+
+// Task #4196 (anh Dee 11-07): + New agent opens Cmd-N, which starts the agent on the person's own computer at once. A Member's
+// chat is opened first with no start, and the running session then joins it: a server start waited on its host (p50 18 s).
+describe('+ New agent, Member started on its own computer', () => {
+  const configuration = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
+  const join = (chat: string, extra: Record<string, unknown> = {}) =>
+    ({ type: 'agent.add', conversationId: chat, machineId: 'mate-laptop', harnessId: 'h-ada', name: 'Ada', lead: false, configuration, ...extra }) as Command
+
+  it('opens its chat with no start, even on a computer the Swarm does not list', () => {
+    const f = swarm()
+    const made = f.add({ kind: 'regular', name: 'Ada', machineId: 'mate-laptop', local: true })
+    expect(f.state.conversations.find(c => c.id === made.result.conversationId))
+      .toMatchObject({ kind: 'agent-chat', title: 'Ada', agentIds: [], audience: { people: [{ id: 'mate' }] } })
+    expect(made.result.startId).toBeUndefined()
+    expect(f.state.starts ?? []).toEqual([])
+  })
+
+  it('takes the running session as a Regular agent in that chat, once', () => {
+    const f = swarm()
+    const chat = f.add({ kind: 'regular', name: 'Ada', machineId: 'mate-laptop', local: true }).result.conversationId as string
+    const added = f.run(join(chat, { initialMessage: 'Fix the docs' }), mate, own('mate'))
+    const agent = f.state.agents.find(a => a.id === added.result.agentId)!
+    expect(agent).toMatchObject({ machineId: 'mate-laptop', harnessId: 'h-ada', regular: true, contributorId: 'mate', machineOwnerId: 'mate' })
+    expect(agent.projectId).toBeUndefined()
+    expect(agentKind(f.state, agent)).toBe('regular')
+    expect(f.state.conversations.find(c => c.id === chat)!.agentIds).toEqual([agent.id])
+    expect(added.messages.map(m => m.text)).toContain('Fix the docs')
+    expect(code(() => f.run(join(chat, { harnessId: 'h-other' }), mate, own('mate')))).toBe('AGENT_CHAT_TAKEN')
+  })
+
+  it('leaves an unused chat for its person to archive, as Desktop\'s Discard does', () => {
+    const f = swarm()
+    const chat = f.add({ kind: 'regular', name: 'Ada', machineId: 'mate-laptop', local: true }).result.conversationId as string
+    expect(code(() => f.run({ type: 'conversation.archive', conversationId: chat, archived: true }, owner))).not.toBeNull()
+    f.run({ type: 'conversation.archive', conversationId: chat, archived: true }, mate)
+    expect(f.state.conversations.find(c => c.id === chat)!.archived).toBe(true)
+  })
+
+  it('is refused for a PM, another person\'s computer, another person\'s chat and a viewer', () => {
+    const f = swarm()
+    expect(code(() => f.add({ kind: 'pm', projectName: 'P', machineId: 'mate-laptop', local: true }))).not.toBeNull()
+    expect(code(() => f.add({ kind: 'regular', name: 'A', machineId: 'owner-mac', local: true }, mate,
+      { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }))).toBe('AGENT_OWN_MACHINE')
+    const chat = f.add({ kind: 'regular', name: 'Ada', machineId: 'mate-laptop', local: true }).result.conversationId as string
+    expect(code(() => f.run(join(chat, { machineId: 'owner-mac' }), mate, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })))
+      .toBe('AGENT_OWN_MACHINE')
+    expect(code(() => f.run(join(chat, { machineId: 'owner-laptop' }), owner, own('owner')))).toBe('NOT_FOUND')
+    expect(f.state.conversations.find(c => c.id === chat)!.agentIds).toEqual([])
+    const viewer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'viewer', email: 'viewer@example.com' }
+    const invited = f.run({ type: 'invite.create', email: viewer.email, role: 'viewer', conversationId: 'lead' }, owner)
+    f.run({ type: 'invite.accept', inviteId: invited.result.inviteId as string }, viewer)
+    expect(code(() => f.add({ kind: 'regular', name: 'A', machineId: 'viewer-mac', local: true }, viewer))).toBe('READ_ONLY')
   })
 })

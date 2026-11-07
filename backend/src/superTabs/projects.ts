@@ -114,6 +114,9 @@ export interface SwarmProject {
   githubSeen?: GitHubSeen
   /** What its coordinator is called; reads give "Product Manager" when absent (instructions.ts coordinatorNameOf). */
   coordinatorName?: string
+  /** Agents answer every person's message in that message's thread, never right below it in the main chat (task #3747, anh
+   *  Dee 11-06: "i don't know which one you reply to which"). Absent: as before. Set with `project.answers`. */
+  answersInThread?: true
   /** Its owner's last "New repository" from New Project (task #1788): asked, then what GitHub's sign-in made of it. The
    *  app that asked starts the Product Manager in it once `created`; the next ask replaces it. */
   repositoryCreation?: RepositoryCreation
@@ -141,7 +144,13 @@ export const GITHUB_SEEN = ['not-installed', 'not-approved', 'covered'] as const
 export type GitHubSeen = typeof GITHUB_SEEN[number]
 
 /** A project's status card: its text, when (ISO time) and by which agent it was written. */
-export interface ProjectStatus { text: string; at: string; by: string }
+export interface ProjectStatus { text: string; at: string; by: string
+  /** The text is the coordinator's own lines, shown after the server's (statusCard.ts, task #3593). Absent on a card saved before:
+   *  that text was the whole card, whose lines the server now writes, so it is not shown beside them. */
+  own?: true
+  /** Set by visibleState on the text it shows readers (the server's lines with the coordinator's own): a view applied again to a
+   *  view leaves it as it is. Never stored. */
+  shown?: true }
 export const PROJECT_STATUS_MAX = 2_000
 
 export const skillModeOf = (project: SwarmProject): SkillMode => project.skillMode ?? 'orchestration'
@@ -318,6 +327,17 @@ export function requestedByLine(state: SuperTabState, project: SwarmProject, gro
   return requester?.email ? `Start each pull request body with: Requested by ${agentWrittenNameOf(state, requester.id)} through Harness.` : null
 }
 
+/** Where Regular agent [worker] finds [project]'s code, for its task's message. It starts in its own empty folder, in no project
+ *  (task #4116), and nothing prepares a checkout when it is given a task, so the message says where the code is (task #4218):
+ *  the GitHub repository to clone with its own person's git, or the checkout on its own computer. A checkout's folder is
+ *  named only on that computer, its person's own. */
+export function regularCodeLine(project: SwarmProject, worker: Agent): string {
+  const repository = project.repository
+  if (repository?.repositoryUrl) return `This project's code is ${repository.repositoryUrl}. Clone it into a folder inside your own folder and work on a branch there, with the git and gh signed in on this computer.`
+  if (repository && repository.machineId === worker.machineId) return `This project's code is checked out at ${repository.cwd} on this computer. Make a git worktree of it inside your own folder and work on a branch there.`
+  return 'This project has no code this computer can reach: it has no GitHub repository. Ask its PM before changing code.'
+}
+
 export function readProject(state: SuperTabState, actor: Actor, projectId: string): SwarmProject {
   author(state, actor)
   const project = projectOf(state, projectId)
@@ -355,9 +375,10 @@ export function readConversation(state: SuperTabState, actor: Actor, conversatio
  *  (2026-10-26); this is the one place that decides it (design section 4.8). */
 export const PRIVATE_VISIBLE_TO_OWNERS = false
 
-/** A Chat with PM from before Buddies replaced it (Ken, 10-29): a private conversation that is no Buddy chat. Nobody opens
- *  one any more, and nobody reads one, the PM and its person included; its rows stay in the database. */
-export const isClosedPmChat = (group: Pick<Conversation, 'kind' | 'audience'>): boolean => !!group.audience && !isBuddyChat(group)
+/** A Chat with PM from before Buddies replaced it (Ken, 10-29): a private conversation that is no Buddy chat and no Regular agent's
+ *  chat (#4248: counted as one, a Regular agent's chat was never listed or delivered). Nobody opens one any more, and nobody reads
+ *  one, the PM and its person included; its rows stay in the database. */
+export const isClosedPmChat = (group: Pick<Conversation, 'kind' | 'audience'>): boolean => !!group.audience && !isBuddyChat(group) && !isAgentChat(group)
 
 /** Who reads a conversation: nobody the removed Leads conversation (model.ts leadsRemoved); a project conversation's readers; and a Buddy
  *  chat's owner and Buddy (buddies.ts), the PM never. A closed Chat with PM is nobody's. A Buddy reads what its person
@@ -630,7 +651,7 @@ export function readAgent(state: SuperTabState, actor: Actor, agentId: string): 
 /** Whether Regular agent [target] may take a task in [project]: its person reads it (it works only where they could read it
  *  themselves), and, once it has worked in a private project, it is that one: its one conversation holds that project's
  *  content, which no other project's members may hear from it (security review 2 of #4116). Public work moves on freely. */
-function regularMayWorkIn(state: SuperTabState, target: Agent, project: SwarmProject): boolean {
+export function regularMayWorkIn(state: SuperTabState, target: Agent, project: SwarmProject): boolean {
   const member = state.people.find(p => p.id === target.contributorId)
   return !!member && canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)
     && (!target.privateProjectId || target.privateProjectId === project.id)
