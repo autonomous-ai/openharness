@@ -18,7 +18,6 @@ import 'super_tab_launch_test.dart' show SuperTabLaunchFixture;
 import 'super_tab_tasks_view_test.dart' show tasksServer;
 import 'support/capture.dart';
 import 'support/memory_key_value_store.dart';
-import 'support/super_tab_fixture.dart';
 
 /// Set to a folder to write the PR's screenshots there.
 final shots = Platform.environment['SUPER_TAB_PROCESS_SHOTS'];
