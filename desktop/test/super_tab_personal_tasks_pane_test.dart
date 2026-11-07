@@ -7,6 +7,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/harness_activity_mark.dart';
 import 'package:harness/state/harness_activity.dart';
 
@@ -108,6 +110,15 @@ class TasksFixture {
 
 Finder inCard(String id, Finder f) =>
     find.descendant(of: find.byKey(ValueKey('personal-task-$id')), matching: f);
+
+/// The card of task [id] is quiet: one hairline at radius 10 and no shadow (#4468).
+bool quietCard(WidgetTester t, String id) {
+  final ink = t.widget<Ink>(inCard(id, find.byType(Ink)).first);
+  final d = ink.decoration! as BoxDecoration;
+  return d.borderRadius == BorderRadius.circular(10) &&
+      d.border == Border.all(color: DesktopChrome.rim) &&
+      (d.boxShadow ?? const []).isEmpty;
+}
 
 void main() {
   setUpAll(superTabLoadZones);
@@ -667,14 +678,23 @@ void main() {
           find.byWidgetPredicate((w) => w is ActivityMark),
         );
         expect(t.widget<Text>(title).maxLines, 3);
+        // A neutral grey capsule with secondary text, never the project's colour (#4468).
         expect(
           t.widget<DecoratedBox>(tag).decoration,
-          isA<BoxDecoration>().having(
-            (d) => d.color,
-            'color',
-            superTabProjectColor('lead5701'),
-          ),
+          isA<ShapeDecoration>()
+              .having((d) => d.color, 'color', grid.AppSurface.wellFill)
+              .having((d) => d.shape, 'shape', isA<StadiumBorder>()),
         );
+        expect(
+          t
+              .widget<Text>(
+                find.descendant(of: tag, matching: find.byType(Text)),
+              )
+              .style
+              ?.color,
+          DesktopChrome.muted,
+        );
+        expect(quietCard(t, 'new'), isTrue);
         // The mark sits top right: above the title, at the card's right side.
         expect(t.getRect(mark).bottom, lessThanOrEqualTo(t.getRect(title).top));
         expect(
@@ -695,6 +715,8 @@ void main() {
         final asked = t.getRect(avatars.at(0)),
             agent = t.getRect(avatars.at(1));
         expect(t.widget<SuperTabAvatar>(avatars.at(0)).identity, 'person:6a86');
+        expect(asked.height, 18);
+        expect(agent.height, 18);
         expect(asked.left, lessThan(agent.left));
         expect(agent.right, lessThan(t.getRect(card).center.dx));
         expect(asked.top, greaterThan(t.getRect(title).bottom));
@@ -727,19 +749,43 @@ void main() {
       expect(f.commands, isEmpty);
     });
 
-    test('a project keeps its colour', () {
-      expect(
-        superTabProjectColor('lead5701'),
-        superTabProjectColor('lead5701'),
-      );
-      expect(
-        {
-          for (final id in ['a', 'b', 'c', 'd', 'e', 'f', 'g'])
-            superTabProjectColor(id),
-        }.length,
-        greaterThan(1),
-      );
-    });
+    testWidgets(
+      'a long project name stays in its capsule and a selected card is only filled',
+      (t) async {
+        f = TasksFixture()
+          ..rows = [
+            // A project the snapshot doesn't hold shows the row's own name.
+            task('new', 1, 20)
+              ..['projectId'] = 'elsewhere'
+              ..['projectName'] = 'A very long project name ' * 8,
+          ];
+        addTearDown(() => f.controller.dispose());
+        await f.controller.refresh();
+        await t.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 340,
+                child: SuperTabPersonalTasksPane(
+                  controller: f.controller,
+                  onOpenTask: (_) {},
+                  selectedId: 'new',
+                ),
+              ),
+            ),
+          ),
+        );
+        expect(t.takeException(), isNull);
+        final card = t.getRect(
+          inCard('new', find.byType(SuperTabPersonalTaskCard)),
+        );
+        final mark = t.getRect(
+          inCard('new', find.byIcon(AppIcons.circleDashed)),
+        );
+        expect(mark.right, lessThanOrEqualTo(card.right));
+        expect(quietCard(t, 'new'), isTrue);
+      },
+    );
   });
 
   testWidgets('while a change is sent, Approve and Reject are disabled', (
