@@ -409,19 +409,39 @@ quarter of its box, and nothing else outside the words more than 38 pixels.
 - **Task card and row.** The Tasks pane card (`SuperTabPersonalTaskCard`) and
   the sidebar row (`SuperTabBuddyRow`) carry the elements above at their
   shipped sizes; their size and layout do not change when an element does.
-- **Chat message.** A message row (`SuperTabMessageRow`) leads with a round
-  28 face, then one header line: the name at 13 semibold and the time at 12
-  in tertiary ink (`textFaint`), nothing else; no engine mark, since colour
-  is only the face's. The text reads at 14 on 20 px lines (`SwarmType`).
-  An empty chat shows no line; only a chat that can't be read or is still
-  loading says so (task #4467).
-- **Chat composer.** Both composers (the chat's and a thread's) are Cmd-N's
-  field: radius 12, a hairline (`rim`) and the faint fill (`field`). Under
-  the text, the paperclip on the left and, on the right, the mic beside the
-  round send (`SwarmSendButton`, `super_tabs/chat/send_button.dart`): a 28
-  circle in a 32 target, `rim` with a `textFaint` arrow while there is
-  nothing to send, `AppPalette.accent` with a white (`onSelection`) arrow
-  once there is text or a file. No @ button: an @ typed tags.
+- **Chat bubbles.** A chat reads like iMessage (anh Dee's mockup,
+  2026-11-07, task #4529). Your own messages are bubbles on the right in
+  `SwarmPalette.ownBubble` (#0A84FF) under white text (`onSelection`);
+  everyone else's on the left in grey (`field`). Radius 18, and 4 on the
+  sender's side where one sender's bubbles meet; a bubble takes at most three
+  quarters of the row (`SwarmBubble`, `super_tabs/chat/bubble.dart`). Between
+  you and a chat's own agent (a Buddy chat, an agent chat) there are no names
+  or faces; in a group chat a speaker's name sits over their first bubble in
+  13 plain secondary ink, and their round 28 face by their last. No engine
+  mark: colour is the face's. Text reads at 14 on 20 px lines (`SwarmType`).
+- **Chat times.** No time in a bubble's row. A time sits centered between
+  messages only after a pause of more than five minutes (`SwarmChatTime`);
+  a bubble's full date and time are on its tooltip.
+- **Chat cards.** A sent brief and a shipped note are compact cards
+  (`SwarmChatCard`): an icon and a small label (Sent to River, Shipped), one
+  title line, and one blue action (View brief, What changed) that shows the
+  rest in place. Never the whole brief inline. A task's live card under its
+  brief keeps its status and checks without repeating the title.
+- **Long messages.** An agent's message folds after about six lines, with
+  More (`SwarmFold`); a person's never does.
+- **Voice.** A voice message is its own bubble with play, waveform and
+  length, blue on your side; it plays only, with no words under it (anh Dee,
+  2026-11-04, again 2026-11-07).
+- **Chat composer.** The chat's composer is a pill (`SwarmComposerPill`,
+  radius 20, a hairline and the faint fill) holding the paperclip, the text
+  and its options; beside it the mic while there is nothing to send, and the
+  round send (`SwarmSendButton`, 28, blue) in its place once there is text or
+  a file. A thread's box keeps its row under the text, with a grey send until
+  there is something to send. No @ button: an @ typed tags.
+- **Empty chats.** An empty chat shows no line; only one that can't be read
+  or is still loading says so.
+- **Blue.** Blue is for the main action and for your own bubbles, nothing
+  else.
 - **Adding or changing one.** A new or changed element updates this section
   and the gallery, with its images, in the same pull request.
 
