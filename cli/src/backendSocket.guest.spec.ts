@@ -51,8 +51,17 @@ describe('a guest session', () => {
     const { socket, ask } = session('kim@acme.io')
     const askers: unknown[] = []
     socket.serviceRouter = (_type, _payload, asker, reply) => { askers.push(asker); reply({ ok: true }); return true }
-    await ask('usage_read')
+    await ask('guest_folders')
     expect(askers).toEqual([expect.objectContaining({ owner: false, guest: 'kim@acme.io' })])
+  })
+
+  it('never hears the owner\'s plan allowances: the usage service is not asked', async () => {
+    const { socket, ask, answered } = session('kim@acme.io')
+    const routed = vi.fn(() => true)
+    socket.serviceRouter = routed
+    await ask('usage_read')
+    expect(routed).not.toHaveBeenCalled()
+    expect(answered()).toEqual([{ type: 'usage_read', payload: expect.objectContaining({ error: 'GUEST_NOT_ALLOWED' }) }])
   })
 
   it('lists only its own harnesses, and opens only their terminals', async () => {
