@@ -837,7 +837,7 @@ void main() {
           inCard('new', find.byType(SuperTabPersonalTaskCard)),
         );
         final mark = t.getRect(
-          inCard('new', find.byIcon(AppIcons.circleDashed)),
+          inCard('new', find.byType(SuperTabTaskStatusMark)),
         );
         expect(mark.right, lessThanOrEqualTo(card.right));
         expect(quietCard(t, 'new'), isTrue);

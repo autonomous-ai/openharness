@@ -5,10 +5,50 @@ import '../../shared/theme/app_theme.dart' as grid;
 import '../../shared/widgets/app_menu.dart';
 import '../../widgets/desktop_chrome.dart';
 
-/// The Tasks pane's Auto approve or Review choice: plain secondary text at rest, its chevron and a faint fill only
-/// on hover, focus or while open (anh Dee, 11-07: dropdowns stay plain text until you hover).
-class SuperTabApprovalModeChoice extends StatefulWidget {
-  const SuperTabApprovalModeChoice({
+/// The top of the Tasks pane (anh Dee, 11-07): "Tasks" in semibold on the left, and the reader's Auto approve or
+/// Review choice on the right, shown only when [mode] is known.
+class SuperTabTasksPaneHeader extends StatelessWidget {
+  const SuperTabTasksPaneHeader({super.key, this.mode, this.onChanged});
+
+  /// `autoApprove` or `review`, as the server stores it; null when the backend has no Tasks.
+  final String? mode;
+
+  /// Null while a change is sent or the reader can't write: the choice then stays plain text.
+  final ValueChanged<String>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: grid.AppDesktop.groupGap,
+        vertical: grid.AppDesktop.controlGap,
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              'Tasks',
+              style: DesktopChrome.control(color: DesktopChrome.foreground)
+                  .copyWith(fontWeight: grid.AppFont.semibold),
+            ),
+          ),
+          if (mode case final mode?)
+            _ApprovalModeChoice(
+              key: const ValueKey('tasks-approval-mode'),
+              mode: mode,
+              onChanged: onChanged,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The Auto approve or Review choice: plain secondary text at rest, its chevron and a faint fill only on hover,
+/// focus or while open (anh Dee, 11-07: dropdowns stay plain text until you hover).
+class _ApprovalModeChoice extends StatefulWidget {
+  const _ApprovalModeChoice({
     super.key,
     required this.mode,
     required this.onChanged,
@@ -21,12 +61,12 @@ class SuperTabApprovalModeChoice extends StatefulWidget {
   final ValueChanged<String>? onChanged;
 
   @override
-  State<SuperTabApprovalModeChoice> createState() => _ChoiceState();
+  State<_ApprovalModeChoice> createState() => _ChoiceState();
 }
 
 const _modes = {'autoApprove': 'Auto approve', 'review': 'Review'};
 
-class _ChoiceState extends State<SuperTabApprovalModeChoice> {
+class _ChoiceState extends State<_ApprovalModeChoice> {
   bool _hovered = false, _focused = false;
 
   @override

@@ -3,14 +3,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../shared/theme/app_theme.dart';
-import '../../widgets/desktop_chrome.dart';
 import '../../widgets/laid_out_list.dart';
 import '../controller.dart';
 import '../identity.dart';
 import '../model.dart';
-import 'approval_mode_choice.dart';
 import 'personal_task_card.dart';
 import 'personal_tasks.dart';
+import 'tasks_pane_header.dart';
 
 /// The person's active work, from the same authenticated cursor as the chat.
 class SuperTabPersonalTasksPane extends StatefulWidget {
@@ -205,36 +204,13 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: AppDesktop.groupGap,
-                    vertical: AppDesktop.controlGap,
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'Tasks',
-                          style: DesktopChrome.control(
-                            color: DesktopChrome.foreground,
-                          ).copyWith(fontWeight: AppFont.semibold),
-                        ),
-                      ),
-                      if (supported)
-                        SuperTabApprovalModeChoice(
-                          key: const ValueKey('tasks-approval-mode'),
-                          mode: tasks!.mode,
-                          onChanged: enabled
-                              ? (mode) => unawaited(
-                                  _send({
-                                    'type': 'member.approvalMode',
-                                    'mode': mode,
-                                  }),
-                                )
-                              : null,
-                        ),
-                    ],
-                  ),
+                SuperTabTasksPaneHeader(
+                  mode: supported ? tasks!.mode : null,
+                  onChanged: enabled
+                      ? (mode) => unawaited(
+                          _send({'type': 'member.approvalMode', 'mode': mode}),
+                        )
+                      : null,
                 ),
                 if (_error != null)
                   Padding(
