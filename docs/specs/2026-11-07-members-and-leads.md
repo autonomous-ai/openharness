@@ -20,6 +20,16 @@ whole-screen polish; then this flow; then the mockup's finish across the rest of
 > computer, the Lead offers a private GitHub repo and sends anything else in the task thread. Existing Buddies become
 > Members, keep their chats and ask their owner for a main project.
 
+## Where this differs from the ask
+
+Anh Dee asked for "one home folder with a worktree per project and a separate session per project". The spec keeps
+one Member, one name, one face and one chat for people, but on the computer a Member has **two folders**: a home for
+its chat with its person, and a task home holding a worktree per project. Why: the chat can carry every project its
+person reads, private ones and their decisions included, while a task can be steered by outside text (an issue, a pull
+request, a file). Kept in one folder and one session, a public task could read the person's private projects and post
+them; both security reviews of this spec asked for the split (section 2). Nobody sees the two folders or the two kinds
+of session: they are inside Harness.
+
 ## How it works today (main a1c62e12f)
 
 - **Kinds are derived, not stored.** `agentKind()` (`backend/src/superTabs/agentKind.ts`) says `buddy` when the agent
@@ -60,6 +70,9 @@ agent on screen.
 | **Helping** | A free Member doing a task in a project that is not its main project. |
 | **Set up** | A project is set up for a Member when its worktree is on the Member's computer, ready to work in. |
 | **Waiting** | A task is waiting when it is approved and nobody is on it yet (the Board's Next up). |
+
+**Chat session**, **task session** and **task home** (section 2) are words for this spec and the build tasks only.
+They never appear on screen: people see one Member and its chat.
 
 Engineer, Reviewer and Tester stay as what a Member does on a given task, by the project's instructions. They are not
 kinds of agent.
@@ -121,6 +134,13 @@ Member's good behaviour.
   its person reads, the decisions and lines addressed to them) and sends only the Buddy's commands (`BUDDY_COMMANDS`:
   talk, propose, answer on the cards it sent). It never takes a task, never receives a task's brief or thread, and
   never posts in one. It runs in its own home folder, as a Buddy's does (`buddyHome.ts`), with no task worktree in it.
+- **The chat's project copies are shared, one set per person per computer.** A Buddy's home holds a read copy of each
+  project its person reads whose checkout is on that computer (`projects/<name>`, detached worktrees made from the
+  existing checkouts, nothing cloned, at most 50, `MAX_BUDDY_PROJECTS`). Every Member of the same person on the same
+  computer reads that one set, kept in the home of the person's first Member there (their old Buddy's, for a migrated
+  one). So a person with several Members uses the disk one Buddy uses today. The copies follow their default branch
+  and leave when the person no longer reads the project (`refreshBuddyHome`, `pruneBuddyHome`), and the set goes when
+  the person's last Member on that computer stops. Task sessions never read it.
 - **The task sessions**, one per project, do the work. Each is its own agent record, tied to its Member and bound to
   that one project's session scope (`sessionScope.ts bindSession`), as a project's agent is today. The server lets it
   read and post only inside its project: that project's tasks, threads, chat and instructions. It reads no person's
@@ -340,6 +360,7 @@ stores a role.
    | `mainProjectId` | at the Cmd-N start, or the person's answer (section 7) | the person picks another; a Lead's when its project is replaced | cleared when the agent is removed | kept while the agent moves machines (`movedTo`) | n/a | removed with the agent, whose membership generation ends | with the agent; a deleted project clears it on every agent that named it, and they ask again | a new agent never inherits it |
    | `workingIn` | at its first assignment | at each assignment in another project | kept | kept | kept | with the agent | with the agent; a deleted project clears it | n/a |
    | `setUp` | from the host's report after a set-up | replaced on each report; capped at 5 | n/a | on a move, the new machine reports its own (empty) | n/a | with the agent | with the agent; a deleted project's entry leaves on the next report | n/a |
+   | Chat project copies (host), one set per person per computer | at the first Member's start there, from existing checkouts | refreshed to the default branch at most hourly | a project the person no longer reads leaves before the next turn (`pruneBuddyHome`) | stay with the old machine's set; the new machine's set is made from its own checkouts | n/a | the person's last Member on that computer stopping removes the set | with that last Member | a new first Member makes a new set |
    | `projectsHeld` entry | at an assignment in a project not yet held | n/a (ids only) | removed when the host reports that worktree dropped | kept on a move until the old host reports it dropped; the new machine's task home starts empty and adds its own | n/a | with the agent | with the agent; a deleted project's entry stays until its worktree is dropped | n/a |
    | Task session record | at a Member's first task in a project | its engine session id, by the host | closed when its worktree is dropped | today's lost-work path; the next task starts it again | n/a | removed with its Member | with its Member or its project | a new task session for the same pair is a new record, scoped again |
    | `mainAsked` | when the Member asks | never (asked once) | cleared when answered | kept | n/a | with the agent | with the agent | n/a |
@@ -385,9 +406,12 @@ stores a role.
    - *The host's `setUp` report* rides the machine report it already sends, about 60 bytes per Member, written only
      when the list changes.
 4. **Scale.** Today's openharness Swarm has about 60 agents, 45 people and one project; 10x is 600 agents across up to
-   100 projects, and up to 3,000 task session records beside them (5 per Member, most of them asleep). Dispatch's work per free Member is bounded by waiting tasks in projects it may help, already loaded;
+   100 projects, and up to 3,000 task session records beside them (5 per Member, most of them asleep). On one computer,
+   a person with N Members holds one set of chat project copies (at most 50 detached worktrees, as one Buddy does
+   today) plus at most 5N task worktrees. Dispatch's work per free Member is bounded by waiting tasks in projects it may help, already loaded;
    at 10x that is at most a few thousand comparisons per pass, measured on a synthetic 600-agent, 100-project state
-   before the dispatch task merges. Disk is the first limit a person feels: 5 worktrees per Member. The metrics that
+   before the dispatch task merges. Disk is the first limit a person feels: 5 task worktrees per Member plus one shared set of chat copies per person per
+   computer. The metrics that
    warn first are the dispatch pass's time (p95, already timed), the Swarm's first-load bytes (task session parts), and
    the measure *idle-while-waiting* above; set-ups per
    day shows clone and install load before disk runs out.
@@ -496,37 +520,50 @@ This flow, smallest first:
 
 1. **Words.** Member, Lead, Main project, Helping, Set up and Waiting in docs/naming-system.md; Buddy, Regular agent and
    PM agent leave the on-screen words. Docs; no release.
+   Owner area: docs/naming-system.md.
 2. **What a project is.** `about` on the project, set by its owner or Lead in Project settings (one line, 80
    characters). Backend first, then Desktop's settings row. Backend release, then Desktop release.
+   Owner area: backend/src/superTabs/ (projects.ts, commands.ts), then desktop/lib/super_tabs/ (Project settings).
 3. **The project list read.** Readable projects with name, about (else the repository's name), Lead, waiting count and
    the row to pick first (the invitation's project, else the one that needs help most). Backend release.
+   Owner area: backend/src/superTabs/ (a command read, read/).
 4. **Main project on agents.** `mainProjectId` and `role: lead | member` beside `kind`; `agent.new` and Bring agent take
    a main project; New project makes the Lead (`project.create`, then the Lead's start). Backend release.
+   Owner area: backend/src/superTabs/ (model.ts, agentKind.ts, read/views.ts, commands.ts).
 5. **The Cmd-N form.** The folder, worktree, branch rows and the Member or Lead pill go; the project list and New
    project take their place; joining shows the same form after Bring agent. Desktop release (macOS, Windows, Linux).
+   Owner area: desktop/lib/widgets/new_harness_form.dart, desktop/lib/state/new_harness.dart, desktop/lib/super_tabs/launch.dart, desktop/lib/super_tabs/join/, desktop/design/.
 6. **A Member's two kinds of session.** The backend makes a task session per project, tied to its Member and bound to
    that project's scope, and keeps `projectsHeld`; the chat session keeps the Buddy's reads and commands. The CLI host
    keeps the chat home apart from the task home, a worktree and an engine session per project in the task home,
    reports `setUp` and dropped worktrees, and says `memberProjects`; the task session tells the Lead it's ready after
    its first set-up. Backend release, then CLI release, with two security reviews.
+   Owner area: backend/src/superTabs/ (sessionScope.ts, model.ts, machines.ts), cli/src/superTabs/ (start.ts, host.ts, agentFolder.ts, buddyHome.ts).
 7. **One task at a time, then helping.** Dispatch gives a free Member its main project's task, else a set-up project's,
    else the one that needs help most, public projects only; it goes back after its task; the change line in its chat.
    Every check in section 3's list inside `work.assign`, for a Lead's pick by name too. Backend release, with two
    security reviews.
-8. **Sleep only when nothing is waiting.** Members sleep after 10 minutes free with nothing they may take, and wake for
-   any such task; replaces the hour-idle rules for Members. Backend release.
+   Owner area: backend/src/superTabs/ (dispatch.ts, projects.ts, commands.ts for work.assign).
+8. **Sleep only when nothing is waiting.** A Member's task sessions sleep after 10 minutes free with nothing it may
+   take, and wake for any such task; replaces the crew's hour-idle rule for them. The chat session keeps the Buddy's
+   sleep. Backend release.
+   Owner area: backend/src/superTabs/ (crewKeep.ts, crewRules.ts, buddySleep.ts); the host's existing rest and resume path is unchanged.
 9. **Buddies become Members.** Buddies and Regular agents act as Members, their old sessions as chat sessions only, never
    for tasks; each asks its person once for a main project in its chat, with the project list; the default Buddy is the
    default Member. Backend release, then Desktop release for the project list in the chat, with two security reviews.
+   Owner area: backend/src/superTabs/ (buddies.ts, agentKind.ts, buddySleep.ts), desktop/lib/super_tabs/ (the chat's project list), desktop/design/.
 10. **The Lead asks a computer's owner to start more.** Only an owner who can read the project; one ask per computer
     and project a day, in the owner's Tasks
     pane and default Member's chat, with Start opening Cmd-N filled in. Backend release, then Desktop release.
+    Owner area: backend/src/superTabs/ (the ask, read/personalTasks.ts), desktop/lib/super_tabs/ (the Tasks pane button that opens Cmd-N), desktop/design/.
 11. **Files only on the Lead's computer.** The Lead offers its person a private repository through New repository and
     Share repository, once; other files go as attachments in the task thread, through `readInsideFolder` with the
     ignored-file and secret-name refusals (section 6). Backend release (the Lead's instructions text and the offer
     record), CLI release (the attachment checks) and Desktop release (the offer's buttons).
+    Owner area: backend/src/superTabs/ (the offer record), cli/src/superTabs/attach.ts, cli/src/lib/swarmSkills.ts, desktop/lib/super_tabs/ (the offer's buttons).
 12. **Cleanup, on 2026-12-07.** `buddyOf`, the `buddy` kind, the Buddy-only command list and the Buddy screens' code go,
     once no client from before task 9 is in use. Backend, CLI and Desktop releases.
+    Owner area: backend/src/superTabs/, cli/src/superTabs/, cli/src/lib/buddyGuard.ts, desktop/lib/super_tabs/.
 
 Then the mockup's finish across the rest of the app, one task per area, each from the design system and the
 whole-screen polish: the left pane and My agents; the chat and its header; the Board and its cards; the Tasks pane;
