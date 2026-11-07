@@ -194,22 +194,78 @@ describe('personal approval enforced before work', () => {
     expect(f.state.conversations.filter(c => !c.archived && c.requesterId === peer.userId && (c.task || c.proposal))).toHaveLength(1)
     expect(() => f.runCommand(input, f.pm, { proposal })).toThrow()
   })
-  it('keeps a chosen agent binding when the person approves before PM preparation', () => {
+  it('refuses approving an undecided or Later proposal; the person approves the task the PM shaped (#4249)', () => {
     const f = fixture(); f.mode('review'); f.propose()
     const card = f.state.conversations.find(c => c.proposal)!
     f.runCommand({ type: 'task.suggest', conversationId: card.id, agentId: f.candidate })
-    f.runCommand({ type: 'task.approve', conversationId: card.id })
+    expect(() => f.runCommand({ type: 'task.approve', conversationId: card.id })).toThrow(expect.objectContaining({ code: 'PROPOSAL_UNDECIDED' }))
+    expect(f.card(card.id).taskApproval?.state).toBe('proposal')
     f.runCommand({ type: 'proposal.decide', conversationId: card.id, decision: 'accept', reason: 'Build', task,
       checks: [{ description: 'Restores drafts' }] }, f.pm)
+    expect(() => f.runCommand({ type: 'work.assign', conversationId: card.id, agentId: f.candidate }, f.pm))
+      .toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
+    f.runCommand({ type: 'task.approve', conversationId: card.id })
     expect(() => f.runCommand({ type: 'work.assign', conversationId: card.id, agentId: f.other }, f.pm)).toThrow()
     f.runCommand({ type: 'work.assign', conversationId: card.id, agentId: f.candidate }, f.pm)
     expect(f.card(card.id).assignment?.agentId).toBe(f.candidate)
+  })
+  it('refuses approving a proposal the PM marked Later (#4249)', () => {
+    const f = fixture(); f.mode('review'); f.propose()
+    const card = f.state.conversations.find(c => c.proposal)!
+    f.runCommand({ type: 'proposal.decide', conversationId: card.id, decision: 'later', reason: 'Next week', revisitAt: NOW + 86_400_000 }, f.pm)
+    expect(() => f.runCommand({ type: 'task.approve', conversationId: card.id })).toThrow(expect.objectContaining({ code: 'PROPOSAL_UNDECIDED' }))
+  })
+  it.each(['accept', 'reshape'])('a stored approval from before the decision does not carry over to the task the PM shapes on %s (#4249)', decision => {
+    const f = fixture(); f.mode('review'); f.propose()
+    const card = f.state.conversations.find(c => c.proposal)!
+    // Approved while undecided, as a server before this fix allowed.
+    f.edit(s => Object.assign(s.conversations.find(c => c.id === card.id)!.taskApproval!,
+      { state: 'approved', decidedAt: NOW, suggestedAgentId: f.candidate }))
+    f.runCommand({ type: 'proposal.decide', conversationId: card.id, decision, reason: 'Bigger', task: { ...task, changes: 'Persist drafts and sync them' },
+      checks: [{ description: 'Restores drafts' }] }, f.pm)
+    expect(f.card(card.id).taskApproval).toMatchObject({ state: 'proposal', suggestedAgentId: f.candidate })
+    expect(f.card(card.id).taskApproval?.decidedAt).toBeUndefined()
+    expect(() => f.runCommand({ type: 'work.assign', conversationId: card.id, agentId: f.candidate }, f.pm))
+      .toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
+    f.runCommand({ type: 'task.approve', conversationId: card.id })
+    f.runCommand({ type: 'work.assign', conversationId: card.id, agentId: f.candidate }, f.pm)
+    expect(f.card(card.id).assignment?.agentId).toBe(f.candidate)
+  })
+  it('a new scope for an approved, unstarted task goes back to its person (#4249, security review 1)', () => {
+    const f = fixture(); f.mode('review'); const id = f.create()
+    f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate }, f.pm)
+    f.runCommand({ type: 'task.approve', conversationId: id })
+    f.runCommand({ type: 'work.define', conversationId: id, task: { ...task, changes: 'Persist drafts and rewrite sync' },
+      checks: [{ description: 'Restores and syncs drafts' }] }, f.pm)
+    expect(f.card(id).taskApproval).toMatchObject({ state: 'proposal', suggestedAgentId: f.candidate })
+    expect(f.card(id).taskApproval?.decidedAt).toBeUndefined()
+    expect(() => f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm))
+      .toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
+    f.runCommand({ type: 'task.approve', conversationId: id })
+    f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm)
+    expect(f.card(id).assignment?.agentId).toBe(f.candidate)
+  })
+  it('a converted older proposal gets a fresh approval, never the card’s decision (#4249)', () => {
+    const f = fixture(false); f.mode('review'); const sent = f.propose()
+    const row = sent.messages.find(m => m.source?.kind === 'buddy-proposal')!
+    const mirror = f.state.conversations.find(c => c.taskApproval && c.proposal)!
+    f.edit(s => Object.assign(s.conversations.find(c => c.id === mirror.id)!.taskApproval!,
+      { state: 'approved', decidedAt: NOW, suggestedAgentId: f.candidate }))
+    const id = f.runCommand({ type: 'conversation.create', title: 'Prepared', task: { ...task, changes: 'A different scope' }, priority: 'P2',
+      proposalMessageId: row.id, checks: [{ description: 'Restores drafts' }] }, f.pm,
+    { proposal: { id: row.id, conversationId: row.conversationId, author: row.author, source: row.source ?? null } }).result.conversationId
+    expect(f.card(id).taskApproval).toMatchObject({ state: 'proposal', personId: peer.userId })
+    expect(f.card(id).taskApproval?.suggestedAgentId).toBeUndefined()
+    expect(f.card(id).taskApproval?.decidedAt).toBeUndefined()
+    expect(() => f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm))
+      .toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
   })
   it('cannot merge an approved Review proposal and lose its chosen agent or requester', () => {
     const f = fixture(); f.mode('review'); f.propose()
     const card = f.state.conversations.find(c => c.proposal)!
     f.runCommand({ type: 'task.suggest', conversationId: card.id, agentId: f.candidate })
-    f.runCommand({ type: 'task.approve', conversationId: card.id })
+    // Approved while undecided, as a server before #4249 allowed.
+    f.edit(s => Object.assign(s.conversations.find(c => c.id === card.id)!.taskApproval!, { state: 'approved', decidedAt: NOW }))
     const target = f.runCommand({ type: 'proposal.create', projectId: 'lead', title: 'Other', text: 'Other', goal: 'Other', why: 'Other',
       doneWhen: 'Other', evidence: ['Reproduction'], priority: 'P2' }, owner).result.conversationId
     expect(() => f.runCommand({ type: 'proposal.merge', conversationId: card.id, intoConversationId: target, reason: 'Same' }, f.pm)).toThrow()

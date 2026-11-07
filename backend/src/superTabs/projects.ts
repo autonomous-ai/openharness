@@ -239,6 +239,7 @@ export function settleOwners(state: SuperTabState): Array<{ projectId: string; f
  *  a project from before ownerGeneration whose owner left is never matched to them again (security reviews of #3082). */
 export function admitPerson(state: SuperTabState, member: Person): void {
   settleOwners(state)
+  settleBoardRights(state)
   state.people.push(member)
 }
 
@@ -247,6 +248,22 @@ export function admitPerson(state: SuperTabState, member: Person): void {
 export function dismissPeople(state: SuperTabState, leaving: ReadonlySet<string>): void {
   state.people = state.people.filter(p => !leaving.has(p.id))
   settleOwners(state)
+  settleBoardRights(state)
+}
+
+/** Takes everyone no longer in the Swarm out of each project's Can chat and decider seat (task #4216). Both name a person by
+ *  id only, and any member reads a public project, so without this a person removed and invited back had them again. Run
+ *  before a person is admitted too, which clears a right kept from before this ran on leaving. */
+function settleBoardRights(state: SuperTabState): void {
+  const people = new Set(state.people.map(p => p.id))
+  for (const project of state.projects ?? []) {
+    if (project.canChat) {
+      const kept = project.canChat.filter(id => people.has(id))
+      if (kept.length) project.canChat = kept
+      else delete project.canChat
+    }
+    if (project.decider && !people.has(project.decider)) delete project.decider
+  }
 }
 
 /** Whose active work other projects' Leads see and are alerted about. A private project's work stays with its own people. */

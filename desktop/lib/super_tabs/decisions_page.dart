@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/skeleton.dart';
@@ -9,12 +10,14 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/laid_out_list.dart';
 import 'activity.dart';
 import 'activity_rows.dart';
+import 'backlog.dart';
 import 'decisions.dart';
 import 'decisions_view.dart' show quietDecisionAction;
 import 'model.dart';
 import 'page_rows.dart';
 import 'prompt_lines.dart';
 import 'reminders.dart';
+import 'task_groups.dart';
 
 /// Decisions, the sidebar's first page (anh Dee, 11-05, task #2996): what
 /// waits on the reader's answer, as Needs you listed it. Due reminders lead,
@@ -158,7 +161,8 @@ class _DecisionsPageState extends State<SuperTabDecisionsPage> {
     }
   }
 
-  List<Widget> _rows() {
+  /// The page's rows; null once read with nothing waiting on the reader.
+  List<Widget>? _rows() {
     final a = _activity;
     // Until the decisions are read the list is not known: neither "nothing"
     // nor a count. A failed read says so above, with Retry.
@@ -219,28 +223,7 @@ class _DecisionsPageState extends State<SuperTabDecisionsPage> {
               ),
             ]);
           }();
-    if (due.isEmpty && waiting.isEmpty && decided.isEmpty) {
-      final handled = a.handledToday;
-      final name = a.coordinatorFor(handled);
-      return [
-        superTabPageEmpty(
-          'Nothing needs you',
-          handled.isEmpty
-              ? null
-              : '$name handled ${handled.length} for you today',
-          handled.isEmpty
-              ? null
-              : quietDecisionAction(
-                  key: const ValueKey('super-activity-handled'),
-                  label: 'See what',
-                  onPressed: () =>
-                      setState(() => _handledShown = !_handledShown),
-                ),
-        ),
-        if (_handledShown && handled.isNotEmpty)
-          for (final d in handled) _handledRow(d),
-      ];
-    }
+    if (due.isEmpty && waiting.isEmpty && decided.isEmpty) return null;
     return [
       ?bar,
       // A reminder the reader set is theirs to answer: it leads, above the
@@ -255,6 +238,84 @@ class _DecisionsPageState extends State<SuperTabDecisionsPage> {
         widget.now(),
       ),
     ];
+  }
+
+  /// Nothing waits on the reader (audit finding 14, task #4211): a calm
+  /// all-clear in the middle of the page, with how much of the work is moving
+  /// and what the PM handled today one click away.
+  Widget _allClear() {
+    final a = _activity;
+    final handled = a.handledToday;
+    final moving = _moving();
+    return LayoutBuilder(
+      builder: (context, box) => SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: box.maxHeight),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  AppIcons.circleCheck,
+                  size: 24,
+                  color: DesktopChrome.muted,
+                ),
+                superTabPageEmpty(
+                  'All clear',
+                  'Your crew has what it needs',
+                  moving == 0
+                      ? null
+                      : Padding(
+                          padding: const EdgeInsets.only(
+                            top: grid.AppDesktop.listRowGap * 2,
+                          ),
+                          child: Text(
+                            '$moving ${moving == 1 ? 'task' : 'tasks'} moving',
+                            style: DesktopChrome.metadata(),
+                          ),
+                        ),
+                ),
+                if (handled.isNotEmpty) ...[
+                  Text(
+                    '${a.coordinatorFor(handled)} handled ${handled.length} '
+                    'for you today',
+                    textAlign: TextAlign.center,
+                    style: DesktopChrome.control(color: DesktopChrome.muted),
+                  ),
+                  quietDecisionAction(
+                    key: const ValueKey('super-activity-handled'),
+                    label: 'See what',
+                    onPressed: () =>
+                        setState(() => _handledShown = !_handledShown),
+                  ),
+                  if (_handledShown)
+                    for (final d in handled) _handledRow(d),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// How many tasks the reader can see are moving: those in a Board's Working
+  /// column, so open, handed to an agent and not yet done.
+  int _moving() {
+    final c = _activity.controller;
+    final now = widget.now();
+    var moving = 0;
+    for (final project in c.snapshot?.projects ?? const <SuperTabProject>[]) {
+      for (final task in superTabProjectTasks(c, project)) {
+        final place = superTabTaskPlaceOf(
+          task,
+          readerId: c.accountId,
+          now: now,
+        );
+        if (place?.column == SuperTabTaskColumn.working) moving++;
+      }
+    }
+    return moving;
   }
 
   Widget _handledRow(SuperTabDecision d) {
@@ -473,17 +534,28 @@ class _DecisionsPageState extends State<SuperTabDecisionsPage> {
       grid.AppTheme.watch(context);
       final a = _activity;
       final error = a.decisions.error ?? a.reminders.error;
+      final retry = error == null
+          ? null
+          : superTabPageError(error, () {
+              unawaited(a.decisions.load());
+              unawaited(a.reminders.load());
+            });
+      final rows = _rows();
+      if (rows == null) {
+        // The page's key either way, which its places look for.
+        return Column(
+          key: const ValueKey('super-decisions-list'),
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ?retry,
+            Expanded(child: _allClear()),
+          ],
+        );
+      }
       return LaidOutListView(
         key: const ValueKey('super-decisions-list'),
         padding: const EdgeInsets.only(bottom: grid.AppDesktop.groupGap),
-        children: [
-          if (error != null)
-            superTabPageError(error, () {
-              unawaited(a.decisions.load());
-              unawaited(a.reminders.load());
-            }),
-          ..._rows(),
-        ],
+        children: [?retry, ...rows],
       );
     },
   );

@@ -706,7 +706,7 @@ export class ContributedMachines {
               if (privacy?.mode === 'account' && !privacy.passed && !start.dispatched) {
                 await scoped({ action: 'command', operationId: `privacy-failed-${start.id}`,
                   command: { type: 'agent.startFailed', startId: start.id,
-                    error: `This computer's Harness Team account is not private (${privacy.item}): ${privacy.detail} Its owner can run \`harness team setup\` to repair it.` } })
+                    error: `This computer's Harness Team account is not private (${privacy.item}): ${privacy.detail} Its owner can remove it: \`harness team remove\`.` } })
                 continue
               }
               // Another person's project is cloned and fetched with the Harness GitHub App's token, never this machine's own

@@ -21,11 +21,15 @@ function scene() {
 }
 
 describe('personal Tasks summaries', () => {
+  // An undecided or Later proposal is not yet a task the person can approve (#4249).
   it.each([
     [undefined, false, false],
-    [undefined, true, false],
+    [undefined, 'undecided', false],
     ['proposal', false, true],
-    ['proposal', true, true],
+    ['proposal', 'undecided', false],
+    ['proposal', 'later', false],
+    ['proposal', 'accept', true],
+    ['proposal', 'reshape', true],
     ['approved', false, false],
     ['rejected', false, false],
   ] as const)('exposes approval capability for decision %s with Buddy proposal %s as %s', (decision, proposal, canApprove) => {
@@ -34,7 +38,8 @@ describe('personal Tasks summaries', () => {
     if (decision) data.taskApproval = { ...data.taskApproval!, state: decision }
     else delete data.taskApproval
     if (proposal) data.proposal = { version: 1, text: 'Keep drafts', goal: 'Drafts', why: 'Loss', doneWhen: 'Returns', evidence: ['Repro'], priority: 'P2',
-      createdAt: NOW, questions: [], senders: [{ personId: peer.userId, generation: s.f.state.people.find(p => p.id === peer.userId)!.generation }] }
+      createdAt: NOW, questions: [], senders: [{ personId: peer.userId, generation: s.f.state.people.find(p => p.id === peer.userId)!.generation }],
+      ...proposal === 'undecided' ? {} : { decision: { kind: proposal, reason: 'PM', at: NOW, by: 'lead' } } }
     for (const reset of [true, false])
       expect(personalTasksFor([row], s.view(), peer, reset)!.upserts).toEqual([expect.objectContaining({ id: row.key, canApprove })])
   })

@@ -1,7 +1,7 @@
 import type { Actor, Conversation } from '../model.js'
 import type { Part } from '../parts/types.js'
 import { canReadGroup, groupProject } from '../projects.js'
-import type { ApprovalMode } from '../taskApproval.js'
+import { undecidedProposal, type ApprovalMode } from '../taskApproval.js'
 import type { AgentView } from './contract.js'
 import type { ReaderView } from './views.js'
 
@@ -52,7 +52,7 @@ export function personalTasksFor(changed: readonly Part[], view: ReaderView, act
     const status = approval?.state === 'proposal' || approval?.state === 'rejected' ? approval.state
       : group.assignment?.status ?? (group.proposal && !['accept', 'reshape'].includes(group.proposal.decision?.kind ?? '') ? 'proposal' : 'planned')
     out.upserts.push({ id: group.id, version: part.version, at: part.changedAt, projectId: project.id, projectName: project.name,
-      title: group.title, status, suggested: !group.assignment && !!approval?.suggestedAgentId, canApprove: approval?.state === 'proposal',
+      title: group.title, status, suggested: !group.assignment && !!approval?.suggestedAgentId, canApprove: approval?.state === 'proposal' && !undecidedProposal(group),
       agent: worker ? { id: worker.id, name: worker.displayName ?? worker.name, ...worker.avatar ? { avatar: worker.avatar } : {} } : null,
       ...approval?.reason ? { reason: approval.reason } : {} })
   }
