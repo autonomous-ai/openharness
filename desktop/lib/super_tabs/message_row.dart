@@ -11,6 +11,7 @@ import '../widgets/engine_identity.dart';
 import '../widgets/finger_target.dart';
 import 'attachment_chips.dart';
 import 'chat/bubble.dart';
+import 'chat/fold.dart';
 import 'composer_newline.dart';
 import 'identity.dart';
 import 'identity_card.dart';
@@ -63,6 +64,7 @@ class SuperTabMessageRow extends StatefulWidget {
     required this.author,
     required this.onReturnToComposer,
     this.card,
+    this.brief,
     required this.receipts,
     this.agent,
     this.person,
@@ -114,6 +116,10 @@ class SuperTabMessageRow extends StatefulWidget {
   /// The live card [message] is (live_card.dart), drawn in place of its pull
   /// request links; null for a plain message.
   final Widget? card;
+
+  /// A card drawn in place of the message's text, such as a sent brief's:
+  /// a label, one title line and its action (#4529).
+  final Widget? brief;
 
   /// The thread [message] is the root of, once it has a reply.
   final SuperTabThread? thread;
@@ -604,6 +610,11 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
         (message.text.isNotEmpty && !voiceMessage);
   }
 
+  /// An agent's long message folds after about six lines, with More; a
+  /// person's never does (anh Dee's mockup, 11-07, #4529).
+  Widget _folded(Widget text) =>
+      widget.message.fromAgent ? SwarmFold(child: text) : text;
+
   /// The message's full date and time, on its bubble's tooltip: the chat
   /// shows a time only after a pause.
   String get _clock {
@@ -832,7 +843,9 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                                   widget.onOpenReply!(context),
                                       ),
                                     ),
-                                  if (_bubbled(voiceMessage))
+                                  if (widget.brief case final brief?)
+                                    brief
+                                  else if (_bubbled(voiceMessage))
                                     SwarmBubble(
                                       own: own,
                                       tooltip: _clock,
@@ -886,19 +899,23 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                                     const BoxConstraints(
                                                       maxWidth: 960,
                                                     ),
-                                                child: SuperTabMessageText(
-                                                  message.text,
-                                                  ink: own
-                                                      ? SwarmBubble.ownInk
-                                                      : null,
-                                                  references: widget.references,
-                                                  onOpenGroup:
-                                                      widget.onOpenGroup,
-                                                  mentions: widget.mentions,
-                                                  addresses:
-                                                      widget.mentionAddresses,
-                                                  labels: widget.mentionLabels,
-                                                  taggedYou: taggedYou,
+                                                child: _folded(
+                                                  SuperTabMessageText(
+                                                    message.text,
+                                                    ink: own
+                                                        ? SwarmBubble.ownInk
+                                                        : null,
+                                                    references:
+                                                        widget.references,
+                                                    onOpenGroup:
+                                                        widget.onOpenGroup,
+                                                    mentions: widget.mentions,
+                                                    addresses:
+                                                        widget.mentionAddresses,
+                                                    labels:
+                                                        widget.mentionLabels,
+                                                    taggedYou: taggedYou,
+                                                  ),
                                                 ),
                                               ),
                                             ),

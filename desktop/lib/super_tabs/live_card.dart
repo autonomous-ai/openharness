@@ -35,8 +35,13 @@ class SuperTabLiveCard extends StatefulWidget {
     required this.card,
     required this.controller,
     required this.facts,
+    this.titled = true,
   });
   final SuperTabConversation group;
+
+  /// Whether a task card names its task; off under a brief's card, which
+  /// already does (#4529).
+  final bool titled;
   final SuperTabCard card;
   final SuperTabController controller;
   final SuperTabPullRequestFacts facts;
@@ -133,7 +138,8 @@ class _SuperTabLiveCardState extends State<SuperTabLiveCard>
     // (backend commands.ts `work.check`).
     final passed = checks.where((c) => c['passedBy'] != null).length;
     return [
-      Text(widget.group.label, style: DesktopChrome.control(medium: true)),
+      if (widget.titled)
+        Text(widget.group.label, style: DesktopChrome.control(medium: true)),
       SuperTabCardLine([
         superTabCardStatus(widget.group.assignment),
         if (checks.isNotEmpty) '$passed of ${checks.length} checks passed',

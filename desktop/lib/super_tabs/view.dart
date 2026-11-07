@@ -85,6 +85,7 @@ import 'message_link_swarms.dart';
 import 'message_link_preview.dart';
 import 'message_row.dart';
 import 'message_receipt.dart';
+import 'message_text.dart';
 import 'notifications.dart';
 import 'buddies.dart';
 import 'buddy_card.dart';
@@ -117,6 +118,7 @@ import 'buddy_rows.dart';
 import 'task_groups.dart';
 import 'tasks_view.dart';
 import 'chat/agent_chat_header.dart';
+import 'chat/chat_card.dart';
 import 'chat/chat_time.dart';
 import 'chat/send_button.dart';
 import 'tasks/personal_tasks_pane.dart';
@@ -3442,6 +3444,20 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
+  /// A task's brief as a card (anh Dee's mockup, 11-07, #4529): who it went
+  /// to and the task's title; View brief shows the whole brief in place.
+  Widget _briefCard(SuperTabConversation group, SuperTabMessage message) {
+    final agentId = group.assignment?['agentId'] as String?;
+    return SwarmChatCard(
+      label: agentId == null
+          ? 'Brief'
+          : 'Sent to ${c.snapshot!.agentName(agentId, fallback: 'its agent')}',
+      title: group.title,
+      action: 'View brief',
+      details: SuperTabMessageText(message.text),
+    );
+  }
+
   /// Whether [message] is said between the two parties of a one-on-one chat
   /// (a Buddy chat, an agent chat): the reader and that chat's own agent. Its
   /// bubble carries no name or face (#4529); a line from anyone else there,
@@ -4883,6 +4899,7 @@ class _SuperTabViewState extends State<SuperTabView>
       message: message,
       joinsBelow: joinsBelow,
       oneOnOne: _oneOnOne(message),
+      brief: card?.task == true ? _briefCard(group!, message) : null,
       card: card == null
           ? null
           : SuperTabLiveCard(
@@ -4890,6 +4907,7 @@ class _SuperTabViewState extends State<SuperTabView>
               card: card,
               controller: c,
               facts: _facts,
+              titled: !card.task,
             ),
       author: _shownAuthor(c, message),
       // A person is found by their username, as they are tagged, and reads
