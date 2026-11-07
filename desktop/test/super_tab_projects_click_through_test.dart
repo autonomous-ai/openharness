@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -184,7 +185,10 @@ void _projects(ConversationServer server) {
     pulse[row.id] = _pulse(row.working, row.toDo);
     activity.add({
       'projectId': row.id,
-      'shipped': [for (var d = 0; d < 28; d++) (d * (i + 3) + i * 5) % 7],
+      'shipped': [
+        for (var d = 0; d < 28; d++)
+          (2 + 2 * math.sin(d / (2.5 + i) + i) + d / (9 + i)).round(),
+      ],
       'updatedAt': now.subtract(row.ago).millisecondsSinceEpoch,
     });
   }

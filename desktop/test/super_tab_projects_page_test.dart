@@ -399,7 +399,7 @@ void main() {
       'autonomous-ai/openharness',
     );
     await tester.tap(repository);
-    expect(repositories, ['https://github.com/autonomous-ai/openharness.git']);
+    expect(repositories, ['https://github.com/autonomous-ai/openharness']);
     expect([for (final p in opened) p.id], ['docs']);
   });
 

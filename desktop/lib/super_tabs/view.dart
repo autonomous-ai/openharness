@@ -6556,7 +6556,12 @@ class _SuperTabViewState extends State<SuperTabView>
                               c.snapshot!.projectById(boardProject)!,
                               narrow,
                             )
-                          else
+                          // The Projects page opens on its own title (task #4662): a bar naming it again says it twice.
+                          // Narrow, the bar keeps its menu button.
+                          else if (_pageShown != SwarmPage.projects ||
+                              _manageOpen ||
+                              narrow ||
+                              _phone)
                             _header(c.selected, narrow),
                           if (_manageOpen)
                             Align(

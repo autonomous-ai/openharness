@@ -633,6 +633,10 @@ class SuperTabProject {
   SuperTabProject.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       name = _text(row, 'name'),
+      about = switch (row['about']) {
+        final String about when about.trim().isNotEmpty => about.trim(),
+        _ => null,
+      },
       ownerId = _text(row, 'ownerId'),
       leadConversationId = _text(row, 'leadConversationId'),
       skillMode = row['skillMode'] == 'default' ? 'default' : 'orchestration',
@@ -669,6 +673,10 @@ class SuperTabProject {
       ),
       deciderId = row['decider'] is String ? row['decider'] as String : null;
   final String id, name, ownerId, leadConversationId;
+
+  /// What the project is, in one line, as its owner or Lead set it (backend projects.ts `about`, task #4540); null when
+  /// none is set, and from an older backend.
+  final String? about;
 
   /// Whether its owner switched it to the Board way of working (#3819, spec 2026-11-06-buddy-board-final-spec):
   /// people talk to their Buddies, work comes in as proposals, and only people with Can chat write in its chat.
