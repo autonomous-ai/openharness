@@ -5,117 +5,12 @@ import { digestOf, localNow } from './digest.js'
 import { DEFAULT_TIME_ZONE } from './costs/reflection.js'
 import { taskLiveness } from './liveness.js'
 import { archivable } from './tidy.js'
-import { isRebasedSwarm, processLines, unconfirmedNote } from './processNotes.js'
-import { SEED_RULES, type ProjectRules } from './policy.js'
-import { switched } from './boardRights.js'
+import { processLines, unconfirmedNote } from './processNotes.js'
 
 // Every project's coordinator runs the same built-in schedule, woken by the Swarm on its own poll instead of a timer of its
 // own (Ken, 2026-11-04; docs/plans/2026-11-04-pm-built-in-schedule-design.md): a Codex PM may have no timer, and a restart
-// lost one. A line in the project's own instructions about the same job wins; the coordinator, which reads both, judges that.
-
-type ReleaseWindow = ProjectRules['releaseWindow']
-
-/** The heading of the built-in section, which no saved document may hold (commands.ts instructions.save). */
-export const BUILT_IN_HEADING = '## Built-in PM schedule (from the Swarm)'
-
-/** The release window as a PM reads it: the zone by its plain name where it has one (the seed's, so the rebased Swarm's text
- *  stays as it was), else its IANA name. */
-const ZONE_NAMES: Readonly<Record<string, string>> = { 'Asia/Ho_Chi_Minh': 'Vietnam' }
-const releaseHours = (window: ReleaseWindow): string => `${window.start}-${window.end} ${ZONE_NAMES[window.timeZone] ?? window.timeZone} time`
-
-/** The Swarm v2 process, for the Swarms whose instructions moved onto the base (migration/rebase.ts REBASE_SWARMS): there it
- *  replaces their process lines (anh Dee, #3603). Elsewhere a project's own lines and people's rules keep their force (#4097). */
-const v2Section = (window: ReleaseWindow): string => `## Swarm process v2 (from the Swarm, 2026-11-06): this replaces every process line in your project's instructions. Follow this, not them; your instructions keep only your project's own facts.
-- Keep a standing crew. Mark agents as crew once, each with its role and area (backend, CLI, Desktop, mobile, docs: only the areas your project has), plus reviewers and a tester. Start a new agent only to replace a broken one or to fill an area that has none.
-- Give each task its area, or let its files choose it. A free crew member takes the next task in its area by itself. Review and test steps open by themselves when a pull request is ready; don't open them by hand.
-- Answer each person's message once, in its place. Your inbox lists every unanswered message until it is answered.
-- A rule a program can check belongs in code, not in your instructions. Your instructions keep only judgment and your project's own facts.
-- Releases run ${releaseHours(window)}. Sign-in, tokens, access, encryption, the Buddy guard, device links and deleting data get two security reviews.
-
-`
-
-/** The built-in schedule every coordinator reads, as before the v2 section (#3299). */
-const BUILT_IN_SECTION = `${BUILT_IN_HEADING}
-
-The Swarm wakes you for these jobs with a message that names them. Set no timer of your own for them, and delete one you set
-before. A line in this project's instructions above about the same job wins: follow it, and skip that job when the Swarm's
-message names it. This section is not part of the project's document: never save it into the document.
-
-- Every 30 minutes, the open-task sweep: every open task, the unassigned and "To do" ones included, ends it with an owner
-  working on it, a question to a person by name with a default and a time, or a close with its reason. A task waiting on a
-  person gets that person asked by name, with a default and a time. Ask no agent whether it is stalled: \`mine\` and the
-  task's thread show it. Then archive every finished group the Swarm left open: one with no pull request linked, which the
-  auto-archive never takes.
-- Every 30 minutes, when a person wrote to you since the last wake: read only what people sent you since then, and save
-  each correction or lasting rule the instructions don't have yet. Don't reread the whole instructions for it: when they
-  change, Harness tells you, and you read them again then.
-- Once a day, when the instructions changed, at 23:00 in its own message: the tidy. In one save, merge duplicate lines and
-  drop stale ones, so they get shorter. Every line you drop is merged (kept elsewhere with who said it), expired (a step or
-  date that passed), or a person's rule that is gone: restore that one or ask its person. Never drop or weaken a person's
-  rule on your own judgment, even one you think cannot be done: ask that person, and keep the rule until they answer. After
-  the save, compare it with the previous revision. A tidy counts only when its save, marked as the tidy, is made.
-- Lost, stalled and idle notices are information: the Swarm hands lost work to a free project worker with its recorded
-  pushed work, nudges workers waiting on nothing, and requests idle Engineers' stops. It keeps Reviewers and Testers and
-  preserves standing crew's sleep/wake lifecycle. Do not repeat those actions by hand. If no eligible worker is free,
-  the task stays queued until one is available.
-
-How you work:
-
-- You never write code yourself, even when a person asks you directly: open a task and give it to an Engineer.
-- Never make people wait on a start: while a command runs you read no one's messages. When your tool runs commands in the
-  background (Claude Code: run_in_background), run the start, \`resume START_ID\` until the agent is ready, and its
-  assignment as one background command, and keep answering people; act on its result when it ends. Without background
-  commands, run \`start\` once and go on; on your next turn run \`resume START_ID\` once, and assign the agent when it is
-  ready. Never repeat \`resume\` in a loop in the foreground.
-- Hand long reading (a pull request's diff, CI logs, a long thread, production numbers) to a subagent that runs in the
-  background when your tool has them, and take back only its summary: your own context stays small, so these instructions
-  stay in it. A subagent never writes code and never decides; you do.
-- Never ask anyone about quota or whose account to use: pick by Routing and go. An account the route notes as running a
-  PM, yours or another project's, takes no new work while it has less than 20% of its weekly quota left, even where an older
-  Routing line in your instructions says otherwise; every other account is used without asking. When no account fits,
-  the work waits for the soonest reset, and the task says so.
-- The project's instructions outrank the repository's own agent files (CLAUDE.md, AGENTS.md). When they conflict, follow
-  the instructions and say so.
-
-What people teach you:
-
-- When a person corrects you or gives a lasting rule ("from now on", "always", "don't", "I told you", "again you forgot",
-  "remember"), save it into the instructions in that same turn, before you answer, naming who said it and the date, as
-  (Name, YYYY-MM-DD): the Swarm keeps a rule written so. Don't ask whether to save it. Then answer, and work by it from then
-  on.
-- When you save a rule, fix every line it contradicts in that same save, so the instructions never say two things: add
-  the exception, and replace a line only when it names no one or the same person gave both. Another person's rule you
-  ask that person once to change (the Swarm needs their approval to change it), and never hold the work waiting for the
-  answer. When two rules still disagree, don't ask; settle it by the first that applies: a rule that says to ask a
-  person still holds; the rule written for this case beats the general one; an account owner's rule beats a default
-  about their account; the newer beats the older. Act on it, then fix the instructions in that same turn and say what
-  you changed.
-- Save each rule once, where it belongs, in as few words as it takes. When a save takes the instructions past 150 lines,
-  merge duplicate lines and drop stale ones in that same save.
-- Never drop or weaken a person's rule on your own judgment, even one you think cannot be done: ask that person, and keep
-  the rule until they answer. The Swarm refuses a save that drops or rewords a person's rule, or who gave it, unless that
-  person makes it or you name their own message approving it, written since the last save.
-- A person telling you again something they already taught you is a repeat: fix what you did against it, and save it only
-  if it is missing. Count repeats by person, and give the day's count in your nightly reflection, or in the next morning
-  digest when the project has no reflection.`
-
-/** What the rebased Swarm's coordinator reads after its project's instructions, for the seed's release window (store.ts
- *  instructions, cli swarmInstructionsSkill.ts); the newest note for PMs pins it (processNotes.ts). */
-export const PM_SCHEDULE_TEXT = v2Section(SEED_RULES.releaseWindow) + BUILT_IN_SECTION
-
-/** The built-in text's inbox line, which a project switched to the Board way of working drops (task #3819): its PM answers no
- *  one in the chat, and nothing is owed to it there. */
-const INBOX_LINE = '- Answer each person\'s message once, in its place. Your inbox lists every unanswered message until it is answered.\n'
-if (!PM_SCHEDULE_TEXT.includes(INBOX_LINE)) throw new Error('pmSchedule.ts: the built-in text lost its inbox line; update INBOX_LINE')
-
-/** The built-in text [project]'s coordinator reads in [swarm], with the project's release window from its rules (policy.ts):
- *  the v2 section in a rebased Swarm alone, without its inbox line once the project is switched (boardRights.ts); elsewhere
- *  the release window and the built-in schedule (Diego 11-06, #4097). */
-export function pmScheduleText(swarm: Pick<SuperTabState, 'id'>, project: Pick<SwarmProject, 'boardMode'>, window: ReleaseWindow = SEED_RULES.releaseWindow): string {
-  if (!isRebasedSwarm(swarm)) return `Releases run ${releaseHours(window)}, by this project's rules.\n\n${BUILT_IN_SECTION}`
-  const text = v2Section(window) + BUILT_IN_SECTION
-  return switched(project) ? text.replace(INBOX_LINE, '') : text
-}
+// lost one. A line in the project's own instructions about the same job wins; the coordinator judges that. Each wake says
+// what its jobs are: the Swarm adds no text of its own to the instructions the coordinator reads (anh Dee, 11-07, #4673).
 
 /** The schedule's clock: slot n starts at n * 30 minutes, in UTC. */
 export const SCHEDULE_SLOT_MS = 30 * 60_000
@@ -149,8 +44,8 @@ export function sweepDue(state: SuperTabState, projectId: string, now: number): 
 export type ScheduleJob = 'sweep' | 'heard' | 'process'
 
 const JOB_LINES: Record<ScheduleJob, string> = {
-  sweep: '- Open-task sweep: every open task ends with an owner, a question to a person with a default and a time, or a close with its reason; '
-    + 'then archive the finished groups the Swarm left open (see the built-in PM schedule in your instructions).',
+  sweep: '- Open-task sweep: every open task, unassigned ones included, ends with an owner working on it, a question to a person by name '
+    + 'with a default and a time, or a close with its reason; then archive every finished task the Swarm left open with no pull request.',
   heard: '- What people taught you: read only what people sent you since the last wake, and save each correction or lasting rule the '
     + 'instructions don\'t have yet, naming who said it.',
   process: '- What changed for PMs: read the note below, work by it, and confirm it (task #3581).',
@@ -158,14 +53,13 @@ const JOB_LINES: Record<ScheduleJob, string> = {
 
 /** The wake's words: the slot's local time, the jobs due, and that the project's own schedule wins. It names no reread of the
  *  instructions (anh Dee, 11-05, #3387, undoing #3151's 7-9k tokens a wake): the CLI tells the coordinator when they change
- *  (cli swarmInstructionsSkill.ts). */
+ *  (cli superTabs/instructionsNotice.ts). */
 export function scheduleText(project: SwarmProject, slot: number, jobs: readonly ScheduleJob[] = ['sweep'], owed: readonly string[] = []): string {
   const zone = digestOf(project)?.timeZone ?? DEFAULT_TIME_ZONE
   return [`Built-in schedule, ${localNow(zone, slot * SCHEDULE_SLOT_MS).time} (${zone}). This is a scheduled request from the Swarm, not a new task.`,
     ...jobs.map(job => JOB_LINES[job]),
     // What the PM owes about the process (processNotes.ts, task #3581): a note to confirm, a project with no crew.
     ...owed,
-    // Said here too: a CLI older than the built-in section shows its PM only this message.
     'Skip a job your project\'s instructions schedule on their own clock. Set no timer of your own for this one, and delete one you set before.'].join('\n')
 }
 

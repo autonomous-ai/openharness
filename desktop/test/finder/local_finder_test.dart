@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/finder/finder_controller.dart';
 import 'package:harness/finder/finder_models.dart';
 import 'package:harness/finder/local_finder_files.dart';
 import 'package:harness/finder/local_finder_git.dart';
@@ -30,6 +31,9 @@ void main() {
     await run(['init', '-q', '-b', 'main']);
     await run(['config', 'user.email', 'finder@test']);
     await run(['config', 'user.name', 'Finder Test']);
+    // Git for Windows checks out with CRLF by default; this repository keeps
+    // the bytes it was given, as a Mac's does.
+    await run(['config', 'core.autocrlf', 'false']);
     file('a.txt').writeAsStringSync('one\ntwo\n');
     file('.gitignore').writeAsStringSync('build/\n');
     await run(['add', '.']);
@@ -137,6 +141,24 @@ void main() {
     await git.discard(repo, repo.changes);
     expect(file('a.txt').readAsStringSync(), 'one\ntwo\n');
     expect((await git.changes(root))!.changes, isEmpty);
+  });
+
+  // Git names the top folder `C:/Users/…` on Windows, and the tree lists
+  // `C:\Users\…\a.txt`: no file there wore its Git colour.
+  test('marks a changed file at the path the tree lists it', () async {
+    await repository();
+    file('a.txt').writeAsStringSync('one\nTWO\n');
+    final controller = FinderController(root: root, files: files, git: git);
+    addTearDown(controller.dispose);
+    await controller.refresh();
+    final listed = controller.tree.rows.firstWhere(
+      (row) => row.entry.name == 'a.txt',
+    );
+    expect(controller.git.repository?.root, root);
+    expect(
+      controller.git.fileStatus(listed.entry.path),
+      GitChangeKind.modified,
+    );
   });
 
   test('tells which entries Git ignores', () async {

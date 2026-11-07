@@ -50,7 +50,8 @@ Future<void> loadRealFonts() async {
   }
 
   // A model id is set in mono, and an unregistered mono family falls back to
-  // Ahem just as loudly.
+  // Ahem just as loudly. `Consolas` is the Windows terminal default, and with
+  // it the app's mono chrome there (`terminalFontFamily`).
   final mono = await bytes(
     _firstExisting('mono', [
       '/System/Library/Fonts/Supplemental/Courier New.ttf',
@@ -64,6 +65,7 @@ Future<void> loadRealFonts() async {
     'SF Mono',
     'Menlo',
     'DejaVu Sans Mono',
+    'Consolas',
   ]) {
     await (FontLoader(family)..addFont(Future.value(mono))).load();
   }
