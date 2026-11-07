@@ -1177,10 +1177,8 @@ void main() {
       c.select(code.leadConversationId);
       await show(tester, f);
       expect(find.text('2 panes in this project'), findsOneWidget);
-      expect(
-        find.text('Discuss the plan with Product Manager.'),
-        findsOneWidget,
-      );
+      // An empty chat says nothing (rule 7, #4465).
+      expect(find.textContaining('Discuss the plan'), findsNothing);
       await tester.tap(find.text('Show panes'));
       for (var i = 0; i < 20; i++) {
         await tester.pump(const Duration(milliseconds: 20));
@@ -1225,10 +1223,8 @@ void main() {
       await show(tester, f);
       expect(find.textContaining('panes in this project'), findsNothing);
       expect(find.text('Show panes'), findsNothing);
-      expect(
-        find.text('Discuss the plan with Product Manager.'),
-        findsOneWidget,
-      );
+      // An empty chat says nothing (rule 7, #4465).
+      expect(find.textContaining('Discuss the plan'), findsNothing);
       await close(tester, f, c);
     });
   });

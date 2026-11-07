@@ -3496,8 +3496,6 @@ class _SuperTabViewState extends State<SuperTabView>
       title: count == 1
           ? '1 pane in this project'
           : '$count panes in this project',
-      message:
-          'Discuss the plan with ${c.snapshot!.coordinatorNameOf(group.projectId)}.',
       action: OutlinedButton(
         key: const ValueKey('super-project-show-panes'),
         onPressed: _openTerminals(group),
@@ -3514,8 +3512,7 @@ class _SuperTabViewState extends State<SuperTabView>
   };
 
   /// A Personal project's empty chat with no Lead: the card that starts one
-  /// (Huy 11-04, task #2815), and under it what the chat says without it: its
-  /// panes when it holds any, else its plain line.
+  /// (Huy 11-04, task #2815), and under it its panes when it holds any.
   Widget _leadWaiting(SuperTabConversation group) => Center(
     child: SingleChildScrollView(
       padding: const EdgeInsets.all(grid.AppDesktop.panelPadding),
@@ -3530,20 +3527,8 @@ class _SuperTabViewState extends State<SuperTabView>
               conversationId: group.id,
               app: widget.app!,
             ),
-            if (_personalPaneCount(group) > 0)
-              _panesWaiting(group)
-            else
-              Padding(
-                padding: const EdgeInsets.only(
-                  top: grid.AppDesktop.panelPadding,
-                ),
-                child: Text(
-                  'Discuss the plan with '
-                  '${c.snapshot!.coordinatorNameOf(group.projectId)}.',
-                  textAlign: TextAlign.center,
-                  style: DesktopChrome.text(color: DesktopChrome.muted),
-                ),
-              ),
+            // Nothing more for a chat with no panes (rule 7, task #4465).
+            if (_personalPaneCount(group) > 0) _panesWaiting(group),
           ],
         ),
       ),
@@ -4671,7 +4656,7 @@ class _SuperTabViewState extends State<SuperTabView>
       ],
       builder: (context, menu, _) => AppIconButton(
         key: const ValueKey('super-group-options'),
-        icon: AppIcons.ellipsisVertical,
+        icon: AppIcons.ellipsis,
         // On the Board the Buddy card holds the Buddy's own options, so this one is the chat's (audit finding 15).
         tooltip: _isBuddyChat(group)
             ? widget.board
@@ -5630,28 +5615,31 @@ class _SuperTabViewState extends State<SuperTabView>
                     _personalPaneCount(group) > 0
               ? _panesWaiting(group)
               : messages.isEmpty && outgoing.isEmpty
-              ? Padding(
-                  // The pane's side padding, as the composer has: a long line
-                  // wraps inside it, centered.
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: grid.AppDesktop.panelPadding,
-                  ),
-                  child: Center(
-                    child: Text(
-                      c.accessRevoked
-                          ? 'Conversation unavailable.'
-                          : group == null
-                          ? 'Loading conversation…'
-                          : c.snapshot!.isProjectLead(group.id)
-                          ? 'Discuss the plan with ${c.snapshot!.coordinatorNameOf(group.projectId)}.'
-                          : _buddyName(group) != null
-                          ? "Only you and ${_buddyName(group)} read this chat. Say what you want to build; say 'send to the ${c.snapshot!.coordinatorNameOf(group.projectId)}' when it's ready."
-                          : 'Start the conversation.',
-                      textAlign: TextAlign.center,
-                      style: DesktopChrome.text(color: DesktopChrome.muted),
+              ? switch (c.accessRevoked
+                    ? 'Conversation unavailable.'
+                    : group == null
+                    ? 'Loading conversation…'
+                    : _buddyName(group) != null
+                    // One short line that helps the reader act (anh Dee's copy rules, task #4465).
+                    ? "Say what to build, then 'send to the ${c.snapshot!.coordinatorNameOf(group.projectId)}'."
+                    // Empty means empty (anh Dee's rule 7, task #4465): no words for a chat with nothing in it.
+                    : null) {
+                  final words? => Padding(
+                    // The pane's side padding, as the composer has: a long line
+                    // wraps inside it, centered.
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: grid.AppDesktop.panelPadding,
+                    ),
+                    child: Center(
+                      child: Text(
+                        words,
+                        textAlign: TextAlign.center,
+                        style: DesktopChrome.text(color: DesktopChrome.muted),
+                      ),
                     ),
                   ),
-                )
+                  null => const SizedBox.expand(),
+                }
               : Column(
                   children: [
                     // Above the list, never over a message.
@@ -6523,6 +6511,11 @@ class _SuperTabViewState extends State<SuperTabView>
         onKeyEvent: _attentionKey,
         child: Stack(
           children: [
+            // One surface under the left, middle and right panes, split only by the layout's hairlines (anh Dee's six
+            // rules, task #4465): no pane shows its host's colour.
+            Positioned.fill(
+              child: ColoredBox(color: grid.AppPalette.swarmField),
+            ),
             ExcludeFocus(
               excluding: chatCovered,
               child: SuperTabPaneLayout(

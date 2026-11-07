@@ -431,15 +431,17 @@ void main() {
       },
     );
 
-    testWidgets('with no model shared, it says nobody shares one yet', (
+    // Empty means empty (anh Dee's rule 7, #4465): no heading or words for models nobody shares.
+    testWidgets('with no model shared, it shows only the subscription', (
       tester,
     ) async {
       final c = await show(tester, swarm(localModels: false));
       await open(tester);
-      expect(find.text('SHARED IN THIS SWARM'), findsOneWidget);
+      expect(find.text('SHARED IN THIS SWARM'), findsNothing);
+      expect(find.textContaining('Nobody shares'), findsNothing);
       expect(
-        find.text('Nobody shares a model in this Swarm yet.'),
-        findsOneWidget,
+        find.textContaining('What your Buddy reads and writes'),
+        findsNothing,
       );
       expect(find.byType(AppMenuItem), findsOneWidget);
       await close(tester, c);
