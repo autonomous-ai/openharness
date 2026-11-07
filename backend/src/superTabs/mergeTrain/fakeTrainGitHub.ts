@@ -33,10 +33,13 @@ export function fakeTrainGitHub() {
     nextNumber: 900,
     /** Runs before each merge into a batch branch: a test pushes onto the branch here. */
     beforeMerge: null as ((branch: string) => void) | null,
+    /** Runs after each read, by name: a test moves main mid-pass here. */
+    afterRead: null as ((name: string) => void) | null,
   }
   const read = (name: string) => {
     state.reads.push(name)
     if (state.failing.has(name)) throw new TrainReadError(name, 500)
+    state.afterRead?.(name)
   }
   const write = (name: string) => {
     state.writes.push(name)

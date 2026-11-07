@@ -12,8 +12,8 @@ import { activeWork, workerIndex, type Agent, type CheckVerdict, type Conversati
 import { agentProjectId, groupProject, onTeamAccount } from './projects.js'
 import { agentTarget, modelMatches } from './rules.js'
 import { canStart, standing } from './reviewSeats.js'
-import { stepsOf } from './steps.js'
-import { reportsOs, type StepKind, type StepOs } from './reviewTable.js'
+import { stepName, stepsOf } from './steps.js'
+import { reportsOs, stepOs, type StepKind, type StepOs } from './reviewTable.js'
 
 /** The agents that built [task]: its assignee and every agent its ledger says ran it. */
 export function builtBy(task: Conversation): Set<string> {
@@ -101,4 +101,16 @@ export function reviewerCandidates(state: SuperTabState, task: Conversation, kin
     return [{ agent, rank: 0, cost: row.cost }]
   })
   return ranked.sort((a, b) => a.rank - b.rank || a.cost - b.cost || a.agent.id.localeCompare(b.agent.id)).map(entry => entry.agent)
+}
+
+/** The agents that may take [step] now, as reviewerCandidates ranks them: its kind by its name, at its task's newest pull
+ *  request head, and on the OS its name names (task #3926). None when its task is not loaded. */
+export function stepCandidates(state: SuperTabState, step: Conversation, now: number): Agent[] {
+  const task = state.conversations.find(g => g.id === step.reviewOf)
+  if (!task) return []
+  const name = stepName(step)
+  const kind: StepKind = /test/i.test(name) ? 'test' : /security/i.test(name) ? 'security' : 'review'
+  const latest = task.pullRequestUrls?.at(-1)
+  const head = latest ? task.pullRequestHeads?.[latest]?.head ?? null : null
+  return reviewerCandidates(state, task, kind, head, now, stepOs(step))
 }

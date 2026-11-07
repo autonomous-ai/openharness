@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { processStartMarker } from './processLiveness.js'
+import { processLockIdentity, processStartMarker } from './processLiveness.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { ProcessIdentity, RegisteredSession, RegisterInput } from './registry.js'
 
@@ -63,6 +63,16 @@ async function loadRegistryModule() {
   return import('./registry.js')
 }
 
+/** Each pause of the registry lock's wait moves the fake clock by `taken(asked)` ms and returns at once: the wait is
+ *  then measured on the clock alone. A real pause can take far longer than asked: on the Mac Studio, 2026-11-07, an
+ *  agent's 20 ms `Atomics.wait` returned after ~150 ms. */
+function pausesTake(taken: (asked: number) => number): void {
+  vi.spyOn(Atomics, 'wait').mockImplementation((_view, _index, _value, asked) => {
+    vi.setSystemTime(Date.now() + taken(asked ?? 0))
+    return 'timed-out'
+  })
+}
+
 describe('registry remote display names', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -70,6 +80,7 @@ describe('registry remote display names', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     vi.useRealTimers()
     rmSync(dataDir, { recursive: true, force: true })
     delete process.env.ADAPTER_DATA_DIR
@@ -515,6 +526,7 @@ describe('registry remote display names', () => {
     'reclaims an old lock with %s, and leaves a fresh one to its creator', async (_label, owner) => {
       const { registry } = await loadRegistryModule()
       registry.load()
+      pausesTake((asked) => asked)
       const lockDir = join(dataDir, 'registry.json.lock')
       const leave = (age: number) => {
         mkdirSync(lockDir, { mode: 0o700 })
@@ -533,6 +545,26 @@ describe('registry remote display names', () => {
       expect(readFileSync(join(dataDir, 'registry.json'), 'utf8')).not.toContain('during-fresh-lock')
       rmSync(lockDir, { recursive: true, force: true })
     })
+
+  it('gives up on a live lock after 2 s on the clock, however long each pause really takes', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const lockDir = join(dataDir, 'registry.json.lock')
+    mkdirSync(lockDir, { mode: 0o700 })
+    writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({
+      pid: process.pid, ...processLockIdentity(process.pid), token: 'live-holder',
+    }), { mode: 0o600 })
+    pausesTake((asked) => asked * 7.5)
+    const started = Date.now()
+
+    registry.openProcessAgent({ agentId: 'behind-a-live-lock', engine: 'claude', tmuxPane: '%36', processIdentity: processIdentity(836) })
+
+    expect(Date.now() - started).toBeLessThanOrEqual(2_000 + 150)
+    expect(readFileSync(join(lockDir, 'owner.json'), 'utf8')).toContain('live-holder')
+    expect(existsSync(join(dataDir, 'registry.json'))
+      && readFileSync(join(dataDir, 'registry.json'), 'utf8').includes('behind-a-live-lock')).toBe(false)
+    rmSync(lockDir, { recursive: true, force: true })
+  })
 
   it('deduplicates nested panes by process identity', async () => {
     const { registry } = await loadRegistryModule()
@@ -618,6 +650,50 @@ describe('registry remote display names', () => {
     // Still writable: nothing about the retired rows blocked the file.
     reloaded.openProcessAgent({ agentId: 'after', engine: 'claude', tmuxPane: '%41', processIdentity: processIdentity(941) })
     expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))).toHaveLength(2)
+  })
+
+  // Swarm v3 (task #4215): until then Harness itself started every Swarm agent in full mode, and an older Buddy in `buddy` or
+  // `readOnlyAsk`; a relaunch reapplies a saved mode, so those agents kept skipping permissions after the fix.
+  it('clears, once, the permission modes Harness forced on saved agents, and keeps the person\'s own', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    registry.openProcessAgent({ agentId: 'template', engine: 'claude', tmuxPane: '%50', processIdentity: processIdentity(950) })
+    const [row] = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))
+    const at = (agentId: string, pane: string, fields: Record<string, unknown>) => ({ ...row, agentId, sessionId: '', processIdentity: null,
+      tmuxPane: pane, runtimes: [{ backend: 'tmux', paneId: pane }], primaryRuntimeKey: `tmux\u0000${pane}`, ...fields })
+    const swarmSkill = { role: 'lead', key: 'swarm-lead' }
+    const saved = [
+      at('swarm-full', '%51', { swarmSkill, permissionMode: 'full', bypassPermission: true }),
+      at('old-buddy', '%52', { swarmSkill: { role: 'buddy', key: 'swarm-buddy' }, permissionMode: 'buddy', bypassPermission: true }),
+      at('old-codex-buddy', '%53', { permissionMode: 'readOnlyAsk', bypassPermission: true }),
+      at('own-full', '%54', { permissionMode: 'full', bypassPermission: true }),
+      at('swarm-ask', '%55', { swarmSkill, permissionMode: 'ask' }),
+      at('team-written', '%56', { swarmSkill, permissionMode: 'teamWritten', bypassPermission: true }),
+    ]
+    writeFileSync(join(dataDir, 'registry.json'), JSON.stringify(saved), { mode: 0o600 })
+    // As a machine upgrading from a build before the sweep: no marker yet.
+    rmSync(join(dataDir, 'registry-own-modes'), { force: true })
+
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+
+    for (const id of ['swarm-full', 'old-buddy', 'old-codex-buddy']) {
+      expect(reloaded.byAgent(id)?.permissionMode, id).toBeUndefined()
+      expect(reloaded.byAgent(id)?.bypassPermission, id).toBeUndefined()
+    }
+    expect([reloaded.byAgent('own-full')?.permissionMode, reloaded.byAgent('own-full')?.bypassPermission]).toEqual(['full', true])
+    expect(reloaded.byAgent('swarm-ask')?.permissionMode).toBe('ask')
+    expect(reloaded.byAgent('team-written')?.permissionMode).toBe('teamWritten')
+    const persisted = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8')) as Array<Record<string, unknown>>
+    expect(persisted.find(entry => entry.agentId === 'swarm-full')).not.toHaveProperty('permissionMode')
+    expect(persisted.find(entry => entry.agentId === 'swarm-full')).not.toHaveProperty('bypassPermission')
+
+    // Once: full mode a person chooses for a Swarm agent afterwards is theirs, and a later load keeps it.
+    writeFileSync(join(dataDir, 'registry.json'), JSON.stringify(persisted.map(entry => entry.agentId === 'swarm-full'
+      ? { ...entry, permissionMode: 'full', bypassPermission: true } : entry)), { mode: 0o600 })
+    const { registry: later } = await loadRegistryModule()
+    later.load()
+    expect([later.byAgent('swarm-full')?.permissionMode, later.byAgent('swarm-full')?.bypassPermission]).toEqual(['full', true])
   })
 
   it('repairs a Codex parent registry entry overwritten with a child rollout', async () => {

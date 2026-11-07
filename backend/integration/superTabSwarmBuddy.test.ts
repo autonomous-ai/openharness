@@ -15,6 +15,7 @@ import { poolRows } from './hostRows.test-support.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
 import { readInbox } from '../src/superTabs/read/inbox.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
+import { profiled } from './plans.test-support.js'
 
 // One Buddy per person per Swarm (docs/specs/2026-10-31-one-buddy-per-swarm.md; Dee, 10-31): one chat at Swarm level, a main
 // Buddy that reads every project its person reads and writes nowhere but that chat, and project sessions, the only Buddies that
@@ -859,6 +860,27 @@ describe('several Buddies through the store (#3818)', () => {
     const chats = (await f.store.read(peer, f.tab)).state.conversations
     expect(chats.find(c => c.id === first.chat)).toMatchObject({ buddyDefault: true })
     expect(chats.find(c => c.id === first.chat)!.buddyChats).toBeUndefined()
+  })
+
+  // Ken's 06:20 VN prod scan on v1.4.26 (task #4213): loading the listed chats loaded the whole Swarm again, so every command
+  // in a Swarm with a quiet second Buddy read its machines, agents, members and progress twice.
+  it('loads a quiet listed chat by itself: any command reads the Swarm\'s machines, agents, members and progress once', async () => {
+    const f = await swarm()
+    await buddy(f)
+    const research = await named(f, 'Research')
+    await quiet(f, research.chat)
+    const reads = await profiled(db, () => send(f, 'lead', 'Hello', {}, owner))
+    // Every live row of the Swarm, by tab: not one row's version check by its id. Prisma's filters name a field as `$tabId`, a
+    // plain match (the held listing, parts/held.ts) as `tabId`.
+    const names = (filter: string, field: string) => filter.includes(`"$${field}"`) || filter.includes(`"${field}":`)
+    const wholeSwarm = (collection: string) => reads.filter(e => e.ns.endsWith(`.${collection}`) && e.op !== 'update').filter(e => {
+      const filter = JSON.stringify(e.command?.pipeline ?? e.command?.filter ?? {})
+      return names(filter, 'tabId') && names(filter, 'deleted') && !names(filter, '_id')
+    }).length
+    expect(['SwarmMachine', 'SwarmAgent', 'SwarmMember', 'SwarmProgress'].map(c => [c, wholeSwarm(c)]))
+      .toEqual([['SwarmMachine', 1], ['SwarmAgent', 1], ['SwarmMember', 1], ['SwarmProgress', 1]])
+    await expect(f.execute({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Research' } as Command, peer))
+      .rejects.toMatchObject({ code: 'BUDDY_NAME_TAKEN' })
   })
 
   it('keeps a quiet Buddy\'s name taken, and counts it against the cap', async () => {
