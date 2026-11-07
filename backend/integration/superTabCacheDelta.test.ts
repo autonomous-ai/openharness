@@ -13,9 +13,9 @@ import { MemoryStamps } from '../src/superTabs/cache.test-support.js'
 import { cacheDigest, startsOfRule } from '../src/superTabs/cachePatch.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { guardedWrite, startFinished } from '../src/superTabs/parts/write.js'
-import { DIRECT, deriveLight, readChanged, readDelta, readLastChangedAt, readLight, readParts, type ReadNamed } from '../src/superTabs/cachedReads.js'
+import { DIRECT, deriveLight, hostMembers, readChanged, readDelta, readLastChangedAt, readLight, readParts, type ReadNamed } from '../src/superTabs/cachedReads.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
-import { stableId, type SuperTabState } from '../src/superTabs/model.js'
+import { stableId, type Agent, type SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { outsider as outsiderActor, owner as ownerActor, peer as peerActor, richSwarm } from '../src/superTabs/read/fixture.test-support.js'
 
@@ -135,11 +135,12 @@ describe('the patched cache answers as reads with no cache do', () => {
         .toBe(cacheDigest(await readLight(db, DIRECT, tabId, { groups: 'working' })))
       const all = await parts.loadAll(db, tabId)
       for (const machineId of new Set(liveOf(all.agents).map(a => (a.data as { machineId: string }).machineId))) {
-        const agentIds = liveOf(all.agents).filter(a => (a.data as { machineId: string }).machineId === machineId).map(a => a.key)
+        // As read/host.ts hostParts reads it: by membership only for its Buddies, and a lost task's conversation by id (#4560).
+        const { buddies, lost } = hostMembers(liveOf(all.agents).filter(a => (a.data as { machineId: string }).machineId === machineId) as Array<{ key: string; data?: Agent | null }>)
         const starts = liveOf(all.starts).filter(s => !startFinished(s.data!) && s.data!.request.machineId === machineId)
         const groupIds = [...new Set(starts.map(s => s.data!.request.conversationId))]
         const projectIds = [...new Set(liveOf(all.groups).filter(g => groupIds.includes(g.key)).map(g => g.data!.projectId ?? 'lead'))]
-        const fresh = await db.$transaction(tx => parts.loadLight(tx, tabId, { groups: 'working', agentIds, groupIds, projectIds, machines: false }))
+        const fresh = await db.$transaction(tx => parts.loadLight(tx, tabId, { groups: 'working', agentIds: buddies, groupIds: [...groupIds, ...lost], projectIds, machines: false }))
         // Machines come from their own entry (read/host.ts tabState); the light load leaves them empty.
         expect(cacheDigest({ ...await deriveLight(db, view, tabId, { groups: 'working', machineId }), machines: [] }), `host state ${machineId} ${step}`)
           .toBe(cacheDigest(fresh))
@@ -161,7 +162,9 @@ describe('the patched cache answers as reads with no cache do', () => {
     expect(delta.mock.calls.length).toBeGreaterThan(30)
   })
 
-  it('a host state reads its agents\' quiet conversations light, as the host rows read them (B4, #2597)', async () => {
+  // Task #4560: reading every conversation its agents are in was prod's top slow query on the PM's machine. Only a Buddy's are
+  // read by membership (B4, #2597 keeps those light); another agent's quiet conversation stays unread.
+  it('a host state reads no quiet conversation of an agent that is not a Buddy', async () => {
     const { tabId } = await scene()
     // A quiet conversation of an agent on the host, with the brief and checks a whole read would carry.
     const all = await parts.loadAll(db, tabId)
@@ -180,11 +183,8 @@ describe('the patched cache answers as reads with no cache do', () => {
     }
     const rows = await db.$runCommandRaw({ find: 'system.profile', filter: { ts: { $gte: { $date: since.toISOString() } }, ns: { $regex: '\\.SwarmGroup$' },
       'command.pipeline.0.$match.agentIds': { $exists: true } }, projection: { _id: 0, responseLength: 1 } }) as { cursor: { firstBatch: Array<{ responseLength: number }> } }
-    expect(state!.groups.map(g => g.key)).toContain(quiet.key)
-    // The agent's read: light, so well under the brief it would carry whole.
-    const bytes = rows.cursor.firstBatch.reduce((n, r) => n + r.responseLength, 0)
-    expect(bytes).toBeGreaterThan(0)
-    expect(bytes).toBeLessThan(10_000)
+    expect(state!.groups.map(g => g.key)).not.toContain(quiet.key)
+    expect(rows.cursor.firstBatch).toEqual([])
   })
 
   it('a write committed after the load but stamped 20 s earlier is in the next patch', async () => {

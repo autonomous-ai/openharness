@@ -32,6 +32,9 @@ export interface HostLookups {
   /** This Mac's Harness Team accounts, which join wherever the Mac was added. */
   teams: Array<{ machineId: string }>
   githubApp: boolean
+  /** Its agents in no loaded open conversation but in a quiet one: the host poll loads no agent's quiet conversations (read/host.ts
+   *  quietMembers). Absent where the state holds every conversation. */
+  quietMembers?: Set<string>
 }
 
 /** Removed machines whose host has not yet said it cleaned up (store.ts cleanups). */
@@ -88,7 +91,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
   return {
     tabId, tabName: state.name, lastChangedAt, paused: state.paused,
     // `active` lets the host release members that are only in archived groups to automatic cleanup.
-    active: state.conversations.some(c => !c.archived && c.agentIds.includes(target.id)),
+    active: state.conversations.some(c => !c.archived && c.agentIds.includes(target.id)) || !!lookups.quietMembers?.has(target.id),
     attention: waiting ? { assignmentId: waiting.id, status: waiting.status, result: waiting.result?.slice(0, 500) ?? null } : null,
     resume,
     agent: target,

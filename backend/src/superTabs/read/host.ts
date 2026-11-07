@@ -8,10 +8,10 @@ import type { AuthUser } from '../../lib/ssoAuth.js'
 import { machineAlive } from '../../lib/prisma.js'
 import { isTeamSession } from '../../lib/teamSession.js'
 import { machineBillingAllowsDataPlane } from '../../lib/billingState.js'
-import { fail, type SuperTabState } from '../model.js'
+import { fail, type Agent, type SuperTabState } from '../model.js'
 import { GrantReads, TEAM_HOST_ONLY, TEAM_HOST_ONLY_MESSAGE, teamByRecord, type SuperTabStore } from '../store.js'
 import type { CacheView } from '../cache.js'
-import { readLastChangedAts, readMachines, deriveLight } from '../cachedReads.js'
+import { readLastChangedAts, readMachines, deriveLight, hostMembers } from '../cachedReads.js'
 import { retryTransient } from '../retry.js'
 import * as parts from '../parts/index.js'
 import type { MachineData, Part } from '../parts/index.js'
@@ -76,7 +76,7 @@ export class HostReads {
       const state = await this.tabState(tx, cached, tabId, machineId)
       // Its Team account alone hosts a machine this Swarm records as one, whatever its account row says now (store.ts).
       if (!isTeamSession(user) && teamByRecord(state, machineId)) fail(TEAM_HOST_ONLY, TEAM_HOST_ONLY_MESSAGE, 403)
-      const rows = await hostTab(tabId, state, machineId, user, lastChangedAt, await this.lookups(tx, state, teams, grants))
+      const rows = await hostTab(tabId, state, machineId, user, lastChangedAt, await this.lookups(tx, state, machineId, teams, grants))
       const etag = rows.etag + (inputs ?? '')
       // The host already holds these rows: say so instead of sending them again.
       tabs.push(held?.slice(0, ROW_HASH) === rows.etag ? { tabId, lastChangedAt, etag, unchanged: true as const } : { ...rows, etag })
@@ -128,22 +128,34 @@ export class HostReads {
 
   private async hostParts(tx: Transaction, tabId: string, machineId: string) {
     const [agents, starts] = await Promise.all([
-      tx.swarmAgent.findMany({ where: { tabId, machineId, deleted: false }, select: { key: true } }),
+      tx.swarmAgent.findMany({ where: { tabId, machineId, deleted: false }, select: { key: true, data: true } }),
       tx.swarmStart.findMany({ where: { tabId, machineId, deleted: false, finishedAt: null }, select: { conversationId: true } }),
     ])
+    const { buddies, lost } = hostMembers(agents.map(a => ({ key: a.key, data: a.data as unknown as Agent })))
     const groupIds = [...new Set(starts.map(s => s.conversationId))]
     // A pool lists every conversation of a project it has a start in.
     const projectIds = groupIds.length ? [...new Set((await tx.swarmGroup.findMany({ where: { tabId, key: { in: groupIds } }, select: { projectId: true } }))
       .map(g => g.projectId ?? 'lead'))] : []
     // Light conversations (parts/light.ts), and only those host rows read: its agents' (dormant ones too, for `active`),
     // the Lead conversations, running work (assignments, attention, stop requests), and its starts' and their projects'.
-    return parts.loadLight(tx, tabId, { groups: 'working', agentIds: agents.map(a => a.key), groupIds, projectIds, machines: false })
+    return parts.loadLight(tx, tabId, { groups: 'working', agentIds: buddies, groupIds: [...groupIds, ...lost], projectIds, machines: false })
   }
 
-  private async lookups(tx: Transaction, state: SuperTabState, teams: Array<{ machineId: string }>, grants: GrantReads): Promise<HostLookups> {
-    const people = state.people.length ? await tx.user.findMany({ where: { id: { in: state.people.map(p => p.id) }, autonomousEnv: state.environment }, select: { id: true, email: true } }) : []
-    const confidential = await confidentialSessions(tx, state.agents.map(a => a.id), state.id)
-    return { people, confidential, teams, githubApp: !!this.options.githubApp, agentGrant: target => this.store.agentGrant(tx, state, target, grants) }
+  /** This machine's agents in no loaded open conversation that are still in a quiet one, for `active` (hostRows.ts): one
+   *  conversation at most per such agent, never every conversation they are in. */
+  private async quietMembers(tx: Transaction, state: SuperTabState, machineId: string): Promise<Set<string>> {
+    const idle = state.agents.filter(a => a.machineId === machineId && !state.conversations.some(c => !c.archived && c.agentIds.includes(a.id)))
+    const found = await Promise.all(idle.map(async agent => (await groupsBy(tx, 'agents', [
+      { $match: { tabId: state.id, deleted: false, agentIds: agent.id, 'data.archived': { $ne: true } } }, { $limit: 1 }, { $project: { _id: 0, key: 1 } }])).length
+      ? [agent.id] : []))
+    return new Set(found.flat())
+  }
+
+  private async lookups(tx: Transaction, state: SuperTabState, machineId: string, teams: Array<{ machineId: string }>, grants: GrantReads): Promise<HostLookups> {
+    const [people, confidential, quietMembers] = await Promise.all([
+      state.people.length ? tx.user.findMany({ where: { id: { in: state.people.map(p => p.id) }, autonomousEnv: state.environment }, select: { id: true, email: true } }) : [],
+      confidentialSessions(tx, state.agents.map(a => a.id), state.id), this.quietMembers(tx, state, machineId)])
+    return { people, confidential, teams, githubApp: !!this.options.githubApp, agentGrant: target => this.store.agentGrant(tx, state, target, grants), quietMembers }
   }
 
   /** Swarms whose record of this machine changed since the cursor and that no longer list it. */
