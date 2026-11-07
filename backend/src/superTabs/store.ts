@@ -3214,11 +3214,13 @@ export class SuperTabStore {
   }
 
   /**
-   * The files a Buddy's proposal names (buddies.ts), and which of them it takes. Only what its owner handed it: its own upload
-   * to its chat, still unsent, which the proposal then takes like a chat message; or a file its owner sent in that chat,
-   * which stays with their message too and goes with one proposal at most. Nothing else is found, so the command refuses
-   * it, its own order of refusals first. The server cannot tell where an upload's bytes came from on the Buddy's machine:
-   * that is its CLI's folder check and its guard (lib/buddyGuard.ts), and here only what it uploaded to its own chat.
+   * The files a Buddy's proposal names (buddies.ts), and which of them it takes. Only what its owner handed it or saw: its own
+   * upload to its chat, still unsent, which the proposal then takes like a chat message; a file its owner sent in that chat;
+   * or one it showed its owner there on its own plain message, as a picture it drew (#4470). Those two stay with their
+   * message and go with one proposal at most. Nothing else is found, so the command refuses it, its own order of refusals
+   * first; a file over the 10 MB a proposal carries is refused by name. The server cannot tell where an upload's bytes came
+   * from on the Buddy's machine: that is its CLI's folder check and its guard (lib/buddyGuard.ts), and here only what it
+   * uploaded to its own chat.
    */
   private async proposable(tx: Transaction, state: SuperTabState, actor: Actor, command: ProposeCommand): Promise<{ attachments: Attachment[]; claimed: string[]; proposed: string[] }> {
     const attachments = this.attachments ?? fail('ATTACHMENTS_UNAVAILABLE', 'File attachments are not available on this server.', 503)
@@ -3227,23 +3229,30 @@ export class SuperTabStore {
     if (!ownerId) return { attachments: [], claimed: [], proposed: [] }
     const ids = [...new Set(command.attachmentIds)]
     const rows = await tx.superTabAttachment.findMany({ where: { tabId: state.id, id: { in: ids }, conversationId: command.conversationId } })
-    const own = rows.filter(r => !r.purpose && r.actorKey === actorKey(actor) && !r.usedBy)
-    // A file the expiry sweep took (lib/attachmentSweep.ts) is being removed: it was never sent, so it was never handed.
-    let handed = rows.filter(r => !r.purpose && r.actorKey === `person:${ownerId}` && !!r.usedBy && r.usedBy !== EXPIRED_UPLOAD)
-    // A thread session reads its own thread alone, so it proposes only files its person sent there (spec: Guard): a file from
-    // the main chat or another thread could be another project's.
+    const mine = actorKey(actor), owners = `person:${ownerId}`
+    const own = rows.filter(r => !r.purpose && r.actorKey === mine && !r.usedBy)
+    // A file the expiry sweep took (lib/attachmentSweep.ts), or on a message deleted since, is being removed: never handed.
+    const sent = rows.filter(r => !r.purpose && (r.actorKey === owners || r.actorKey === mine) && !!r.usedBy && r.usedBy !== EXPIRED_UPLOAD)
+    // The messages they are on, by id through their named index (pageReads.ts messagesById), never an `in` filter on a hot
+    // collection: at most 5, and only in this chat.
+    const on = new Map((await messagesById(tx, state.id, command.conversationId, sent.map(r => r.usedBy!))).map(m => [m.id, m]))
+    // A thread session reads its own thread alone, so it proposes only files from there (spec: Guard): a file from the main
+    // chat or another thread could be another project's. The main Buddy never hears a session's thread either.
     const thread = self.buddySession?.thread
-    if (thread && handed.length) {
-      // By the messages' ids through their named index (pageReads.ts messagesById), never an `in` filter on a hot collection.
-      const inThread = new Set((await messagesById(tx, state.id, command.conversationId, handed.map(r => r.usedBy!)))
-        .filter(m => m.id === thread || m.thread === thread).map(m => m.id))
-      handed = handed.filter(r => inThread.has(r.usedBy!))
-    } else if (handed.length && self.buddyScope === 'swarm') {
-      // The main Buddy never hears a session's thread, and a file sent there is that session's project's: never another's.
-      const heard = new Set((await messagesById(tx, state.id, command.conversationId, handed.map(r => r.usedBy!))).filter(m => !m.buddySession).map(m => m.id))
-      handed = handed.filter(r => heard.has(r.usedBy!))
+    const heard = (m: Pick<SuperTabMessage, 'id' | 'thread' | 'buddySession'>) => thread ? m.id === thread || m.thread === thread
+      : self.buddyScope !== 'swarm' || !m.buddySession
+    // Its own file only on a message it wrote itself, never a row the Swarm wrote (a source): what its owner saw it show.
+    const shownBy = (m: Pick<SuperTabMessage, 'author' | 'source'>) => {
+      const author = m.author as { kind?: unknown; id?: unknown } | null
+      return !m.source && author?.kind === 'agent' && author.id === self.id
     }
-    return { attachments: [...own, ...handed].map(row => ({ id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey),
+    const handed = sent.filter(r => {
+      const m = on.get(r.usedBy!)
+      return !!m && heard(m) && (r.actorKey === owners || shownBy(m))
+    })
+    const taken = [...own, ...handed]
+    if (taken.some(r => r.size > MAX_FORM_ATTACHMENT_BYTES)) fail('ATTACHMENT_TOO_LARGE', 'A proposal carries files of up to 10 MB each. Send a smaller file.', 413)
+    return { attachments: taken.map(row => ({ id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey),
         ...pictureFields(row.image) })),
       claimed: own.map(r => r.id), proposed: handed.map(r => r.id) }
   }

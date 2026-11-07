@@ -358,7 +358,8 @@ export const commandSchema = z.discriminatedUnion('type', [
     launchRefused: z.object({ model: z.string().regex(LAUNCH_MODEL), effort: z.string().regex(LAUNCH_EFFORT).optional() }).strict().optional() }).strict(),
   z.object({ type: z.literal('agent.start'), request: startRequestSchema, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   // A Buddy's proposal for its owner, posted in its project's chat: `conversationId` is its own chat, and `ownerMessageId` its
-  // owner's message there asking for it. Its files are its own uploads in that chat, or files its owner sent there (store.ts proposable).
+  // owner's message there asking for it. Its files are its own uploads in that chat, files its owner sent there, or files it showed its
+  // owner there on its own messages (store.ts proposable).
   // `projectId` is the project a person's one Buddy sends to (authorizeCommandAccess reads it as its person would); a project
   // session or a project chat's Buddy has its own project, and naming another reads as a project that does not exist.
   // `text` is what the project chat shows, as its owner's own message (anh Dee, task #2926): their words, or the line their Buddy
@@ -715,7 +716,7 @@ export interface CommandContext {
   /** An uncertain receipt and its original message, read transactionally. */
   delivery?: { id: string; conversationId: string; agentId: string; messageId: string; text: string; attachments?: Attachment[] }
   /** The files `message.send` or `buddy.propose` names, each checked by the store: uploaded by this actor to this conversation and
-   *  unused, or for a proposal, sent there by its Buddy's owner (store.ts proposable). */
+   *  unused, or for a proposal, sent there by its Buddy's owner or shown to them by that Buddy (store.ts proposable). */
   attachments?: Attachment[]
   /** The words of each voice message's file among [attachments], by its id, read by the store (store.ts readVoice). */
   voiceWords?: Record<string, string>
