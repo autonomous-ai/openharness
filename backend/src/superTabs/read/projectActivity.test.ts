@@ -23,7 +23,7 @@ function scene() {
     shipped(first, FIRST)
     shipped(before, FIRST - 1)
     shipped(s.secretGroup, TODAY - DAY_MS)
-    // Never a task: a step, a project's own chat, a Buddy chat, and the owner's private conversation peer cannot read.
+    // Never a task: a step, a project's own chat, a Buddy chat, and a closed private chat, which nobody reads.
     shipped(step, NOW - 2_000, { reviewOf: s.web })
     shipped('lead', NOW - 3_000)
     shipped(chat, NOW - 4_000)
@@ -32,7 +32,8 @@ function scene() {
     brief: '', checks: [], assignment: null, lastMessageSequence: 0, ledger: { shippedAt: NOW - 5_000 }, lastActivityAt: iso(NOW - 500),
     audience: { people: [{ id: owner.userId, generation }] } }
   const hidden: Conversation = { ...buddyChat, id: 'hidden', kind: undefined, title: 'Hidden', lastActivityAt: iso(NOW - 600) }
-  return { ...s, groups: [...s.state.conversations, buddyChat, hidden] }
+  // Not a spread: `state` stays a live getter.
+  return Object.assign(s, { groups: [...s.state.conversations, buddyChat, hidden] })
 }
 
 const row = (answer: ReturnType<typeof projectActivity>, projectId: string) => answer.projects.find(p => p.projectId === projectId)
@@ -43,14 +44,14 @@ describe('a project\'s activity: tasks shipped per UTC day for 28 days, and when
     const s = scene()
     const answer = projectActivity(s.state, owner, s.groups, NOW)
     expect(answer.through).toBe('2026-10-26')
-    // The owner reads "hidden" (it is theirs): it counts with web today.
-    expect(row(answer, 'lead')!.shipped).toEqual(days({ 0: 1, 24: 1, 25: 1, 27: 2 }))
+    // Done and Two shipped on the same day, Two in its last millisecond.
+    expect(row(answer, 'lead')!.shipped).toEqual(days({ 0: 1, 24: 2, 27: 1 }))
     expect(row(answer, s.secret)!.shipped).toEqual(days({ 26: 1 }))
   })
 
   it('skips steps, a project\'s chat, Buddy chats and conversations the reader cannot read', () => {
     const s = scene()
-    expect(row(projectActivity(s.state, peer, s.groups, NOW), 'lead')!.shipped).toEqual(days({ 0: 1, 24: 1, 25: 1, 27: 1 }))
+    expect(row(projectActivity(s.state, peer, s.groups, NOW), 'lead')!.shipped).toEqual(days({ 0: 1, 24: 2, 27: 1 }))
   })
 
   it('gives the newest activity of the project\'s readable conversations, a dormant one and its chat included', () => {
@@ -58,8 +59,8 @@ describe('a project\'s activity: tasks shipped per UTC day for 28 days, and when
     expect(row(projectActivity(s.state, peer, s.groups, NOW), 'lead')!.updatedAt).toBe(NOW - 1_000)
     const quiet = { id: 'quiet', projectId: 'lead', title: 'Quiet', archived: true, dormant: true, lastActivityAt: iso(NOW - 100) } as Conversation
     expect(row(projectActivity(s.state, peer, [...s.groups, quiet], NOW), 'lead')!.updatedAt).toBe(NOW - 100)
-    // The owner reads their private "hidden"; their Buddy chat, newer still, is no project's work.
-    expect(row(projectActivity(s.state, owner, s.groups, NOW), 'lead')!.updatedAt).toBe(NOW - 600)
+    // The owner reads their Buddy chat, newer still, but it is no project's work; the closed private chat is nobody's.
+    expect(row(projectActivity(s.state, owner, s.groups, NOW), 'lead')!.updatedAt).toBe(NOW - 1_000)
     // Secret's newest is its chat's, after its task shipped.
     expect(row(projectActivity(s.state, owner, s.groups, NOW), s.secret)!.updatedAt).toBe(NOW - 4_000)
   })

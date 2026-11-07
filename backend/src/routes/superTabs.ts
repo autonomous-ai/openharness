@@ -701,6 +701,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof scorecardQuery> }>('/api/super-tabs/:tabId/scorecard',
     { preHandler: [validateParams(tabParams), validateQuery(scorecardQuery)] },
     (req, reply) => respond(reply, () => reads.scorecard(req.user!, req.params.tabId, req.query.projectId, req.query.scope === 'all')))
+  // Each readable project's shipped tasks per day and last activity (superTabs/read/projectActivity.ts), for the Projects list.
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery> }>('/api/super-tabs/:tabId/project-activity',
+    { preHandler: [validateParams(tabParams), validateQuery(noQuery)] },
+    (req, reply) => respond(reply, () => reads.projectActivity(req.user!, req.params.tabId)))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof leaderboardQuery> }>('/api/super-tabs/:tabId/leaderboard',
     { preHandler: [validateParams(tabParams), validateQuery(leaderboardQuery)] },
     (req, reply) => respond(reply, () => reads.leaderboard(req.user!, req.params.tabId, req.query.projectId, req.query.week, req.query.period, req.query.scope === 'all')))
