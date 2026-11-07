@@ -142,12 +142,13 @@ describe('which machines take a teammate\'s project', () => {
     expect(teamWorkRefusal(pool(reading('team', { ...FAILED, item: 'credentials' })), NOW)?.reason).toContain('(credentials: it could list its owner\'s Windows Credential Manager folder)')
   })
 
-  it('not on a machine with no Harness Team account', () => {
-    expect(teamWorkRefusal(pool(reading('computer')), NOW)).toEqual({ code: 'TEAM_ACCOUNT_REQUIRED',
-      reason: 'MacBook Pro has no Harness Team account yet, so it runs only its owner\'s projects.' })
+  // Swarm v3 (task #4120): a person's own agent works on their own computer, in their own account, so a machine that is not a
+  // Team account reads no Team-account rule, even where the rule was required everywhere (task #4218).
+  it('on a machine with no Harness Team account, which runs its own person\'s agents', () => {
+    expect(teamWorkRefusal(pool(reading('computer')), NOW)).toBeNull()
     // A reading from before readings were stamped with their session is an ordinary machine's.
     const { sessionKind: _kind, ...unstamped } = reading('computer')
-    expect(teamWorkRefusal(pool(unstamped as Reading), NOW)?.code).toBe('TEAM_ACCOUNT_REQUIRED')
+    expect(teamWorkRefusal(pool(unstamped as Reading), NOW)).toBeNull()
   })
 
   it('not on a Team machine that reported no privacy check', () => {
@@ -158,10 +159,8 @@ describe('which machines take a teammate\'s project', () => {
   })
 
   it('not while offline', () => {
-    for (const offline of [pool(), pool(reading('team', PASSED, NOW - 46_000))]) {
-      expect(teamWorkRefusal(offline, NOW)).toEqual({ code: 'MACHINE_OFFLINE',
-        reason: 'MacBook Pro is offline, so it cannot show that its Harness Team account is private.' })
-    }
+    expect(teamWorkRefusal(pool(reading('team', PASSED, NOW - 46_000)), NOW)).toEqual({ code: 'MACHINE_OFFLINE',
+      reason: 'MacBook Pro is offline, so it cannot show that its Harness Team account is private.' })
     // A Mac's team account has its Mac's name, and the Mac may be online: the account is what is offline (third VM run).
     expect(teamWorkRefusal({ ...pool(), hostMachineId: 'mac' }, NOW, true)).toEqual({ code: 'MACHINE_OFFLINE',
       reason: 'The Harness Team account on MacBook Pro is offline, so it cannot show that it is private.' })
@@ -390,18 +389,17 @@ describe('one machine: a Mac and its Harness Team account', () => {
     expect(f.state.starts).toEqual([expect.objectContaining({ request: expect.objectContaining({ machineId: 'mate-mac', cwd: '/swarm/lead' }) })])
   })
 
-  // 2026-10-28: every Mac read "has no Harness Team account yet" beside the account that took its teammates' work.
-  it('reads a Mac as its Harness Team account does, since that is where its teammates\' work runs', () => {
+  // Swarm v3 (task #4218): a teammate's work on the Mac runs as its own person's agent there, never in its Team account, so the
+  // Mac reads as itself: its Team account's privacy check no longer leaves its person's agents out of the route.
+  it('reads a Mac as itself, not as its Harness Team account', () => {
     const f = oneMachine()
     f.machine('mate-mac').observation = reading('computer')
-    f.machine('mate-team').observation = reading('team', PASSED)
-    expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, ['mate-team'])).toBeNull()
     f.machine('mate-team').observation = reading('team', FAILED)
-    expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, ['mate-team'])?.code).toBe('PRIVACY_CHECK_FAILED')
-    expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, ['mate-team'], ['mate-team'])?.code).toBe('MACHINE_IN_OTHER_WORKSPACE')
-    // The account itself reads as itself; a Mac whose account is no longer signed in reads as a Mac without one.
+    expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, ['mate-team'])).toBeNull()
+    expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, ['mate-team'], ['mate-team'])).toBeNull()
+    expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, [])).toBeNull()
+    // The account itself reads as itself.
     expect(machineTeamWork(f.state, f.machine('mate-team'), NOW, ['mate-team'])?.code).toBe('PRIVACY_CHECK_FAILED')
-    expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, [])?.code).toBe('TEAM_ACCOUNT_REQUIRED')
   })
 
   it('takes nothing in its Team account, whether its account row is still listed or not', () => {
@@ -542,12 +540,13 @@ describe('a machine added as its person joined', () => {
     expect(f.state.starts).toHaveLength(2)
   })
 
-  it('says why in its reading, so routing leaves it out of a teammate\'s project', () => {
+  // Task #4218: it read "has no Harness Team account yet", and routing left its person's own agents out of every teammate's
+  // project the server would let them work on.
+  it('reads as taking its person\'s agents\' work, so routing keeps them for a teammate\'s project', () => {
     const f = swarm()
     f.run(joined, mate, contribution)
     f.machine('joined-mac').observation = reading('computer')
-    expect(machineTeamWork(f.state, f.machine('joined-mac'), NOW, [])?.code).toBe('TEAM_ACCOUNT_REQUIRED')
-    // An ordinary machine contributed by hand takes it as before while the rule is not required.
+    expect(machineTeamWork(f.state, f.machine('joined-mac'), NOW, [])).toBeNull()
     expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, [])).toBeNull()
   })
 

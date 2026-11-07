@@ -126,11 +126,11 @@ describe('teammates\' work in a Mac owner\'s own account', () => {
       askedIn: { conversationId: 'lead', messageId: 'm-gray' } })
   })
 
-  it('reads the Mac itself, not its Team account, for routing once it is on', () => {
+  // Swarm v3 (task #4218): the Mac reads as itself whether the choice is on or not; its Team account takes no new work.
+  it('reads the Mac itself, not its Team account, for routing', () => {
     const f = swarm()
-    // A stale privacy check on the Team account refuses teammates there; with the owner's choice on, starts run on the Mac.
     f.machine('gray-team').observation = { ...reading('team', PASSED), privacy: { ...PASSED, seenAt: NOW - 24 * 60 * 60_000 } }
-    expect(machineTeamWork(f.state, f.machine('gray-mac'), NOW, ['gray-team'])?.code).toBe('PRIVACY_CHECK_STALE')
+    expect(machineTeamWork(f.state, f.machine('gray-mac'), NOW, ['gray-team'])).toBeNull()
     f.choose(true)
     expect(machineTeamWork(f.state, f.machine('gray-mac'), NOW, ['gray-team'])).toBeNull()
   })
