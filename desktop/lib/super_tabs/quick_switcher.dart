@@ -271,9 +271,7 @@ List<_Destination> _destinations(SuperTabController c) {
               : s.isProjectLead(g.id)
               ? projects[g.projectId]!.name
               : g.label,
-          g.isBuddyChat
-              ? 'Your Buddy'
-              : g.isAgentChat
+          g.isBuddyChat || g.isAgentChat
               ? 'Your agent'
               : s.isProjectLead(g.id)
               ? 'Project chat'

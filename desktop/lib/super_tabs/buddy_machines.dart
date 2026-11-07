@@ -341,7 +341,7 @@ class BuddyMachineAdder {
 /// Buddy now: none is signed in to their account, all are offline, or new work
 /// is paused on those that are not.
 const kBuddyNoMachine =
-    'Your Buddy runs on one of your own computers. Open Harness on one, '
+    'Your agent runs on one of your own computers. Open Harness on one, '
     'signed in to your account.';
 const kBuddyAllOffline =
     'Your machines are offline. Open Harness on one of them to start your '

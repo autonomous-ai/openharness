@@ -181,7 +181,9 @@ class SuperTabPageRow extends StatefulWidget {
   final bool trailingWarn;
   final String? preview;
   final bool previewStrong;
-  final int previewLines;
+
+  /// The most lines [preview] takes; null shows it whole.
+  final int? previewLines;
 
   /// How many leading characters of [preview] are a name, shown stronger.
   final int? previewLead;
