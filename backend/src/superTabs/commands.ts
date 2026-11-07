@@ -8,7 +8,7 @@ import { crewMoveFailed, takeOverCrewMember, wakeCrewMember } from './crewKeep.j
 import { moveTimingRow, startWake } from './crewTimes.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from './repositoryReach.js'
-import { admitByRoom, admitMachineStart, noRepositoryStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamAccountPool, teamPoolsOf, teamWorkCheck, TEAM_ACCOUNTS_GONE, NOT_YOUR_COMPUTER, type ContributedMachine } from './machines.js'
+import { admitByRoom, admitMachineStart, AGENT_MEMORY_BYTES, noRepositoryStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamAccountPool, teamPoolsOf, teamWorkCheck, TEAM_ACCOUNTS_GONE, NOT_YOUR_COMPUTER, type ContributedMachine } from './machines.js'
 import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { addedAgentName, renameAgentTo } from './agentRename.js'
@@ -41,9 +41,9 @@ import { isReview, machineRuleRefusal } from './machineRules.js'
 import { accessRefusal, changeAccess, expireAccess, taskAccess } from './machineAccess.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
-import { CREW_NEED_KIND, crewNeedPlace, crewNeedText, routedLine, routesToPm, type CrewNeed } from './crewNeeds.js'
+import { CREW_NEED_KIND, crewNeedPlace, crewNeedText, projectPm, routedLine, routesToPm, type CrewNeed } from './crewNeeds.js'
 import { checkReason, heldReason, missingReason } from './heldReason.js'
-import { answerDecision, askDecisions, checkDecisionDeadline, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
+import { answerDecision, askDecisions, askedThroughBuddy, mustAgreePassed, asksDirectly, checkDirectAsk, checkDecisionDeadline, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { leadOf, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest, workedAgain } from './terminal.js'
 import { BACK_WITH_YOU, pickUp, reopenHanded } from './handed.js'
 import { changesRequested, engineerAnswered, leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, revisionReady, toldEngineer, waitingForReview } from './liveness.js'
@@ -1566,7 +1566,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // Sessions have no count of their own (Scholes, 11-02): idle ones close themselves. The one limit is the machine's, which
       // its owner set to protect it (Lead, 11-02), said in words a person can act on. A Buddy-only machine has none (below).
-      if (!pool.buddyOnly) admitByRoom(state, pool, machineSlots(state, pool), BUDDY_REQUIREMENTS.memoryBytes)
+      if (!pool.buddyOnly) admitByRoom(state, pool, machineSlots(state, pool), BUDDY_REQUIREMENTS.memoryBytes, 'a Buddy')
       const contributor = person(state, main.contributorId)
       // In the one Buddy chat a session works in one project its person reads, or, with none named, as the main Buddy does
       // (spec: The model). A project's own chat has its project.
@@ -3000,9 +3000,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const group = open(state, command.conversationId)
       const drafts = askDecisions(state, group, command.personId, command.questions,
         { now: context.now, operationId, askerAgentId: checkAsker(state, actor, group), assignmentId: null })
-      // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts): another agent's questions are the PM's crew needs, one
-      // each, checked as a decision would be and opened for nobody.
-      const pmInstead = routesToPm(state, actor, group)
+      // In a switched project the person is asked directly, through their default Buddy (task #3826). Elsewhere people talk only
+      // to the PM (anh Dee, 11-05; crewNeeds.ts): another agent's questions are the PM's crew needs, one each, checked as a
+      // decision would be and opened for nobody.
+      const direct = asksDirectly(state, group)
+      if (direct) checkDirectAsk(command.questions)
+      const pmInstead = direct ? null : routesToPm(state, actor, group)
       if (pmInstead) {
         command.questions.forEach((q, i) => crewNeed(group, pmInstead, { personIds: [command.personId], conversationId: group.id,
           question: q.question, options: q.options, recommended: q.recommended, ...q.defaultAt ? { defaultAt: q.defaultAt } : {} }, q.question, stableId(operationId, 'crew-need', String(i))))
@@ -3010,10 +3013,20 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         break
       }
       effects.decisions = drafts
+      if (direct) effects.messages.push(...askedThroughBuddy(state, group, drafts, sender))
       result.decisionIds = effects.decisions.map(d => d.id)
       break
     }
     case 'decision.answer': {
+      // The sweep at the time of a decision its person must agree to: no default applies, the PM is told once (task #3826).
+      if (context.defaulted && context.decision?.mustAgree) {
+        const passed = mustAgreePassed(state, actor, context.decision, context.now)
+        effects.decisionKeptWaiting = context.decision.id
+        if (passed.recipients.length) message(passed.noticeIn, passed.text, passed.recipients, null, passed.source)
+        result.decisionId = context.decision.id
+        result.keptWaiting = true
+        break
+      }
       const { answer, noticeIn, notice, recipients, source, line } = answerDecision(state, actor, context.decision,
         { choice: command.choice, note: command.note ?? null, delegate: command.delegate === true, overdue: context.overdue === true, defaulted: context.defaulted === true, now: context.now })
       effects.decisionAnswer = answer
@@ -3519,6 +3532,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         { kind: 'buddy-proposal', personId: owner.id, buddyId: self.id, ownerMessageId: command.ownerMessageId,
           goal: command.goal, scope: command.scope, priority: command.priority }, attachments)
       effects.messages.at(-1)!.author = { kind: 'person', id: owner.id, name: owner.email, membershipGeneration: owner.generation }
+      const relayed = effects.messages.at(-1)!
+      owe(state, home, { ...relayed, thread: relayed.thread ?? null }, context.now)
       // Its own id: this command's id is the proposal's, and a second row with it rolls the command back. Marked with its project,
       // so it goes from view as a PM's line does when its person loses that project (buddySessions.ts lostProjectRow).
       if (isSwarmBuddy(self)) effects.messages.push({ id: stableId('proposal-sent', operationId), conversationId: chat.id, author: sender,
@@ -3753,7 +3768,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (!pool.observation?.capabilities?.includes(REGULAR_AGENT_CAPABILITY)) fail('HOST_OUTDATED', `Update Harness on ${pool.name ?? 'your computer'} to start this agent there.`, 409)
       const chatId = openAgentChat(me, name)
       const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
-        ...(command.model ? { model: command.model } : {}), name, cwd: buddyHomeFolder(pool, me), worktree: false, requirements: BUDDY_REQUIREMENTS, regular: true }
+        ...(command.model ? { model: command.model } : {}), name, cwd: buddyHomeFolder(pool, me), worktree: false,
+        // A Buddy's smaller memory is for a session that only reads and talks (#3738); a Regular agent takes tasks.
+        requirements: { ...BUDDY_REQUIREMENTS, memoryBytes: AGENT_MEMORY_BYTES }, regular: true }
       const admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)!
       state.starts ??= []
       if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')
@@ -4313,7 +4330,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
       }
       result.changed = react(group, command.messageId, command.on, context.reaction)
-      if (actor.kind === 'agent') settleReaction(state, group, actor.agentId, command.messageId, command.emoji, command.on)
+      if (actor.kind === 'agent') settleReaction(state, group, actor.agentId, command.messageId, command.on)
       // A reaction is how an agent acknowledges (ACK_ONLY refuses the post), so it settles the agent's delivery of that message.
       if (actor.kind === 'agent' && command.on) effects.settles = { messageId: command.messageId, agentId: actor.agentId }
       break
@@ -4496,6 +4513,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       message(group.id, text, recipients, command.replyTo, command.agentOnly ? { ...AGENT_ONLY, ...command.notice ? { notice: command.notice } : {} } : undefined, attachments, tagged,
         tagged.length ? command.mentionsIfNoWorker : undefined)
       if (!command.agentOnly) effects.messages.at(-1)!.post = true
+      if (command.answers) effects.messages.at(-1)!.answers = command.answers
       // Whom a stuck line in a task tags, with its requester (stuck.ts, task #3915).
       if (actor.kind === 'person' && !command.agentOnly && !group.kind && !group.audience && !isProjectChat(state, group)) noteWriter(group, actor.userId)
       // After the post is marked: the crew need is the server's row for the PM, never a post of its own.
@@ -4782,7 +4800,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       let asked: string | undefined
       // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts): an agent's needs_human, whoever's assignment it is, when that
       // agent is not the PM, is the PM's crew need, and its question opens no decision for the person it names (review of #3223).
-      const pmInstead = command.status === 'needs_human' ? routesToPm(state, actor, group) : null
+      // In a switched project an ask goes to the person directly, through their default Buddy and their Needs you list, and the
+      // PM sees only the task waiting on them (task #3826).
+      const direct = !!command.ask && asksDirectly(state, group)
+      if (direct) checkDirectAsk([command.ask!])
+      const pmInstead = command.status === 'needs_human' && !direct ? routesToPm(state, actor, group) : null
       if (command.ask) {
         if (command.status !== 'needs_human' || !command.result || actor.kind !== 'agent') {
           fail('INVALID_DECISION', 'An agent asks a person for a decision only when its work needs a human, with the question as its result.', 400)
@@ -4799,6 +4821,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (context.openDecisions == null) {
           effects.decisions = drafts
           asked = context.repeatedDecision ?? drafts[0]!.id
+          // A repeat of a question still open was already brought to the person.
+          if (direct && !context.repeatedDecision) effects.messages.push(...askedThroughBuddy(state, group, drafts, sender))
         }
         else effects.result.notAsked = `Not asked ${agentWrittenNameOf(state, person(state, personId).id)}: ${context.openDecisions} decisions you asked them are still open, and at most ${MAX_OPEN_DECISIONS} can be. Wait for answers before asking more.`
       }
@@ -4845,7 +4869,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           // Its own Ready wakes nobody (Ken, 2026-11-02: every hand-over reached the PM): it names whom it hands to.
           : own ? (lead && ['needs_human', 'blocked', 'done'].includes(command.status) ? [lead] : [])
           : [...command.status === 'stopped' ? [] : [assignment.agentId], ...lead ? [lead] : []]
-        const recipients = [...new Set(told)].filter(id => actor.kind !== 'agent' || id !== actor.agentId)
+        // A direct ask is the person's to answer: the PM only sees the task waiting on them (askedOf), never the question.
+        const pm = direct ? projectPm(state, group) : null
+        const recipients = [...new Set(told)].filter(id => (actor.kind !== 'agent' || id !== actor.agentId) && !(direct && (id === pm || id === group.leadId)))
         const askedName = command.ask ? agentWrittenNameOf(state, person(state, command.ask.personId).id) : ''
         const asked = !command.ask ? '' : pmInstead ? `\n\nFor the PM to ask ${askedName}.`
           : effects.result.notAsked ? `\n\n${effects.result.notAsked}` : `\n\nAsked ${askedName}.`

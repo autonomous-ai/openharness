@@ -3,6 +3,8 @@
  *  the PM gets a crew need, and the agent's command result says so. This routes; it never refuses. The PM tags anyone. Any
  *  other agent may still tag the person it is answering (the author of the message it answers or replies to). A project with
  *  no PM in its chat routes nothing, so its tags reach people as before.
+ *  In a switched project (boardRights.ts) an agent's ask of a person is not routed: it goes to the person directly, through
+ *  their default Buddy (decisions.ts asksDirectly, task #3826).
  *
  *  A crew need is either its own row (source kind `crew-need`: a tag, a decision ask, a line to a person) or the needs_human
  *  status row the agent already writes to the PM (`source.crewNeed`). `crewNeedOf` reads both; the PM's inbox (#3403) lists
