@@ -1,7 +1,8 @@
 import { clearEngineHomeFixture } from '../testing/engineHomeFixture.js'
 import { nativeConversationFixture } from '../testing/nativeConversationEvidence.js'
+import { darwinProcessImages } from '../testing/darwinProcessImages.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'fs'
 import { execFileSync, spawn } from 'child_process'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -547,13 +548,9 @@ describe('session repair — a Codex process names its own rollout', () => {
   })
 
   it('does not give a starting process the only sibling rollout before its own file opens', async () => {
-    if (process.platform === 'darwin') {
-      // Native source tests explicitly supply the same verified artifact as the bundle.
-      // A missing helper is itself a held identity, never a permissive ps/lsof fallback.
-      const artifact = process.env.HARNESS_PROCESS_IMAGES_ARTIFACT
-      expect(artifact, 'Build the private Darwin helper for native integration tests').toBeTruthy()
-      vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', readFileSync(artifact!, 'utf8'))
-    }
+    // Native source tests supply the helper the bundle embeds: a missing one is itself a held identity, never a
+    // permissive ps/lsof fallback.
+    if (process.platform === 'darwin') vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', darwinProcessImages())
     const profile = tempRoot()
     const sibling = 'a1b2c3d4-1111-4a4a-8a8a-000000000009'
     writeCodexRollout(profile, sibling, CWD, Date.now())
@@ -594,10 +591,7 @@ describe('session repair — a Codex process names its own rollout', () => {
   })
 
   it('reads a live process\'s open files, and binds the repair to the rollout it holds', async () => {
-    if (process.platform === 'darwin') {
-      expect(process.env.HARNESS_PROCESS_IMAGES_ARTIFACT, 'Build the private Darwin helper for native integration tests').toBeTruthy()
-      vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', readFileSync(process.env.HARNESS_PROCESS_IMAGES_ARTIFACT!, 'utf8'))
-    }
+    if (process.platform === 'darwin') vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', darwinProcessImages())
     const profile = tempRoot()
     const fork = 'a1b2c3d4-1111-4a4a-8a8a-000000000006'
     const forkFile = writeCodexRollout(profile, fork, CWD, STARTED_AT + 1_000)
