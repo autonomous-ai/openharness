@@ -432,19 +432,9 @@ class _RemoveBuddyDialogState extends State<_RemoveBuddyDialog> {
   }
 }
 
-/// What the reader's Buddy is called until they name it, as the backend
-/// names it: "ken's Buddy".
-String buddyDefaultName(SuperTabController c) {
-  final email = c.snapshot?.people
-      .where((p) => p.id == c.accountId)
-      .firstOrNull
-      ?.email;
-  return "${(email ?? '').split('@').first}'s Buddy";
-}
-
 /// Rename the reader's Buddy in [projectId] (mockup confirmed by Diego,
-/// 10-29): the name everyone in the Swarm sees; empty goes back to
-/// [buddyDefaultName]. The backend checks the name and says why it refuses.
+/// 10-29): the name everyone in the Swarm sees; empty gives it a fresh real
+/// name (task #4568). The backend checks the name and says why it refuses.
 Future<void> showRenameBuddy(
   BuildContext context,
   SuperTabController c,
@@ -512,14 +502,19 @@ class _RenameBuddyDialogState extends State<_RenameBuddyDialog> {
 
   /// The backend's limit: a longer name is refused there anyway.
   static const _maxLength = 32;
-  late final _name = TextEditingController(
-    text:
-        (widget.conversationId == null
-                ? c.buddyChat(widget.projectId)
-                : c.snapshot?.conversation(widget.conversationId!))
-            ?.buddyName ??
-        '',
-  );
+  late final _chat = widget.conversationId == null
+      ? c.buddyChat(widget.projectId)
+      : c.snapshot?.conversation(widget.conversationId!);
+  late final _name = TextEditingController(text: _chat?.buddyName ?? '');
+
+  /// The name it goes by now, as its chat's header shows it.
+  String? get _shown => switch ((_chat, c.snapshot)) {
+    (final chat?, final snapshot?) => switch (superTabChatBuddy(c, chat)) {
+      final agent? => snapshot.agentName(agent.id, fallback: agent.name),
+      null => chat.buddyName,
+    },
+    _ => null,
+  };
   bool _busy = false;
   String? _error;
 
@@ -554,9 +549,9 @@ class _RenameBuddyDialogState extends State<_RenameBuddyDialog> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final fallback = buddyDefaultName(c);
+    final shown = _shown;
     return AlertDialog(
-      title: const Text('Rename your Buddy'),
+      title: Text(shown == null ? 'Rename your agent' : 'Rename $shown'),
       content: SizedBox(
         width: 440,
         // Scrolls in a short window or at large text, as Add a Buddy does.
@@ -576,15 +571,12 @@ class _RenameBuddyDialogState extends State<_RenameBuddyDialog> {
                 autofocus: true,
                 enabled: !_busy,
                 maxLength: _maxLength,
-                decoration: InputDecoration(
-                  hintText: fallback,
-                  counterText: '',
-                ),
+                decoration: InputDecoration(hintText: shown, counterText: ''),
                 onSubmitted: (_) => _submit(),
               ),
               const SizedBox(height: 4),
               Text(
-                'Leave it empty to go back to "$fallback".',
+                'Leave it empty for a new name.',
                 style: DesktopChrome.control(color: DesktopChrome.muted),
               ),
               if (_error case final error?) ...[

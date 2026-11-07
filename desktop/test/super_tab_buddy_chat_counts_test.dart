@@ -524,13 +524,13 @@ void main() {
         Future<void> shortcutOverNotifications() async {
           await tester.tap(find.byKey(const ValueKey('super-decisions')));
           await tester.pumpAndSettle();
-          expect(find.text('Message your Buddy'), findsNothing);
+          expect(find.text('Message your agent'), findsNothing);
           // What ⇧⌘K runs (openActiveBuddyChat).
           expect(await c.openCurrentBuddyChat(), isTrue);
           await tester.pumpAndSettle();
           expect(c.selectedId, c.buddyChat('lead')?.id);
           // The composer names the Buddy chat as its row does.
-          expect(find.text('Message your Buddy'), findsOneWidget);
+          expect(find.text('Message your agent'), findsOneWidget);
         }
 
         await shortcutOverNotifications();
@@ -569,13 +569,13 @@ void main() {
       final c = await show(tester, pmChatSwarm());
       await tester.tap(find.byKey(const ValueKey('super-decisions')));
       await tester.pumpAndSettle();
-      expect(find.text('Message your Buddy'), findsNothing);
+      expect(find.text('Message your agent'), findsNothing);
 
       await tester.tap(entry);
       await tester.pumpAndSettle();
 
       expect(c.selectedId, c.buddyChat('lead')!.id);
-      expect(find.text('Message your Buddy'), findsOneWidget);
+      expect(find.text('Message your agent'), findsOneWidget);
       await close(tester, c);
     });
 

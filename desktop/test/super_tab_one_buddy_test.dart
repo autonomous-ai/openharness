@@ -227,7 +227,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text(unavailable), findsNothing);
-      expect(find.text('Rename your Buddy'), findsOneWidget);
+      expect(find.text('Rename Wren'), findsOneWidget);
       await tester.enterText(
         find.byKey(const ValueKey('super-buddy-name')),
         'Sparky',

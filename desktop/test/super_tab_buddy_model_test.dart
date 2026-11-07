@@ -461,7 +461,9 @@ void main() {
     testWidgets('name the Buddies that run on each model', (tester) async {
       final server = swarm(gridModel: 'kimi-k3');
       // A Buddy goes by its own name (task #4568), never "<person>'s Buddy".
-      (server.state['agents'] as List).cast<Map>().firstWhere((a) => a['id'] == 'wren')['displayName'] = 'Wren';
+      (server.state['agents'] as List).cast<Map>().firstWhere(
+        (a) => a['id'] == 'wren',
+      )['displayName'] = 'Wren';
       final c = server.controller(account: 'owner');
       await c.refresh();
       await tester.pumpWidget(
