@@ -94,6 +94,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: grid.buildAppTheme(brightness: brightness),
+        debugShowCheckedModeBanner: false,
         home: Scaffold(
           body: SuperTabView(
             controller: c,
