@@ -657,7 +657,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.textContaining('This specialist works in the background.'),
+        find.text('This specialist works in the background.'),
         findsOneWidget,
       );
       tester.widget<WebPanePanel>(find.byType(WebPanePanel)).onToggleZoom!();
@@ -690,6 +690,7 @@ void main() {
       await model.refresh();
       await tester.pump();
       expect(find.text('Starting your director…'), findsOneWidget);
+      expect(find.text('Your work takes shape here'), findsNothing);
       await tester.pumpWidget(const SizedBox());
     },
   );

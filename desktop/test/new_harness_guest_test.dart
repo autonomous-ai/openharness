@@ -250,7 +250,7 @@ void main() {
     box.focusField(NewHarnessField.projectMenu);
     expect(box.options.map((option) => (option.title, option.detail)), [
       ('My workspace', 'Your own folder on Dee’s Studio'),
-      ('app', '/Users/dee/code/app · you can edit it'),
+      ('app', '/Users/dee/code/app · editable'),
       ('docs', '/Users/dee/docs · read only'),
     ]);
     box.accept(box.options[2]);

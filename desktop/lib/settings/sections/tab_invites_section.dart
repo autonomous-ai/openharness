@@ -195,9 +195,7 @@ class _TabInvitesSectionState extends State<TabInvitesSection>
       case SharedTabsState.unknown:
         return const _Skeleton();
       case SharedTabsState.off:
-        return _superInvites.isEmpty && !_loadingSuper && _superError == null
-            ? const Text('No invitations.')
-            : const SizedBox.shrink();
+        return const SizedBox.shrink();
       case SharedTabsState.tooOld:
         return UpdateHarnessLine(widget.notifier);
       case SharedTabsState.unsupported:
@@ -219,7 +217,7 @@ class _TabInvitesSectionState extends State<TabInvitesSection>
         break;
     }
     if (snapshot.invites.isEmpty && snapshot.untrusted.isEmpty) {
-      return const Text('No invitations.');
+      return const SizedBox.shrink();
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,

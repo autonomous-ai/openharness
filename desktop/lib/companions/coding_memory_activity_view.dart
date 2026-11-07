@@ -89,14 +89,10 @@ class _CodingMemoryActivityViewState extends State<_CodingMemoryActivityView> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _text(
-            'See the last recorded recall for an open coding session. You can check each memory and tell your companion whether it helped.',
-          ),
+          _text('The last recall for an open coding session.'),
           const SizedBox(height: 16),
           if (activity.available == false)
-            _text(
-              'Recall activity is not available in this local service yet. You can still read individual memories and their evidence.',
-            ),
+            _text('Recall activity is not available in this local service.'),
           if (activity.sessions.isNotEmpty) ...[
             Semantics(
               enabled: !activity.writing,
@@ -149,13 +145,6 @@ class _CodingMemoryActivityViewState extends State<_CodingMemoryActivityView> {
                 ],
               ),
             ),
-          if (!busy &&
-              activity.error == null &&
-              activity.available == true &&
-              activity.sessions.isEmpty)
-            _text(
-              'No recall activity for open coding sessions yet. New activity appears when a supported agent requests memory.',
-            ),
           if (selection != null) ...[
             _text(_where(selection)),
             _text(_time(context, selection['preparedAt']), small: true),
@@ -177,13 +166,13 @@ class _CodingMemoryActivityViewState extends State<_CodingMemoryActivityView> {
                 (selection['selectedCount'] as num? ?? 0) >
                     activity.items.length)
               _text(
-                'Some earlier selections have changed or are no longer available. Only current memory versions are shown.',
+                'Some earlier selections changed or are gone. Only current versions are shown.',
                 small: true,
               ),
             const SizedBox(height: 16),
             for (final item in activity.items) _item(item, busy),
             _text(
-              'This records context prepared by Harness. It does not establish that the model received or used it. The time above may precede the current turn.',
+              'Harness prepared this context. The model may not have received or used it.',
               small: true,
             ),
           ],
@@ -271,7 +260,7 @@ class _CodingMemoryActivityViewState extends State<_CodingMemoryActivityView> {
             ),
             if (recall['canGuideRecall'] == true)
               _text(
-                'Your feedback helps choose memories for matching work. Correct the memory separately if the fact is wrong.',
+                'Feedback guides recall for matching work. If the fact is wrong, correct the memory.',
                 small: true,
               ),
           ],

@@ -111,7 +111,7 @@ class _ViewerPageState extends State<ViewerPage> {
         return _message(
           agent.viewerError ??
               (agent.viewerName != null
-                  ? '${agent.viewerName} is starting. You can keep working in hn.'
+                  ? '${agent.viewerName} is starting.'
                   : 'This harness has no viewer.'),
           retry: () {
             app.reloadMachineData(location.machineId);

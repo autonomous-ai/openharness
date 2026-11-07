@@ -748,7 +748,7 @@ class EnvironmentProvisioner {
         emit(
           step: EnvironmentStep.harness,
           status: EnvironmentStepStatus.failed,
-          message: 'Automatic environment setup is currently available on macOS and Linux only.',
+          message: 'Automatic environment setup works only on macOS, Linux and Windows.',
           phase: EnvironmentSetupPhase.failed,
         );
         return state;

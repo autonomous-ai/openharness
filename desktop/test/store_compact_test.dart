@@ -536,12 +536,13 @@ void main() {
   });
 
   testWidgets('on Desktop an empty discipline waits for this computer, then '
-      'says nothing is here', (tester) async {
+      'stays empty', (tester) async {
     await _openEmptyDiscipline(tester, web: false, loaded: false);
     expect(find.text('Asking this computer…'), findsOneWidget);
 
     await _openEmptyDiscipline(tester, web: false, loaded: true);
-    expect(find.text('Nothing here yet.'), findsOneWidget);
+    expect(find.text('Asking this computer…'), findsNothing);
+    expect(find.text('Nothing here yet.'), findsNothing);
   });
 
   testWidgets('in a browser Discover does not wait on a computer', (

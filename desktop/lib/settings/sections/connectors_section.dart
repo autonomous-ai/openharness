@@ -179,7 +179,7 @@ class _ConnectorsSectionState extends State<ConnectorsSection> {
               : LaidOutListView(
                   children: [
                     _group(context, 'Connected', on,
-                        query.isEmpty ? 'Nothing connected yet. Choose a service below.' : 'No connected service matches.'),
+                        query.isEmpty ? null : 'No connected service matches.'),
                     if (!_connectedOnly) _group(context, 'Available', off, 'No service matches.'),
                   ],
                 ),
@@ -188,7 +188,9 @@ class _ConnectorsSectionState extends State<ConnectorsSection> {
     );
   }
 
-  Widget _group(BuildContext context, String title, List<ConnectorCard> cards, String empty) {
+  /// [empty] is said only when there is something to say: an empty group's
+  /// heading already counts 0.
+  Widget _group(BuildContext context, String title, List<ConnectorCard> cards, String? empty) {
     final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.only(top: 16),
@@ -204,9 +206,9 @@ class _ConnectorsSectionState extends State<ConnectorsSection> {
             ),
           ),
           const SizedBox(height: 10),
-          if (cards.isEmpty)
-            Text(empty, style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant))
-          else
+          if (cards.isEmpty) ...[
+            if (empty != null) Text(empty, style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+          ] else
             LayoutBuilder(
               builder: (context, box) {
                 final columns = (box.maxWidth / 300).floor().clamp(1, 4);

@@ -440,7 +440,7 @@ class _CompanionHomeState extends State<CompanionHome> {
             ],
           ),
           Text(
-            'A look into their world. Previewing does not unlock or pair this companion.',
+            'Previewing does not unlock or pair this companion.',
             style: ink(12, AppColors.textSoft),
           ),
         ],
@@ -540,7 +540,7 @@ class _CompanionHomeState extends State<CompanionHome> {
           style: ink(),
           onSubmitted: (_) => _saveName(daemon),
           decoration: InputDecoration(
-            labelText: 'A name just for them',
+            labelText: 'Name',
             hintText: IllustratedArt.name(daemon.id),
             errorText: _renameError,
           ),
@@ -718,7 +718,7 @@ class _CompanionHomeState extends State<CompanionHome> {
       if (_exploring) ...[
         const SizedBox(height: 10),
         Text(
-          'A gallery of possibilities. Exploring never changes your collection.',
+          'Exploring never changes your collection.',
           style: ink(13, AppColors.textSoft),
         ),
         const SizedBox(height: 18),
@@ -822,16 +822,13 @@ class _CompanionHomeState extends State<CompanionHome> {
             openingCompanion: widget.openingConversation,
           ),
         if (widget.brain.active && _codingMemory?.available != true) ...[
-          _memoryCard(
-            AppIcons.history,
-            history?.title ?? 'A little time to look back',
-            history?.detail ?? 'Your recent conversations can hold the beginnings of a useful memory. Review the last 24 hours on this computer with your companion’s chosen model.',
-          ),
+          if (history != null)
+            _memoryCard(AppIcons.history, history.title, history.detail),
           if (history?.more == true || (history?.indexing ?? 0) > 0)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(
-                'This review covers the recent conversations currently indexed on this computer. Some turns remain outside this snapshot.',
+                'Covers only conversations indexed so far.',
                 style: ink(12, AppColors.textSoft),
               ),
             ),
@@ -839,9 +836,7 @@ class _CompanionHomeState extends State<CompanionHome> {
             spacing: 8,
             children: [
               _button(
-                history?.canRetry == true
-                    ? 'Retry review'
-                    : 'Look back over 24 hours',
+                history?.canRetry == true ? 'Retry review' : 'Review 24 hours',
                 _lessons.busy ||
                         _lessons.learning?.state == 'unopened' ||
                         (history?.active == true && history?.canRetry != true)
@@ -867,8 +862,7 @@ class _CompanionHomeState extends State<CompanionHome> {
         Text('What we’ve learned.', style: display(26)),
         const SizedBox(height: 12),
         Text(
-          'These are real, approved lessons shared with your harnesses. '
-          'You can read them here or forget one for all your agents.',
+          'Lessons you approved, shared with your agents.',
           style: ink(14, AppColors.textSoft),
         ),
         const SizedBox(height: 18),
@@ -877,19 +871,8 @@ class _CompanionHomeState extends State<CompanionHome> {
             'Connect to the companion on this computer to see its lessons.',
             style: ink(14, AppColors.textSoft),
           )
-        else if (!_lessons.loaded)
-          Text(
-            _lessons.busy
-                ? 'Opening the memory book…'
-                : 'Your memory book is ready to open.',
-            style: ink(14, AppColors.textSoft),
-          )
-        else if (learned.isEmpty && _lessons.learning == null)
-          _memoryCard(
-            AppIcons.bookOpen,
-            'Room for a first memory',
-            'When a useful lesson is proposed and you approve it, it will appear here. No memories are invented.',
-          ),
+        else if (!_lessons.loaded && _lessons.busy)
+          Text('Opening the memory book…', style: ink(14, AppColors.textSoft)),
         if (widget.brain.active && _lessons.learning != null) ...[
           _memoryCard(
             AppIcons.bookOpen,
@@ -907,7 +890,7 @@ class _CompanionHomeState extends State<CompanionHome> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Read what your companion noticed. Only the lessons you approve are shared with your harnesses.',
+            'Only lessons you approve are shared.',
             style: ink(14, AppColors.textSoft),
           ),
           const SizedBox(height: 16),
@@ -963,14 +946,14 @@ class _CompanionHomeState extends State<CompanionHome> {
                 ),
                 if (_forgetting == lesson.id) ...[
                   Text(
-                    'Forget this shared lesson for every agent? Its revision remains in your lesson history.',
+                    'Forget this lesson for every agent? It stays in your lesson history.',
                     style: ink(13, AppColors.textSoft),
                   ),
                   Wrap(
                     spacing: 8,
                     children: [
                       _button(
-                        'Forget shared lesson',
+                        'Forget lesson',
                         _lessons.busy
                             ? null
                             : () {
@@ -997,7 +980,7 @@ class _CompanionHomeState extends State<CompanionHome> {
             'The day you met',
             date == null
                 ? '${companionName(d)} joined your collection.'
-                : '${companionName(d)} hatched on ${_date(date)}. A little beginning, all your own.',
+                : '${companionName(d)} hatched on ${_date(date)}.',
           ),
           const SizedBox(height: 12),
           _memoryCard(
@@ -1051,14 +1034,13 @@ class _CompanionHomeState extends State<CompanionHome> {
             lesson.reason.isNotEmpty
                 ? lesson.reason
                 : switch (lesson.signal) {
-                    'correction' =>
-                      'A correction you made could help your agents next time.',
+                    'correction' => 'A correction you made may help next time.',
                     'repeat-failure' =>
                       'The same failure appeared more than once.',
                     'repeat-steps' =>
                       'A repeated workflow may be worth keeping.',
-                    'conversation' => 'Your companion noticed this while reviewing recent conversations.',
-                    _ => 'Your companion found something that may help in future work.',
+                    'conversation' => 'Noticed in recent conversations.',
+                    _ => 'May help in future work.',
                   },
             style: ink(14),
           ),
@@ -1109,7 +1091,7 @@ class _CompanionHomeState extends State<CompanionHome> {
             ],
             const SizedBox(height: 12),
             Text(
-              'Approving makes this lesson available to your agents. You can forget it later.',
+              'Approving shares this with your agents. Forget it any time.',
               style: ink(12, AppColors.textSoft),
             ),
           ],

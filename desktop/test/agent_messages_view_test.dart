@@ -182,18 +182,14 @@ void main() {
     expect(opened, isEmpty);
   });
 
-  testWidgets('an empty log says how messages come; an unreachable one says '
+  testWidgets('an empty log stays empty; an unreachable one says '
       'so', (tester) async {
     await open(
       tester,
       () async => (reached: true, complete: true, messages: <AgentMessage>[]),
     );
-    expect(
-      find.text(
-        'No messages yet. Agents in this tab send them with `harness send`.',
-      ),
-      findsOneWidget,
-    );
+    expect(find.textContaining('No messages'), findsNothing);
+    expect(find.byKey(const ValueKey('agent-messages-empty')), findsNothing);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     await open(

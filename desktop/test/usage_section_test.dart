@@ -248,7 +248,8 @@ void main() {
     await pumpUsage(tester, controller);
 
     expect(find.byType(UsageEmptyState), findsOneWidget);
-    expect(find.text('Nothing is being read yet.'), findsOneWidget);
+    expect(find.text('Usage overview'), findsOneWidget);
+    expect(find.text('Nothing is being read yet.'), findsNothing);
     for (final provider in LedgerProvider.values) {
       expect(find.text('Enable ${provider.label}'), findsOneWidget);
     }

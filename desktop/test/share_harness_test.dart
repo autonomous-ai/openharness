@@ -608,7 +608,7 @@ void main() {
         return {'shares': shares};
       });
       await field(tester, 'people');
-      expect(find.text('No invited people yet.'), findsOneWidget);
+      expect(find.textContaining('No invited people'), findsNothing);
       expect(find.textContaining('cannot control your agent'), findsOneWidget);
       await tester.enterText(
         find.byType(TextField),

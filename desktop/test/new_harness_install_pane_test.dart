@@ -438,7 +438,7 @@ void main() {
       await tester.pump();
       expect(closes, 0);
       expect(box.busy, isTrue);
-      expect(box.error, contains('Still working on it'));
+      expect(box.error, 'Still working. Close when it finishes.');
       expect(notifier.launches, isEmpty);
       notifier.pendingInstall!.complete('Synthetic installation failure');
       await tester.pumpAndSettle();

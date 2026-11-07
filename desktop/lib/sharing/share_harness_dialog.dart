@@ -1126,7 +1126,6 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog>
                             : 'Invited for $_days days. Copy and send them the link.',
                       ),
                       const SizedBox(height: DesktopChrome.groupGap),
-                      if (_shares.isEmpty) note('No invited people yet.'),
                       for (final share in _shares) ...[
                         Text(
                           plainSharedText('${share['email']}'),

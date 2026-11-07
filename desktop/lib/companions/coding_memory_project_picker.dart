@@ -143,7 +143,7 @@ class _CodingMemoryProjectPickerState extends State<CodingMemoryProjectPicker> {
       ] else if (!_loading && _items.isEmpty)
         Text(
           _search.text.trim().isEmpty
-              ? 'No projects are available yet. Open a coding project with memory enabled to make it available here.'
+              ? 'No projects. Open a coding project with memory on.'
               : 'No projects match this search.',
           style: AppType.body(color: AppPalette.textPrimary),
         ),

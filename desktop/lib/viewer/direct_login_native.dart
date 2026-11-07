@@ -165,4 +165,4 @@ String _page(String title) =>
     '<!doctype html><meta charset="utf-8"><title>$title</title>'
     '<body style="font:16px system-ui,sans-serif;text-align:center;padding:4em 1em">'
     '<h1 style="font-weight:600">$title</h1>'
-    '<p>You can close this window and go back to Harness.</p></body>';
+    '<p>Close this window and go back to Harness.</p></body>';

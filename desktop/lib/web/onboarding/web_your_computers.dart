@@ -172,7 +172,7 @@ class _ComputerRow extends StatelessWidget {
       ComputerLinkState.failed =>
         "Couldn't connect. Check Harness is running on it, then try again.",
       ComputerLinkState.ready => 'Ready to connect to this browser.',
-      ComputerLinkState.idle => 'Not connected yet.',
+      ComputerLinkState.idle => 'Not connected.',
     };
     final busy =
         link == ComputerLinkState.linking ||

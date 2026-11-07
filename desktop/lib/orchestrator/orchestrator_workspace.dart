@@ -111,7 +111,7 @@ class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace>
       builder: (context) => AlertDialog(
         title: const Text('Stop this project?'),
         content: const Text(
-          'Stops the director and active specialist turns. Files and harnesses remain available to inspect. Other projects are unaffected.',
+          'Stops the director and active specialists. Files and harnesses stay available.',
         ),
         actions: [
           TextButton(
@@ -226,29 +226,14 @@ class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace>
     final tasks = model.tasks;
     if (tasks.isEmpty) {
       return _surface(
-        Center(
-          child: Padding(
-            padding: const EdgeInsets.all(32),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  AppIcons.layers,
-                  color: grid.AppPalette.textSecondary,
-                  size: 28,
-                ),
-                const SizedBox(height: 16),
-                const Text('Your work takes shape here'),
-                const SizedBox(height: 8),
-                Text(
-                  model.state == 'starting' ? 'Starting your director…' : 'Live views appear as specialists begin. You can keep talking on the right.',
-                  textAlign: TextAlign.center,
+        model.state == 'starting'
+            ? Center(
+                child: Text(
+                  'Starting your director…',
                   style: TextStyle(color: grid.AppPalette.textSecondary),
                 ),
-              ],
-            ),
-          ),
-        ),
+              )
+            : const SizedBox.expand(),
       );
     }
     final visible = _expanded == null
@@ -351,8 +336,8 @@ class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace>
                           : task.state == 'queued'
                           ? 'Waiting for upstream results or an available worker.'
                           : !task.hasViewer
-                          ? 'This specialist works in the background. Its summary and files will appear here.'
-                          : 'The specialist’s live view will appear when its viewer is ready.'),
+                          ? 'This specialist works in the background.'
+                          : 'Waiting for the live view…'),
                   textAlign: TextAlign.center,
                 ),
                 if (task.artifacts.isNotEmpty)

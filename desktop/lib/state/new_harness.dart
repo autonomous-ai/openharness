@@ -763,8 +763,7 @@ class NewHarnessController extends ChangeNotifier {
       NewHarnessOption(
         id: '$guestFolderId${folder.path}',
         title: p.basename(folder.path),
-        detail:
-            '${folder.path} · ${folder.write ? 'you can edit it' : 'read only'}',
+        detail: '${folder.path} · ${folder.write ? 'editable' : 'read only'}',
         project: NewHarnessProject.folder(folder.path, exact: true),
       ),
   ];
@@ -4561,18 +4560,18 @@ class NewHarnessController extends ChangeNotifier {
   /// A second explicit dismissal acknowledges an unresolved creation.
   bool requestDismiss() {
     if (linkingProfile) {
-      warn('Linking the profile. You can close once it is done.');
+      warn('Linking the profile. Close when it finishes.');
       return false;
     }
     if (busy && integration?.stopBuddy?.call() != true) {
-      warn('Still working on it. You can close once it is done.');
+      warn('Still working. Close when it finishes.');
       return false;
     }
     if (checking && !_warnedAboutClosing) {
       _warnedAboutClosing = true;
       warn(
         canCancelPending
-            ? 'Your request is saved and will continue when the model is available. Cancel request to prevent that, or close again to leave it waiting.'
+            ? 'Your request waits for the model. Cancel request to drop it, or close again to leave it waiting.'
             : _desktopChoices
             ? 'The harness may already exist. Check status to find it, or click Close again to leave this form.'
             : 'The harness may already exist. Return checks on it; Escape again '

@@ -214,15 +214,7 @@ class _DebugSectionState extends State<DebugSection> {
     }
     // Nothing logged yet and "the filter hid it all" are two different stories,
     // so the search box stays above and the user has a way back out.
-    if (nothingLogged) {
-      return const EmptyState(
-        icon: AppIcons.terminal,
-        title: 'Nothing logged yet',
-        message:
-            'Use the app and every command, socket frame and request it makes '
-            'shows up here.',
-      );
-    }
+    if (nothingLogged) return const SizedBox.shrink();
     return const EmptyState.noMatches(
       message: 'No entry matches this filter or search.',
     );

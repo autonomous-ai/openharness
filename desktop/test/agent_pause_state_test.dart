@@ -93,7 +93,10 @@ void main() {
           detail: 'identity check failed',
         ),
       );
-      expect((await first).error, contains('could not be verified'));
+      expect(
+        (await first).error,
+        contains('Could not verify the saved conversation'),
+      );
       expect(app.restartAttempt('m', 'a0').awaitingConfirmation, isFalse);
       final retry = app.resumeAgent('m', 'a0');
       expect(connection.requests.last['creationId'], isNot(original));

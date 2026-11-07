@@ -168,10 +168,11 @@ void main() {
     },
   );
 
-  testWidgets('an empty log says so', (tester) async {
+  testWidgets('an empty log stays empty', (tester) async {
     app.history = const DeviceLogHistory(complete: true, rows: []);
     await open(tester);
-    expect(find.text('No history yet.'), findsOneWidget);
+    expect(find.text('No history yet.'), findsNothing);
+    expect(find.byKey(const Key('device-history-empty')), findsNothing);
   });
 
   testWidgets('a read that fails says so and can be tried again', (

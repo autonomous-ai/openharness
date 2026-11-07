@@ -425,7 +425,7 @@ void main() {
       await key(tester, LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
       expect(cli.unlinks, ['build-box', 'build-box']);
-      expect(find.text('No machines linked yet.'), findsOneWidget);
+      expect(find.textContaining('No machines linked'), findsNothing);
       await key(tester, LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       expect(field(tester, passwordKey).focusNode!.hasFocus, isTrue);

@@ -1435,7 +1435,9 @@ void main() {
     expect(originalSwarm.panes.single, same(otherPane));
     expect(app.panes, isEmpty);
     expect(
-      find.text('link-mac is not linked to this computer yet.'),
+      find.text(
+        'link-mac isn’t linked to this computer. Link it with its remote password.',
+      ),
       findsNothing,
     );
     await tester.pumpWidget(const SizedBox());

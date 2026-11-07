@@ -104,12 +104,6 @@ class _AccountDeviceHistoryState extends State<_AccountDeviceHistory> {
                     )
                   : null,
             ),
-          if (history.rows.isEmpty && history.complete)
-            Text(
-              'No history yet.',
-              key: const Key('device-history-empty'),
-              style: grid.AppType.body(color: grid.AppPalette.textSecondary),
-            ),
           if (!history.complete)
             Padding(
               padding: const EdgeInsets.only(top: 8),

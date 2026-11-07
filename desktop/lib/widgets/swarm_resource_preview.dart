@@ -1487,11 +1487,10 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview>
               swarm.settingUp
                   ? 'Setting up this Swarm\'s models… The first time can take a few minutes.'
                   : swarm.canSetUp && swarm.setupPending
-                  ? 'This Swarm\'s models are being set up in the background. If that has not finished, your first '
-                        'share or run finishes it.'
+                  ? 'This Swarm\'s models are being set up. Your first share or run finishes it.'
                   : swarm.canSetUp
-                  ? 'This Swarm\'s models are not set up yet. Your first share or run sets them up: it connects this '
-                        'computer to the Swarm with your Harness account, and everyone in the Swarm can then use them.'
+                  ? 'Your first share or run sets up this Swarm\'s models for everyone in it. It connects this computer '
+                        'to the Swarm with your Harness account.'
                   : swarm.setupNote ??
                         'The Swarm owner has not set up models yet.',
               style: DesktopChrome.metadata(),

@@ -137,43 +137,26 @@ class _StoreCategoryState extends State<StoreCategory> {
                   if (entries.isEmpty && _installedOnly)
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 36),
-                      child: Column(
-                        children: [
-                          Text(
-                            'Your next tool is waiting.',
-                            style: grid.AppType.heading(
-                              color: grid.AppPalette.textPrimary,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Explore the harnesses in $name and choose one to try.',
-                            textAlign: TextAlign.center,
-                            style: grid.AppType.body(
-                              color: grid.AppPalette.textSecondary,
-                            ),
-                          ),
-                          const SizedBox(height: 14),
-                          TextButton(
-                            onPressed: () => _filter(false),
-                            child: const Text('Show all harnesses'),
-                          ),
-                        ],
+                      child: Center(
+                        child: TextButton(
+                          onPressed: () => _filter(false),
+                          child: const Text('Show all'),
+                        ),
                       ),
                     )
                   else if (entries.isEmpty)
-                    loaded || runsNoHarness
+                    runsNoHarness
                         ? Padding(
                             padding: const EdgeInsets.symmetric(vertical: 36),
                             child: Text(
-                              runsNoHarness
-                                  ? kStoreOnAComputer
-                                  : 'Nothing here yet.',
+                              kStoreOnAComputer,
                               style: TextStyle(
                                 color: grid.AppPalette.textSecondary,
                               ),
                             ),
                           )
+                        : loaded
+                        ? const SizedBox.shrink()
                         : Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [

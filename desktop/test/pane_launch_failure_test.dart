@@ -99,7 +99,7 @@ void main() {
                   find
                       .textContaining(
                         state == 'starting'
-                            ? 'You can answer setup prompts'
+                            ? 'Answer setup prompts below while it starts'
                             : state == 'RESUME_UNCONFIRMED'
                             ? 'Answer setup prompts below'
                             : 'The daemon said so.',

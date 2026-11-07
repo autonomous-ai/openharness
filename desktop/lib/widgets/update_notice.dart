@@ -399,7 +399,7 @@ Future<void> showUpdateCheckDialog(
                           'Don’t quit Harness. It will restart on its own.',
                         ].join(' ')
                       : current.isSkipped
-                      ? 'You skipped this version earlier. You can still install it.'
+                      ? 'You skipped this version earlier.'
                       : 'Download and install it now? Harness will restart when it '
                             'finishes.',
                   busy: installing,

@@ -595,7 +595,8 @@ void main() {
       find.byKey(const ValueKey('store-card:autonomous/doc-viewer')),
       findsNothing,
     );
-    expect(find.textContaining('No matching harnesses'), findsOneWidget);
+    expect(find.text('0 results'), findsOneWidget);
+    expect(find.textContaining('No matching harnesses'), findsNothing);
   });
 
   testWidgets(

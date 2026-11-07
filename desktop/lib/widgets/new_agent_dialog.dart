@@ -1474,7 +1474,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                 Expanded(
                   child: Text(
                     'Couldn’t check whether ${_labelOf(_baseEngine(_engine))} is installed. '
-                    'You can still try starting the harness.',
+                    'Retry, or start anyway.',
                     style: boxMonoStyle(color: grid.AppPalette.textSecondary),
                   ),
                 ),

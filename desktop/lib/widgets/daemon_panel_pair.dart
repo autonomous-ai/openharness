@@ -826,11 +826,6 @@ mixin _PairSections on State<DaemonPanel> {
       }
     }
     return [
-      if (lessons.loaded && lessons.lessons.isEmpty && live.isEmpty)
-        Text(
-          'nothing learned yet. it proposes what it notices.',
-          style: _ink(_muted),
-        ),
       ...rows,
       if (lessons.message != null)
         Padding(
@@ -859,7 +854,7 @@ mixin _PairSections on State<DaemonPanel> {
       _header('autonomy'),
       if (!watching)
         Text(
-          '$name does not watch yet: the dial waits for that yes first.',
+          '$name isn’t watching. The dial waits for your yes.',
           key: const ValueKey('daemon-panel-dial-waits'),
           style: _ink(_muted),
         ),
@@ -1018,7 +1013,7 @@ mixin _PairSections on State<DaemonPanel> {
         consent?.watching == true
             ? '$name watches your harnesses$since.'
             : consent == null
-            ? '$name has not been asked yet: it watches nothing.'
+            ? '$name watches nothing.'
             : '$name does not watch$since.',
         key: const ValueKey('daemon-panel-consent'),
         style: _ink(_muted),

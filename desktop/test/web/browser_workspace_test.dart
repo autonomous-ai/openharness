@@ -326,7 +326,7 @@ void main() {
     await tester.sendKeyUpEvent(modifier);
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.byKey(const ValueKey('swarm-search-input')), findsOneWidget);
-    expect(find.textContaining('No harnesses yet.'), findsOneWidget);
+    expect(find.textContaining('Start one with New Harness'), findsOneWidget);
     expect(find.textContaining('This tab is full'), findsNothing);
     expect(tester.takeException(), isNull);
     tester.view.physicalSize = const Size(390, 844);

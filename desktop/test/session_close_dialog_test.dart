@@ -40,10 +40,7 @@ void main() {
       await tester.tap(find.text('Open'));
       await tester.pumpAndSettle();
       expect(find.textContaining('Captain of project Pilot'), findsOneWidget);
-      expect(
-        find.textContaining('The Captain will keep running.'),
-        findsOneWidget,
-      );
+      expect(find.text('The Captain keeps running.'), findsOneWidget);
       expect(
         tester
             .widget<FilledButton>(find.byKey(const Key('session-close-now')))

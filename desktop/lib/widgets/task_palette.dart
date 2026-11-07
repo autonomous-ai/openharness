@@ -366,7 +366,7 @@ class _TaskPaletteState extends State<_TaskPalette> {
         _stage = _Stage.empty;
         _note = widget.notifier.ownedActionMachine == null
             ? (widget.notifier.viewer == null
-                  ? 'No local machine is connected yet.'
+                  ? 'No local machine is connected.'
                   : 'Connect a machine first.')
             : (widget.notifier.viewer == null
                   ? 'Could not reach the router on this computer.'

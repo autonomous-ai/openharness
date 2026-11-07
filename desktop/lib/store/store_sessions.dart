@@ -40,16 +40,16 @@ class StoreSessions extends StatelessWidget {
                     color: grid.AppPalette.textPrimary,
                   ),
                 ),
-                const SizedBox(height: 12),
-                Text(
-                  sessions.isEmpty
-                      ? 'Recorded runs will appear here when they are available in your catalog.'
-                      : '${sessions.length} harness${sessions.length == 1 ? '' : 'es'} to explore. Watch a recorded run, then try the same prompt.',
-                  style: grid.AppType.body(
-                    height: 1.5,
-                    color: grid.AppPalette.textSecondary,
+                if (sessions.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    'Watch a recorded run, then try its prompt.',
+                    style: grid.AppType.body(
+                      height: 1.5,
+                      color: grid.AppPalette.textSecondary,
+                    ),
                   ),
-                ),
+                ],
                 const SizedBox(height: 24),
                 StoreSessionGrid(sessions: sessions, onOpen: onOpen),
               ],
@@ -233,7 +233,7 @@ class _SessionCard extends StatelessWidget {
                     child: Text(
                       entry.tagline ??
                           entry.description ??
-                          'See what you can make with ${entry.name}.',
+                          'Make something with ${entry.name}.',
                       maxLines: 3,
                       overflow: TextOverflow.ellipsis,
                       style: grid.AppType.heading(

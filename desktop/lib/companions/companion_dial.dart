@@ -42,7 +42,7 @@ class CompanionDial extends StatelessWidget {
         if (dial.devices.isEmpty)
           _card(
             title: 'A little company on your desk',
-            detail: 'Connect your dial to bring your companion along. It follows your chosen companion, including their growth and appearance.',
+            detail: 'Connect your dial to bring your companion along.',
           ),
         for (final device in dial.devices) _device(device),
       ],
@@ -103,7 +103,7 @@ class CompanionDial extends StatelessWidget {
         ? 'Waiting for the dial to confirm the change.'
         : !modern
         ? 'Your companion is connected. Update the dial firmware to sync growth and appearance too.'
-        : 'Same companion, same little details. Changes here follow you to your dial.';
+        : 'Changes here follow you to your dial.';
     return _card(
       key: ValueKey('companion-dial:${device.id}'),
       title: title,

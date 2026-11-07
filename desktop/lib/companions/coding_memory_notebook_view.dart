@@ -132,12 +132,10 @@ class _ProjectMemoryViewState extends State<_ProjectMemoryView> {
           if (individual) ...[
             _text(
               notebooks.available == false
-                  ? 'Notebook explanations are not available in this local service. You can read and manage individual memories here.'
-                  : 'The original decisions, findings and open questions. Read a memory to see its evidence, correct it or forget it.',
+                  ? 'Notebook explanations are not available in this local service.'
+                  : 'The original decisions, findings and open questions.',
             ),
             const SizedBox(height: 16),
-            if (library.items.isEmpty && !library.busy && library.error == null)
-              _text('No project memories are available yet.'),
             ..._memoryRows(
               library.items,
               busy: library.busy,
@@ -170,14 +168,8 @@ class _ProjectMemoryViewState extends State<_ProjectMemoryView> {
                 child: LinearProgressIndicator(),
               ),
             if (notebooks.selectedId == null) ...[
-              _text(
-                'A living guide to each project, drawn from saved memories. Each explanation keeps its sources and limits.',
-              ),
+              _text('A guide to each project, drawn from saved memories.'),
               const SizedBox(height: 16),
-              if (notebooks.items.isEmpty && !busy && notebooks.error == null)
-                _text(
-                  'Project notebooks appear as your companion learns about included work. Individual memories are available while a notebook is being prepared.',
-                ),
               for (final item in notebooks.items)
                 _memorySurface(
                   Column(
@@ -234,7 +226,7 @@ class _ProjectMemoryViewState extends State<_ProjectMemoryView> {
           _text(_notebookStatus(summary, widget.library.learn))
         else ...[
           _text(
-            'An explanation from ${summary['supportingRecords']} saved ${summary['supportingRecords'] == 1 ? 'memory' : 'memories'}. It may cover only part of this topic. Read the sources to check a conclusion.',
+            'An explanation from ${summary['supportingRecords']} saved ${summary['supportingRecords'] == 1 ? 'memory' : 'memories'}. It may cover only part of this topic.',
             small: true,
           ),
           _text(
@@ -279,7 +271,7 @@ class _ProjectMemoryViewState extends State<_ProjectMemoryView> {
         ),
         const SizedBox(height: 8),
         _text(
-          'Original records, including possible memories and items needing review. Correcting or forgetting a source clears any explanation based on it.',
+          'Correcting or forgetting a source clears explanations built on it.',
           small: true,
         ),
         const SizedBox(height: 16),
@@ -347,16 +339,15 @@ String _notebookStatus(Map<String, dynamic> summary, bool learn) =>
     summary['state'] == 'ready'
     ? 'Explanation available'
     : !learn
-    ? 'Learning is paused. Saved memories are available below.'
+    ? 'Learning is paused.'
     : switch (summary['state']) {
         'reviewing' => 'Preparing an explanation from saved memories.',
-        'empty' =>
-          'No supported explanation yet. You can read the individual memories.',
+        'empty' => 'No supported explanation.',
         'waiting_for_model' =>
           'Waiting for the model selected in your companion.',
         'budget_deferred' => 'Waiting for the next learning allowance.',
-        'failed' => 'The last explanation could not be completed. Saved memories are still available.',
-        _ => 'An explanation will be prepared when your companion is free.',
+        'failed' => 'The last explanation could not finish.',
+        _ => 'The explanation waits until your companion is free.',
       };
 
 Widget _notebookConstraints(

@@ -451,6 +451,22 @@ void main() {
     expect(find.text('No harnesses in this tab yet.'), findsNothing);
   });
 
+  // Empty means empty (anh Dee, 11-07; #4501): a tab with no harnesses shows no words.
+  testWidgets('unshared People: a tab with no harnesses stays empty', (tester) async {
+    late AppNotifier app;
+    late String tab;
+    await tester.runAsync(() async {
+      final (a, _, _) = await _started();
+      app = a;
+      app.newSwarm();
+      tab = app.activeSwarmId;
+    });
+    await _pumpPeople(tester, app, tab);
+    expect(find.byKey(const ValueKey('tab-people-loading')), findsNothing);
+    expect(find.byKey(const ValueKey('tab-people-empty')), findsNothing);
+    expect(find.textContaining('No harnesses'), findsNothing);
+  });
+
   group('Tasks step labels', () {
     Map<String, dynamic> task(int n, {Map<String, dynamic>? assignee, Map<String, dynamic>? pr, String state = 'open'}) => {
       'repo': 'acme/api', 'issue': n, 'title': 'T$n', 'url': 'https://github.com/acme/api/issues/$n',
