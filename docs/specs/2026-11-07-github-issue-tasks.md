@@ -74,7 +74,8 @@ The issue is the truth for title, details, owner and status:
 
 The copy serves screens and agents without a GitHub call per read, lets an older release roll back (Design 6), and lets
 an agent rebuild offline. It changes only from GitHub's answers and webhooks, never from a Harness edit directly. When
-the copy and GitHub differ, the copy is replaced.
+the copy and GitHub differ, the copy is replaced. Until a task's issue exists (it is being created, or GitHub is down),
+the task's fields are Harness's own, as today. The issue is created from them, and from then on the copy rule applies.
 
 **Status, both ways:**
 
@@ -185,14 +186,15 @@ issue.
   `Retry-After` and secondary-limit answers back off (1 s, 2 s, 4 s ... up to 5 min) and never retry in a loop. Every
   request keeps the existing 10 s timeout.
 - **Missed webhooks:** GitHub doesn't retry a failed delivery itself. Every 15 minutes the worker reads one page of the
-  app's delivery log (`GET /app/hook/deliveries`, 100 entries) and asks GitHub to redeliver the failed ones. That is one
+  app's delivery log with the app's JWT (`GET /app/hook/deliveries`, 100 entries) and asks GitHub to redeliver the
+failed ones. That is one
   request per server, not per task. Opening a task's chat and assigning an agent also do a conditional GET of its issue.
 
 ### 4. Scale (10x)
 
 - Today: about 80 tasks a day (56, 65 and 84 commits reached `main` on 4, 5 and 6 Nov) and 34 open tasks in the
   busiest Swarm (openharness). At 10x: 800 tasks a day, about 9,600
-  writes a day, so about 400 an hour on a busy hour in one repository. **That is GitHub's secondary write limit**, so it
+  requests a day (nearly all writes), so about 400 writes in a busy hour in one repository. **That is GitHub's secondary write limit**, so it
   is the first limit, under 2x away. The write budget keeps Harness under it (writes wait; they don't fail), and this
   line triggers a design review (Rule 2) when the measured peak passes 200 an hour.
 - The metric that warns first: `harness_github_issue_writes_per_hour_peak` (a gauge of the busiest installation's last
@@ -297,8 +299,8 @@ Order:
 - Linking a person's GitHub account uses the app's existing sign-in. The person's short-lived token reads only who they
   are, is revoked at once and is never stored.
 - On GitHub projects, agent tokens lose `issues` (B). `TOKEN_PERMISSIONS` stays as it is.
-- The app's manifest needs no new permission. The webhook needs **Issues** and **Repository metadata** events turned on,
-  plus the secret. `docs/swarm-github-app.md` changes in the same PR as the receiver.
+- The app's manifest needs no new permission. The webhook needs the **Issues** and **Repository** events turned on, plus
+  the secret (GitHub sends installation events to every app). `docs/swarm-github-app.md` changes in the same PR as the receiver.
 - Missing identity: with no app, no Issues grant or no webhook secret, the project isn't a GitHub project, and Project
   details says which is missing. Nothing falls back to a person's login.
 
