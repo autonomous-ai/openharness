@@ -44,10 +44,7 @@ export interface QuotaWindow { name: string | null; leftPercent: number; resetsA
  * usage window to run out. */
 export interface Quota { known: boolean; leftPercent: number | null; resetsAt: number | null; windows?: QuotaWindow[]; account?: string; metered?: true
   /** Why an unknown allowance could not be read, as its machine said (cli superTabs/capacity.ts quotaUnknownReason). */
-  why?: string
-  /** The machine this reading is from, when it is not the candidate's own: a Harness Team account's Mac, whose subscription
-   *  the account spends (routeCommand.ts relayedReadings). */
-  from?: string }
+  why?: string }
 /** The task's folder as the routing agent's machine sees it. `unknown` means it could not be read, `none` that it is not a
  * repository, `missing` that this machine has no such folder (a member elsewhere may). */
 export interface TaskFolder { cwd: string; kind: 'git' | 'none' | 'missing' | 'unknown'; name: string | null; root: string | null; remote: string | null }
@@ -74,7 +71,7 @@ export interface Probe {
   /** A model the catalog does not rate: a person named it, or a member runs it. */
   unrated?: true
   /** Members: the frame (null when it could not be read), whether the member is in the task's repository, and its earlier work in this Super Tab. */
-  frame?: MemberFrame | null; repo?: 'same' | 'different' | 'unknown'; earlier?: Array<{ group: string; outcome: string }>
+  frame?: MemberFrame | null; repo?: 'same' | 'different' | 'unknown'; earlier?: Array<{ group: string; groupId?: string; outcome: string }>
   terminalUnverified?: boolean
   /** What the machine has: for new agents, and for members where their machine's reading is known. */
   load?: MachineLoad
@@ -208,7 +205,8 @@ function pluginAdjustments<T extends Probe & { fit: Fit }>(ranked: T[], plugins:
 }
 /** What the route says of its candidates: no pick (task #2901). `via` `instructions`: the project's Routing instructions choose;
  *  `only`: one candidate can run. */
-export interface Verdict { via: 'instructions' | 'only'; p: null; why: string }
+/** `order`: the route's pick by the Routing order (routePick.ts, task #3576), with `pick` (a candidate's id) and `reasons`, one per step. */
+export interface Verdict { via: 'instructions' | 'only' | 'order'; p: null; why: string; pick?: string; reasons?: string[] }
 
 const LEVELS: Level[] = ['low', 'medium', 'high']
 const HEAVY_WORK: unknown[] = ['build', 'e2e'] satisfies HeavyWork[]
@@ -422,7 +420,6 @@ function weeklyResetsIn(resetsAt: number, now: number): string {
 function quotaText(q: Quota, now: number): string {
   if (q.metered) return 'quota metered'
   if (!q.known || q.leftPercent === null) return q.why ? `quota unknown (${q.why})` : 'quota unknown'
-  if (q.from) return `quota read on ${cut(q.from, 40)}, whose subscription this account spends: ${quotaText({ ...q, from: undefined }, now).replace(/^quota /, '')}`
   if (q.windows?.length) {
     return `quota ${q.windows.map(w => `${w.name ?? 'window'} ${Math.round(w.leftPercent)}% left${w.resetsAt === null ? '' : ` (resets in ${resetsIn(w.resetsAt, now)})`}`).join(', ')}`
   }
@@ -552,7 +549,7 @@ function modelTier(p: Probe, catalog: Catalog): Tier | null {
 }
 /** How well a candidate fits [tier]: 0 on the tier's model and effort, 1 on neither tier's model or the tier's at another
  *  effort, 2 on the other tier's model. */
-function fitRank(p: Probe, catalog: Catalog, tier: Tier): 0 | 1 | 2 {
+export function fitRank(p: Probe, catalog: Catalog, tier: Tier): 0 | 1 | 2 {
   const runs = modelTier(p, catalog)
   if (runs === null) return 1
   if (runs !== tier) return 2
@@ -591,7 +588,7 @@ export function machineBrief(room: MachineRoom): string {
 
 /** A quota's weekly window, the one the project's order compares: its percent left and reset, or a reading with no windows
  *  named as one; null left when it was not read. */
-function weekly(q: Quota): { left: number | null; resetsAt: number | null } {
+export function weekly(q: Quota): { left: number | null; resetsAt: number | null } {
   const week = q.windows?.find(w => w.name === 'weekly')
   const left = !q.known ? null : week ? week.leftPercent : q.windows?.length ? null : q.leftPercent
   return { left, resetsAt: week ? week.resetsAt : q.resetsAt }
@@ -700,6 +697,13 @@ export function decide(choice: Choice): Verdict {
     : { via: 'instructions', p: null, why: choice.adjusted ? `${CHOOSE_BY_INSTRUCTIONS} Plug-ins' findings are in each candidate's notes.` : CHOOSE_BY_INSTRUCTIONS }
 }
 
+/** The verdict with the route's pick (task #3576, anh Dee 11-06): the candidate [picked] names, by the Routing order, with its reasons.
+ *  With no pick (nothing has the quota the work needs) or one candidate, the verdict is [decide]'s, as before. */
+export function decideByOrder(choice: Choice, picked: { id: string; reasons: string[] } | null): Verdict {
+  if (!picked || choice.shown.length === 1) return decide(choice)
+  return { via: 'order', p: null, why: cut(picked.reasons.join(' '), 300), pick: picked.id, reasons: picked.reasons }
+}
+
 /** The record in the shape a backend takes: `current` with the job's kind (what attempts are compared by, backend costs/read.ts),
  *  no pick (task #2901) and each candidate's weekly % left and reset in its fit (task #3163: without them quota at route time
  *  could not be measured); `unquoted` the same without them, for a backend from before them; `picked` for a backend from before
@@ -718,7 +722,8 @@ export function recordOf(choice: Choice, verdict: Verdict, a: Assessment, shape:
       ...(s.gridModel && s.gridName ? { gridModel: s.gridModel, gridName: s.gridName } : {}) })),
     excluded: choice.excluded.slice(0, 200).map(e => ({ title: e.title, reason: cut(e.reason, 500) })),
     floor: 1, notes: false,
-    ...(pickless ? { via: verdict.via } : { pick: choice.shown[0]!.id, via: verdict.via === 'only' ? 'only' : 'order' }),
+    ...(verdict.pick && choice.shown.some(c => c.id === verdict.pick) ? { pick: verdict.pick, via: 'order' }
+      : pickless ? { via: verdict.via } : { pick: choice.shown[0]!.id, via: verdict.via === 'only' ? 'only' : 'order' }),
     p: verdict.p, belowFloor: false, why: cut(verdict.why, 300),
   }
 }

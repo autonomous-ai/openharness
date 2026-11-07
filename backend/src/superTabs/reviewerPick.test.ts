@@ -180,4 +180,17 @@ describe('reviewerCandidates', () => {
     f.add('away', otherLead, opus, { roleName: 'Reviewer' })
     expect(f.pick()).toEqual([])
   })
+
+  // Task #3774: a test step's Tester needs a mid-strength model or stronger, whatever the engineer runs; a review keeps its bar.
+  it('takes a Sonnet Tester for an Opus engineer\'s test step, never for its review', () => {
+    const f = fixture()
+    f.add('s-tst', f.task, sonnet, { roleName: 'Tester' })
+    f.add('s-rev', f.task, sonnet, { roleName: 'Reviewer' })
+    const grid = f.add('g-tst', f.task, opus, { roleName: 'Tester' })
+    f.state.agents.find(a => a.id === grid)!.gridModel = 'kimi k3'
+    f.add('h-tst', f.task, { ...opus, model: 'haiku', effort: 'auto' }, { roleName: 'Tester' })
+    expect(f.pick('test')).toEqual(['s-tst'])
+    expect(f.pick('review')).toEqual([])
+    expect(f.pick('security')).toEqual([])
+  })
 })

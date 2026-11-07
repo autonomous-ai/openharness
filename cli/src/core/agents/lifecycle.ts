@@ -116,7 +116,7 @@ export function createAgentLifecycle({
     retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume, adoptSwarmSkill,
     refreshGridWebSearch, clearDeleted, attachDsh, attachSession, relaunchMarks,
   })
-  const resumeAgent: ResumeAgent = (id, permissionMode) => {
+  const resumeAgent: ResumeAgent = (id, permissionMode, launchArgs) => {
     // A pane a stopped move left may still run this conversation's engine, which no record names (its pid was never
     // the row's), so a resume would find the engine gone and start a second one beside it: not this start.
     const heldId = (stoppedAgents.get(id) ?? registry.byAgent(id))?.agentId ?? id
@@ -124,12 +124,12 @@ export function createAgentLifecycle({
       console.warn(moveHeldLine(heldId))
       return Promise.resolve({ ok: false, error: 'AGENT_BUSY', detail: 'This harness is held until the daemon restarts.' })
     }
-    return resumeChecked(id, permissionMode)
+    return resumeChecked(id, permissionMode, launchArgs)
   }
-  const resumeChecked: ResumeAgent = (id, permissionMode) => (stoppedAgents.get(id) ?? registry.byAgent(id))?.guest
+  const resumeChecked: ResumeAgent = (id, permissionMode, launchArgs) => (stoppedAgents.get(id) ?? registry.byAgent(id))?.guest
     ? Promise.resolve(GUEST_HARNESS_REFUSAL)
     : purgeAgentService.busy(id) || purgeAgentService.blocksFolder(stoppedAgents.get(id)?.cwd)
-      ? Promise.resolve({ ok: false, error: 'AGENT_BUSY' }) : resume(id, permissionMode)
+      ? Promise.resolve({ ok: false, error: 'AGENT_BUSY' }) : resume(id, permissionMode, launchArgs)
   return { stopJobs, stopAgent, purgeAgentService, resumeAgent }
 }
 

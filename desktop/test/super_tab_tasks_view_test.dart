@@ -4,7 +4,10 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/chip.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/identity.dart';
+import 'package:harness/super_tabs/task_card.dart';
 import 'package:harness/super_tabs/tasks_view.dart';
 
 import 'support/memory_key_value_store.dart';
@@ -26,6 +29,10 @@ Map<String, dynamic> taskFixture(
   bool archived = false,
   DateTime? shippedAt,
   List<String>? releasing,
+  Map<String, dynamic>? released,
+  Map<String, String>? checks,
+  List<Map<String, dynamic>>? acceptance,
+  int? messages,
 }) => {
   ...conversationFixture(id, title),
   'projectId': 'lead',
@@ -54,6 +61,10 @@ Map<String, dynamic> taskFixture(
   },
   if (shippedAt != null) 'shippedAt': shippedAt.millisecondsSinceEpoch,
   'releasing': ?releasing,
+  'released': ?released,
+  'pullRequestChecks': ?checks,
+  if (acceptance != null) 'checks': acceptance,
+  if (messages != null) 'lastMessageSequence': messages,
 };
 
 /// The project of the mockup Dee confirmed: a proposal, two tasks nobody is on
@@ -224,18 +235,26 @@ List<String> _cardsIn(WidgetTester tester, String column) {
 /// A project's Tasks view (Dee, task #2569): Board by default, or List, with
 /// Mine and Search, every ask from proposal to shipped.
 void main() {
-  testWidgets('Board shows the five columns in order, each with its count', (
+  testWidgets('Board shows the six columns in order, each with its count', (
     tester,
   ) async {
     final c = await _show(tester, tasksServer());
-    final names = ['proposals', 'nextUp', 'working', 'waiting', 'shipped'];
+    final names = [
+      'proposals',
+      'nextUp',
+      'working',
+      'done',
+      'merged',
+      'shipped',
+    ];
     final lefts = [for (final n in names) tester.getTopLeft(_column(n)).dx];
     expect(lefts, orderedEquals([...lefts]..sort()));
     for (final (name, label, count) in [
-      ('proposals', 'Proposals', '2'),
+      ('proposals', 'Proposal', '2'),
       ('nextUp', 'Next up', '2'),
-      ('working', 'Working', '1'),
-      ('waiting', 'Waiting', '1'),
+      ('working', 'Working', '2'),
+      ('done', 'Done', '0'),
+      ('merged', 'Merged', '0'),
       ('shipped', 'Shipped', '1'),
     ]) {
       final heading = find.byKey(ValueKey('super-tasks-heading-$name'));
@@ -252,28 +271,446 @@ void main() {
     await _close(tester, c);
   });
 
-  testWidgets('each column is a 280-wide panel of card material, rounded 12, '
-      'with no shadow', (tester) async {
+  testWidgets('each column is a tinted lane as wide as the board gives it, rounded 12, with no rim '
+      'or shadow (task #3787)', (tester) async {
     final c = await _show(tester, tasksServer());
     for (final name in [
       'proposals',
       'nextUp',
       'working',
-      'waiting',
+      'done',
+      'merged',
       'shipped',
     ]) {
-      expect(tester.getSize(_column(name)).width, 280, reason: name);
+      // 1400 is under six minimums, so each takes the least a column does (task #3869).
+      expect(
+        tester.getSize(_column(name)).width,
+        SuperTabTasksView.minColumnWidth,
+        reason: name,
+      );
       final panel = tester.widget<DecoratedBox>(_column(name));
       final decoration = panel.decoration as BoxDecoration;
-      expect(decoration.color, grid.AppCard.base, reason: name);
+      // A step off the page, as Trello's lists: darker under white cards in
+      // light, darker under lifted ones in dark.
+      expect(
+        decoration.color,
+        grid.AppTheme.pick(grid.AppSurface.wellFill, grid.AppPalette.panelBg),
+        reason: name,
+      );
       expect(
         decoration.borderRadius,
         BorderRadius.circular(grid.AppCard.radius),
       );
-      expect(decoration.border, Border.all(color: grid.AppCard.hair));
-      expect(decoration.boxShadow, isNull, reason: 'shadows are for floating');
+      expect(decoration.border, isNull, reason: name);
+      expect(decoration.boxShadow, isNull, reason: name);
+      // Its name is the lane's bold title.
+      final label = find.descendant(
+        of: find.byKey(ValueKey('super-tasks-heading-$name')),
+        matching: find.byType(Text),
+      );
+      expect(
+        tester.widget<Text>(label.first).style?.fontWeight,
+        grid.AppFont.semibold,
+        reason: name,
+      );
     }
     await _close(tester, c);
+  });
+
+  group('a Board card is Trello\'s (task #3869)', () {
+    String pr(int n) => 'https://github.com/autonomous-ai/openharness/pull/$n';
+    var checkCount = 0;
+    Map<String, dynamic> check(bool passed) => {
+      'id': 'check-${checkCount++}',
+      'description': 'A check',
+      'independent': false,
+      'evidence': null,
+      'passedBy': passed ? 'agent:r' : null,
+    };
+    Future<SuperTabController> faces(
+      WidgetTester tester, {
+      Size size = const Size(1920, 900),
+    }) async {
+      final server = tasksServer();
+      (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+        taskFixture(
+          'ready',
+          'Ready to merge',
+          50,
+          requester: 'tony',
+          status: 'done',
+          pullRequest: 3700,
+          shippedAt: _now.subtract(const Duration(minutes: 12)),
+          checks: {pr(3700): 'green'},
+          acceptance: [
+            check(true),
+            check(true),
+            check(true),
+            check(false),
+            check(false),
+          ],
+          messages: 4,
+        ),
+        taskFixture(
+          'failing',
+          'Checks are red',
+          51,
+          requester: 'tony',
+          status: 'working',
+          pullRequest: 3701,
+          checks: {pr(3701): 'red'},
+        ),
+        taskFixture(
+          'bare',
+          'Nothing linked yet',
+          52,
+          requester: 'tony',
+          status: 'working',
+        ),
+      ]);
+      return _show(tester, server, size: size);
+    }
+
+    Finder inCard(String id, Key key) =>
+        find.descendant(of: _card(id), matching: find.byKey(key));
+    const agentKey = ValueKey('super-card-agent');
+    const requesterKey = ValueKey('super-card-requester');
+
+    testWidgets(
+      'the agent\'s avatar sits bottom right with the requester\'s small beside it, and no name line',
+      (tester) async {
+        final c = await faces(tester);
+        final agent = inCard('ready', agentKey);
+        final requester = inCard('ready', requesterKey);
+        expect(agent, findsOneWidget);
+        expect(requester, findsOneWidget);
+        final card = tester.getRect(_card('ready'));
+        expect(
+          tester.getBottomRight(agent).dx,
+          moreOrLessEquals(
+            card.right - SuperTabTaskCard.tilePadding,
+            epsilon: 1,
+          ),
+        );
+        expect(
+          tester.getBottomRight(agent).dy,
+          moreOrLessEquals(
+            card.bottom - SuperTabTaskCard.tilePadding,
+            epsilon: 1,
+          ),
+        );
+        expect(
+          tester.getSize(requester).width,
+          lessThan(tester.getSize(agent).width),
+        );
+        expect(
+          tester.getTopRight(requester).dx,
+          lessThanOrEqualTo(tester.getTopLeft(agent).dx),
+        );
+        expect(
+          find.descendant(
+            of: _card('ready'),
+            matching: find.byType(SuperTabAvatar),
+          ),
+          findsNWidgets(2),
+        );
+        expect(
+          find.descendant(
+            of: _card('ready'),
+            matching: find.textContaining('Finch2'),
+          ),
+          findsNothing,
+        );
+        expect(
+          find.descendant(
+            of: _card('ready'),
+            matching: find.textContaining('tony'),
+          ),
+          findsNothing,
+        );
+        await _close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'a task nobody is on shows the requester alone, and a proposal too',
+      (tester) async {
+        final c = await faces(tester);
+        expect(inCard('shipped-means', agentKey), findsNothing);
+        expect(inCard('shipped-means', requesterKey), findsOneWidget);
+        expect(inCard('p-old', requesterKey), findsOneWidget);
+        await _close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'chips say the state once: Ready to merge green, CI failing red, Needs you yellow',
+      (tester) async {
+        final c = await faces(tester);
+        Color? ink(String id, String text) => tester
+            .widget<SuperTabChip>(
+              find.descendant(
+                of: _card(id),
+                matching: find.widgetWithText(SuperTabChip, text),
+              ),
+            )
+            .color;
+        expect(ink('ready', 'Ready to merge'), grid.AppPalette.online);
+        expect(ink('failing', 'CI failing'), grid.AppPalette.usageCritical);
+        expect(ink('test-copy', 'Needs you'), grid.AppPalette.warn);
+        // Said once: the quiet line leaves out what a chip says.
+        expect(
+          find.descendant(of: _card('failing'), matching: find.text('CI red')),
+          findsNothing,
+        );
+        expect(
+          find.descendant(
+            of: _card('ready'),
+            matching: find.textContaining('green,'),
+          ),
+          findsNothing,
+        );
+        expect(
+          find.descendant(
+            of: _card('ready'),
+            matching: find.textContaining('waiting 12 min'),
+          ),
+          findsOneWidget,
+        );
+        await _close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'the footer shows the pull request and checks without inventing a comment count',
+      (tester) async {
+        final c = await faces(tester);
+        Finder footer(String id, String key) => inCard(id, ValueKey(key));
+        expect(
+          find.descendant(
+            of: footer('ready', 'super-card-pr'),
+            matching: find.text('#3700'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: footer('ready', 'super-card-checks'),
+            matching: find.text('3/5'),
+          ),
+          findsOneWidget,
+        );
+        expect(footer('ready', 'super-card-comments'), findsNothing);
+        // None of a kind, none shown.
+        expect(footer('bare', 'super-card-pr'), findsNothing);
+        expect(footer('bare', 'super-card-checks'), findsNothing);
+        expect(footer('bare', 'super-card-comments'), findsNothing);
+        await _close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'a live tab message sequence is never displayed as a comment count',
+      (tester) async {
+        final server = tasksServer();
+        (server.state['conversations'] as List).add(
+          taskFixture(
+            'live-sequence',
+            'A task on an established Swarm',
+            53,
+            status: 'working',
+            messages: 241397,
+          ),
+        );
+        final c = await _show(tester, server);
+        expect(
+          inCard('live-sequence', const ValueKey('super-card-comments')),
+          findsNothing,
+        );
+        expect(
+          find.descendant(
+            of: _card('live-sequence'),
+            matching: find.text('241397'),
+          ),
+          findsNothing,
+        );
+        expect(tester.takeException(), isNull);
+        await _close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'List keeps its rows as they were: names in the caption, no footer',
+      (tester) async {
+        final c = await faces(tester);
+        await tester.tap(find.byKey(const ValueKey('super-tasks-layout-list')));
+        await tester.pumpAndSettle();
+        expect(inCard('ready', agentKey), findsNothing);
+        expect(
+          find.descendant(
+            of: _card('ready'),
+            matching: find.textContaining('Finch2'),
+          ),
+          findsOneWidget,
+        );
+        await _close(tester, c);
+      },
+    );
+  });
+
+  group('the Board\'s columns share the pane and every one is reachable (task #3869)', () {
+    const names = [
+      'proposals',
+      'nextUp',
+      'working',
+      'done',
+      'merged',
+      'shipped',
+    ];
+    final board = find.byKey(const ValueKey('super-tasks-board'));
+    List<double> widths(WidgetTester tester) => [
+      for (final name in names) tester.getSize(_column(name)).width,
+    ];
+    ScrollPosition position(WidgetTester tester) => tester
+        .state<ScrollableState>(
+          find.descendant(of: board, matching: find.byType(Scrollable)).first,
+        )
+        .position;
+
+    for (final width in [1920.0, 2560.0]) {
+      testWidgets(
+        'at $width the six columns are equal and reach the pane\'s edge',
+        (tester) async {
+          final c = await _show(tester, tasksServer(), size: Size(width, 900));
+          final all = widths(tester);
+          expect(
+            all.every((w) => (w - all.first).abs() < .5),
+            isTrue,
+            reason: '$all',
+          );
+          expect(all.first, greaterThan(SuperTabTasksView.columnWidth));
+          // No empty band: the last column ends where the pane's padding does.
+          expect(
+            tester.getTopRight(_column('shipped')).dx,
+            moreOrLessEquals(
+              tester.getRect(board).right - grid.AppDesktop.groupGap,
+              epsilon: 1,
+            ),
+          );
+          expect(position(tester).maxScrollExtent, 0);
+          await _close(tester, c);
+        },
+      );
+    }
+
+    testWidgets(
+      'at 1280 they keep their minimum and the Board scrolls sideways',
+      (tester) async {
+        final c = await _show(
+          tester,
+          tasksServer(),
+          size: const Size(1280, 900),
+        );
+        final all = widths(tester);
+        expect(all.every((w) => (w - 240).abs() < .5), isTrue, reason: '$all');
+        expect(position(tester).maxScrollExtent, greaterThan(0));
+        await _close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'a scrollbar shows while they do not fit, and not when they do',
+      (tester) async {
+        final c = await _show(
+          tester,
+          tasksServer(),
+          size: const Size(900, 900),
+        );
+        final bar = find.byWidgetPredicate(
+          (w) => w is RawScrollbar,
+          description: 'the Board\'s scrollbar',
+        );
+        expect(bar, findsOneWidget);
+        expect(tester.widget<RawScrollbar>(bar).thumbVisibility, isTrue);
+        await tester.binding.setSurfaceSize(const Size(2560, 900));
+        await tester.pumpAndSettle();
+        expect(position(tester).maxScrollExtent, 0);
+        await _close(tester, c);
+      },
+    );
+
+    Future<void> reachesTheLastColumnAndBack(
+      WidgetTester tester,
+      Future<void> Function() there,
+      Future<void> Function() back,
+    ) async {
+      final start = position(tester).pixels;
+      await there();
+      await tester.pumpAndSettle();
+      expect(
+        position(tester).pixels,
+        position(tester).maxScrollExtent,
+        reason: 'the last column is in view',
+      );
+      expect(tester.getTopRight(_column('shipped')).dx, lessThanOrEqualTo(900));
+      await back();
+      await tester.pumpAndSettle();
+      expect(position(tester).pixels, start, reason: 'and back to the first');
+    }
+
+    testWidgets('a trackpad swipe reaches every column and back', (
+      tester,
+    ) async {
+      final c = await _show(tester, tasksServer(), size: const Size(900, 900));
+      await reachesTheLastColumnAndBack(
+        tester,
+        () => tester.trackpadFling(board, const Offset(-2000, 0), 3000),
+        () => tester.trackpadFling(board, const Offset(2000, 0), 3000),
+      );
+      await _close(tester, c);
+    });
+
+    testWidgets('shift plus the mouse wheel reaches every column and back', (
+      tester,
+    ) async {
+      final c = await _show(tester, tasksServer(), size: const Size(900, 900));
+      final mouse = TestPointer(1, PointerDeviceKind.mouse);
+      Future<void> wheel(double dy) async {
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+        tester.binding.handlePointerEvent(mouse.hover(tester.getCenter(board)));
+        tester.binding.handlePointerEvent(mouse.scroll(Offset(0, dy)));
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      }
+
+      await reachesTheLastColumnAndBack(
+        tester,
+        () => wheel(3000),
+        () => wheel(-3000),
+      );
+      await _close(tester, c);
+    });
+
+    testWidgets(
+      'dragging the scrollbar\'s thumb reaches every column and back',
+      (tester) async {
+        final c = await _show(
+          tester,
+          tasksServer(),
+          size: const Size(900, 900),
+        );
+        final rect = tester.getRect(board);
+        final thumb = Offset(rect.left + 60, rect.bottom - 4);
+        await reachesTheLastColumnAndBack(
+          tester,
+          () => tester.dragFrom(thumb, const Offset(2000, 0)),
+          () => tester.dragFrom(
+            Offset(rect.right - 60, rect.bottom - 4),
+            const Offset(-2000, 0),
+          ),
+        );
+        await _close(tester, c);
+      },
+    );
   });
 
   testWidgets('columns that do not fit scroll sideways', (tester) async {
@@ -281,7 +718,7 @@ void main() {
     expect(tester.getTopLeft(_column('shipped')).dx, greaterThan(900));
     await tester.drag(
       find.byKey(const ValueKey('super-tasks-board')),
-      const Offset(-800, 0),
+      const Offset(-1200, 0),
     );
     await tester.pumpAndSettle();
     expect(tester.getTopRight(_column('shipped')).dx, lessThanOrEqualTo(900));
@@ -305,31 +742,57 @@ void main() {
         find.descendant(of: _card(id), matching: find.text(text));
     expect(tester.widget<Text>(title('long', long)).maxLines, 3);
     final board = tester.getSize(title('long', long)).height;
+    // Three of the tile title's lines.
+    final style = tester.widget<Text>(title('long', long)).style!;
+    expect(
+      board,
+      moreOrLessEquals(style.fontSize! * style.height! * 3, epsilon: 2),
+    );
     await tester.tap(find.byKey(const ValueKey('super-tasks-layout-list')));
     await tester.pumpAndSettle();
     expect(tester.widget<Text>(title('long', long)).maxLines, 1);
-    final line = tester.getSize(title('long', long)).height;
-    expect(board, moreOrLessEquals(line * 3, epsilon: 1));
     await _close(tester, c);
   });
 
-  testWidgets('a Board card is an inset tile, rounded 8, with no shadow', (
-    tester,
-  ) async {
+  testWidgets('a Board card is raised card material, rounded 8, with a soft '
+      'shadow that lifts under the pointer (task #3787)', (tester) async {
     final c = await _show(tester, tasksServer());
+    BoxDecoration decoration(String id) =>
+        tester
+                .widget<Ink>(
+                  find.descendant(of: _card(id), matching: find.byType(Ink)),
+                )
+                .decoration!
+            as BoxDecoration;
     for (final id in ['tag', 'preview', 'p-old', 'sender']) {
-      final ink = tester.widget<Ink>(
-        find.descendant(of: _card(id), matching: find.byType(Ink)),
-      );
-      final decoration = ink.decoration! as BoxDecoration;
-      expect(decoration.color, grid.AppCard.inset, reason: id);
+      expect(decoration(id).color, grid.AppCard.base, reason: id);
       expect(
-        decoration.borderRadius,
+        decoration(id).borderRadius,
         BorderRadius.circular(grid.AppCard.insetRadius),
       );
-      expect(decoration.border, Border.all(color: grid.AppCard.insetHair));
-      expect(decoration.boxShadow, isNull, reason: 'shadows are for floating');
+      expect(decoration(id).border, Border.all(color: grid.AppCard.insetHair));
+      expect(decoration(id).boxShadow, grid.AppGlass.cardShadow, reason: id);
     }
+    // Padding of 12 around its text.
+    final preview = tester.getRect(_card('preview'));
+    final previewTitle = tester.getRect(
+      find.descendant(
+        of: _card('preview'),
+        matching: find.text('Remove the old preview route'),
+      ),
+    );
+    expect(previewTitle.left - preview.left, moreOrLessEquals(12, epsilon: 1));
+    expect(previewTitle.top - preview.top, moreOrLessEquals(12, epsilon: 1));
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(_card('preview')));
+    await tester.pumpAndSettle();
+    expect(decoration('preview').boxShadow, grid.AppGlass.shadow);
+    expect(decoration('tag').boxShadow, grid.AppGlass.cardShadow);
+    await mouse.moveTo(Offset.zero);
+    await tester.pumpAndSettle();
+    expect(decoration('preview').boxShadow, grid.AppGlass.cardShadow);
     // List keeps its plain rows.
     await tester.tap(find.byKey(const ValueKey('super-tasks-layout-list')));
     await tester.pumpAndSettle();
@@ -340,15 +803,58 @@ void main() {
     await _close(tester, c);
   });
 
-  testWidgets('an empty column keeps its heading with 0', (tester) async {
+  testWidgets('a Board card wears its lane as a label on top; List does not '
+      '(task #3787)', (tester) async {
     final server = tasksServer();
-    (server.state['conversations'] as List).removeWhere(
-      (g) => (g as Map)['id'] == 'tag',
-    );
+    (server.state['conversations'] as List)
+            .cast<Map<String, dynamic>>()
+            .firstWhere((g) => g['id'] == 'tag')['handOutLane'] =
+        'Desktop';
     final c = await _show(tester, server);
+    final label = find.descendant(
+      of: _card('tag'),
+      matching: find.byKey(const ValueKey('super-task-lane-Desktop')),
+    );
+    expect(label, findsOneWidget);
+    expect(
+      find.descendant(of: label, matching: find.text('Desktop')),
+      findsOneWidget,
+    );
+    final title = find.descendant(
+      of: _card('tag'),
+      matching: find.text('One tag per ask'),
+    );
+    expect(tester.getTopLeft(label).dy, lessThan(tester.getTopLeft(title).dy));
+    // The footer names the pull request; the card has no name line (task #3869).
+    expect(
+      find.descendant(of: _card('tag'), matching: find.text('#2867')),
+      findsOneWidget,
+    );
     expect(
       find.descendant(
-        of: find.byKey(const ValueKey('super-tasks-heading-working')),
+        of: _card('tag'),
+        matching: find.textContaining('Finch2'),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: _card('preview'),
+        matching: find.byKey(const ValueKey('super-task-lane-Desktop')),
+      ),
+      findsNothing,
+    );
+    await tester.tap(find.byKey(const ValueKey('super-tasks-layout-list')));
+    await tester.pumpAndSettle();
+    expect(label, findsNothing);
+    await _close(tester, c);
+  });
+
+  testWidgets('an empty column keeps its heading with 0', (tester) async {
+    final c = await _show(tester, tasksServer());
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('super-tasks-heading-done')),
         matching: find.text('0'),
       ),
       findsOneWidget,
@@ -373,11 +879,11 @@ void main() {
             .color;
     expect(
       fill('tag'),
-      Color.alphaBlend(grid.AppSurface.selectedFill, grid.AppCard.inset),
+      Color.alphaBlend(grid.AppSurface.selectedFill, grid.AppCard.base),
     );
     expect(tester.getSemantics(_card('tag')), isSemantics(isSelected: true));
     for (final id in ['preview', 'test-copy', 'p-old']) {
-      expect(fill(id), grid.AppCard.inset, reason: id);
+      expect(fill(id), grid.AppCard.base, reason: id);
       expect(
         tester.getSemantics(_card(id)),
         isNot(isSemantics(isSelected: true)),
@@ -398,21 +904,21 @@ void main() {
   testWidgets('an empty column says No tasks in the caption color', (
     tester,
   ) async {
-    final server = tasksServer();
-    (server.state['conversations'] as List).removeWhere(
-      (g) => (g as Map)['id'] == 'tag',
-    );
-    final c = await _show(tester, server);
+    final c = await _show(tester, tasksServer());
     final empty = find.descendant(
-      of: _column('working'),
+      of: _column('done'),
       matching: find.text('No tasks'),
     );
     expect(empty, findsOneWidget);
     expect(
+      find.descendant(of: _column('merged'), matching: find.text('No tasks')),
+      findsOneWidget,
+    );
+    expect(
       tester.widget<Text>(empty).style?.color,
       grid.AppPalette.textSecondary,
     );
-    for (final name in ['proposals', 'nextUp', 'waiting', 'shipped']) {
+    for (final name in ['proposals', 'nextUp', 'working', 'shipped']) {
       expect(
         find.descendant(of: _column(name), matching: find.text('No tasks')),
         findsNothing,
@@ -429,26 +935,26 @@ void main() {
     await _close(tester, c);
   });
 
-  testWidgets('cards read the title, then requester · agent · state', (
-    tester,
-  ) async {
-    final c = await _show(tester, tasksServer());
-    Finder inCard(String id, String text) =>
-        find.descendant(of: _card(id), matching: find.text(text));
-    expect(inCard('tag', 'One tag per ask'), findsOneWidget);
-    expect(inCard('tag', 'dee · Finch2 · PR #2867'), findsOneWidget);
-    expect(inCard('shipped-means', 'scholes'), findsOneWidget);
-    expect(inCard('sender', 'scholes · Finch2 · PR #2870'), findsOneWidget);
-    expect(
-      inCard('test-copy', 'ken15 · Finch2 · Needs you'),
-      findsOneWidget,
-    );
-    // No task numbers, machines or models.
-    expect(find.textContaining('#12'), findsNothing);
-    expect(find.textContaining('studio'), findsNothing);
-    expect(find.textContaining('claude'), findsNothing);
-    await _close(tester, c);
-  });
+  testWidgets(
+    'cards read the title, then the state, the footer and the avatars (task #3869)',
+    (tester) async {
+      final c = await _show(tester, tasksServer());
+      Finder inCard(String id, String text) =>
+          find.descendant(of: _card(id), matching: find.text(text));
+      expect(inCard('tag', 'One tag per ask'), findsOneWidget);
+      expect(inCard('tag', '#2867'), findsOneWidget);
+      expect(inCard('sender', '#2870'), findsOneWidget);
+      expect(inCard('test-copy', 'Needs you'), findsOneWidget);
+      // Who asked and who works on it are avatars, not a line of names.
+      expect(find.textContaining('scholes'), findsNothing);
+      expect(find.textContaining('Finch2'), findsNothing);
+      // No task numbers, machines or models.
+      expect(find.textContaining('#12'), findsNothing);
+      expect(find.textContaining('studio'), findsNothing);
+      expect(find.textContaining('claude'), findsNothing);
+      await _close(tester, c);
+    },
+  );
 
   testWidgets('a task that needs the reader says so, first in its column', (
     tester,
@@ -464,7 +970,7 @@ void main() {
       ),
     );
     final c = await _show(tester, server);
-    expect(_cardsIn(tester, 'waiting'), ['test-copy', 'later']);
+    expect(_cardsIn(tester, 'working'), ['test-copy', 'later', 'tag']);
     expect(
       find.descendant(
         of: _card('test-copy'),
@@ -489,7 +995,7 @@ void main() {
     final c = await _show(tester, tasksServer(), openedProposals: opened);
     expect(_cardsIn(tester, 'proposals'), ['p-old', 'p-new']);
     expect(
-      find.descendant(of: _card('p-new'), matching: find.text('tony · 23m')),
+      find.descendant(of: _card('p-new'), matching: find.text('23m')),
       findsOneWidget,
     );
     await tester.tap(_card('p-old'));
@@ -511,7 +1017,14 @@ void main() {
     final c = await _show(tester, tasksServer());
     await tester.tap(find.byKey(const ValueKey('super-tasks-layout-list')));
     await tester.pumpAndSettle();
-    final names = ['proposals', 'nextUp', 'working', 'waiting', 'shipped'];
+    final names = [
+      'proposals',
+      'nextUp',
+      'working',
+      'done',
+      'merged',
+      'shipped',
+    ];
     final tops = [
       for (final n in names)
         tester.getTopLeft(find.byKey(ValueKey('super-tasks-heading-$n'))).dy,
@@ -545,6 +1058,101 @@ void main() {
     expect(_card('tag'), findsNothing);
     expect(_card('p-old'), findsNothing);
     await _close(tester, c);
+  });
+
+  group('a filter that hides every card says so (task #3869)', () {
+    final noCards = find.byKey(const ValueKey('super-tasks-no-match'));
+    final showAll = find.byKey(const ValueKey('super-tasks-show-all'));
+
+    for (final layout in ['board', 'list']) {
+      testWidgets('Mine and Search name themselves in the $layout, '
+          'and Show all brings the cards back', (tester) async {
+        final c = await _show(tester, tasksServer());
+        // The Board is the view itself; List is one tap away.
+        if (layout == 'list') {
+          await tester.tap(
+            find.byKey(const ValueKey('super-tasks-layout-list')),
+          );
+          await tester.pumpAndSettle();
+        }
+        expect(noCards, findsNothing);
+
+        // Mine alone hides every card the reader did not ask for: the
+        // search for "preview" leaves only another person's task.
+        await tester.tap(find.byKey(const ValueKey('super-tasks-mine')));
+        await tester.enterText(
+          find.byKey(const ValueKey('super-tasks-search')),
+          'preview',
+        );
+        await tester.pumpAndSettle();
+        expect(_card('preview'), findsNothing);
+        expect(
+          find.descendant(
+            of: noCards,
+            matching: find.text('No cards match Mine and “preview”'),
+          ),
+          findsOneWidget,
+        );
+        expect(find.text('No tasks yet'), findsNothing);
+
+        await tester.tap(showAll);
+        await tester.pumpAndSettle();
+        expect(noCards, findsNothing);
+        expect(_card('preview'), findsOneWidget);
+        expect(_card('tag'), findsOneWidget);
+        expect(
+          tester
+              .widget<TextField>(
+                find.byKey(const ValueKey('super-tasks-search')),
+              )
+              .controller
+              ?.text,
+          isNot('preview'),
+        );
+        await _close(tester, c);
+      });
+    }
+
+    testWidgets('a search alone, and Mine alone, are named alone', (
+      tester,
+    ) async {
+      final c = await _show(tester, tasksServer());
+      await tester.enterText(
+        find.byKey(const ValueKey('super-tasks-search')),
+        'zzz',
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('No cards match “zzz”'), findsOneWidget);
+      await tester.tap(showAll);
+      await tester.pumpAndSettle();
+      expect(noCards, findsNothing);
+      expect(_card('tag'), findsOneWidget);
+
+      // Mine alone: the reader asked for nothing in this project.
+      final server = tasksServer();
+      for (final g
+          in (server.state['conversations'] as List)
+              .cast<Map<String, dynamic>>()) {
+        g.remove('requesterId');
+      }
+      await _close(tester, c);
+      final lonely = await _show(tester, server);
+      await tester.tap(find.byKey(const ValueKey('super-tasks-mine')));
+      await tester.pumpAndSettle();
+      expect(find.text('No cards match Mine'), findsOneWidget);
+      await tester.tap(showAll);
+      await tester.pumpAndSettle();
+      expect(_card('tag'), findsOneWidget);
+      await _close(tester, lonely);
+    });
+
+    testWidgets('a project with no tasks still says so, with no filter to '
+        'clear', (tester) async {
+      final c = await _show(tester, tasksServer(empty: true));
+      expect(find.text('No tasks yet'), findsOneWidget);
+      expect(noCards, findsNothing);
+      await _close(tester, c);
+    });
   });
 
   testWidgets('List and Mine are remembered for the reader on this Mac', (
@@ -728,7 +1336,7 @@ void main() {
       await dragTo(tester, 'preview', tester.getCenter(_column('working')));
       expect(moves(server), isEmpty);
       expect(_cardsIn(tester, 'nextUp'), ['shipped-means', 'preview', 'third']);
-      expect(_cardsIn(tester, 'working'), ['tag']);
+      expect(_cardsIn(tester, 'working'), ['test-copy', 'tag']);
       await _close(tester, c);
     });
 
@@ -803,9 +1411,9 @@ void main() {
     });
   });
 
-  testWidgets('a merged task waits in Waiting, as merged, releasing, until its '
-      'release; a merge the server has no release list for stays Shipped '
-      '(task #3452)', (tester) async {
+  testWidgets('a merged task waits under Merged, with its parts, until its '
+      'release, in Board and in List; a merge the server has no release list '
+      'for stays Shipped (tasks #3452, #3812)', (tester) async {
     final server = tasksServer();
     (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
       taskFixture(
@@ -832,24 +1440,236 @@ void main() {
       ),
     ]);
     final c = await _show(tester, server);
-    expect(_cardsIn(tester, 'waiting'), containsAll(['releasing', 'fresh']));
+    expect(_cardsIn(tester, 'merged'), containsAll(['releasing', 'fresh']));
+    expect(_cardsIn(tester, 'working'), isNot(contains('releasing')));
     expect(_cardsIn(tester, 'shipped'), ['sender']);
     expect(
       find.descendant(
         of: _card('releasing'),
-        matching: find.textContaining('merged, releasing (Desktop, CLI)'),
+        matching: find.textContaining('waiting for Desktop, CLI'),
       ),
       findsOneWidget,
     );
     expect(
       find.descendant(
         of: _card('fresh'),
-        matching: find.textContaining('merged, releasing'),
+        matching: find.textContaining('waiting for a release'),
       ),
       findsOneWidget,
     );
+    // List agrees: under the Merged heading, above Shipped's.
+    await tester.tap(find.byKey(const ValueKey('super-tasks-layout-list')));
+    await tester.pumpAndSettle();
+    double top(Finder f) => tester.getTopLeft(f).dy;
+    final merged = top(
+      find.byKey(const ValueKey('super-tasks-heading-merged')),
+    );
+    final shipped = top(
+      find.byKey(const ValueKey('super-tasks-heading-shipped')),
+    );
+    expect(top(_card('releasing')), inExclusiveRange(merged, shipped));
+    expect(top(_card('fresh')), inExclusiveRange(merged, shipped));
+    expect(
+      find.byKey(const ValueKey('super-tasks-heading-waiting')),
+      findsNothing,
+    );
     await _close(tester, c);
   });
+
+  testWidgets('a task done and waiting for its merge is under Done with how '
+      'long it has waited, a warning past an hour; work with no code stays '
+      'Done (task #3812)', (tester) async {
+    final server = tasksServer();
+    (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+      taskFixture(
+        'fresh-done',
+        'Just reviewed',
+        30,
+        requester: 'owner',
+        status: 'done',
+        pullRequest: 3500,
+        shippedAt: _now.subtract(const Duration(minutes: 12)),
+      ),
+      taskFixture(
+        'stuck-done',
+        'Waiting on the merge',
+        31,
+        requester: 'owner',
+        status: 'done',
+        pullRequest: 3501,
+        shippedAt: _now.subtract(const Duration(minutes: 90)),
+      ),
+      taskFixture(
+        'no-code',
+        'A research note',
+        32,
+        requester: 'owner',
+        status: 'done',
+        shippedAt: _now.subtract(const Duration(hours: 2)),
+      ),
+    ]);
+    final c = await _show(tester, server);
+    expect(
+      _cardsIn(tester, 'done'),
+      unorderedEquals(['fresh-done', 'stuck-done', 'no-code']),
+    );
+    Finder line(String id, String text) =>
+        find.descendant(of: _card(id), matching: find.textContaining(text));
+    expect(line('fresh-done', 'waiting to merge for 12 min'), findsOneWidget);
+    expect(
+      tester
+          .widget<Text>(line('fresh-done', 'waiting to merge for 12 min'))
+          .style
+          ?.color,
+      isNot(grid.AppPalette.warn),
+    );
+    final stuck = line('stuck-done', 'waiting to merge for 1 h 30 min');
+    expect(stuck, findsOneWidget);
+    expect(tester.widget<Text>(stuck).style?.color, grid.AppPalette.warn);
+    // How long it has waited is what the column is for: never cut off.
+    expect(
+      tester.renderObject<RenderParagraph>(stuck).didExceedMaxLines,
+      isFalse,
+    );
+    expect(line('no-code', 'Done'), findsOneWidget);
+    // Finished with no pull request waits for no merge: never the warning,
+    // however long ago it was done.
+    expect(
+      tester.widget<Text>(line('no-code', 'Done')).style?.color,
+      isNot(grid.AppPalette.warn),
+    );
+    expect(_cardsIn(tester, 'shipped'), ['sender']);
+    await _close(tester, c);
+  });
+
+  testWidgets(
+    'a done task says its checks, red ones return it to Working, and a merged '
+    'one says when the next release is due (task #3827)',
+    (tester) async {
+      final server = tasksServer();
+      String pr(int n) =>
+          'https://github.com/autonomous-ai/openharness/pull/$n';
+      (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+        taskFixture(
+          'green-done',
+          'Checks passed',
+          40,
+          requester: 'owner',
+          status: 'done',
+          pullRequest: 3600,
+          shippedAt: _now.subtract(const Duration(minutes: 12)),
+          checks: {pr(3600): 'green'},
+        ),
+        taskFixture(
+          'stale-green',
+          'Green for a while',
+          41,
+          requester: 'owner',
+          status: 'done',
+          pullRequest: 3601,
+          shippedAt: _now.subtract(const Duration(minutes: 90)),
+          checks: {pr(3601): 'green'},
+        ),
+        taskFixture(
+          'red-done',
+          'Checks failed',
+          42,
+          requester: 'owner',
+          status: 'done',
+          pullRequest: 3602,
+          shippedAt: _now.subtract(const Duration(minutes: 5)),
+          checks: {pr(3602): 'red'},
+        ),
+        taskFixture(
+          'merged-soon',
+          'Waiting for Desktop',
+          43,
+          requester: 'owner',
+          status: 'done',
+          pullRequest: 3603,
+          merged: true,
+          shippedAt: _now.subtract(const Duration(minutes: 30)),
+          releasing: ['desktop'],
+        ),
+      ]);
+      // What the server sends in `derived.releaseTimes`: Desktop may release at 15:30 today.
+      server.state['releaseTimes'] = {
+        'lead': {
+          'desktop': DateTime(2026, 11, 4, 15, 30).millisecondsSinceEpoch,
+        },
+      };
+      final c = await _show(tester, server);
+      Finder line(String id, String text) =>
+          find.descendant(of: _card(id), matching: find.textContaining(text));
+      expect(
+        _cardsIn(tester, 'done'),
+        containsAll(['green-done', 'stale-green']),
+      );
+      expect(line('green-done', 'waiting 12 min'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: _card('green-done'),
+          matching: find.text('Ready to merge'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tester.widget<Text>(line('green-done', 'waiting 12 min')).style?.color,
+        isNot(grid.AppPalette.warn),
+      );
+      final stale = line('stale-green', 'waiting 1 h 30 min');
+      expect(stale, findsOneWidget);
+      expect(tester.widget<Text>(stale).style?.color, grid.AppPalette.warn);
+      expect(_cardsIn(tester, 'working'), contains('red-done'));
+      expect(_cardsIn(tester, 'done'), isNot(contains('red-done')));
+      expect(
+        find.descendant(
+          of: _card('red-done'),
+          matching: find.text('CI failing'),
+        ),
+        findsOneWidget,
+      );
+      expect(_cardsIn(tester, 'merged'), contains('merged-soon'));
+      expect(
+        line('merged-soon', 'waiting for Desktop · next release about 15:30'),
+        findsOneWidget,
+      );
+      await _close(tester, c);
+    },
+  );
+
+  testWidgets(
+    'a released task is under Shipped with its version (task #3812)',
+    (tester) async {
+      final server = tasksServer();
+      (server.state['conversations'] as List).add(
+        taskFixture(
+          'released',
+          'Out in a release',
+          33,
+          requester: 'owner',
+          status: 'done',
+          pullRequest: 3400,
+          merged: true,
+          shippedAt: _now.subtract(const Duration(hours: 3)),
+          released: {
+            'at': _now.millisecondsSinceEpoch,
+            'tags': ['v1.3.84_desktop'],
+          },
+        ),
+      );
+      final c = await _show(tester, server);
+      expect(_cardsIn(tester, 'shipped'), contains('released'));
+      expect(
+        find.descendant(
+          of: _card('released'),
+          matching: find.textContaining('Desktop 1.3.84'),
+        ),
+        findsOneWidget,
+      );
+      await _close(tester, c);
+    },
+  );
 
   for (final scale in [1.0, 1.5]) {
     testWidgets('all four release parts show in full on a board card, at text '
@@ -876,9 +1696,7 @@ void main() {
       );
       final caption = find.descendant(
         of: _card('all-four'),
-        matching: find.textContaining(
-          'merged, releasing (backend, CLI, Desktop, Web)',
-        ),
+        matching: find.textContaining('waiting for Backend, CLI, Desktop, Web'),
       );
       expect(caption, findsOneWidget);
       expect(
