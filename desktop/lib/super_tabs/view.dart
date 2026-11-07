@@ -272,6 +272,12 @@ class _SuperTabViewState extends State<SuperTabView>
     _closeSidebar();
   }
 
+  /// Opens the reader's private chat with their own Lead [agent], opened on the server first (task #4664).
+  Future<void> _openLeadChat(SuperTabAgent agent) async {
+    final id = await c.openLeadChat(agent.id);
+    if (id != null && mounted) _openAgentChat(id);
+  }
+
   /// Opens the terminal of an agent chosen in My agents that has no chat to open (task #4220), as Members opens one.
   void _openAgentTerminal(SuperTabAgent agent) {
     setState(() {
@@ -2134,6 +2140,7 @@ class _SuperTabViewState extends State<SuperTabView>
     onNewAgent: widget.onNewAgent,
     onOpenAgentChat: _openAgentChat,
     onOpenAgentTerminal: _openAgentTerminal,
+    onOpenLeadChat: _openLeadChat,
     onNewSwarm: widget.onNewSwarm,
     page: _pageShown,
     places: SuperTabPlaces.of(c),
@@ -3769,6 +3776,7 @@ class _SuperTabViewState extends State<SuperTabView>
             group: group,
             menu: _options(group),
             app: widget.app,
+            onOpenProject: _openProjectChat,
             // The reader's own Buddy chat: its name opens the Buddy card (Restart with launch flags, Rename, Remove),
             // which nothing else here reaches.
             title: _isBuddyChat(group)

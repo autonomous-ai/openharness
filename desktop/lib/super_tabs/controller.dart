@@ -3743,6 +3743,22 @@ class SuperTabController extends ChangeNotifier {
     return id is String && await select(id);
   }
 
+  /// Opens the reader's private chat with their own Lead [agentId] on the
+  /// server (backend agent.chat, task #4664): an agent is a direct message, a
+  /// project a group chat. One request per reader and agent, so a second click
+  /// or another window gets the same chat back. Null when it was refused.
+  Future<String?> openLeadChat(String agentId) async {
+    final op = 'agent-chat-$agentId-$accountId';
+    final result = await command({
+      'type': 'agent.chat',
+      'agentId': agentId,
+    }, operationId: op.length > 160 ? op.substring(0, 160) : op);
+    return switch (result?['conversationId']) {
+      final String id => id,
+      _ => null,
+    };
+  }
+
   String _buddyChatOperation(String projectId, String? generation) {
     final id = 'buddy-chat-$projectId-$accountId-${generation ?? ''}';
     // The backend's operation ids are at most 160 characters.

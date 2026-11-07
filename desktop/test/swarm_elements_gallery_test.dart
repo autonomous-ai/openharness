@@ -25,6 +25,7 @@ import 'package:harness/terminal/terminal_typography.dart';
 
 import 'super_tab_personal_tasks_pane_test.dart' show TasksFixture;
 import 'support/buddy_engine_fixture.dart';
+import 'support/super_tab_fixture.dart' show conversationFixture;
 
 /// The Swarm elements gallery (desktop-design-system.md, Swarm elements): every
 /// element drawn in light and dark against its checked-in image. A new or
@@ -127,14 +128,39 @@ Future<List<SuperTabController>> _show(
   // The top bars' chats: the reader's own Buddy, and a member agent of a project (task #4465).
   final buddy = buddyEngineSwarm().controller(account: 'peer');
   final member = TasksFixture().controller;
+  // A Lead's private chat with its person, its project's chat a quiet link away (task #4664).
+  final leadServer = buddyEngineSwarm();
+  final agents = leadServer.state['agents'] as List;
+  final wren = agents.cast<Map>().firstWhere((a) => a['id'] == 'wren');
+  agents.add(
+    <String, Object>{
+        ...wren.cast<String, Object>(),
+        'id': 'faye',
+        'name': 'Faye',
+        'kind': 'pm',
+        'chatId': 'agent-chat-faye',
+      }
+      ..remove('buddyOf')
+      ..remove('buddyScope'),
+  );
+  final groups = (leadServer.state['conversations'] as List)
+      .cast<Map<String, dynamic>>();
+  groups.firstWhere((g) => g['id'] == 'lead')['leadId'] = 'faye';
+  groups.add({
+    ...conversationFixture('agent-chat-faye', 'Faye'),
+    'kind': 'agent-chat',
+    'agentIds': ['faye'],
+  });
+  final lead = leadServer.controller(account: 'peer');
   // A Swarm with no tasks, for the empty Tasks pane (rule 7).
   final empty = (TasksFixture()..rows.clear()).controller;
-  for (final c in [buddy, member, empty]) {
+  for (final c in [buddy, member, lead, empty]) {
     addTearDown(c.dispose);
     await c.refresh();
   }
   await buddy.select('swarm-buddy-peer');
   await member.select('aeef');
+  await lead.select('agent-chat-faye');
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = const Size(760, 1080);
   addTearDown(tester.view.reset);
@@ -148,7 +174,7 @@ Future<List<SuperTabController>> _show(
         child: _Gallery(
           brightness,
           faces: faces,
-          bars: [buddy, member],
+          bars: [buddy, member, lead],
           empty: empty,
         ),
       ),
@@ -156,7 +182,7 @@ Future<List<SuperTabController>> _show(
   );
   await tester.pump();
   expect(tester.takeException(), isNull);
-  return [buddy, member, empty];
+  return [buddy, member, lead, empty];
 }
 
 /// Takes the gallery down and lets the bars' chats save, so no timer outlives the test.
@@ -366,7 +392,7 @@ class _Gallery extends StatelessWidget {
   final Brightness brightness;
   final List<String> faces;
 
-  /// Chats whose top bars the gallery draws: the reader's Buddy, then a member agent.
+  /// Chats whose top bars the gallery draws: the reader's Buddy, a member agent, then a Lead's private chat.
   final List<SuperTabController> bars;
 
   /// A Swarm with no tasks: the Tasks pane empty.
@@ -544,7 +570,7 @@ class _Gallery extends StatelessWidget {
                   ),
                 ],
               ),
-              title('Top bar: your Buddy, a member agent'),
+              title('Top bar: your Buddy, a member agent, a Lead'),
               for (final c in bars)
                 SizedBox(
                   width: 720,
@@ -556,6 +582,7 @@ class _Gallery extends StatelessWidget {
                       tooltip: 'Chat options',
                       onPressed: () {},
                     ),
+                    onOpenProject: (_) {},
                     title: c.selected!.isBuddyChat
                         ? (name) => BuddyCardButton(
                             controller: c,

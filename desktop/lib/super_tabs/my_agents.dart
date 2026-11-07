@@ -27,18 +27,15 @@ List<SuperTabAgent> superTabMyAgents(
 bool superTabAgentIsPm(SuperTabSnapshot snapshot, SuperTabAgent agent) =>
     agent.kind != null ? agent.kind == 'pm' : snapshot.isLead(agent.id);
 
-/// The chat that opens when [agent] is chosen in My agents: a PM's is its project's chat, a Regular agent's is the open task
-/// it works on now (the newest, when several); null while it has none.
+/// The chat that opens when [agent] is chosen in My agents: the one the backend names, its person's private chat with it
+/// (#4116, #4664: a Lead's too, never its project's), else the open task it works on now (the newest, when several); null
+/// while it has none. A Lead with none opens one (backend agent.chat).
 SuperTabConversation? superTabAgentChat(
   SuperTabSnapshot snapshot,
   SuperTabAgent agent,
 ) {
-  // The chat the backend names is the one its person talks to it in (#4116); an older backend names none.
   if (agent.chatId case final id? when snapshot.conversation(id) != null) {
     return snapshot.conversation(id);
-  }
-  if (snapshot.leadProjectForAgent(agent.id) case final project?) {
-    return snapshot.conversation(project.leadConversationId);
   }
   final tasks = [
     for (final group in snapshot.conversations)

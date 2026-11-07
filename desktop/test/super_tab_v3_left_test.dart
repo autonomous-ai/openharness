@@ -70,6 +70,7 @@ void main() {
     List<String>? selected,
     List<String>? created,
     List<String>? terminals,
+    List<String>? leads,
     double width = 300,
     Brightness brightness = Brightness.light,
     List<SwarmPage>? pages,
@@ -107,6 +108,7 @@ void main() {
               },
               onNewAgent: () => created?.add('new'),
               onOpenAgentTerminal: (agent) => terminals?.add(agent.id),
+              onOpenLeadChat: (agent) => leads?.add(agent.id),
               places: SuperTabPlaces.of(c),
               onNewSwarm: () {},
               onNewProject: () {},
@@ -797,20 +799,23 @@ void main() {
       );
     });
 
-    testWidgets('opening an agent opens its chat: a PM\'s project chat, a '
+    // Task #4664: a Lead opens its private chat with its person, never its project chat.
+    testWidgets('opening an agent opens its chat: a Lead\'s private chat, a '
         'Regular agent\'s task', (tester) async {
-      final selected = <String>[];
+      final selected = <String>[], leads = <String>[];
       final c = await show(
         tester,
         agents: mine,
         setup: agents,
         selected: selected,
+        leads: leads,
       );
       await tester.tap(key('super-agent-orion'));
       await tester.pump();
       await tester.tap(key('super-agent-kestrel'));
       await tester.pump();
-      expect(selected, ['lead', 'offline']);
+      expect(leads, ['orion']);
+      expect(selected, ['offline']);
       await tester.runAsync(c.flush);
     });
 
@@ -1123,9 +1128,10 @@ void main() {
         'opens its project\'s chat', (tester) async {
       final c = await view(
         tester,
-        setup: (server) => (server.state['agents'] as List<Map<String, dynamic>>)
-            .firstWhere((a) => a['id'] == 'orion')
-            .addAll({'kind': 'pm', 'chatId': null}),
+        setup: (server) =>
+            (server.state['agents'] as List<Map<String, dynamic>>)
+                .firstWhere((a) => a['id'] == 'orion')
+                .addAll({'kind': 'pm', 'chatId': null}),
       );
       final project = c.snapshot!.leadProjectForAgent('orion')!;
       await tester.tap(key('super-agent-orion'));
