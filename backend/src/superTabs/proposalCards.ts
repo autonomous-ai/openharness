@@ -183,8 +183,10 @@ export function applyProposalAction(state: SuperTabState, actor: Actor, command:
       deadline: command.deadline, requiresConsent: command.requiresConsent ?? false }
     card.proposal.questions.push(q)
     result.questionId = q.id
-    // On the card alone: no line in the proposer's private chat with their own agent (task #4558).
+    // On the card alone: no line in the proposer's private chat with their own agent (task #4558). One that needs their own
+    // agreement has no default to fall back on, so it tags them there: their inbox and phone, with or without a Buddy.
     row(`${q.question}\nDefault: ${q.defaultAnswer}\nBy: ${new Date(q.deadline).toISOString()}`, { kind: 'proposal-question', questionId: q.id })
+    if (q.requiresConsent) messages.at(-1)!.mentions = [q.personId]
   } else if (command.type === 'proposal.decide') {
     pending(card)
     if (hasOpenQuestion(card)) fail('PROPOSAL_QUESTION_OPEN', 'Answer the open questions before deciding.', 409)
