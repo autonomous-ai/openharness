@@ -120,6 +120,7 @@ import 'tasks_view.dart';
 import 'chat/agent_chat_header.dart';
 import 'chat/chat_card.dart';
 import 'chat/chat_time.dart';
+import 'chat/composer_pill.dart';
 import 'chat/send_button.dart';
 import 'tasks/personal_tasks_pane.dart';
 import 'tasks/task_header.dart';
@@ -3398,9 +3399,7 @@ class _SuperTabViewState extends State<SuperTabView>
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           Expanded(
-            child: DecoratedBox(
-              key: const ValueKey('super-message-composer-surface'),
-              decoration: _composerPill,
+            child: SwarmComposerPill(
               child: Padding(
                 padding: EdgeInsets.only(
                   left: row.left,
@@ -3415,7 +3414,18 @@ class _SuperTabViewState extends State<SuperTabView>
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       attach,
-                      Expanded(child: field),
+                      // One line centres on the buttons beside it.
+                      Expanded(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            minHeight: grid.AppControl.height,
+                          ),
+                          child: Align(
+                            alignment: AlignmentDirectional.centerStart,
+                            child: field,
+                          ),
+                        ),
+                      ),
                       ...options,
                     ],
                   ),
@@ -3495,13 +3505,6 @@ class _SuperTabViewState extends State<SuperTabView>
       ],
     );
   }
-
-  /// The composer's rounded pill: a hairline and the faint fill.
-  BoxDecoration get _composerPill => BoxDecoration(
-    color: DesktopChrome.field,
-    borderRadius: BorderRadius.circular(grid.AppDesktop.composerRadius),
-    border: Border.all(color: DesktopChrome.rim),
-  );
 
   /// A task's brief as a card (anh Dee's mockup, 11-07, #4529): who it went
   /// to and the task's title; View brief shows the whole brief in place.
@@ -6142,7 +6145,9 @@ class _SuperTabViewState extends State<SuperTabView>
                 key: _phone
                     ? const ValueKey('super-message-composer-surface')
                     : null,
-                decoration: _phone ? _composerPill : const BoxDecoration(),
+                decoration: _phone
+                    ? SwarmComposerPill.decoration
+                    : const BoxDecoration(),
                 child: NewHarnessDropZone(
                   attachments: _files,
                   enabled: writable && !busy,
