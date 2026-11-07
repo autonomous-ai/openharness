@@ -27,7 +27,7 @@ import { jobKindOf } from './evidence/jobKind.js'
 import { endSteps, listStep, stepEndedRows, isStep, stepName, stepsOf, taskOwner } from './steps.js'
 import { closeMerged } from './mergedTasks.js'
 import { noteWriter } from './stuck.js'
-import { reviewPlan, refreshStepBrief, type PlannedStep, type StepKind } from './reviewTable.js'
+import { reviewPlan, refreshStepBrief, stepOsRefusal, type PlannedStep, type StepKind } from './reviewTable.js'
 import { openReviewStep, type StepPull } from './stepOpen.js'
 import { LINUX_WAIT_LINE, testsOnLinux, waitForLinux } from './linuxSteps.js'
 import { builtBy, reviewerCandidates, STRENGTH_RULE } from './reviewerPick.js'
@@ -1492,6 +1492,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       return { code: 'TEAM_WRITTEN_WORK' as const, reason: TEAM_WRITTEN_REASON }
     }
     const contributor = member?.contributorId ?? pool?.contributorId ?? starter
+    // A step named for an OS on a machine of another OS (reviewTable.ts, task #3926).
+    const wrongOs = stepOsRefusal(state, group, machineId, member?.contributorId)
+    if (wrongOs) return { code: 'STEP_OS' as const, reason: wrongOs }
     // Then what the task needs to reach, in the account it would run in (machineAccess.ts, task #3047).
     return teamWorkCheck(state, machineId, contributor, project)
       ?? accessRefusal(state, machineId, project, needed)
@@ -1901,6 +1904,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     // And what the task needs to reach, where it runs (machineAccess.ts): an assignment is held to it as a start is.
     const unreached = accessRefusal(state, worker.machineId, home, taskAccess(group))
     if (unreached) failTeamWork(unreached)
+    // A step named for an OS runs on a machine of that OS (reviewTable.ts, task #3926).
+    const wrongOs = stepOsRefusal(state, group, worker.machineId, worker.contributorId)
+    if (wrongOs) fail('STEP_OS', wrongOs)
     requireRepositoryReach(state, onTeamAccount(state, worker), worker.machineOwnerId, home, context.repositoryReach)
     // Team-written code: only the project owner's own agent (teamWritten.ts, task #4120; audit H2).
     pushedRefusal(group, worker)
@@ -3318,6 +3324,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       else if (context.pushOrigin === 'unknown' && !ownersOwnMachine(state, startGroup, named.machineId)) failPushUnknown(unknownPushReason(context.repositoryReach))
       const request: AgentStartRequest = noRepositoryStart(state.machines?.find(m => m.machineId === named.machineId), home,
         written ? { ...named, projectSettings: 'off' } : named)
+      // A step named for an OS starts its agent only on a machine of that OS (reviewTable.ts, task #3926).
+      const wrongOs = stepOsRefusal(state, startGroup, request.machineId)
+      if (wrongOs) fail('STEP_OS', wrongOs)
       // Before it is queued: a machine that cannot get the app's token for it would fail it, and count that against its engine.
       requireRepositoryReach(state, false, grant.machineOwnerId, home, context.repositoryReach)
       // The project's machine rules (machineRules.ts).
