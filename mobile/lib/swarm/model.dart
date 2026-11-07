@@ -628,6 +628,10 @@ class SuperTabProject {
   SuperTabProject.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       name = _text(row, 'name'),
+      about = switch (row['about']) {
+        final String about when about.trim().isNotEmpty => about.trim(),
+        _ => null,
+      },
       ownerId = _text(row, 'ownerId'),
       leadConversationId = _text(row, 'leadConversationId'),
       skillMode = row['skillMode'] == 'default' ? 'default' : 'orchestration',
@@ -668,6 +672,10 @@ class SuperTabProject {
       ),
       deciderId = row['decider'] is String ? row['decider'] as String : null;
   final String id, name, ownerId, leadConversationId;
+
+  /// What the project is, in one line (backend projects.ts `about`, task #4540), read as the desktop's model reads it;
+  /// null when none is set.
+  final String? about;
 
   /// The Board way of working (#3819), read as the desktop's model reads it; the phone draws it with #3821.
   final bool boardMode;
