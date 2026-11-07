@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
 import '../../shared/theme/app_theme.dart' as grid;
+import '../../widgets/desktop_chrome.dart';
 import '../swarm_type.dart';
 import 'chat_link.dart';
 
@@ -20,6 +21,27 @@ class SwarmFold extends StatefulWidget {
 class _SwarmFoldState extends State<SwarmFold> {
   var _open = false, _overflows = false;
 
+  /// A cut message fades out over its last line or so, so no line shows cut
+  /// in half above More (Mac test of #4529).
+  Widget _faded(Widget clip) => !_overflows
+      ? clip
+      : ShaderMask(
+          key: const ValueKey('swarm-fold-fade'),
+          blendMode: BlendMode.dstIn,
+          // Only the mask's alpha counts: opaque ink, then none.
+          shaderCallback: (bounds) => LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              DesktopChrome.foreground,
+              DesktopChrome.foreground,
+              Colors.transparent,
+            ],
+            stops: const [0, .7, 1],
+          ).createShader(bounds),
+          child: clip,
+        );
+
   void _measured(bool overflows) {
     if (overflows == _overflows || !mounted) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -35,10 +57,12 @@ class _SwarmFoldState extends State<SwarmFold> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _FoldClip(
-          height: line.fontSize! * line.height! * widget.lines,
-          onMeasured: _measured,
-          child: widget.child,
+        _faded(
+          _FoldClip(
+            height: line.fontSize! * line.height! * widget.lines,
+            onMeasured: _measured,
+            child: widget.child,
+          ),
         ),
         if (_overflows)
           Padding(

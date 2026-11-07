@@ -77,41 +77,45 @@ class _SuperTabShipRowState extends State<SuperTabShipRow> {
       ),
       child: Align(
         alignment: Alignment.centerLeft,
-        child: FractionallySizedBox(
-          widthFactor: SuperTabMessageRow.bubbleShare,
-          alignment: Alignment.centerLeft,
-          child: SwarmChatCard(
-            icon: AppIcons.circleCheck,
-            label: 'Shipped',
-            title: title,
-            action: 'What changed',
-            details: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Wrap(
-                  spacing: 16,
-                  runSpacing: 6,
-                  children: [
-                    if (requester != null)
-                      _Credit('Requested by', [
-                        (
-                          SuperTabAvatar.person(requester, size: 20),
-                          requester.shownName,
-                        ),
-                      ]),
-                    agents('Built by', _ids('builderIds')),
-                    agents('Reviewed by', _ids('reviewerIds')),
-                  ],
-                ),
-                SuperTabPullRequestLinks(
-                  _ids('pullRequests').join(' '),
-                  repositoryUrl:
-                      snapshot
-                              ?.projectFor(message.conversationId)
-                              ?.repository?['repositoryUrl']
-                          as String?,
-                ),
-              ],
+        // As wide as its words, up to a bubble's share, as a brief's card is.
+        child: LayoutBuilder(
+          builder: (context, room) => ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: room.maxWidth * SuperTabMessageRow.bubbleShare,
+            ),
+            child: SwarmChatCard(
+              icon: AppIcons.circleCheck,
+              label: 'Shipped',
+              title: title,
+              action: 'What changed',
+              details: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Wrap(
+                    spacing: 16,
+                    runSpacing: 6,
+                    children: [
+                      if (requester != null)
+                        _Credit('Requested by', [
+                          (
+                            SuperTabAvatar.person(requester, size: 20),
+                            requester.shownName,
+                          ),
+                        ]),
+                      agents('Built by', _ids('builderIds')),
+                      agents('Reviewed by', _ids('reviewerIds')),
+                    ],
+                  ),
+                  SuperTabPullRequestLinks(
+                    _ids('pullRequests').join(' '),
+                    repositoryUrl:
+                        snapshot
+                                ?.projectFor(message.conversationId)
+                                ?.repository?['repositoryUrl']
+                            as String?,
+                  ),
+                ],
+              ),
             ),
           ),
         ),
