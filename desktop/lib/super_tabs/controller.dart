@@ -3732,6 +3732,8 @@ class SuperTabController extends ChangeNotifier {
   /// or another window gets the same chat back.
   Future<bool> openBuddyChat(String projectId) async {
     if (buddyChat(projectId) case final chat?) return select(chat.id);
+    // Where the reader is now: the server may answer late, and by then they may have opened another chat or a terminal.
+    final from = _selectRequest;
     final me = snapshot?.people.where((p) => p.id == accountId).firstOrNull;
     // The empty id is the reader's one Buddy chat for the Swarm (spec
     // 2026-10-31-one-buddy-per-swarm), which names no project.
@@ -3740,7 +3742,8 @@ class SuperTabController extends ChangeNotifier {
       if (projectId != kSwarmBuddyKey) 'projectId': projectId,
     }, operationId: _buddyChatOperation(projectId, me?.generation));
     final id = result?['conversationId'];
-    return id is String && await select(id);
+    // The chat is made either way; only a reader still where they were when they asked is taken to it (task #4704).
+    return id is String && from == _selectRequest && await select(id);
   }
 
   String _buddyChatOperation(String projectId, String? generation) {
