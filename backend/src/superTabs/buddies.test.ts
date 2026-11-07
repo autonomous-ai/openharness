@@ -4,7 +4,8 @@ import { applyCommand, commandSchema, type Command, type CommandContext } from '
 import { createSuperTab, stableId, visibleState, type Actor, type Conversation } from './model.js'
 import { canReadGroup, canWatchAgent, isConfidential, readsRecordsIn, wordsOf } from './projects.js'
 import { CLOSED_CHAT_ANSWERED_NOTICE } from './decisions.js'
-import { BUDDY_REQUIREMENTS, buddyChatId, defaultBuddy, defaultBuddyChat, shownBefore, swarmBuddyChatId } from './buddies.js'
+import { BUDDY_REQUIREMENTS, buddyChatId, defaultBuddy, defaultBuddyChat, ownAgentAuthor, refuseOthersInPrivateChat, shownBefore, swarmBuddyChatId } from './buddies.js'
+import { giveOwnBuddy } from './ownBuddy.test-support.js'
 import { AGENT_NAMES, isRoleName } from './agentNames.js'
 import { buddiesTold } from './buddyNews.js'
 import { sweepLiveness } from './liveness.js'
@@ -875,7 +876,7 @@ describe('a Buddy\'s proposal to the PM', () => {
   })
 
   // River, 11-04 (task #2926): proposals answered before threads, or opened as tasks without the link, still read as open.
-  it('is closed with a reason by its project\'s PM or a person in the project, posting only its person\'s notice, and by nobody else', () => {
+  it('is closed with a reason by its project\'s PM or a person in the project, posting nothing, and by nobody else', () => {
     const { f, propose } = asked()
     const root = propose().messages[0]!
     const context = { proposal: { id: root.id, conversationId: f.app.conversationId, author: root.author, source: root.source as Record<string, unknown> } }
@@ -883,9 +884,8 @@ describe('a Buddy\'s proposal to the PM', () => {
       f.run({ type: 'proposal.close', projectId: f.app.projectId, messageId, reason: '  Built in #2901 ' }, actor, loaded)
     const closed = close(agentActor(f.pm))
     expect(closed.closedProposal).toEqual({ messageId: root.id, conversationId: f.app.conversationId, reason: 'Built in #2901' })
-    // Nothing in the project's chat: only the notice to its person (task #4252).
-    expect(closed.messages.map(m => m.source?.kind)).toEqual(['proposal-notice'])
-    expect(closed.messages.some(m => m.conversationId === f.app.conversationId)).toBe(false)
+    // Nothing in the project's chat (task #4252), nor in its person's private chat (task #4558): the card records it.
+    expect(closed.messages).toEqual([])
     expect(close(peer).closedProposal).toMatchObject({ messageId: root.id })
     const webPm = group(f, f.web.conversationId).leadId!
     for (const actor of [agentActor('buddy'), agentActor(webPm)]) expect(() => close(actor)).toThrow()
@@ -1211,69 +1211,44 @@ describe('a person\'s Buddy chat before any Buddy (Lead, 10-29)', () => {
   })
 })
 
-describe('the PM\'s private line to a person (Ken, 10-29)', () => {
+describe('a person\'s private chat with their own agent (anh Dee, 11-07, task #4558)', () => {
   const tell = (personId = 'peer', text = 'Your fix is merged.') => ({ type: 'person.tell' as const, personId, text })
+  const send = (conversationId: string, text = 'Hello') => ({ type: 'message.send' as const, conversationId, text, replyTo: null, recipientIds: [] })
 
-  // In the person's one Buddy chat, marked with its project (Dee, 10-31), and in their older chat in that project, which older
-  // apps and the phone still show (spec: Older apps).
-  it('goes to the person\'s one Buddy chat marked with its project, and their older chat there, opening each when they have none, to nobody; the PM still cannot read them', () => {
+  // "I don't want River or Theo to show up in this chat": a Lead's private line is refused, its own project's or another's.
+  it('refuses a Lead\'s private line, from its own project or another, naming the project chat, and opens no chat for it', () => {
     const f = fresh()
-    const told = f.run(tell(), agentActor(f.pm))
-    const swarm = group(f, peerSwarmChat)
-    const older = f.state.conversations.find(c => c.kind === 'buddy' && c.projectId === f.app.projectId)!
-    for (const chat of [swarm, older]) expect(chat).toMatchObject({ agentIds: [], audience: { people: [{ id: 'peer', generation: 'first' }] } })
-    expect(told.messages).toEqual([
-      expect.objectContaining({ conversationId: swarm.id, recipients: [], text: 'Your fix is merged.', source: { kind: 'pm-line', projectId: f.app.projectId },
-        author: expect.objectContaining({ kind: 'agent', id: f.pm }) }),
-      expect.objectContaining({ conversationId: older.id, recipients: [], text: 'Your fix is merged.', author: expect.objectContaining({ kind: 'agent', id: f.pm }) }),
-    ])
-    // Its own id, derived from the line's operation, so both rows are stored.
-    expect(told.messages[1]!.id).toBe(stableId(told.messages[0]!.id, 'project-chat'))
-    expect(told.messages[1]!.source).toBeUndefined()
-    expect(told.result).toEqual({ messageId: told.messages[0]!.id })
-    for (const chat of [swarm, older]) {
-      expect(canReadGroup(f.state, agentActor(f.pm), chat)).toBe(false)
-      expect(canReadGroup(f.state, owner, chat)).toBe(false)
-      expect(canReadGroup(f.state, peer, chat)).toBe(true)
+    const webPm = f.state.agents.find(a => a.harnessId === 'web-pm')!.id
+    for (const lead of [f.pm, webPm]) {
+      expect(() => f.run(tell(), agentActor(lead))).toThrow(expect.objectContaining({ code: 'PRIVATE_CHAT',
+        message: expect.stringContaining('project chat') }))
     }
-    // The same one chat its Buddy joins later, and a line to it then reaches the person, not the Buddy.
-    expect(addBuddy(f, peer, f.app.projectId).result.conversationId).toBe(swarm.id)
-    expect(f.run(tell('peer', 'Again.'), agentActor(f.pm)).messages.map(m => [m.conversationId, m.recipients])).toEqual([[swarm.id, []], [older.id, []]])
+    expect(f.state.conversations.filter(c => c.kind === 'buddy' || c.kind === 'swarm-buddy')).toEqual([])
   })
 
-  it('is the PM\'s, never a person\'s, to a person in the Swarm, and needs a line', () => {
+  it('keeps another agent\'s line the PM\'s crew need in the project chat, and refuses a person, a stranger or a Buddy', () => {
     const f = fresh()
     const worker = f.run({ type: 'agent.add', conversationId: f.group, harnessId: 'worker-harness', machineId: 'machine', name: 'Worker',
       configuration, lead: false }).result.agentId as string
     expect(() => f.run(tell(), peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
     expect(() => f.run(tell('stranger'), agentActor(f.pm))).toThrow('person in this Swarm')
-    expect(() => f.run(tell('peer', '  '), agentActor(f.pm))).toThrow()
-    expect(f.state.conversations.filter(c => c.kind === 'buddy' || c.kind === 'swarm-buddy')).toEqual([])
-    // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts, task #3404): another agent's line is the PM's crew need, in the
-    // project chat, and reaches no Buddy chat of the person.
     expect(f.run(tell(), agentActor(worker)).messages).toEqual([expect.objectContaining({ conversationId: f.app.conversationId, recipients: [f.pm],
       source: expect.objectContaining({ kind: 'crew-need' }) })])
-    expect(f.run(tell(), agentActor(f.pm)).messages).toEqual([expect.objectContaining({ conversationId: peerSwarmChat, text: 'Your fix is merged.', recipients: [] }),
-      expect.objectContaining({ conversationId: buddyChatId(f.app.projectId, { id: 'peer', generation: 'first' }), text: 'Your fix is merged.', recipients: [] })])
+    expect(f.state.conversations.filter(c => c.kind === 'buddy' || c.kind === 'swarm-buddy')).toEqual([])
+    expect(() => setup().run(tell('owner'), agentActor('buddy'))).toThrow('A Buddy')
   })
 
-  it('reaches only a person who reads the Lead\'s project, and only in that project', () => {
-    const f = fresh()
-    const secret = f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).result as { projectId: string; conversationId: string }
-    const secretPm = f.run({ type: 'agent.add', conversationId: secret.conversationId, harnessId: 'secret-pm', machineId: 'machine', name: 'Secret PM',
-      configuration, lead: true }).result.agentId as string
-    // By username, never email (task #2954).
-    expect(() => f.run(tell(), agentActor(secretPm))).toThrow(/^peer cannot read this project\.$/)
-    const webPm = f.state.agents.find(a => a.harnessId === 'web-pm')!.id
-    const told = f.run(tell(), agentActor(webPm))
-    expect(told.messages.map(m => m.conversationId)).toEqual([peerSwarmChat, buddyChatId(f.web.projectId, { id: 'peer', generation: 'first' })])
-    expect(told.messages[0]!.source).toEqual({ kind: 'pm-line', projectId: f.web.projectId })
-    expect(f.state.conversations.filter(c => c.kind === 'buddy').map(c => c.projectId)).toEqual([f.web.projectId])
-  })
-
-  it('is refused to a Buddy, as every command but its own chat\'s', () => {
+  it('lets the person and their own agent post there, and refuses any other agent\'s row, whatever command writes it', () => {
     const f = setup()
-    expect(() => f.run(tell('owner'), agentActor('buddy'))).toThrow('A Buddy')
+    expect(f.run(send(f.chat, 'What outcome do you want?'), agentActor('buddy')).messages[0]).toMatchObject({ conversationId: f.chat })
+    expect(f.run(send(f.chat, 'Faster sync.'), peer).messages[0]).toMatchObject({ conversationId: f.chat })
+    const pm = { kind: 'agent' as const, id: f.pm, name: 'app-pm', membershipGeneration: 'first' }
+    const row = { id: 'r', conversationId: f.chat, author: pm, text: 'Hi', replyTo: null, recipients: [] }
+    expect(() => refuseOthersInPrivateChat(f.state, [row], f.state)).toThrow(expect.objectContaining({ code: 'PRIVATE_CHAT' }))
+    // Another person's agent, even a Buddy, is not this person's own.
+    f.state.agents.push({ ...f.state.agents.find(a => a.id === 'buddy')!, id: 'owners-buddy', buddyOf: { personId: 'owner', generation: f.state.people[0]!.generation } })
+    expect(() => refuseOthersInPrivateChat(f.state, [{ ...row, author: { ...pm, id: 'owners-buddy' } }], f.state)).toThrow(expect.objectContaining({ code: 'PRIVATE_CHAT' }))
+    expect(() => refuseOthersInPrivateChat(f.state, [{ ...row, author: { ...pm, id: 'buddy' } }, { ...row, conversationId: f.app.conversationId }], f.state)).not.toThrow()
   })
 })
 
@@ -1307,8 +1282,10 @@ describe('a Buddy\'s terminal alert', () => {
 })
 
 describe('a decision left to the PM while Buddies are on', () => {
-  it('puts the PM\'s line in the person\'s one Buddy chat marked with its project, and in their older Buddy chat there, to no one, not in their read-only Chat with PM', () => {
+  it('has their own Buddy say what the PM chose in their one Buddy chat marked with its project, and in their older Buddy chat there, to no one, not in their read-only Chat with PM', () => {
     const f = setup()
+    // Only they and their own agent post in their private chat (task #4558): their default Buddy writes the line.
+    giveOwnBuddy(f.state, 'peer')
     const decision = { id: 'decision-1', personId: 'peer', conversationId: f.group, projectId: f.app.projectId, askerAgentId: f.pm,
       question: 'Ship how?', options: ['Behind a flag', 'To everyone'], recommended: 1, answeredAt: null, createdAt: 0, assignmentId: null }
     const delegate = () => f.run({ type: 'decision.answer', decisionId: 'decision-1', delegate: true }, peer, { decision }).messages
@@ -1316,7 +1293,7 @@ describe('a decision left to the PM while Buddies are on', () => {
     const lines = delegate()
     expect(lines).toEqual([
       expect.objectContaining({ conversationId: peerSwarmChat, recipients: [], text: 'PM decided: To everyone — Ship how?',
-        source: { kind: 'decision-delegated', decisionId: 'decision-1', projectId: f.app.projectId } }),
+        author: expect.objectContaining({ id: 'peer-buddy' }), source: { kind: 'decision-delegated', decisionId: 'decision-1', projectId: f.app.projectId } }),
       expect.objectContaining({ conversationId: f.chat, recipients: [], text: 'PM decided: To everyone — Ship how?',
         source: { kind: 'decision-delegated', decisionId: 'decision-1' } })])
     expect(lines.map(m => m.conversationId)).not.toContain(f.pmChat)
@@ -1757,12 +1734,11 @@ describe('several Buddies: where a person\'s lines go', () => {
     return { f, first: start(), second: start({ name: 'Research' }) }
   }
 
-  it('sends a PM\'s line to the default Buddy\'s chat, and an older app\'s Buddy chat is the default\'s', () => {
+  it('writes a server line in the default Buddy\'s chat, by that Buddy, and an older app\'s Buddy chat is the default\'s', () => {
     const { f, second } = two()
     f.run({ type: 'buddy.default', conversationId: second.chat } as Command, peer)
-    const told = f.run({ type: 'person.tell', personId: 'peer', text: 'Your idea is next up.' }, agentActor(f.pm))
-    expect(told.messages.filter(m => m.text === 'Your idea is next up.').map(m => m.conversationId)).toContain(second.chat)
-    expect(told.messages.filter(m => m.text === 'Your idea is next up.').map(m => m.conversationId)).not.toContain(peerSwarmChat)
+    const me = f.state.people.find(p => p.id === 'peer')!
+    expect([defaultBuddyChat(f.state, me).id, ownAgentAuthor(f.state, me)?.id]).toEqual([second.chat, second.agentId])
     expect(f.run({ type: 'buddy.chat' }, peer).result.conversationId).toBe(second.chat)
   })
 

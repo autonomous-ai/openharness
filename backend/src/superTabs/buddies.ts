@@ -3,7 +3,7 @@
  *  reads what its person reads of its project but no private conversation (Ken, 10-29), and does nothing but post in its
  *  chat and propose. On in every Swarm: Buddies replaced Chat with PM (Ken, 10-29). */
 import { agentDisplayName, freeAgentName, isRoleName } from './agentNames.js'
-import { fail, nextConversationNumber, person, stableId, type Actor, type Agent, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
+import { fail, nextConversationNumber, person, stableId, type Actor, type Agent, type AgentStartRequest, type Author, type Conversation, type MessageDraft, type Person, type SuperTabState } from './model.js'
 
 export const isBuddy = (target: Pick<Agent, 'buddyOf'>): boolean => !!target.buddyOf
 /** A person's Buddy chat: in a project, or their one chat for the whole Swarm. */
@@ -17,7 +17,6 @@ export const isSwarmBuddy = (target: Pick<Agent, 'buddyOf' | 'buddyScope'> | und
  *  chat, whose project is its chat's. */
 export const sessionProjectId = (target: Pick<Agent, 'buddySession'> | undefined): string | undefined => target?.buddySession?.projectId
 /** A project PM's private line to one person in their one Buddy chat (commands.ts person.tell): its source names the project. */
-export const PM_LINE_KIND = 'pm-line'
 
 /** Whether a Buddy reads [group] of its own project, as its person would (Ken, 10-29): the project chat, its own chat, and
  *  the project's workgroups. Never a private conversation, its own person's with others included, nor another Buddy chat.
@@ -126,6 +125,32 @@ export function defaultBuddy(state: SuperTabState, personId: string): Agent | un
     : state.agents.find(agent => ownBuddy(agent, person))
 }
 
+/** Who writes a server notice in [person]'s private chat: their own default Buddy, as only they and it post there (anh Dee,
+ *  11-07, task #4558). Undefined when they have none: then the notice is not written, and what it tells stays where it lives
+ *  (Needs you, Members, the card). */
+export function ownAgentAuthor(state: SuperTabState, person: Pick<Person, 'id'>): Author | undefined {
+  const buddy = defaultBuddy(state, person.id)
+  return buddy && { kind: 'agent', id: buddy.id, name: buddy.name, displayName: agentDisplayName(state.agents, buddy.id),
+    membershipGeneration: buddy.membershipGeneration }
+}
+
+export const PRIVATE_CHAT_REFUSAL = 'Only a person and their own agent post in their private chat. Post in the project chat, tagging them, or in the task\'s chat.'
+
+/** In a person's private chat with their own agent, only they and their own agent post (anh Dee, 11-07, task #4558: "I don't
+ *  want River or Theo to show up in this chat"): any other agent's row, a Lead's included, refuses the command that wrote it.
+ *  The writer is looked up after the command, else before it: a thread session that ended in it writes its own last line. */
+export function refuseOthersInPrivateChat(state: SuperTabState, messages: readonly MessageDraft[], before: Pick<SuperTabState, 'agents'>): void {
+  for (const m of messages) {
+    if (m.author.kind !== 'agent') continue
+    const chat = state.conversations.find(c => c.id === m.conversationId)
+    if (!chat || !isBuddyChat(chat)) continue
+    const owner = chat.audience?.people[0]
+    const writer = state.agents.find(a => a.id === m.author.id) ?? before.agents.find(a => a.id === m.author.id)
+    if (owner && writer?.buddyOf?.personId === owner.id && writer.buddyOf.generation === owner.generation) continue
+    fail('PRIVATE_CHAT', PRIVATE_CHAT_REFUSAL, 403)
+  }
+}
+
 /** The chat a line for [person] goes to: their default Buddy's, or with none their main Buddy chat, opened if missing, so there
  *  is always somewhere to write (task #3818). */
 export function defaultBuddyChat(state: SuperTabState, person: Person): Conversation {
@@ -177,16 +202,6 @@ export function dropBuddyChat(state: SuperTabState, person: Pick<Person, 'id' | 
   if (!wasDefault) return
   const next = buddyChatsOf(state, person).find(c => c.id !== chat.id && state.agents.some(a => ownBuddy(a, person) && c.agentIds.includes(a.id)))
   if (next) setDefaultBuddy(state, person, next)
-}
-
-/** Where a notice about what [senderBuddyId] sent for [person] goes (task #3817's decided and needs-you lines): that Buddy and its
- *  chat while it is still theirs, else their default (defaultBuddyChat), so a removed sender's news is never lost. */
-export function buddyFor(state: SuperTabState, person: Person, senderBuddyId: string | null): { agent?: Agent; chat: Conversation } {
-  const sender = senderBuddyId ? state.agents.find(a => a.id === senderBuddyId && ownBuddy(a, person)) : undefined
-  const chat = sender && state.conversations.find(c => isSwarmBuddyChat(c) && c.agentIds.includes(sender.id))
-  if (sender && chat) return { agent: sender, chat }
-  const agent = defaultBuddy(state, person.id)
-  return { ...agent ? { agent } : {}, chat: defaultBuddyChat(state, person) }
 }
 
 /** A Buddy chat's title until its agent has its name (task #4568: never "<person>'s Buddy"), as Desktop shows it. */

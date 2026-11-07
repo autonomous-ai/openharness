@@ -4,7 +4,7 @@ import type { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
-import type { Command } from '../src/superTabs/commands.js'
+import { commandSchema, type Command } from '../src/superTabs/commands.js'
 import { overdueNotice } from '../src/superTabs/decisions.js'
 import { OVERDUE_DECISION_MS, overdueDecisions, dueDefaultDecisions } from '../src/superTabs/overdueDecisions.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
@@ -299,6 +299,14 @@ describe('a switched project’s direct asks at their default time', () => {
 
   it('notifies the default Buddy only once when decision.ask repeats an open question', async () => {
     const f = await direct()
+    // peer's own Buddy, on peer's Mac: it writes the line, as only peer and their own agent post in their private chat (task #4558).
+    await db.machine.create({ data: { machineId: 'peer-mac', userId: peer.sub, apiKey: `fixture-${randomUUID()}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    const added = await f.execute({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', setup: { name: 'Peer Mac', cwd: '/peer', engines: ['claude'] } }, peer)
+    const startId = String(added.result.startId)
+    const host = (command: unknown) => f.store.execute(peer, f.tab, { operationId: randomUUID(), command: commandSchema.parse(command) }, undefined, 'peer-mac')
+    await host({ type: 'agent.startDispatch', startId })
+    await host({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config })
+    await host({ type: 'agent.startSettled', startId, warning: null })
     const chat = String((await f.execute({ type: 'buddy.chat' }, peer)).result.conversationId)
     const command: Command = { type: 'decision.ask', conversationId: f.task, personId: peer.sub,
       questions: [{ question: 'Ship this copy?', options: ['Yes', 'No'], recommended: 0, unblocks: 'Release', defaultAt: at(HOUR) }] }

@@ -10,6 +10,7 @@ import { sweepLiveness } from './liveness.js'
 import { withoutMachineNames } from './store.js'
 import { BUDDY_MODEL_GONE_MS, BUDDY_MODEL_LEASE_MS } from './tidy.js'
 import { expiredModelRequests, unservedBuddyModels } from './buddyModel.js'
+import { giveOwnBuddy } from './ownBuddy.test-support.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -186,6 +187,7 @@ describe('the Buddy\'s machine reporting the switch', () => {
 
   it('names no machine to a Buddy reading these lines: a Buddy reads no machines', () => {
     const { f, requestId } = asked()
+    giveOwnBuddy(f.state, 'owner')
     const effects = f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId, ok: true }, f.buddy())
     const read = effects.messages.map(m => withoutMachineNames(m as unknown as Parameters<typeof withoutMachineNames>[0]).text)
     expect(read).toEqual(['Your Buddy now runs on DeepSeek 4.1 Flash, served by a machine.',
@@ -275,8 +277,10 @@ describe('the Buddy\'s machine reporting the switch', () => {
 })
 
 describe('the member who serves the model', () => {
-  const landed = (gridModel = MODEL) => {
+  const landed = (gridModel = MODEL, buddy = true) => {
     const f = setup()
+    // The serving member's own Buddy writes their line: only they and it post in their private chat (task #4558).
+    if (buddy) giveOwnBuddy(f.state, 'owner')
     f.run({ type: 'buddy.model', gridModel })
     return { f, effects: f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId: f.agent().modelRequest!.id, ok: true }, f.buddy()) }
   }
@@ -284,8 +288,12 @@ describe('the member who serves the model', () => {
 
   it('is told, in their own Buddy chat, whose Buddy now runs on their machine\'s model', () => {
     const { effects } = landed()
-    expect(effects.messages.filter(m => m.conversationId === ownerChat).map(m => m.text))
-      .toEqual(["peer's agent now runs on DeepSeek 4.1 Flash, which your machine serves."])
+    expect(effects.messages.filter(m => m.conversationId === ownerChat).map(m => [m.text, m.author.id]))
+      .toEqual([["peer's agent now runs on DeepSeek 4.1 Flash, which your machine serves.", 'owner-buddy']])
+  })
+
+  it('is not told without a Buddy of their own', () => {
+    expect(landed(MODEL, false).effects.messages.filter(m => m.conversationId === ownerChat)).toEqual([])
   })
 
   it('is told when it is their saved API', () => {
