@@ -555,6 +555,23 @@ describe('hook notify terminal scope', () => {
     expect(requests.map((request) => request.url)).toEqual(['/api/hook/session-end', '/api/hook/session-end'])
   })
 
+  // An agent's temporary folder on a Mac (~/.harness/cli/data/agent-tmp/…) leaves no room for a socket beside a test's
+  // data folder. The hook then looks where the daemon would have put it (#4381): in a short folder under home, or, with
+  // home too long as well, nowhere, and it posts to the port with the hook-only token.
+  it.each([['a short folder under home', 'short'], ['the port with the hook token', 'tcp']] as const)(
+    'reaches the daemon through %s when its data folder is too long for a socket', async (_route, route) => {
+      const { port, requests } = await collect()
+      const dir = mkdtempSync(join(route === 'short' ? '/tmp' : tmpdir(), 'hl-'))
+      tmpDirs.push(dir)
+      const dataDir = join(dir, 'd'.repeat(100))
+      const home = join(dir, route === 'short' ? 'h' : 'h'.repeat(100))
+      mkdirSync(home)
+
+      await runHook({ port, tmuxPane: '%42', dataDir, env: { HOME: home } })
+
+      expect(requests.map((request) => request.url)).toEqual(['/api/hook/session-end'])
+    })
+
   it('drops standalone SessionEnd but forwards tmux SessionEnd', async () => {
     const requests: Array<{ url: string; body: Record<string, unknown> }> = []
     const server = createServer((req, res) => {
