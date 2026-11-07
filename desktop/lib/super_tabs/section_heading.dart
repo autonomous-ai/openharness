@@ -6,6 +6,7 @@ import '../shared/theme/app_icons.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/finger_target.dart';
+import 'buddy_rows.dart' show SuperTabCountBadge;
 
 /// Keeps resource headings aligned whether their add action is available or not.
 class SuperTabSectionHeading extends StatelessWidget {
@@ -22,6 +23,7 @@ class SuperTabSectionHeading extends StatelessWidget {
     this.onToggleCollapsed,
     this.titleTooltip,
     this.titleStyle,
+    this.waiting = 0,
   });
 
   final String title;
@@ -61,6 +63,11 @@ class SuperTabSectionHeading extends StatelessWidget {
   /// name.
   final String? titleTooltip;
 
+  /// What waits inside a folded group: shown only while [collapsed], as a
+  /// bold title and this count in a row's red number, so a folded Projects
+  /// still says a tag is in it (audit finding 19).
+  final int waiting;
+
   /// The chevron and every action are a fixed 32 px square; the gap
   /// before the actions is 4 px; the title always keeps at least this
   /// much room, even when the trailing pill is at its widest.
@@ -95,9 +102,19 @@ class SuperTabSectionHeading extends StatelessWidget {
         constraints: const BoxConstraints(minHeight: 32),
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final titleStyle =
+            final shownWaiting = collapsed == true && collapsible
+                ? waiting
+                : 0;
+            final ordinaryStyle =
                 this.titleStyle ??
                 DesktopChrome.metadata().copyWith(fontWeight: FontWeight.w600);
+            // Bold at full strength, as a row with something unread.
+            final titleStyle = shownWaiting > 0
+                ? ordinaryStyle.copyWith(
+                    fontWeight: grid.AppFont.semibold,
+                    color: grid.SidebarInk.foreground(context),
+                  )
+                : ordinaryStyle;
             final titleMeasure = TextPainter(
               text: TextSpan(text: title, style: titleStyle),
               textDirection: Directionality.of(context),
@@ -158,6 +175,16 @@ class SuperTabSectionHeading extends StatelessWidget {
                                                 child: titleLabel,
                                               ),
                                       ),
+                                      if (shownWaiting > 0) ...[
+                                        const SizedBox(width: _trailingGap),
+                                        Semantics(
+                                          label: '$shownWaiting waiting',
+                                          excludeSemantics: true,
+                                          child: SuperTabCountBadge(
+                                            shownWaiting,
+                                          ),
+                                        ),
+                                      ],
                                       const SizedBox(width: _trailingGap),
                                       Icon(
                                         collapsed == true

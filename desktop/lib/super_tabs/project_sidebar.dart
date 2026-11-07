@@ -777,6 +777,23 @@ class ProjectSidebar extends StatelessWidget {
     SuperTabSnapshot? snapshot,
     _SidebarReading reading, {
     bool taggedOnly = false,
+  }) => [
+    for (final read in _listed(snapshot, reading, taggedOnly: taggedOnly))
+      (
+        read.project.name,
+        Column(
+          key: ValueKey('super-project-${read.project.id}'),
+          mainAxisSize: MainAxisSize.min,
+          children: [_row(read.lead!, reading: read)],
+        ),
+      ),
+  ];
+
+  /// The projects Projects lists, each with a chat, in its order; [taggedOnly] as [_channels].
+  Iterable<_ProjectReading> _listed(
+    SuperTabSnapshot? snapshot,
+    _SidebarReading reading, {
+    bool taggedOnly = false,
   }) {
     final hidden = superTabHiddenProjects(controller, app: app);
     return [
@@ -787,16 +804,19 @@ class ProjectSidebar extends StatelessWidget {
                     (attention?.chatTagsIn(read.lead!.id) ?? 0) > 0) &&
                 (!controller.unreadOnly || _hasUnread(read)) &&
                 !_paneless(project, read.lead!, hidden))
-          (
-            project.name,
-            Column(
-              key: ValueKey('super-project-${project.id}'),
-              mainAxisSize: MainAxisSize.min,
-              children: [_row(read.lead!, reading: read)],
-            ),
-          ),
+          read,
     ];
   }
+
+  /// The listed projects whose rows would be bold or carry a red number
+  /// ([_drawRow]): what a folded Projects counts.
+  int _waitingProjects(SuperTabSnapshot? snapshot, _SidebarReading reading) =>
+      _listed(snapshot, reading).where((read) {
+        final chat = read.lead!.id;
+        final muted = controller.notifyOf(chat) == SuperTabNotify.muted;
+        return (read.unread.contains(chat) && !muted) ||
+            (attention?.chatTagsIn(chat) ?? 0) > 0;
+      }).length;
 
   // The sidebar's ink scope (#3006): a theme's own sidebar ink reaches the
   // shared rows drawn in it.
@@ -927,6 +947,9 @@ class ProjectSidebar extends StatelessWidget {
                   endInset: 0,
                   // The Desktop folds Projects: closed while the person has an agent (Swarm v3, #4118).
                   collapsed: board ? !controller.projectsOpen : null,
+                  waiting: board && !controller.projectsOpen
+                      ? _waitingProjects(snapshot, reading)
+                      : 0,
                   onToggleCollapsed: board
                       ? controller.toggleProjectsGroup
                       : null,
