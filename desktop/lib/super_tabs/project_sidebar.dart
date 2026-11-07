@@ -551,7 +551,9 @@ class ProjectSidebar extends StatelessWidget {
       for (final project in projects)
         if (reading.of(project) case final read
             when (read.buddyChat != null || controller.canWrite) &&
-                (!controller.unreadOnly ||
+                // The Desktop has no unread filter to turn off: one saved on hides nothing there.
+                (board ||
+                    !controller.unreadOnly ||
                     (read.buddyChat != null && _keptByFilter(read.buddyChat!))))
           read,
     ];
@@ -662,31 +664,40 @@ class ProjectSidebar extends StatelessWidget {
     _SidebarReading reading, {
     required Widget? switcher,
     required int decisions,
-  }) => [
-    ?switcher,
-    if (onPage case final onPage?) ...[
-      _iconRow(
-        key: 'super-decisions',
-        icon: AppIcons.inbox,
-        name: 'Decisions',
-        detail: decisions > 0 ? countText(decisions) : null,
-        unread: decisions > 0,
-        selected: page == SwarmPage.decisions,
-        onTap: () => onPage(SwarmPage.decisions),
-      ),
-      _iconRow(
-        key: 'super-projects',
-        icon: AppIcons.layoutGrid,
-        name: 'Projects',
-        // A project's Board is one of the grid's: it lights Projects.
-        selected: page == SwarmPage.projects || (!_paneCovered && _boardOpen),
-        onTap: () => onPage(SwarmPage.projects),
-      ),
-    ],
-    const SizedBox(height: grid.AppDesktop.groupGap),
-    ..._myAgents(snapshot, reading),
-    ..._humans(snapshot),
-  ];
+  }) {
+    final tags = [
+      for (final project in [...?snapshot?.projects])
+        attention?.chatTagsIn(project.leadConversationId) ?? 0,
+    ].fold(0, (a, b) => a + b);
+    return [
+      ?switcher,
+      if (onPage case final onPage?) ...[
+        _iconRow(
+          key: 'super-decisions',
+          icon: AppIcons.inbox,
+          name: 'Decisions',
+          detail: decisions > 0 ? countText(decisions) : null,
+          unread: decisions > 0,
+          selected: page == SwarmPage.decisions,
+          onTap: () => onPage(SwarmPage.decisions),
+        ),
+        _iconRow(
+          key: 'super-projects',
+          icon: AppIcons.layoutGrid,
+          name: 'Projects',
+          // Tags of you in the projects' chats: with no project rows and no Mentions row, they show here (task #4220).
+          detail: tags > 0 ? countText(tags) : null,
+          unread: tags > 0,
+          // A project's Board is one of the grid's: it lights Projects.
+          selected: page == SwarmPage.projects || (!_paneCovered && _boardOpen),
+          onTap: () => onPage(SwarmPage.projects),
+        ),
+      ],
+      const SizedBox(height: grid.AppDesktop.groupGap),
+      ..._myAgents(snapshot, reading),
+      ..._humans(snapshot),
+    ];
+  }
 
   /// Humans (task #4466): the Leaderboard in short, its people most points first with their points on the right. The
   /// heading and every person open the whole board.
