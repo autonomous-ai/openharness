@@ -99,7 +99,7 @@ On a GitHub project, each task is one GitHub issue. The issue holds:
 | Details (goal, changes, constraints, owns, checks, review) | The issue body, as Markdown sections with these headings, plus a hidden marker line `<!-- harness-task: v1 -->`. |
 | Owner | The person, as the issue's assignee. |
 | Status | One Harness label: `harness: assigned`, `harness: accepted`, `harness: in review`, `harness: done`. |
-| Agent | One label `agent: <name>` for the agent on it now. |
+| Agent | Private repository: one label `agent: <name>` for the agent on it now. Public repository: one neutral label `harness: agent`, since agent names are chosen in Harness and could name a person. |
 
 The issue is the truth for title, details, owner and status:
 
@@ -147,8 +147,8 @@ Harness acts on these changes made on GitHub:
 | Deleted or transferred | The link is removed. The task stays in Harness with its last copy, and the PM is told. |
 
 **The close note.** When a PR merges with CI green, Harness posts one comment and closes the issue. The comment says what
-changed (the PR's title and link) and how it was tested (the names of the checks green at the merged head, and of the
-review steps that said Yes). It carries no evidence text, so no machine name, path or agent output reaches GitHub. It is
+changed (the PR's title and link) and how it was tested (the names of the checks green at the merged head; on a
+private repository also the review steps that said Yes, and on a public one only how many did, never their names). It carries no evidence text, so no machine name, path or agent output reaches GitHub. It is
 capped at 2,000 characters. It is the only comment Harness writes on an issue, apart from the reopen line below.
 
 **No close without green checks.** GitHub closes an issue on merge when a PR body or a commit message on the default
@@ -218,7 +218,7 @@ App tokens), Ownrev2 (security: private repositories).
 | Pending GitHub write on the task (`issue.pending`: wanted fields and the copy each was based on) | A Harness edit or status change | Overwritten by the next wanted state, so it never queues more than one per field | Cleared when applied or refused | With the group | One per task, about 5 fields |
 | Person's GitHub link (`githubUserId`, `githubLogin` on the membership) | Linking | Relinking | Removed when the membership is | With the membership; rejoining starts unlinked | One per membership |
 | Webhook delivery receipt | Each applied delivery (an existing `SuperTabOperation` keyed by the `X-GitHub-Delivery` id) | Never | — | Existing operation-receipt expiry | One per delivery for a linked issue. Deliveries for issues with no task store nothing. |
-| `agent: <name>` label in the repository | First time that agent works a task there | Never | — | Never by Harness: a label in the team's repository is theirs to remove | One per agent that worked there (tens per repository) |
+| `agent: <name>` label (private repositories; public ones use the one neutral `harness: agent`) | First time that agent works a task there | Never | — | Never by Harness: a label in the team's repository is theirs to remove | One per agent that worked there (tens per repository) |
 | Harness status labels (4) | Created once per repository on first use | Never | — | Left in place | 4 per repository |
 | The close note | One per merged task | Never | — | The team's, on GitHub | One per task |
 
@@ -231,7 +231,9 @@ issue.
 - The unit is the task's group part, as today. A webhook applies in one transaction that loads the group by `issueKey`
   and writes it with the existing version check. Nothing locks the Swarm.
 - Invariant: **one writer of the copy.** Only GitHub's answers and webhooks write it. They apply only when the issue's
-  `updated_at` is newer than the copy's, so late or replayed deliveries change nothing.
+  `updated_at` is newer than the copy's. That holds for every action, close and reopen included, since GitHub moves
+  `updated_at` on each. The delivery receipt keys on `X-GitHub-Delivery`, a header the signature doesn't cover, so it
+  only saves work. A replayed body under a new delivery id still changes nothing, because its `updated_at` is old.
 - Invariant: **GitHub wins.** Each Harness edit records the copy it was based on. The command refuses with
   `ISSUE_CHANGED_ON_GITHUB` if the copy has moved since. The sync pass reads the issue again (conditional GET) just before
   writing, and drops any field whose GitHub value is no longer the base. Labels and assignees change through GitHub's
@@ -400,6 +402,8 @@ Order:
 - Every issue write runs as the app, with a server-only installation token: `ISSUE_SYNC_PERMISSIONS = { issues: 'write',
   metadata: 'read' }` for the one repository. It is minted when the sync pass needs it, cached in the server's memory
   until 10 minutes before expiry, never sent to a client or an agent, and never logged.
+- The app's own JWT (signed with its private key), used for installation lookups and the redelivery pass, is the same:
+  server-only, minted per use as today (`app.ts`), and never logged or sent anywhere but GitHub.
 - No person's login and no user-to-server token writes an issue. The machine owner's git or gh login is never used.
 - Linking a person's GitHub account uses the app's existing sign-in. The person's short-lived token reads only who they
   are, is revoked at once and is never stored.
