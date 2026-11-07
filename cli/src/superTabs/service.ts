@@ -105,7 +105,7 @@ const HELP = {
     { type: 'conversation.agent', conversationId: 'GROUP', agentId: 'AGENT', present: true, lead: false },
     { type: 'work.priority', conversationId: 'GROUP', priority: 'P0' },
     { type: 'work.define', conversationId: 'GROUP', task: { goal: 'What to deliver', changes: 'What changes', constraints: 'What must stay true', owns: ['Paths or code areas'] }, checks: [{ description: 'Observable acceptance evidence', independent: false }] },
-    { type: 'work.cancel', conversationId: 'GROUP', assignmentId: 'current', reason: 'Why the task is cancelled, in one short sentence' },
+    { type: 'work.cancel', conversationId: 'GROUP', assignmentId: 'current', reason: 'Why the task is cancelled, in one short sentence; a duplicate names the task its work goes on in, as Duplicate of #N, and leaves people\'s Tasks' },
     { type: 'conversation.merged', conversationId: 'GROUP', pullRequestUrl: 'https://github.com/OWNER/REPOSITORY/pull/NUMBER', mergedAt: 'Optional ISO time of a merge recorded later' },
     { type: 'agent.release', agentId: 'AGENT', decision: 'keep|stop' },
     { type: 'instructions.save', projectId: 'PROJECT', baseRevision: 3, text: 'The whole new document', summary: 'One line, up to 200 characters', askedBy: 'PERSON' },
