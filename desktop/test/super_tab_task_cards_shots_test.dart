@@ -133,24 +133,29 @@ void main() {
       await captureWindow(t, shots, 'cards-$b');
     });
 
-    testWidgets('a task opened in the middle, $b', (t) async {
-      size(t, const Size(1440, 800), brightness);
-      final f = TasksFixture()..rows = rows();
-      addTearDown(f.controller.dispose);
-      await f.controller.refresh();
-      await t.pumpWidget(themed(brightness, view(f.controller)));
-      await t.pump();
-      await t.tap(
-        find.descendant(
-          of: find.byKey(const ValueKey('personal-task-aeef')),
-          matching: find.byType(SuperTabPersonalTaskCard),
-        ),
-      );
-      await t.pumpAndSettle();
-      expect(t.takeException(), isNull);
-      expect(find.byKey(const ValueKey('super-task-header')), findsOneWidget);
-      await captureWindow(t, shots, 'task-middle-$b');
-    });
+    // At the narrowest window the Swarm screen keeps all three panes, and wide.
+    for (final width in [880.0, 1440.0]) {
+      testWidgets('a task opened in the middle at ${width.toInt()}, $b', (
+        t,
+      ) async {
+        size(t, Size(width, 800), brightness);
+        final f = TasksFixture()..rows = rows();
+        addTearDown(f.controller.dispose);
+        await f.controller.refresh();
+        await t.pumpWidget(themed(brightness, view(f.controller)));
+        await t.pump();
+        await t.tap(
+          find.descendant(
+            of: find.byKey(const ValueKey('personal-task-aeef')),
+            matching: find.byType(SuperTabPersonalTaskCard),
+          ),
+        );
+        await t.pumpAndSettle();
+        expect(t.takeException(), isNull);
+        expect(find.byKey(const ValueKey('super-task-header')), findsOneWidget);
+        await captureWindow(t, shots, 'task-middle-${width.toInt()}-$b');
+      });
+    }
 
     testWidgets('the Buddy chat header, $b', (t) async {
       size(t, const Size(1440, 500), brightness);
