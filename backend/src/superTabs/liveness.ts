@@ -263,13 +263,15 @@ function answeredAt(group: Conversation, assignment: Assignment): number | undef
   return assignment.status === 'needs_human' && waiting?.assignmentId === assignment.id ? waiting.answeredAt ?? undefined : undefined
 }
 
-/** A task waits on a person (needs_human, or blocked: its agent cannot go on) and its agent is alive: its machine's last report
- *  lists the session running. Its terminal prints nothing while it waits, so quiet time does not count (Ken, 2026-11-04, #2969:
- *  a task waiting on Huy was lost after 30 quiet minutes, twice). Not once the person answered (the agent then has 30 minutes
- *  from the answer, leaseEnd), and not for an agent no report shows running: that one is gone and loses it as before. */
+/** A task waits on a person (needs_human, or blocked: its agent cannot go on; or its terminal at a prompt its host alerted,
+ *  terminal.ts, whatever its status says, task #4217) and its agent is alive: its machine's last report lists the session
+ *  running. Its terminal prints nothing while it waits, so quiet time does not count (Ken, 2026-11-04, #2969: a task waiting on
+ *  Huy was lost after 30 quiet minutes, twice). Not once the person answered (the agent then has 30 minutes from the answer,
+ *  leaseEnd), and not for an agent no report shows running: that one is gone and loses it as before. */
 function waitingOnPerson(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment): boolean {
-  return (assignment.status === 'needs_human' || assignment.status === 'blocked') && answeredAt(group, assignment) === undefined
-    && !!state.machines?.find(m => m.machineId === worker.machineId)?.observation?.runningHarnessIds.includes(worker.harnessId)
+  const asked = ((assignment.status === 'needs_human' || assignment.status === 'blocked') && answeredAt(group, assignment) === undefined)
+    || !!worker.alerting?.includes('prompt')
+  return asked && !!state.machines?.find(m => m.machineId === worker.machineId)?.observation?.runningHarnessIds.includes(worker.harnessId)
 }
 
 /** When a worker's lease ends: from its own last status, check or post (for an assignment from before leases, its group's
