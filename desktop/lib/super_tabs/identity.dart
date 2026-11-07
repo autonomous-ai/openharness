@@ -24,7 +24,8 @@ class SuperTabAvatar extends StatelessWidget {
     this.face = false,
     this.now,
     this.radius,
-  }) : lead = false;
+    this.lead = false,
+  });
 
   SuperTabAvatar.person(
     SuperTabPerson person, {

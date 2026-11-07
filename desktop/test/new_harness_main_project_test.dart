@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
@@ -207,14 +208,7 @@ void main() {
     final integration = _newAgent(starts: [], choices: await _list());
     await _mount(tester, integration);
     bool picked(String id) => tester
-        .widget<Semantics>(
-          find
-              .descendant(
-                of: _key('new-harness-main-project-$id'),
-                matching: find.byType(Semantics),
-              )
-              .first,
-        )
+        .widget<Semantics>(_key('new-harness-main-project-$id'))
         .properties
         .checked!;
     expect(integration.mainProjectId, 'lamp');

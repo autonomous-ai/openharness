@@ -1,4 +1,5 @@
 import '../super_tabs/new_repository.dart';
+import '../super_tabs/project_choices.dart';
 import 'harness_attachments.dart';
 import 'lead_placement.dart';
 
@@ -16,6 +17,24 @@ class LeadSwarmStart {
   final String? repositoryUrl, title;
   final String machineId, engine, task;
   final List<HarnessAttachment> files;
+}
+
+/// The main project choice for a new project, whose new agent leads it.
+const kNewProjectChoice = '+new';
+
+/// A new agent the Swarm starts, picked in the Cmd-N form (task #4541): a Member of [mainProjectId], or the Lead of a
+/// new project named [projectName]. Harness keeps its folders; the form picks none.
+class AgentStart {
+  const AgentStart({
+    required this.machineId,
+    required this.engine,
+    this.model,
+    this.mainProjectId,
+    this.projectName,
+    this.task = '',
+  });
+  final String machineId, engine, task;
+  final String? model, mainProjectId, projectName;
 }
 
 /// An optional destination around the existing New Harness launch. Preparing
@@ -50,6 +69,7 @@ class HarnessLaunchIntegration {
     this.stopBuddy,
     this.heading,
     this.intro,
+    this.startAgent,
   });
   final String creationId, actionLabel;
 
@@ -90,6 +110,36 @@ class HarnessLaunchIntegration {
   /// [engine], as before; the form only chooses them. Set, the form shows no
   /// project and takes no first message.
   final Future<void> Function(String machineId, String engine)? startBuddy;
+
+  /// + New agent and Join with a project list (task #4541): the Swarm starts the agent the form picked. Set, the form
+  /// shows [projectChoices] in place of the folder, worktree and branch rows and the Member or Lead pill. Null against
+  /// a backend with no list: the form is today's.
+  final Future<void> Function(AgentStart start)? startAgent;
+
+  /// The projects to pick a main project from, in the server's order; null while unread or when the read failed.
+  ({List<SuperTabProjectChoice> projects, String? pick})? get projectChoices =>
+      _projectChoices;
+  set projectChoices(
+    ({List<SuperTabProjectChoice> projects, String? pick})? choices,
+  ) {
+    _projectChoices = choices;
+    if (choices != null) {
+      mainProjectId =
+          choices.pick ?? choices.projects.firstOrNull?.id ?? kNewProjectChoice;
+    }
+  }
+
+  ({List<SuperTabProjectChoice> projects, String? pick})? _projectChoices;
+
+  /// Why the list could not be read, said with [retryProjects]; New project still works.
+  String? projectsError;
+  Future<void> Function()? retryProjects;
+
+  /// The pick: a project's id, or [kNewProjectChoice].
+  String mainProjectId = kNewProjectChoice;
+
+  /// The name New project's Lead starts it with.
+  String newProjectName = '';
 
   /// Stops [startBuddy] while it only waits for the computer, so the form
   /// closes at once; false once the start is sent (#4442).

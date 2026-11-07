@@ -1486,6 +1486,26 @@ class NewHarnessController extends ChangeNotifier {
 
   /// Join's Buddy, which the Swarm starts (task #4196).
   bool get bringsBuddy => integration?.startBuddy != null;
+
+  /// + New agent or Join with the Swarm's project list (task #4541): the form picks a main project, or New project,
+  /// and the Swarm starts the agent; it shows no folder, worktree or branch and no Member or Lead pill.
+  bool get choosesProject => integration?.startAgent != null;
+
+  void setMainProject(String id) {
+    final destination = integration;
+    if (destination == null || locked) return;
+    destination.mainProjectId = id;
+    error = null;
+    notifyListeners();
+  }
+
+  void setNewProjectName(String name) {
+    integration?.newProjectName = name;
+    if (error != null) {
+      error = null;
+      notifyListeners();
+    }
+  }
   bool get taskTooLong => task.trim().length > kFirstTaskMaxLength;
   List<PermissionMode> get _modes =>
       _noAgentSetup || isCloud || leadThroughSwarm
@@ -4608,6 +4628,7 @@ class NewHarnessController extends ChangeNotifier {
         return _fail(failure.toString());
       }
     }
+    if (choosesProject) return _startAgent();
     if (bringsBuddy) return _startBuddy();
     if (!checking && usesProfile && _profile != null) {
       if (loadingProfiles) {
@@ -4985,6 +5006,38 @@ class NewHarnessController extends ChangeNotifier {
       return _fail(failure.toString());
     }
     integration?.completed = true;
+    if (_disposed) return NewHarnessOutcome.created;
+    busy = false;
+    status = null;
+    notifyListeners();
+    return NewHarnessOutcome.created;
+  }
+
+  /// The pick the form made, started by the Swarm on the chosen computer (task #4541).
+  Future<NewHarnessOutcome> _startAgent() async {
+    final destination = integration!;
+    final lead = destination.mainProjectId == kNewProjectChoice;
+    final name = destination.newProjectName.trim();
+    if (lead && name.isEmpty) return _fail('Name the project.');
+    busy = true;
+    error = null;
+    status = 'Starting your agent on $machineLabel…';
+    notifyListeners();
+    try {
+      await destination.startAgent!(
+        AgentStart(
+          machineId: _machineId,
+          engine: _base,
+          model: _model?.id,
+          mainProjectId: lead ? null : destination.mainProjectId,
+          projectName: lead ? name : null,
+          task: task.trim(),
+        ),
+      );
+    } catch (failure) {
+      return _fail(failure.toString());
+    }
+    destination.completed = true;
     if (_disposed) return NewHarnessOutcome.created;
     busy = false;
     status = null;
