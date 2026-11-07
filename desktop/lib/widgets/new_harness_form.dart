@@ -91,8 +91,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   final _headerMachineMenu = MenuController();
   final _headerMachineFocus = FocusNode(debugLabel: 'New harness computer');
   final _kindMenu = MenuController();
-  final _kindFocus = FocusNode(debugLabel: 'New agent Member or Lead');
-  final _kindAnchor = GlobalKey();
+  final _kindFocus = FocusNode(debugLabel: 'New agent role');
   final _leadRowFocus = <String, FocusNode>{};
   final _headerMachineAnchor = GlobalKey();
   bool get _desktopStartEnabled =>
@@ -2033,33 +2032,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                   ),
                 ),
               ),
-            if (box.agentKind case final kind?)
-              _desktopField(
-                order: 3.5,
-                finger: phone,
-                anchor: _kindAnchor,
-                child: _desktopKindMenu(
-                  child: DesktopPill(
-                    key: const ValueKey('new-harness-field-agent-kind'),
-                    focusNode: _kindFocus,
-                    label: kind == 'lead' ? 'Product Manager' : 'Agent',
-                    semanticLabel:
-                        'Starts as, ${kind == 'lead' ? 'Product Manager' : 'Agent'}',
-                    icon: kind == 'lead' ? AppIcons.crown : AppIcons.user,
-                    menu: true,
-                    capsule: true,
-                    tooltip: 'Start as an agent or a Product Manager',
-                    textSize: 13,
-                    surfaceColor: DesktopChrome.surface,
-                    onPressed:
-                        box.locked || box.integration?.agentKindLocked == true
-                        ? null
-                        : () => _kindMenu.isOpen
-                              ? _kindMenu.close()
-                              : _kindMenu.open(),
-                  ),
-                ),
-              ),
           ]),
         ),
         if (!widget.embedded) ...[
@@ -2124,7 +2096,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     if (attachments == null) {
       return Align(
         alignment: Alignment.centerRight,
-        child: _desktopLaunchActions(includeProjectVisibility: true),
+        child: _desktopLaunchActions(includeChoices: true),
       );
     }
     return LayoutBuilder(
@@ -2163,7 +2135,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                 constraints.maxWidth - grid.AppControl.height - 6 - 12,
               ),
             ),
-            child: _desktopLaunchActions(includeProjectVisibility: true),
+            child: _desktopLaunchActions(includeChoices: true),
           ),
         ],
       ),
@@ -2628,7 +2600,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     child: const Text('Use the existing folder'),
   );
 
-  Widget _desktopLaunchActions({bool includeProjectVisibility = false}) => Wrap(
+  /// [includeChoices]: the project's visibility and the agent's role, which
+  /// the box under the task shows and the starting view does not.
+  Widget _desktopLaunchActions({bool includeChoices = false}) => Wrap(
     spacing: 8,
     runSpacing: 8,
     alignment: WrapAlignment.end,
@@ -2649,12 +2623,38 @@ class NewHarnessFormState extends State<NewHarnessForm> {
           },
         ),
       // In + New agent, only a Product Manager makes a project.
-      if (includeProjectVisibility &&
+      if (includeChoices &&
           box.integration?.projectVisibility != null &&
           (box.agentKind ?? 'lead') == 'lead')
         _desktopProjectVisibility(9.95),
+      // Chosen where the agent is started (product owner, task #4445).
+      if (includeChoices)
+        if (box.agentKind case final kind?) _desktopKindChip(kind),
       _desktopStartButton(),
     ],
+  );
+
+  Widget _desktopKindChip(String kind) => FocusTraversalOrder(
+    // Just before Start.
+    order: const NumericFocusOrder(9.97),
+    child: _desktopKindMenu(
+      child: DesktopPill(
+        key: const ValueKey('new-harness-field-agent-kind'),
+        focusNode: _kindFocus,
+        label: kind == 'lead' ? 'Product Manager' : 'Agent',
+        semanticLabel:
+            'Starts as, ${kind == 'lead' ? 'Product Manager' : 'Agent'}',
+        icon: kind == 'lead' ? AppIcons.crown : AppIcons.user,
+        menu: true,
+        capsule: true,
+        tooltip: 'Start as an agent or a Product Manager',
+        textSize: 13,
+        surfaceColor: DesktopChrome.surface,
+        onPressed: box.locked || box.integration?.agentKindLocked == true
+            ? null
+            : () => _kindMenu.isOpen ? _kindMenu.close() : _kindMenu.open(),
+      ),
+    ),
   );
 
   Widget _desktopProjectVisibility(double order) => FocusTraversalOrder(
