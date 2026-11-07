@@ -110,7 +110,7 @@ export function extracted(kind: PartKind, data: unknown, stamp: number): Record<
       const group = data as GroupData, dueAt = proposalDueAt(group.proposal)
       return { projectId: group.projectId ?? null, kind: group.kind ?? null, archived: group.archived, dormant: !!group.dormant,
         proposalDueAt: dueAt == null ? null : new Date(dueAt),
-        agentIds: group.agentIds, feedIds: feedIdsOf(group), executionMachineId: activeWork(group) ? group.assignment!.execution.machineId : null,
+        agentIds: group.agentIds, feedIds: feedIdsOf(group), number: group.number ?? null, executionMachineId: activeWork(group) ? group.assignment!.execution.machineId : null,
         messageSeq: group.messageSeq ?? 0, reportSeq: group.reportSeq ?? 0,
         lastActivityAt: group.lastActivityAt ? new Date(group.lastActivityAt) : new Date(stamp), hostDigest: hostDigest(group),
         // A step is never marked by a write: it archives with its task (task steps design; steps.ts endSteps), not on its own clock.

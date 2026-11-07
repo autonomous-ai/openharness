@@ -160,6 +160,14 @@ export function loadGroupsByKey(tx: Transaction, tabId: string, keys: string[]):
     group: keys.length ? [['key', { key: { $in: [...new Set(keys)] } }]] : [] })
 }
 
+/** The keys of the live groups with these numbers, quiet ones too, through the number index: what a cancel's reason names
+ *  (store.ts moreNamed, task #4480). At most 10 numbers, as commands.ts tasksNamedIn returns them. */
+export async function loadGroupKeysByNumber(tx: Transaction, tabId: string, numbers: number[]): Promise<string[]> {
+  if (!numbers.length) return []
+  const rows = await groupsBy(tx, 'number', [{ $match: { tabId, number: { $in: [...new Set(numbers)].slice(0, 10) }, deleted: false } }, { $project: { _id: 0, key: 1 } }])
+  return rows.map(row => row.key as string)
+}
+
 /** What a read check needs of a Swarm, and no more (read/service.ts oneGroup, task #2875): its head, members and agents. The
  *  read cache holds it as `access` and patches it from those kinds alone (cachePatch.ts accessRule). */
 export function loadAccess(tx: Transaction, tabId: string): Promise<SwarmParts> {

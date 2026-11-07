@@ -2072,8 +2072,13 @@ class _SuperTabViewState extends State<SuperTabView>
                                         group.label,
                                         style: DesktopChrome.control(),
                                       ),
-                                      onTap: () =>
-                                          Navigator.pop(context, group.id),
+                                      // A duplicate opens the task its
+                                      // work goes on in (#4480).
+                                      onTap: () => Navigator.pop(
+                                        context,
+                                        group.foldedInto.firstOrNull ??
+                                            group.id,
+                                      ),
                                     ),
                                 ],
                               ),

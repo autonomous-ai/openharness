@@ -1984,6 +1984,9 @@ model SwarmGroup {
   feedIds            String[]  @default([])
   /// The machine running its active assignment, for the host's change read.
   executionMachineId String?
+  /// Its task number (Conversation.number), for a cancel that names the task its work goes on in, quiet ones too (task #4480).
+  /// Set on every write; parts written before it are set at worker startup (read/olderDuplicates.ts).
+  number             Int?
   messageSeq         Int       @default(0)
   reportSeq          Int       @default(0)
   lastActivityAt     DateTime
@@ -2016,6 +2019,8 @@ model SwarmGroup {
   @@index([hostMachineIds, tabId, changedAt])
   /// A Swarm's running work (parts/light.ts, the host's light load).
   @@index([tabId, executionMachineId])
+  /// The tasks a cancel's reason names by number (parts/load.ts loadGroupKeysByNumber, task #4480).
+  @@index([tabId, number])
   /// The host signature (read/host.ts inputs) reads every conversation's digest and dormancy from this index alone.
   @@index([tabId, deleted, key, hostDigest, dormant])
   /// A command's awake conversations, listed by the columns it compares with what it holds (parts/held.ts) from this index alone:

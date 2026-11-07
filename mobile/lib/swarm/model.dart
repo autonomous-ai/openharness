@@ -429,6 +429,9 @@ class SuperTabConversation {
       ),
       cards = SuperTabCards.fromJson(row['cards']),
       reviewOf = row['reviewOf'] as String?,
+      foldedInto = List.unmodifiable(
+        (row['foldedInto'] as List?)?.whereType<String>() ?? const <String>[],
+      ),
       step = row['step'] as String?,
       brief = _text(row, 'brief'),
       task = row['task'] is Map
@@ -575,6 +578,12 @@ class SuperTabConversation {
 
   /// A review group's reviewed group; null for any other conversation.
   final String? reviewOf;
+
+  /// The tasks its work goes on in, when it was cancelled as a duplicate or
+  /// folded or split into them (backend #4462), as the desktop reads it: its
+  /// Archived row there opens the first (#4480). Empty for any other
+  /// conversation and from an older backend.
+  final List<String> foldedInto;
 
   /// A step of the task [reviewOf] names, by the name its project's
   /// instructions give it (task steps design); null for a task, and for a

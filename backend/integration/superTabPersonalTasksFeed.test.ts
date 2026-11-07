@@ -8,6 +8,7 @@ import { commandSchema } from '../src/superTabs/commands.js'
 import type { Conversation } from '../src/superTabs/model.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { feedIdsOf, markFeedIds } from '../src/superTabs/read/feedIds.js'
+import { linkOlderDuplicates } from '../src/superTabs/read/olderDuplicates.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
 
@@ -176,6 +177,99 @@ describe('the person\'s Tasks feed (task #4203)', () => {
     for (const row of rows.filter(r => !(r.data as unknown as Conversation).assignment))
       expect([...row.feedIds].sort(), row.key).toEqual(feedIdsOf(row.data as unknown as Conversation).sort())
     expect(await markFeedIds(db)).toBe(0)
+  })
+})
+
+// Task #4480: a duplicate links to the task its reason names however long that task has been quiet, only in its own project.
+describe('a duplicate of a quiet task (task #4480)', () => {
+  /** [key] gone quiet two days ago, as the dormancy sweep leaves a finished task: no command loads it unless named. */
+  const quiet = async (f: Fixture, key: string) => {
+    const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key } } })
+    const at = new Date(f.now() - 2 * 24 * 60 * MINUTE)
+    await db.swarmGroup.update({ where: { id: row.id }, data: { dormant: true, lastActivityAt: at,
+      data: { ...row.data as object, dormant: true, lastActivityAt: at.toISOString() } as never } })
+    return (row.data as unknown as Conversation).number!
+  }
+  const feedOf = async (f: Fixture) => ids((await new SwarmReads(f.store).firstLoad(peer, f.tab)).personalTasks!.upserts)
+  const create = async (f: Fixture, title: string, projectId?: string) => String((await f.execute({ type: 'conversation.create', title, priority: 'P2',
+    requesterId: peer.sub, ...projectId ? { projectId } : {}, task: { goal: title, changes: title, constraints: 'none', owns: ['backend/'] },
+    checks: [{ description: `${title} works`, independent: false }] })).conversationId)
+  const cancel = (f: Fixture, conversationId: string, reason: string) => f.execute({ type: 'work.cancel', conversationId, assignmentId: 'current', reason })
+
+  it('leaves the Tasks feed when its real task has been quiet for days, cancelled now or before', async () => {
+    const f = await fixture()
+    const real = await quiet(f, f.asked)
+    const now = await create(f, 'Duplicate cancelled now'), before = await create(f, 'Duplicate cancelled before')
+    await cancel(f, before, 'Duplicate')
+    expect(await feedOf(f)).toEqual(expect.arrayContaining([now, before]))
+    await cancel(f, now, `Duplicate of #${real}`)
+    await cancel(f, before, `Duplicate of #${real}`)
+    const feed = await feedOf(f)
+    expect(feed).not.toContain(now)
+    expect(feed).not.toContain(before)
+    for (const key of [now, before]) {
+      const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key } } })
+      expect((row.data as unknown as Conversation).foldedInto, key).toEqual([f.asked])
+    }
+  })
+
+  it('leaves at worker start when it was cancelled before #4480 shipped, with a line saying where its work goes on', async () => {
+    const f = await fixture()
+    const real = await quiet(f, f.asked)
+    const other = String((await f.execute({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' })).projectId)
+    const elsewhere = ((await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: await create(f, 'Real elsewhere', other) } } }))
+      .data as unknown as Conversation).number
+    // An assigned task cancelled as a duplicate, its reason in its assignment's result.
+    const assigned = await create(f, 'Assigned duplicate')
+    const agent = String((await f.execute({ type: 'agent.add', conversationId: assigned, machineId: 'feed-peer-mac', harnessId: randomUUID(), name: 'Dupe', configuration: config, lead: false }, peer)).agentId)
+    await f.execute({ type: 'work.assign', conversationId: assigned, agentId: agent })
+    const assignment = ((await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: assigned } } })).data as unknown as Conversation).assignment!
+    await f.execute({ type: 'work.cancel', conversationId: assigned, assignmentId: assignment.id, reason: `Duplicate of #${real}` })
+    // Tasks nobody was assigned, their reasons only in their cancel lines.
+    const inside = await create(f, 'Unassigned duplicate'), across = await create(f, 'Across projects'), waiting = await create(f, 'Waiting')
+    await cancel(f, inside, `Being done inside #${real}`)
+    await cancel(f, across, `Duplicate of #${elsewhere}`)
+    await cancel(f, waiting, `Waiting on #${real}`)
+    // As a backend from before #4480 stored them: no number column and no link, so each is still in the feed. A new version, as
+    // any write leaves, so no reader holds the linked one.
+    await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { tabId: f.tab }, u: { $unset: { number: '', feedIds: '', 'data.foldedInto': '' },
+      $inc: { version: 1 }, $currentDate: { changedAt: true } }, multi: true }] })
+    await markFeedIds(db)
+    expect(await feedOf(f)).toEqual(expect.arrayContaining([assigned, inside, across, waiting]))
+
+    let linked = 0
+    const entries = await profiled(db, async () => { linked = await linkOlderDuplicates(db, f.store) })
+    expect(linked).toBe(2)
+    // A cancel line is read by its conversation's index, and so is a real task by its number.
+    const lines = plan(reads(entries, 'SuperTabMessage', ['source.status']))
+    expect(lines.length).toBeGreaterThan(0)
+    for (const read of lines) expect(read.plan).toContain('IXSCAN { tabId: 1, conversationId: 1, sequence: 1, _id: 1 }')
+    const byNumber = plan(reads(entries, 'SwarmGroup', ['number'], ['$exists']))
+    expect(byNumber.length).toBeGreaterThan(0)
+    for (const read of byNumber) expect(read.plan).toContain('IXSCAN { tabId: 1, number: 1 }')
+    const feed = await feedOf(f)
+    expect(feed).not.toContain(assigned)
+    expect(feed).not.toContain(inside)
+    expect(feed).toEqual(expect.arrayContaining([across, waiting, f.asked]))
+    for (const key of [assigned, inside]) {
+      const lines = await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: key } })
+      expect(lines.filter(m => m.text.includes(`goes on in #${real}`)), key).toHaveLength(1)
+    }
+    const rows = await db.swarmGroup.findMany({ where: { tabId: f.tab } })
+    for (const row of rows) expect(row.number, row.key).toBe((row.data as unknown as Conversation).number ?? null)
+    expect(await linkOlderDuplicates(db, f.store)).toBe(0)
+  })
+
+  it('stays when the task it names is in another project', async () => {
+    const f = await fixture()
+    const other = String((await f.execute({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' })).projectId)
+    const elsewhere = await create(f, 'Real task elsewhere', other)
+    const number = (await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: elsewhere } } })).data as unknown as Conversation
+    const dup = await create(f, 'Named across projects')
+    await cancel(f, dup, `Duplicate of #${number.number}`)
+    expect(await feedOf(f)).toContain(dup)
+    const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: dup } } })
+    expect((row.data as unknown as Conversation).foldedInto).toBeUndefined()
   })
 })
 
