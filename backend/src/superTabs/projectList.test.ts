@@ -19,21 +19,28 @@ function swarm() {
   }
   const invited = run({ type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' })
   run({ type: 'invite.accept', inviteId: invited.result.inviteId as string }, peer)
-  const project = (name: string, extra: { visibility?: 'public' | 'private'; by?: Actor; waiting?: number; members?: number } = {}) => {
-    const id = run({ type: 'project.create', name, visibility: extra.visibility ?? 'public' }, extra.by ?? owner).result.projectId as string
-    const chat = state.conversations.find(c => c.id === state.projects!.find(p => p.id === id)!.leadConversationId)!
-    chat.pulse = pulse(extra.waiting ?? 0, extra.members ?? 0)
+  // Every command records each project's pulse again (pulse.ts recordPulse), so the pulses wanted here are put on last.
+  const wanted = new Map<string, Pulse | undefined>()
+  const chatOf = (projectId: string) => state.conversations.find(c => c.id === state.projects!.find(p => p.id === projectId)!.leadConversationId)!
+  const project = (name: string, extra: { visibility?: 'public' | 'private'; waiting?: number; members?: number } = {}) => {
+    const id = run({ type: 'project.create', name, visibility: extra.visibility ?? 'public', brief: '' }).result.projectId as string
+    wanted.set(id, pulse(extra.waiting ?? 0, extra.members ?? 0))
     return id
   }
+  const noPulse = (projectId: string) => wanted.set(projectId, undefined)
+  const read = () => {
+    for (const [id, recorded] of wanted) { const chat = chatOf(id); if (recorded) chat.pulse = recorded; else delete chat.pulse }
+    return state
+  }
   const lead = (projectId: string, name: string) => {
-    const chat = state.conversations.find(c => c.id === state.projects!.find(p => p.id === projectId)!.leadConversationId)!
+    const chat = chatOf(projectId)
     const id = `agent-${name}`
     state.agents.push({ id, machineId: 'mac', harnessId: name, machineOwnerId: 'owner', contributorId: 'owner',
       membershipGeneration: state.people[0]!.generation, hostGrant: null, name, configuration: null, configurationVersion: 'v' } as unknown as SuperTabState['agents'][number])
     chat.leadId = id
     chat.agentIds.push(id)
   }
-  return { run, project, lead, get state() { return state } }
+  return { run, project, noPulse, lead, read, get state() { return state } }
 }
 
 /** A stored pulse with [waiting] tasks in Next up and [members] agents working in the project beside its Lead. */
@@ -50,8 +57,8 @@ describe('the project list', () => {
     const f = swarm()
     f.project('harness')
     f.project('secret', { visibility: 'private' })
-    expect(names(projectList(f.state, peer))).not.toContain('secret')
-    expect(names(projectList(f.state, owner))).toContain('secret')
+    expect(names(projectList(f.read(), peer))).not.toContain('secret')
+    expect(names(projectList(f.read(), owner))).toContain('secret')
   })
 
   it('shows what each project is, else its repository\'s name, its Lead and how many tasks wait', () => {
@@ -60,8 +67,8 @@ describe('the project list', () => {
     f.run({ type: 'project.about', projectId: harness, about: 'The Harness app and Swarm' })
     f.lead(harness, 'River')
     const lamp = f.project('lamp')
-    f.run({ type: 'project.repository', projectId: lamp, repositoryUrl: 'https://github.com/autonomous-ai/lamp-os' })
-    const rows = projectList(f.state, peer).projects
+    f.state.projects!.find(p => p.id === lamp)!.repository = { machineId: 'mac', cwd: '/Users/someone/lamp', repositoryUrl: 'https://github.com/autonomous-ai/lamp-os' }
+    const rows = projectList(f.read(), peer).projects
     expect(rows.find(r => r.id === harness)).toEqual({ id: harness, name: 'harness', about: 'The Harness app and Swarm', repositoryName: null,
       lead: { agentId: 'agent-River', name: 'River' }, waiting: 12 })
     // A repository's name, never a folder on someone's computer.
@@ -72,7 +79,7 @@ describe('the project list', () => {
     const f = swarm()
     f.project('busy', { waiting: 9 })
     const quiet = f.project('quiet')
-    const list = projectList(f.state, peer, quiet)
+    const list = projectList(f.read(), peer, quiet)
     expect(list.pick).toBe(quiet)
     expect(list.projects[0]!.id).toBe(quiet)
   })
@@ -81,8 +88,8 @@ describe('the project list', () => {
     const f = swarm()
     const busy = f.project('busy', { waiting: 9 })
     const secret = f.project('secret', { visibility: 'private', waiting: 50 })
-    expect(projectList(f.state, peer, secret).pick).toBe(busy)
-    expect(projectList(f.state, peer, 'gone').pick).toBe(busy)
+    expect(projectList(f.read(), peer, secret).pick).toBe(busy)
+    expect(projectList(f.read(), peer, 'gone').pick).toBe(busy)
   })
 
   it('otherwise starts on the one that needs help most: waiting per Member there, then waiting, then A to Z', () => {
@@ -92,7 +99,7 @@ describe('the project list', () => {
     f.project('empty', { waiting: 1, members: 0 })
     f.project('beta', { waiting: 4, members: 2 })
     f.project('alpha', { waiting: 2, members: 1 })
-    const list = projectList(f.state, peer)
+    const list = projectList(f.read(), peer)
     // Nobody working where a task waits needs help first; 6 per Member; 2 per Member, the one with more waiting first, then A
     // to Z; nothing waiting comes last.
     expect(names(list)).toEqual(['empty', 'short', 'crowded', 'beta', 'alpha', 'Pilot'])
@@ -102,15 +109,14 @@ describe('the project list', () => {
   it('lists a project whose pulse is not recorded yet with nothing waiting', () => {
     const f = swarm()
     const fresh = f.project('fresh')
-    const chat = f.state.conversations.find(c => c.id === f.state.projects!.find(p => p.id === fresh)!.leadConversationId)!
-    delete chat.pulse
-    expect(projectList(f.state, peer).projects.find(r => r.id === fresh)).toMatchObject({ waiting: 0, lead: null })
+    f.noPulse(fresh)
+    expect(projectList(f.read(), peer).projects.find(r => r.id === fresh)).toMatchObject({ waiting: 0, lead: null })
   })
 
   it('gives a person who reads no project an empty list and no pick', () => {
     const f = swarm()
-    f.run({ type: 'project.create', name: 'mine', visibility: 'private' })
-    const state = f.state
+    f.run({ type: 'project.create', name: 'mine', visibility: 'private', brief: '' })
+    const state = f.read()
     // Only private projects of another person: the implicit first project is made private too.
     state.projects!.forEach(p => { p.visibility = 'private' })
     expect(projectList(state, peer)).toEqual({ projects: [], pick: null })
@@ -118,13 +124,12 @@ describe('the project list', () => {
 
   it('stays within its byte bound for 100 projects with every field at its longest', () => {
     const f = swarm()
-    const state = f.state
-    for (let i = state.projects?.length ?? 0; i < 100; i++) {
-      const id = f.project(`${i}`.padStart(3, '0') + 'x'.repeat(157))
-      state.projects!.find(p => p.id === id)!.repository = { machineId: 'mac', cwd: '/repo', repositoryUrl: `https://github.com/${'o'.repeat(39)}/${'r'.repeat(100)}` }
+    for (let i = f.state.projects?.length ?? 0; i < 100; i++) {
+      const id = f.project(`${i}`.padStart(3, '0') + 'x'.repeat(157), { waiting: 999 })
+      f.state.projects!.find(p => p.id === id)!.repository = { machineId: 'mac', cwd: '/repo', repositoryUrl: `https://github.com/${'o'.repeat(39)}/${'r'.repeat(100)}` }
       f.lead(id, `${i}`.padStart(3, '0') + 'n'.repeat(77))
     }
-    const list = projectList(f.state, peer)
+    const list = projectList(f.read(), peer)
     expect(list.projects).toHaveLength(100)
     expect(Buffer.byteLength(JSON.stringify(list))).toBeLessThan(64 * 1024)
   })
