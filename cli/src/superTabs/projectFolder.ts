@@ -83,6 +83,8 @@ export async function prepareSwarmStart(core: CoreApi, row: Json, start: Json,
   // A person's one Buddy has no project: its launch makes its folder from the checkouts already here and fetches nothing
   // (buddyHome.ts). Asking for a token anyway was refused with a 404, which failed every such start (2026-11-02).
   if (request.buddyScope === 'swarm') return null
+  // Nor does a Regular agent (backend agent.new, task #4116): it starts in no project, in a folder of its own (start.ts).
+  if (request.regular === true) return null
   // Nor does a project with no repository address (task #3211): there is nothing to clone, and the server refuses a token
   // for it. Its work starts in a folder of its own, made without any login (prepareSwarmProject).
   const project = startProject(row, request)

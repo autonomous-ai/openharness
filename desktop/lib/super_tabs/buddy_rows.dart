@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import 'buddy_chat.dart';
@@ -57,6 +58,7 @@ class SuperTabBuddyRow extends StatelessWidget {
     this.note,
     this.detail,
     this.status,
+    this.crownKey,
   });
 
   /// The Buddy, for its avatar; null while none runs.
@@ -77,6 +79,9 @@ class SuperTabBuddyRow extends StatelessWidget {
 
   /// A quiet word after the name, such as a Buddy's "offline".
   final String? note;
+
+  /// Set on a PM: its crown, right after the name (Swarm v3, task #4118).
+  final Key? crownKey;
 
   /// A line under the name, such as where a Buddy runs, with [status], its
   /// activity mark, before it.
@@ -154,6 +159,15 @@ class SuperTabBuddyRow extends StatelessWidget {
                                         ),
                                   ),
                                 ),
+                                if (crownKey case final crownKey?) ...[
+                                  const SizedBox(width: 4),
+                                  Icon(
+                                    AppIcons.crown,
+                                    key: crownKey,
+                                    size: AppIcons.metadataSize,
+                                    color: color,
+                                  ),
+                                ],
                                 if (project case final project?) ...[
                                   const SizedBox(width: 8),
                                   Flexible(

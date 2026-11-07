@@ -17,7 +17,6 @@ import { worktreeFolderName } from '../lib/agentNames.js'
 import { join as joinPath } from 'node:path'
 import { markBuddyOwner } from '../lib/buddyGuard.js'
 import { engineAccount } from '../lib/engineAccount.js'
-import { codexModelNotOffered, NO_PM_RELAY, offeredCodexModels, teamRelayed } from '../team/relay.js'
 
 type Json = Record<string, unknown>
 export type ScopedRequest = (payload: Json) => Promise<Json>
@@ -356,25 +355,6 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
     if (native.state === 'missing') {
       if (start.dispatched) return { error: 'START_UNCERTAIN', startId, creationId,
         detail: 'This start was submitted but its machine has no receipt. Inspect the machine before creating another agent.' }
-      // A Codex Product Manager in a Harness Team account runs in an engine home of its own, with no sign-in there: it signs
-      // in on the owner's relay, or not at all. With no relay it is refused before anything launches, and the queue moves it
-      // on (backend leadStart.ts), rather than starting signed out (security re-check 3 of #2089).
-      if (request.engine === 'codex' && request.leadFor && typeof request.leadFor === 'object' && isTeamDaemon() && !teamRelayed()) {
-        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: NO_PM_RELAY } }))
-        return { error: 'START_FAILED', startId, detail: NO_PM_RELAY }
-      }
-      // A Codex model the Mac owner's ChatGPT account does not offer launched and then failed every request (Mac Auto, whose
-      // owner is offered GPT-6-Luna and the GPT-5.6 models, was asked for gpt-6.1-sol, 2026-10-29). In a Team account on the
-      // relay the owner's list is read first, and such a start is refused before anything launches, naming what is offered.
-      // A list that cannot be read refuses nothing.
-      if (request.engine === 'codex' && model && model !== 'default' && request.gridModel === undefined && isTeamDaemon()) {
-        const offered = await offeredCodexModels().catch(() => null)
-        if (offered && !offered.slugs.includes(model)) {
-          const detail = codexModelNotOffered(model, offered)
-          requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: detail } }))
-          return { error: 'START_FAILED', startId, detail }
-        }
-      }
       // A Buddy launches with its owner's full rights, so only on its owner's own machine and account (task #2832), before
       // anything is reserved or launched.
       if (request.buddyOf !== undefined && !buddyOnOwnMachine(input, start, object(request.buddyOf))) {
@@ -445,7 +425,8 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       // A start that works in the folder it names, when that folder is a temporary one: a scratchpad, which Claude Code asks
       // about on every run and nobody answers (computer's Dee, Scholes 11-06, #3713). The agent gets a permanent folder of its
       // own, made, marked and trusted here, and removed when it stops (agentFolder.ts, machines.ts).
-      const agentFolder = !homeFolder && request.worktree !== true && typeof request.cwd === 'string' && temporaryFolder(request.cwd)
+      // So does a Regular agent (backend agent.new, task #4116), which starts in no project: the backend's folder only admits it.
+      const agentFolder = !homeFolder && request.worktree !== true && (request.regular === true || (typeof request.cwd === 'string' && temporaryFolder(request.cwd)))
         ? agentFolderFor(projectsRoot(), startId) : null
       // A folder there Harness did not make is refused, and so is the start: it never runs, or trusts, in someone else's folder.
       if (agentFolder) {

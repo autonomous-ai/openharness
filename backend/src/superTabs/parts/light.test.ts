@@ -70,6 +70,7 @@ const conversation: Required<Conversation> = {
   pin: { agentId: 'a', why: 'ci', at: 1 },
   priority: 'P0',
   projectId: 'p',
+  proposal: { version: 1, text: 'Words', goal: 'Goal', why: 'Why', doneWhen: 'Done', evidence: ['Evidence'], priority: 'P2', createdAt: 0, senders: [], questions: [] },
   proposals: [],
   pullRequestChecks: {},
   pullRequestEvents: {},
@@ -87,11 +88,15 @@ const conversation: Required<Conversation> = {
   step: 'Review',
   stepIds: [],
   stepUp: { attempt: 2, floor: 2, reason: 'r', at: 1, carry: '' },
+  stuck: { key: 'k', messageId: 'm', tagged: [], fixed: 'f' },
   talkedAt: { w: { person: 1, answer: 2 } },
   task: { goal: '', changes: '', constraints: '', owns: [] },
+  taskApproval: { personId: 'p', generation: 'g', state: 'proposal', createdAt: 1 },
   teamWritten: true,
   teamWrittenBy: { kind: 'assigned' },
   title: 't',
+  unlinkedPullRequests: [],
+  writers: [],
 }
 
 describe('the light conversation projection (parts/light.ts)', () => {

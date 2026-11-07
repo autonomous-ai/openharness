@@ -3,9 +3,11 @@
  * before parts (the store's old host reads, which this replaced), built from a reassembled state, with `revision`
  * replaced by `lastChangedAt` and the Leads conversation id added to agent rows.
  */
+import { buddySleepManaged } from '../buddySleep.js'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { activeWork, agent, isLeads, SuperTabError, conversation, type Agent, type SuperTabState } from '../model.js'
 import { buddyChatOf, isSwarmBuddy, isSwarmBuddyChat } from '../buddies.js'
+import { buddyEngineChat } from '../buddyEngine.js'
 import { hostLocalGrid, machineContribution, machineLimitReached, machineRoom, type MachineCleanup } from '../machines.js'
 import { agentProjectId, agentSetRole, canWatchAgent, isConfidential, groupProject, ledProject, projectsOf, skillModeOf, startProject, skillSetOf, watchClosed } from '../projects.js'
 import type { HostAgentRow, HostPool, HostRosterRow, HostTabRows } from './contract.js'
@@ -15,7 +17,8 @@ import { PM_SCHEDULE_TEXT, pmScheduleText } from '../pmSchedule.js'
 import { PM_RESTART_AFTER_MS } from '../timeChecks.js'
 
 /** The built-in PM schedule's hash, once per text: it changes only with a backend release, and with a project's switch to the
- *  Board way of working (pmSchedule.ts pmScheduleText, task #3819). */
+ *  Board way of working (pmSchedule.ts pmScheduleText, task #3819). It is taken over the seed's release window: this read loads
+ *  no project rules, so a window change reaches the PM at its next instructions read (#4097). */
 const BUILT_IN_HASHES = new Map<string, string>([[PM_SCHEDULE_TEXT, instructionsHash(PM_SCHEDULE_TEXT)]])
 const builtInHash = (text: string): string => BUILT_IN_HASHES.get(text) ?? (BUILT_IN_HASHES.set(text, instructionsHash(text)), BUILT_IN_HASHES.get(text)!)
 
@@ -78,6 +81,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
   const home = projectsOf(state).find(p => p.id === agentProjectId(state, target))
   const custom = home && skillSetOf(home) === 'custom' ? home : null
   const chosen = custom ? agentSetRole(state, custom, target) : null
+  const buddyChat = isSwarmBuddy(target) || (target.buddySession && target.buddyOf) ? buddyChatOf(state, target) : undefined
   return {
     tabId, tabName: state.name, lastChangedAt, paused: state.paused,
     // `active` lets the host release members that are only in archived groups to automatic cleanup.
@@ -85,6 +89,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     attention: waiting ? { assignmentId: waiting.id, status: waiting.status, result: waiting.result?.slice(0, 500) ?? null } : null,
     resume,
     agent: target,
+    ...(buddySleepManaged(state, target) ? { buddySleepManaged: true as const } : {}),
     // A Buddy-only record is not the machine in the Swarm: the owner's Lead there still joins it, which makes the record an ordinary
     // machine (commands.ts machine.contribute ifMissing; security review 2 of #2234).
     // Not where machine.contribute would refuse it (#2637): a Buddy-only record is counted already, so it still joins.
@@ -98,7 +103,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     // running daemons read the text again (2026-11-02: agents kept the old routing after #2495, as revision 0 never moves).
     instructions: home ? { projectId: home.id, revision: home.instructionsRevision ?? 0,
       hash: home.instructionsHash ?? (home.instructionsRevision ? null : FIRST_INSTRUCTIONS.instructionsHash),
-      coordinatorName: coordinatorNameOf(home), ...ledProject(state, target.id)?.id === home.id ? { builtInHash: builtInHash(pmScheduleText(home)) } : {} } : null,
+      coordinatorName: coordinatorNameOf(home), ...ledProject(state, target.id)?.id === home.id ? { builtInHash: builtInHash(pmScheduleText(state, home)) } : {} } : null,
     ...(custom ? { role: chosen && { ...chosen, projectId: custom.id } } : {}),
     lead: !!ledProject(state, target.id),
     // What a PM owes people, and how long it may while it hangs: its host restarts it after that (timeChecks.ts, cli host.ts).
@@ -108,6 +113,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     // The conversation it leads: the chat its host rebuilds its start prompt from when it switches it (cli leadSwitchRequest.ts).
     // A field of its own: an older host reads leadsConversationId as "only this conversation's deliveries" (cli host.ts).
     ledConversationId: ledProject(state, target.id)?.leadConversationId ?? null,
+    ...(isSwarmBuddy(target) && !target.buddySession ? { buddyConversationId: buddyChat?.id ?? buddyEngineChat(state, target) } : {}),
     stopRequested: target.workDecision === 'stop' && !state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id),
     observers: lookups.people.filter(p => p.id !== user.sub && canWatchAgent(state, { kind: 'person', userId: p.id, email: p.email }, target, closed))
       .map(p => ({ email: p.email, userId: p.id })),
@@ -116,7 +122,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     // But for this Swarm's current Lead: its listed observers watch it while this row is in force (Ken, 2026-10-28).
     membersWatch: isConfidential(state, target, closed) && !watchClosed(state, target, closed),
     // Which of its person's Buddies' chats it is in (task #3818).
-    ...isSwarmBuddy(target) || (target.buddySession && target.buddyOf) ? { buddyChatId: buddyChatOf(state, target)?.id ?? null } : {},
+    ...isSwarmBuddy(target) || (target.buddySession && target.buddyOf) ? { buddyChatId: buddyChat?.id ?? null } : {},
   }
 }
 
@@ -128,12 +134,15 @@ function pool(tabId: string, state: SuperTabState, machineId: string, user: Auth
     && (!s.harnessId || !s.poolSettled) && !s.error)
   // A host from before Buddies reads only `starts`, and would launch a Buddy as a Builder: it never sees one. Nor a Product
   // Manager (leadStart.ts), which goes only to a host that said it starts one.
-  const starts = pending.filter(s => !s.request.buddyOf && !s.request.leadFor), buddyStarts = pending.filter(s => s.request.buddyOf)
+  // Nor a Regular agent (commands.ts agent.new, task #4116), which an older host would launch in a project folder it lacks.
+  const starts = pending.filter(s => !s.request.buddyOf && !s.request.leadFor && !s.request.regular), buddyStarts = pending.filter(s => s.request.buddyOf)
+  const regularStarts = pending.filter(s => s.request.regular)
   const leadStarts = pending.filter(s => s.request.leadFor)
   const buddyChats = new Set(buddyStarts.map(s => s.request.conversationId))
   const reservations = (state.harnessReservations ?? []).filter(r => r.machineId === machineId)
   const removedHere = (state.removedSessions ?? []).filter(r => r.machineId === machineId).map(r => r.harnessId)
   return { tabId, paused: state.paused, machine: contribution, starts, ...(buddyStarts.length ? { buddyStarts } : {}), ...(leadStarts.length ? { leadStarts } : {}),
+    ...(regularStarts.length ? { regularStarts } : {}),
     ...(contribution.scope === 'swarm' ? { projects: projectsOf(state).filter(p => pending.some(s => startProject(state, s.request)?.id === p.id))
       .map(p => ({ id: p.id, leadConversationId: p.leadConversationId, repository: p.repository,
         // A private conversation is chat only and never runs work here, so its id stays with its audience; a Buddy chat whose
@@ -150,7 +159,7 @@ function pool(tabId: string, state: SuperTabState, machineId: string, user: Auth
     ...(githubApp ? { githubApp: true as const } : {}),
     // Asks the host to say what it launches beyond workers (machines.ts `capabilities`): a host never sends a field this
     // server did not ask for, so an older server, which would refuse every reading with it, never sees it.
-    capabilitiesWanted: true as const }
+    buddySleepWanted: true as const, capabilitiesWanted: true as const }
 }
 
 function assignments(tabId: string, state: SuperTabState, machineId: string, user: AuthUser) {

@@ -32,14 +32,17 @@ void main() {
   });
 
   for (final brightness in Brightness.values) {
-    for (final layout in ['board', 'list']) {
+    // The Board at the three widths its columns must fill, and the List.
+    for (final (layout, size) in [
+      ('board-1280', const Size(1280, 900)),
+      ('board-1920', const Size(1920, 900)),
+      ('board-2560', const Size(2560, 900)),
+      ('list', const Size(1900, 1500)),
+    ]) {
       testWidgets('screenshots for review ($layout, ${brightness.name})', (
         tester,
       ) async {
-        await tester.binding.setSurfaceSize(
-          // Six columns of 280 beside the sidebar: the whole Board in one picture.
-          layout == 'list' ? const Size(1900, 1500) : const Size(2300, 900),
-        );
+        await tester.binding.setSurfaceSize(size);
         addTearDown(() => tester.binding.setSurfaceSize(null));
         final before = grid.AppTheme.brightness.value;
         grid.AppTheme.brightness.value = brightness;

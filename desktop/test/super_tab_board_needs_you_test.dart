@@ -72,7 +72,12 @@ void main() {
     (server.state['conversations'] as List).addAll(cards);
     final c = server.controller(
       account: 'owner',
-      initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
+      initial: {
+        'tabId': 'tab',
+        'projectsGroupOpen': true,
+        'accountId': 'owner',
+        'selectedId': 'lead',
+      },
     );
     await tester.runAsync(c.refresh);
     await tester.pumpWidget(
