@@ -9,6 +9,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm_catalog.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
@@ -203,4 +204,60 @@ void main() {
     expect(_form, findsNothing);
     await unmountSwarm(tester, f);
   });
+
+  // Product owner, relayed by the PM (task #4445): the role is chosen where
+  // the agent is started, beside New agent, not among the header's pickers.
+  for (final way in ['+ New agent', 'Cmd-N']) {
+    testWidgets('$way: the role chip sits just left of New agent', (
+      tester,
+    ) async {
+      final f = await mountSwarm(tester);
+      if (way == 'Cmd-N') {
+        await key(tester, LogicalKeyboardKey.keyN, cmd: true);
+        await tester.pumpAndSettle();
+      } else {
+        await tapNewAgent(tester);
+      }
+      final start = find.byKey(const ValueKey('new-harness-field-start'));
+      final chip = tester.getRect(_kind);
+      final button = tester.getRect(start);
+      // Below the task's text, in the box's bottom row: no longer up among
+      // the header's pickers.
+      final task = tester.getRect(
+        find.byKey(const ValueKey('new-harness-task')),
+      );
+      expect(chip.top, greaterThan(task.top), reason: 'Not the header');
+      expect((chip.center.dy - button.center.dy).abs(), lessThan(2));
+      expect(chip.right, lessThanOrEqualTo(button.left));
+      expect(button.left - chip.right, lessThan(16), reason: 'Beside it');
+
+      // Tab goes from the chip to New agent, and its menu still opens.
+      tester.widget<DesktopPill>(_kind).focusNode!.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      final focused = FocusManager.instance.primaryFocus!.context!;
+      expect(
+        find.descendant(
+          of: start,
+          matching: find.byElementPredicate((e) => e == focused),
+          matchRoot: true,
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(_kind);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('new-harness-agent-kind-lead')),
+        findsOneWidget,
+      );
+      await tester.tap(_kind, warnIfMissed: false);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('new-harness-agent-kind-lead')),
+        findsNothing,
+      );
+      await unmountSwarm(tester, f);
+    });
+  }
 }
