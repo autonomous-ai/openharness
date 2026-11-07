@@ -97,17 +97,14 @@ function refusal(state: SuperTabState, request: AgentStartRequest, start?: Agent
 const refused = (error: SuperTabError) => error.message.split('Refused: ')[1] ?? ''
 
 describe('a start on a contributed machine', () => {
-  it.each(['claude', 'codex'])('admits full permissions for %s, including dispatch rechecks', engine => {
-    const f = setup()
-    expect(refusal(f.state, f.request({ engine, permissionMode: 'full' }))).toBeNull()
-    expect(refusal(f.state, f.request({ engine, permissionMode: 'full' }), { poolGeneration: 'g1' } as AgentStart)).toBeNull()
-  })
-
-  it.each(['ask', 'auto', 'readOnly', 'bypass'])('refuses permission mode %s with an accurate explanation', permissionMode => {
+  // Swarm v3 (task #4215): every agent starts with its owner's own settings. A CLI from before full mode answers these exact
+  // words by sending the start again without the field, so CLIs from the last 30 days keep starting agents.
+  it.each(['full', 'ask', 'auto', 'readOnly', 'bypass'])('refuses permission mode %s in the words older CLIs retry without it', permissionMode => {
     const f = setup()
     const error = refusal(f.state, f.request({ permissionMode }))!
     expect(error).toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
-    expect(error.message).toContain('permissionMode (only full is accepted; leave it out to use the machine’s default)')
+    expect(error.message.endsWith('Refused: permissionMode (it runs with its own default account settings, so leave it out).')).toBe(true)
+    expect(error.message).not.toContain('full permissions')
   })
 
   it('is admitted inside the contribution: its project folder, one of its engines, no account settings', () => {
@@ -171,7 +168,7 @@ describe('a start on a contributed machine', () => {
     const error = refusal(f.state, f.request({ cwd: '/elsewhere', engine: 'opencode', codexHome: '/h', permissionMode: 'bypass' }))!
     expect(error.message).toContain('cwd (this project uses /data/swarm-projects/tab/lead on it)')
     expect(error.message).toContain('engine (it contributes claude, codex)')
-    expect(error.message).toContain('codexHome (it runs with its own default account settings, so leave it out); permissionMode (only full is accepted')
+    expect(error.message).toContain('codexHome (it runs with its own default account settings, so leave it out); permissionMode (it runs with its own default account settings, so leave it out).')
   })
 
   it('says nothing of other projects or machines', () => {
