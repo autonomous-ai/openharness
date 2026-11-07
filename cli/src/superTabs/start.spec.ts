@@ -2,12 +2,12 @@ import { AGENT_FOLDER_MARK, agentFolderFor } from './agentFolder.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { dirname, join, sep } from 'node:path'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
 import { buddyOwnerFile, buddyOwnerOf } from '../lib/buddyGuard.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { env } from '../config/env.js'
 import { homedir, tmpdir } from 'node:os'
-import { BUDDY_CLAUDE_SIGNED_OUT, BUDDY_NOT_OWN_MACHINE, HEAVY_NOT_RECORDED, HEAVY_REFUSED, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent } from './start.js'
+import { BUDDY_CLAUDE_SIGNED_OUT, BUDDY_NOT_OWN_MACHINE, HEAVY_NOT_RECORDED, HEAVY_REFUSED, inspectCapacity, linkCodexSignIn, MODEL_REPORT_WAIT_MS, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 import { readCapacityDisk } from './disk.js'
 import { SuperTabHostError } from './wire.js'
@@ -203,12 +203,73 @@ describe('Swarm permission mode', () => {
     } finally { teamDaemon.value = false }
   })
 
-  it.each(['claude', 'codex'] as const)('refuses Team-written %s work in the main account, before anything is created', async engine => {
+  // Swarm v3 (task #4307): no Team machine is left, and the server sends Team-written work only to the project owner's own
+  // computer with project settings off (backend superTabs/teamWritten.ts, ruling #4120). It launches there as on a Team daemon.
+  it('starts Team-written Claude Code work on the owner\'s own computer with project settings off', async () => {
     const f = fixture()
-    Object.assign(f.start.request, { engine, projectSettings: 'off' })
-    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ error: 'START_FAILED' })
-    expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
-    expect(f.start.error).toContain('Team account')
+    Object.assign(f.start.request, { engine: 'claude', projectSettings: 'off' })
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+    const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
+    expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: true })
+    expect(payload).not.toHaveProperty('codexHome')
+    expect(f.start.error).toBeNull()
+  })
+
+  describe('Team-written Codex work on the owner\'s own computer', () => {
+    const profiles: string[] = []
+    afterEach(() => { for (const dir of profiles.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+    /** A Codex home of the person's, with a stand-in sign-in file: the tests never touch a real one. */
+    const profile = (signedIn: boolean) => {
+      const dir = mkdtempSync(join(tmpdir(), 'start-codex-profile-'))
+      profiles.push(dir)
+      if (signedIn) writeFileSync(join(dir, 'auth.json'), '{"stand-in":true}')
+      writeFileSync(join(dir, 'config.toml'), '[projects."/repo"]\ntrust_level = "trusted"\n')
+      return dir
+    }
+
+    it('launches in an engine home of its own that trusts no project, signed in with the person\'s own Codex sign-in', async () => {
+      const own = profile(true), f = fixture()
+      Object.assign(f.start.request, { engine: 'codex', projectSettings: 'off', codexHome: own })
+      expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+      const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
+      const home = String(payload.codexHome)
+      profiles.push(dirname(home))
+      expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: true })
+      expect(home).toContain(`${sep}${PM_HOMES}${sep}`)
+      // The person's own config, which trusts the repository and so its settings, hooks and exec policies, stays out.
+      const config = readFileSync(join(home, 'config.toml'), 'utf8')
+      expect(config).toContain('[projects."/repo"]\ntrust_level = "untrusted"\n')
+      expect(config).not.toMatch(/trust_level = "trusted"/)
+      // Linked, never copied: Harness does not read the login, and a sign-out or token refresh is the person's own.
+      expect(lstatSync(join(home, 'auth.json')).isSymbolicLink()).toBe(true)
+      expect(readlinkSync(join(home, 'auth.json'))).toBe(join(own, 'auth.json'))
+    })
+
+    it('keeps its link when the start is resumed', async () => {
+      const own = profile(true), f = fixture()
+      Object.assign(f.start.request, { engine: 'codex', projectSettings: 'off', codexHome: own })
+      expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+      const home = String(f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!.codexHome)
+      profiles.push(dirname(home))
+      expect(linkCodexSignIn(home, own)).toBeNull()
+      expect(linkCodexSignIn(home, profile(true))).toContain('could not')
+    })
+
+    it('fails before anything is created when Codex on this computer has no sign-in file, saying why', async () => {
+      const f = fixture()
+      Object.assign(f.start.request, { engine: 'codex', projectSettings: 'off', codexHome: profile(false) })
+      expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ error: 'START_FAILED' })
+      expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
+      expect(f.start.error).toContain('sign')
+      rmSync(join(homedir(), PM_HOMES, f.start.creationId), { recursive: true, force: true })
+    })
+  })
+
+  it('gives a normal Codex start no engine home of its own', async () => {
+    const f = fixture()
+    Object.assign(f.start.request, { engine: 'codex' })
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+    expect(f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!).not.toHaveProperty('codexHome')
   })
 
   it.each(['opencode', 'kilo'])('fails a pending legacy %s Swarm start before native creation', async engine => {
