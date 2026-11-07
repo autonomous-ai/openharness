@@ -8,13 +8,21 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/app_type.dart';
+import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/shared/widgets/app_icon_button.dart';
+import 'package:harness/super_tabs/buddy_card.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
+import 'package:harness/super_tabs/chat/agent_chat_header.dart';
+import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/tasks/personal_task_card.dart';
 import 'package:harness/super_tabs/tasks/personal_tasks.dart';
 import 'package:harness/terminal/terminal_typography.dart';
+
+import 'super_tab_personal_tasks_pane_test.dart' show TasksFixture;
+import 'support/buddy_engine_fixture.dart';
 
 /// The Swarm elements gallery (desktop-design-system.md, Swarm elements): every
 /// element drawn in light and dark against its checked-in image. A new or
@@ -108,8 +116,17 @@ Future<void> _show(
   final old = grid.AppTheme.brightness.value;
   grid.AppTheme.brightness.value = brightness;
   addTearDown(() => grid.AppTheme.brightness.value = old);
+  // The top bars' chats: the reader's own Buddy, and a member agent of a project (task #4465).
+  final buddy = buddyEngineSwarm().controller(account: 'peer');
+  final member = TasksFixture().controller;
+  for (final c in [buddy, member]) {
+    addTearDown(c.dispose);
+    await c.refresh();
+  }
+  await buddy.select('swarm-buddy-peer');
+  await member.select('aeef');
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 500);
+  tester.view.physicalSize = const Size(760, 640);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -118,7 +135,7 @@ Future<void> _show(
       // A still spinner, so the image holds one frame.
       home: MediaQuery(
         data: const MediaQueryData(disableAnimations: true),
-        child: _Gallery(brightness, faces: faces),
+        child: _Gallery(brightness, faces: faces, bars: [buddy, member]),
       ),
     ),
   );
@@ -308,9 +325,12 @@ final _person = SuperTabPerson.fromJson({
 });
 
 class _Gallery extends StatelessWidget {
-  const _Gallery(this.brightness, {required this.faces});
+  const _Gallery(this.brightness, {required this.faces, required this.bars});
   final Brightness brightness;
   final List<String> faces;
+
+  /// Chats whose top bars the gallery draws: the reader's Buddy, then a member agent.
+  final List<SuperTabController> bars;
   static const boundary = ValueKey('swarm-elements-gallery');
 
   @override
@@ -447,6 +467,27 @@ class _Gallery extends StatelessWidget {
                   ),
                 ],
               ),
+              title('Top bar: your Buddy, a member agent'),
+              for (final c in bars)
+                SizedBox(
+                  width: 720,
+                  child: SuperTabAgentChatHeader(
+                    controller: c,
+                    group: c.selected!,
+                    menu: AppIconButton(
+                      icon: AppIcons.ellipsis,
+                      tooltip: 'Chat options',
+                      onPressed: () {},
+                    ),
+                    title: c.selected!.isBuddyChat
+                        ? (name) => BuddyCardButton(
+                            controller: c,
+                            projectId: c.selected!.projectId,
+                            label: name,
+                          )
+                        : null,
+                  ),
+                ),
             ],
           ),
         ),
