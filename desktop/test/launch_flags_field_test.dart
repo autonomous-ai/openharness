@@ -184,7 +184,18 @@ void main() {
   });
 
   group('a long flag in the Buddy card (#4444)', () {
-    setUpAll(() => loadCaptureFonts(shots));
+    setUpAll(() async {
+      await loadCaptureFonts(shots);
+      if (shots == null || !Platform.isMacOS) return;
+      // A flag is set in the terminal's mono face, which the capture fonts leave out.
+      for (final (family, path) in [
+        ('.AppleSystemUIFontMonospaced', '/System/Library/Fonts/SFNSMono.ttf'),
+        ('Menlo', '/System/Library/Fonts/Menlo.ttc'),
+      ]) {
+        final bytes = ByteData.sublistView(await File(path).readAsBytes());
+        await (FontLoader(family)..addFont(Future.value(bytes))).load();
+      }
+    });
 
     testWidgets('ends in … inside the field, whole in a tooltip, and its × '
         'removes it', (tester) async {
@@ -218,6 +229,8 @@ void main() {
             ),
           ),
         );
+        // The theme animates from the last pump's brightness.
+        await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
         final field = tester.getRect(find.byType(LaunchFlagsField));
         final remove = tester.getRect(
