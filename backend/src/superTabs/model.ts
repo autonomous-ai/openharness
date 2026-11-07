@@ -877,6 +877,8 @@ export const NOTICE_READERS = {
   'decision-delegated': 'people', 'machine-removed': 'people', ship: 'people',
   // An agent's question to a person in a switched project, in their default Buddy chat (decisions.ts askedThroughBuddy, #3826).
   'decision-asked': 'people',
+  // A Buddy's question settled in its owner's Decisions, in their Buddy chat (decisions.ts settleBuddyDecision).
+  'decision-answered': 'people',
   // A decision its person must agree to reached its time unanswered, told to the PM alone (decisions.ts mustAgreePassed).
   'decision-must-agree': 'recipients',
   // A computer signed in as another account now, told to its old owner in their Buddy chat (commands.ts machine.moved, #3122).

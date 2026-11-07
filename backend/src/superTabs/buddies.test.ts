@@ -563,7 +563,7 @@ describe('what a Buddy may do', () => {
       .toThrow('A Buddy posts only in its own chat')
   })
 
-  it('never assigns, starts agents, opens groups, asks decisions, sets rules or reacts outside its chat', () => {
+  it('never assigns, starts agents, opens groups, asks anyone but its owner, sets rules or reacts outside its chat', () => {
     const f = on()
     const refused: Command[] = [
       { type: 'work.assign', conversationId: f.group, agentId: 'buddy' },
@@ -571,7 +571,8 @@ describe('what a Buddy may do', () => {
       { type: 'conversation.create', projectId: f.app.projectId, title: 'New', brief: 'Brief', checks: [{ description: 'Done', independent: false }] },
       { type: 'agent.start', request: { conversationId: f.group, machineId: 'machine', engine: 'claude', name: 'Helper', cwd: '/repo', worktree: true,
         requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }, routeDecisionId: 'route' },
-      { type: 'decision.ask', conversationId: f.chat, personId: 'peer', questions: [{ question: 'Which?', options: ['A', 'B'], recommended: 0, unblocks: 'Work' }] },
+      // Its own owner only (task #4525, buddyDecisions.test.ts).
+      { type: 'decision.ask', conversationId: f.chat, personId: 'owner', questions: [{ question: 'Which?', options: ['A', 'B'], recommended: 0, unblocks: 'Work' }] },
       { type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Idle first.' },
       { type: 'conversation.agent', conversationId: f.app.conversationId, agentId: 'buddy', present: true, lead: false },
       { type: 'message.react', conversationId: f.app.conversationId, messageId: 'm', emoji: 'thumbs_up', on: true },
