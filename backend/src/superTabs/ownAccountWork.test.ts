@@ -89,7 +89,7 @@ describe('teammates\' work in a Mac owner\'s own account', () => {
     expect(f.machine('gray-mac').teamAccountOnly).toBe(true)
     // Routing reads it as a machine that takes a teammate's work.
     expect(teamWorkRefusal(f.machine('gray-mac'), NOW)).toBeNull()
-    expect(machineTeamWork(f.state, f.machine('gray-mac'), NOW, ['gray-team'])).toBeNull()
+    expect(machineTeamWork(f.machine('gray-mac'), NOW, ['gray-team'])).toBeNull()
   })
 
   it('is changed by nobody but the machine\'s owner: not the Swarm\'s owner, a teammate, an agent or a Buddy', () => {
@@ -126,13 +126,13 @@ describe('teammates\' work in a Mac owner\'s own account', () => {
       askedIn: { conversationId: 'lead', messageId: 'm-gray' } })
   })
 
-  it('reads the Mac itself, not its Team account, for routing once it is on', () => {
+  // Swarm v3 (task #4218): the Mac reads as itself whether the choice is on or not; its Team account takes no new work.
+  it('reads the Mac itself, not its Team account, for routing', () => {
     const f = swarm()
-    // A stale privacy check on the Team account refuses teammates there; with the owner's choice on, starts run on the Mac.
     f.machine('gray-team').observation = { ...reading('team', PASSED), privacy: { ...PASSED, seenAt: NOW - 24 * 60 * 60_000 } }
-    expect(machineTeamWork(f.state, f.machine('gray-mac'), NOW, ['gray-team'])?.code).toBe('PRIVACY_CHECK_STALE')
+    expect(machineTeamWork(f.machine('gray-mac'), NOW, ['gray-team'])).toBeNull()
     f.choose(true)
-    expect(machineTeamWork(f.state, f.machine('gray-mac'), NOW, ['gray-team'])).toBeNull()
+    expect(machineTeamWork(f.machine('gray-mac'), NOW, ['gray-team'])).toBeNull()
   })
 
   it('checks the owner before saying an entry is a Team account\'s', () => {

@@ -223,9 +223,23 @@ class _Chip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Padding(
-            padding: const EdgeInsets.only(left: grid.AppDesktop.controlGap),
-            child: Text(word, style: grid.AppType.mono(color: ink)),
+          // A chip is at most as wide as the field: a long flag ends in "…" and is whole on hover, and its × stays
+          // inside (#4444).
+          Flexible(
+            child: Tooltip(
+              message: word,
+              child: Padding(
+                padding: const EdgeInsets.only(
+                  left: grid.AppDesktop.controlGap,
+                ),
+                child: Text(
+                  word,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: grid.AppType.mono(color: ink),
+                ),
+              ),
+            ),
           ),
           InkResponse(
             key: removeKey,

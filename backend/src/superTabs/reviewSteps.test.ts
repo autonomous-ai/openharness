@@ -18,7 +18,7 @@ function fixture() {
   }
   const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
   const contribution = { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }
-  const add = (harnessId: string, group: string, roleName?: string) => run({ type: 'agent.add', conversationId: group, machineId: 'host', harnessId,
+  const add = (harnessId: string, group: string, roleName?: string, machineId = 'host') => run({ type: 'agent.add', conversationId: group, machineId, harnessId,
     name: harnessId, configuration: opus, lead: false, ...roleName ? { roleName } : {} } as Command, owner, contribution).result.agentId as string
   const lead = run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'pm', name: 'pm', configuration: opus, lead: true }, owner, contribution).result.agentId as string
   const task = run({ type: 'conversation.create', title: 'Fix login', brief: 'Sign in works offline.', checks: [{ description: 'Signs in offline', independent: true }], priority: 'P2', requesterId: 'owner' }, as(lead)).result.conversationId as string
@@ -229,6 +229,71 @@ describe('a handed task opens its review steps', () => {
     expect(f.steps()).toEqual([{ name: 'Review', agent: expect.any(String), status: 'working' },
       { name: 'Test on a Mac', agent: mac, status: 'working' }, { name: 'Test on a Linux machine', agent: linux, status: 'working' }])
     expect(stepsOf(f.state, f.task).find(s => s.step === 'Test on a Linux machine')!.brief).toContain('a Linux machine')
+  })
+
+
+  const machine = (machineId: string, os: string) => ({ machineId, name: machineId, contributorId: 'owner', membershipGeneration: 'g', generation: 'g1', cwd: '/swarm',
+    scope: 'swarm', engines: ['claude'], maxAgents: 8, paused: false,
+    observation: { generation: 'g1', receivedAt: 999_000, sessionKind: 'computer', resources: { os }, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
+      readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] },
+      quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }] } })
+
+  it.each(['desktop/lib/super_tabs/view.dart', 'cli/src/services/process.ts'])('routes %s to an independent Windows Tester on Ready', file => {
+    const f = fixture()
+    f.add('rev', f.task, 'Reviewer')
+    f.add('mac-tst', f.task, 'Tester')
+    const win = f.add('win-tst', f.task, 'Tester', 'win')
+    const prior = f.add('prior-builder', f.task, 'Tester', 'win')
+    // A former builder with the Tester role must still be excluded.
+    f.group(f.task).ledger!.runs!.push({ agentId: prior } as never)
+    f.state.machines = [machine('host', 'macOS'), machine('win', 'Windows')] as never
+    f.ready([file])
+    const step = stepsOf(f.state, f.task).find(s => s.step === 'Test on Windows')
+    expect(step?.assignment).toMatchObject({ agentId: win, status: 'working' })
+    expect(step?.checks[0]?.independent).toBe(true)
+    expect(step?.brief).toContain('docs/windows-rules.md')
+    expect(step?.brief).toMatch(/no .*window.*(?:flash|moment)/i)
+    expect(step?.brief).toMatch(/recording/i)
+    expect(step?.brief).toContain('signed build')
+    expect(step?.brief).toContain("person's Windows session")
+    // A second Ready must not duplicate or move the active Windows step.
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'working', result: 'CI rerun' }, f.as(f.dev))
+    f.ready([file])
+    expect(stepsOf(f.state, f.task).filter(s => s.step === 'Test on Windows').map(s => [s.id, s.assignment?.agentId])).toEqual([[step!.id, win]])
+  })
+
+  it('leaves Windows open when its only Windows Tester built the task', () => {
+    const f = fixture()
+    f.add('rev', f.task, 'Reviewer'); f.add('mac-tst', f.task, 'Tester'); f.add('unknown-tst', f.task, 'Tester', 'unknown')
+    const prior = f.add('prior-builder', f.task, 'Tester', 'win')
+    f.group(f.task).ledger!.runs!.push({ agentId: prior } as never)
+    f.state.machines = [machine('host', 'macOS'), machine('win', 'Windows')] as never
+    const effects = f.ready(['desktop/lib/view.dart'])
+    expect(f.steps().find(s => s.name === 'Test on Windows')).toEqual({ name: 'Test on Windows', agent: null, status: null })
+    expect(effects.messages.some(m => m.recipients.includes(f.lead) && m.text.includes('Test on Windows'))).toBe(true)
+    expect(f.group(f.task).assignment?.status).toBe('review')
+  })
+
+  it.each(['docs/windows-rules.md', 'backend/src/superTabs/steps.ts', 'cli/src/team/script.ts'])('does not open Windows for %s', file => {
+    const f = fixture()
+    f.add('win-tst', f.task, 'Tester', 'win')
+    f.state.machines = [machine('win', 'Windows')] as never
+    f.ready([file])
+    expect(f.steps().some(s => s.name === 'Test on Windows')).toBe(false)
+  })
+
+  it('keeps an existing Windows step when a later Ready adds a Mac test', () => {
+    const f = fixture()
+    const win = f.add('win-tst', f.task, 'Tester', 'win'), mac = f.add('mac-tst', f.task, 'Tester')
+    f.state.machines = [machine('host', 'macOS'), machine('win', 'Windows')] as never
+    const onlyWindows = { ...SEED_RULES, reviews: { ...SEED_RULES.reviews, test: [{ where: 'Desktop on Windows', paths: ['desktop/**'] }] } }
+    f.ready(['desktop/lib/view.dart'], 'abc1234', true, { projectRules: { revision: 1, rules: onlyWindows } })
+    const step = stepsOf(f.state, f.task).find(s => s.step === 'Test on Windows')
+    expect(step?.assignment?.agentId).toBe(win)
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'working', result: 'More changes' }, f.as(f.dev))
+    f.ready(['desktop/lib/view.dart'], 'def5678')
+    expect(stepsOf(f.state, f.task).filter(s => s.step === 'Test on Windows').map(s => s.id)).toEqual([step!.id])
+    expect(f.steps().find(s => s.name === 'Test')?.agent).toBe(mac)
   })
 
   it('with nobody free, the step stays open and the PM is told once; the Ready itself goes through', () => {

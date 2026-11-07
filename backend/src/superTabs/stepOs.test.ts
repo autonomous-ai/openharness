@@ -4,8 +4,9 @@
  */
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { candidatesFor, DISPATCH_RULES } from './dispatch.js'
+import { candidatesFor, DISPATCH_RULES, openTasks } from './dispatch.js'
 import { sweepLiveness } from './liveness.js'
+import { agentProjectId } from './projects.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { stepsOf } from './steps.js'
 
@@ -65,7 +66,7 @@ function fixture() {
     held.lost = { reason: 'its machine went offline', at: NOW }
     linuxStep.lostAttempt = { id: held.id, agentId: linux, machineId: 'linux1', engine: 'claude' }
   }
-  const offered = (agentId: string) => candidatesFor(state, agent(agentId), DISPATCH_RULES, NOW).map(c => c.group.id)
+  const offered = (agentId: string) => candidatesFor(state, agent(agentId), DISPATCH_RULES, NOW, openTasks(state, agentProjectId(state, agent(agentId))!, NOW)).map(c => c.group.id)
   return { run, as, lead, task, dev, linux, linux2, mac, mac2, win, linuxStep, step, lose, offered, get state() { return state } }
 }
 

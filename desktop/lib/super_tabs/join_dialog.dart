@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
@@ -177,6 +178,10 @@ class _SwarmJoinDialogState extends State<SwarmJoinDialog> {
   Map<String, dynamic>? _preview;
   bool _loading = true, _joining = false;
   String? _error;
+
+  /// The link can never work for this account (revoked, invalid, not
+  /// theirs): Close is the only action, never a Retry that fails again.
+  bool _unavailable = false;
   String get _path =>
       '/api/super-tabs/${Uri.encodeComponent(widget.link.tabId)}/join';
   Map<String, dynamic> get _token => {
@@ -263,6 +268,7 @@ class _SwarmJoinDialogState extends State<SwarmJoinDialog> {
         'LINK_REVOKED',
         'JOIN_UNAVAILABLE',
       }.contains(failure.code)) {
+        _unavailable = true;
         return 'This link is unavailable for your account. Ask the owner for an invitation.';
       }
       if (failure.code == 'SIGNED_OUT' || failure.code == 'ACCOUNT_CHANGED') {
@@ -302,10 +308,16 @@ class _SwarmJoinDialogState extends State<SwarmJoinDialog> {
             ),
           ],
           const SizedBox(height: 12),
-          Text(widget.accountEmail, style: DesktopChrome.metadata()),
+          Text(
+            'Signed in as ${widget.accountEmail}',
+            style: DesktopChrome.metadata(),
+          ),
           if (_error != null) ...[
             const SizedBox(height: 12),
-            Text(_error!, style: DesktopChrome.text()),
+            Text(
+              _error!,
+              style: DesktopChrome.text(color: grid.AppPalette.dangerFill),
+            ),
           ],
         ],
       ),
@@ -313,17 +325,23 @@ class _SwarmJoinDialogState extends State<SwarmJoinDialog> {
     actions: [
       FilledButton(
         key: const Key('swarm-join-confirm'),
-        onPressed: _loading || _joining
+        onPressed: _unavailable
+            ? () => Navigator.pop(context)
+            : _loading || _joining
             ? null
             : _preview == null
             ? _load
             : _join,
+        // Named for what it will do: Join Swarm while the invitation loads,
+        // Retry only after a failure a retry can fix (audit finding 13).
         child: Text(
-          _joining
+          _unavailable
+              ? 'Close'
+              : _joining
               ? 'Joining…'
-              : _preview == null
+              : _preview == null && !_loading
               ? 'Retry'
-              : _preview!['alreadyMember'] == true
+              : _preview?['alreadyMember'] == true
               ? 'Open Swarm'
               : 'Join Swarm',
         ),

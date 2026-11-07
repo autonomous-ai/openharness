@@ -27,6 +27,8 @@ export const GUARD_REASONS = {
   systemWide: `${PREFIX} no sudo and no system-wide installs on a shared machine; put the tools you need in your session folder.`,
   fixedTmp: `${PREFIX} a fixed name in /tmp can be read or planted by every account; make a folder with `
     + 'mktemp -d "${TMPDIR:-/tmp}/name.XXXXXX" and write inside it.',
+  macMktemp: `${PREFIX} on a Mac, mktemp with no template ignores TMPDIR and writes to a folder every app of this account `
+    + 'shares, outside your own; name one in your temporary folder: mktemp -d "${TMPDIR:-/tmp}/name.XXXXXX".',
   liveWorktree: (path: string, pid: number) => `${PREFIX} process ${pid} still works in a worktree in ${path}; never remove a `
     + 'worktree a live process uses.',
   worktreeUnknown: (path: string) => `${PREFIX} could not tell whether a live process uses the worktree ${path}, so it is not `
@@ -62,6 +64,7 @@ export function shellRefusal(command: string, facts: GuardFacts): string | null 
   if (killsByName(commands)) return GUARD_REASONS.killByName
   if (commands.some(killsAll)) return GUARD_REASONS.killAll
   if (commands.some((simple) => fixedTmp(simple, facts))) return GUARD_REASONS.fixedTmp
+  if (facts.platform === 'darwin' && commands.some(mktempIgnoringTmpdir)) return GUARD_REASONS.macMktemp
   return liveWorktree(commands, facts)
 }
 
@@ -406,6 +409,21 @@ function fixedTmp({ words, targets }: Simple, facts: GuardFacts): boolean {
   // `cd /tmp` and then a plain name writes a fixed name there.
   if ((program === 'cd' || program === 'pushd') && words[1] && TMP_ROOTS.includes(words[1].replace(/\/+$/, ''))) return true
   return words.some((word) => tmpPathRefused(word, facts))
+}
+
+/** A mktemp that names no template and no folder (`-p`, `--tmpdir`): macOS's then writes in the account's own temporary
+ *  folder, whatever TMPDIR says (the Mac test of #3506). `-t` takes a prefix, not a folder. */
+function mktempIgnoringTmpdir({ words }: Simple): boolean {
+  if (programName(words[0]) !== 'mktemp') return false
+  for (let at = 1; at < words.length; at++) {
+    const word = words[at]
+    if (word === '--tmpdir' || word.startsWith('--tmpdir=')) return false
+    if (!word.startsWith('-')) return false
+    // A cluster such as -dt or -dp: its last letter may take the next word as its value.
+    if (!word.startsWith('--') && word.includes('p')) return false
+    if (!word.startsWith('--') && word.endsWith('t')) at++
+  }
+  return true
 }
 
 /** Whether [word] names a path in /tmp whose top folder is not one only this account can open. */

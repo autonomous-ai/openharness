@@ -52,6 +52,21 @@ export function authorizeTaskApproval(state: SuperTabState, actor: Actor, type: 
   if (!approval || (!own && !pm)) fail('TASK_APPROVAL_FORBIDDEN', 'Only the requesting person can approve or reject; their PM may suggest an agent.', 403)
   return group
 }
+/** Why a leaving person's pending approvals are rejected (commands.ts member.remove). */
+export const REQUESTER_LEFT = 'Its requester left the Swarm.'
+/** Rejects [group]'s approval for [reason], and settles its proposal with it (task #4218): the PM's clock and proposal.decide read
+ *  the proposal's own decision, so a rejection that left it open was overdue for good and could still be accepted. */
+export function rejectTaskApproval(group: Conversation, reason: string, by: string, now: number): void {
+  const approval = pendingTaskApproval(group)
+  approval.state = 'rejected'
+  approval.decidedAt = now
+  approval.reason = reason
+  const proposal = group.proposal
+  if (proposal && !proposal.decision && !proposal.mergedInto) {
+    proposal.decision = { kind: 'no', reason, at: now, by }
+    delete proposal.overdue
+  }
+}
 export function pendingTaskApproval(group: Conversation): TaskApproval {
   const approval = group.taskApproval
   if (!approval || approval.state !== 'proposal') fail('TASK_APPROVAL_DECIDED', 'This task already has an approval decision.', 409)

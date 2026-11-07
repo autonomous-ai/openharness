@@ -683,7 +683,6 @@ describe('a teammate\'s work and the machines that take it', () => {
   const start = (tab: string, conversationId: string, machineId: string, user: AuthUser = owner, cwd = machineId === 'team-mac' ? '/team' : '/work/lead', at: SuperTabStore = store) =>
     at.execute(user, tab, { operationId: randomUUID(), command: { type: 'agent.start', request: { conversationId, machineId, engine: 'codex', name: 'Builder',
       cwd, worktree: false, requirements } } })
-  const NO_TEAM_ACCOUNT = 'MacBook Pro has no Harness Team account yet, so it runs only its owner\'s projects.'
 
   it('keeps privacy only from the team account\'s own reading, and the read says which machines take teammates\' projects', async () => {
     const f = await fixture()
@@ -691,8 +690,9 @@ describe('a teammate\'s work and the machines that take it', () => {
     expect((await pool(f.tab, 'team-mac')).observation!.privacy).toEqual({ ...PASSED, seenAt: expect.any(Number) })
     expect((await pool(f.tab, 'team-mac')).teamWork).toEqual({ allowed: true })
     // The person's own sign-in claimed the same check for its MacBook: an ordinary computer proves nothing about a team account.
+    // It runs its own person's agents, so it reads no Team-account rule (Swarm v3, task #4218).
     expect((await pool(f.tab, 'personal-mac')).observation).not.toHaveProperty('privacy')
-    expect((await pool(f.tab, 'personal-mac')).teamWork).toEqual({ allowed: false, code: 'TEAM_ACCOUNT_REQUIRED', reason: NO_TEAM_ACCOUNT })
+    expect((await pool(f.tab, 'personal-mac')).teamWork).toEqual({ allowed: true })
     // The same check sent again keeps the date it first arrived, so a check that stops running goes stale.
     const first = (await pool(f.tab, 'team-mac')).observation!.privacy!.seenAt
     await new Promise(resolve => setTimeout(resolve, 5))

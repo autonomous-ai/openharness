@@ -7,7 +7,7 @@ import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../..
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
-import { agentTmpEnv, buddyTmpEnv } from '../../lib/agentTmp.js'
+import { agentTmpLaunch, buddyTmpEnv } from '../../lib/agentTmp.js'
 import { realpathSync, statSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -391,7 +391,10 @@ export function createAgentCreator({
     // as every relaunch reads them again (`buildLaunchOverrides`). A Buddy's too: it launches like its owner's own session
     // (task #2832).
     const machineMcp = machineMcpLaunchArgs(engine, cwd)
-    const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...(swarmLaunch && swarmSkill ? swarmLaunch.args(engine) : []), ...told])
+    // The agent's private temporary folder: its TMPDIR, and, for a Swarm agent, its one added working directory, so its owner's
+    // own settings ask nothing for its mktemp files (lib/agentTmp.ts, task #4395). A Buddy has its own folder.
+    const tmp = swarmSkill?.role === 'buddy' ? { env: buddyTmpEnv(engine, cwd), args: [] } : agentTmpLaunch(engine, swarmSkill)
+    const extraArgs = joinedInstructions(engine, [...tmp.args, ...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...(swarmLaunch && swarmSkill ? swarmLaunch.args(engine) : []), ...told])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
     const firstPrompt = prompt
@@ -431,7 +434,7 @@ export function createAgentCreator({
       paneLaunch: windowsPaneLaunch(engine, { ...launchOptions, held: isWindowsHeldPane(argv) }),
       // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
       // The private temporary folder first, so the launch's own variables win over it (lib/agentTmp.ts).
-      env: mergedLaunchEnv(mergedLaunchEnv(swarmSkill?.role === 'buddy' ? buddyTmpEnv(engine, cwd) : agentTmpEnv(engine, swarmSkill?.role), freshHarnessEnvironment(engine, mergedLaunchEnv(mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? profileEnvironment(engine, codexHome) : undefined), dshEnv),
+      env: mergedLaunchEnv(mergedLaunchEnv(tmp.env, freshHarnessEnvironment(engine, mergedLaunchEnv(mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? profileEnvironment(engine, codexHome) : undefined), dshEnv),
         mergedLaunchEnv(mergedLaunchEnv(scmLaunchEnv(scmLaunchRecord), swarmGitHub?.env), native?.environment)), !!grid,
         permissionMode ?? (bypassPermission ? DEFAULT_HARNESS_PERMISSION : 'ask'))), engineLaunchEnv(engine, native)),
       grid: grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null,
