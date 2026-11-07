@@ -593,6 +593,11 @@ class ConversationServer {
   // Route decisions by id, answered by GET .../route-decisions/:id.
   final routeDecisions = <String, Map<String, dynamic>>{};
 
+  /// The project activity read's answer (backend read/projectActivity.ts, task #4662); null answers 404, as a server
+  /// before it does.
+  Map<String, dynamic>? projectActivity;
+  var projectActivityReads = 0;
+
   /// The leaderboard read's answer; reads of it are listed in [leaderboardReads].
   Map<String, dynamic>? leaderboard;
   final leaderboardReads = <String>[];
@@ -2136,6 +2141,14 @@ class ConversationServer {
               .toList(),
         }),
       ) as Map<String, dynamic>;
+    }
+    if (uri.pathSegments.last == 'project-activity') {
+      projectActivityReads++;
+      final answer = projectActivity;
+      if (answer == null) {
+        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+      }
+      return jsonDecode(jsonEncode(answer)) as Map<String, dynamic>;
     }
     if (uri.pathSegments.last == 'leaderboard') {
       leaderboardReads.add(path);
