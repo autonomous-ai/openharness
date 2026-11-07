@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import type { ContributedMachine } from './machines.js'
+import { AGENT_MEMORY_BYTES, type ContributedMachine } from './machines.js'
 import { createSuperTab, SuperTabError, type Actor, type SuperTabState } from './model.js'
 import { agentKind } from './agentKind.js'
 import { hostTab } from './read/hostRows.js'
@@ -69,6 +69,12 @@ describe('+ New agent, Regular', () => {
     expect(start.request).toMatchObject({ machineId: 'mate-mac', conversationId: chat.id, engine: 'claude', name: 'Ada', regular: true })
     expect(start).toMatchObject({ contributorId: 'mate', machineOwnerId: 'mate' })
     expect((f.state.projects ?? []).filter(p => p.id !== 'lead')).toHaveLength(0)
+  })
+
+  it('asks an agent\'s memory, not a Buddy\'s smaller one: it takes tasks (#3738)', () => {
+    const f = swarm()
+    const made = f.add({ kind: 'regular', name: 'Ada' })
+    expect(f.state.starts!.find(s => s.id === made.result.startId)!.request.requirements.memoryBytes).toBe(AGENT_MEMORY_BYTES)
   })
 
   it('once started, is a Regular agent in its own chat', () => {
