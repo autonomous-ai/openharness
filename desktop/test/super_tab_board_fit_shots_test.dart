@@ -96,12 +96,7 @@ void main() {
       conversations.addAll(_tasks());
       final c = server.controller(
         account: 'owner',
-        initial: {
-          'tabId': 'tab',
-          'projectsGroupOpen': true,
-          'accountId': 'owner',
-          'selectedId': 'lead',
-        },
+        initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
       );
       await tester.runAsync(c.refresh);
       await tester.pumpWidget(
@@ -126,6 +121,9 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      // A project's Board opens from the Projects grid (task #4466).
+      await tester.tap(find.byKey(const ValueKey('super-projects')));
+      await tester.pump();
       await tester.tap(find.byKey(const ValueKey('super-group-lead')));
       await tester.pumpAndSettle();
       expect(

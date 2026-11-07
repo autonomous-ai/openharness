@@ -907,7 +907,7 @@ describe('decisions asked of one person (v2)', () => {
     expect(await decisions(s.tabId, owner, 'open', s.lead)).toEqual([expect.objectContaining({ id: second })])
   })
 
-  it('leaves a decision to the PM: the recommended option, listed as the PM\'s, and the PM\'s line in the person\'s quiet Buddy chat', async () => {
+  it('leaves a decision to the PM: the recommended option, listed as the PM\'s, and no PM line in the person\'s quiet Buddy chat', async () => {
     const s = await scene()
     clock = Date.now()
     const asked = await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub,
@@ -924,9 +924,9 @@ describe('decisions asked of one person (v2)', () => {
     expect(await decisions(s.tabId, peer, 'answered')).toEqual([])
     // Agents read it as answered, as before, now saying who decided.
     expect(await decisions(s.tabId, owner, 'answered', s.lead)).toEqual([expect.objectContaining(listed)])
-    const line = (await db.superTabMessage.findMany({ where: { tabId: s.tabId, conversationId: s.buddyId } })).at(-1)
-    expect(line).toMatchObject({ text: 'PM decided: To everyone — Ship how?', recipientIds: [], source: { kind: 'decision-delegated', decisionId: id } })
-    expect(line!.author).toMatchObject({ kind: 'agent', id: s.lead })
+    // Only the person and their own agent post in their private chat (task #4558): with no Buddy of theirs, no line there.
+    expect((await db.superTabMessage.findMany({ where: { tabId: s.tabId, conversationId: s.buddyId } }))
+      .filter(m => (m.source as { kind?: string } | null)?.kind === 'decision-delegated')).toEqual([])
     // Only the person asked may leave it to the PM, and only while it is open.
     expect((await post(s.tabId, { type: 'decision.answer', decisionId: id, delegate: true }, peer)).body.error?.code).toBe('DECISION_ANSWERED')
     expect((await post(s.tabId, { type: 'decision.answer', decisionId: id, delegate: true }, owner)).status).toBe(404)

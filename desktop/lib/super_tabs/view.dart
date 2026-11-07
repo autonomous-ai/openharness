@@ -98,6 +98,7 @@ import 'thread_panel.dart';
 import 'work_details.dart';
 import 'manage_page.dart';
 import 'project_sidebar.dart';
+import 'projects_page.dart';
 import 'buddy_sessions.dart';
 import 'swarm_switcher.dart' show fallBackToPersonal;
 import 'project_options.dart';
@@ -2124,6 +2125,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// [boardProjectId]: the project whose Board holds the middle, whose row is then lit.
   Widget _sidebar({String? boardProjectId}) => ProjectSidebar(
     board: widget.board,
+    leaderboard: _board,
     boardProjectId: boardProjectId,
     controller: c,
     compact: _phone,
@@ -3070,6 +3072,7 @@ class _SuperTabViewState extends State<SuperTabView>
             SwarmPage.leaderboard => 'Leaderboard',
             SwarmPage.mentions => 'Mentions',
             SwarmPage.threads => 'Threads',
+            SwarmPage.projects => 'Projects',
           }
         : group == null
         ? c.snapshot?.projects.isEmpty == true
@@ -6614,6 +6617,13 @@ class _SuperTabViewState extends State<SuperTabView>
                                       const {},
                                       inThread: true,
                                     ),
+                                  ),
+                                  SwarmPage.projects => SuperTabProjectsPage(
+                                    controller: c,
+                                    onOpen: _openBoard,
+                                    onNewProject: c.canWrite
+                                        ? widget.onNewProject
+                                        : null,
                                   ),
                                   null => const SizedBox.shrink(),
                                 },

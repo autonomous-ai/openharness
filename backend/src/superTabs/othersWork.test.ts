@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
 import { createSuperTab, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
+import { giveOwnBuddy } from './ownBuddy.test-support.js'
 import { DAY_MS, WEEK_MS, weekStart } from './leaderboard/week.js'
 import { othersWorkNotice } from './othersWork.js'
 
@@ -13,7 +14,7 @@ const config: AgentConfiguration = { engine: 'claude', model: 'opus', effort: 'h
 const NOW = Date.UTC(2026, 9, 29, 12)
 const NOTICE = 'others-work-notice'
 
-function fixture() {
+function fixture(buddy = true) {
   let state: SuperTabState = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
   let sequence = 0, now = NOW
   const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
@@ -28,13 +29,15 @@ function fixture() {
     generation: 'g1', cwd: '/repo', scope: 'swarm', engines: ['claude'], maxAgents: 4, paused: false,
     observation: { receivedAt: NOW, runningHarnessIds: [], stoppedHarnessIds: [], quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 38, resetsAt: NOW + 3 * DAY_MS }] }] } as never }
   state.machines = [pool]
+  // Each person's own Buddy, who writes the notice: only they and it post in their private chat (task #4558).
+  if (buddy) for (const me of state.people) giveOwnBuddy(state, me.id)
   const add = (harnessId: string, group = 'lead', lead = false) => run({ type: 'agent.add', conversationId: group, machineId: 'host', harnessId,
     name: harnessId, configuration: config, lead }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).result.agentId as string
   const create = (actor: Actor, extra: Record<string, unknown> = {}) =>
     run(commandSchema.parse({ type: 'conversation.create', title: 'Fix login', brief: 'Fix it.', checks: [], ...extra }), actor).result.conversationId as string
   const assign = (id: string, worker = add(`worker-${id}`, id)) => run({ type: 'work.assign', conversationId: id, agentId: worker })
   const told = (effects: ReturnType<typeof run>) => effects.messages.filter(m => (m.source as { kind?: string } | undefined)?.kind === NOTICE)
-  const buddyChat = () => state.conversations.find(c => c.kind === 'swarm-buddy')
+  const buddyChat = () => state.conversations.find(c => c.kind === 'swarm-buddy' && c.audience?.people[0]?.id === 'owner')
   return { run, add, create, assign, told, buddyChat, get state() { return state }, at(ms: number) { now = ms } }
 }
 
@@ -43,10 +46,17 @@ describe('the owner hears when someone else\'s work starts on their machine', ()
     const f = fixture(), id = f.create(peer)
     const told = f.told(f.assign(id))
     expect(told).toEqual([expect.objectContaining({ conversationId: f.buddyChat()!.id, recipients: [], source: { kind: NOTICE, machineId: 'host' },
+      author: expect.objectContaining({ kind: 'agent', id: 'owner-buddy' }),
       text: 'peer\'s work "Fix login" started on your Mac Studio (Claude, 38% of this week used, resets in 3d). '
         + 'Members › your card shows what it runs and ships; Manage › Machines can pause new work.' })])
     expect(f.buddyChat()!.audience).toEqual({ people: [{ id: 'owner', generation: f.state.people[0]!.generation }] })
     expect(f.state.machines![0]!.othersToldWeek).toBe(weekStart(NOW))
+  })
+
+  it('writes nothing when the owner has no Buddy, and keeps the week untold', () => {
+    const f = fixture(false)
+    expect(f.told(f.assign(f.create(peer)))).toEqual([])
+    expect(f.state.machines![0]!.othersToldWeek).toBeUndefined()
   })
 
   it('tells once a week per machine: not again this week, again next week', () => {

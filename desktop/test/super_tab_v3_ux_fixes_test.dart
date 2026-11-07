@@ -49,7 +49,6 @@ void main() {
       account: 'owner',
       initial: {
         'tabId': 'tab',
-        'projectsGroupOpen': true,
         'accountId': 'owner',
         'selectedId': 'swarm-buddy-owner',
       },
@@ -87,16 +86,20 @@ void main() {
       'the Buddy\'s', (tester) async {
     final (c, _) = await showDesktop(tester);
     expect(_lit('super-swarm-buddy'), isTrue);
+    // A project's Board opens from the Projects grid (task #4466).
+    await tester.tap(find.byKey(const ValueKey('super-projects')));
+    await tester.pump();
     await tester.tap(_key('super-group-lead'));
     await tester.pumpAndSettle();
     expect(c.selectedId, 'swarm-buddy-owner');
-    expect(_lit('super-group-lead'), isTrue);
+    // The Board is one of the Projects grid's: Projects is lit (task #4466).
+    expect(_lit('super-projects'), isTrue);
     expect(_lit('super-swarm-buddy'), isFalse);
     // Choosing the Buddy again puts its chat in the middle, and its row is the lit one.
     await tester.tap(_key('super-swarm-buddy'));
     await tester.pumpAndSettle();
     expect(_lit('super-swarm-buddy'), isTrue);
-    expect(_lit('super-group-lead'), isFalse);
+    expect(_lit('super-projects'), isFalse);
   });
 
   // Finding 3: a page or Manage in the middle turned the board layout off, and the Tasks pane with it.
@@ -113,7 +116,8 @@ void main() {
     expect(tasks, findsOneWidget);
     for (final row in [
       'super-decisions',
-      'super-leaderboard',
+      // Humans opens the Leaderboard (task #4466).
+      'project-sidebar-humans',
       'super-manage',
     ]) {
       await tester.tap(_key(row));
