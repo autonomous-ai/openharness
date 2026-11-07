@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { stepsOf } from './steps.js'
+import { openWaitingSteps } from './linuxSteps.js'
 
 // Task #4278: since v3 (#4120) a Tester starts only on its own person's computer, and no own-account Linux machine could take
 // harness's Linux test steps, yet every new head opened one and the PM closed it by hand (#4204, #4215, #4216, #4217, #4252,
@@ -110,5 +111,40 @@ describe('a Ready opens a Linux test step only where the project can test on Lin
     f.ready('b'.repeat(40))
     expect(f.steps()).toEqual(['Review', 'Test on a Mac'])
     expect(f.lines()).toHaveLength(1)
+  })
+})
+
+describe('a waiting Linux step opens once a Linux machine is there', () => {
+  it('opens nothing while none is, then opens it at the recorded head and tells the PM, once', () => {
+    const f = fixture()
+    f.machines()
+    const head = 'a'.repeat(40)
+    f.ready(head)
+    const state = f.state
+    expect(openWaitingSteps(state, NOW)).toEqual([])
+    expect(f.steps()).toEqual(['Review', 'Test on a Mac'])
+    // The PM's person's Linux computer reports.
+    state.machines = [machine('mac1', 'macOS'), machine('linux1', 'Linux')] as never
+    const rows = openWaitingSteps(state, NOW)
+    const linux = stepsOf(state, f.task).filter(step => step.step === 'Test on a Linux machine')
+    expect(linux).toHaveLength(1)
+    expect(linux[0]!.brief).toContain(head)
+    expect(rows.find(row => row.conversationId === linux[0]!.id)!.text).toBe(linux[0]!.brief)
+    expect(rows.find(row => row.conversationId === f.task)!.recipients).toEqual([f.lead])
+    expect(state.conversations.find(c => c.id === f.task)!.waitingLinuxStep).toBeUndefined()
+    // A second pass opens nothing more.
+    expect(openWaitingSteps(state, NOW)).toEqual([])
+    expect(stepsOf(state, f.task).filter(step => step.step === 'Test on a Linux machine')).toHaveLength(1)
+  })
+
+  it('keeps waiting on a task that is no longer open', () => {
+    const f = fixture()
+    f.machines()
+    f.ready('a'.repeat(40))
+    const state = f.state
+    state.conversations.find(c => c.id === f.task)!.assignment!.status = 'done'
+    state.machines = [machine('mac1', 'macOS'), machine('linux1', 'Linux')] as never
+    expect(openWaitingSteps(state, NOW)).toEqual([])
+    expect(stepsOf(state, f.task).some(step => step.step === 'Test on a Linux machine')).toBe(false)
   })
 })
