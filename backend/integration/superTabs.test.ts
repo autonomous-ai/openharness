@@ -4742,7 +4742,8 @@ describe('leaderboard credits written by the store (leaderboard/record.ts)', () 
     await invite(tab)
     const group = (await run(tab, { type: 'conversation.create', title: 'Copy review', brief: '', checks: [] })).result.conversationId as string
     await run(tab, { type: 'conversation.agent', conversationId: group, agentId: lead, present: true, lead: true })
-    const tag = (await run(tab, { type: 'message.send', conversationId: group, text: 'Confirm the copy?', replyTo: null, recipientIds: [], mentions: [peer.sub] },
+    // A tag tells; a question for a person is a Decision, never a tag (task #4623).
+    const tag = (await run(tab, { type: 'message.send', conversationId: group, text: 'The copy is ready for your look.', replyTo: null, recipientIds: [], mentions: [peer.sub] },
       host, lead)).result.messageId as string
     await run(tab, { type: 'message.send', conversationId: group, text: 'Confirmed.', replyTo: null, recipientIds: [] }, peer)
     await run(tab, { type: 'message.send', conversationId: group, text: 'One more thing.', replyTo: null, recipientIds: [] }, peer)
