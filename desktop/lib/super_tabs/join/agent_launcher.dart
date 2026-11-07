@@ -63,21 +63,14 @@ class SwarmAgentLauncher {
 
   /// Fails only with a [SwarmAgentLaunchFailure]: a timeout or a raw error
   /// becomes a sentence naming the computer, never its text.
-  /// [mainProjectId]: the project it becomes a Member of; [projectName]: a new project it leads (task #4541). At most
-  /// one; neither from a form without the project list.
+  /// [mainProjectId]: the project it becomes a Member of (task #4541); none from a form without the project list.
   Future<Map<String, dynamic>> create(
     String engine,
     String operationId, {
     String? mainProjectId,
-    String? projectName,
   }) async {
     try {
-      return await _create(
-        engine,
-        operationId,
-        mainProjectId: mainProjectId,
-        projectName: projectName,
-      );
+      return await _create(engine, operationId, mainProjectId: mainProjectId);
     } on SwarmAgentLaunchFailure {
       rethrow;
     } on TimeoutException {
@@ -99,7 +92,6 @@ class SwarmAgentLauncher {
     String engine,
     String operationId, {
     String? mainProjectId,
-    String? projectName,
   }) async {
     _guard();
     // A computer the Swarm does not list yet is recorded Buddy-only with its
@@ -122,7 +114,6 @@ class SwarmAgentLauncher {
       'engine': engine,
       if (!_listed) 'setup': _prepared,
       'mainProjectId': ?mainProjectId,
-      'projectName': ?projectName,
     }, '$operationId-start').timeout(const Duration(seconds: 25));
     _guard();
     return result;

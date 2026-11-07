@@ -95,6 +95,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   final _kindFocus = FocusNode(debugLabel: 'New agent role');
   final _leadRowFocus = <String, FocusNode>{};
   final _headerMachineAnchor = GlobalKey();
+  final _mainProjectAnchor = GlobalKey();
   bool get _desktopStartEnabled =>
       !box.busy &&
       box.leadBlocked == null &&
@@ -1741,8 +1742,34 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                                   ],
                                   _desktopHeader(),
                                   const SizedBox(height: 12),
-                                  if (box.choosesProject) ...[
-                                    NewHarnessMainProject(controller: box),
+                                  // New project's name, under the pills (anh Dee's first-day mockup, 11-07).
+                                  if (box.choosesProject &&
+                                      box.integration!.mainProjectId ==
+                                          kNewProjectChoice) ...[
+                                    NewHarnessNewProjectName(controller: box),
+                                    const SizedBox(height: 12),
+                                  ],
+                                  if (box.integration?.projectsError
+                                      case final failed?
+                                      when box.choosesProject) ...[
+                                    Row(
+                                      children: [
+                                        Flexible(
+                                          child: Text(
+                                            failed,
+                                            style: DesktopChrome.metadata(
+                                              color: DesktopChrome.muted,
+                                            ),
+                                          ),
+                                        ),
+                                        TextButton(
+                                          onPressed: box.locked
+                                              ? null
+                                              : box.retryProjects,
+                                          child: const Text('Retry'),
+                                        ),
+                                      ],
+                                    ),
                                     const SizedBox(height: 12),
                                   ],
                                   if (_installing case final run?)
@@ -2056,6 +2083,14 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                   ),
                 ),
               ),
+            if (box.choosesProject)
+              _desktopField(
+                order: 3,
+                finger: phone,
+                anchor: _mainProjectAnchor,
+                maxWidth: 340,
+                child: NewHarnessMainProject(controller: box),
+              ),
           ]),
         ),
         if (!widget.embedded) ...[
@@ -2368,7 +2403,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                   decoration: InputDecoration(
                     // An agent that takes no first message is not a terminal: with Kilo chosen
                     // the box said a terminal would open (a fresh Ubuntu VM, 2026-10-12).
-                    hintText: box.takesTask
+                    hintText: box.choosesProject
+                        ? 'Anything for it to start with? (optional)'
+                        : box.takesTask
                         ? 'What would you like to work on?'
                         : box.isTerminal
                         ? 'Open a terminal in this repo'
@@ -4565,9 +4602,9 @@ class _RoleFieldState extends State<_RoleField> {
   );
 }
 
-/// The Cmd-N form's Main project (task #4541, spec 2026-11-07-members-and-leads section 1): a row per project the person
-/// can read, in the server's order, then New project. A row: the name, what the project is, its Lead's face and name,
-/// and how many tasks are waiting. Picking a row makes the new agent a Member there; New project makes it a Lead.
+/// The Cmd-N form's Main project (task #4541, anh Dee's first-day mockup 11-07): a pill naming the pick, beside the
+/// agent and computer, opening the project list: each readable project with its Lead's face, what it is and how many
+/// tasks wait, in the server's order, then New project, which the new agent leads. A pick makes it a Member there.
 class NewHarnessMainProject extends StatefulWidget {
   const NewHarnessMainProject({super.key, required this.controller});
   final NewHarnessController controller;
@@ -4577,6 +4614,108 @@ class NewHarnessMainProject extends StatefulWidget {
 }
 
 class _NewHarnessMainProjectState extends State<NewHarnessMainProject> {
+  final _menu = MenuController();
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final box = widget.controller;
+    final integration = box.integration!;
+    final projects = [...?integration.projectChoices?.projects];
+    final picked = integration.mainProjectId;
+    final label = picked == kNewProjectChoice
+        ? 'New project'
+        : projects.where((p) => p.id == picked).firstOrNull?.name ??
+              'Main project';
+    void pick(String id) {
+      _menu.close();
+      box.setMainProject(id);
+    }
+
+    return AppDropdown(
+      controller: _menu,
+      width: _menuWidth,
+      header: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          grid.AppDesktop.groupGap,
+          grid.AppDesktop.menuInset,
+          grid.AppDesktop.groupGap,
+          grid.AppDesktop.listRowGap,
+        ),
+        child: Text(
+          'Main project',
+          style: DesktopChrome.metadata(color: DesktopChrome.muted),
+        ),
+      ),
+      children: [
+        for (final project in projects)
+          AppMenuItem(
+            key: ValueKey('new-harness-main-project-${project.id}'),
+            label: project.name,
+            detail: project.purpose.isEmpty ? null : project.purpose,
+            highlighted: picked == project.id,
+            leading: switch (project.lead) {
+              // A Lead's face is a rounded square (#4563).
+              final lead? => SuperTabAvatar(
+                identity: 'agent:${lead.agentId}',
+                name: lead.name,
+                size: _faceSize,
+                face: true,
+                radius: _faceSize * .28,
+              ),
+              null => const SizedBox.square(dimension: _faceSize),
+            },
+            trailing: Text(
+              project.waiting == 0
+                  ? 'none waiting'
+                  : '${project.waiting} waiting',
+              style: DesktopChrome.metadata(color: DesktopChrome.muted)
+                  .copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
+            ),
+            onPressed: box.locked ? null : () => pick(project.id),
+          ),
+        if (projects.isNotEmpty) const AppMenuDivider(),
+        AppMenuItem(
+          key: const ValueKey('new-harness-main-project-new'),
+          icon: AppIcons.plus,
+          label: 'New project',
+          detail: 'You lead it',
+          highlighted: picked == kNewProjectChoice,
+          onPressed: box.locked ? null : () => pick(kNewProjectChoice),
+        ),
+      ],
+      builder: (context, menu, _) => DesktopPill(
+        key: const ValueKey('new-harness-field-main-project'),
+        label: label,
+        semanticLabel: 'Main project, $label',
+        icon: AppIcons.folder,
+        menu: true,
+        capsule: true,
+        tooltip: 'Main project',
+        textSize: 13,
+        surfaceColor: DesktopChrome.surface,
+        onPressed: box.locked
+            ? null
+            : () => menu.isOpen ? menu.close() : menu.open(),
+      ),
+    );
+  }
+
+  static const _faceSize = 24.0;
+  static const _menuWidth = 420.0;
+}
+
+/// New project's name, under the pills while New project is the pick.
+class NewHarnessNewProjectName extends StatefulWidget {
+  const NewHarnessNewProjectName({super.key, required this.controller});
+  final NewHarnessController controller;
+
+  @override
+  State<NewHarnessNewProjectName> createState() =>
+      _NewHarnessNewProjectNameState();
+}
+
+class _NewHarnessNewProjectNameState extends State<NewHarnessNewProjectName> {
   late final _name = TextEditingController(
     text: widget.controller.integration?.newProjectName ?? '',
   );
@@ -4588,172 +4727,17 @@ class _NewHarnessMainProjectState extends State<NewHarnessMainProject> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    grid.AppTheme.watch(context);
-    final box = widget.controller;
-    final integration = box.integration!;
-    final picked = integration.mainProjectId;
-    Widget row({
-      required String id,
-      required Widget name,
-      Widget? purpose,
-      Widget? lead,
-      String? waiting,
-      String? label,
-    }) {
-      final selected = picked == id;
-      return Semantics(
-        key: ValueKey(
-          'new-harness-main-project-${id == kNewProjectChoice ? 'new' : id}',
-        ),
-        inMutuallyExclusiveGroup: true,
-        checked: selected,
-        label: label,
-        child: Material(
-          color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
-          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            onTap: box.locked ? null : () => box.setMainProject(id),
-            hoverColor: grid.AppSurface.hoverFill,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: _rowHeight),
-              child: Row(
-                children: [
-                  const SizedBox(width: grid.AppDesktop.controlGap),
-                  Icon(
-                    selected ? AppIcons.circleDot : AppIcons.circle,
-                    size: AppIcons.inlineSize,
-                    color: selected
-                        ? DesktopChrome.foreground
-                        : DesktopChrome.muted,
-                  ),
-                  const SizedBox(width: grid.AppDesktop.controlGap),
-                  SizedBox(width: _nameWidth, child: name),
-                  const SizedBox(width: grid.AppDesktop.controlGap),
-                  Expanded(child: purpose ?? const SizedBox.shrink()),
-                  if (lead != null) ...[
-                    const SizedBox(width: grid.AppDesktop.controlGap),
-                    SizedBox(width: _leadWidth, child: lead),
-                  ],
-                  SizedBox(
-                    width: _waitingWidth,
-                    child: waiting == null
-                        ? null
-                        : Text(
-                            waiting,
-                            maxLines: 1,
-                            textAlign: TextAlign.right,
-                            style:
-                                DesktopChrome.metadata(
-                                  color: DesktopChrome.muted,
-                                ).copyWith(
-                                  fontFeatures: const [
-                                    FontFeature.tabularFigures(),
-                                  ],
-                                ),
-                          ),
-                  ),
-                  const SizedBox(width: grid.AppDesktop.controlGap),
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-
-    Text words(String text, {bool strong = false}) => Text(
-      text,
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: strong
-          ? DesktopChrome.control(medium: true)
-          : DesktopChrome.metadata(color: DesktopChrome.muted),
-    );
-
-    return Column(
-      key: const ValueKey('new-harness-main-project'),
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(
-            bottom: grid.AppDesktop.listRowGap * 2,
-          ),
-          child: Text(
-            'Main project',
-            style: DesktopChrome.metadata(color: DesktopChrome.muted),
-          ),
-        ),
-        if (integration.projectsError case final failed?)
-          Row(
-            children: [
-              Flexible(child: words(failed)),
-              TextButton(
-                onPressed: box.locked ? null : box.retryProjects,
-                child: const Text('Retry'),
-              ),
-            ],
-          ),
-        for (final project in [...?integration.projectChoices?.projects])
-          row(
-            id: project.id,
-            label: [
-              project.name,
-              if (project.purpose.isNotEmpty) project.purpose,
-              if (project.lead case final lead?) 'Lead ${lead.name}',
-              '${project.waiting} waiting',
-            ].join(', '),
-            name: words(project.name, strong: true),
-            purpose: project.purpose.isEmpty ? null : words(project.purpose),
-            lead: switch (project.lead) {
-              final lead? => Row(
-                children: [
-                  SuperTabAvatar(
-                    identity: 'agent:${lead.agentId}',
-                    name: lead.name,
-                    size: _faceSize,
-                    face: true,
-                    lead: true,
-                  ),
-                  const SizedBox(width: grid.AppDesktop.controlGap),
-                  Flexible(child: words(lead.name)),
-                ],
-              ),
-              null => const SizedBox.shrink(),
-            },
-            waiting: '${project.waiting}',
-          ),
-        row(
-          id: kNewProjectChoice,
-          label: 'New project',
-          name: words('New project', strong: true),
-          purpose: picked == kNewProjectChoice
-              ? TextField(
-                  key: const ValueKey('new-harness-new-project-name'),
-                  controller: _name,
-                  autofocus:
-                      integration.projectChoices?.projects.isNotEmpty == true,
-                  enabled: !box.locked,
-                  maxLength: 80,
-                  style: DesktopChrome.control(),
-                  decoration: const InputDecoration(
-                    hintText: 'Name',
-                    isDense: true,
-                    counterText: '',
-                    border: InputBorder.none,
-                  ),
-                  onChanged: box.setNewProjectName,
-                )
-              : null,
-        ),
-      ],
-    );
-  }
-
-  static const _rowHeight = 36.0;
-  static const _faceSize = 20.0;
-  static const _nameWidth = 140.0;
-  static const _leadWidth = 120.0;
-  static const _waitingWidth = 32.0;
+  Widget build(BuildContext context) => TextField(
+    key: const ValueKey('new-harness-new-project-name'),
+    controller: _name,
+    enabled: !widget.controller.locked,
+    maxLength: 80,
+    style: DesktopChrome.control(),
+    decoration: const InputDecoration(
+      hintText: 'Project name',
+      isDense: true,
+      counterText: '',
+    ),
+    onChanged: widget.controller.setNewProjectName,
+  );
 }

@@ -10,6 +10,7 @@ import '../../state/new_harness.dart';
 import '../../widgets/desktop_chrome.dart';
 import '../../widgets/new_harness_form.dart';
 import '../controller.dart';
+import '../machines.dart' show contributeComputer;
 import '../project_choices.dart';
 import 'agent_launcher.dart';
 
@@ -128,7 +129,6 @@ Future<Map<String, dynamic>?> showBringAgentForm(
     String machineId,
     String engine, {
     String? mainProjectId,
-    String? projectName,
   }) async {
     final (launcher, operation) = launchers[machineId] ??= (
       launcherFor(machineId),
@@ -141,7 +141,6 @@ Future<Map<String, dynamic>?> showBringAgentForm(
         engine,
         operation,
         mainProjectId: mainProjectId,
-        projectName: projectName,
       );
     } finally {
       starting = null;
@@ -153,6 +152,47 @@ Future<Map<String, dynamic>?> showBringAgentForm(
     }
     started = result;
     startedOn = machineId;
+  }
+
+  // New project from Join: a Buddy never leads (#4540), so this computer is listed in the Swarm, then the Lead starts
+  // there with the project's name, each step keeping its receipt across retries.
+  final leadSetup = superTabOperationId(), leadStart = superTabOperationId();
+  Future<void> startLead(AgentStart start) async {
+    final listed =
+        controller.snapshot?.machines.any(
+          (m) => m['machineId'] == start.machineId && m['buddyOnly'] != true,
+        ) ==
+        true;
+    if (!listed &&
+        await contributeComputer(
+              controller,
+              app,
+              start.machineId,
+              setupId: leadSetup,
+              alive: current,
+              ifMissing: true,
+            ) ==
+            null) {
+      throw const SwarmAgentLaunchFailure(
+        'Your account changed. Close this form and try again.',
+      );
+    }
+    final result = await controller.command({
+      'type': 'agent.new',
+      'kind': 'pm',
+      'machineId': start.machineId,
+      'engine': start.engine,
+      'model': ?start.model,
+      'projectName': start.projectName,
+    }, operationId: leadStart);
+    if (result == null) {
+      throw SwarmAgentLaunchFailure(
+        controller.operationError ??
+            'Your agent’s start is not confirmed. Try again to check it.',
+      );
+    }
+    started = result;
+    startedOn = start.machineId;
   }
 
   // The same project list as + New agent (task #4541); a backend without it keeps Bring agent as it was.
@@ -175,9 +215,10 @@ Future<Map<String, dynamic>?> showBringAgentForm(
       HarnessLaunchIntegration(
           creationId: superTabOperationId(),
           actionLabel: 'Bring agent',
-          heading: 'Bring your agent to $swarm',
+          // anh Dee's first-day mockup (11-07).
+          heading: listed ? 'Welcome to $swarm' : 'Bring your agent to $swarm',
           intro: listed
-              ? 'It runs on your computer, under your sign-in.'
+              ? 'Bring your agent and pick the project it works on. It helps others when it’s free.'
               : 'Your Buddy is your own agent in $swarm: it runs on your computer, '
                     'under your sign-in, and you can also start it later from your '
                     'Buddy chat.',
@@ -189,12 +230,13 @@ Future<Map<String, dynamic>?> showBringAgentForm(
           startBuddy: listed ? null : startOn,
           startAgent: !listed
               ? null
-              : (start) => startOn(
-                  start.machineId,
-                  start.engine,
-                  mainProjectId: start.mainProjectId,
-                  projectName: start.projectName,
-                ),
+              : (start) => start.projectName != null
+                    ? startLead(start)
+                    : startOn(
+                        start.machineId,
+                        start.engine,
+                        mainProjectId: start.mainProjectId,
+                      ),
           stopBuddy: () => starting?.stop() ?? false,
         )
         ..projectChoices = choices
