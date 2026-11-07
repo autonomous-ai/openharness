@@ -247,6 +247,18 @@ void main() {
     },
   );
 
+  // Empty means empty (anh Dee's rule 7, 11-07): an empty chat shows nothing under its bar.
+  testWidgets('an empty chat says nothing', (t) async {
+    final f = TasksFixture();
+    addTearDown(f.controller.dispose);
+    await f.controller.refresh();
+    await f.controller.select('aeef');
+    await show(t, f.controller, tasks: true);
+    expect(f.controller.messages('aeef'), isEmpty);
+    expect(find.text('Start the conversation.'), findsNothing);
+    expect(find.textContaining('Discuss the plan with'), findsNothing);
+  });
+
   testWidgets(
     'with a thread open the Buddy chat is in the full view and keeps its pickers',
     (t) async {
