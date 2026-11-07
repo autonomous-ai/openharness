@@ -39,8 +39,10 @@ export const GROUP_FIELDS = {
     'kind',
     'leadId',
     'projectId',
+    'proposal',
     'pulse',
     'reviewOf',
+    'taskApproval',
   ],
   whenRunning: [
     'assignment.execution',
@@ -95,6 +97,7 @@ export const GROUP_FIELDS = {
     'pin',
     'priority',
     'proposals',
+    'pullRequestChecks',
     'pullRequestEvents',
     'pullRequestHeads',
     'pullRequestUrls',
@@ -108,9 +111,12 @@ export const GROUP_FIELDS = {
     'step',
     'stepIds',
     'stepUp',
+    'stuck',
     'talkedAt',
     'teamWritten',
     'teamWrittenBy',
+    'unlinkedPullRequests',
+    'writers',
   ],
 } as const
 const LIGHT_GROUP = {

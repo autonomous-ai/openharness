@@ -10,6 +10,8 @@ import { attributedRules, budgetParts, droppedRules, INSTRUCTIONS_BUDGET, ITEM_C
 import { fail, type Author, type Conversation, type SuperTabState } from './model.js'
 import { canReadProject, projectRules, type SwarmProject } from './projects.js'
 import { isSwarmBuddyChat } from './buddies.js'
+import type { ProjectRules } from './policy.js'
+import { agentWrittenNameOf } from './personNames.js'
 import { swarmUsernames } from './usernames.js'
 
 /** Approval messages one save may name: one per person whose rules it drops is plenty. */
@@ -22,10 +24,18 @@ export interface ApprovalRow { id: string; author: Author; source: boolean; crea
 
 /** The members a written name is: by username, shown name or email, else by one word of a shown name ("Leo" is Leo Tran),
  *  honorifics and a possessive aside (instructionsDiff.ts personKey). */
-export function membersNamed(state: SuperTabState, name: string): string[] {
+export function membersNamed(state: SuperTabState, name: string, authority?: ProjectRules['instructionApprovals']): string[] {
   const key = personKey(name)
   if (!key) return []
+  // Explicit identity links outrank mutable display names. Only listed IDs gain the extra identity.
+  const present = new Set(state.people.map(p => p.id))
+  const linked = authority?.people.find(p => personKey(p.name) === key)
+  if (linked) return linked.accountIds.filter(id => present.has(id))
   const usernames = swarmUsernames(state)
+  // A linked account's unique handle/email may name the group too. Display names never add an account to that group.
+  const account = state.people.find(p => [usernames.get(p.id), p.email].some(n => n && personKey(n) === key))
+  const accountLink = account && authority?.people.find(p => p.accountIds.includes(account.id))
+  if (accountLink) return accountLink.accountIds.filter(id => present.has(id))
   const whole = state.people.filter(p => [usernames.get(p.id), p.name, p.email, p.email.split('@')[0]].some(n => n && personKey(n) === key))
   if (whole.length) return whole.map(p => p.id)
   return state.people.filter(p => p.name?.split(/\s+/).some(word => personKey(word) === key)).map(p => p.id)
@@ -64,9 +74,9 @@ const codeTasks = (state: SuperTabState, project: SwarmProject): Conversation[] 
   && c.id !== project.leadConversationId && !c.kind && !c.reviewOf && !c.step && !c.audience && !!c.brief)
 
 /** How the guard tells people apart in this Swarm: a written name as the members it is, so "0xken15" and "Ken" are one. */
-function identifier(state: SuperTabState): (name: string) => string {
+function identifier(state: SuperTabState, authority?: ProjectRules['instructionApprovals']): (name: string) => string {
   const membersOf = new Map<string, string[]>()
-  return name => (membersOf.get(name) ?? membersOf.set(name, membersNamed(state, name)).get(name)!).slice().sort().join(',') || `?${personKey(name)}`
+  return name => (membersOf.get(name) ?? membersOf.set(name, membersNamed(state, name, authority)).get(name)!).slice().sort().join(',') || `?${personKey(name)}`
 }
 
 /**
@@ -92,29 +102,33 @@ export function tasksHoldingMoves(state: SuperTabState, project: SwarmProject, b
  * several people needs each of them. A name that is no member is the project owner's to allow.
  */
 export function allowedDrops(state: SuperTabState, project: SwarmProject, before: string, after: string, sender: { kind: Author['kind']; id: string },
-  named: readonly string[], approvals: readonly ApprovalRow[], since: number, merges: Readonly<Record<string, number | null>> = {}): { told: Map<string, DroppedRule[]>; rules: DroppedRule[] } {
+  named: readonly string[], approvals: readonly ApprovalRow[], since: number, merges: Readonly<Record<string, number | null>> = {}, authority?: ProjectRules['instructionApprovals']): { told: Map<string, DroppedRule[]>; rules: DroppedRule[]; deciderId?: string } {
   const told = new Map<string, DroppedRule[]>()
   const membersOf = new Map<string, string[]>()
-  const members = (name: string) => membersOf.get(name) ?? membersOf.set(name, membersNamed(state, name)).get(name)!
-  const dropped = droppedRules(before, after, identifier(state), rulePlaces(state, project, merges))
+  const members = (name: string) => membersOf.get(name) ?? membersOf.set(name, membersNamed(state, name, authority)).get(name)!
+  const dropped = droppedRules(before, after, identifier(state, authority), rulePlaces(state, project, merges))
   if (!dropped.length) return { told, rules: [] }
   const saver = sender.kind === 'person' ? sender.id : undefined
   // Written after the revision this save replaces, in a conversation of this project: an old "thanks" approves nothing (review
   // of #3112). A person's one Buddy chat belongs to no project.
   const here = (conversationId: string) => conversationId === project.leadConversationId || state.conversations.some(c => c.id === conversationId
     && !isSwarmBuddyChat(c) && (c.projectId ?? 'lead') === project.id)
+  const eligible = (id: string) => state.people.some(p => p.id === id && canReadProject(state, { kind: 'person', userId: p.id, email: p.email }, project))
   const approvers = new Set(approvals.filter(a => named.includes(a.id) && a.author.kind === 'person' && !a.source && a.createdAt >= since
     && here(a.conversationId)).map(a => a.author.id)
-    .filter(id => state.people.some(p => p.id === id && canReadProject(state, { kind: 'person', userId: p.id, email: p.email }, project))))
+    .filter(eligible))
+  const decider = authority?.topDeciderId && approvers.has(authority.topDeciderId) ? authority.topDeciderId : undefined
   const refused: DroppedRule[] = []
   for (const rule of dropped) {
-    const by = rule.people.map(name => {
+    const by = decider ? [decider] : rule.people.map(name => {
       const ids = members(name).length ? members(name) : [project.ownerId]
       if (saver && ids.includes(saver)) return saver
       return ids.find(id => approvers.has(id))
     })
     if (by.some(id => !id)) { refused.push(rule); continue }
-    for (const id of new Set(by as string[])) if (id !== saver) told.set(id, [...told.get(id) ?? [], rule])
+    // With a decider override the rule's authors did not approve it themselves: tell their current, permitted accounts too.
+    const notify = decider ? [...by, ...rule.people.flatMap(members).filter(eligible)] : by
+    for (const id of new Set(notify as string[])) if (id !== saver) told.set(id, [...told.get(id) ?? [], rule])
   }
   if (refused.length) {
     const unknown = (rule: DroppedRule) => rule.people.filter(name => !members(name).length)
@@ -123,13 +137,15 @@ export function allowedDrops(state: SuperTabState, project: SwarmProject, before
         + 'people notes or its role section, into the project\'s rules record, or into a code task, whose line stays until the '
         + 'Swarm sees that task\'s pull request merged on GitHub (name a quiet one in tasks). Otherwise ask that person and name their own message approving the change '
         + '(approvals). Never drop or weaken a person\'s rule on your own judgment, even one you think cannot be done.',
+      ...(authority?.topDeciderId ? [`The project's top decider ${agentWrittenNameOf(state, authority.topDeciderId) ?? 'named in its rules record'} may also approve any rule with their own recent message in this project.`] : []),
       ...refused.map(rule => `- "${cut(rule.text)}" (${rule.people.join(', ')}): ${WHY[rule.why]}`
         + (rule.movedTo ? ` (${rule.movedTo}): keep its line until it merges.` : '.')
-        + (unknown(rule).length ? ` ${unknown(rule).join(', ')} is no member here, so the project's owner decides.` : '')),
+        + (unknown(rule).length ? ` ${unknown(rule).join(', ')} is no member here, so the project's owner decides.`
+          : ` Ask ${rule.people.map(name => members(name).map(id => agentWrittenNameOf(state, id) ?? name).join(' or ')).join(' and ')} for approval.`)),
     ].join('\n'), 409, { dropped: refused.map(rule => ({ rule: rule.text, people: rule.people, why: rule.why,
       ...rule.movedTo ? { movedTo: rule.movedTo } : {} })) })
   }
-  return { told, rules: dropped }
+  return { told, rules: dropped, ...decider ? { deciderId: decider } : {} }
 }
 
 /**
@@ -205,9 +221,9 @@ export function droppedLines(before: string, after: string, sorted: readonly Sor
   })
 }
 
-/** The one line a person is told when [who] changed their [rules] in [project]'s instructions with their approval. */
-export function approvedDropNotice(who: string, project: SwarmProject, rules: readonly DroppedRule[]): string {
+/** The one line a person is told when [who] changed [rules], naming the decider when someone else approved the change. */
+export function approvedDropNotice(who: string, project: SwarmProject, rules: readonly DroppedRule[], decider?: string): string {
   const each = rules.map(rule => `${rule.why === 'removed' ? 'removed' : 'changed'} "${cut(rule.text)}"`).join('; ')
-  return `${who} changed your ${rules.length === 1 ? 'rule' : `${rules.length} rules`} in the ${project.name} instructions, as you approved: ${each}.`
+  return `${who} changed ${decider ? 'the' : 'your'} ${rules.length === 1 ? 'rule' : `${rules.length} rules`} in the ${project.name} instructions, ${decider ? `approved by ${decider}` : 'as you approved'}: ${each}.`
     .replace(/\s*[\r\n]+\s*/g, ' ')
 }

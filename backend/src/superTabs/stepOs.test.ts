@@ -14,6 +14,8 @@ const opus: AgentConfiguration = { engine: 'claude', model: 'opus', effort: 'hig
 const PR = 'https://github.com/acme/app/pull/7'
 const NOW = 1_000_000
 const contribution = { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }
+/** A new agent starts only on its starter's own computer, as them (Swarm v3, task #4120). */
+const ownComputer = { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }
 
 const machine = (machineId: string, os: string) => ({ machineId, name: machineId, contributorId: 'owner', membershipGeneration: 'g', generation: 'g1',
   cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 4, paused: false,
@@ -115,7 +117,7 @@ describe('a step named for an OS', () => {
     const f = fixture()
     f.lose()
     const start = (machineId: string) => () => f.run({ type: 'agent.start', request: { conversationId: f.linuxStep.id, machineId, engine: 'claude',
-      name: 'Tester', cwd: '/swarm/lead', worktree: true, requirements } } as Command, owner, contribution)
+      name: 'Tester', cwd: '/swarm/lead', worktree: true, requirements } } as Command, owner, ownComputer)
     expect(start('mac1')).toThrow(expect.objectContaining({ code: 'STEP_OS' }))
     expect(start('linux1')).not.toThrow()
   })

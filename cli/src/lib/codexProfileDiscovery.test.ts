@@ -23,11 +23,19 @@ function write(path: string, content: string, { executable = false } = {}): void
 }
 
 describe('discoverCodexProfiles — conventional homes', () => {
-  it('finds a .codex folder that has auth.json', () => {
+  it('finds a .codex folder that has config.toml', () => {
+    const home = tempHome()
+    mkdirSync(join(home, '.codex'))
+    writeFileSync(join(home, '.codex', 'config.toml'), '')
+    expect(discoverCodexProfiles({ home, environment: {} })).toContain(join(home, '.codex'))
+  })
+
+  // A sign-in file is not Harness's to look at, not even for whether it is there (#4137).
+  it('does not take a sign-in file for a profile', () => {
     const home = tempHome()
     mkdirSync(join(home, '.codex'))
     writeFileSync(join(home, '.codex', 'auth.json'), '{}')
-    expect(discoverCodexProfiles({ home, environment: {} })).toContain(join(home, '.codex'))
+    expect(discoverCodexProfiles({ home, environment: {} })).not.toContain(join(home, '.codex'))
   })
 
   it('finds a folder named like a Codex profile that has config.toml', () => {
@@ -41,7 +49,7 @@ describe('discoverCodexProfiles — conventional homes', () => {
     const home = tempHome()
     const config = join(home, 'myconfig')
     mkdirSync(join(config, 'codex-team'), { recursive: true })
-    writeFileSync(join(config, 'codex-team', 'auth.json'), '{}')
+    writeFileSync(join(config, 'codex-team', 'config.toml'), '')
     const found = discoverCodexProfiles({ home, environment: { XDG_CONFIG_HOME: config } })
     expect(found).toContain(join(config, 'codex-team'))
   })

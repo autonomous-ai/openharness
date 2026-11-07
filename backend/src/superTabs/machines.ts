@@ -1,4 +1,4 @@
-import { accessRefusal, sharedOwnAccess, taskAccess } from './machineAccess.js'
+import { accessRefusal, taskAccess } from './machineAccess.js'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { engineUnusable, machineSuspensionReason } from './engineHealth.js'
@@ -6,7 +6,7 @@ import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, occupiesAgent, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
 import { startFinished } from './parts/write.js'
-import { agentProjectId, canReadAgent, canReadProject, groupProject, ledProject, ownsProject, projectOf, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
+import { agentProjectId, isAgentChat, canReadAgent, canReadProject, groupProject, ledProject, ownsProject, projectOf, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
 import { isSwarmBuddyChat } from './buddies.js'
 export { teamAccountPool } from './projects.js'
 import { conversation } from './model.js'
@@ -162,6 +162,8 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
   quotaReasons: z.record(z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), z.string().min(1).max(300)).refine(v => Object.keys(v).length <= 8).optional(),
   runningHarnessIds: z.array(z.string().max(160)).max(1000),
   stoppedHarnessIds: z.array(z.string().max(160)).max(1000),
+  /** Running Buddy sessions positively idle in this reading; absent is unknown, never idle (#3824). */
+  idleBuddyHarnessIds: z.array(z.string().max(160)).max(1000).optional(),
   /** Of the stopped ones, those this machine's idle cleanup closed (cli superTabs/cleanupCloses.ts): only such a session is
    *  refused new work (closedAgents.ts sessionClosed), never one stopped by Change agent or a restart (review of #2953).
    *  Absent from hosts before it. */
@@ -235,7 +237,7 @@ export const refusableStart = (start: AgentStart, machineId: string): boolean =>
  */
 export function storedObservation(pool: ContributedMachine, observation: MachineObservation,
   opts: { team: boolean; now: number; preparable: (startId: string) => boolean; refusable?: (startId: string) => boolean }): StoredReading {
-  const { privacy: reported, harnessProgress, harnessTokens, preparingStartIds, refusedStarts, profiles, ...reading } = observation
+  const { privacy: reported, harnessProgress, harnessTokens, preparingStartIds, refusedStarts, profiles, idleBuddyHarnessIds, ...reading } = observation
   const running = (id: string) => observation.runningHarnessIds.includes(id)
   const progress = harnessProgress && Object.fromEntries(Object.entries(harnessProgress).filter(([id]) => running(id)))
   const tokens = harnessTokens && Object.fromEntries(Object.entries(harnessTokens).filter(([id]) => running(id)))
@@ -245,6 +247,7 @@ export function storedObservation(pool: ContributedMachine, observation: Machine
   const privacy = observedPrivacy(pool.observation?.privacy, reported, opts.team, opts.now)
   const engines = contributedEngines(pool, observation)
   return { ...reading, quotas: observation.quotas.filter(q => engines.includes(q.engine)), receivedAt: opts.now,
+    ...(idleBuddyHarnessIds ? { idleBuddyHarnessIds: [...new Set(idleBuddyHarnessIds.filter(running))] } : {}),
     ...(profiles ? { profiles: profiles.filter(p => engines.includes(p.engine)) } : {}),
     sessionKind: opts.team ? 'team' : 'computer', ...(privacy ? { privacy } : {}), ...(progress ? { harnessProgress: progress } : {}),
     ...(tokens ? { harnessTokens: tokens } : {}), ...(preparing ? { preparingStartIds: preparing } : {}),
@@ -269,7 +272,8 @@ export function readingOnly(previous: StoredReading | undefined, next: StoredRea
   if (!previous || next.stoppedReservations?.length || next.refusedStarts?.length || previous.sessionKind !== next.sessionKind) return false
   if (!sameSet(previous.runningHarnessIds, next.runningHarnessIds) || !sameSet(previous.stoppedHarnessIds, next.stoppedHarnessIds)
     || !sameSet(previous.closedHarnessIds ?? [], next.closedHarnessIds ?? [])
-    || !sameSet(previous.preparingStartIds, next.preparingStartIds)) return false
+    || !sameSet(previous.preparingStartIds, next.preparingStartIds)
+    || !sameSet(previous.idleBuddyHarnessIds, next.idleBuddyHarnessIds)) return false
   if (!previous.harnessProgress || !next.harnessProgress) return !previous.harnessProgress && !next.harnessProgress
   const before = previous.harnessProgress, after = next.harnessProgress
   return sameSet(Object.keys(before), Object.keys(after)) && Object.entries(before).every(([id, at]) => after[id]! >= at)
@@ -310,7 +314,7 @@ export function observedPrivacy(previous: StoredPrivacy | undefined, reported: M
 }
 
 export type TeamWorkCode = 'TEAM_WRITTEN_WORK' | 'MACHINE_OFFLINE' | 'TEAM_ACCOUNT_REQUIRED' | 'PRIVACY_UNCHECKED' | 'PRIVACY_CHECK_FAILED' | 'PRIVACY_CHECK_STALE'
-  | 'MACHINE_IN_OTHER_WORKSPACE' | 'NOT_SWARM_MACHINE' | 'MACHINE_PROJECTS' | 'ACCESS_MISSING' | 'TEAM_ACCOUNT_JOINING' | 'STEP_OS'
+  | 'MACHINE_IN_OTHER_WORKSPACE' | 'NOT_SWARM_MACHINE' | 'MACHINE_PROJECTS' | 'ACCESS_MISSING' | 'TEAM_ACCOUNT_JOINING' | 'TEAM_ACCOUNTS_REMOVED' | 'NOT_YOUR_COMPUTER' | 'READ_ONLY' | 'STEP_OS'
 export interface TeamWorkRefusal { code: TeamWorkCode; reason: string }
 /** Refusals that hold until a person acts on the machine; a stale check or an offline machine may pass again by itself. */
 export const LASTING_TEAM_REFUSALS: readonly string[] = ['TEAM_ACCOUNT_REQUIRED', 'PRIVACY_UNCHECKED', 'PRIVACY_CHECK_FAILED', 'MACHINE_IN_OTHER_WORKSPACE']
@@ -377,34 +381,34 @@ export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow =
 }
 
 /**
- * Whether work for [project] may run on [machineId] under [contributorId]'s grant there: the pool's contributor for a
- * start on a contributed machine, the agent's contributor for an agent already in the Swarm. The project owner's own
- * grant always may. A teammate's needs a contributed Team machine that shows its privacy (teamWorkRefusal); a machine
- * outside the Swarm's Machines list reports nothing, so it never does. `teamMachines`: the tab's machines whose account
- * row is signed in as a team account, read by the store.
+ * Whether work for [project] may run on [machineId] under [contributorId]'s grant there: the pool's contributor for a start, the
+ * agent's contributor for an agent already in the Swarm. Swarm v3 has no Team accounts (task #4120, the PM's ruling there): an
+ * agent a person brought works on any task of a project that person can read, in their own account, so the work runs as its own
+ * person and never as a machine owner it does not belong to.
  */
-export function teamWorkCheck(state: SuperTabState, machineId: string, contributorId: string, project: SwarmProject, now: number,
-  teamMachines: readonly string[] = [], otherWorkspaceMachines: readonly string[] = [],
-  /** What the task needs to reach (machineAccess.ts): own-account entries its owner shared let it run in their account. */
-  access: readonly string[] = []): TeamWorkRefusal | null {
+export function teamWorkCheck(state: SuperTabState, machineId: string, contributorId: string, project: SwarmProject): TeamWorkRefusal | null {
   // Its owner kept it for other projects (machine.projects): whoever's project and grant it is.
   const kept = machineProjectRefusal(state, machineId, project)
   if (kept) return kept
   const pool = state.machines?.find(m => m.machineId === machineId)
-  // A Buddy-only machine is its person's alone: an agent they added there takes their own projects' work and no other's,
-  // whatever the Team account switches say (security re-check 1 of #2234). New starts there are refused in admitMachineStart.
+  // A Buddy-only machine is its person's alone: an agent they added there takes their own projects' work and no other's
+  // (security re-check 1 of #2234). New starts there are refused in admitMachineStart.
   if (pool?.buddyOnly) return ownsProject(state, pool.contributorId, project) ? null : { code: 'NOT_SWARM_MACHINE', reason: NOT_SWARM_MACHINE }
-  if (ownsProject(state, contributorId, project)) return null
-  if (!pool) {
-    // Off the Machines list nothing reports a team account (store.ts teamMachines), so this is the switch alone.
-    if (!teamAccountRequired()) return null
-    return { code: 'TEAM_ACCOUNT_REQUIRED', reason: `This machine is not a Team machine of this Swarm, ${ONLY_OWN}.` }
-  }
-  // Its owner shared what this task needs from their own account with teammates: the owner's choice, as ownAccountWork, for
-  // the tasks that need it only (design section 4).
-  if (sharedOwnAccess(pool, access)) return null
-  return teamWorkRefusal(pool, now, teamMachines.includes(machineId), teamAccountRequired(), otherWorkspaceMachines.includes(machineId))
+  // A Team account's agent already in the Swarm keeps working in what it holds until it is stopped after the release; it gets no
+  // new work and no new agent starts there, which their own gates refuse (admitMachineStart, work.assign, the route, the picks).
+  if (pool && pool.contributorId !== contributorId) return { code: 'NOT_YOUR_COMPUTER', reason: NOT_YOUR_COMPUTER }
+  const person = state.people.find(p => p.id === contributorId)
+  // Reading is not working: a viewer's agent takes no work (security review 1 of #3446).
+  if (person?.role === 'viewer') return { code: 'READ_ONLY', reason: 'This agent\'s person is a viewer here, so their agents take no work.' }
+  if (ownsProject(state, contributorId, project) || (person && canReadProject(state, { kind: 'person', userId: person.id, email: person.email }, project))) return null
+  return { code: 'NOT_YOUR_COMPUTER', reason: `${pool?.name ?? 'This machine'}'s person cannot read this project, so its agents take none of its work.` }
 }
+
+/** Why a Team account's entry takes no new agent and no new work (task #4120). */
+export const TEAM_ACCOUNTS_GONE: TeamWorkRefusal = { code: 'TEAM_ACCOUNTS_REMOVED',
+  reason: 'Harness Team accounts are gone: an agent runs on its own person\'s computer, in their own account.' }
+/** Why a new agent does not start on another person's computer (task #4120): it would run as that computer's person. */
+export const NOT_YOUR_COMPUTER = 'A new agent starts only on its own person\'s computer, in their own account, never on another person\'s.'
 
 /**
  * Why [machineId] takes no work of [project]: its owner kept it for other projects (commands.ts machine.projects, Tony
@@ -529,47 +533,6 @@ export const ownAccountWork = (pool: Pick<ContributedMachine, 'ownAccountChoice'
 export const ownAccountNote = (pool: Pick<ContributedMachine, 'name'>, ownerName: string | undefined): string =>
   `${pool.name} runs teammates' work in ${ownerName ?? 'its owner'}'s own account.`
 
-/** What a start moved to [pool]'s Team account says, so it is never moved silently (task #2806). The owner's choice is kept
- *  on each Swarm's own entry for the Mac, so it says which Swarm's to change (task #2993: Gray turned it on in another
- *  Swarm). Team-written code moves whatever the owner chose, so that note names the code, not a setting that would not help. */
-export const movedToTeamAccount = (pool: Pick<ContributedMachine, 'name'>, teamWritten = false): string => teamWritten
-  ? `A Harness Team agent wrote this task's code, so it runs in the Harness Team account on ${pool.name}.`
-  : `${pool.name} runs teammates' work in its Harness Team account in this Swarm. Its owner can change that in this Swarm's Manage > Machines.`
-
-/** Where a new agent for [project] runs when a start names [machineId]: the Mac's team account when the project is not
- *  its contributor's own and the Mac has one in this Swarm, else the machine named. Not when its owner lets teammates'
- *  work run in their own account there (ownAccountWork), unless a Team agent wrote the code. */
-export function teamMachineFor(state: SuperTabState, machineId: string, project: SwarmProject, idle = false, live?: readonly string[], teamWritten = false,
-  /** What the task needs to reach: a teammate's task needing only own-account entries its owner shared stays on the Mac. */
-  access: readonly string[] = []): string {
-  // With no GitHub App on this server a team account cannot fetch or push, so the work stays on the Mac, as before.
-  if (idle) return machineId
-  const pool = state.machines?.find(m => m.machineId === machineId)
-  // [teamWritten]: code a Team agent wrote takes the Team account even in its owner's own project (teamWritten.ts, audit H2).
-  if (!pool || (!teamWritten && ownsProject(state, pool.contributorId, project))) return machineId
-  if (!teamWritten && (ownAccountWork(pool) || sharedOwnAccess(pool, access))) return machineId
-  return teamPoolOf(state, pool, live)?.machineId ?? machineId
-}
-
-/** The Mac's own entry when [machineId] is its Harness Team account's and its owner lets teammates' work run in their own
- *  account there (ownAccountWork), for a teammate's [project] whose code no Team agent wrote; else undefined. Such a start
- *  belongs on the Mac, not the Team account it named (task #3060: a lamp start named Gray's Team entry, both entries named
- *  'Gray.local', and was placed there as named). */
-export function ownAccountTeamEntry(state: SuperTabState, machineId: string, project: SwarmProject, teamWritten: boolean): ContributedMachine | undefined {
-  if (teamWritten) return undefined
-  const team = state.machines?.find(m => m.machineId === machineId)
-  if (!team?.hostMachineId || team.contributorId === project.ownerId) return undefined
-  const mac = state.machines?.find(m => m.machineId === team.hostMachineId && m.contributorId === team.contributorId && !m.removal)
-  return ownAccountWork(mac) ? mac : undefined
-}
-
-/** Refuses a start that names a Team account's entry its owner's choice keeps teammates' work off (ownAccountTeamEntry), with
- *  the Mac's own entry to start on. Refused, not moved: a move would put the work in a person's own account, with their files
- *  and sign-ins, when the start named the isolated one; the starter picks the Mac knowingly, as its route row says. */
-export function failOwnAccountTeamEntry(mac: ContributedMachine): never {
-  fail('OWN_ACCOUNT_WORK', `${mac.name}'s owner runs teammates' work in their own account in this Swarm, so its Harness Team account takes only work a Harness Team agent wrote. Start on ${mac.name} itself (machine ${mac.machineId}).`, 409)
-}
-
 /** The folder a start for [project] uses on [pool]: what admitMachineStart accepts there. */
 export function projectFolder(pool: ContributedMachine, project: SwarmProject): string {
   return pool.scope === 'swarm'
@@ -612,19 +575,6 @@ export function buddyProjectsOn(state: SuperTabState, pool: ContributedMachine, 
   const counts = new Map<string, number>()
   for (const p of readable) counts.set(p.cwd, (counts.get(p.cwd) ?? 0) + 1)
   return readable.filter(p => counts.get(p.cwd) === 1).slice(0, MAX_BUDDY_PROJECTS)
-}
-
-/**
- * A start on a Mac for another person's project, moved to the Mac's Harness Team account: its machine, and its folder in
- * place of the Mac's own for that project. Every other start is returned as it is, so the Mac's owner's own projects
- * stay with the owner's daemon, and a Mac without a team account here refuses it as before (teamWorkCheck).
- */
-export function teamStartRequest(state: SuperTabState, request: AgentStartRequest, project: SwarmProject, idle = false,
-  live?: readonly string[], teamWritten = false, access: readonly string[] = []): AgentStartRequest {
-  const machineId = teamMachineFor(state, request.machineId, project, idle, live, teamWritten, access)
-  if (machineId === request.machineId) return request
-  const pool = state.machines!.find(m => m.machineId === request.machineId)!, team = state.machines!.find(m => m.machineId === machineId)!
-  return { ...request, machineId, cwd: request.cwd === projectFolder(pool, project) ? projectFolder(team, project) : request.cwd }
 }
 
 /** Refuses with the refusal's code and sentence: 403, or 409 like any start on an offline machine. */
@@ -871,6 +821,8 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   slots: (pool: ContributedMachine) => number = pool => machineSlots(state, pool)) {
   const pool = machineContribution(state, request.machineId)
   if (!pool) return null
+  // No new agent in a Harness Team account, whoever asks (task #4120): its agents keep what they hold until they are stopped.
+  if (teamAccountPool(pool)) failTeamWork(TEAM_ACCOUNTS_GONE)
   if (pool.buddyOnly && request.buddyOf?.personId !== pool.contributorId) fail('NOT_SWARM_MACHINE', NOT_SWARM_MACHINE, 403)
   // At its add and again at its launch: a Buddy-only machine is first read after its Buddy was asked for.
   if (request.buddyOf && refusesWindowsBuddy(pool)) fail('BUDDY_WINDOWS', BUDDY_WINDOWS_REFUSAL, 403)
@@ -880,7 +832,8 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   // A person's one Buddy chat has no project (Dee, 10-31): its project session works in the one it names, and its main Buddy
   // and plain sessions in none, in their own folder (buddyHomeFolder).
   const group = forProject ? undefined : conversation(state, request.conversationId)
-  const project = forProject ?? (!isSwarmBuddyChat(group!) ? groupProject(state, group!)
+  // A Regular agent's own chat has none either (agent.new, task #4116): it starts in its person's home folder.
+  const project = forProject ?? (isAgentChat(group!) ? undefined : !isSwarmBuddyChat(group!) ? groupProject(state, group!)
     : request.buddySession?.projectId ? projectOf(state, request.buddySession.projectId) : undefined)
   if (project && !pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
   // Kept by its owner for other projects: a Product Manager too. A Buddy is its owner's own (commands.ts buddy.create).
@@ -895,11 +848,11 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   // a Product Manager outside a Team account: any machine of the Swarm takes it (leadStart.ts, Ken 10-29).
   // What the task needs to reach, checked here for every start whatever the route sent (an older CLI drops needs.access):
   // a Buddy and a Product Manager need none (design section 3).
-  const needed = !request.buddyOf && !request.leadFor ? taskAccess(group) : []
-  if (!request.buddyOf && !(request.leadFor && !teamAccountPool(pool))) requireTeamWork(state, pool.machineId, pool.contributorId, project!, now, teamMachines, otherWorkspaceMachines, needed)
+  const needed = !request.buddyOf && !request.leadFor && !request.regular ? taskAccess(group) : []
+  if (!request.buddyOf && !request.leadFor && !request.regular) requireTeamWork(state, pool.machineId, pool.contributorId, project!)
   const missing = project ? accessRefusal(state, pool.machineId, project, needed) : null
   if (missing) failTeamWork(missing)
-  const cwd = project ? projectFolder(pool, project) : buddyHomeFolder(pool, { id: request.buddyOf!.personId })
+  const cwd = project ? projectFolder(pool, project) : buddyHomeFolder(pool, { id: request.buddyOf?.personId ?? pool.contributorId })
   // Every refused field is named, with what the machine does accept. Values the caller sent are not echoed: an account
   // setting can be a path or a name of the caller's own.
   const refused: string[] = []

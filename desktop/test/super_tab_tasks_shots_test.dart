@@ -32,14 +32,17 @@ void main() {
   });
 
   for (final brightness in Brightness.values) {
-    for (final layout in ['board', 'list']) {
+    // The Board at the three widths its columns must fill, and the List.
+    for (final (layout, size) in [
+      ('board-1280', const Size(1280, 900)),
+      ('board-1920', const Size(1920, 900)),
+      ('board-2560', const Size(2560, 900)),
+      ('list', const Size(1900, 1500)),
+    ]) {
       testWidgets('screenshots for review ($layout, ${brightness.name})', (
         tester,
       ) async {
-        await tester.binding.setSurfaceSize(
-          // Six columns of 280 beside the sidebar: the whole Board in one picture.
-          layout == 'list' ? const Size(1900, 1500) : const Size(2300, 900),
-        );
+        await tester.binding.setSurfaceSize(size);
         addTearDown(() => tester.binding.setSurfaceSize(null));
         final before = grid.AppTheme.brightness.value;
         grid.AppTheme.brightness.value = brightness;
@@ -104,6 +107,21 @@ void main() {
             status: 'done',
             pullRequest: 3500,
             shippedAt: DateTime.now().subtract(const Duration(minutes: 12)),
+            checks: {
+              'https://github.com/autonomous-ai/openharness/pull/3500': 'green',
+            },
+          ),
+          taskFixture(
+            'done-red',
+            'Checks failed after review',
+            27,
+            requester: 'owner',
+            status: 'done',
+            pullRequest: 3502,
+            shippedAt: DateTime.now().subtract(const Duration(minutes: 5)),
+            checks: {
+              'https://github.com/autonomous-ai/openharness/pull/3502': 'red',
+            },
           ),
           taskFixture(
             'done-stuck',
@@ -113,6 +131,9 @@ void main() {
             status: 'done',
             pullRequest: 3501,
             shippedAt: DateTime.now().subtract(const Duration(minutes: 90)),
+            checks: {
+              'https://github.com/autonomous-ai/openharness/pull/3501': 'green',
+            },
           ),
           taskFixture(
             'merged-two',
@@ -151,6 +172,20 @@ void main() {
             },
           ),
         ]);
+        // What the server sends in `derived.releaseTimes` (task #3827): the apps may release in two hours, the backend later.
+        server.state['releaseTimes'] = {
+          'lead': {
+            'desktop': DateTime.now()
+                .add(const Duration(hours: 2))
+                .millisecondsSinceEpoch,
+            'cli': DateTime.now()
+                .add(const Duration(hours: 2))
+                .millisecondsSinceEpoch,
+            'backend': DateTime.now()
+                .add(const Duration(hours: 4))
+                .millisecondsSinceEpoch,
+          },
+        };
         final conversations = (server.state['conversations'] as List)
             .cast<Map<String, dynamic>>();
         conversations.firstWhere((task) => task['id'] == 'sender')['liveness'] =

@@ -895,6 +895,8 @@ describe('on Linux', () => {
       expect(text, needle).toContain(needle)
     }
     expect(text).not.toMatch(/dscl|launchctl|LaunchDaemon|Users & Groups/)
+    // No subscription relay since #4137: nothing says the account may use the owner's subscriptions.
+    expect(text).not.toMatch(/subscription|relay  /)
   })
 
   it('remove runs the Linux removal with sudo in a terminal and takes the team computer off the owner\'s account', async () => {
@@ -1050,6 +1052,7 @@ describe('on Windows', () => {
       `${WIN_HOME}\\.harness-team-privacy`]) {
       expect(text, needle).toContain(needle)
     }
+    expect(text).not.toMatch(/subscription|relay  /)
     expect(text).not.toMatch(/dscl|launchctl|LaunchDaemon|systemctl|mode 700/)
   })
 
