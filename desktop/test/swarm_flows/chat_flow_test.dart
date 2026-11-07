@@ -1,7 +1,9 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/live_card.dart';
+import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 
 import 'support/stack.dart';
@@ -137,15 +139,22 @@ void main() {
         'recipientIds': <String>[],
       }),
     );
-    await flow.tap(find.text('Chat'), what: 'the project\'s Chat');
+    await flow.tap(
+      find.byKey(const ValueKey('super-board-tab-chat')),
+      what: 'the project\'s Chat tab',
+    );
 
-    final reference = find.textRange.ofSubstring('#$number');
+    // In the chat's own message row: a preview elsewhere shows the same words.
+    final reference = find.textRange.ofSubstring(
+      '#$number',
+      descendentOf: find.byType(SuperTabMessageRow),
+    );
     await flow.see(find.textContaining('Next up is'), what: 'the message');
     await flow.until(
       '#$number as a link',
       () => reference.evaluate().isNotEmpty,
     );
-    await tester.tapOnText(reference.first);
+    await _tapLink(tester, reference.first);
     await flow.until(
       'the task to open',
       () => flow.swarm(tabId)?.selectedId == taskId,
@@ -200,6 +209,30 @@ Future<({String id, String chatId})> _newMember(
     return agentId != null;
   }, timeout: const Duration(seconds: 60));
   return (id: agentId!, chatId: flow.swarm(tabId)!.selectedId);
+}
+
+/// Taps the link [range] is in, on its first character, as a mouse does.
+/// tapOnText aims at the middle of the range, which can fall exactly on the
+/// edge between two glyphs ("#" and "1"), where no span is hit.
+Future<void> _tapLink(
+  WidgetTester tester,
+  FinderBase<TextRangeContext> range,
+) async {
+  final found = range.evaluate().single;
+  final paragraph = found.renderObject;
+  final first = paragraph
+      .getBoxesForSelection(
+        TextSelection(
+          baseOffset: found.textRange.start,
+          extentOffset: found.textRange.start + 1,
+        ),
+      )
+      .first;
+  await tester.tapAt(
+    paragraph.localToGlobal(first.toRect().center),
+    kind: PointerDeviceKind.mouse,
+  );
+  await tester.pump();
 }
 
 /// Waits, pumping frames, until [check] on the backend holds.

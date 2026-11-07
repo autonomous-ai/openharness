@@ -6,7 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'support/stack.dart';
 
 /// Tasks as a person works them: the right pane's Tasks list, where a task
-/// they asked for waits for their Approve or Reject and shows its agent's
+/// they asked for waits for their Accept or Decline and shows its agent's
 /// status, and the project's Board, where each task is a card in its column.
 void main() {
   if (cliRoot == null) {
@@ -147,7 +147,7 @@ void main() {
     await flow.see(find.byKey(const ValueKey('super-tasks-board')));
   }
 
-  flowTest('Approve a task waiting for you in Tasks lets it go ahead', (
+  flowTest('Accept a task waiting for you in Tasks lets it go ahead', (
     tester,
   ) async {
     final (tabId, taskId) = await swarmWithTask(
@@ -159,14 +159,14 @@ void main() {
     flow.app.openSuperTab(tabId, 'Company');
     await flow.see(statusMark(taskId, 'Proposal'));
 
-    await flow.tap(onTasksCard(taskId, find.text('Approve')));
+    await flow.tap(onTasksCard(taskId, find.text('Accept')));
 
     await flow.until('the approved task to show Planned', () {
       flow.refuse('was refused');
       return statusMark(taskId, 'Planned').evaluate().isNotEmpty;
     });
-    expect(onTasksCard(taskId, find.text('Approve')), findsNothing);
-    expect(onTasksCard(taskId, find.text('Reject')), findsNothing);
+    expect(onTasksCard(taskId, find.text('Accept')), findsNothing);
+    expect(onTasksCard(taskId, find.text('Decline')), findsNothing);
     expect(boardCard(taskId, 'nextUp'), findsOneWidget);
     final row = await backendRow(tester, tabId, taskId);
     expect(row, containsPair('status', 'planned'), reason: 'the backend');
@@ -174,7 +174,7 @@ void main() {
     await flow.close();
   });
 
-  flowTest('Reject a task waiting for you in Tasks, with a reason', (
+  flowTest('Decline a task waiting for you in Tasks, with a reason', (
     tester,
   ) async {
     final (tabId, taskId) = await swarmWithTask(
@@ -186,18 +186,21 @@ void main() {
     flow.app.openSuperTab(tabId, 'Company');
     await flow.see(statusMark(taskId, 'Proposal'));
 
-    await flow.tap(onTasksCard(taskId, find.text('Reject')));
+    await flow.tap(onTasksCard(taskId, find.text('Decline')));
     await flow.type(
       find.byKey(const ValueKey('task-reject-reason')),
       'Keep this for later',
     );
-    await flow.tap(find.text('Reject task'));
+    await flow.tap(
+      find.descendant(of: find.byType(Dialog), matching: find.text('Decline')),
+      what: 'the dialog\'s Decline',
+    );
 
-    await flow.until('the rejected task to show Rejected', () {
+    await flow.until('the declined task to show Declined', () {
       flow.refuse('was refused');
-      return statusMark(taskId, 'Rejected').evaluate().isNotEmpty;
+      return statusMark(taskId, 'Declined').evaluate().isNotEmpty;
     });
-    expect(onTasksCard(taskId, find.text('Approve')), findsNothing);
+    expect(onTasksCard(taskId, find.text('Accept')), findsNothing);
     final row = await backendRow(tester, tabId, taskId);
     expect(row, containsPair('status', 'rejected'), reason: 'the backend');
     expect(row, containsPair('reason', 'Keep this for later'));
