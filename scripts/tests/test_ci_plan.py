@@ -4,16 +4,28 @@ import importlib.util
 import io
 import itertools
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 spec = importlib.util.spec_from_file_location("ci_plan", Path(__file__).resolve().parents[1] / "ci-plan.py")
 planner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(planner)
+
+
+def needs_full_checkout(test, present, why):
+    """Skip a test that reads the whole tree on CI's sparse process checkout. CI's planner-audit job sets
+    CI_FULL_CHECKOUT, so there a missing tree fails instead: a skip there would hide the audit (task #4313)."""
+    if present:
+        return
+    if os.environ.get("CI_FULL_CHECKOUT"):
+        test.fail(f"CI_FULL_CHECKOUT is set, but {why}")
+    test.skipTest(why)
 
 
 class SelectionTests(unittest.TestCase):
@@ -41,8 +53,7 @@ class SelectionTests(unittest.TestCase):
         # test's copies and model) the desktop side 'lib/super_tabs/<file>.dart', which only Desktop has.
         root = Path(__file__).resolve().parents[2]
         tests = sorted((root / "mobile/test").rglob("*.dart"))
-        if not tests:
-            self.skipTest("mobile/test is not in this checkout (CI's process checks are sparse)")
+        needs_full_checkout(self, tests, "mobile/test is not in this checkout (CI's process checks are sparse)")
         named = set()
         for test in tests:
             text = test.read_text()
@@ -70,6 +81,30 @@ class SelectionTests(unittest.TestCase):
         self.assertIn(f"key: {key}", saver)
         self.assertIn("path: /tmp/harness-super-tab-mongodb-binaries", job)
         self.assertIn("path: /tmp/harness-super-tab-mongodb-binaries", saver)
+
+    def test_planner_audit_runs_this_file_on_a_full_checkout_and_gates_ci_required(self):
+        # Task #4313: process-checks' sparse checkout skipped the audits below, and main failed them unseen.
+        ci = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text()
+        job = re.search(r"(?m)^  planner-audit:\n((?:(?:    .*)?\n)+)", ci)
+        self.assertIsNotNone(job, "ci.yml has no planner-audit job")
+        job = job.group(1)
+        self.assertNotRegex(job, r"(?m)^    (if|needs):", "a skipped or blocked audit would pass ci/required")
+        self.assertIn("uses: actions/checkout@", job)
+        self.assertNotIn("sparse-checkout", job)
+        self.assertRegex(job, r'(?m)^\s+CI_FULL_CHECKOUT: "1"$')
+        self.assertRegex(job, r"(?m)^\s+run: python3 -m unittest -v scripts/tests/test_ci_plan\.py$")
+        gate = re.search(r"(?m)^  required:\n((?:(?:    .*)?\n)+)", ci).group(1)
+        needs = re.search(r"(?ms)^    needs: \[(.*?)\]", gate).group(1)
+        self.assertIn("planner-audit", re.split(r"[\s,]+", needs))
+
+    def test_a_full_checkout_test_fails_instead_of_skipping_where_ci_needs_the_full_tree(self):
+        with mock.patch.dict(os.environ, {"CI_FULL_CHECKOUT": "1"}):
+            with self.assertRaisesRegex(AssertionError, "CI_FULL_CHECKOUT is set, but needs the tree"):
+                needs_full_checkout(self, False, "needs the tree")
+            needs_full_checkout(self, True, "needs the tree")
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(unittest.SkipTest):
+                needs_full_checkout(self, False, "needs the tree")
 
     def test_docs_workflows_scripts_and_unknown_paths_need_only_process_checks(self):
         for path in ["docs/guide.md", "README.md", "docs/images/poster.png", "scripts/ci-plan.py",
@@ -994,10 +1029,24 @@ class CrossReadTests(unittest.TestCase):
         planner.NOT_READS["backend/src/fixture.test.ts"] = ("owned-code strings in a fixture", {"cli/src/lib/"})
         self.assertEqual(planner.undeclared_reads(self.root, "backend"), [])
 
+    def test_a_folder_listed_as_data_covers_the_quoted_paths_under_it_only(self):
+        # policy.securityExclusions.json names 119 files across the tree: the folders they sit in are listed, not each.
+        self.write("cli/src/lib/a.ts", "a")
+        self.write("cli/src/b.ts", "b")
+        self.write("cli/src/lib/c.ts", "c")
+        self.write("backend/src/rules.test.ts", "\n".join([
+            "held(['cli/src/lib/a.ts', 'cli/src/lib/'])", "held(['cli/src/b.ts'])",
+            "readFileSync(new URL('../../cli/src/lib/c.ts', import.meta.url))"]))
+        original = dict(planner.NOT_READS)
+        self.addCleanup(lambda: (planner.NOT_READS.clear(), planner.NOT_READS.update(original)))
+        planner.NOT_READS["backend/src/rules.test.ts"] = ("test data: paths matched against rules", {"cli/src/lib/"})
+        self.assertEqual(planner.undeclared_reads(self.root, "backend"), [
+            ("backend/src/rules.test.ts", "cli/src/b.ts"), ("backend/src/rules.test.ts", "cli/src/lib/c.ts")])
+
     def test_every_cross_read_in_this_repository_is_declared(self):
         repository = Path(__file__).resolve().parents[2]
-        if not all((repository / top).is_dir() for top in ["cli/src", "desktop/lib", "mobile/lib", "backend/src"]):
-            self.skipTest("needs a full checkout; the merge helper runs this scan before accepting reuse")
+        needs_full_checkout(self, all((repository / top).is_dir() for top in ["cli/src", "desktop/lib", "mobile/lib", "backend/src"]),
+                            "needs a full checkout; the merge helper runs this scan before accepting reuse")
         for suite in sorted(planner.SUITES):
             with self.subTest(suite=suite):
                 self.assertEqual(planner.undeclared_reads(repository, suite), [])

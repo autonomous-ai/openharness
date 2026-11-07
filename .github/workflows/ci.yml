@@ -169,6 +169,28 @@ jobs:
           overwrite: true
           retention-days: 7
 
+  # The planner's audits scan the whole tree: every cross-read is declared, and every desktop file the phone tests read
+  # selects mobile. process-checks' sparse checkout skips them, and main failed them unseen (task #4313). No `needs` and
+  # no `if`: ci/required needs this job, so a failed, cancelled or blocked audit fails the gate.
+  planner-audit:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-planner-audit
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      - name: Planner tests and whole-tree audits
+        # As in process-checks: no background git maintenance in the fixtures' temporary repositories.
+        env:
+          CI_FULL_CHECKOUT: "1"
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: maintenance.auto
+          GIT_CONFIG_VALUE_0: "false"
+        run: python3 -m unittest -v scripts/tests/test_ci_plan.py
+
   desktop-tests:
     concurrency:
       group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-desktop-tests-${{ strategy.job-index }}
@@ -727,7 +749,7 @@ jobs:
 
   required:
     name: ci/required
-    needs: [plan, process-checks, desktop-tests, companion-subsystems, cli-typecheck, cli-tests, tui-test,
+    needs: [plan, process-checks, planner-audit, desktop-tests, companion-subsystems, cli-typecheck, cli-tests, tui-test,
             backend-desk, backend-integration, website-checks, os-checks, provider-checks, firmware-checks, pro-firmware-build, pro-golden,
             mobile-checks, daemons-checks, pty-checks]
     if: always()

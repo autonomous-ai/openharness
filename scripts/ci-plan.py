@@ -70,7 +70,8 @@ ALSO.update({f"desktop/{path}": "mobile" for path in (
     "lib/super_tabs/parts.dart", "lib/super_tabs/profile_model.dart", "lib/super_tabs/live_card_model.dart",
     "lib/super_tabs/linked_tasks.dart", "lib/super_tabs/task_steps.dart", "lib/super_tabs/instructions_model.dart",
     "lib/super_tabs/live_card.dart", "lib/super_tabs/task_status.dart", "lib/widgets/engine_identity.dart",
-    "lib/super_tabs/roster.dart", "lib/screens/swarm_screen.dart", "test/support/real_fonts.dart")})
+    "lib/super_tabs/roster.dart", "lib/screens/swarm_screen.dart", "test/support/real_fonts.dart",
+    "lib/super_tabs/pulse.dart", "lib/super_tabs/tasks/personal_tasks.dart")})
 # Narrower directories that add a suite on top of their component's (the ESP32-P4 build and golden screens).
 SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 
@@ -84,9 +85,11 @@ DEPENDS = {
     "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
                 "cli/src/lib/superTabAttachmentProxy.ts", "cli/src/superTabs/attachments.ts", "daemons/frames.json",
                 "desktop/lib/measurement/", "desktop/lib/super_tabs/attachment_upload.dart",
-                "desktop/lib/super_tabs/buddies.dart", "mobile/lib/measurement/", "mobile/lib/swarm/swarm_outgoing_files.dart",
+                "desktop/lib/super_tabs/buddies.dart", "mobile/integration_test/push_e2e/reply_push.apns", "mobile/lib/measurement/",
+                "mobile/lib/swarm/swarm_outgoing_files.dart",
                 "provider/reference-provider/", "tests/fixtures/"),
-    "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts", "desktop/",
+    "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts",
+            "backend/src/superTabs/machineRules.cases.json", "backend/src/superTabs/processNotes.ts", "desktop/",
             "cli/e2e/harness/", "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/", "pty/", "tui/"),
     "companions": ("cli/", "docs/research/2026-09-30-memory-batch-extraction-cases.json",
                    "docs/research/2026-09-30-memory-extraction-cases.json"),
@@ -118,8 +121,39 @@ DEPENDS = {
 # CrossReadTests fails when a file outside the folder refers into it.
 NOT_READ = {"cli": ("cli/e2e/",)}
 # Strings in a suite's files that name another directory's path but are not read by its PR jobs:
-# test data, or a script run only by hand. {source: (why, {path the scan reports})}.
+# test data, or a script run only by hand. {source: (why, {path the scan reports, or a "dir/" holding them})}.
 NOT_READS = {
+    **{source: ("test data: a task's owned paths or a pull request's changed files", set(folders.split()))
+       for source, folders in {
+           "backend/integration/crewDispatch.test.ts": "desktop/ devices/ mobile/",
+           "backend/integration/superTabReviewSteps.test.ts": "cli/src/superTabs/host.ts docs/",
+           "backend/src/github/train.test.ts": "docs/",
+           "backend/src/superTabs/crew.test.ts": "devices/",
+           "backend/src/superTabs/dispatch.test.ts": "cli/ desktop/ docs/ mobile/",
+           "backend/src/superTabs/linuxSteps.test.ts": "cli/src/superTabs/host.ts",
+           "backend/src/superTabs/machineRules.commands.test.ts": "mobile/",
+           "backend/src/superTabs/mergeTrain/plan.test.ts": "cli/ desktop/ docs/",
+           "backend/src/superTabs/mergeTrain/rulesRecord.test.ts": "desktop/ mobile/",
+           "backend/src/superTabs/mergeTrain/train.test.ts": "cli/ desktop/ docs/",
+           "backend/src/superTabs/prHistory.test.ts": "docs/",
+           "backend/src/superTabs/prHistoryRead.test.ts": "docs/",
+           "backend/src/superTabs/pullRequestFiles.test.ts": "docs/",
+           "backend/src/superTabs/releaseWatch.test.ts": "cli/ desktop/",
+           "backend/src/superTabs/releases.test.ts": "cli/ desktop/ docs/",
+           "backend/src/superTabs/reviewSteps.test.ts": "cli/ desktop/ docs/",
+           "backend/src/superTabs/reviewTable.test.ts": "cli/ desktop/ docs/ mobile/",
+       }.items()},
+    "backend/src/superTabs/policy.ts": ("the seed rules: lanes' owned paths and security areas' globs",
+                                        set("cli/ companions/ daemons/ desktop/ devices/ docs/ installer/ mobile/ pty/ "
+                                            "term/ tui/ website/".split())),
+    "backend/src/superTabs/policy.securityExclusions.json": (
+        "the reviewed file names the security areas leave at one read, matched by policy.test.ts",
+        set("cli/ companions/ desktop/ mobile/ os/ provider/ term/ tui/ website/".split())),
+    "backend/src/superTabs/policy.test.ts": ("test data: file names matched against the review rules",
+                                             set("cli/ companions/ desktop/ devices/ docs/ mobile/ os/ tests/ website/".split())),
+    "backend/src/superTabs/releases.ts": ("each release's owned paths", {"cli/", "desktop/"}),
+    "desktop/test/super_tab_project_rules_test.dart": ("test data: a policy's owned-path and untested-path globs",
+                                                        {"docs/", "mobile/"}),
     **{source: ("test data: owned-code paths and model names", {"desktop/lib/", "desktop/lib/super_tabs/",
                                                                 "desktop/lib/super_tabs/roster.dart"})
        for source in ("backend/src/superTabs/commands.test.ts", "backend/integration/superTabs.test.ts")},
@@ -450,6 +484,9 @@ def undeclared_reads(root, suite, known_paths=()):
             return known + "/" if known in folders else known
 
         data = NOT_READS.get(source, ("", set()))[1]
+
+        def is_data(known):
+            return any(covers(entry, known) for entry in data)
         code = "\n".join("" if line.lstrip().startswith(COMMENT_LINE) else line for line in text.splitlines())
         for match in RELATIVE_READ.finditer(code):
             relative = match.group(1) + match.group(2)
@@ -472,7 +509,7 @@ def undeclared_reads(root, suite, known_paths=()):
                     if target.split("/", 1)[0] != top and (target in tracked or target in folders):
                         known = target + "/" if target in folders else target
                         probe = known + "x" if known.endswith("/") else known
-                        if known not in data and not shared_input(probe) and not reads(suite, probe):
+                        if not is_data(known) and not shared_input(probe) and not reads(suite, probe):
                             found.append((source, known))
                 continue
             for target in targets:
@@ -499,7 +536,7 @@ def undeclared_reads(root, suite, known_paths=()):
                     for start in (top, str(PurePosixPath(source).parent))):
                 continue
             known = existing(target)
-            if known is None or known in data:
+            if known is None or is_data(known):
                 continue
             probe = known + "x" if known.endswith("/") else known
             if not shared_input(probe) and not reads(suite, probe):
