@@ -409,6 +409,19 @@ quarter of its box, and nothing else outside the words more than 38 pixels.
 - **Task card and row.** The Tasks pane card (`SuperTabPersonalTaskCard`) and
   the sidebar row (`SuperTabBuddyRow`) carry the elements above at their
   shipped sizes; their size and layout do not change when an element does.
+- **Chat message.** A message row (`SuperTabMessageRow`) leads with a round
+  28 face, then one header line: the name at 13 semibold and the time at 12
+  in tertiary ink (`textFaint`), nothing else; no engine mark, since colour
+  is only the face's. The text reads at 14 on 20 px lines (`SwarmType`).
+  An empty chat shows no line; only a chat that can't be read or is still
+  loading says so (task #4467).
+- **Chat composer.** Both composers (the chat's and a thread's) are Cmd-N's
+  field: radius 12, a hairline (`rim`) and the faint fill (`field`). Under
+  the text, the paperclip on the left and, on the right, the mic beside the
+  round send (`SwarmSendButton`, `super_tabs/chat/send_button.dart`): a 28
+  circle in a 32 target, `rim` with a `textFaint` arrow while there is
+  nothing to send, `AppPalette.accent` with a white (`onSelection`) arrow
+  once there is text or a file. No @ button: an @ typed tags.
 - **Adding or changing one.** A new or changed element updates this section
   and the gallery, with its images, in the same pull request.
 
