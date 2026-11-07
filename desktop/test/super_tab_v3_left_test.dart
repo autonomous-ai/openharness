@@ -1117,9 +1117,39 @@ void main() {
       await end(tester, c);
     });
 
-    testWidgets('a PM opens its project\'s chat in the middle', (tester) async {
-      final c = await view(tester);
+    // Task #4664 (anh Dee 11-07): an agent is a direct message, a project a group chat. A Lead opened its project's chat;
+    // it opens the person's private chat with it, and its header's quiet link opens the project chat.
+    testWidgets('a Lead opens its private chat in the middle, and its header '
+        'opens its project\'s chat', (tester) async {
+      final c = await view(
+        tester,
+        setup: (server) => (server.state['agents'] as List<Map<String, dynamic>>)
+            .firstWhere((a) => a['id'] == 'orion')
+            .addAll({'kind': 'pm', 'chatId': null}),
+      );
+      final project = c.snapshot!.leadProjectForAgent('orion')!;
       await tester.tap(key('super-agent-orion'));
+      await settle(tester);
+      expect(c.selectedId, 'agent-chat-orion');
+      expect(c.snapshot!.conversation('agent-chat-orion')!.isAgentChat, isTrue);
+      expect(key('super-middle-chat'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: key('super-center-pane'),
+          matching: find.text('The project chat line.'),
+        ),
+        findsNothing,
+      );
+      final link = find.descendant(
+        of: key('super-agent-chat-header'),
+        matching: key('super-agent-chat-project'),
+      );
+      expect(link, findsOneWidget);
+      expect(
+        find.descendant(of: link, matching: find.text('${project.name} chat')),
+        findsOneWidget,
+      );
+      await tester.tap(link);
       await settle(tester);
       expect(c.selectedId, 'lead');
       expect(
@@ -1129,7 +1159,14 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(key('super-tasks-lead'), findsNothing);
+      // Back in My agents, the Lead opens the same private chat again.
+      await tester.tap(key('super-agent-orion'));
+      await settle(tester);
+      expect(c.selectedId, 'agent-chat-orion');
+      expect(
+        c.snapshot!.conversations.where((g) => g.id == 'agent-chat-orion'),
+        hasLength(1),
+      );
       await end(tester, c);
     });
 
