@@ -6448,7 +6448,8 @@ describe('a held task carries one of four reasons (HOLD_REASON_MISSING)', () => 
 // waited on each, or lost the agent when its own script misread a receipt. A start that names what its agent is for ends with it
 // assigned and briefed by the server the moment its host says it is ready, and tells the PM only when the start fails.
 describe('a start that names its task assigns and briefs its agent when it is ready (#3614)', () => {
-  const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+  // The PM's own person's computer: Swarm v3 starts a new agent only there (task #4120).
+  const contribution = { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }
   const setup = () => {
     const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
     const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
@@ -6527,12 +6528,34 @@ describe('a start that names its task assigns and briefs its agent when it is re
       .toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
   })
 
-  it('does not assign code a Team agent pushed to an agent of the main account', () => {
+  // Swarm v3 personal approval (task #4188): "the same guard covers explicit assignment, starts and automatic dispatch". A task
+  // can return to pending between the start and its agent being ready (a new suggestion before its first assignment).
+  it.each([
+    ['pending its person\'s approval', { state: 'proposal' as const }, 'must approve it'],
+    ['approved for another agent', { state: 'approved' as const, suggestedAgentId: 'someone-else' }, 'the agent the requesting person approved'],
+  ])('does not assign a task %s when its agent is ready, and tells the coordinator', (_, approval, why) => {
     const t = setup()
     const { startId } = t.start('b-1', { message: 'Brief.' })
+    t.f.state.conversations.find(c => c.id === t.group)!.taskApproval = { personId: 'owner', generation: 'g', createdAt: NOW, ...approval }
+    const effects = t.settle(startId)
+    expect(t.work()).toBeNull()
+    expect(effects.messages.filter(m => m.text === 'Brief.')).toEqual([])
+    const told = effects.messages.filter(m => m.text.includes('could not be assigned'))
+    expect(told).toHaveLength(1)
+    expect(told[0]!.text).toContain(why)
+    expect(told[0]!.recipients).toContain(t.lead)
+  })
+
+  // Swarm v3 (task #4120): Team-written code runs only for the project owner's own agent; this agent is the PM's person's, not the owner's.
+  it('does not assign code a Team agent pushed to an agent that is not the project owner\'s own', () => {
+    const t = setup()
+    const { startId } = t.start('b-1', { message: 'Brief.' })
+    t.f.state.projects!.find(p => p.leadConversationId === 'lead')!.ownerId = 'project-owner'
     const effects = t.settle(startId, { pushOrigin: 'team' })
     expect(t.work()).toBeNull()
-    expect(effects.messages.filter(m => m.text.includes('could not be assigned'))).toHaveLength(1)
+    const told = effects.messages.filter(m => m.text.includes('could not be assigned'))
+    expect(told).toHaveLength(1)
+    expect(told[0]!.text).toContain('only the project owner\'s own agent')
   })
 
   it('tells the coordinator of a failed start once, however often its host says so', () => {

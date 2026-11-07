@@ -80,12 +80,14 @@ describe('a start that names its task, through the store', () => {
     expect(brief).toHaveLength(1)
   })
 
-  it('does not hand code a Team agent pushed to the main account\'s agent, which a work.assign refuses (audit H2)', async () => {
+  // Swarm v3 (task #4120): code a Team agent pushed goes only to the project owner's own agent, which this one is; the read is what
+  // a work.assign makes, so the task is marked before the assignment checks it.
+  it('reads who pushed the task\'s code before it assigns, as a work.assign does (audit H2)', async () => {
     const f = await swarm('team')
-    const { group, settle } = await f.started('Continue the work in https://github.com/acme/app/pull/5.')
+    const { group, agentId, settle } = await f.started('Continue the work in https://github.com/acme/app/pull/5.')
     await settle()
-    expect(await f.assignment(group)).toBeNull()
-    const told = await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: group, text: { contains: 'could not be assigned' } } })
-    expect(told).toHaveLength(1)
+    const task = (await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === group)!
+    expect(task.teamWritten).toBe(true)
+    expect(task.assignment).toMatchObject({ agentId, status: 'working' })
   })
 })
