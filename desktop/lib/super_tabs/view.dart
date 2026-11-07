@@ -305,6 +305,9 @@ class _SuperTabViewState extends State<SuperTabView>
   /// last opened from it, or the task whose chat the board was opened from.
   String? _tasksSelectedId;
 
+  /// The Board page's Board, List or Members: its Board tab is on only while the Board is, and turns it back on.
+  final _tasksLayout = ValueNotifier(SuperTabTasksLayout.board);
+
   /// Why the last priority change was refused, and for which task: said
   /// beside that task's title (task #3117).
   ({String taskId, String error})? _priorityRefusal;
@@ -1209,6 +1212,7 @@ class _SuperTabViewState extends State<SuperTabView>
     _answer.dispose();
     _board.dispose();
     _facts.dispose();
+    _tasksLayout.dispose();
     c.removeListener(_changed);
     c.removeListener(_holdVoiceAway);
     _voice?.dispose();
@@ -3548,13 +3552,26 @@ class _SuperTabViewState extends State<SuperTabView>
   /// A task's chat, opened from its card: read first when it is one of the
   /// shipped tasks only the Tasks view holds.
   Future<void> _openTask(String id) async {
-    if (!await c.loadGroup(id) || !mounted) return;
+    if (!await _readTask(id)) return;
     _openConversation(id);
+  }
+
+  /// Whether task [id]'s chat is held, read first if need be: a card whose chat can't be read says so rather than
+  /// doing nothing (audit polish, #4445).
+  Future<bool> _readTask(String id) async {
+    final read = await c.loadGroup(id);
+    if (!mounted) return false;
+    if (!read && !c.accessRevoked) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text("You can't open this task's chat.")),
+      );
+    }
+    return read;
   }
 
   /// A Tasks card opens its task's chat in the middle under the task's header, never the Board (#4204).
   Future<void> _openPersonalTask(String id) async {
-    if (!await c.loadGroup(id) || !mounted) return;
+    if (!await _readTask(id)) return;
     _openAgentChat(id);
     setState(() => _taskInMiddle = id);
   }
@@ -3601,7 +3618,10 @@ class _SuperTabViewState extends State<SuperTabView>
                 ),
               ),
               const SizedBox(width: 12),
-              _projectTabs(project, board: true),
+              ListenableBuilder(
+                listenable: _tasksLayout,
+                builder: (context, _) => _projectTabs(project, board: true),
+              ),
             ],
           ),
         ),
@@ -3624,7 +3644,16 @@ class _SuperTabViewState extends State<SuperTabView>
     mainAxisSize: MainAxisSize.min,
     children: [
       for (final (key, label, selected, open) in [
-        ('super-board-tab-board', 'Board', board, () => _openBoard(project)),
+        // On the Board page with List or Members on, the Board tab is the way back to the Board.
+        (
+          'super-board-tab-board',
+          'Board',
+          board && _tasksLayout.value == SuperTabTasksLayout.board,
+          () {
+            if (!board) return _openBoard(project);
+            _tasksLayout.value = SuperTabTasksLayout.board;
+          },
+        ),
         (
           'super-board-tab-chat',
           'Chat',
@@ -3931,6 +3960,8 @@ class _SuperTabViewState extends State<SuperTabView>
       controller: c,
       project: project,
       storage: widget.app?.localStore,
+      // Under the Board page's tabs, which show it.
+      layout: boardProject != null ? _tasksLayout : null,
       needsHuman: (g) => _needsHuman(g).length,
       selectedId: _tasksSelectedId,
       onOpenTask: (id) {
