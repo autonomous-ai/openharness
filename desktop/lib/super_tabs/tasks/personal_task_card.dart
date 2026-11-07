@@ -113,7 +113,10 @@ class _CardState extends State<SuperTabPersonalTaskCard> {
                         ),
                       ),
                       const SizedBox(width: grid.AppDesktop.controlGap),
-                      SuperTabTaskStatusMark(w.task.status),
+                      SuperTabTaskStatusMark(
+                        w.task.status,
+                        reason: w.task.reason,
+                      ),
                     ],
                   ),
                   const SizedBox(height: grid.AppDesktop.controlGap),
@@ -204,15 +207,19 @@ class _Tag extends StatelessWidget {
 /// A task's status as the Tasks pane marks it: a proposal and a rejection by their own icons, work by its activity,
 /// each named in the task's own words, never the terminal's.
 class SuperTabTaskStatusMark extends StatelessWidget {
-  const SuperTabTaskStatusMark(this.status, {super.key});
+  const SuperTabTaskStatusMark(this.status, {super.key, this.reason});
   final String status;
+
+  /// Why it was rejected: said on hover, as the person who rejected it typed it.
+  final String? reason;
 
   @override
   Widget build(BuildContext context) {
     final label = superTabTaskStatusLabel(status);
     if (status == 'proposal' || status == 'rejected') {
+      final why = status == 'rejected' ? superTabTaskRejection(reason) : null;
       return Tooltip(
-        message: label,
+        message: why == null ? label : '$label: $why',
         child: Icon(
           status == 'proposal' ? AppIcons.circleDashed : AppIcons.circleX,
           size: AppIcons.metadataSize,
@@ -261,3 +268,9 @@ String superTabTaskStatusLabel(String status) => switch (status) {
   'lost' => 'Agent lost',
   _ => HarnessActivity.unknown.label,
 };
+
+/// The reason a rejected task was turned down, or null when none was given.
+String? superTabTaskRejection(String? reason) {
+  final text = reason?.trim();
+  return text == null || text.isEmpty ? null : text;
+}
