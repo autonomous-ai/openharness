@@ -35,8 +35,10 @@ const WINDOWS_NOTE =
   "Requires Windows 10 or 11.";
 
 const MAC_OFFER: Offer = {
-  primary: [DESKTOP_BUILD.macos],
-  others: othersThan([DESKTOP_BUILD.macos]),
+  // Windows is a button on every page, not a link buried under "Other downloads": a person sharing the
+  // download with someone on a PC should not have to know the link exists.
+  primary: [DESKTOP_BUILD.macos, DESKTOP_BUILD.windows],
+  others: othersThan([DESKTOP_BUILD.macos, DESKTOP_BUILD.windows]),
   othersLabel: "Other downloads:",
   description: MAC_DESCRIPTION,
   note: `One download for Apple silicon and Intel Macs. ${MAC_TRUST}`,
@@ -46,9 +48,9 @@ function offerFor(platform: VisitorPlatform | null): Offer {
   switch (platform) {
     case "macos-arm64":
       return {
-        primary: [DESKTOP_BUILD["macos-arm64"]],
+        primary: [DESKTOP_BUILD["macos-arm64"], DESKTOP_BUILD.windows],
         // The universal build is still the Intel one, whatever else it runs on.
-        others: [{ ...DESKTOP_BUILD.macos, name: "macOS (Intel)" }, ...othersThan([DESKTOP_BUILD.macos])],
+        others: [{ ...DESKTOP_BUILD.macos, name: "macOS (Intel)" }, ...othersThan([DESKTOP_BUILD.macos, DESKTOP_BUILD.windows])],
         othersLabel: "Other downloads:",
         description: MAC_DESCRIPTION,
         note: `Built for Apple silicon Macs. ${MAC_TRUST}`,
@@ -56,14 +58,14 @@ function offerFor(platform: VisitorPlatform | null): Offer {
     case "linux-x64":
     case "linux-arm64":
       return {
-        primary: [DESKTOP_BUILD[platform]],
-        others: othersThan([DESKTOP_BUILD[platform]]),
+        primary: [DESKTOP_BUILD[platform], DESKTOP_BUILD.windows],
+        others: othersThan([DESKTOP_BUILD[platform], DESKTOP_BUILD.windows]),
         othersLabel: "Other downloads:",
         description: LINUX_DESCRIPTION,
         note: LINUX_NOTE,
       };
     case "linux": {
-      const primary = [DESKTOP_BUILD["linux-x64"], DESKTOP_BUILD["linux-arm64"]];
+      const primary = [DESKTOP_BUILD["linux-x64"], DESKTOP_BUILD["linux-arm64"], DESKTOP_BUILD.windows];
       return {
         primary,
         others: othersThan(primary),

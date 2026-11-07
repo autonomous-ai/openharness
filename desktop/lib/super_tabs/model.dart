@@ -173,6 +173,9 @@ class SuperTabAgent {
       machineOwnerId =
           row['machineOwnerId'] as String? ?? _text(row, 'contributorId'),
       role = row['role'] as String?,
+      kind = row['kind'] as String?,
+      chatId = row['chatId'] as String?,
+      myAgent = row['myAgent'] as bool?,
       roleId = row['roleId'] as String?,
       roleName = row['roleName'] as String?,
       buddyOf = switch (row['buddyOf']) {
@@ -220,6 +223,14 @@ class SuperTabAgent {
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
 
+  /// What it is and where its person talks to it (Swarm v3, backend #4116): `buddy`, `pm` or `regular`, and the chat it
+  /// has, or none yet. An older backend sends neither.
+  final String? kind, chatId;
+
+  /// Whether it is in the reader's My agents (backend agentKind.ts inMyAgents, task #4192): their Buddy, or an agent of
+  /// theirs running on their own account and not finished. Null from an older backend.
+  final bool? myAgent;
+
   /// Set by its contributor or its project's Lead; null draws its pattern.
   final SuperTabAvatarPicture? avatar;
 
@@ -231,8 +242,8 @@ class SuperTabAgent {
   /// while it waits at a prompt in its terminal, gone once that is answered.
   final List<String> alerting;
 
-  /// A Product Manager's switch to another engine or account that is asked for
-  /// and not yet done (backend `switchRequest`); null otherwise.
+  /// A Product Manager or Buddy's engine switch that is asked for and not yet
+  /// done (backend `switchRequest`); null otherwise.
   final Map<String, dynamic>? switchRequest;
 
   /// The model on the Swarm's grid it runs on; null on its own subscription
@@ -427,6 +438,13 @@ class SuperTabConversation {
       releasing = row['releasing'] is List
           ? List.unmodifiable((row['releasing'] as List).whereType<String>())
           : null,
+      pullRequestChecks = row['pullRequestChecks'] is Map
+          ? Map.unmodifiable({
+              for (final MapEntry(:key, :value)
+                  in (row['pullRequestChecks'] as Map).entries)
+                if (key is String && value is String) key: value,
+            })
+          : const {},
       releasedTags = row['released'] is Map && row['released']['tags'] is List
           ? List.unmodifiable(
               (row['released']['tags'] as List).whereType<String>(),
@@ -462,6 +480,10 @@ class SuperTabConversation {
   /// chat with their Buddy. A `leads` one is never kept ([SuperTabSnapshot]).
   final String? kind;
   bool get isBuddyChat => kind == 'buddy' || kind == 'swarm-buddy';
+
+  /// A person's chat with one of their own agents (Swarm v3, backend #4116): the agent takes the message, so it needs no
+  /// Lead, as a Buddy chat needs none.
+  bool get isAgentChat => kind == 'agent-chat';
 
   /// A person's one Buddy chat for the whole Swarm (spec
   /// 2026-10-31-one-buddy-per-swarm): in no project, keyed by the empty id.
@@ -554,6 +576,10 @@ class SuperTabConversation {
   /// released, for work merged before the server recorded releases, and from
   /// an older server: each reads as released, as it did.
   final List<String>? releasing;
+
+  /// Each linked pull request's check state as the server's PR watch last read it, by URL: `green`, `red` or `running`
+  /// (backend pullRequestEvents.ts checksStateOf, task #3827). Empty before the watch reads one, and from an older server.
+  final Map<String, String> pullRequestChecks;
 
   /// The release tags (`v1.3.84_desktop`) that carried it to people, once they
   /// have (backend releases.ts `released`): what Shipped names. Empty before,
@@ -1045,6 +1071,15 @@ class SuperTabSnapshot {
       activityDigest = row['activityDigest'] as String?,
       remindersDigest = row['remindersDigest'] as String?,
       _pulses = SuperTabPulse.readAll(row['pulse']),
+      _releaseTimes = {
+        if (row['releaseTimes'] case final Map projects)
+          for (final MapEntry(key: project, value: times) in projects.entries)
+            if (project is String && times is Map)
+              project: {
+                for (final MapEntry(key: part, value: at) in times.entries)
+                  if (part is String && at is num) part: at.toInt(),
+              },
+      },
       chatSettings = Map.unmodifiable({
         if (row['chatSettings'] case final Map settings)
           for (final MapEntry(:key, :value) in settings.entries)
@@ -1200,6 +1235,12 @@ class SuperTabSnapshot {
   /// or when its pulse could not be read.
   SuperTabPulse? pulseOf(String projectId) => _pulses[projectId];
   final Map<String, SuperTabPulse> _pulses;
+
+  /// When each release part (`desktop`, `cli`, `web`, `backend`) of [projectId] may next open, in ms: 0 is now, and a part
+  /// left to people has none (backend releases.ts nextReleaseAt, task #3827). Empty from an older server.
+  Map<String, int> releaseTimesOf(String projectId) =>
+      _releaseTimes[projectId] ?? const {};
+  final Map<String, Map<String, int>> _releaseTimes;
 
   /// The reader's own notification setting by conversation (backend chatSettings.ts); a chat not listed is at
   /// [SuperTabNotify.mentions]. Never another person's.

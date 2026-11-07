@@ -102,7 +102,7 @@ describe('codexProfiles', () => {
   it('listCodexProfiles includes freshly discovered folders', async () => {
     const { listCodexProfiles } = await loadModule()
     mkdirSync(join(home, '.codex'))
-    writeFileSync(join(home, '.codex', 'auth.json'), '{}')
+    writeFileSync(join(home, '.codex', 'config.toml'), '')
     expect(listCodexProfiles([], { home, environment: {} })).toEqual([
       { path: join(home, '.codex'), label: '.codex', offered: true },
     ])
@@ -112,7 +112,7 @@ describe('codexProfiles', () => {
     const { linkCodexProfile, listCodexProfiles } = await loadModule()
     const folder = join(home, '.codex')
     mkdirSync(folder)
-    writeFileSync(join(folder, 'auth.json'), '{}')
+    writeFileSync(join(folder, 'config.toml'), '')
     linkCodexProfile(folder)
     // The default account: offered with no offer of its own.
     expect(listCodexProfiles([folder], { home, environment: {} })).toEqual([{ path: folder, label: '.codex', offered: true }])

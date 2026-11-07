@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   WINDOWS_GH_BUILDS, parseWindowsAccountExists, parseWindowsJobState, runWindowsPrivacyCheck, windowsAccountExistsScript, windowsGroupSids,
-  takeWindowsHandoffFile, windowsJobStateScript, windowsOwnerSidScript, windowsPrivacyProbes, windowsRelayAclCommand, windowsStartTaskScript,
+  takeWindowsHandoffFile, windowsJobStateScript, windowsPrivacyProbes, windowsStartTaskScript,
   windowsUnzipScript, windowsUserSid, writeWindowsHandoff, type WindowsPrivacyDeps,
 } from './windowsTeam.js'
 
@@ -133,25 +133,6 @@ describe('windowsGroupSids', () => {
   })
 })
 
-describe('windowsRelayAclCommand', () => {
-  it('grants the owner and SYSTEM full, the team account read only, as an argument array', () => {
-    const command = windowsRelayAclCommand({ dir: 'C:\\ProgramData\\Harness\\team-relay-DELL', ownerSid: 'S-1-5-21-3073114020-2660841771-734626734-1001', team: 'harnessteam' },
-      { SystemRoot: 'C:\\Windows' })
-    expect(command).toEqual({
-      command: 'C:\\Windows\\System32\\icacls.exe',
-      args: ['C:\\ProgramData\\Harness\\team-relay-DELL', '/inheritance:r', '/grant:r', '*S-1-5-21-3073114020-2660841771-734626734-1001:(OI)(CI)F',
-        'harnessteam:(OI)(CI)R', '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F', '/q'],
-    })
-  })
-
-  it('takes the team account by SID too, and refuses what is not plain', () => {
-    expect(windowsRelayAclCommand({ dir: 'C:\\x', ownerSid: 'S-1-5-21-1-2-3-1001', team: 'S-1-5-21-1-2-3-1010' }, {}).args[4]).toBe('*S-1-5-21-1-2-3-1010:(OI)(CI)R')
-    expect(() => windowsRelayAclCommand({ dir: 'C:\\x" & y', ownerSid: 'S-1-5-21-1-2-3-1001', team: 'harnessteam' }, {})).toThrow()
-    expect(() => windowsRelayAclCommand({ dir: 'C:\\x', ownerSid: 'Everyone', team: 'harnessteam' }, {})).toThrow()
-    expect(() => windowsRelayAclCommand({ dir: 'C:\\x', ownerSid: 'S-1-5-21-1-2-3-1001', team: 'a:b' }, {})).toThrow()
-  })
-})
-
 describe('the gh builds for Windows', () => {
   it('are GitHub\'s zips of 2.103.3, pinned by sha256 and size', () => {
     expect(WINDOWS_GH_BUILDS.x64).toEqual({
@@ -196,11 +177,5 @@ describe('what harness team status reads on Windows', () => {
     expect(parseWindowsJobState({ status: 0, stdout: '{"loaded":false}', stderr: '' })).toEqual({ loaded: false, pid: null, state: null })
     expect(parseWindowsJobState({ status: 1, stdout: '', stderr: 'x' })).toEqual({ loaded: false, pid: null, state: null })
     expect(parseWindowsJobState({ status: 0, stdout: 'not json', stderr: '' })).toEqual({ loaded: false, pid: null, state: null })
-  })
-
-  it('reads a path\'s owner as a SID, for the team side\'s check of the relay folder', () => {
-    const query = windowsOwnerSidScript('C:\\ProgramData\\Harness\\team-relay-DELL')
-    expect(query.script).toContain('GetOwner([Security.Principal.SecurityIdentifier])')
-    expect(query.inputs).toEqual({ HARNESS_PATH: 'C:\\ProgramData\\Harness\\team-relay-DELL' })
   })
 })

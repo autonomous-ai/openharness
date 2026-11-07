@@ -259,7 +259,7 @@ export function projectPulse(state: SuperTabState, project: SwarmProject, now: n
     lost: { count: counts.lost.length, since: lostAt, conversationIds: counts.lost.map(l => l.id).slice(0, PULSE_LIST_MAX) },
     held: { count: counts.held.length, withoutReason, list: counts.held.slice(0, PULSE_LIST_MAX) },
     idleSince,
-    process: (note => note ? { noteId: note.id } : null)(unconfirmedNote(project)),
+    process: (note => note ? { noteId: note.id } : null)(unconfirmedNote(state, project)),
     redAt: {
       asks: oldest ? oldest.at + limits.askMinutes * MINUTE : null,
       idle: idleSince === null ? null : idleSince + limits.idleMinutes * MINUTE,

@@ -55,7 +55,12 @@ void main() {
     }
     final c = server.controller(
       account: reader,
-      initial: {'tabId': 'tab', 'accountId': reader, 'selectedId': 'lead'},
+      initial: {
+        'tabId': 'tab',
+        'projectsGroupOpen': true,
+        'accountId': reader,
+        'selectedId': 'lead',
+      },
     );
     await tester.runAsync(c.refresh);
     await tester.pumpWidget(

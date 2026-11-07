@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { InstalledDsh } from './installed.js'
 import { dshLaunch, harnessEnvToClear, DSH_SESSION_ENV } from './launch.js'
 import { buildLaunchOverrides, type LaunchOverridesDeps } from '../lib/launchOverrides.js'
@@ -7,6 +7,9 @@ import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 import { HARNESS_INSTRUCTIONS } from '../lib/agentAttribution.js'
 import { env } from '../config/env.js'
 import { setAgentSettingsForTest, signedOutForTest } from '../testing/agentSettings.js'
+
+// Harness's status line rides every Claude launch beside what these pin (engines/claude/statusLine.spec.ts).
+vi.mock('../engines/kit/statusLine.js', async (original) => ({ ...await original<object>(), statusLineSetting: () => null }))
 
 afterEach(() => signedOutForTest())
 
