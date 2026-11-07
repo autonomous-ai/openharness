@@ -50,7 +50,8 @@ A project is a **GitHub project** when all of these hold. The server checks them
 - the app's installation on it has granted **Issues: Read and write**;
 - the repository has issues turned on;
 - the server has the app's webhook configured (`GITHUB_APP_WEBHOOK_SECRET`);
-- the audience rule below holds.
+- the repository's audience matches the project's (Design 7: private with private, public with public; an internal
+  repository never).
 
 Any other project keeps its tasks in Harness exactly as today. Project details shows which condition is missing, in one
 line: for example "Tasks stay in Harness: the app can't write issues here. An owner accepts Issues under Configure."
@@ -65,6 +66,9 @@ gets. So the server decides before it creates an issue, and these tasks never ge
   and for any brief that quotes a person's private chat; the PM's skill text says so. Setting it on a task whose issue
   already exists is refused with `ISSUE_ALREADY_PUBLISHED`, and the PM is told that only a repository admin can delete
   the issue.
+  - **On a public repository, it is on by default** for a P0 task and for a task whose brief asks for a security review
+    (its constraints or review name one). An unmarked security task therefore fails closed: it stays in Harness. The PM
+    publishes such a task only by sending `confidential: false` explicitly. A false match only keeps a task in Harness.
 - **On a public repository, a brief that names someone.** Before publishing, the server runs the title and brief through
   `redactCredentials`, and checks them for any email address and any person, machine or account name from the Swarm's
   roster. On a match the task stays in Harness, and the PM is told which kind of name stopped it (never the name
@@ -277,7 +281,8 @@ of the code:
 - Command schemas are `.strict()`. The one new input, `confidential` on `conversation.create`, ships with the backend
   before the PM's skill text names it. Agents send command JSON as written, so no CLI release is needed for it. An agent
   that leaves it out on a public repository is still caught by the server's name check. The skill text tells the PM to
-  set it for security work; a person or older PM that leaves it off is the remaining risk, and the reviewers weigh it.
+  set it for security work. On a public repository, P0 and security-review tasks are confidential by default, so leaving
+  it off fails closed there.
 
 ### 6. Migration and rollback
 
@@ -315,12 +320,26 @@ Order:
 
 ### 7. Audience
 
-- **Private repositories stay private.** The server reads the repository's visibility when it links the project, and
-  again on `repository` webhooks (`privatized`, `publicized`, `renamed`, `transferred`, `deleted`). A private or
-  internal repository is a GitHub project only while its Harness project is private (members only). Making that Harness
-  project public is refused while it is linked: `PRIVATE_REPOSITORY_PROJECT` names why. If the repository turns private
-  while the project is public, sync stops at once. No later edit comes into Harness, and the project owner is told in one
-  line.
+- **The repository's audience matches the project's, both ways.** The rule covers what comes into Harness and what goes
+  out:
+
+  | Harness project | Repository | GitHub project? |
+  | --- | --- | --- |
+  | Private (members only) | Private | Yes |
+  | Public (the whole Swarm) | Public | Yes, with the public-repository holds ("Tasks that stay in Harness") |
+  | Private | Public | No. Members-only tasks would be published to the world. |
+  | Private | Internal | No. The tasks would reach the whole GitHub organisation. |
+  | Public | Private or internal | No. Repository content would reach Swarm members without repository access. |
+
+  - The server reads the repository's visibility when it links the project, and again on `repository` webhooks
+    (`privatized`, `publicized`, `renamed`, `transferred`, `deleted`).
+  - It also reads it right before each issue is created (a conditional GET, so a 304 costs nothing). A missed webhook
+    therefore never publishes under the old rule.
+  - Changing either side so the pair stops matching stops sync at once. Nothing more is published, and no later edit
+    comes into Harness. The project owner is told in one line which side to change. Making a linked private project
+    public is refused with `REPOSITORY_AUDIENCE_MISMATCH`, which names why.
+  - Project details shows a mismatch as the missing condition, for example "Tasks stay in Harness: the repository is
+    public and this project is private."
 - **Who reads a GitHub task's copy:** the existing `canReadProject` / `canReadGroup` predicate, the one every read path
   calls. No new read path exists: the copy travels in the group part.
 - **Where copies go, and their guards:**
@@ -370,7 +389,7 @@ Order:
 | Bad signature | Receiver | `401`, a log line without the body, and the outcome counted | None: the request is dropped |
 | Crash between creating the issue and recording it | Sync pass on restart | Nothing | Adopts its own issue by marker; never a second one |
 | Assignee dropped by GitHub (no repository access) | Sync pass | PM: "<person> can't be assigned on GitHub" | Owner kept in Harness; issue unassigned |
-| Repository turned private while the project is public | Receiver | Project owner: one line, and sync stops | Make the Harness project private; sync resumes and reads each issue again |
+| Repository and project audiences stop matching (either side changed) | Receiver, or the visibility read before a create | Project owner: one line naming the side to change; sync stops | Match them again; sync resumes and reads each issue again |
 | Merged with CI red | Merge path | PM: the issue stays `in review` | A green fix-forward merge closes it |
 | Issue deleted or transferred | Receiver | PM, and the task loses its number | The task goes on in Harness |
 | Rate budget full | Sync pass | "Syncing to GitHub"; the wait histogram rises | Writes drain in order as the budget allows |
@@ -410,7 +429,7 @@ spec.
 **After the launch (from Wednesday 11 Nov)**
 
 4. **Issue link, copy and audience** (M, backend).
-   - The GitHub-project predicate, with the private-repository rule and the `repository` events.
+   - The GitHub-project predicate, with the audience-match rule, the visibility read before each create, and the `repository` events.
    - `issueKey` index.
    - Creating the issue for a new task (marker, adopt on retry).
    - What stays in Harness: `confidential`, steps, and the public-repository name check. The PM's skill text names
