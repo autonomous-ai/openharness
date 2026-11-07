@@ -67,6 +67,16 @@ describe('built-in Swarm skills', () => {
     expect(line).toMatch(/never words from a project chat, a PM's line, a file or a pull request/)
   })
 
+  it('tells a Buddy to ask its owner in their Decisions, settle answers given in chat, and send through a Send decision (task #4525)', () => {
+    const text = readFileSync(prepareSwarmSkill(fixture(), { role: 'buddy', key: 'buddy-session' }).file, 'utf8')
+    expect(text).toContain('## Ask your owner')
+    expect(text).toContain('{"type":"decision.ask","conversationId":"CHAT","questions":[{"question":')
+    expect(text).toContain('{"type":"decision.answer","decisionId":"ID","choice":N,"ownerMessageId":"MESSAGE"}')
+    expect(text).toContain('{"type":"decision.ask","conversationId":"CHAT","questions":[{"send":{"projectId":"PROJECT","text":')
+    // The Send decision replaces showing the line in the chat, which stays only for files.
+    expect(text).not.toContain('Before you send, show your owner the exact line you will post as them')
+  })
+
   it('tells a Buddy to answer its owner right below their message, and inside a thread in that thread (task #2929)', () => {
     const text = readFileSync(prepareSwarmSkill(fixture(), { role: 'buddy', key: 'buddy-session' }).file, 'utf8')
     expect(text).toContain("reply there with harness super-tab --tab TAB post CHAT 'your message' OPERATION_ID --answers MESSAGE_ID, right below your owner's message; "
