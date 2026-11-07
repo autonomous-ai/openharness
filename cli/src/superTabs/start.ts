@@ -14,6 +14,7 @@ import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { join as joinPath } from 'node:path'
 import { markBuddyOwner } from '../lib/buddyGuard.js'
+import { helperLine, memberLine, setUpSteps } from './memberSetup.js'
 import { engineAccount } from '../lib/engineAccount.js'
 
 type Json = Record<string, unknown>
@@ -465,6 +466,11 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       const github = buddy ? null : hosted ? (typeof hosted.requester === 'string' && hosted.requester ? { requester: hosted.requester } : null) : facts?.github ?? null
       // The role's name from the project's document, when the backend's start request has it; one line, bounded.
       const roleName = typeof request.roleName === 'string' ? request.roleName.replace(/\s+/g, ' ').trim().slice(0, 80) : ''
+      // Anh Dee's agent model (task #4698): a Member sets its project up once in its folder; a helper starts from that setup.
+      // A helper's Member's commands only when its host found that Member on this computer (machines.ts `memberHere`).
+      const memberProject = !buddy && !lead ? text(object(request.member).projectId) : null
+      const helper = !buddy && !lead && identifier(object(request.helperOf).harnessId)
+      const setUpLine = memberProject && identifier(memberProject) ? ` ${memberLine(String(input.tabId), memberProject)}` : helper ? ` ${helperLine(input.memberHere === true ? setUpSteps(request.setUpSteps) : null)}` : ''
       // Swarm v3 (task #4215): a PM, an agent and a Buddy start with their owner's own permission settings: no mode, so the
       // engine opens in the person's own default. Forced full mode turned off every check on people's own computers, where
       // Anthropic says to use it only in isolated environments. Team-written work keeps its barrier against the branch's own
@@ -478,7 +484,7 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
           : buddySessionPrompt(String(input.tabId), String(request.conversationId), session, mode)
           : home ? swarmBuddyPrompt(String(input.tabId), String(request.conversationId), home, mode)
           : buddyPrompt(String(input.tabId), String(request.conversationId), mode))
-          : `${lead ? leadPrompt(String(input.tabId), String(request.conversationId), roleName) : workerPrompt(String(input.tabId), String(request.conversationId), roleName)}${github ? ` ${githubPromptLine()}` : ''}${handoffPrompt}`,
+          : `${lead ? leadPrompt(String(input.tabId), String(request.conversationId), roleName) : workerPrompt(String(input.tabId), String(request.conversationId), roleName)}${setUpLine}${github ? ` ${githubPromptLine()}` : ''}${handoffPrompt}`,
         ...(homeFolder ? { cwd: homeFolder } : agentFolder ? { cwd: agentFolder } : request.worktree ? { projectSource: 'worktree', gitSource: request.cwd, branchName: `super-tab/${startId}`,
           // No branch named: the repository's default branch, fetched, not the host checkout's old HEAD.
           ...(request.branchRef ? { branchRef: request.branchRef } : { branchBase: 'default' }) } : { cwd: request.cwd }),
@@ -595,6 +601,11 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
     const configuration = { engine, model: matched?.model ?? null,
       effort: matched?.effort === 'auto' && launchedEffort ? launchedEffort : matched?.effort ?? null,
       contextWindow: number(seenFrame.contextWindow), engineVersion: text(seenFrame.engineVersion) }
+    // A helper's folder gets its Member's set-up copy before it joins: the server gives it its task only once it has, so the copy
+    // never races its work. The host's own step logs what it did; a helper it could not ready still starts, and installs itself.
+    if (!start.harnessId && typeof input.beforeJoin === 'function' && identifier(object(request.helperOf).harnessId)) {
+      await (input.beforeJoin as (harnessId: string) => Promise<void>)(nativeId).catch(() => {})
+    }
     const join = { type: 'agent.started', startId, harnessId: nativeId, configuration }
     let joined: Json = { result: {} }
     if (!start.harnessId) {

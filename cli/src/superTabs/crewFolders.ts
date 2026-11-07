@@ -10,12 +10,14 @@
  *   clone's other branches (a person's, other agents') are never touched (security reviews of #3229).
  */
 import { execFile } from 'node:child_process'
+import { ownProcessGroup } from '../lib/windows/noWindow.js'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
 
 const run = promisify(execFile)
-const git = async (cwd: string, ...args: string[]) => (await run('git', args, { cwd, timeout: 60_000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim()
+// No window on Windows (docs/windows-rules.md): a woken Member's folder comes back through here (task #4698).
+const git = async (cwd: string, ...args: string[]) => (await run('git', args, { cwd, timeout: 60_000, maxBuffer: 4 * 1024 * 1024, ...ownProcessGroup() })).stdout.trim()
 
 /** What a crew row asks of its host, from its agent record: close it to sleep (folder kept), close it and drop its folder, or
  *  close it because it moves elsewhere. Null for an awake member. */
