@@ -1,9 +1,14 @@
 import 'usage_window.dart';
 
-/// One remote machine's answer to `usage_read`: what ITS agent accounts have
-/// spent, read there with its own credentials.
+/// One computer's CLI rate-limit report, without credential access in Desktop.
 class MachineUsage {
-  const MachineUsage({required this.machineName, required this.readings});
+  const MachineUsage({
+    required this.machineName,
+    required this.readings,
+    this.isLocal = false,
+  });
+
+  final bool isLocal;
 
   /// How the machine is named on screen — the strip's label for a figure that
   /// is not this computer's.

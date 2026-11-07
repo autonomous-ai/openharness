@@ -67,7 +67,8 @@ async function swarm({ fresh = false, told }: { fresh?: boolean; told?: string[]
   const harnessOf = new Map<string, string>()
   const add = async (conversationId: string, machineId: string, name: string, lead = false) => {
     const harnessId = randomUUID()
-    const agentId = String((await execute({ type: 'agent.add', conversationId, machineId, harnessId, name, configuration: config, lead })).result.agentId)
+    // Added by the host, whose machines they run on: an agent is its own person's, on their own computer (task #4120).
+    const agentId = String((await execute({ type: 'agent.add', conversationId, machineId, harnessId, name, configuration: config, lead }, host)).result.agentId)
     harnessOf.set(machineId, harnessId)
     return agentId
   }

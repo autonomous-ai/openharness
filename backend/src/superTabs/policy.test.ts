@@ -25,13 +25,60 @@ describe('the project rules record', () => {
       'The phone app in a simulator', 'The web in a browser', 'Install and update on a Mac', 'Firmware on the device plugged into a machine'])
     // The merge train is opt-in per project (River, #3402).
     expect(SEED_RULES.mergeTrain).toEqual({ enabled: false, everyMinutes: 10 })
-    expect(SEED_RULES).toMatchObject({ caps: [], paths: [], crew: [], lanes: [] })
+    expect(SEED_RULES).toMatchObject({ caps: [], paths: [], crew: [] })
+  })
+
+  it('seeds the current dispatch lanes and numbers and accepts project replacements', () => {
+    const seed = projectRulesSchema.parse(SEED_RULES)
+    expect(seed.lanes).toEqual([
+      { name: 'backend', owns: ['backend/'] }, { name: 'CLI', owns: ['cli/'] },
+      { name: 'Desktop', owns: ['desktop/'] }, { name: 'mobile', owns: ['mobile/'] }, { name: 'docs', owns: ['docs/'] },
+    ])
+    expect(seed.dispatch).toEqual({ everyMs: 30_000, maxHanded: 3, nudgeAfterMs: 7_200_000, returnAfterMs: 10_800_000 })
+    const custom = { ...copy(), lanes: [{ name: 'firmware', owns: ['devices/'] }],
+      dispatch: { everyMs: 60_000, maxHanded: 1, nudgeAfterMs: 60_000, returnAfterMs: 120_000 } }
+    expect(projectRulesSchema.parse(custom)).toEqual(custom)
+  })
+
+  it('normalizes legacy empty lanes but preserves a new deliberately empty list', () => {
+    const { dispatch: _old, ...legacy } = copy()
+    expect(projectRulesSchema.parse({ ...legacy, lanes: [] }).lanes.map(l => l.name)).toEqual(['backend', 'CLI', 'Desktop', 'mobile', 'docs'])
+    expect(projectRulesSchema.parse({ ...copy(), lanes: [] }).lanes).toEqual([])
+    const custom = projectRulesSchema.parse({ ...legacy, lanes: [{ name: 'firmware', owns: ['devices/'] }] })
+    expect(custom.lanes).toEqual([{ name: 'firmware', owns: ['devices/'] }])
+    expect(custom.dispatch).toEqual({ everyMs: 30_000, maxHanded: 3, nudgeAfterMs: 7_200_000, returnAfterMs: 10_800_000 })
+  })
+
+  it('refuses unsafe dispatch bounds and ambiguous lane names', () => {
+    for (const dispatch of [
+      { everyMs: 29_999 }, { everyMs: 3_600_001 }, { maxHanded: 0 }, { maxHanded: 1001 },
+      { maxHanded: 1.5 }, { nudgeAfterMs: 59_999 }, { nudgeAfterMs: 604_800_001 },
+      { returnAfterMs: 1_209_600_001 }, { nudgeAfterMs: 120_000, returnAfterMs: 120_000 },
+    ]) expect(refused({ ...copy(), dispatch: { ...copy().dispatch, ...dispatch } }), JSON.stringify(dispatch)).toBe(true)
+    expect(refused({ ...copy(), lanes: [{ name: 'firmware', owns: [] }, { name: 'Firmware', owns: [] }] })).toBe(true)
+    expect(refused({ ...copy(), lanes: [{ name: '', owns: [] }] })).toBe(true)
   })
 
   it('holds caps, paths, the crew and lanes', () => {
     const rules = { ...copy(), caps: [{ name: 'Agents on the phone Mac', value: 4 }], paths: [{ name: 'Plans', path: 'docs/plans/' }],
       crew: [{ role: 'Engineer', names: ['Ledger'] }], lanes: [{ name: 'Backend', owns: ['backend/'] }] }
     expect(projectRulesSchema.parse(rules)).toEqual(rules)
+  })
+
+  it('accepts optional approval authority with explicit linked account IDs and rejects ambiguous links', () => {
+    const authority = { topDeciderId: 'dee-id', people: [{ name: 'Ken', accountIds: ['ken-id', 'other-ken-id'] }] }
+    expect(projectRulesSchema.parse({ ...copy(), instructionApprovals: authority })).toMatchObject({ instructionApprovals: authority })
+    expect(projectRulesSchema.parse({ ...copy(), instructionApprovals: null })).toMatchObject({ instructionApprovals: null })
+    expect(projectRulesSchema.parse(copy())).not.toHaveProperty('instructionApprovals')
+    const bad = [
+      { ...authority, people: [{ name: 'Ken', accountIds: [] }] },
+      { ...authority, people: [{ name: 'Ken', accountIds: ['a', 'a'] }] },
+      { ...authority, people: [{ name: 'Ken', accountIds: ['a'] }, { name: 'KEN', accountIds: ['b'] }] },
+      { ...authority, people: [{ name: 'Ken', accountIds: ['a'] }, { name: 'Other', accountIds: ['a'] }] },
+      { ...authority, people: [{ name: 'Ken', accountIds: Array.from({ length: 11 }, (_, i) => `a${i}`) }] },
+      { ...authority, people: Array.from({ length: 51 }, (_, i) => ({ name: `Person ${i}`, accountIds: [`a${i}`] })) },
+    ]
+    for (const instructionApprovals of bad) expect(projectRulesSchema.safeParse({ ...copy(), instructionApprovals }).success).toBe(false)
   })
 
   it('refuses bad values', () => {
@@ -406,6 +453,26 @@ describe('who changes the rules', () => {
     expect(effects.messages).toEqual([])
   })
 
+  it.each(['owner', 'peer'])('refuses authority changes through the PM quoting %s, while allowing that person directly', id => {
+    const f = fixture()
+    f.invite()
+    const lead = f.add('lead', 'lead', true)
+    const authority = { topDeciderId: 'peer', people: [{ name: 'Ken', accountIds: ['owner'] }] }
+    const current = { revision: 1, rules: { ...copy(), instructionApprovals: authority } }
+    const context = { projectRules: current, askedIn: personAsked(id) }
+    for (const instructionApprovals of [null, { ...authority, topDeciderId: 'owner' },
+      { ...authority, people: [{ name: 'Ken', accountIds: ['owner', 'peer'] }] }]) {
+      expect(code(() => f.run(set(1, { ...later(), instructionApprovals }, asked('lead')), as(lead), context)))
+        .toBe('RULES_APPROVAL_EDITOR_REQUIRED')
+    }
+    // The PM may still make ordinary edits with either omitted or unchanged authority.
+    for (const rules of [later(), { ...later(), instructionApprovals: authority }]) {
+      expect(f.run(set(1, rules, asked('lead')), as(lead), context).projectRules?.rules.instructionApprovals).toEqual(authority)
+    }
+    expect(f.run(set(1, { ...later(), instructionApprovals: null }), id === 'owner' ? owner : peer, { projectRules: current })
+      .projectRules?.rules.instructionApprovals).toBeNull()
+  })
+
   it('refuses every other agent, the PM of another project and a Buddy', () => {
     const f = fixture()
     f.invite()
@@ -420,5 +487,60 @@ describe('who changes the rules', () => {
     const buddy = f.add('buddy', task)
     f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', generation: 'tab' }
     expect(code(() => f.run(set(0, later(), asked(task)), as(buddy), context))).toBe('BUDDY_FORBIDDEN')
+  })
+})
+
+// Task #3964 (part 2 of #3576): the four Machines rules of the Routing instructions, as project data by machine id.
+describe('machine rules in the record', () => {
+  const RULES = [
+    { machineIds: ['ken-mbp'], why: 'Ken travels then', away: { days: [1, 2, 3, 4, 5], windows: [['07:30', '09:30'], ['18:00', '21:00']], timeZone: 'Asia/Ho_Chi_Minh' } },
+    { machineIds: ['tony-mac'], why: 'Tony\'s Mac has the phone setup', first: { lanes: ['mobile'] } },
+    { machineIds: ['diego-mac'], why: 'Diego runs no Codex', noEngines: ['codex'] },
+    { machineIds: ['local-codex'], why: 'Its Codex defaults to a local model', noReviews: true },
+  ]
+  const withMachines = (machines: unknown): ProjectRules => ({ ...copy(), machines } as ProjectRules)
+
+  it('holds each of the four kinds, and refuses a rule that is wrong or says nothing', () => {
+    expect(projectRulesSchema.parse(withMachines(RULES)).machines).toEqual(RULES)
+    const away = RULES[0]!.away
+    expect(refused(withMachines([{ ...RULES[0], away: { ...away, windows: [['09:30', '07:30']] } }]))).toBe(true)
+    expect(refused(withMachines([{ ...RULES[0], away: { ...away, days: [7] } }]))).toBe(true)
+    expect(refused(withMachines([{ ...RULES[0], away: { ...away, timeZone: 'Mars/Olympus' } }]))).toBe(true)
+    expect(refused(withMachines([{ ...RULES[2], noEngines: ['gemini'] }]))).toBe(true)
+    // A lane the record does not have: the rule would never apply.
+    expect(refused(withMachines([{ ...RULES[1], first: { lanes: ['firmware'] } }]))).toBe(true)
+    expect(refused(withMachines([{ machineIds: ['m'], why: 'Nothing' }]))).toBe(true)
+    expect(refused(withMachines([{ ...RULES[3], machineIds: [] }]))).toBe(true)
+    // A record from before has none.
+    expect(projectRulesSchema.parse(copy()).machines).toBeUndefined()
+  })
+
+  it('preserves approval authority and machine rules together without letting an ordinary member change authority', () => {
+    const f = fixture()
+    f.invite()
+    const authority = { topDeciderId: 'owner', people: [{ name: 'Ken', accountIds: ['owner', 'peer'] }] }
+    const current = { revision: 1, rules: { ...withMachines(RULES), instructionApprovals: authority } }
+    const kept = f.run(set(1, later()), peer, { projectRules: current })
+    expect(kept.projectRules?.rules).toMatchObject({ machines: RULES, instructionApprovals: authority })
+    expect(kept.projectRules?.diff).toEqual([{ path: 'releaseWindow.start', before: '09:00', after: '08:00' }])
+    expect(f.run(set(1, copy()), peer, { projectRules: current }).result.unchanged).toBe(true)
+    expect(code(() => f.run(set(1, { ...later(), instructionApprovals: null }), peer, { projectRules: current })))
+      .toBe('RULES_APPROVAL_EDITOR_REQUIRED')
+    const cleared = f.run(set(1, { ...later(), instructionApprovals: null, machines: [] }), owner, { projectRules: current })
+    expect(cleared.projectRules?.rules).toMatchObject({ instructionApprovals: null, machines: [] })
+    expect(code(() => f.run(set(1, { ...copy(), lanes: [{ name: 'phone', owns: ['mobile/'] }] }), owner, { projectRules: current })))
+      .toBe('RULES_INVALID')
+  })
+
+  it('keeps the current machine rules when a save leaves them out, and clears them only when it says so', () => {
+    const f = fixture()
+    const current = { revision: 1, rules: withMachines(RULES) }
+    const kept = f.run(set(1, later()), owner, { projectRules: current })
+    expect(kept.projectRules?.rules.machines).toEqual(RULES)
+    expect(kept.projectRules?.diff).toEqual([{ path: 'releaseWindow.start', before: '09:00', after: '08:00' }])
+    const cleared = f.run(set(1, { ...later(), machines: [] } as ProjectRules), owner, { projectRules: current })
+    expect(cleared.projectRules?.rules.machines).toEqual([])
+    // An old client renaming the phone lane cannot keep a rule naming a lane that is gone.
+    expect(code(() => f.run(set(1, { ...copy(), lanes: [{ name: 'phone', owns: ['mobile/'] }] }), owner, { projectRules: current }))).toBe('RULES_INVALID')
   })
 })

@@ -173,6 +173,17 @@ describe('decisions', () => {
   })
 })
 
+describe('machineRules', () => {
+  // Task #3964: the route reads the project's machine rules alone, as that agent.
+  it('reads the project\'s machine rules as the agent, and refuses a project that is not an id', async () => {
+    const read = { projectId: FIXTURE.projectId, revision: 2, machines: [{ machineIds: ['m1'], why: 'No Codex there', noEngines: ['codex'] }] }
+    const s = swarm((method, path) => path.startsWith(`/api/super-tabs/${T}/projects/${FIXTURE.projectId}/machine-rules?`) ? ok(read) : undefined)
+    expect(await s.ask({ action: 'machineRules', tabId: T, agentId: FIXTURE.leadId, projectId: FIXTURE.projectId }, owner)).toEqual({ ok: true, value: read })
+    expect(s.call).toHaveBeenCalledWith('GET', `/api/super-tabs/${T}/projects/${FIXTURE.projectId}/machine-rules?asAgentId=${FIXTURE.leadId}`, undefined)
+    expect(await s.ask({ action: 'machineRules', tabId: T, agentId: FIXTURE.leadId, projectId: '../x' }, owner)).toMatchObject({ error: 'INVALID_REQUEST' })
+  })
+})
+
 describe('instructions', () => {
   const document = { projectId: FIXTURE.projectId, revision: 3, hash: 'h', text: 'Work by this.', template: false, coordinatorName: 'Ana', notesRevision: 1, notes: [] }
   const instructionsPath = (projectId: string, agentId: string) => `/api/super-tabs/${T}/projects/${projectId}/instructions?asAgentId=${agentId}`

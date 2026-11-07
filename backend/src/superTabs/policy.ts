@@ -6,6 +6,7 @@
  * the server and shown to people. Revision 0 is the seed below, never stored until the first save (policyStore.ts).
  */
 import { z } from 'zod'
+import { personKey } from './instructionsDiff.js'
 
 /** The record as stored, as JSON: small enough that a reader reads every revision kept. */
 export const MAX_RULES_BYTES = 16_384
@@ -35,7 +36,63 @@ const globs = z.array(glob).max(MAX_LIST)
 const distinct = <T extends z.ZodTypeAny>(item: T, key: (entry: z.infer<T>) => string, what: string) =>
   z.array(item).max(MAX_LIST).refine(list => new Set(list.map(e => key(e).toLowerCase())).size === list.length, `Each ${what} once.`)
 
-export const projectRulesSchema = z.object({
+const accountId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,159}$/)
+const instructionApprovals = z.object({
+  topDeciderId: accountId.nullable(),
+  people: distinct(z.object({ name: line(80).refine(name => !!personKey(name), 'Name a person.'),
+    accountIds: z.array(accountId).min(1).max(10) }).strict(), person => personKey(person.name), 'person')
+    .refine(people => {
+      const ids = people.flatMap(person => person.accountIds)
+      return new Set(ids).size === ids.length
+    }, 'An account belongs to only one named person, once.'),
+}).strict()
+
+/** Defaults for projects predating configurable dispatch (#3601); kept here with the rest of the project policy. */
+export const SEED_DISPATCH = deepFreeze({ everyMs: 30_000, maxHanded: 3, nudgeAfterMs: 7_200_000, returnAfterMs: 10_800_000 })
+export const SEED_LANES = deepFreeze([
+  { name: 'backend', owns: ['backend/'] }, { name: 'CLI', owns: ['cli/'] },
+  { name: 'Desktop', owns: ['desktop/'] }, { name: 'mobile', owns: ['mobile/'] }, { name: 'docs', owns: ['docs/'] },
+])
+const dispatchSchema = z.object({
+  everyMs: z.number().int().min(30_000).max(3_600_000),
+  maxHanded: z.number().int().min(1).max(1000),
+  nudgeAfterMs: z.number().int().min(60_000).max(604_800_000),
+  returnAfterMs: z.number().int().max(1_209_600_000),
+}).strict().refine(d => d.returnAfterMs > d.nudgeAfterMs, 'Return time is later than the nudge.')
+
+/** Old clients and stored revisions have no dispatch section; their unused empty lane table meant the fixed five lanes.
+ * An explicit dispatch section makes an empty list deliberate. No backfill or mutation of a saved revision. */
+const legacyDispatch = (value: unknown): unknown => {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || 'dispatch' in value) return value
+  const old = value as Record<string, unknown>
+  return { ...old, dispatch: SEED_DISPATCH, ...Array.isArray(old.lanes) && old.lanes.length === 0 ? { lanes: SEED_LANES } : {} }
+}
+
+/** A machine by its id, as the Swarm's Machines list names it: a Mac and its Harness Team account are two ids. */
+const machineId = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/, 'A machine id.')
+/** A machine rule its owners gave (project instructions, Routing › Machines; task #3964): kept here by machine id, never in
+ *  source, since people's machines and hours stay out of this public repository (River, 11-05). Each says why, in the words
+ *  people read, and at least one of: when the machine is away, the engines no agent runs there with, that no Reviewer runs
+ *  there, or the lanes whose work goes there first. machineRules.ts applies them. */
+const machineRuleSchema = z.object({
+  machineIds: z.array(machineId).min(1).max(20),
+  why: line(200),
+  /** On these weekdays (0 Sunday … 6 Saturday), between these local times, in its owner's time zone: nothing starts there. */
+  away: z.object({
+    days: z.array(z.number().int().min(0).max(6)).min(1).max(7),
+    windows: z.array(z.tuple([clock, clock]).refine(([from, to]) => from < to, 'An away window ends after it starts, the same day.')).min(1).max(6),
+    timeZone,
+  }).strict().optional(),
+  noEngines: z.array(z.enum(['claude', 'codex'])).min(1).max(2).optional(),
+  noReviews: z.literal(true).optional(),
+  /** Work of these lanes goes to this machine first, while an agent there takes it. */
+  first: z.object({ lanes: z.array(line(80)).min(1).max(MAX_LIST) }).strict().optional(),
+}).strict().refine(rule => !!(rule.away || rule.noEngines || rule.noReviews || rule.first),
+  'A machine rule says when the machine is away, which engines or Reviewers it refuses, or which lanes go there first.')
+
+export const projectRulesSchema = z.preprocess(legacyDispatch, z.object({
+  /** Explicit authority for instruction-rule changes; absent on older records, null deliberately disables it. */
+  instructionApprovals: instructionApprovals.nullable().optional(),
   /** When releases go out, in a local time of day; the end comes after the start, the same day. */
   releaseWindow: z.object({ start: clock, end: clock, timeZone }).strict()
     .refine(w => w.start < w.end, 'The release window ends after it starts, the same day.'),
@@ -60,17 +117,31 @@ export const projectRulesSchema = z.object({
   paths: distinct(z.object({ name: line(80), path: line(400) }).strict(), entry => entry.name, 'path name'),
   /** The crew roster: each role and who fills it. */
   crew: distinct(z.object({ role: line(40), names: z.array(line(80)).max(20) }).strict(), entry => entry.role, 'role'),
+  /** Periodic dispatch cadence, handed-work cap and progress clocks. */
+  dispatch: dispatchSchema,
   /** Lanes of work and the paths each owns. */
   lanes: distinct(z.object({ name: line(80), owns: z.array(line(400)).max(MAX_LIST) }).strict(), lane => lane.name, 'lane'),
+  /** The project's machine rules. Absent on a record from before them: none apply. */
+  machines: z.array(machineRuleSchema).max(MAX_LIST).optional(),
 }).strict().refine(rules => Buffer.byteLength(JSON.stringify(rules)) <= MAX_RULES_BYTES,
   `Project rules are at most ${MAX_RULES_BYTES / 1024} KB.`)
+  // A lane a machine rule names is one the record has, or the rule would never apply.
+  .refine(rules => (rules.machines ?? []).every(rule => (rule.first?.lanes ?? []).every(name =>
+    rules.lanes.some(lane => lane.name.toLowerCase() === name.toLowerCase()))), 'A machine rule names a lane this record has.')
   // The backend pause is a part of the release window (review of #3216): outside it, there is no release to pause.
   .refine(rules => {
     const pause = rules.releasePace.backendPause
     return !pause || (pause.start >= rules.releaseWindow.start && pause.end <= rules.releaseWindow.end)
-  }, 'The backend pause falls inside the release window.')
+  }, 'The backend pause falls inside the release window.'))
 
 export type ProjectRules = z.infer<typeof projectRulesSchema>
+export type MachineRule = z.infer<typeof machineRuleSchema>
+/** The machine rules of a stored [record] that pass, whether or not the rest of it does (security review 1 of #3964): a record
+ *  broken elsewhere still keeps a machine its owner's rule refuses work, rather than failing open while it is repaired. */
+export function validMachineRules(record: unknown): MachineRule[] {
+  const machines = record && typeof record === 'object' ? (record as { machines?: unknown }).machines : undefined
+  return Array.isArray(machines) ? machines.flatMap(rule => { const parsed = machineRuleSchema.safeParse(rule); return parsed.success ? [parsed.data] : [] }) : []
+}
 
 /** [value] frozen all the way down: the seed is shared, so no reader may change it. */
 function deepFreeze<T>(value: T): T {
@@ -138,8 +209,20 @@ export const SEED_RULES: ProjectRules = deepFreeze({
   caps: [],
   paths: [],
   crew: [],
-  lanes: [],
+  lanes: SEED_LANES,
+  dispatch: SEED_DISPATCH,
 })
+
+/** Task #3710: only this Harness project asked for Dee's authority and Ken's linked accounts.
+ * Stable account IDs, never a project/display name or an email-prefix guess; no other project inherits them. */
+const HARNESS_APPROVALS = deepFreeze({
+  topDeciderId: '6a8fe4fcf1a6b5972eed0103',
+  people: [{ name: 'Ken', accountIds: ['6a86d24c2ea251076eb4eebe', '6ae980b6215612e2be51c35b'] }],
+})
+export function seedRules(tabId: string, projectId: string, rules: ProjectRules = SEED_RULES): ProjectRules {
+  return rules.instructionApprovals === undefined && tabId === 'c51479bd73b59e58176ad9e4' && projectId === '5701099db2a04f605ac0d4d4'
+    ? { ...rules, instructionApprovals: HARNESS_APPROVALS } : rules
+}
 
 /** One change a save made: a leaf of an object section, or a whole list. */
 export interface RulesChange { path: string; before: unknown; after: unknown }

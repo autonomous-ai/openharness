@@ -109,4 +109,9 @@ describe('the notices the Swarm writes into a chat', () => {
     expect(agentOnly({ kind: 'from-a-newer-server' }, ['lead'])).toBe(false)
     expect(agentOnly(undefined, [])).toBe(false)
   })
+
+  it('keeps the PM’s task decision wake out of people’s chat while it reaches the PM', () => {
+    expect(agentOnly({ kind: 'task-approval', state: 'approved' }, ['lead'])).toBe(true)
+    expect(agentOnly({ kind: 'task-approval', state: 'rejected' }, [])).toBe(false)
+  })
 })

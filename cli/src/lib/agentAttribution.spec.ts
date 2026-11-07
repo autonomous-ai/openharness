@@ -1,10 +1,13 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AGENT_ATTRIBUTION_LINE, agentLaunchArgs, HARNESS_INSTRUCTIONS, joinedInstructions } from './agentAttribution.js'
 import { agentSettingsPath } from './agentSettings.js'
 import { setAgentSettingsForTest, signedOutForTest } from '../testing/agentSettings.js'
+
+// Harness's status line rides every Claude launch beside what these pin (engines/claude/statusLine.spec.ts).
+vi.mock('../engines/kit/statusLine.js', async (original) => ({ ...await original<object>(), statusLineSetting: () => null }))
 
 let dataDir = ''
 beforeEach(() => {

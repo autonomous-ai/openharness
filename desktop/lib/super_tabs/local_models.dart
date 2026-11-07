@@ -590,8 +590,9 @@ class SuperTabMachineLocalModels extends StatelessWidget {
         ));
       }
     }
-    // Whoever serves a model sees whose Buddy runs on it (PRODUCT.md,
-    // Contribution: seen), from the Buddies every member's read carries.
+    // Whoever serves a model sees whose Buddy runs on it (AGENTS.md,
+    // contributed capacity: seen), from the Buddies every member's read
+    // carries.
     String? usedBy(String model) {
       final people = {
         for (final a in controller.snapshot!.agents)

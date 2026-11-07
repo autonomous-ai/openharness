@@ -11,6 +11,7 @@ import 'private_project_lock.dart';
 import 'controller.dart';
 import 'buddy_machines.dart';
 import 'buddy_model.dart';
+import 'buddy_engine.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'model.dart';
@@ -309,8 +310,9 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
 Future<void> confirmRemoveBuddy(
   BuildContext context,
   SuperTabController c,
-  String projectId,
-) async {
+  String projectId, {
+  String? conversationId,
+}) async {
   final remove = await showAppDialog<bool>(
     context: context,
     builder: (context) => _BuddyDialogScope(
@@ -336,7 +338,9 @@ Future<void> confirmRemoveBuddy(
       ),
     ),
   );
-  if (remove == true) await c.removeBuddy(projectId);
+  if (remove == true) {
+    await c.removeBuddy(projectId, conversationId: conversationId);
+  }
 }
 
 /// What the reader's Buddy is called until they name it, as the backend
@@ -355,13 +359,18 @@ String buddyDefaultName(SuperTabController c) {
 Future<void> showRenameBuddy(
   BuildContext context,
   SuperTabController c,
-  String projectId,
-) => showAppDialog<void>(
+  String projectId, {
+  String? conversationId,
+}) => showAppDialog<void>(
   context: context,
   builder: (context) => _BuddyDialogScope(
     controller: c,
     projectId: projectId,
-    child: _RenameBuddyDialog(controller: c, projectId: projectId),
+    child: _RenameBuddyDialog(
+      controller: c,
+      projectId: projectId,
+      conversationId: conversationId,
+    ),
   ),
 );
 
@@ -394,9 +403,16 @@ class _BuddyDialogScope extends StatelessWidget {
 }
 
 class _RenameBuddyDialog extends StatefulWidget {
-  const _RenameBuddyDialog({required this.controller, required this.projectId});
+  const _RenameBuddyDialog({
+    required this.controller,
+    required this.projectId,
+    this.conversationId,
+  });
   final SuperTabController controller;
   final String projectId;
+
+  /// One Buddy of several (#3818); null for the default.
+  final String? conversationId;
 
   @override
   State<_RenameBuddyDialog> createState() => _RenameBuddyDialogState();
@@ -408,7 +424,12 @@ class _RenameBuddyDialogState extends State<_RenameBuddyDialog> {
   /// The backend's limit: a longer name is refused there anyway.
   static const _maxLength = 32;
   late final _name = TextEditingController(
-    text: c.buddyChat(widget.projectId)?.buddyName ?? '',
+    text:
+        (widget.conversationId == null
+                ? c.buddyChat(widget.projectId)
+                : c.snapshot?.conversation(widget.conversationId!))
+            ?.buddyName ??
+        '',
   );
   bool _busy = false;
   String? _error;
@@ -425,7 +446,11 @@ class _RenameBuddyDialogState extends State<_RenameBuddyDialog> {
       _busy = true;
       _error = null;
     });
-    final renamed = await c.renameBuddy(widget.projectId, _name.text);
+    final renamed = await c.renameBuddy(
+      widget.projectId,
+      _name.text,
+      conversationId: widget.conversationId,
+    );
     if (!mounted) return;
     if (renamed) {
       Navigator.pop(context);
@@ -579,8 +604,9 @@ class SuperTabBuddyBar extends StatelessWidget {
       "Couldn't switch your Buddy: Start your Buddy again to switch its model";
 
   /// How far back the bar looks for that line: one page of the chat. The read
-  /// runs on every build, so it is bounded (ENGINEERING.md 4); a refusal under
-  /// more newer messages than this offers nothing, and nothing is removed.
+  /// runs on every build, so it is bounded (AGENTS.md standard 4); a refusal
+  /// under more newer messages than this offers nothing, and nothing is
+  /// removed.
   static const _heldSwitchReach = 100;
 
   /// Whether [agent]'s last switch failed because it must be started again:
@@ -597,7 +623,11 @@ class SuperTabBuddyBar extends StatelessWidget {
   /// a copy ([SuperTabController.newestFirst]), so the scan stops at this
   /// Buddy's newest system line.
   bool _mustStartAgain(SuperTabController c, SuperTabAgent agent) {
-    if (!chat.isSwarmBuddyChat || agent.modelRequest != null) return false;
+    if (!chat.isSwarmBuddyChat ||
+        agent.modelRequest != null ||
+        agent.switchRequest != null) {
+      return false;
+    }
     final conversation = c.snapshot?.conversation(chat.id);
     if (conversation == null ||
         c.hasNewer(chat.id) ||
@@ -662,7 +692,13 @@ class SuperTabBuddyBar extends StatelessWidget {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final c = controller;
-    final agent = c.buddy(chat.projectId);
+    final agent = chat.isSwarmBuddyChat && c.snapshot!.buddyCap != null
+        ? chat.agentIds
+              .map(c.snapshot!.agent)
+              .whereType<SuperTabAgent>()
+              .where((a) => a.isMainBuddy && a.buddyOf == c.accountId)
+              .firstOrNull
+        : c.buddy(chat.projectId);
     if (agent == null) return _starting(c);
     final name = c.snapshot!.agentName(agent.id, fallback: agent.name);
     final machine = buddyMachineName(c, agent.machineId, app: app);
@@ -673,7 +709,10 @@ class SuperTabBuddyBar extends StatelessWidget {
         ? 'only you can read this chat'
         : '${buddyPersonName(c, agent.machineOwnerId)} can see its terminal';
     final where = [
-      '${buddyEngineName(agent.engine)} on $machine',
+      if (chat.isSwarmBuddyChat && buddyEngineCapable(c.snapshot!, agent))
+        machine
+      else
+        '${buddyEngineName(agent.engine)} on $machine',
       if (project != null) '#${project.name}',
       // The one Buddy for the whole Swarm (spec 2026-10-31-one-buddy-per-swarm).
       if (chat.isSwarmBuddyChat) 'reads all your projects',
@@ -721,6 +760,31 @@ class SuperTabBuddyBar extends StatelessWidget {
             )
           else
             Text(where, style: DesktopChrome.metadata()),
+          if (chat.isSwarmBuddyChat &&
+              agent.gridModel == null &&
+              agent.downSince == null &&
+              agent.switchRequest == null &&
+              agent.modelRequest == null &&
+              agent.limitedUntil?.isAfter(DateTime.now()) == true &&
+              buddyEngineCapable(c.snapshot!, agent))
+            Row(
+              key: const ValueKey('super-buddy-engine-limit'),
+              children: [
+                Expanded(
+                  child: Text(
+                    'Limit reached.',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.metadata(),
+                  ),
+                ),
+                BuddyEnginePicker(
+                  controller: c,
+                  agent: agent,
+                  limitAction: true,
+                ),
+              ],
+            ),
           if (offer)
             Row(
               key: const ValueKey('super-buddy-start-again'),
@@ -886,7 +950,11 @@ class _BuddyStartState extends State<_BuddyStart> {
           if (machines.isEmpty)
             BuddyNoMachine(machines: machines)
           else
-            Row(
+            // Wraps in a narrow pane: the Buddy chat beside the Board is about 300 px wide (task #3787).
+            Wrap(
+              spacing: grid.AppDesktop.controlGap,
+              runSpacing: grid.AppDesktop.controlGap,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 BuddyMachineField(
                   key: const ValueKey('super-buddy-start-machine'),
@@ -902,7 +970,6 @@ class _BuddyStartState extends State<_BuddyStart> {
                     });
                   },
                 ),
-                const SizedBox(width: 8),
                 SizedBox(
                   width: 120,
                   child: AppSelectField<String>(
@@ -920,7 +987,6 @@ class _BuddyStartState extends State<_BuddyStart> {
                     },
                   ),
                 ),
-                const SizedBox(width: 8),
                 FilledButton(
                   onPressed: busy || machine == null || keptBlock != null
                       ? null

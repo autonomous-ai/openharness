@@ -6,6 +6,7 @@
  *
  * The numbers here stay in this one place until the project rules record lands (sibling task of #3397).
  */
+import { DISPATCH_RULES, laneNamed, spokenList, type Lane } from './dispatch.js'
 import { isBuddy } from './buddies.js'
 import { roleNameOf } from './instructions.js'
 import { fail, type Actor, type Agent, type SuperTabState } from './model.js'
@@ -15,11 +16,6 @@ import { agentProjectId, canReadProject, ledProject, ownsProject, projectOf } fr
 export const CREW_REOPEN_GRACE_MS = 5 * 60_000
 /** The longest role a crew entry names, in characters. */
 export const CREW_ROLE_MAX = 40
-/** The lanes a crew member may work in: automatic assignment gives it its lane's top task, and one with no lane the
- *  project's (River for Budget, 11-05). */
-export const CREW_LANES = ['backend', 'cli', 'desktop', 'mobile', 'docs'] as const
-export type CrewLane = typeof CREW_LANES[number]
-
 export const isCrew = (target: Pick<Agent, 'crew'>): boolean => !!target.crew
 
 /** Who may change [target]'s crew mark: its project's PM, or, of the people who read the project and are no viewer, the
@@ -36,10 +32,11 @@ function mayManageCrew(state: SuperTabState, actor: Actor, target: Agent): void 
 
 /** `crew.add`: marks [target] as crew, with [role] or the role it goes by, and its [lane] if any. Again on crew replaces it.
  *  Never the PM (kept alive already) nor a Buddy. */
-export function addCrew(state: SuperTabState, actor: Actor, target: Agent, role: string | undefined, lane: CrewLane | undefined, now: number): void {
+export function addCrew(state: SuperTabState, actor: Actor, target: Agent, role: string | undefined, lane: string | undefined, now: number, lanes: readonly Lane[] = DISPATCH_RULES.lanes): void {
   mayManageCrew(state, actor, target)
   if (isBuddy(target)) fail('CREW_BUDDY', 'A Buddy waits for its person; it is never crew.')
   if (ledProject(state, target.id)) fail('CREW_LEAD', 'The PM is already kept alive; it needs no crew mark.')
+  if (lane) lane = (laneNamed(lanes, lane) ?? fail('LANE_UNKNOWN', `Name a lane: ${spokenList(lanes.map(l => l.name))}.`, 400)).toLowerCase()
   target.crew = { role: role ?? roleNameOf(state, target).slice(0, CREW_ROLE_MAX), ...lane ? { lane } : {}, at: now, by: actor.kind === 'agent' ? actor.agentId : actor.userId }
 }
 
