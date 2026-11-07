@@ -190,6 +190,58 @@ void main() {
     );
   }
 
+  // Review of #4442: a computer that stays preparing never holds the form
+  // open; Not now closes it at once and nothing starts.
+  testWidgets('Not now while the computer prepares closes and starts nothing', (
+    tester,
+  ) async {
+    final f = newMember();
+    await tester.binding.setSurfaceSize(const Size(1000, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: grid.buildAppTheme(brightness: Brightness.light),
+        home: SwarmJoinHost(app: f.app, child: const Scaffold()),
+      ),
+    );
+    late Future<void> joining;
+    await tester.runAsync(() async {
+      joining = f.app.addMachineOnJoin(tabId, role: 'collaborator');
+      await pumpEventQueue();
+    });
+    await tester.pump();
+    await tester.runAsync(() async => pumpEventQueue());
+    await tester.pumpAndSettle();
+    f.connection.keepPreparing = true;
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Bring agent'));
+      await pumpEventQueue();
+    });
+    await tester.pump();
+    expect(find.textContaining('Starting your Buddy on'), findsOneWidget);
+    await tester.tap(find.text('Not now'));
+    await tester.pump();
+    await tester.pump();
+    expect(find.textContaining('Still working on it'), findsNothing);
+    expect(find.byType(NewHarnessForm), findsNothing);
+    // Ready now, in real time past the next ask: the closed form starts nothing.
+    f.connection.keepPreparing = false;
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 1500)),
+    );
+    await tester.pump();
+    await tester.runAsync(() => joining);
+    expect(
+      f.connection.server.posts.where(
+        (post) => (post['command'] as Map)['type'] == 'buddy.create',
+      ),
+      isEmpty,
+    );
+    await tester.pumpWidget(const SizedBox());
+    f.dispose();
+  });
+
   // Audit finding 13 (#4442), in both themes for the pull request.
   for (final brightness in Brightness.values) {
     testWidgets('join dialog loading and dead link in ${brightness.name}', (

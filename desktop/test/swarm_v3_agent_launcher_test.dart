@@ -152,6 +152,56 @@ void main() {
     },
   );
 
+  // Review of #4442: closing the form while the computer prepares stops the
+  // wait; nothing is started, and once the start is sent it can't stop.
+  test(
+    'stop during the preparing wait sends no start; after it, stop refuses',
+    () {
+      fakeAsync((async) {
+        var asks = 0;
+        final sent = <Map<String, dynamic>>[];
+        final launcher = SwarmAgentLauncher(
+          machineId: 'local',
+          machineName: 'Mac',
+          inSwarm: false,
+          isCurrent: () => true,
+          prepare: (op) async {
+            asks++;
+            return {'state': 'preparing'};
+          },
+          command: (command, op) async {
+            sent.add(command);
+            return {'startId': 'one'};
+          },
+        );
+        Object? failure;
+        launcher.create('claude', 'op').catchError((Object e) {
+          failure = e;
+          return <String, dynamic>{};
+        });
+        async.elapse(const Duration(seconds: 3));
+        expect(launcher.stop(), isTrue);
+        final asked = asks;
+        async.elapse(const Duration(seconds: 10));
+        expect(failure, isA<SwarmAgentLaunchFailure>());
+        expect(asks, asked);
+        expect(sent, isEmpty);
+
+        final listed = SwarmAgentLauncher(
+          machineId: 'local',
+          machineName: 'Mac',
+          inSwarm: true,
+          isCurrent: () => true,
+          prepare: (op) async => throw StateError('must not prepare'),
+          command: (command, op) => Completer<Map<String, dynamic>>().future,
+        );
+        listed.create('claude', 'op').ignore();
+        async.flushMicrotasks();
+        expect(listed.stop(), isFalse);
+      });
+    },
+  );
+
   test('a computer that never finishes preparing gives up in plain words', () {
     fakeAsync((async) {
       final launcher = SwarmAgentLauncher(
