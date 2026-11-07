@@ -135,6 +135,8 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
             request.gridModel == null
                 ? 'Switching to your subscription…'
                 : 'Switching to ${request.name ?? nameOf(request.gridModel!)}…',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: DesktopChrome.metadata(),
           )
         : _anchor(
@@ -161,7 +163,13 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
             ),
             const SizedBox(width: grid.AppDesktop.controlGap),
           ],
-          KeyedSubtree(key: const ValueKey('super-buddy-model'), child: picker),
+          // The model gives way with "…" in a narrow header, not the Buddy's name or ⋮ (#4444).
+          Flexible(
+            child: KeyedSubtree(
+              key: const ValueKey('super-buddy-model'),
+              child: picker,
+            ),
+          ),
           // A picked shared model that stopped is a failure the reader acts on, so it stays (review 4 of #3464).
           if (request == null && current != null && on == null) ...[
             const SizedBox(width: grid.AppDesktop.menuInset),
@@ -258,6 +266,8 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
               Flexible(
                 child: Text(
                   label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: DesktopChrome.metadata(
                     color: DesktopChrome.foreground,
                   ),
