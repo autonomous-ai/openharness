@@ -523,7 +523,7 @@ export const operationSchema = z.object({ operationId: id, command: commandSchem
 /** The words in each command that people and agents read in the Swarm: messages, briefs and tasks, results, evidence,
  *  reasons, errors and names. `[]` is each item of a list. Not `agent.input`: its host types the exact text, and only its
  *  chat row is redacted (terminal.ts). Not a role's skill text, which only its project's owner, Lead and hosts read. */
-const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
+export const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'message.send': ['text'],
   // An edit is a new text in a row everyone reads: cleaned as a send is (security review 2 of #2967).
   'message.edit': ['text'],

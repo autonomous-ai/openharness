@@ -5,6 +5,7 @@ import { type Actor, type Conversation, type SuperTabState } from './model.js'
 import { queueSiblings } from './taskQueue.js'
 import { groupView } from './read/views.js'
 import { GROUP_FIELDS } from './parts/light.js'
+import { CREDENTIAL_MARKER } from './credentials.js'
 
 const words = 'Keep edits offline until the connection returns.'
 const proposal = { title: 'Offline edits', text: words, goal: 'Keep drafts', why: 'People lose offline work',
@@ -284,6 +285,31 @@ describe('PM decisions and card questions', () => {
     expect(() => f.run({ type: 'proposal.merge', conversationId: id, intoConversationId: other, reason: 'Duplicate' }, f.pm)).toThrow(expect.objectContaining({ code: 'PROPOSAL_QUESTION_OPEN' }))
     for (let i = 1; i < 20; i++) f.run(ask(id), f.pm)
     expect(() => f.run(ask(id), f.pm)).toThrow(expect.objectContaining({ code: 'PROPOSAL_LIMIT' }))
+  })
+})
+
+// Task #4340: a ruling's reason was stored and copied to the proposer's Buddy chat as typed.
+describe('credentials in proposal words', () => {
+  // Assembled at run time from obviously fake parts, never a credential-shaped literal.
+  const token = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_')
+
+  it('removes a token from a proposal, its questions, answers, merges and ruling, in the card and in every copy', () => {
+    const f = fixture(), buddy: Actor = { kind: 'agent', agentId: f.buddy, machineOwnerId: `${owner.userId}-machine` }
+    const id = f.create(peer, { title: `Rotate ${token}`, text: `Calls fail with ${token}`, goal: `Drop ${token}`, why: `Leaked ${token}`,
+      doneWhen: `No ${token} left`, evidence: [`Log shows ${token}`] }).result.conversationId
+    f.card(id).proposal!.senders[0]!.buddyId = f.buddy
+    const sent = [f.run(ask(id, { question: `Is ${token} yours?`, defaultAnswer: `Rotate ${token}` }), f.pm)]
+    sent.push(f.run({ type: 'proposal.answer', conversationId: id, questionId: sent[0]!.result.questionId, text: `Yes, ${token}` }, buddy))
+    sent.push(f.run({ type: 'proposal.merge', conversationId: f.create(owner).result.conversationId, intoConversationId: id, reason: `Same as ${token}` }, f.pm))
+    const ruled = f.run(decide(id, 'accept', { reason: `Rotate ${token} first`, task: { ...acceptedTask, changes: `Remove ${token}` },
+      checks: [{ description: `No ${token} in logs`, independent: false }] }), f.pm)
+    // Both proposers hear the ruling in their Buddy chats, in its cleaned words.
+    const notices = ruled.messages.filter(m => m.source?.kind === 'proposal-notice')
+    expect(notices.map(m => m.text)).toEqual([0, 1].map(() => `Rotate ${CREDENTIAL_MARKER}: accept. Rotate ${CREDENTIAL_MARKER} first`))
+    expect(f.card(id).proposal!.decision!.reason).toBe(`Rotate ${CREDENTIAL_MARKER} first`)
+    expect(f.card(id).proposal!.questions[0]!.answer!.text).toBe(`Yes, ${CREDENTIAL_MARKER}`)
+    expect(JSON.stringify([...sent, ruled].map(e => e.messages))).not.toContain(token)
+    expect(JSON.stringify(f.state)).not.toContain(token)
   })
 })
 
