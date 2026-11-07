@@ -375,6 +375,32 @@ void main() {
     await end(tester, c);
   });
 
+  testWidgets('a Buddy that never saved flags shows none, and Restart sends none', (
+    tester,
+  ) async {
+    app.stateOf('m')!.agents = [
+      const Agent(
+        id: 'h-wren',
+        name: 'Wren',
+        engine: 'claude',
+        terminalAvailable: true,
+      ),
+    ];
+    final c = await show(tester);
+    await open(tester);
+    expect(key('launch-flag-chip-0'), findsNothing, reason: 'no default flags');
+    await tester.tap(restart);
+    await tester.pump();
+    expect(connection.types.single, 'agent_restart');
+    expect(connection.requests.single.containsKey('launchArgs'), isFalse);
+    connection.restartReplies.single.complete(
+      restartReceipt(creationId(), agentId: 'h-wren'),
+    );
+    await settle(tester);
+    expect(card, findsNothing);
+    await end(tester, c);
+  });
+
   testWidgets('a restart in flight survives closing and reopening the card', (
     tester,
   ) async {
