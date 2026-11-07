@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { basename, join } from 'path'
 import type * as ClaudeProfilesModule from './claudeProfiles.js'
 
 let dataDir = ''
@@ -39,9 +39,9 @@ describe('claudeProfiles', () => {
     account(join(home, '.claude-work'), { displayName: 'Work' })
     const profiles = listClaudeProfiles([], { home, environment: {}, machineId })
     expect(profiles.map((p) => p.id)).toEqual([profileId(machineId, 'claude', 'default'), expect.stringMatching(/^[0-9a-f]{16}$/)])
-    expect(profiles[0]).toMatchObject({ path: home, label: 'Me', reportLabel: expect.not.stringContaining('Me'), offered: true, default: true })
+    expect(profiles[0]).toMatchObject({ path: home, label: basename(home), reportLabel: basename(home), offered: true, default: true })
     expect(profiles[1]).not.toHaveProperty('default')
-    expect(profiles[1]).toMatchObject({ path: join(home, '.claude-work'), label: 'Work' })
+    expect(profiles[1]).toMatchObject({ path: join(home, '.claude-work'), label: '.claude-work' })
   })
 
   it('lists the default account even with no .claude.json, and folders without Claude files are not offered', async () => {
@@ -65,13 +65,13 @@ describe('claudeProfiles', () => {
     const folder = join(home, 'Library/Application Support/orca/claude-profiles/ab12cd34-0000-4000-8000-000000000000/home')
     account(folder, { emailAddress: 'a@b.c' })
     const orca = listClaudeProfiles([], { home, environment: {}, machineId })[1]
-    expect(orca).toMatchObject({ label: 'a@b.c', reportLabel: 'Orca ab12' })
+    expect(orca).toMatchObject({ label: 'Orca ab12', reportLabel: 'Orca ab12' })
   })
 
-  it('uses displayName for the label when present', async () => {
+  it('names a profile by its folder, never by the account signed in to it', async () => {
     const { listClaudeProfiles } = await loadModule()
     account(join(home, '.claude-w'), { displayName: 'Work', emailAddress: 'w@x.y' })
-    expect(listClaudeProfiles([], { home, environment: {}, machineId })[1]).toMatchObject({ label: 'Work', reportLabel: '.claude-w' })
+    expect(listClaudeProfiles([], { home, environment: {}, machineId })[1]).toMatchObject({ label: '.claude-w', reportLabel: '.claude-w' })
   })
 
   it('never reports a person: the label is the folder, Orca by its id, Harness-made as Claude <n>', async () => {
@@ -128,7 +128,7 @@ describe('claudeProfiles', () => {
     const { listClaudeProfiles } = await loadModule()
     account(join(home, '.claude-w'), { displayName: 'me@x.y' })
     const profile = listClaudeProfiles([], { home, environment: {}, machineId })[1]
-    expect(profile).toMatchObject({ label: 'me@x.y', reportLabel: '.claude-w' })
+    expect(profile).toMatchObject({ label: '.claude-w', reportLabel: '.claude-w' })
   })
 
   it('falls back to a plain word when even the folder name has an @', async () => {
@@ -188,7 +188,8 @@ describe('Desktop-added accounts', () => {
     account(join(base, 'acct1'), { displayName: 'Desk' })
     mkdirSync(join(base, 'empty'), { recursive: true })
     const labels = listClaudeProfiles([], { home, environment: {}, machineId }).map((p) => p.label)
-    expect(labels).toContain('Desk')
+    expect(labels).toContain('Claude acct1')
+    expect(labels).not.toContain('Desk')
     expect(labels).not.toContain('empty')
     rmSync(dataDir, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true })
     delete process.env.ADAPTER_DATA_DIR
@@ -226,7 +227,7 @@ describe('profileHome', () => {
     account(folder, {})
     const codex = join(home, '.codex-two')
     mkdirSync(codex)
-    writeFileSync(join(codex, 'auth.json'), '{}')
+    writeFileSync(join(codex, 'config.toml'), '')
     const options = { home, environment: {}, offeredOnly: true }
     const work = listClaudeProfiles([], { home, environment: {}, machineId })[1]
     expect(profileHome('claude', work.id, machineId, options)).toBeNull()
@@ -248,7 +249,7 @@ describe('profileHome', () => {
     const { profileHome, profileId, codexReportLabel } = await loadModule()
     const codex = join(home, '.codex-two')
     mkdirSync(codex)
-    writeFileSync(join(codex, 'auth.json'), '{}')
+    writeFileSync(join(codex, 'config.toml'), '')
     const found = profileHome('codex', profileId(machineId, 'codex', codex), machineId, { home, environment: {} })
     expect(found).toBe(codex)
     expect(codexReportLabel('/x/.codex-two')).toBe('.codex-two')
@@ -272,7 +273,7 @@ describe('profileHome', () => {
     const { profileHome, profileId } = await loadModule()
     const codex = join(home, '.codex')
     mkdirSync(codex)
-    writeFileSync(join(codex, 'auth.json'), '{}')
+    writeFileSync(join(codex, 'config.toml'), '')
     expect(profileHome('codex', profileId(machineId, 'codex', codex), machineId, { home, environment: {} })).toBe('default')
   })
 

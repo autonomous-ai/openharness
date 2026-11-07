@@ -33,6 +33,21 @@ function fixture() {
 }
 
 describe('a handed task opens its review steps', () => {
+  // Task #3964 (review of PR #3436): the Ready that hands out review steps follows the project's machine rules too.
+  it('hands no review step to a Reviewer on a machine where no Reviewer runs, and gives it to one elsewhere', () => {
+    const rules = { projectRules: { revision: 1, rules: { ...SEED_RULES, machines: [{ machineIds: ['host'], why: 'Its Codex defaults to a local model', noReviews: true as const }] } } }
+    const alone = fixture()
+    alone.add('rev-local', alone.task, 'Reviewer')
+    alone.ready(['docs/a.md'], 'abc1234', true, rules)
+    expect(alone.steps()).toEqual([{ name: 'Review', agent: null, status: null }])
+    const f = fixture()
+    f.add('rev-local', f.task, 'Reviewer')
+    const elsewhere = f.run({ type: 'agent.add', conversationId: f.task, machineId: 'other', harnessId: 'rev-other', name: 'rev-other', configuration: opus,
+      lead: false, roleName: 'Reviewer' } as Command, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
+    f.ready(['docs/a.md'], 'abc1234', true, rules)
+    expect(f.steps()).toEqual([{ name: 'Review', agent: elsewhere, status: 'working' }])
+  })
+
   it('a pull request touching sign-in code opens two security reviews, each to a different free Reviewer, never the Engineer', () => {
     const f = fixture()
     const a = f.add('rev-a', f.task, 'Reviewer'), b = f.add('rev-b', f.task, 'Reviewer')
@@ -48,6 +63,36 @@ describe('a handed task opens its review steps', () => {
     // Task #3540: the verdict it asks for counts only at the head and base it names (#3394).
     expect(step.brief).toContain('at the pull request head (whole commit id) and base branch you read')
     expect(step.checks).toHaveLength(1)
+  })
+
+  it('puts each PR history result in both security briefs and refreshes active and finished steps', () => {
+    const f = fixture()
+    f.add('rev-a', f.task, 'Reviewer'); f.add('rev-b', f.task, 'Reviewer')
+    const head = 'a'.repeat(40), next = 'b'.repeat(40)
+    const history = (head: string, productionLines: number) => ({ head, planFirst: 'pass' as const, testBeforeCode: 'pass' as const,
+      productionLines, totalLines: productionLines + 7, commits: 3, merges: 0, missingTests: [] })
+    const ready = (at: string, lines: number) => f.ready(['backend/src/routes/auth.ts'], at, true, { pullRequestFiles: {
+      urls: [PR], head: at, files: ['backend/src/routes/auth.ts'], heads: [{ url: PR, head: at, base: 'main', history: history(at, lines) }] } })
+    ready(head, 12)
+    const [first, second] = stepsOf(f.state, f.task)
+    for (const step of [first!, second!]) {
+      expect(step.brief).toContain('Plan first: pass')
+      expect(step.brief).toContain('Test before code: pass')
+      expect(step.brief).toContain('12 production lines')
+      expect(step.brief).toContain('does not prove a test failed')
+    }
+    first!.brief += '\nKeep this manual instruction.'
+    f.run({ type: 'work.status', conversationId: first!.id, assignmentId: first!.assignment!.id, status: 'done', result: 'No' } as Command, f.as(first!.assignment!.agentId))
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'working', result: 'Fixing' } as Command, f.as(f.dev))
+    ready(next, 30)
+    expect(stepsOf(f.state, f.task).find(s => s.id === first!.id)!.brief).toContain('Keep this manual instruction.')
+    for (const step of stepsOf(f.state, f.task)) {
+      expect(step.brief).toContain('30 production lines')
+      expect(step.brief).not.toContain('12 production lines')
+      expect(step.brief).toContain(next)
+      expect(step.brief).not.toContain(head)
+      expect(step.brief!.match(/PR history checks/g)).toHaveLength(1)
+    }
   })
 
   it('a docs pull request opens one read', () => {
@@ -229,5 +274,50 @@ describe('a handed task opens its review steps', () => {
     expect(stepsOf(f.state, f.task)).toHaveLength(1)
     expect(stepsOf(f.state, step.id)).toHaveLength(0)
     expect(a).toBeTruthy()
+  })
+})
+
+// Task #3774 (Ken's routing rule, restored 11-06: "A Tester runs where the change runs: the machine comes before the model, and a
+// mid-strength model is enough for most testing"). On 11-06 four Linux test steps waited for an Opus Tester while Sonnet Testers
+// sat idle on the same machine.
+describe('a test step\'s Tester runs a mid-strength model or stronger, whatever the engineer runs', () => {
+  const sonnet: AgentConfiguration = { ...opus, model: 'sonnet' }
+  function linux() {
+    const f = fixture()
+    const join = (name: string, roleName: string, configuration: AgentConfiguration) => f.run({ type: 'agent.add', conversationId: f.task, machineId: 'linux1',
+      harnessId: name, name, configuration, lead: false, roleName } as Command, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
+    /** The Linux machine as its report lists it, once its agents joined. */
+    const listed = () => { f.state.machines = [{ machineId: 'linux1', name: 'linux1', contributorId: 'owner', membershipGeneration: 'g', generation: 'g1', cwd: '/swarm',
+      scope: 'swarm', engines: ['claude'], maxAgents: 4, paused: false,
+      observation: { generation: 'g1', receivedAt: 1_000_000 - 1000, sessionKind: 'computer', resources: { os: 'Linux' }, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
+        readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] },
+        quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }] } }] as never }
+    return Object.assign(f, { join, listed })
+  }
+
+  it('gives an Opus-built task\'s Linux test step to an idle Sonnet Tester; its review still refuses a Sonnet Reviewer', () => {
+    const f = linux()
+    const tester = f.join('sonnet-tst', 'Tester', sonnet)
+    f.join('sonnet-rev', 'Reviewer', sonnet)
+    f.listed()
+    const effects = f.ready(['cli/src/superTabs/host.ts'])
+    expect(f.steps()).toEqual(expect.arrayContaining([{ name: 'Review', agent: null, status: null },
+      { name: 'Test on a Linux machine', agent: tester, status: 'working' }]))
+    // The notice names the rule it applied to the step left open.
+    const told = effects.messages.find(m => m.recipients.includes(f.lead) && /no free reviewer/i.test(m.text))!
+    expect(told.text).toContain('Review')
+    expect(told.text).toContain('at least as strong as its engineer')
+  })
+
+  it('never gives a test step to a grid model or a weaker one, and says the rule it applied', () => {
+    const f = linux()
+    const grid = f.join('grid-tst', 'Tester', sonnet)
+    f.state.agents.find(a => a.id === grid)!.gridModel = 'kimi k3'
+    f.join('haiku-tst', 'Tester', { ...opus, model: 'haiku', effort: 'auto' })
+    f.listed()
+    const effects = f.ready(['cli/src/superTabs/host.ts'])
+    expect(f.steps().find(s => s.name === 'Test on a Linux machine')).toMatchObject({ agent: null })
+    const told = effects.messages.find(m => m.recipients.includes(f.lead) && /no free reviewer/i.test(m.text))!
+    expect(told.text).toMatch(/Test on a Linux machine.*mid-strength model or stronger/s)
   })
 })

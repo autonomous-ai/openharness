@@ -1,5 +1,3 @@
-import 'package:dio/dio.dart';
-
 import 'usage_window.dart';
 
 /// One account's usage, fetched from whoever knows it.
@@ -19,19 +17,6 @@ abstract class UsageSource {
   /// the caller invent the sentence instead of the source that knows it.
   Future<ProviderUsage> read();
 }
-
-/// A Dio configured the way every usage call wants it.
-///
-/// `validateStatus` lets 4xx through so a 401 can be read as "sign in" rather
-/// than surfacing as a transport failure — the split [ApiClient] draws too.
-Dio buildUsageDio({String? baseUrl}) => Dio(
-  BaseOptions(
-    baseUrl: baseUrl ?? '',
-    connectTimeout: const Duration(seconds: 10),
-    receiveTimeout: const Duration(seconds: 15),
-    validateStatus: (status) => status != null && status >= 200 && status < 600,
-  ),
-);
 
 /// Turns a finished request into the state the rail should draw.
 ///

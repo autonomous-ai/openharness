@@ -1105,40 +1105,6 @@
      "id": "c2",
      "title": "New agent · Codex gpt-6.1-sol high · c",
      "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · c · new · quota 40% left, resets in 2h"
-    },
-    {
-     "kind": "new",
-     "machineId": "d",
-     "machineName": "d",
-     "engine": "codex",
-     "model": "gpt-6.1-sol",
-     "effort": "high",
-     "quality": 3,
-     "cost": 2,
-     "quota": {
-      "known": true,
-      "leftPercent": 40,
-      "resetsAt": null,
-      "from": "Team Mac"
-     },
-     "activity": "new",
-     "known": true,
-     "refusals": [],
-     "notes": [],
-     "fit": {
-      "status": "unknown",
-      "coverage": null,
-      "effectiveCost": 2,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 30,
-       "weekly": 4
-      },
-      "account": "d:codex"
-     },
-     "id": "c3",
-     "title": "New agent · Codex gpt-6.1-sol high · d",
-     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · d · new · quota read on Team Mac, whose subscription this account spends: 40% left"
     }
    ],
    "excluded": [],
@@ -1231,31 +1197,6 @@
       "account": "c:codex",
       "left": 40,
       "resetsAt": 1007200000
-     }
-    },
-    {
-     "id": "c3",
-     "kind": "new",
-     "machineId": "d",
-     "engine": "codex",
-     "model": "gpt-6.1-sol",
-     "effort": "high",
-     "quality": 3,
-     "cost": 2,
-     "title": "New agent · Codex gpt-6.1-sol high · d",
-     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · d · new · quota read on Team Mac, whose subscription this account spends: 40% left",
-     "fit": {
-      "status": "unknown",
-      "coverage": null,
-      "effectiveCost": 2,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 30,
-       "weekly": 4
-      },
-      "account": "d:codex",
-      "left": 40,
-      "resetsAt": null
      }
     }
    ],
