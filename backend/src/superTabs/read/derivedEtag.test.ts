@@ -3,7 +3,7 @@ import type { Derived } from './contract.js'
 import { derivedEtag, MARK_FIELDS } from './derivedEtag.js'
 
 const summary = (): Derived => ({
-  agents: { a1: { downSince: null, limitedUntil: null, workDecision: null, roleId: null, roleName: 'Engineer', kind: 'regular', chatId: null, myAgent: false } },
+  agents: { a1: { downSince: null, limitedUntil: null, workDecision: null, roleId: null, roleName: 'Engineer', kind: 'regular', chatId: null, myAgent: false, role: 'member' as const, mainProjectId: null } },
   machines: { m1: { availableSlots: 2, teamWork: { allowed: true } } },
   mentionsWaiting: 1, mentionsDigest: 'd1', avatars: { 'person:p1': 'https://example.test/a?sig=1' },
 })
