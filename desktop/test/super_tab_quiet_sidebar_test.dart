@@ -72,7 +72,8 @@ void main() {
         reason: '${order[i - 1]} over ${order[i]}',
       );
     }
-    expect(find.text('Buddy'), findsOneWidget);
+    // The Buddy row with no agent yet reads as the person's agent (task #4568).
+    expect(find.text('Your agent'), findsWidgets);
   });
 
   testWidgets('none of what moved', (tester) async {

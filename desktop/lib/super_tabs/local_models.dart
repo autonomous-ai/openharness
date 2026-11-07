@@ -16,7 +16,6 @@ import '../widgets/key_hints.dart';
 import '../widgets/swarm_resource_preview.dart';
 import '../widgets/swarm_switcher.dart';
 import '../ws/ws_conn.dart';
-import 'buddies.dart' show buddyPersonName;
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
@@ -596,8 +595,9 @@ class SuperTabMachineLocalModels extends StatelessWidget {
     String? usedBy(String model) {
       final people = {
         for (final a in controller.snapshot!.agents)
+          // By its own name (task #4568), never "<person>'s Buddy".
           if (a.isBuddy && a.gridModel == model)
-            "${buddyPersonName(controller, a.buddyOf!)}'s Buddy",
+            controller.snapshot!.agentName(a.id, fallback: a.name),
       };
       return people.isEmpty ? null : 'Used by ${people.join(', ')}';
     }
