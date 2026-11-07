@@ -1404,6 +1404,10 @@ describe('a PM still in a Harness Team account', () => {
     }
     // An agent of the Team account that is no PM keeps the plain refusal.
     await expect(run(f.tab, { type: 'work.assign', conversationId: f.personalGroup, agentId: f.personal }, team, f.builder)).rejects.toMatchObject(LIMITED)
+    // Naming another project's PM, one not on this Team computer, tells it nothing of that project (review of #3476).
+    const other = run(f.tab, { type: 'work.assign', conversationId: f.personalGroup, agentId: f.personal }, team, f.lead)
+    await expect(other).rejects.not.toMatchObject({ code: 'PM_IN_TEAM_ACCOUNT' })
+    await expect(other).rejects.not.toMatchObject({ message: expect.stringContaining('Switch PM') })
     // Coordinating stays: it posts in its project.
     await run(f.tab, { type: 'message.send', conversationId: f.leadChat, text: 'The footer task needs a Switch PM before I can assign it.', replyTo: null,
       recipientIds: [] }, team, f.pm)
