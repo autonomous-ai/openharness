@@ -41,6 +41,10 @@ of session: they are inside Harness.
    wait after its last task before the task sessions sleep, so a task that turns waiting a minute later doesn't pay a
    resume (section 4).
 
+Anh Dee's decisions on these (11-07 17:05, through River): the three are in his Decisions, defaulting to the spec at
+20:00. Vendor terms block nothing: build as if they are allowed, helping other projects included; his legal team
+handles them. Phone comes after Desktop.
+
 ## How it works today (main a1c62e12f)
 
 - **Kinds are derived, not stored.** `agentKind()` (`backend/src/superTabs/agentKind.ts`) says `buddy` when the agent
@@ -311,8 +315,11 @@ proposals, the Board and the rights. This spec changes it in these places:
    decides how many run there, so a person's crew of 20 or more on one computer keeps starting agents, and section 5's
    ask still works. One fixed limit bounds the records, for the whole Swarm, not per person: at most 1,000 Members in a
    Swarm (with their task sessions, at most 6,000 agent records). Today's openharness Swarm has about 60 agents, one
-   person running 25 of them, so the limit is about 16 times today's. Past it, a start is refused with "This Swarm has
-   1,000 agents. Remove one to start another." The default Buddy becomes the default Member (section 7).
+   person running 25 of them, so the limit is about 16 times today's. So that one person can't fill it for everyone,
+   no person holds more than half of it, 500 Members (20 times today's busiest person), asleep ones included. Past
+   the person's share, a start is refused with "You have 500 agents in this Swarm. Remove one to start another."; past
+   the Swarm's limit, with "This Swarm has 1,000 agents. Remove one to start another.", and its owner gets one line
+   naming the three people with the most Members. The default Buddy becomes the default Member (section 7).
 4. **Sleep.** "Only crew members sleep" and the Buddy's hour-idle sleep are replaced by section 4.
 5. **"A Buddy may only post in its own chat"** (BUDDY_FORBIDDEN) still holds for a Member's chat session. Its task
    sessions post where a project's agent posts, and only in their own project.
@@ -388,7 +395,7 @@ Roles stay derived, as today: an agent is a Lead when a project's chat names it 
 stores a role.
 
 1. **Growth.** Every field is bounded by what it hangs on: one per agent, one per project, `setUp` at 5, `moreAsked` at
-   the Swarm's machines, `privateOnDisk` at the Swarm's 100 projects per machine, and Members at 1,000 per Swarm.
+   the Swarm's machines, `privateOnDisk` at the Swarm's 100 projects per machine, and Members at 1,000 per Swarm and 500 per person.
    Lifecycle:
 
    | Record | Created | Updated | Finished | Lost | Cancelled | Leave and rejoin | Deleted, purged | Recreated under the same key |
@@ -594,7 +601,7 @@ This flow, smallest first:
 9. **Buddies become Members.** Buddies and Regular agents act as Members, their old sessions as chat sessions only, never
    for tasks; each asks its person once for a main project in its chat, with the project list; the default Buddy is the
    default Member. The per-person cap counts awake chat sessions only; the number of Members is the computers' room,
-   up to 1,000 per Swarm.
+   up to 1,000 per Swarm and 500 per person.
    Backend release, then Desktop release for the project list in the chat, with two security reviews.
    Owner area: backend/src/superTabs/ (buddies.ts, agentKind.ts, buddySleep.ts), desktop/lib/super_tabs/ (the chat's project list), desktop/design/.
 10. **The Lead asks a computer's owner to start more.** Only an owner who can read the project; one ask per computer
@@ -618,7 +625,8 @@ Project settings; the join and invite screens. Desktop releases.
 
 - Members helping in private projects, or on computers that hold a private project's files (section 3), until a
   per-engine deny rule with a test per engine ships in its own security-reviewed task.
-- Phone and web screens for the Cmd-N form; they show Members and Leads with today's screens.
+- Phone and web screens for the Cmd-N form; they show Members and Leads with today's screens. Phone comes after
+  Desktop (anh Dee, 11-07 17:05).
 - Changing what a project's instructions say about review, test, merge and release.
 - New approvals or gates for people: the ask to start more and the private repo offer hold nothing up.
 - Reading any login: Members run under their own person's login and settings; quota comes only from the CLIs' own
