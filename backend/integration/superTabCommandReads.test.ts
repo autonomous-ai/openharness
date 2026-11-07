@@ -225,19 +225,27 @@ describe('a host poll on the PM\'s machine', () => {
         await s.execute({ type: 'conversation.agent', conversationId: 'lead', agentId, present: false, lead: false })
         return { conversationId, agentId }
       }
-      const quiet = await only('Quiet agent'), archived = await only('Archived agent')
+      const quiet = await only('Quiet agent'), archived = await only('Archived agent'), secret = await only('Private agent')
       await s.execute({ type: 'conversation.archive', conversationId: archived.conversationId, archived: true } as Command)
       const row = await db.swarmGroup.findFirstOrThrow({ where: { tabId: s.tab, key: quiet.conversationId } })
       await db.swarmGroup.update({ where: { id: row.id }, data: { dormant: true, data: { ...row.data as object, dormant: true } } })
+      // Review of #3573 (Mactest5): an agent whose only conversation is a quiet private chat stays confidential on its host row.
+      const generation = (await db.swarmMember.findFirstOrThrow({ where: { tabId: s.tab, key: owner.sub } }).then(m => m.data as { generation: string })).generation
+      const privateRow = await db.swarmGroup.findFirstOrThrow({ where: { tabId: s.tab, key: secret.conversationId } })
+      await db.swarmGroup.update({ where: { id: privateRow.id }, data: { dormant: true,
+        data: { ...privateRow.data as object, dormant: true, audience: { people: [{ id: owner.sub, generation }] } } } })
       const hosts = new HostReads(s.store, { now: () => Date.now() })
       let polled: Awaited<ReturnType<typeof hosts.changes>> | undefined
       const read = await profiled(db, async () => { polled = await hosts.changes(owner, 'mac-0', { full: true }) })
       // At most one conversation for each idle agent of this machine, never the 200 the PM is in.
       expect(docs(read), JSON.stringify(byMembership(read).map(e => [e.docsExamined, e.command?.pipeline]))).toBeLessThanOrEqual(10)
-      const rows = new Map(polled!.tabs.flatMap(t => 'roster' in t ? (t.roster as Array<{ agent: { id: string }; active: boolean }>) : []).map(r => [r.agent.id, r.active]))
+      const roster = polled!.tabs.flatMap(t => 'roster' in t ? (t.roster as Array<{ agent: { id: string }; active: boolean; confidential: boolean }>) : [])
+      const rows = new Map(roster.map(r => [r.agent.id, r.active]))
       expect(rows.get(s.lead)).toBe(true)
       expect(rows.get(quiet.agentId)).toBe(true)
       expect(rows.get(archived.agentId)).toBe(false)
+      expect(roster.find(r => r.agent.id === secret.agentId)).toMatchObject({ active: true, confidential: true })
+      expect(roster.find(r => r.agent.id === quiet.agentId)).toMatchObject({ confidential: false })
     } finally {
       configureSwarmStamps(new MemoryStamps())
     }
