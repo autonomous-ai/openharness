@@ -65,12 +65,17 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
           : await owner.command(_action!, operationId: _operationId);
       if (!mounted || !identical(owner, c)) return;
       setState(() {
-        if (answer != null) {
+        // Done, or refused: the controller holds it no more, so neither does Tasks (task #4220).
+        final settled = answer != null || !owner.hasPendingAction;
+        if (settled) {
           _action = null;
           _operationId = null;
-        } else {
+        }
+        if (answer == null) {
           _error = owner.operationErrorCode == 'UPDATE_REQUIRED'
               ? 'Update Harness to change Tasks.'
+              : settled
+              ? owner.operationError ?? 'The change was refused.'
               : 'The change is not confirmed. Retry to check it.';
         }
       });
@@ -220,12 +225,14 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                             color: Theme.of(context).colorScheme.error,
                           ),
                         ),
-                        TextButton(
-                          onPressed: _sending
-                              ? null
-                              : () => _send(_action!, retry: true),
-                          child: const Text('Retry'),
-                        ),
+                        // Only a change whose answer was lost is retried: a refused one would be refused again.
+                        if (_action case final action?)
+                          TextButton(
+                            onPressed: _sending
+                                ? null
+                                : () => _send(action, retry: true),
+                            child: const Text('Retry'),
+                          ),
                       ],
                     ),
                   ),
