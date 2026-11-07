@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
@@ -389,6 +390,44 @@ void main() {
       ),
       findsOneWidget,
     );
+    await closeWindow(tester, c);
+  });
+
+  testWidgets('at 880 the Board folds the left pane into its drawer, which '
+      'the header opens and Esc or a click outside closes', (tester) async {
+    final c = await showWindow(tester, crewServer(), width: 880);
+    expect(_key('super-left-pane'), findsNothing);
+    final menu = find.descendant(
+      of: _key('super-board-header'),
+      matching: find.byTooltip('Conversations'),
+    );
+    expect(menu, findsOneWidget);
+    // The Board's own bar is one row in the wider middle.
+    final bar = tester.getCenter(_key('super-tasks-layout-list')).dy;
+    expect(tester.getCenter(_key('super-tasks-search')).dy, closeTo(bar, 1));
+    expect(tester.getCenter(_key('super-tasks-mine')).dy, closeTo(bar, 1));
+    await tester.tap(menu);
+    await tester.pumpAndSettle();
+    expect(_key('super-group-lead'), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(_key('super-group-lead'), findsNothing);
+    expect(_key('super-tasks-lead'), findsOneWidget, reason: 'the Board stays');
+    await tester.tap(menu);
+    await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(860, 430));
+    await tester.pumpAndSettle();
+    expect(_key('super-group-lead'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await closeWindow(tester, c);
+  });
+
+  testWidgets('at 1100 the Board keeps the left pane, with no menu button', (
+    tester,
+  ) async {
+    final c = await showWindow(tester, crewServer(), width: 1100);
+    expect(_key('super-left-pane'), findsOneWidget);
+    expect(find.byTooltip('Conversations'), findsNothing);
     await closeWindow(tester, c);
   });
 }
