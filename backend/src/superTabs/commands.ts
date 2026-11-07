@@ -4825,6 +4825,19 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       projectChatWork(command.conversationId)
       const group = open(state, command.conversationId)
       const worker = agent(state, command.agentId)
+      // A security review stuck on a reviewer of the other one moves on without a cancel (task #4534): that reviewer may not take
+      // it and said so, so its attempt ends here, its reviewer told and freed, and assignRefusal holds the new one to the rule.
+      const stuck = group.assignment
+      const reviewed = stuck && ['blocked', 'needs_human'].includes(stuck.status) && isReview(group) && /security/i.test(stepName(group))
+        ? state.conversations.find(c => c.id === group.reviewOf) : undefined
+      if (stuck && reviewed && stuck.agentId !== worker.id && otherSecurityReviewers(state, reviewed, group.id).has(stuck.agentId)) {
+        const to = worker.displayName ?? worker.name
+        stuck.status = 'cancelled'
+        stuck.result = `Moved to ${to}: its reviewer did this task's other security review.`
+        finishWorker(state, stuck.agentId)
+        message(group.id, `This security review moved to ${to}: you did this task's other one, and the two are independent. Stop working on it.`,
+          [stuck.agentId], null, forRecipients(SYSTEM_ROW), undefined, undefined, undefined, stableId(operationId, 'step-moved'))
+      }
       assignRefusal(group, worker)
       const home = groupProject(state, group)
       // An older client assigns in a custom role: kept for older readers, and the role name it means for a worker without
