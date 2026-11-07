@@ -98,6 +98,7 @@ const conversation: Required<Conversation> = {
   title: 't',
   unlinkedPullRequests: [],
   waitingLinuxStep: { step: { name: 'Test on a Linux machine', kind: 'test', areas: [], where: ['The CLI on a Linux machine'], os: 'linux' }, pulls: [] },
+  waitingWindowsStep: { step: { name: 'Test on a Windows machine', kind: 'test', areas: [], where: ['The CLI on a Windows machine'], os: 'windows' }, pulls: [] },
   writers: [],
 }
 

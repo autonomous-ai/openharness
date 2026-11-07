@@ -29,7 +29,7 @@ import { closeMerged } from './mergedTasks.js'
 import { noteWriter } from './stuck.js'
 import { reviewPlan, refreshStepBrief, stepOsRefusal, type PlannedStep, type StepKind } from './reviewTable.js'
 import { openReviewStep, type StepPull } from './stepOpen.js'
-import { LINUX_WAIT_LINE, testsOnLinux, waitForLinux } from './linuxSteps.js'
+import { stopWaiting, testsOn, WAIT_LINE, waitFor, waits } from './osSteps.js'
 import { builtBy, reviewerCandidates, STRENGTH_RULE } from './reviewerPick.js'
 import { checkedPullRequest, deriveCheck, recordCheckVerdict } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
@@ -293,6 +293,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('note.remove'), projectId: id, noteId: id }).strict(),
   // What the project calls its coordinator, as its instructions say (instructions.ts coordinatorNameOf).
   z.object({ type: z.literal('project.coordinatorName'), projectId: id, name: roleNameSchema }).strict(),
+  // Whether its agents answer each person's message in that message's thread (projects.ts answersInThread, task #3747).
+  z.object({ type: z.literal('project.answers'), projectId: id, inThread: z.boolean() }).strict(),
   z.object({ type: z.literal('lead.start'), projectId: id, machineId: id.nullable(), engine: swarmEngine,
     model: z.string().trim().min(1).max(200).optional(), effort: z.string().trim().min(1).max(80).optional(),
     branchRef: z.string().max(1024).regex(/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/).optional(), repositoryUrl: repositoryUrl.optional() }).strict(),
@@ -385,7 +387,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('buddy.model'), gridModel: z.string().trim().min(1).max(200).nullable(), conversationId: id.optional() }).strict(),
   // What the Buddy's machine reports once it carried the request out: `fresh` when the conversation was too long for the model.
   z.object({ type: z.literal('buddy.modelResult'), agentId: id, requestId: id, ok: z.boolean(), fresh: z.boolean().optional(),
-    error: z.string().max(300).optional() }).strict(),
+    // The thread sessions its machine could not move, by harness id: they run where they were (buddyModel.ts, task #3810).
+    error: z.string().max(300).optional(), stayed: z.array(id).max(64).optional() }).strict(),
   z.object({ type: z.literal('buddy.sessionEnd'), conversationId: id, thread: id, reason: z.enum(['ended', 'idle', 'stopped', 'maintenance']) }).strict(),
   // The PM's private line to one person, in their Buddy chat of its project: Buddies replaced Chat with PM (Ken, 10-29).
   z.object({ type: z.literal('person.tell'), personId: id, text: z.string().trim().min(1).max(32_000) }).strict(),
@@ -1090,11 +1093,23 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
 
 /** An answer (answers.ts) to a reply inside a thread goes in that thread: a reply to it, never right below it in the main chat.
  *  Worked out before anything reads where the post goes, so it routes, settles and threads as that reply would. */
-function placeAnswer(command: Command, context: CommandContext): Command {
-  if (command.type !== 'message.send' || !command.answer) return command
-  if (!command.answers || command.replyTo) fail('VALIDATION_ERROR', 'An answer names the message it answers, and nothing else to reply to.', 400)
+function placeAnswer(command: Command, context: CommandContext, state: SuperTabState): Command {
+  if (command.type !== 'message.send') return command
+  // In a project that answers people in threads (task #3747), any post naming a person's message in the main chat goes in its
+  // thread, whatever the client sent: an older host's --answers, or an agent that skipped its reply line. A post naming
+  // nothing stays in the main chat, and an agent's message is answered as before.
   const reply = context.reply
+  if (command.answers && !command.replyTo && reply?.id === command.answers && reply.author.kind === 'person' && !inThread(reply)
+    && answersInThread(state, command.conversationId)) return { ...command, replyTo: command.answers, answers: undefined }
+  if (!command.answer) return command
+  if (!command.answers || command.replyTo) fail('VALIDATION_ERROR', 'An answer names the message it answers, and nothing else to reply to.', 400)
   return reply && reply.id === command.answers && inThread(reply) ? { ...command, replyTo: command.answers, answers: undefined } : command
+}
+
+/** Whether [conversationId]'s project answers people in threads. Never throws: a conversation outside every project does not. */
+function answersInThread(state: SuperTabState, conversationId: string): boolean {
+  const group = state.conversations.find(c => c.id === conversationId)
+  try { return !!group && groupProject(state, group).answersInThread === true } catch { return false }
 }
 
 /** The project `project.closeTab` may close (task #3929): a no-repo tab's, in the caller's own Personal Swarm, by that person.
@@ -1113,7 +1128,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   // A credential someone pasted, or an agent echoed from its terminal, is gone before anything is stored or delivered
   // (Oct 2026: a Harness access token in a shared Lead chat). The sender's result says what went.
   const removed: CredentialKind[] = []
-  const command = placeAnswer(withoutCredentials(commandSchema.parse(input), removed), context)
+  const command = placeAnswer(withoutCredentials(commandSchema.parse(input), removed), context, original)
   const state = cloneData(original)
   numberConversations(state)
   placeRules(state)
@@ -2023,14 +2038,16 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         taken.add(step.id)
         step.brief = refreshStepBrief(step.brief ?? '', planned, { number: task.number!, title: task.title, pulls })
       }
-      // A new Linux step opens only where the project can test on Linux (linuxSteps.ts, task #4278): else it waits, and the
-      // task says once that CI's Linux runs stand in. A step the PM closed is not open, so a later head never brings it back.
-      if (!step && planned.os === 'linux') {
-        if (!testsOnLinux(state, groupProject(state, task), context.now)) {
-          if (waitForLinux(task, planned, pulls)) message(task.id, LINUX_WAIT_LINE, [], null, SYSTEM_ROW, undefined, undefined, undefined, stableId(operationId, 'linux-wait'))
+      // A new Linux or Windows step opens only where the project can test on that OS (osSteps.ts, tasks #4278, #4410): else it
+      // waits, and the task says once why (for Linux CI's runs stand in; for Windows a person's check is owed). A step the PM
+      // closed is not open, so a later head never brings it back.
+      const os = planned.os
+      if (!step && waits(os)) {
+        if (!testsOn(state, groupProject(state, task), context.now, os)) {
+          if (waitFor(task, { ...planned, os }, pulls)) message(task.id, WAIT_LINE[os], [], null, SYSTEM_ROW, undefined, undefined, undefined, stableId(operationId, `${os}-wait`))
           continue
         }
-        delete task.waitingLinuxStep
+        stopWaiting(task, os)
       }
       if (step && activeWork(step)) continue
       // A step whose every check passed at this very head keeps its verdict: a repeated Ready (a CI rerun) asks nothing again.
@@ -2490,6 +2507,17 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const stored = projectOf(state, project.id)
       // Confirming an older note after a newer one never brings the newer back.
       if (noteIndex(command.noteId) > noteIndex(stored.processNote?.confirmed)) stored.processNote = { ...stored.processNote, confirmed: command.noteId }
+      break
+    }
+    case 'project.answers': {
+      // As its coordinator's name: the coordinator sets it, or a person who manages the project.
+      const project = readProject(state, actor, command.projectId)
+      if (actor.kind === 'agent') coordinatorOf(project)
+      else manageProject(state, actor, project.id)
+      mutableProjects(state)
+      const stored = projectOf(state, project.id)
+      if (command.inThread) stored.answersInThread = true
+      else delete stored.answersInThread
       break
     }
     case 'project.digest': {
