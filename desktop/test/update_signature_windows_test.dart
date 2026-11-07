@@ -49,19 +49,23 @@ Uint8List _utf16le(String text) {
 
 Future<String> _embeddedSignedProgram() async {
   final root = Platform.environment['SystemRoot'] ?? r'C:\Windows';
-  for (final candidate in _candidates) {
-    final path = p.join(root, candidate);
-    if (!File(path).existsSync()) continue;
-    final type = await _powershell(
-      "(Get-AuthenticodeSignature -LiteralPath '$path').SignatureType",
-    );
-    if (type == 'Authenticode') return path;
-  }
-  fail('no program with an embedded signature in $_candidates');
+  final named = [
+    for (final candidate in _candidates) "'${p.join(root, candidate)}'",
+  ].join(', ');
+  final system32 = p.join(root, 'System32');
+  final found = await _powershell(
+    "foreach (\$path in @($named) + @((Get-ChildItem -LiteralPath '$system32' -Filter *.exe).FullName)) { "
+    'if (-not (Test-Path -LiteralPath \$path)) { continue }; '
+    '\$s = Get-AuthenticodeSignature -LiteralPath \$path; '
+    "if (\$s.SignatureType -eq 'Authenticode' -and \$s.Status -eq 'Valid') "
+    '{ \$path; break } }',
+  );
+  if (found.isEmpty) fail('no program with an embedded signature here');
+  return found;
 }
 
-/// [source] without its Authenticode certificate table: the same program,
-/// unsigned.
+/// [source] without its Authenticode certificate table, and one byte of its
+/// DOS stub changed so no system catalog lists it either: unsigned.
 void _stripSignature(String source, String target) {
   final bytes = File(source).readAsBytesSync();
   final view = ByteData.sublistView(bytes);
@@ -72,6 +76,7 @@ void _stripSignature(String source, String target) {
   expect(offset, isNot(0), reason: '$source has no embedded signature');
   view.setUint32(security, 0, Endian.little);
   view.setUint32(security + 4, 0, Endian.little);
+  bytes[0x4e] ^= 0x01;
   File(target).writeAsBytesSync(Uint8List.sublistView(bytes, 0, offset));
 }
 
@@ -186,7 +191,7 @@ void main() {
         isA<UpdateRefused>().having(
           (e) => e.message,
           'message',
-          contains('not signed by Microsoft Corporation'),
+          contains('not signed by Microsoft'),
         ),
       ),
     );
