@@ -12,7 +12,7 @@ const scratch = () => { const dir = realpathSync(mkdtempSync(join(tmpdir(), 'age
 
 const config = { user: 'harnessteam' } as TeamConfig
 const deps = (dataDir: string, over: Partial<AgentTmpDeps> = {}): AgentTmpDeps => ({
-  platform: 'darwin', dataDir, config: () => config, user: () => 'owner-placeholder', log: vi.fn(), now: () => 1_000_000_000_000, ...over,
+  platform: 'darwin', dataDir, config: () => config, user: () => 'owner-placeholder', userTemp: () => null, log: vi.fn(), now: () => 1_000_000_000_000, ...over,
 })
 
 const none = { env: {}, args: [] }
@@ -38,6 +38,31 @@ describe('who gets the private temporary folder', () => {
     const another = agentTmpLaunch('claude', 'agent', other, deps(data, { config: () => null })).env.TMPDIR
     expect(another).not.toBe(folder)
     expect(another!.startsWith(`${realpathSync(agentTmpFolder(data))}/`)).toBe(true)
+  })
+
+  // The Mac test of #3506 at 259e32c: macOS's mktemp, mktemp -d and mktemp -t ignore TMPDIR and make their file in the
+  // account's own temporary folder (getconf DARWIN_USER_TEMP_DIR, /var/folders/…/T), the incident's path. So on a Mac that
+  // folder is added too, by the name mktemp prints and by its real path, as it is one folder named two ways. GNU mktemp
+  // follows TMPDIR, so Linux adds nothing more.
+  it('on a Mac, also the account\'s own temporary folder that mktemp uses whatever TMPDIR says, by both its names', () => {
+    const data = scratch(), workspace = scratch(), real = join(scratch(), 'T'), named = join(scratch(), 'var-link')
+    mkdirSync(real)
+    symlinkSync(real, named)
+    const launch = agentTmpLaunch('claude', 'agent', workspace, deps(data, { config: () => null, userTemp: () => named }))
+    const folder = launch.env.TMPDIR!
+    expect(launch).toEqual({ env: { TMPDIR: folder }, args: [`--add-dir=${folder}`, `--add-dir=${named}`, `--add-dir=${real}`] })
+    expect(agentTmpLaunch('codex', 'agent', workspace, deps(data, { config: () => null, userTemp: () => real })).args)
+      .toEqual([`--add-dir=${folder}`, `--add-dir=${real}`])
+    const linux = deps(data, { platform: 'linux', config: () => null, userTemp: vi.fn(() => named) })
+    expect(agentTmpLaunch('claude', 'agent', workspace, linux).args).toEqual([`--add-dir=${folder}`])
+    expect(linux.userTemp).not.toHaveBeenCalled()
+    // Not known (getconf failed): the agent's own folder alone, and the log says so.
+    const unknown = deps(data, { config: () => null })
+    expect(agentTmpLaunch('claude', 'agent', workspace, unknown).args).toEqual([`--add-dir=${folder}`])
+    expect(unknown.log).toHaveBeenCalledWith(expect.stringContaining('macOS\'s own temporary folder is not known'))
+    // Only a Swarm agent: a person's own session and a Buddy get nothing more.
+    expect(agentTmpLaunch('claude', undefined, workspace, deps(data, { userTemp: () => named })).args).toEqual([])
+    expect(agentTmpLaunch('claude', 'buddy', workspace, deps(data, { userTemp: () => named }))).toEqual(none)
   })
 
   it('an engine that takes no such folder gets the folder alone', () => {
