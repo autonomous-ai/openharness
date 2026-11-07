@@ -147,7 +147,7 @@ void main() {
     );
     expect(find.text('Tasks'), findsOneWidget);
     expect(find.byTooltip('Proposal'), findsNWidgets(2));
-    expect(find.byIcon(AppIcons.circleDashed), findsNWidgets(2));
+    expect(find.byIcon(AppIcons.lightbulb), findsNWidgets(2));
     f.rows.first['status'] = 'working';
     f.rows.first['version'] = 2;
     await f.controller.refresh();
@@ -767,5 +767,53 @@ void main() {
           .onPressed,
       isNotNull,
     );
+  });
+
+  // anh Dee's pick (task #4461): Proposal is a lightbulb, Rejected a thumbs-down, Failed a triangle in the error ink;
+  // the check, question mark and spinner stay. No Flutter status draws an X: an X means close.
+  testWidgets('each task status has its own mark and none is an X', (t) async {
+    late BuildContext context;
+    Future<void> show(String status) => t.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (c) {
+              context = c;
+              return SuperTabTaskStatusMark(status);
+            },
+          ),
+        ),
+      ),
+    );
+    Icon? icon() => t.widgetList<Icon>(find.byType(Icon)).firstOrNull;
+    await show('proposal');
+    expect(icon()?.icon, AppIcons.lightbulb);
+    await show('rejected');
+    expect(icon()?.icon, AppIcons.thumbsDown);
+    await show('blocked');
+    expect(icon()?.icon, AppIcons.triangleAlert);
+    expect(icon()?.color, Theme.of(context).colorScheme.error);
+    expect(find.bySemanticsLabel('Stuck'), findsOneWidget);
+    for (final status in [
+      'proposal',
+      'rejected',
+      'planned',
+      'working',
+      'needs_human',
+      'blocked',
+      'review',
+      'done',
+      'stopped',
+      'cancelled',
+      'lost',
+    ]) {
+      await show(status);
+      expect(
+        {AppIcons.circleX, AppIcons.close}.contains(icon()?.icon),
+        isFalse,
+        reason: status,
+      );
+      expect(find.textContaining(RegExp('[✗✕×]')), findsNothing, reason: status);
+    }
   });
 }
