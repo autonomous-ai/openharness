@@ -126,10 +126,11 @@ NOT_READS = {
     **{source: ("test data: a task's owned paths or a pull request's changed files", set(folders.split()))
        for source, folders in {
            "backend/integration/crewDispatch.test.ts": "desktop/ devices/ mobile/",
-           "backend/integration/superTabReviewSteps.test.ts": "docs/",
+           "backend/integration/superTabReviewSteps.test.ts": "cli/src/superTabs/host.ts docs/",
            "backend/src/github/train.test.ts": "docs/",
            "backend/src/superTabs/crew.test.ts": "devices/",
            "backend/src/superTabs/dispatch.test.ts": "cli/ desktop/ docs/ mobile/",
+           "backend/src/superTabs/linuxSteps.test.ts": "cli/src/superTabs/host.ts",
            "backend/src/superTabs/machineRules.commands.test.ts": "mobile/",
            "backend/src/superTabs/mergeTrain/plan.test.ts": "cli/ desktop/ docs/",
            "backend/src/superTabs/mergeTrain/rulesRecord.test.ts": "desktop/ mobile/",
