@@ -1,4 +1,4 @@
-"""The release workflow keeps Apple signing material away from every job that runs a branch's code.
+"""The release workflow keeps Apple signing material and publication away from every job that runs a branch's code.
 
 `if:` conditions are the branch's own text, so the enforcement is the `release` environment (limited
 to main and v*_desktop tags) holding the secrets. These tests keep the workflow's shape matching it:
@@ -16,6 +16,8 @@ ROOT = Path(__file__).resolve().parents[2]
 RELEASE = ROOT / '.github/workflows/release-desktop.yml'
 INTERNAL = ROOT / '.github/workflows/desktop-internal-build.yml'
 SIGNING_MATERIAL = ('secrets.APPLE_', 'secrets.KEYCHAIN_PASSWORD', 'macos-signing')
+RELEASE_REF = ("github.ref == 'refs/heads/main'", "startsWith(github.ref, 'refs/tags/v')", "endsWith(github.ref, '_desktop')")
+BUILDS = ('build-macos', 'build-linux', 'build-windows')
 
 
 def jobs(path):
@@ -47,15 +49,35 @@ class ReleaseSigningTests(unittest.TestCase):
         for material in SIGNING_MATERIAL:
             self.assertIn(material, self.jobs['sign-macos'])
 
-    def test_signing_jobs_run_in_the_release_environment_for_main_and_desktop_tags_only(self):
-        for job in ('sign-macos', 'sign-windows'):
+    def test_signing_and_upload_jobs_run_in_the_release_environment_for_main_and_desktop_tags_only(self):
+        for job in ('preflight', 'sign-macos', 'sign-windows', 'upload-linux', 'upload-windows', 'cleanup'):
             with self.subTest(job=job):
                 body = self.jobs[job]
                 self.assertRegex(body, r'(?m)^    environment: release$')
                 rule = condition(body)
-                for part in ("github.ref == 'refs/heads/main'", "startsWith(github.ref, 'refs/tags/v')",
-                             "endsWith(github.ref, '_desktop')"):
+                for part in RELEASE_REF:
                     self.assertIn(part, rule)
+
+    # Writing the live manifest or a versioned path needs the cloud identity the release environment holds.
+    def test_every_cloud_login_is_in_the_release_environment(self):
+        for job, body in self.jobs.items():
+            if 'google-github-actions/auth' in body:
+                with self.subTest(job=job):
+                    self.assertRegex(body, r'(?m)^    environment: release$')
+        for job in ('publish', 'candidate', 'expire-candidates', 'publication-test'):
+            self.assertIn('google-github-actions/auth', self.jobs[job])
+
+    def test_builds_hold_no_secret_or_cloud_identity_and_hand_over_packages(self):
+        for job in BUILDS:
+            with self.subTest(job=job):
+                self.assertNotIn('secrets.', self.jobs[job])
+                self.assertNotIn('gcloud', self.jobs[job])
+                self.assertIn('actions/upload-artifact', self.jobs[job])
+        self.assertIn('--no-upload', self.jobs['build-linux'])
+        self.assertIn('--upload-only', self.jobs['upload-linux'])
+        # Builds still run on a branch, where preflight (release environment) is skipped.
+        for job in BUILDS:
+            self.assertIn("needs.preflight.result != 'failure'", condition(self.jobs[job]))
 
     def test_sign_macos_runs_no_build_tooling(self):
         body = self.jobs['sign-macos']
@@ -68,26 +90,24 @@ class ReleaseSigningTests(unittest.TestCase):
                             f'{path}: sign-macos checks out single files, never a source tree')
         self.assertIn('--no-build', body)
 
-    def test_build_macos_holds_no_secret_or_cloud_identity(self):
-        body = self.jobs['build-macos']
-        self.assertNotIn('secrets.', body)
-        self.assertNotIn('google-github-actions/auth', body)
-        self.assertIn('desktop-macos-unsigned', body)
+    def test_build_macos_hands_unsigned_bundles_to_sign_macos(self):
+        self.assertIn('desktop-macos-unsigned', self.jobs['build-macos'])
         self.assertIn('desktop-macos-unsigned', self.jobs['sign-macos'])
 
     def test_publication_and_candidates_wait_for_signed_macos(self):
         for job in ('publish', 'candidate'):
             with self.subTest(job=job):
                 body = self.jobs[job]
-                self.assertIn('sign-macos', re.search(r'^    needs: (.+)$', body, re.M)[1])
-                self.assertIn("needs.sign-macos.result == 'success'", condition(body))
+                for job_needed in ('sign-macos', 'upload-linux'):
+                    self.assertIn(job_needed, re.search(r'^    needs: (.+)$', body, re.M)[1])
+                    self.assertIn(f"needs.{job_needed}.result == 'success'", condition(body))
 
     def test_branch_release_is_refused_but_branch_prepare_and_tags_resolve(self):
         body = self.jobs['version']
         self.assertIn('REF: ${{ github.ref }}', body)
         script = resolve_script(body)
         cases = [('refs/heads/feature', {}, False), ('refs/heads/feature', dict(PREPARE_ONLY='true'), True),
-                 ('refs/heads/feature', dict(TEST_REUSE='true'), True), ('refs/heads/main', {}, True),
+                 ('refs/heads/feature', dict(TEST_REUSE='true'), False), ('refs/heads/main', {}, True),
                  ('refs/tags/v1.2.3_desktop', {}, True), ('refs/tags/v1.2.3_cli', {}, False)]
         for ref, extra, passes in cases:
             with self.subTest(ref=ref, **extra), tempfile.TemporaryDirectory() as folder:
