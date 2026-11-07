@@ -1118,6 +1118,8 @@ model SuperTabMessage {
   /// Files posted with the message (superTabs/attachments.ts); the bytes live in the attachments bucket.
   attachments     Json?
   replyTo         String?
+  /// Explicit answer below a message in main chat; kept with the message, without opening a thread (#3609).
+  answers         String?
   recipientIds    String[]
   /// People a Lead tagged (superTabs/mentions.ts); absent on older rows.
   mentions        String[]

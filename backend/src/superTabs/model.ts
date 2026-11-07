@@ -790,6 +790,8 @@ export interface MessageDraft {
   author: Author
   text: string
   replyTo: string | null
+  /** Explicit answer in main chat, without a thread. */
+  answers?: string
   recipients: string[]
   /** Buddies this row is news for (buddyNews.ts): a delivery each, never listed among its recipients. */
   buddyRecipients?: string[]
