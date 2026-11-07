@@ -604,6 +604,16 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
         (message.text.isNotEmpty && !voiceMessage);
   }
 
+  /// The message's full date and time, on its bubble's tooltip: the chat
+  /// shows a time only after a pause.
+  String get _clock {
+    final time = widget.message.createdAt?.toLocal();
+    if (time == null) return widget.author;
+    final l10n = MaterialLocalizations.of(context);
+    return '${l10n.formatFullDate(time)}, '
+        '${TimeOfDay.fromDateTime(time).format(context)}';
+  }
+
   /// What assistive technology reads for a grouped message in place of its
   /// header: its sender and time, as a header reads them.
   String get _groupedLabel => switch (widget.message.createdAt) {
@@ -825,6 +835,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   if (_bubbled(voiceMessage))
                                     SwarmBubble(
                                       own: own,
+                                      tooltip: _clock,
                                       joinsAbove: widget.grouped,
                                       joinsBelow: widget.joinsBelow,
                                       child: Column(

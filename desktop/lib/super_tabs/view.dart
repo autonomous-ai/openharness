@@ -117,6 +117,7 @@ import 'buddy_rows.dart';
 import 'task_groups.dart';
 import 'tasks_view.dart';
 import 'chat/agent_chat_header.dart';
+import 'chat/chat_time.dart';
 import 'chat/send_button.dart';
 import 'tasks/personal_tasks_pane.dart';
 import 'tasks/task_header.dart';
@@ -5399,6 +5400,11 @@ class _SuperTabViewState extends State<SuperTabView>
                   previous?.createdAt?.toLocal(),
                 ))
               _date(time),
+            if (time != null && SwarmChatTime.after(previous?.createdAt, time))
+              SwarmChatTime(
+                time,
+                key: ValueKey('swarm-chat-time-${message.id}'),
+              ),
             if (message.id == _unread.lineAt(c.selectedId))
               SuperTabNewMessagesLine(key: _unread.key),
             // The message itself is kept in place: its

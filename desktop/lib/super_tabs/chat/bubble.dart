@@ -13,6 +13,7 @@ class SwarmBubble extends StatelessWidget {
     required this.own,
     this.joinsAbove = false,
     this.joinsBelow = false,
+    this.tooltip,
     required this.child,
   });
 
@@ -20,6 +21,9 @@ class SwarmBubble extends StatelessWidget {
 
   /// The bubble right above, or below, is the same sender's.
   final bool joinsAbove, joinsBelow;
+
+  /// What hovering the bubble says, such as its message's exact time.
+  final String? tooltip;
   final Widget child;
 
   static const radius = Radius.circular(18);
@@ -47,7 +51,16 @@ class SwarmBubble extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) => DecoratedBox(
+  Widget build(BuildContext context) => switch (tooltip) {
+    final tip? => Tooltip(
+      message: tip,
+      waitDuration: const Duration(milliseconds: 600),
+      child: _bubble,
+    ),
+    null => _bubble,
+  };
+
+  Widget get _bubble => DecoratedBox(
     key: const ValueKey('swarm-bubble'),
     decoration: BoxDecoration(
       color: own ? SwarmPalette.ownBubble : DesktopChrome.field,
