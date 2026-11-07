@@ -4337,8 +4337,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         && worksInProjectChat(state, group, id) ? id : null
       const answered = chatWorker(replyAgent)
       const below = !command.replyTo && context.above?.author.kind === 'agent' ? chatWorker(context.above.author.id) : null
-      // A Buddy chat has no Lead: its owner talks to its Buddy.
+      // A Buddy chat has no Lead: its owner talks to its Buddy. A Regular agent's chat has none either: its person talks to that agent.
       const automatic = actor.kind === 'person' ? (isBuddyChat(group) ? (session?.inSession ? session.to : mainBuddyOf(state, group)?.id ?? null)
+        : isAgentChat(group) ? group.agentIds[0] ?? null
         : answered ?? (replyAgent && group.agentIds.includes(replyAgent) ? replyAgent : group.leadId)) : toAssignee
       // A person's reply to the agent whose assignment here is done reaches the coordinator too, and the agent still (Ken, #3114):
       // his reply under Hawthorn3's "Done" in #3022 reached Hawthorn3 alone, whose work there was over.

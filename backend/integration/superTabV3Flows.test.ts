@@ -75,9 +75,9 @@ describe('a Regular agent\'s own chat (#4212 finding 1)', () => {
     expect(JSON.stringify((await f.reads.firstLoad(member, f.tab)))).toContain(chat)
     const asked = await f.execute({ type: 'message.send', conversationId: chat, text: 'Fix the footer', replyTo: null, recipientIds: [] }, member)
     expect((await f.store.deliveries(member, f.tab, worker)).map(row => row.messageId)).toContain(asked.result.messageId)
-    await f.execute({ type: 'message.send', conversationId: chat, text: 'On it', replyTo: null, recipientIds: [] }, member, worker)
+    await f.execute({ type: 'message.send', conversationId: chat, text: 'The footer overlaps the menu below 600 px; I am moving it under the links.', replyTo: null, recipientIds: [] }, member, worker)
     const opened = await f.store.messages(member, f.tab, chat, {})
-    expect(JSON.stringify(opened)).toContain('On it')
+    expect(JSON.stringify(opened)).toContain('under the links')
     await f.reads.markRead(member, f.tab, chat, 2)
 
     // Still nobody else's: the Swarm's owner neither reads nor opens it.
