@@ -601,6 +601,14 @@ class ConversationServer {
   Map<String, dynamic>? projectList;
   int projectListStatus = 0;
   final projectListReads = <String>[];
+
+  /// A Member's own chat that agent.new opens is left out of a Swarm's first load, as a big Swarm's read can leave out
+  /// a quiet chat (hotfix #4647): only a read of the chat itself finds it.
+  bool newAgentChatsDormant = false;
+
+  /// A read of a chat's messages the Swarm no longer has answers 404; off, the older tests' reads of chats they never
+  /// listed keep their empty pages.
+  bool chatsGoneAreNotFound = false;
   final leaderboardReads = <String>[];
 
   /// Answers by the read's path instead of [leaderboard], as a server does.
@@ -1799,6 +1807,7 @@ class ConversationServer {
               {'id': 'owner', 'generation': 'g'},
             ],
           },
+          if (newAgentChatsDormant) 'dormant': true,
         });
         output['conversationId'] = id;
       } else if (command['type'] == 'project.create') {
@@ -2254,6 +2263,13 @@ class ConversationServer {
     if (uri.pathSegments.last == 'messages') {
       onRead?.call(path);
       final conversationId = uri.pathSegments[4];
+      // A chat the Swarm no longer has is not found, as the backend answers (hotfix #4647).
+      if (chatsGoneAreNotFound &&
+          !(state['conversations'] as List).any(
+            (g) => (g as Map)['id'] == conversationId,
+          )) {
+        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+      }
       final query = uri.queryParameters;
       final after = int.tryParse(query['after'] ?? '');
       final before = int.tryParse(query['before'] ?? '');
