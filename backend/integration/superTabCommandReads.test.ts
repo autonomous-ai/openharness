@@ -237,8 +237,11 @@ describe('a host poll on the PM\'s machine', () => {
       const hosts = new HostReads(s.store, { now: () => Date.now() })
       let polled: Awaited<ReturnType<typeof hosts.changes>> | undefined
       const read = await profiled(db, async () => { polled = await hosts.changes(owner, 'mac-0', { full: true }) })
-      // At most one conversation for each idle agent of this machine, never the 200 the PM is in.
-      expect(docs(read), JSON.stringify(byMembership(read).map(e => [e.docsExamined, e.command?.pipeline]))).toBeLessThanOrEqual(10)
+      // Each read by membership examines one conversation at most (a quiet or private one of an agent the loaded state cannot
+      // answer for), never the 200 the PM is in.
+      const examined = byMembership(read).map(e => e.docsExamined ?? 0)
+      expect(Math.max(0, ...examined), JSON.stringify(byMembership(read).map(e => [e.docsExamined, e.command?.pipeline]))).toBeLessThanOrEqual(1)
+      expect(docs(read)).toBeLessThan(40)
       const roster = polled!.tabs.flatMap(t => 'roster' in t ? (t.roster as Array<{ agent: { id: string }; active: boolean; confidential: boolean }>) : [])
       const rows = new Map(roster.map(r => [r.agent.id, r.active]))
       expect(rows.get(s.lead)).toBe(true)

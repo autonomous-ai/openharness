@@ -35,6 +35,8 @@ export interface HostLookups {
   /** Its agents in no loaded open conversation but in a quiet one: the host poll loads no agent's quiet conversations (read/host.ts
    *  quietMembers). Absent where the state holds every conversation. */
   quietMembers?: Set<string>
+  /** Its agents in a private conversation the host poll did not load (read/host.ts quietMembers): confidential all the same. */
+  quietPrivate?: Set<string>
 }
 
 /** Removed machines whose host has not yet said it cleaned up (store.ts cleanups). */
@@ -60,7 +62,8 @@ async function roster(tabId: string, state: SuperTabState, machineId: string, us
     rows.push({ tabId, joinTeam: { machineId: team.machineId, name: mac!.name, maxAgents: mac!.maxAgents } })
   }
   // Once per read: each row asks it for each person (task #4504). The state is this read's own, so nothing changes it meanwhile.
-  const sets = confidentialSets(state)
+  const loaded = confidentialSets(state)
+  const sets = { ...loaded, privateMembers: new Set([...loaded.privateMembers, ...lookups.quietPrivate ?? []]) }
   for (const target of state.agents.filter(a => a.machineId === machineId && a.machineOwnerId === user.sub)) {
     try { agent(state, target.id); await lookups.agentGrant(target) } catch (error) { if (error instanceof SuperTabError) continue; throw error }
     rows.push(agentRow(tabId, state, machineId, user, lastChangedAt, lookups, target, sets))
