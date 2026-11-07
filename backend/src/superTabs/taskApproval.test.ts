@@ -148,8 +148,9 @@ describe('personal approval enforced before work', () => {
     expect(() => f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm))
       .toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
     f.runCommand({ type: 'task.approve', conversationId: id })
-    f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm)
-    expect(f.card(id).assignment?.agentId).toBe(f.candidate)
+    // Accepted, it is the requester's ask: another person's agent never takes it by hand (security review 2 of #3575).
+    expect(() => f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm))
+      .toThrow(expect.objectContaining({ code: 'ASKED_BY_ANOTHER' }))
   })
   it('refuses attribution to a Review requester after assignment without changing the existing task', () => {
     const f = fixture()

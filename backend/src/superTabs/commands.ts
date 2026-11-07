@@ -11,7 +11,7 @@ import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from 
 import { admitByRoom, admitMachineStart, AGENT_MEMORY_BYTES, noRepositoryStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamAccountPool, teamPoolsOf, teamWorkCheck, TEAM_ACCOUNTS_GONE, NOT_YOUR_COMPUTER, type ContributedMachine } from './machines.js'
 import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
-import { acceptedByRequester, ACCEPT_ALL_REFUSAL, HELPER_REFUSALS, helperCheck, mayAcceptAll, memberMachine, memberOf, memberQueue } from './members.js'
+import { acceptedByRequester, ACCEPT_ALL_REFUSAL, askedByAnother, HELPER_REFUSALS, helperCheck, mayAcceptAll, memberMachine, memberOf, memberQueue } from './members.js'
 import { ownedPath, pathsOverlap } from './ownedPaths.js'
 import { addedAgentName, newAgentName, renameAgentTo } from './agentRename.js'
 import { addCrew, CREW_ROLE_MAX, removeCrew } from './crew.js'
@@ -1994,6 +1994,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
     pausedTask(group)
     if (activeWork(group)) fail('WORK_ACTIVE', 'The current assignment must finish or be reconciled before reassignment.')
+    // A person's accepted ask runs under their own login alone, by every path, a Lead's pick by hand included (members.ts
+    // askedByAnother; security review 2 of #3575), unless they approved that very agent when it was suggested to them
+    // (task.suggest, #4217): their own choice. Its review steps are anyone's to review, as before.
+    // A suggestion goes back to its person to approve, so only an assignment is refused.
+    if (!suggestion && !group.reviewOf && group.taskApproval?.suggestedAgentId !== worker.id && askedByAnother(state, group, worker)) {
+      fail('ASKED_BY_ANOTHER', 'This task is another person\'s accepted ask: only their own agents take it.', 403)
+    }
     // A review step is never its task's builder's, and a security review never the other one's reviewer, by any path (task
     // #4534: #3542 and #3545 each waited 20-30 minutes on a refused step). The refusal says who may take it now.
     const task = isReview(group) ? state.conversations.find(c => c.id === group.reviewOf) : undefined
