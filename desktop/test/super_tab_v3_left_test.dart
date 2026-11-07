@@ -742,7 +742,9 @@ void main() {
       await tester.pump();
       expect(selected, isEmpty);
       expect(terminals, ['kestrel']);
-      expect(find.byTooltip('Kestrel · opens its terminal'), findsOneWidget);
+      // Copy says it once: no name repeated, no filler (anh Dee 11-07).
+      expect(find.byTooltip('Opens its terminal'), findsOneWidget);
+      expect(find.byTooltip('Kestrel'), findsNothing);
     });
 
     testWidgets('+ New agent is the last row, below the agents, and hands on '

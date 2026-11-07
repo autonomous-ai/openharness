@@ -165,12 +165,17 @@ void main() {
     expect(find.text('New project'), findsNothing);
   });
 
-  testWidgets('a Swarm with no projects says so', (tester) async {
+  // anh Dee 11-07, rule 7: empty means empty; only the action that fills it.
+  testWidgets('a Swarm with no projects shows only New project', (
+    tester,
+  ) async {
     await show(
       tester,
       setup: (server) => server.state['projects'] = <Map<String, dynamic>>[],
+      onNewProject: () {},
     );
-    expect(find.text('No projects yet'), findsOneWidget);
+    expect(find.byType(Text), findsOneWidget);
+    expect(find.text('New project'), findsOneWidget);
   });
 
   testWidgets('it fills 880 and wide windows, light and dark, without '
