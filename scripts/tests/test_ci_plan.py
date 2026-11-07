@@ -838,6 +838,40 @@ class VerifyReuseTests(ReuseFixture):
                 with self.assertRaisesRegex(ValueError, "mobile/test/root_test.dart reads backend/src/app.ts"):
                     planner.verify_reuse(self.root, self.receipt(plan), later, self.evidence)
 
+    def docs_fixture_reuse(self, source, suite, code):
+        self.git("checkout", "-q", "--detach", self.base)
+        self.write(source, code)
+        self.base = self.commit("docs paths in fixture data")
+        passed = self.branch(self.base, [f"{suite}/lib/a.txt"], "pr-docs")
+        self.evidence.add(self.root, passed, {suite}, run_id=61)
+        main = self.branch(self.base, ["docs/guide.md"], "main-docs")
+        head = self.update(passed, main)
+        return main, self.plan(head, main)
+
+    def test_docs_fixture_strings_do_not_refuse_reuse_for_the_two_reported_tests(self):
+        # Without exact NOT_READS entries the helper rejects both for reading the docs/ folder.
+        for source, suite, code in [
+                ("desktop/test/super_tab_project_rules_test.dart", "desktop", "'untested': ['**/*.md', 'docs/**'],"),
+                ("backend/integration/superTabReviewSteps.test.ts", "backend", "files: ['docs/a.md']")]:
+            with self.subTest(source=source):
+                main, plan = self.docs_fixture_reuse(source, suite, code)
+                self.assertEqual(list(plan["reused"]), [suite])
+                try:
+                    verified = planner.verify_reuse(self.root, self.receipt(plan), main, self.evidence)
+                except ValueError as error:
+                    self.fail(f"fixture path must not refuse reuse: {error}")
+                self.assertEqual(list(verified), [suite])
+
+    def test_an_actual_docs_read_in_a_fixture_source_still_refuses_reuse(self):
+        for source, suite, code in [
+                ("desktop/test/super_tab_project_rules_test.dart", "desktop", "File('../docs/guide.md').readAsStringSync();"),
+                ("backend/integration/superTabReviewSteps.test.ts", "backend", "readFileSync(new URL('../../docs/guide.md', import.meta.url));")]:
+            with self.subTest(source=source):
+                main, plan = self.docs_fixture_reuse(source, suite, code)
+                self.assertEqual(list(plan["reused"]), [suite])
+                with self.assertRaisesRegex(ValueError, "reads docs/guide.md"):
+                    planner.verify_reuse(self.root, self.receipt(plan), main, self.evidence)
+
     def test_mismatched_parents_run_tree_or_link_are_refused(self):
         passed, main, head, receipt = self.reusing()
         record = receipt["reused"]["mobile"]
@@ -993,6 +1027,29 @@ class CrossReadTests(unittest.TestCase):
         self.addCleanup(lambda: (planner.NOT_READS.clear(), planner.NOT_READS.update(original)))
         planner.NOT_READS["backend/src/fixture.test.ts"] = ("owned-code strings in a fixture", {"cli/src/lib/"})
         self.assertEqual(planner.undeclared_reads(self.root, "backend"), [])
+
+    def test_docs_reads_are_reported_until_the_exact_dependency_is_declared(self):
+        self.write("backend/integration/docsRead.test.ts", "readFileSync(new URL('../../docs/guide.md', import.meta.url));")
+        self.write("backend/src/docsRead.test.ts", "readFileSync(join(repo, 'docs/contracts/store/v1.json'));")
+        self.assertEqual(planner.undeclared_reads(self.root, "backend"), [
+            ("backend/integration/docsRead.test.ts", "docs/guide.md"),
+            ("backend/src/docsRead.test.ts", "docs/contracts/store/v1.json")])
+        original = planner.DEPENDS["backend"]
+        self.addCleanup(lambda: planner.DEPENDS.__setitem__("backend", original))
+        planner.DEPENDS["backend"] = original + ("docs/guide.md",)
+        self.assertEqual(planner.undeclared_reads(self.root, "backend"), [
+            ("backend/src/docsRead.test.ts", "docs/contracts/store/v1.json")])
+        self.assertFalse(planner.reads("backend", "docs/other.md"))
+
+    def test_every_docs_read_in_this_repository_is_declared(self):
+        repository = Path(__file__).resolve().parents[2]
+        if not all((repository / top).is_dir() for top in ["cli/src", "desktop/lib", "mobile/lib", "backend/src"]):
+            self.skipTest("needs a full checkout; synthetic docs-read checks still run in sparse process CI")
+        for suite in sorted(planner.SUITES):
+            with self.subTest(suite=suite):
+                docs = [(source, target) for source, target in planner.undeclared_reads(repository, suite)
+                        if target.startswith("docs/")]
+                self.assertEqual(docs, [])
 
     def test_every_cross_read_in_this_repository_is_declared(self):
         repository = Path(__file__).resolve().parents[2]

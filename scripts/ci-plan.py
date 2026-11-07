@@ -120,6 +120,21 @@ NOT_READ = {"cli": ("cli/e2e/",)}
 # Strings in a suite's files that name another directory's path but are not read by its PR jobs:
 # test data, or a script run only by hand. {source: (why, {path the scan reports})}.
 NOT_READS = {
+    **{source: ("test data: changed file names", {"docs/"})
+       for source in ("backend/integration/superTabReviewSteps.test.ts", "backend/src/github/train.test.ts",
+                      "backend/src/superTabs/mergeTrain/plan.test.ts", "backend/src/superTabs/mergeTrain/train.test.ts",
+                      "backend/src/superTabs/pullRequestFiles.test.ts")},
+    **{source: ("test data: changed file names", {"docs/", "docs/plans/"})
+       for source in ("backend/src/superTabs/prHistory.test.ts", "backend/src/superTabs/reviewSteps.test.ts",
+                      "backend/src/superTabs/reviewTable.test.ts")},
+    "backend/src/superTabs/dispatch.test.ts": ("test data: a task's owned paths", {"docs/plans/"}),
+    "backend/src/superTabs/dispatch.ts": ("a lane's owned paths, not file inputs", {"docs/"}),
+    "backend/src/superTabs/policy.test.ts": ("test data: paths for policy matching, not file contents",
+                                          {"docs/", "docs/plans/", "docs/autonomous-device-integration.md",
+                                           "docs/performance/2026-09-22-pane-data/pane-sweep-after-1.json"}),
+    "backend/src/superTabs/policy.ts": ("a policy's untested-path glob, not file inputs", {"docs/"}),
+    **{source: ("test data: changed file names", {"docs/plans/"})
+       for source in ("backend/src/superTabs/prHistoryRead.test.ts", "backend/src/superTabs/releases.test.ts")},
     **{source: ("test data: owned-code paths and model names", {"desktop/lib/", "desktop/lib/super_tabs/",
                                                                 "desktop/lib/super_tabs/roster.dart"})
        for source in ("backend/src/superTabs/commands.test.ts", "backend/integration/superTabs.test.ts")},
@@ -143,6 +158,7 @@ NOT_READS = {
     "desktop/test/community_publish_test.dart": ("test data: a file in a temporary folder", {"docs/"}),
     "desktop/test/runtime_model_name_test.dart": ("test data: a model name", {"provider/"}),
     "desktop/test/super_tab_read_fixtures/first_load.json": ("test data: a task's owned paths", {"docs/design/"}),
+    "desktop/test/super_tab_project_rules_test.dart": ("test data: a policy's untested-path glob", {"docs/"}),
     "mobile/lib/demo/sample_scripts.dart": ("demo transcript text", {"tests/"}),
     "tui/src/runtime_model.rs": ("test data: a model name", {"provider/"}),
     # tui-test runs cargo test only (tui/tests/ holds no Rust tests); these read build output and installed packages.
