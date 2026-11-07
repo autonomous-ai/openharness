@@ -11,6 +11,7 @@ import 'package:harness/super_tabs/model.dart' show SuperTabAgent;
 import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/widgets/harness_activity_mark.dart' show ActivityMark;
 
 import 'super_tab_activity_lists_test.dart' show load, swarm;
 import 'support/super_tab_fixture.dart';
@@ -272,6 +273,25 @@ void main() {
       expect(key('super-agent-kestrel'), findsOneWidget);
       expect(key('super-agent-avatarrow'), findsNothing);
       expect(key('super-agent-fir'), findsNothing);
+    });
+
+    // Task #4220: the row drew its status only beside a detail line, and My agents rows have none.
+    testWidgets('each row shows its status, quietly, at its end', (
+      tester,
+    ) async {
+      await show(tester, agents: mine, setup: agents);
+      for (final row in ['super-swarm-buddy', 'super-agent-kestrel']) {
+        final mark = find.descendant(
+          of: key(row),
+          matching: find.byType(ActivityMark),
+        );
+        expect(mark, findsOneWidget, reason: row);
+        expect(
+          tester.getRect(mark).right,
+          greaterThan(tester.getRect(key(row)).right - 40),
+          reason: row,
+        );
+      }
     });
 
     testWidgets('a PM has a crown right after its name, a Regular agent '
