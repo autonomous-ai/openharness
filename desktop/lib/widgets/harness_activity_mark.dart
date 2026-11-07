@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:xterm/xterm.dart' show TerminalTheme;
 
+import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/theme/workspace_bar_style.dart';
@@ -194,16 +196,28 @@ class _ActivityMarkState extends State<ActivityMark> {
       label: widget.activity.label,
       child: ExcludeSemantics(
         child: RepaintBoundary(
-          child: SizedBox(
-            width: cell.width,
-            child: Text(
-              mark,
-              textAlign: TextAlign.center,
-              maxLines: 1,
-              overflow: TextOverflow.clip,
-              style: style,
-            ),
-          ),
+          // Failed is the triangle, never the terminal's ✗: in the app an X
+          // means close (task #4461). It keeps the text's cell.
+          child: widget.activity == HarnessActivity.failed
+              ? SizedBox(
+                  width: cell.width,
+                  height: cell.height,
+                  child: Icon(
+                    AppIcons.triangleAlert,
+                    size: math.min(cell.height, style.fontSize ?? cell.height),
+                    color: widget.color,
+                  ),
+                )
+              : SizedBox(
+                  width: cell.width,
+                  child: Text(
+                    mark,
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.clip,
+                    style: style,
+                  ),
+                ),
         ),
       ),
     );

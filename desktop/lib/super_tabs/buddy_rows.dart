@@ -62,7 +62,7 @@ class SuperTabBuddyRow extends StatelessWidget {
     this.note,
     this.detail,
     this.status,
-    this.crown = false,
+    this.lead = false,
     this.compact = false,
   });
 
@@ -70,7 +70,7 @@ class SuperTabBuddyRow extends StatelessWidget {
   final String? agentId;
   final String name;
 
-  /// An agent in My agents: the row wears its face, picture or pattern, as
+  /// An agent in My agents: the row wears its picture or face, as
   /// its chat, cards and Tasks pane draw it (audit finding 6 of task #4211).
   final SuperTabAgent? agent;
 
@@ -90,8 +90,8 @@ class SuperTabBuddyRow extends StatelessWidget {
   /// a PM leads.
   final String? note;
 
-  /// A PM: its crown on its avatar (anh Dee 11-07, task #4421).
-  final bool crown;
+  /// A PM: the Lead ring around its avatar (anh Dee 11-07, task #4461).
+  final bool lead;
 
   /// A line under the name, such as where a Buddy runs, with [status], its
   /// activity mark, before it. Without one the mark sits at the row's right.
@@ -139,7 +139,7 @@ class SuperTabBuddyRow extends StatelessWidget {
                           name: name,
                           size: 20,
                           engineBadge: false,
-                          crown: crown,
+                          lead: lead,
                         ),
                         null => SuperTabAvatar(
                           identity: agentId == null

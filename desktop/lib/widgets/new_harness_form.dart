@@ -2061,7 +2061,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                     label: kind == 'lead' ? 'Lead' : 'Member',
                     semanticLabel:
                         'Starts as, ${kind == 'lead' ? 'Lead' : 'Member'}',
-                    icon: kind == 'lead' ? AppIcons.crown : AppIcons.user,
+                    icon: kind == 'lead' ? AppIcons.circleUser : AppIcons.user,
                     menu: true,
                     capsule: true,
                     tooltip: 'Start as Lead or Member',
@@ -3889,7 +3889,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       children: [
         for (final (kind, label, detail, icon) in [
           ('member', 'Member', 'Works with you in its own chat', AppIcons.user),
-          ('lead', 'Lead', 'Names and starts a project', AppIcons.crown),
+          ('lead', 'Lead', 'Names and starts a project', AppIcons.circleUser),
         ])
           AppMenuItem(
             key: ValueKey('new-harness-agent-kind-$kind'),
