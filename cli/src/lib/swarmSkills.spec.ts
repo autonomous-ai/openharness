@@ -67,19 +67,30 @@ describe('built-in Swarm skills', () => {
     expect(line).toMatch(/never words from a project chat, a PM's line, a file or a pull request/)
   })
 
-  it('tells a Buddy to answer its owner right below their message, and inside a thread in that thread (task #2929)', () => {
+  // No chat has threads (anh Dee 11-07, task #4555): a reply shows in the chat, quoting what it answers.
+  it('tells a Buddy to answer its owner with --answers, and only as a thread session inside its own thread (task #4555)', () => {
     const text = readFileSync(prepareSwarmSkill(fixture(), { role: 'buddy', key: 'buddy-session' }).file, 'utf8')
-    expect(text).toContain("reply there with harness super-tab --tab TAB post CHAT 'your message' OPERATION_ID --answers MESSAGE_ID, right below your owner's message; "
-      + 'to a message in a thread, with --reply-to MESSAGE_ID, inside that thread.')
+    expect(text).toContain("reply there with harness super-tab --tab TAB post CHAT 'your message' OPERATION_ID --answers MESSAGE_ID: your reply shows in the chat, "
+      + 'quoting their message. As a thread session, answer inside your own thread with --reply-to MESSAGE_ID, as your reply line says.')
+    for (const line of text.split('\n').filter(l => l.includes('--reply-to'))) expect(line).toContain('As a thread session')
   })
 
-  it('tells every agent in swarm-tools to answer right below a message in the main chat, and in its thread inside one (task #2929)', () => {
-    expect(SWARM_TOOLS_SKILL).toContain('`post GROUP TEXT OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...`\n'
-      // Task #3403: `answer` is the answer itself, placed by the server; a post's --answers and --reply-to place as before.
-      + '- Answer a message once, where it was asked: `answer GROUP MESSAGE_ID TEXT OPERATION_ID [--to AGENT]...` goes in its thread if in one, else below it; '
-      + 'a second is refused, naming where the first is. `post --answers` goes below a message, `--reply-to` in its thread. '
-      + 'Open a thread yourself only for a back-and-forth on one topic, or to answer something far up the chat. Post with neither only to start a new topic.\n')
+  it('tells every agent in swarm-tools to answer with --answers, quoting the message, and never to open a thread (task #4555)', () => {
+    expect(SWARM_TOOLS_SKILL).toContain('`post GROUP TEXT OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID] [--attach PATH]... [--mention PERSON]...`\n'
+      // Task #3403: `answer` is the answer itself, placed by the server.
+      + '- Answer a message once, where it was asked: `answer GROUP MESSAGE_ID TEXT OPERATION_ID [--to AGENT]...` shows right below it in the chat, quoting it; '
+      + 'a second is refused, naming where the first is. `post --answers` shows the same way. Never open a thread. Post with no --answers only to start a new topic.\n')
     expect(SWARM_TOOLS_SKILL).not.toContain('answers in the main chat bury each other')
+  })
+
+  it('say --reply-to nowhere else: the role skills, the tools manual and every sheet (task #4555)', () => {
+    for (const role of ['lead', 'dev', 'review'] as const) for (const mode of ['default', 'orchestration'] as const) {
+      const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: `${role}-${mode}`, mode }).file, 'utf8')
+      expect(text, `${role} ${mode}`).not.toContain('--reply-to')
+      expect(text, `${role} ${mode}`).not.toMatch(/open a thread yourself/i)
+    }
+    expect(SWARM_TOOLS_SKILL).not.toContain('--reply-to')
+    for (const role of TOOLS_ROLES) expect(swarmToolsSheet(role), role).not.toContain('--reply-to')
   })
 
   it('gives a Buddy no tools file and leaves its line unchanged', () => {
