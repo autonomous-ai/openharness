@@ -98,6 +98,10 @@ void main() {
     expect(create['cwd'], '/Users/huy/games');
     expect(create['swarmRole'], 'lead');
     expect(create['engine'], 'claude');
+    // Swarm v3 (task #4215): no dialog, so no mode: the PM starts with its
+    // owner's own permission settings.
+    expect(create.containsKey('permissionMode'), isFalse);
+    expect(create['bypassPermission'], isFalse);
     final join = f.connection.joins.single['command'] as Map;
     expect(join['lead'], isTrue);
     expect(join['conversationId'], games);

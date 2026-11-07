@@ -521,6 +521,19 @@ describe('a credentialed read\'s answer', () => {
     await vi.waitFor(async () => expect(await service.contextWindow(TEAM_REF, 'big-model')).toBe(131072))
     expect(await service.contextWindow(TEAM_REF, 'odd')).toBeUndefined()
   })
+
+  // A prewarm's read outlived settled() and the afterEach that awaits it: its fake `grid` was still writing
+  // into the fixture's folder when dispose() removed it (ENOTEMPTY, cli-tests shard 2 on PR #3334).
+  it('has landed once settled() resolves, so none outlives the test that fired it', async () => {
+    answer(TEAM_ID, OVERVIEW, asleep(record(60, [{ name: 'rig', models: ['big-model'] }])))
+    await look()
+    answer(TEAM_ID, MODELS, { status: 200, body: { data: [{ id: 'big-model', context_window: 32_768 }] } })
+
+    expect(await service.retargetPrewarm(TEAM_REF, 'big-model')).toBe('fired')
+    await service.settled()
+
+    expect(await service.contextWindow(TEAM_REF, 'big-model')).toBe(32_768)
+  })
 })
 
 describe('what goes stale with no read to say so', () => {
