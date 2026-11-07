@@ -5966,11 +5966,18 @@ describe('lead.switch', () => {
     expect(told).toEqual([expect.objectContaining({ conversationId: s.f.state.conversations.find(c => c.kind === 'swarm-buddy')!.id,
       author: expect.objectContaining({ kind: 'agent', id: 'peer-buddy' }),
       text: 'owner moved the PM of Pilot on Studio to your Codex account "Work".', source: { kind: 'pm-switch-notice', machineId: 'host' } })])
-    // Without a Buddy of theirs, no line: only they and their own agent post there (task #4558).
+    // Without a Buddy of theirs nobody could tell them (only they and their own agent post in their private chat, task #4558), so
+    // another person's move onto their other account is refused, saying why; on its default account, or their own move, it goes.
     const bare = setup(['leadSwitch'], 'peer')
     bare.agent().machineOwnerId = 'peer'
-    bare.f.run(bare.request)
-    expect(done(bare).messages.filter(m => (m.source as { kind?: string } | undefined)?.kind === 'pm-switch-notice')).toEqual([])
+    expect(() => bare.f.run(bare.request)).toThrow(expect.objectContaining({ code: 'OWNER_NOT_TOLD', message: expect.stringContaining('peer') }))
+    expect(bare.agent().switchRequest).toBeUndefined()
+    bare.f.run({ ...bare.request, profileId: 'default' })
+    expect(bare.agent().switchRequest).toBeDefined()
+    const theirs = setup(['leadSwitch'], 'peer')
+    theirs.agent().machineOwnerId = 'peer'
+    theirs.f.run(theirs.request, peer)
+    expect(theirs.agent().switchRequest).toMatchObject({ requestedBy: 'peer' })
     // The owner's Buddy reads it: never an email, even one the asker took as their name (review of #2954).
     const named = lent()
     named.f.state.people.find(p => p.id === 'owner')!.name = 'owner@example.com'
