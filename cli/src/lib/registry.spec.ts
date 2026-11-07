@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { processStartMarker } from './processLiveness.js'
+import { processLockIdentity, processStartMarker } from './processLiveness.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { ProcessIdentity, RegisteredSession, RegisterInput } from './registry.js'
 
@@ -63,6 +63,16 @@ async function loadRegistryModule() {
   return import('./registry.js')
 }
 
+/** Each pause of the registry lock's wait moves the fake clock by `taken(asked)` ms and returns at once: the wait is
+ *  then measured on the clock alone. A real pause can take far longer than asked: on the Mac Studio, 2026-11-07, an
+ *  agent's 20 ms `Atomics.wait` returned after ~150 ms. */
+function pausesTake(taken: (asked: number) => number): void {
+  vi.spyOn(Atomics, 'wait').mockImplementation((_view, _index, _value, asked) => {
+    vi.setSystemTime(Date.now() + taken(asked ?? 0))
+    return 'timed-out'
+  })
+}
+
 describe('registry remote display names', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -70,6 +80,7 @@ describe('registry remote display names', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     vi.useRealTimers()
     rmSync(dataDir, { recursive: true, force: true })
     delete process.env.ADAPTER_DATA_DIR
@@ -515,6 +526,7 @@ describe('registry remote display names', () => {
     'reclaims an old lock with %s, and leaves a fresh one to its creator', async (_label, owner) => {
       const { registry } = await loadRegistryModule()
       registry.load()
+      pausesTake((asked) => asked)
       const lockDir = join(dataDir, 'registry.json.lock')
       const leave = (age: number) => {
         mkdirSync(lockDir, { mode: 0o700 })
@@ -533,6 +545,26 @@ describe('registry remote display names', () => {
       expect(readFileSync(join(dataDir, 'registry.json'), 'utf8')).not.toContain('during-fresh-lock')
       rmSync(lockDir, { recursive: true, force: true })
     })
+
+  it('gives up on a live lock after 2 s on the clock, however long each pause really takes', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const lockDir = join(dataDir, 'registry.json.lock')
+    mkdirSync(lockDir, { mode: 0o700 })
+    writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({
+      pid: process.pid, ...processLockIdentity(process.pid), token: 'live-holder',
+    }), { mode: 0o600 })
+    pausesTake((asked) => asked * 7.5)
+    const started = Date.now()
+
+    registry.openProcessAgent({ agentId: 'behind-a-live-lock', engine: 'claude', tmuxPane: '%36', processIdentity: processIdentity(836) })
+
+    expect(Date.now() - started).toBeLessThanOrEqual(2_000 + 150)
+    expect(readFileSync(join(lockDir, 'owner.json'), 'utf8')).toContain('live-holder')
+    expect(existsSync(join(dataDir, 'registry.json'))
+      && readFileSync(join(dataDir, 'registry.json'), 'utf8').includes('behind-a-live-lock')).toBe(false)
+    rmSync(lockDir, { recursive: true, force: true })
+  })
 
   it('deduplicates nested panes by process identity', async () => {
     const { registry } = await loadRegistryModule()

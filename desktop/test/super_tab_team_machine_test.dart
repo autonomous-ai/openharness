@@ -221,7 +221,6 @@ void main() {
             "Teammates' agents paused: privacy check out of date",
         'PRIVACY_UNCHECKED':
             "Teammates' agents paused: privacy not checked yet",
-        'TEAM_ACCOUNT_REQUIRED': "Teammates' agents paused: not set up",
       };
       for (final MapEntry(key: code, value: line) in reasons.entries) {
         final server = _swarm();
@@ -238,16 +237,22 @@ void main() {
     },
   );
 
-  testWidgets('without a Harness Team account the Mac\'s own refusal says so', (
+  // Swarm v3 makes no Team accounts (#4120): a Mac without one is short of nothing, so its row says nothing of it
+  // (#4289), for teammates and its owner alike.
+  testWidgets('a Mac without a Harness Team account says nothing of one', (
     tester,
   ) async {
     final server = _swarm();
     server.state['machines'] = [
       _pool('mac', teamWork: _refused('TEAM_ACCOUNT_REQUIRED')),
     ];
-    final c = await _mount(tester, server);
-    expect(_problemText(tester, 'mac'), "Teammates' agents paused: not set up");
-    await _unmount(tester, c);
+    for (final account in ['peer', 'owner']) {
+      final c = await _mount(tester, server, account: account);
+      expect(_row('mac'), findsOneWidget);
+      expect(_problem('mac'), findsNothing, reason: account);
+      expect(find.textContaining('not set up'), findsNothing, reason: account);
+      await _unmount(tester, c);
+    }
   });
 
   // Local Team account run, 2026-10-28 (group #646, item 5): a teammate's Lead computer, never added to the Swarm, read

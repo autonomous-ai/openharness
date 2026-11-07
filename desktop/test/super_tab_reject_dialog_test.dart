@@ -1,7 +1,6 @@
-// Task #4251 (finding 10 of #4211): Reject's dialog names the task, and the open row's agent picker reads at the
-// row's own text size.
+// Task #4251 (finding 10 of #4211): Reject's dialog names the task. The rows' agent picker it also styled went with
+// #4204's cards, which have no agent switch.
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/tasks/personal_tasks_pane.dart';
 import 'package:harness/super_tabs/zone_time.dart';
@@ -29,17 +28,18 @@ void main() {
         ),
       ),
     );
-    await t.tap(find.text(title));
-    await t.pump();
     return f;
   }
 
-  TextStyle drawn(WidgetTester t, Finder text) =>
-      t.renderObject<RenderParagraph>(text).text.style!;
+  // Each waiting card has its own Reject: the one on this task's card.
+  final reject = find.descendant(
+    of: find.byKey(const ValueKey('personal-task-new')),
+    matching: find.text('Reject'),
+  );
 
   testWidgets('the Reject dialog names the task', (t) async {
     await mount(t, 'Add the project export');
-    await t.tap(find.text('Reject'));
+    await t.tap(reject);
     await t.pumpAndSettle();
     expect(
       find.descendant(
@@ -56,7 +56,7 @@ void main() {
   ) async {
     final title = 'Add the project export ${'with every column ' * 12}';
     await mount(t, title);
-    await t.tap(find.text('Reject'));
+    await t.tap(reject);
     await t.pumpAndSettle();
     final heading = find.descendant(
       of: find.byType(AlertDialog),
@@ -64,25 +64,5 @@ void main() {
     );
     expect(heading, findsOneWidget);
     expect(t.takeException(), isNull);
-  });
-
-  testWidgets("the suggested-agent picker uses the row's text style", (
-    t,
-  ) async {
-    await mount(t, 'Add the project export');
-    final picker = find.byKey(const ValueKey('task-agent-new'));
-    final choice = find.descendant(of: picker, matching: find.byType(Text));
-    final title = drawn(t, find.text('Add the project export'));
-    // The field's label is its own; the chosen agent's name is the row's size.
-    final name = choice
-        .evaluate()
-        .map((e) => e.widget as Text)
-        .firstWhere((w) => w.data != 'Suggested agent');
-    final agent = drawn(
-      t,
-      find.descendant(of: picker, matching: find.text(name.data!)).first,
-    );
-    expect(agent.fontSize, title.fontSize);
-    expect(agent.fontWeight, title.fontWeight);
   });
 }
