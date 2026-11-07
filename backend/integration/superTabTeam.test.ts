@@ -744,7 +744,7 @@ describe('a teammate\'s work and the machines that take it', () => {
     expect((await store.read(owner, f.tab)).state.conversations.find(c => c.id === other)!.agentIds).not.toContain(f.builder)
   })
 
-  it('routes the owner\'s project past Team machines and new agents on another person\'s computer, records why, and refuses a pick there', async () => {
+  it('routes the owner\'s project past Team machines and new agents on another person\'s computer, records why, and leaves out a pick there', async () => {
     const f = await fixture()
     await personalMac(f)
     const volunteer = String((await run(f.tab, { type: 'agent.add', conversationId: f.teamGroup, machineId: 'personal-mac', harnessId: randomUUID(),
@@ -758,8 +758,46 @@ describe('a teammate\'s work and the machines that take it', () => {
     const recorded = await store.routeDecision(owner, f.tab, String(routed.result.routeDecisionId))
     expect(recorded.record.candidates.map(c => c.id)).toEqual(['c2'])
     expect(recorded.record.excluded.map(e => e.title)).toEqual(['Builder · team-mac', 'Builder · personal-mac'])
-    await expect(run(f.tab, { type: 'route.record', conversationId: f.teamGroup, decision: decision('c0') }, owner, f.lead))
+    // A route that picked the Team account still answers (task #4194): the pick is left out with why, and the rest is kept.
+    const rerouted = await run(f.tab, { type: 'route.record', conversationId: f.teamGroup, decision: decision('c0') }, owner, f.lead)
+    const kept = await store.routeDecision(owner, f.tab, String(rerouted.result.routeDecisionId))
+    expect(kept.record.candidates.map(c => c.id)).toEqual(['c2'])
+    expect(kept.record.pick).toBeUndefined()
+    expect(kept.record.excluded).toContainEqual({ title: 'Builder · team-mac', reason: expect.stringContaining('Harness Team accounts are gone') })
+  })
+
+  // Task #4194: since #4120 a route whose pick was a Team account was refused whole, so the PM could start or assign nothing.
+  it('routes the owner\'s project to an own-account candidate when its pick was a Team account, and that decision starts and assigns', async () => {
+    const f = await fixture()
+    await personalMac(f)
+    const volunteer = String((await run(f.tab, { type: 'agent.add', conversationId: f.teamGroup, machineId: 'personal-mac', harnessId: randomUUID(),
+      name: 'Volunteer', configuration: config, lead: false }, person)).result.agentId)
+    const decision = () => ({ assessment: { difficulty: 'medium' as const, risk: 'low' as const, why: 'A small change.' },
+      candidates: [
+        { id: 'c0', kind: 'member' as const, agentId: f.builder, machineId: 'team-mac', engine: 'codex' as const, model: 'default', effort: 'default',
+          quality: 3, cost: 2, title: 'Builder · team-mac', label: 'Codex on team-mac' },
+        { id: 'c1', kind: 'new' as const, machineId: 'owner-host', engine: 'codex' as const, model: 'default', effort: 'default',
+          quality: 3, cost: 2, title: 'Builder · owner-host', label: 'Codex on owner-host' },
+        { id: 'c2', kind: 'member' as const, agentId: volunteer, machineId: 'personal-mac', engine: 'codex' as const, model: 'default', effort: 'default',
+          quality: 3, cost: 2, title: 'Volunteer · personal-mac', label: 'Codex on personal-mac' }],
+      excluded: [], floor: 2, notes: false, pick: 'c0', via: 'order' as const, p: null, belowFloor: false, why: 'Policy order.' })
+    const route = async () => {
+      const id = String((await run(f.tab, { type: 'route.record', conversationId: f.teamGroup, decision: decision() }, owner, f.lead)).result.routeDecisionId)
+      const recorded = await store.routeDecision(owner, f.tab, id)
+      expect(recorded.record.candidates.map(c => c.id)).toEqual(['c1', 'c2'])
+      expect(recorded.record.excluded.filter(e => e.title === 'Builder · team-mac')).toHaveLength(1)
+      return id
+    }
+    const reason = 'Routing order: the account resetting soonest.'
+    const started = await run(f.tab, { type: 'agent.start', routeDecisionId: await route(), overrideReason: reason, request: { conversationId: f.teamGroup,
+      machineId: 'owner-host', engine: 'codex', name: 'Builder', cwd: '/work/lead', worktree: false, requirements } }, owner, f.lead)
+    expect(started.result.startId).toBeTruthy()
+    // Still no work for the Team agent (task #4120).
+    await expect(run(f.tab, { type: 'work.assign', conversationId: f.teamGroup, agentId: f.builder, routeDecisionId: await route(), overrideReason: reason }, owner, f.lead))
       .rejects.toMatchObject({ code: 'TEAM_ACCOUNTS_REMOVED' })
+    const assigned = await run(f.tab, { type: 'work.assign', conversationId: f.teamGroup, agentId: volunteer, routeDecisionId: await route(), overrideReason: reason },
+      owner, f.lead)
+    expect(assigned.result.assignmentId).toBeTruthy()
   })
 
   it('refuses at its launch a start queued in a Team account before the release', async () => {

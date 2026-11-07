@@ -251,6 +251,7 @@ class SuperTabController extends ChangeNotifier {
       machinesGroupOpen = initial['machinesGroupOpen'] as bool? ?? true;
       buddiesGroupOpen = initial['buddiesGroupOpen'] as bool? ?? true;
       projectsGroupOpen = initial['projectsGroupOpen'] as bool?;
+      agentsGroupOpen = initial['agentsGroupOpen'] as bool? ?? true;
       modelsGroupOpen = initial['modelsGroupOpen'] as bool? ?? true;
       offlineMachinesOpen = initial['offlineMachinesOpen'] as bool? ?? false;
       sessionProjectId = initial['sessionProjectId'] as String? ?? '';
@@ -1138,6 +1139,9 @@ class SuperTabController extends ChangeNotifier {
   /// Whether the left pane's Projects is open when the reader chose (Swarm v3, task #4118); null until they do: it is then
   /// closed while they have an agent and open when they have none.
   bool? projectsGroupOpen;
+
+  /// Whether the left pane's My agents is open (task #4192): it folds like Projects, open until the reader closes it.
+  bool agentsGroupOpen = true;
   bool get projectsOpen =>
       projectsGroupOpen ??
       (snapshot == null || superTabMyAgents(snapshot!, accountId).isEmpty);
@@ -1214,6 +1218,12 @@ class SuperTabController extends ChangeNotifier {
 
   void toggleProjectsGroup() {
     projectsGroupOpen = !projectsOpen;
+    _saveSoon();
+    _changed();
+  }
+
+  void toggleAgentsGroup() {
+    agentsGroupOpen = !agentsGroupOpen;
     _saveSoon();
     _changed();
   }
@@ -2861,6 +2871,7 @@ class SuperTabController extends ChangeNotifier {
     'machinesGroupOpen': machinesGroupOpen,
     'buddiesGroupOpen': buddiesGroupOpen,
     if (projectsGroupOpen != null) 'projectsGroupOpen': projectsGroupOpen,
+    'agentsGroupOpen': agentsGroupOpen,
     'modelsGroupOpen': modelsGroupOpen,
     'offlineMachinesOpen': offlineMachinesOpen,
     'sessionProjectId': sessionProjectId,

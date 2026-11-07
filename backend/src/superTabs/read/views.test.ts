@@ -126,7 +126,7 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     const view = readerView(parts, peer, NOW, { teamMachines: [] })
     const worker = view.parts.agents.find(a => a.key === s.worker)!
     for (const hidden of ['downNamed', 'downSince', 'limitedUntil', 'roleId']) expect(worker.data).not.toHaveProperty(hidden)
-    expect(view.derived.agents[s.worker]).toEqual({ downSince: new Date(NOW - 5 * MINUTE).toISOString(), limitedUntil: null, workDecision: null, roleId: null, roleName: 'Engineer', kind: 'regular', chatId: null })
+    expect(view.derived.agents[s.worker]).toEqual({ downSince: new Date(NOW - 5 * MINUTE).toISOString(), limitedUntil: null, workDecision: null, roleId: null, roleName: 'Engineer', kind: 'regular', chatId: null, myAgent: false })
     expect(Object.keys(view.derived.agents).sort()).toEqual([s.lead, s.worker].sort())
   })
 
@@ -136,6 +136,16 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     const view = readerView(parts, owner, NOW, { teamMachines: [] })
     expect(view.derived.agents[s.lead]).toMatchObject({ kind: 'pm', chatId: 'lead' })
     expect(view.derived.agents[s.worker]).toMatchObject({ kind: 'regular', chatId: null })
+  })
+
+  // Task #4192: whether each agent is in this reader's My agents comes from the server, so every client lists the same.
+  it('says which agents are in the reader\'s My agents', () => {
+    const { parts, s } = scene()
+    const contributor = s.state.agents.find(a => a.id === s.lead)!.contributorId
+    for (const actor of [owner, peer]) {
+      const view = readerView(parts, actor, NOW, { teamMachines: [] })
+      expect(view.derived.agents[s.lead]!.myAgent).toBe(actor.userId === contributor)
+    }
   })
 
   // Free slots count every session the machine runs, as today, even ones this reader cannot see.

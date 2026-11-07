@@ -27,7 +27,8 @@ Map<String, dynamic> _agent(String id, String name) => {
 };
 
 /// Swarm v3's left pane and middle (task #4118), in both appearances: My agents with the Buddy first, a PM's crown and an
-/// unread name in bold; the chat of a selected agent in the middle; a project's Board with Projects open.
+/// unread name in bold; the chat of a selected agent in the middle; a project's Board with Projects open. Task #4192: no
+/// arrows under the org switcher, the Buddy's own avatar, only the server's My agents, and My agents folded.
 void main() {
   setUpAll(() async {
     await loadCaptureFonts(shots);
@@ -40,7 +41,7 @@ void main() {
   });
 
   for (final brightness in Brightness.values) {
-    for (final scene in ['agent-chat', 'no-agents', 'board']) {
+    for (final scene in ['agent-chat', 'no-agents', 'board', 'folded']) {
       testWidgets('$scene (${brightness.name})', (tester) async {
         await tester.binding.setSurfaceSize(const Size(1500, 800));
         addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -61,13 +62,27 @@ void main() {
               'buddyOf': {'personId': 'owner'},
               'kind': 'buddy',
               'chatId': 'swarm-buddy-owner',
+              'myAgent': true,
             },
             {
               ..._agent('kestrel', 'Kestrel'),
               'kind': 'regular',
               'chatId': 'agent-chat-kestrel',
+              'myAgent': true,
             },
-            {..._agent('orion', 'Orion'), 'kind': 'pm', 'chatId': 'lead'},
+            {
+              ..._agent('orion', 'Orion'),
+              'kind': 'pm',
+              'chatId': 'lead',
+              'myAgent': true,
+            },
+            // A finished or Team-account agent the server leaves out of My agents (task #4192).
+            {
+              ..._agent('avatarrow', 'Avatarrow'),
+              'kind': 'regular',
+              'chatId': null,
+              'myAgent': false,
+            },
           ];
           groups.add({
             ...conversationFixture('swarm-buddy-owner', 'Buddy'),
@@ -108,7 +123,9 @@ void main() {
             'tabId': 'tab',
             'accountId': 'owner',
             'selectedId': 'lead',
-            if (scene == 'board') 'projectsGroupOpen': true,
+            if (scene == 'board' || scene == 'folded')
+              'projectsGroupOpen': true,
+            if (scene == 'folded') 'agentsGroupOpen': false,
           },
         );
         await tester.runAsync(c.refresh);
