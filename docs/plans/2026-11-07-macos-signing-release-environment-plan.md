@@ -178,3 +178,29 @@ Windows untouched unless it has the same gap.
 - [ ] **Step 4: Run** — PASS. **Step 5: Commit.**
 - [ ] **Step 6:** One `prepare_only` run of `release-desktop.yml` from this branch: `build-macos` passes ad hoc,
   `sign-macos` and `sign-windows` are skipped, nothing is sealed. Link it in the PR.
+
+### Task 7: Publication only from the release environment (added by the PM, P0)
+
+The Google Cloud login worked from any branch run and could write the live manifest, which the updater trusts by
+sha256 alone. Every job that logs in to Google Cloud moves into the `release` environment; builds hand packages
+on as artifacts.
+
+**Files:**
+- Modify: `desktop/scripts/upload-desktop-linux.sh` (`--no-upload`: build and package, no cloud call;
+  `--upload-only`: publish the AppImage `--no-upload` left in `build/`; bash 3.2-safe architecture lowercase)
+- Modify: `.github/workflows/release-desktop.yml` (`build-linux` packages and uploads `desktop-linux-<arch>`; new
+  `upload-linux`; `preflight`, `upload-windows`, `publish`, `candidate`, `cleanup`, `expire-candidates`,
+  `publication-test` get `environment: release`; builds run when `preflight` is skipped; a promotion check also
+  needs main or a tag), `scripts/desktop-release-candidate.py` (`check_jobs` requires `upload-linux`)
+- Modify: `docs/validation-and-release.md` ("Who can sign and publish Desktop": the GitHub and Google Cloud settings)
+- Test: `scripts/tests/test_linux_upload.py` (new), `scripts/tests/test_desktop_release_signing.py`,
+  `scripts/tests/test_desktop_release_candidate.py`
+
+- [x] **Step 1: Failing tests:** `test_every_cloud_login_is_in_the_release_environment`,
+  `test_builds_hold_no_secret_or_cloud_identity_and_hand_over_packages`, the ref rule on `preflight`,
+  `upload-linux`, `upload-windows`, `cleanup`; `test_no_upload_packages_without_any_cloud_call`,
+  `test_upload_only_publishes_the_packaged_file_without_building`,
+  `test_upload_only_without_a_package_uploads_nothing`; a candidate without `upload-linux` is refused.
+- [x] **Step 2: Run** — FAIL. **Step 3: Implement.** **Step 4: Run** — PASS. **Step 5: Commit** tests, then code.
+- [ ] **Step 6:** A second `prepare_only` run from this branch at the new head: builds pass, every
+  `release`-environment job is skipped.
