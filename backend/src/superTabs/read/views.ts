@@ -16,7 +16,7 @@ import { canReadGroup, canReadProject, projectsOf } from '../projects.js'
 import { promptWaits } from '../promptWaits.js'
 import { storedPulse, type Pulse } from '../pulse.js'
 import { coordinatorNameOf, roleNameOf } from '../instructions.js'
-import { agentChatId, agentKind, agentRole, inMyAgents, mainProjectOf } from '../agentKind.js'
+import { agentChatId, agentKind, inMyAgents, ledProjects } from '../agentKind.js'
 import { withAvatarView } from '../profile.js'
 import { swarmUsernames } from '../usernames.js'
 import type { AgentView, Derived, GroupView, HeadView, LivePart, MachineView, MemberView, ProgressView, StartView } from './contract.js'
@@ -207,7 +207,9 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     }
     return reads
   }
-  const shownMain = (agent: Agent) => { const main = mainProjectOf(state, agent); return main && readsProject(main) ? main : null }
+  // A Lead's main project is the one it leads; a Member's, the one its person picked (task #4540).
+  const led = ledProjects(state)
+  const shownMain = (agent: Agent) => { const main = led.get(agent.id) ?? agent.mainProjectId; return main && readsProject(main) ? main : null }
   // The next release times the settle recorded (releases.ts), for the projects this reader sees: the release list itself stays
   // the server's (task #3827).
   const releaseTimes = Object.fromEntries(visible.projects?.flatMap(seen => {
@@ -229,7 +231,7 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
         // Whether it is in this reader's My agents, decided here so every client lists the same (task #4192).
         myAgent: inMyAgents(state, actor, stored),
         // Lead or Member, and its main project (agentKind.ts, task #4540).
-        role: agentRole(state, stored), mainProjectId: shownMain(stored) }]
+        role: led.has(stored.id) ? 'lead' as const : 'member' as const, mainProjectId: shownMain(stored) }]
     })),
     machines: Object.fromEntries((visible.machines ?? []).map(machine)),
     ...(visible.otherProjectsWork ? { otherProjectsWork: visible.otherProjectsWork } : {}),

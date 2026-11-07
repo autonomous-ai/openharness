@@ -161,7 +161,7 @@ export interface Agent {
   regular?: true
   /** The one project this Member belongs to (task #4540; spec 2026-11-07-members-and-leads): picked in Cmd-N or when its person
    *  joined. Readers get it in the derived row, never in this part (read/views.ts), and only when they read that project. A
-   *  Lead's is the project it leads, derived (agentKind.ts mainProjectOf). Cleared when the project is deleted. */
+   *  Lead's is the project it leads, derived (agentKind.ts ledProjects). Cleared when the project is deleted. */
   mainProjectId?: string
   /** The private project a Regular agent first worked in: its one conversation holds that project's content, so it takes tasks
    *  only there from then on (projects.ts regularMayWorkIn; security review 2 of #4116). Set at its assignment, never cleared. */

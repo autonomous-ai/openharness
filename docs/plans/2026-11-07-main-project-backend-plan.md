@@ -94,19 +94,19 @@ Design section's lines for `about`, `mainProjectId`, the list's read cost, compa
 
 **Files:**
 - Modify: `backend/src/superTabs/model.ts` (`Agent.mainProjectId?`, `AgentStartRequest.mainProjectId?`)
-- Modify: `backend/src/superTabs/agentKind.ts` (`agentRole`, `mainProjectOf`)
+- Modify: `backend/src/superTabs/agentKind.ts` (`AgentRole`, `ledProjects`)
 - Modify: `backend/src/superTabs/read/views.ts` (`agentView` keeps `mainProjectId` out of the part; derived `role`,
   `mainProjectId`), `backend/src/superTabs/read/contract.ts`
 - Modify: `backend/src/superTabs/commands.ts` (`agent.new`, `buddy.create`, `agent.started`, `project.delete`)
 - Test: `backend/src/superTabs/mainProject.test.ts`, `backend/src/superTabs/agentKind.test.ts`
 
 **Interfaces:**
-- Produces: `agentRole(state, agent): 'lead' | 'member'`; `mainProjectOf(state, agent): string | null` (the led project
-  for a Lead, else the stored one). Derived agent row gains `role` and `mainProjectId` (null when none, or when the reader
+- Produces: `ledProjects(state): Map<agentId, projectId>`, one pass per read (`ledProject` scans every conversation per
+  call). A Lead's main project is the one it leads, else the stored one. Derived agent row gains `role` and `mainProjectId` (null when none, or when the reader
   can't read it). `agent.new` and `buddy.create` take an optional `mainProjectId`.
 
 - [ ] **Step 1: Write the failing tests.** A Regular agent started by the server with a main project carries it; a local
-  start that names one is refused `LOCAL_MAIN_PROJECT`; Bring agent (`buddy.create`) with a main
+  start or a Lead that names one is refused `MAIN_PROJECT_MEMBER_ONLY`; Bring agent (`buddy.create`) with a main
   project makes a Buddy whose role is member and main project is that one; a project the person can't read is refused
   `NOT_FOUND`; a PM made by `agent.new` is a Lead whose main project is its project; the derived rows carry `role` and
   `mainProjectId` while `kind` is unchanged; a reader who can't read the main project gets null; deleting the project
@@ -120,9 +120,9 @@ Design section's lines for `about`, `mainProjectId`, the list's read cost, compa
 
 ### Task 4: The read's cost at prod scale
 
-**Files:**
-- Test: `backend/src/superTabs/projectList.test.ts` (a synthetic 100-project, 600-agent Swarm)
-
-- [ ] **Step 1:** Time `projectList` on the synthetic Swarm (p95 of 200 runs) and record its bytes; assert under 15 KB.
-  Put the numbers in the pull request. The read touches no collection beyond the first load, so no index changes.
-- [ ] **Step 2: Commit.**
+- [ ] **Step 1:** On a synthetic Swarm (100 projects, 600 agents, 2,000 tasks), time `readerView` on main and on this
+  branch, the added derive work alone, and `projectList` (p50 and p95), and record their bytes. Put the numbers in the
+  pull request; no timing is asserted in a test (no flaky timing gates). The byte bound is asserted in
+  `projectList.test.ts`: 100 projects with every field at its longest stay under 64 KB (the spec's 15 KB assumed 150-byte
+  rows; a 100-project list with one-line purposes measures 16.5 KB). The read touches no collection beyond the first load
+  and its project chats, so no index changes.
