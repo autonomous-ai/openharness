@@ -147,6 +147,13 @@ describe('shipping', () => {
 describe('notePendingRelease', () => {
   const project = () => ({ id: 'p1' }) as SwarmProject
 
+  it('does not schedule a release for a Simple task after its project switches to Full', () => {
+    const p = project(), group = { id: 'simple', process: 'simple' } as Conversation
+    notePendingRelease(p, group, 'https://github.com/o/r/pull/1', vn(10))
+    expect(p.releases).toBeUndefined()
+    expect(group.releasing).toBeUndefined()
+  })
+
   it('marks the task releasing, its parts not known yet', () => {
     const p = project(), group = { id: 'a' } as Conversation
     notePendingRelease(p, group, 'https://github.com/o/r/pull/1', vn(10))
@@ -205,6 +212,38 @@ describe('settleReleases', () => {
   const webRelease = { tag: 'v1.3.98_web', sha: 'w1', at: T - 5 * MINUTE, carries: [key12] }
   const noFacts = { resolved: [], releases: {} }
 
+  it('opens no new release step after switching a project to Simple, preserving its existing ledger', () => {
+    const state = swarm([entry({ groupId: 'g12' })])
+    Object.assign(state.projects![0]!, { process: 'simple' })
+    const outcome = settleReleases(state, 'p1', noFacts, T)
+    expect(outcome.opened).toBeNull()
+    expect(ledgerOf(state).pending).toHaveLength(1)
+    expect(state.conversations.map(c => c.id)).toEqual(['lead-p1', 'g12', 'g13'])
+  })
+
+  it('still records a verified release for an existing step after switching to Simple', () => {
+    const state = swarm([entry({ groupId: 'g12' })], { steps: { desktop: { groupId: 'step', at: T - 10 * MINUTE } } })
+    state.conversations.push({ ...task(14), id: 'step' })
+    Object.assign(state.projects![0]!, { process: 'simple' })
+    const outcome = settleReleases(state, 'p1', { resolved: [], releases: { desktop: desktopRelease() } }, T)
+    expect(outcome.shipped).toContain('g12')
+    expect(outcome.opened).toBeNull()
+    expect(state.conversations.some(c => c.id === 'step')).toBe(true)
+  })
+
+  it('does not reopen releases for old Simple work when the project returns to Full', () => {
+    const state = swarm([entry({ groupId: 'g12' })])
+    Object.assign(state.projects![0]!, { process: 'full', simpleThrough: 20 })
+    expect(settleReleases(state, 'p1', noFacts, T).opened).toBeNull()
+    expect(ledgerOf(state).pending).toHaveLength(1)
+    state.conversations.push(task(21))
+    ledgerOf(state).pending.push(entry({ groupId: 'g21', components: ['cli'] }))
+    const opened = settleReleases(state, 'p1', noFacts, T).opened
+    expect(opened).not.toBeNull()
+    expect(state.conversations.find(c => c.id === opened)!.brief).toContain('Release CLI')
+    expect(state.conversations.find(c => c.id === opened)!.brief).not.toContain('Desktop')
+  })
+
   it('records when each component may next release, and changes nothing when that has not changed (task #3827)', () => {
     const state = swarm([entry({ groupId: 'g12', mergedAt: vn(8), components: ['desktop', 'backend'] })])
     settleReleases(state, 'p1', noFacts, vn(8, 30))
@@ -259,6 +298,20 @@ describe('settleReleases', () => {
     expect(outcome.shipped).toEqual(['g13'])
     expect(state.conversations.find(c => c.id === 'g13')!.released).toEqual({ at: T - MINUTE, tags: [] })
     expect(state.conversations.find(c => c.id === 'g13')).not.toHaveProperty('releasing')
+  })
+
+  // Task #4410, River's ruling 11-07: a task merged while its Windows test step waited for a Windows machine owes a person's
+  // Windows check, which the Windows rules ask for on the signed build: the release that ships it lists every such task.
+  it('lists each task it ships whose Windows check is owed, for whoever checks Windows on the signed build', () => {
+    const waiting = { step: { name: 'Test on a Windows machine', kind: 'test' as const, areas: [], where: ['The CLI on a Windows machine'], os: 'windows' as const }, pulls: [] }
+    const state = swarm([entry({ groupId: 'g12', mergedAt: T - MINUTE, components: ['desktop'] }),
+      entry({ groupId: 'g13', url: 'https://github.com/o/r/pull/13', mergedAt: T - MINUTE, components: ['desktop'] })])
+    state.conversations.find(c => c.id === 'g12')!.waitingWindowsStep = waiting
+    const opened = settleReleases(state, 'p1', noFacts, T).opened
+    const step = state.conversations.find(c => c.id === opened)!
+    expect(step.brief).toContain('#12 Task 12; #13 Task 13')
+    expect(step.brief).toContain('Windows check owed on the signed build: #12 Task 12. No Windows machine took its test step: record it here.')
+    expect(step.brief).not.toContain('owed on the signed build: #12 Task 12; #13')
   })
 
   it('opens one release step for the Integrator inside the window, and no second one while it is open', () => {

@@ -30,13 +30,7 @@ String get importComputerWord =>
 /// Why import is refused when this computer is not in the Swarm.
 String get kImportNeedsThisComputer =>
     'Add this $importComputerWord to the Swarm first: the imported agent '
-    'continues in its Harness Team account.';
-
-/// Why import is refused when this computer has no Harness Team account in the
-/// Swarm: the new agent never runs in the person's own account.
-String get kImportNeedsTeamAccount =>
-    'Set up Harness Team on this $importComputerWord first: the imported agent '
-    'continues there, not in your own account.';
+    'continues on it, as you.';
 
 const _engines = {'claude', 'codex'};
 
@@ -81,24 +75,17 @@ List<ImportableAgent> importableAgents(AppNotifier app, SuperTabController c) {
 }
 
 /// Why nothing can be imported into [c]'s Swarm from here, or null when it
-/// can: Harness must run on this Mac, and this Mac's Harness Team account
-/// must be in the Swarm and take work.
+/// can: Harness must run on this Mac, and this Mac must be in the Swarm, where
+/// the new agent runs as its person (Swarm v3, #4120).
 String? importUnavailable(AppNotifier app, SuperTabController c) {
   final mac = _thisMac(app);
   if (mac == null) {
     return 'Import works in Harness on the $importComputerWord where the agent '
         'runs.';
   }
-  final snapshot = c.snapshot;
-  if (snapshot?.pool(mac.machine.machineId) == null) {
-    return kImportNeedsThisComputer;
-  }
-  final team = snapshot!.teamPoolOf(mac.machine.machineId);
-  if (team == null) return kImportNeedsTeamAccount;
-  return switch (team['teamWork']) {
-    {'allowed': false, 'reason': final String reason} => reason,
-    _ => null,
-  };
+  return c.snapshot?.pool(mac.machine.machineId) == null
+      ? kImportNeedsThisComputer
+      : null;
 }
 
 /// The steps of an import, in order, each named where it fails.
@@ -273,8 +260,7 @@ Future<ImportHandoff> prepareImportHandoff(
 /// cli superTabs/start.ts.
 const kImportStartWait = Duration(minutes: 15);
 
-/// What a start asks of the Team account's machine when nothing more is
-/// needed (cli superTabs/capacity.ts START_REQUIREMENTS).
+/// What a start asks of this computer when nothing more is needed (cli superTabs/capacity.ts START_REQUIREMENTS).
 const _startRequirements = {
   'memoryBytes': 2147483648,
   'diskBytes': 10737418240,
@@ -306,8 +292,8 @@ typedef ImportResult = ({String conversationId, String agentId});
 /// Imports [agent] into [projectId] of [c]'s Swarm with [handoff], doing what
 /// [progress] has not done yet: opens a conversation,
 /// `Continue <agent>'s work`, shares both files in it, starts a new agent
-/// there in this Mac's Harness Team account (engine and model as the agent's, role Engineer, in
-/// the project's repository), waits up to [startWait] for it to be listed,
+/// there on this Mac, as its person (engine and model as the agent's, role
+/// Engineer, in the project's folder there), waits up to [startWait] for it to be listed,
 /// then sends it both files in one message, to it alone. The agent on this
 /// Mac is never touched. Throws an [ImportFailure] naming the step.
 Future<ImportResult> importAgent(
@@ -325,8 +311,7 @@ Future<ImportResult> importAgent(
   if (importUnavailable(app, c) case final why?) {
     throw ImportFailure(next, why, code: 'unavailable');
   }
-  final team = c.snapshot!.teamPoolOf(agent.machineId)!;
-  final teamId = team['machineId'] as String;
+  final pool = c.snapshot!.pool(agent.machineId)!;
   final project = c.snapshot!.projectById(projectId);
   final name = agent.agent.displayName;
   final owner =
@@ -380,12 +365,11 @@ Future<ImportResult> importAgent(
   }
 
   final model = agent.agent.modelId;
-  final cwd = project == null ? null : _projectFolder(team, project);
+  final cwd = project == null ? null : _projectFolder(pool, project);
   if (cwd == null) {
     throw ImportFailure(
       ImportStep.start,
-      "This $importComputerWord's Team account has no folder for this project "
-      'yet.',
+      'This $importComputerWord has no folder for this project yet.',
       code: 'no-folder',
     );
   }
@@ -394,7 +378,7 @@ Future<ImportResult> importAgent(
             'type': 'agent.start',
             'request': {
               'conversationId': conversation,
-              'machineId': teamId,
+              'machineId': agent.machineId,
               'engine': agent.agent.engine,
               // Never the session title an automatic name shows (task #2912).
               'name': superTabAddName(agent.agent),
@@ -409,7 +393,7 @@ Future<ImportResult> importAgent(
   final agentId = progress.agentId ??= await _listed(
     c,
     startId,
-    teamId,
+    agent.machineId,
     startWait,
   );
 
@@ -510,8 +494,7 @@ Future<String> _listed(
       wait,
       onTimeout: () => throw ImportFailure(
         ImportStep.start,
-        "The agent has not started yet on this $importComputerWord's Team "
-        'account. Import '
+        'The agent has not started yet on this $importComputerWord. Import '
         'again to keep waiting.',
         code: 'start-timeout',
       ),
