@@ -19,6 +19,11 @@ run-name: Desktop ${{ inputs.prepare_only && 'candidate' || inputs.test_candidat
 # The publish job combines every platform's parts with a generation-conditional write and verifies every
 # public download while holding the publication lock. Different releases may build concurrently.
 #
+# Jobs that run the ref's own build (build-macos, build-linux, build-windows) hold no secret and no cloud
+# identity; they hand their packages on as workflow artifacts. Every job that signs or writes to the bucket
+# runs in the `release` environment, which takes only main and v*_desktop tags, so a branch run builds and
+# writes nothing (#4434). The admin steps are in docs/validation-and-release.md.
+#
 # The tag IS the version — CI never auto-bumps. The scripts bump by reading the current version out
 # of the remote metadata.json, so four jobs left to bump on their own would read the same number
 # and publish four different versions under one tag.
@@ -150,11 +155,11 @@ jobs:
             echo '::error::prepare_only and test_candidate_reuse are separate runs'
             exit 1
           fi
-          # Only main and v*_desktop tags reach the release environment that signs. A release (or a
-          # metadata-test dry run) from anywhere else would build for 15 minutes and publish nothing.
+          # Only main and v*_desktop tags reach the release environment that signs and writes the bucket. A
+          # release, a metadata-test dry run or a promotion check from anywhere else would publish nothing.
           on_release_ref=false
           [[ "$REF" = refs/heads/main || "$REF" =~ ^refs/tags/v.*_desktop$ ]] && on_release_ref=true
-          if [[ "$on_release_ref" != true && "$PREPARE_ONLY" != true && "$TEST_REUSE" != true ]]; then
+          if [[ "$on_release_ref" != true && "$PREPARE_ONLY" != true ]]; then
             echo "::error::$REF cannot release: a release runs from main or a vX.Y.Z_desktop tag. A branch can only prepare, which builds unsigned"
             exit 1
           fi
@@ -191,13 +196,16 @@ jobs:
           echo "test_prefix=$test_prefix" >> "$GITHUB_OUTPUT"
           echo "Desktop **$ver** · candidate=$PREPARE_ONLY · disposable promotion=$TEST_REUSE" >> "$GITHUB_STEP_SUMMARY"
           if [[ "$PREPARE_ONLY" = true && "$on_release_ref" != true ]]; then
-            echo "Branch build check: every platform builds unsigned and nothing is sealed for reuse; the release builds and signs from its tag." >> "$GITHUB_STEP_SUMMARY"
+            echo "Branch build check: every platform builds unsigned, nothing is uploaded or sealed for reuse; the release builds and signs from its tag." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-  # Reject duplicate/older versions and broken credentials before expensive builds.
+  # Reject duplicate/older versions and broken credentials before expensive builds. A branch run (only
+  # --prepare, an unsigned build check) skips it: it writes nothing, so there is nothing to check.
   preflight:
     needs: version
+    if: ${{ (github.ref == 'refs/heads/main' || (startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '_desktop'))) }}
     runs-on: ubuntu-latest
+    environment: release
     timeout-minutes: 24  # follows an existing candidate for at most its 20-minute budget
     outputs:
       reused: ${{ steps.candidate.outputs.reused }}
@@ -277,7 +285,7 @@ jobs:
   # signing material and no cloud identity: every bundle is signed ad hoc, and sign-macos signs them.
   build-macos:
     needs: [version, preflight]
-    if: needs.preflight.outputs.reused != 'true'
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.preflight.result != 'failure' && needs.preflight.outputs.reused != 'true' }}
     runs-on: macos-15
     timeout-minutes: 40
     defaults:
@@ -419,11 +427,10 @@ jobs:
 
   build-linux:
     needs: [version, preflight]
-    if: needs.preflight.outputs.reused != 'true'
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.preflight.result != 'failure' && needs.preflight.outputs.reused != 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
-      # No max-parallel: each job writes its own scratch manifest, so they cannot race.
       fail-fast: false
       matrix:
         include:
@@ -435,9 +442,6 @@ jobs:
           - { runner: ubuntu-22.04-arm, arch: arm64 }
     env:
       TARGET_ARCH: ${{ matrix.arch }}
-      METADATA_PATH: ${{ needs.version.outputs.scratch_prefix }}/linux-${{ matrix.arch }}.json
-      GCS_PATH: ${{ needs.version.outputs.artifact_prefix }}/Harness-linux-${{ matrix.arch }}.AppImage
-      CDN_ASSET_BASE_URL: ${{ needs.version.outputs.artifact_base_url }}
     defaults:
       run:
         working-directory: desktop
@@ -482,17 +486,56 @@ jobs:
           chmod +x "$RUNNER_TEMP/appimagetool"
           echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
 
+      - name: Build and package linux-${{ matrix.arch }}
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: bash scripts/upload-desktop-linux.sh "$VERSION" --no-upload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux-${{ matrix.arch }}
+          path: desktop/build/Harness-linux-${{ matrix.arch }}-${{ needs.version.outputs.version }}.AppImage
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  # Uploads both AppImages build-linux packaged and writes their scratch manifests. Release environment only.
+  upload-linux:
+    needs: [version, preflight, build-linux]
+    if: ${{ needs.preflight.outputs.reused != 'true' && (github.ref == 'refs/heads/main' || (startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '_desktop'))) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      ARTIFACT_PREFIX: ${{ needs.version.outputs.artifact_prefix }}
+      SCRATCH_PREFIX: ${{ needs.version.outputs.scratch_prefix }}
+      CDN_ASSET_BASE_URL: ${{ needs.version.outputs.artifact_base_url }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /.github/actions/setup-gcloud/
+            /desktop/scripts/upload-desktop-linux.sh
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-linux-*
+          path: desktop/build
+          merge-multiple: true
       - name: Authenticate to GCP (workload identity federation)
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - uses: ./.github/actions/setup-gcloud
-
-      - name: Build and upload linux-${{ matrix.arch }}
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
-        run: bash scripts/upload-desktop-linux.sh "$VERSION"
+      - name: Upload both AppImages and write their parts
+        run: |
+          set -euo pipefail
+          for arch in x64 arm64; do
+            TARGET_ARCH="$arch" METADATA_PATH="$SCRATCH_PREFIX/linux-$arch.json" \
+              GCS_PATH="$ARTIFACT_PREFIX/Harness-linux-$arch.AppImage" \
+              bash desktop/scripts/upload-desktop-linux.sh "$VERSION" --upload-only
+          done
 
   # Each architecture on its own runner, like Linux (docs/superpowers/specs/2026-10-19-windows-installer-design.md
   # §2.2). sign-windows signs what these build. The x64 job also builds harness-install.exe, one x64
@@ -501,7 +544,7 @@ jobs:
     # The name desktop-release-candidate.py's check_jobs requires: without it GitHub would add the target too.
     name: build-windows (${{ matrix.runner }}, ${{ matrix.arch }})
     needs: [version, preflight]
-    if: needs.preflight.outputs.reused != 'true'
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.preflight.result != 'failure' && needs.preflight.outputs.reused != 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
@@ -664,8 +707,9 @@ jobs:
   upload-windows:
     needs: [version, build-windows, sign-windows]
     # Signed when WINDOWS_SIGNING is `required`, and then never without it; unsigned only while signing is off.
-    if: ${{ !cancelled() && needs.build-windows.result == 'success' && (needs.sign-windows.result == 'success' || (needs.sign-windows.result == 'skipped' && vars.WINDOWS_SIGNING != 'required')) }}
+    if: ${{ !cancelled() && (github.ref == 'refs/heads/main' || (startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '_desktop'))) && needs.build-windows.result == 'success' && (needs.sign-windows.result == 'success' || (needs.sign-windows.result == 'skipped' && vars.WINDOWS_SIGNING != 'required')) }}
     runs-on: ubuntu-latest
+    environment: release
     timeout-minutes: 15
     env:
       VERSION: ${{ needs.version.outputs.version }}
@@ -697,9 +741,10 @@ jobs:
   # The only job that touches the REAL manifest, and the only one that can, because it is the only
   # one that runs after every build has finished.
   publish:
-    needs: [version, preflight, build-macos, sign-macos, build-linux, build-windows, upload-windows]
-    if: ${{ always() && !inputs.prepare_only && needs.version.result == 'success' && needs.preflight.result == 'success' && (needs.preflight.outputs.reused == 'true' || (needs.sign-macos.result == 'success' && needs.build-linux.result == 'success' && needs.upload-windows.result == 'success')) }}
+    needs: [version, preflight, build-macos, sign-macos, build-linux, upload-linux, build-windows, upload-windows]
+    if: ${{ always() && !inputs.prepare_only && needs.version.result == 'success' && needs.preflight.result == 'success' && (needs.preflight.outputs.reused == 'true' || (needs.sign-macos.result == 'success' && needs.upload-linux.result == 'success' && needs.upload-windows.result == 'success')) }}
     runs-on: ubuntu-latest
+    environment: release
     timeout-minutes: 8
     concurrency:
       # Include verification: another release must not advance the live manifest
@@ -856,9 +901,10 @@ jobs:
   # precisely when scratch manifests are left behind — the builds that DID succeed have already
   # written theirs. `if: always()` here means the prefix is cleared whatever happened upstream.
   cleanup:
-    needs: [version, preflight, build-macos, sign-macos, build-linux, build-windows, upload-windows, candidate, publish]
-    if: ${{ always() && needs.version.result == 'success' }}
+    needs: [version, preflight, build-macos, sign-macos, build-linux, upload-linux, build-windows, upload-windows, candidate, publish]
+    if: ${{ always() && needs.version.result == 'success' && (github.ref == 'refs/heads/main' || (startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '_desktop'))) }}
     runs-on: ubuntu-latest
+    environment: release
     steps:
       - uses: actions/checkout@v7
         with:
@@ -903,11 +949,12 @@ jobs:
   # destination differs. A successful receipt binds nine verified generations to
   # its full producer source tree, Desktop build inputs, version, run and attempt.
   candidate:
-    needs: [version, sign-macos, build-linux, upload-windows]
+    needs: [version, sign-macos, upload-linux, upload-windows]
     # Explicit results: an implicit success() also inspects skipped ancestors, and sign-windows is skipped while
     # WINDOWS_SIGNING is off. A branch candidate has no signed macOS (sign-macos skipped), so it seals nothing.
-    if: ${{ !cancelled() && inputs.prepare_only && needs.version.result == 'success' && needs.sign-macos.result == 'success' && needs.build-linux.result == 'success' && needs.upload-windows.result == 'success' }}
+    if: ${{ !cancelled() && inputs.prepare_only && needs.version.result == 'success' && needs.sign-macos.result == 'success' && needs.upload-linux.result == 'success' && needs.upload-windows.result == 'success' }}
     runs-on: ubuntu-latest
+    environment: release
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v7
@@ -943,6 +990,7 @@ jobs:
   expire-candidates:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
+    environment: release
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -966,6 +1014,8 @@ jobs:
   publication-test:
     if: ${{ inputs.test_publication }}
     runs-on: ubuntu-latest
+    # A dispatch from a branch is refused here, visibly.
+    environment: release
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
