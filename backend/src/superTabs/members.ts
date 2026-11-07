@@ -19,6 +19,16 @@ export function mayAcceptAll(state: SuperTabState, personId: string): boolean {
   return engines.length > 0 && engines.every(q => !!q?.known && q.windows.length === 0)
 }
 
+/** Whether [group]'s requester accepted it (security review 1 of #3575): their Accept, or the Accept all they may choose (API
+ *  accounts alone). Only then does their Member take it, or an agent start on their computer for it: anyone may name them
+ *  requester, and a person who never chose a mode has nothing staged to accept. */
+export function acceptedByRequester(state: SuperTabState, group: Conversation): boolean {
+  const person = state.people.find(p => p.id === group.requesterId)
+  if (!person) return false
+  if (group.taskApproval) return group.taskApproval.state === 'approved' && group.taskApproval.personId === person.id
+  return person.approvalMode === 'autoApprove' && mayAcceptAll(state, person.id)
+}
+
 export const ACCEPT_ALL_REFUSAL = 'Accept all stays off for Claude and ChatGPT subscriptions until Anthropic and OpenAI confirm it in writing. Accept each task.'
 
 /** [personId]'s Member in [projectId] (task #4697): their running agent with that main project, else its start still pending.
@@ -49,14 +59,15 @@ const RANK: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3 }
 /** [personId]'s tasks waiting in [projectId], in the order their Member takes them: priority (P0 first, P2 when unset), then
  *  age (the lower task number). Only what may start now (dispatch.ts openTasks): accepted, not paused, nobody on it. */
 export function memberQueue(state: SuperTabState, projectId: string, personId: string, now: number): Conversation[] {
-  return openTasks(state, projectId, now).filter(g => !g.reviewOf && g.requesterId === personId)
+  return openTasks(state, projectId, now).filter(g => !g.reviewOf && g.requesterId === personId && acceptedByRequester(state, g))
     .sort((a, b) => (RANK[a.priority ?? 'P2'] ?? 2) - (RANK[b.priority ?? 'P2'] ?? 2) || (a.number ?? 0) - (b.number ?? 0))
 }
 
-/** Whether [group] is another person's ask, never [agent]'s to take on its own (task #4697): it goes to its person's Member, so
- *  one person's work never runs under another person's login (AGENTS.md, Secure). */
+/** Whether [group] is another person's accepted ask, never [agent]'s to take on its own (task #4697): it goes to its person's
+ *  Member, so one person's work never runs under another person's login (AGENTS.md, Secure). An ask they have not accepted
+ *  stays with the crew as before, until Accept on every task (follow-up of #4697). */
 export const askedByAnother = (state: SuperTabState, group: Conversation, agent: Agent): boolean =>
-  !!group.requesterId && group.requesterId !== agent.contributorId && state.people.some(p => p.id === group.requesterId)
+  !!group.requesterId && group.requesterId !== agent.contributorId && acceptedByRequester(state, group)
 
 /** Whether [agent] holds no task now, and is not stopping, gone or still launching (an asleep one is free: its assignment wakes
  *  it). */

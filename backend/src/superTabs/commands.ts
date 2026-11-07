@@ -11,7 +11,7 @@ import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from 
 import { admitByRoom, admitMachineStart, AGENT_MEMORY_BYTES, noRepositoryStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamAccountPool, teamPoolsOf, teamWorkCheck, TEAM_ACCOUNTS_GONE, NOT_YOUR_COMPUTER, type ContributedMachine } from './machines.js'
 import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
-import { ACCEPT_ALL_REFUSAL, HELPER_REFUSALS, helperCheck, mayAcceptAll, memberMachine, memberOf, memberQueue } from './members.js'
+import { acceptedByRequester, ACCEPT_ALL_REFUSAL, HELPER_REFUSALS, helperCheck, mayAcceptAll, memberMachine, memberOf, memberQueue } from './members.js'
 import { ownedPath, pathsOverlap } from './ownedPaths.js'
 import { addedAgentName, newAgentName, renameAgentTo } from './agentRename.js'
 import { addCrew, CREW_ROLE_MAX, removeCrew } from './crew.js'
@@ -5109,7 +5109,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const requester = state.people.find(p => p.id === group.requesterId) ?? fail('NO_REQUESTER', 'This task has no person to start a Member for.', 409)
       const lead = actor.kind === 'agent' && ledProject(state, actor.agentId)?.id === project.id
       if (!lead && !(actor.kind === 'person' && actor.userId === requester.id)) fail('FORBIDDEN', 'Only the project\'s coordinator or the task\'s requester starts its Member.', 403)
-      if (group.taskApproval && group.taskApproval.state !== 'approved') fail('TASK_APPROVAL_REQUIRED', 'Its person accepts this task first.', 409)
+      if (!acceptedByRequester(state, group)) fail('TASK_NOT_ACCEPTED', 'Its person accepts this task first.', 409)
       startMember(group, requester.id)
       break
     }
@@ -5119,7 +5119,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const requester = state.people.find(p => p.id === group.requesterId) ?? fail('NO_REQUESTER', 'This task has no person to help.', 409)
       const lead = actor.kind === 'agent' && ledProject(state, actor.agentId)?.id === project.id
       if (!lead && !(actor.kind === 'person' && actor.userId === requester.id)) fail('FORBIDDEN', 'Only the project\'s coordinator or the task\'s requester asks for a helper.', 403)
-      if (group.taskApproval && group.taskApproval.state !== 'approved') fail('TASK_APPROVAL_REQUIRED', 'Its person accepts this task first.', 409)
+      if (!acceptedByRequester(state, group)) fail('TASK_NOT_ACCEPTED', 'Its person accepts this task first.', 409)
       if (activeWork(group)) fail('WORK_ACTIVE', 'This task already has its agent.', 409)
       const member = memberOf(state, requester.id, project.id)?.agent ?? fail('NO_MEMBER', 'Its person has no Member in this project yet.', 409)
       // One helper per task: a second ask while it starts, or once it runs here, changes nothing.

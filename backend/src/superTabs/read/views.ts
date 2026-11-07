@@ -94,8 +94,9 @@ export const seenIn = (parts: ReaderView['parts']): Set<string> =>
 
 export function agentView(agent: Agent): AgentView {
   // A main project goes in the derived row, to its project's readers only: a private one's id says the project exists. A
-  // Member's mark names it too (members.ts), and is its host's alone (read/hostRows.ts sends the agent as stored).
-  const { downNamed: _named, downSince: _since, limitedUntil: _limit, roleId: _role, mainProjectId: _main, member: _member, ...rest } = agent
+  // Member's mark and its set-up record name it too (members.ts; security review 2 of #3575), and are its host's alone
+  // (read/hostRows.ts sends the agent as stored).
+  const { downNamed: _named, downSince: _since, limitedUntil: _limit, roleId: _role, mainProjectId: _main, member: _member, setUp: _setUp, ...rest } = agent
   return withAvatarView(rest) as AgentView
 }
 
