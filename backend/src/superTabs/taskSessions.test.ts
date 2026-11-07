@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { Command } from './commands.js'
 import type { Actor } from './model.js'
 import { canReadGroup, agentProjectId } from './projects.js'
-import { applyMemberSetUp } from './taskSessions.js'
+import { applyMemberSetUp, endBesidePrivate } from './taskSessions.js'
+import { applyDiskReport } from './machines.js'
 import { code, config, mate, NOW, own, swarm, type Swarm } from './taskSessions.test-support.js'
 
 // Task #4543 (spec #4489 section 2, build task 6): a Member is one agent to its person, with a chat session that talks with
@@ -176,4 +177,70 @@ describe('what a Member\'s host reports set up', () => {
   function finishAll(f: Swarm) {
     for (const c of f.state.conversations.filter(c => c.assignment?.status === 'working')) finish(f, c.id, c.assignment!.agentId)
   }
+})
+
+// Security review 2 of #3553: every way a task session gets work meets its Member's checks, and private files that reach its
+// computer later end its public work there before they arrive, or as soon as its host says they are there.
+describe('a task session beside a private project\'s files', () => {
+  /** mate's Member with its task session in app, which has finished its first task; and a private project mate reads. */
+  function beside() {
+    const f = swarm()
+    const app = f.project('app'), secret = f.project('secret', 'private')
+    const person = f.state.people.find(p => p.id === 'mate')!
+    f.state.projects!.find(p => p.id === secret.projectId)!.members.push({ id: person.id, generation: person.generation } as never)
+    const session = host(f, assign(f, app.task, app.asPm).result.startId as string, 'h-app')
+    finish(f, app.task, session)
+    return { f, app, secret, session }
+  }
+
+  it('is refused by its own id as by its Member\'s: private files there, or its Member busy', () => {
+    const { f, app, secret, session } = beside()
+    f.machine().privateOnDisk = [secret.projectId]
+    expect(code(() => f.run({ type: 'work.assign', conversationId: app.newTask('by id'), agentId: session }, app.asPm))).toBe('MEMBER_PRIVATE_ON_DISK')
+    delete f.machine().privateOnDisk
+    const docs = f.project('docs')
+    assign(f, docs.task, docs.asPm)
+    expect(code(() => f.run({ type: 'work.assign', conversationId: app.newTask('busy'), agentId: session }, app.asPm))).toBe('MEMBER_BUSY')
+  })
+
+  it('loses its task and stops once its host reports a private project\'s files there', () => {
+    const { f, app, secret, session } = beside()
+    const next = app.newTask('next')
+    f.run({ type: 'work.assign', conversationId: next, agentId: f.buddy }, app.asPm)
+    expect(f.group(next).assignment).toMatchObject({ agentId: session, status: 'working' })
+    applyDiskReport(f.state, f.machine(), { ...f.machine().observation!, projectsOnDisk: [secret.projectId] })
+    const rows = endBesidePrivate(f.state, 'mate-mac', NOW)
+    expect(f.group(next).assignment!.status).toBe('lost')
+    expect(f.agent(session).workDecision).toBe('stop')
+    expect(rows.some(r => r.conversationId === next)).toBe(true)
+  })
+
+  it('makes a private project\'s start there wait until its public task sessions are down, which stop for it', () => {
+    const { f, secret, session } = beside()
+    const start = f.run({ type: 'agent.start', request: { conversationId: secret.task, machineId: 'mate-mac', engine: 'claude', name: 'Secret worker',
+      cwd: `/swarm/${secret.projectId}`, worktree: true, requirements: { memoryBytes: 1, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as Command,
+      mate, own('mate')).result.startId as string
+    expect(code(() => f.run({ type: 'agent.startDispatch', startId: start }, mate, own('mate')))).toBe('PRIVATE_WAITS')
+    endBesidePrivate(f.state, 'mate-mac', NOW)
+    expect(f.agent(session).workDecision).toBe('stop')
+    f.agent(session).downSince = new Date(NOW).toISOString()
+    f.run({ type: 'agent.startDispatch', startId: start }, mate, own('mate'))
+    expect(f.machine().privateOnDisk).toEqual([secret.projectId])
+  })
+
+  it('does not take its held task when private files reached its computer while it started', () => {
+    const f = swarm()
+    const app = f.project('app'), secret = f.project('secret', 'private')
+    const startId = assign(f, app.task, app.asPm).result.startId as string
+    f.machine().privateOnDisk = [secret.projectId]
+    const session = host(f, startId, 'h-app')
+    expect(f.group(app.task).assignment).toBeNull()
+    expect(f.agent(session).workDecision).toBe('stop')
+  })
+
+  it('tells nobody of a private project in its Member\'s set-up', () => {
+    const { f, app, secret } = beside()
+    applyMemberSetUp(f.state, 'mate-mac', { [f.buddy]: [app.projectId, secret.projectId] }, NOW)
+    expect(f.agent(f.buddy).setUp!.map(e => e.projectId)).toEqual([app.projectId])
+  })
 })
