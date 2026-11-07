@@ -20,6 +20,8 @@ import { crewClock, DISPATCH_RULES, laneOf, nudgeLine, returnReason, type Dispat
 import { handed, pickUp, unclaimedAt, unclaimedReason } from './handed.js'
 import { isBuddy } from './buddies.js'
 import { closeMergedLost } from './mergedTasks.js'
+import { stepCandidates } from './reviewerPick.js'
+import { noTesterFree, stepOs } from './reviewTable.js'
 
 // Work never sits with a dead owner (design: "A Swarm that never stops", 2026-10-26). A worker's active assignment is held
 // by a lease that its progress renews. A dead, stalled or limited worker loses it within minutes: the assignment becomes
@@ -261,13 +263,15 @@ function answeredAt(group: Conversation, assignment: Assignment): number | undef
   return assignment.status === 'needs_human' && waiting?.assignmentId === assignment.id ? waiting.answeredAt ?? undefined : undefined
 }
 
-/** A task waits on a person (needs_human, or blocked: its agent cannot go on) and its agent is alive: its machine's last report
- *  lists the session running. Its terminal prints nothing while it waits, so quiet time does not count (Ken, 2026-11-04, #2969:
- *  a task waiting on Huy was lost after 30 quiet minutes, twice). Not once the person answered (the agent then has 30 minutes
- *  from the answer, leaseEnd), and not for an agent no report shows running: that one is gone and loses it as before. */
+/** A task waits on a person (needs_human, or blocked: its agent cannot go on; or its terminal at a prompt its host alerted,
+ *  terminal.ts, whatever its status says, task #4217) and its agent is alive: its machine's last report lists the session
+ *  running. Its terminal prints nothing while it waits, so quiet time does not count (Ken, 2026-11-04, #2969: a task waiting on
+ *  Huy was lost after 30 quiet minutes, twice). Not once the person answered (the agent then has 30 minutes from the answer,
+ *  leaseEnd), and not for an agent no report shows running: that one is gone and loses it as before. */
 function waitingOnPerson(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment): boolean {
-  return (assignment.status === 'needs_human' || assignment.status === 'blocked') && answeredAt(group, assignment) === undefined
-    && !!state.machines?.find(m => m.machineId === worker.machineId)?.observation?.runningHarnessIds.includes(worker.harnessId)
+  const asked = ((assignment.status === 'needs_human' || assignment.status === 'blocked') && answeredAt(group, assignment) === undefined)
+    || !!worker.alerting?.includes('prompt')
+  return asked && !!state.machines?.find(m => m.machineId === worker.machineId)?.observation?.runningHarnessIds.includes(worker.harnessId)
 }
 
 /** When a worker's lease ends: from its own last status, check or post (for an assignment from before leases, its group's
@@ -370,16 +374,23 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
   const result = assignment.result?.replace(/[.\s]+$/, '')
   const pr = group.pullRequestUrls?.at(-1)
   const source = { kind: 'work-lost', agentId: worker.id, assignmentId: assignment.id, reason }
+  // A step named for an OS that no free agent of that OS can take waits for one, and says so (task #3926): the dispatch never
+  // hands it to another OS, so without these words it would only sit there.
+  const os = stepOs(group)
+  const waits = os && !stepCandidates(state, group, now).length ? noTesterFree(os) : null
   // What happened, never the next step (project instructions, phase 4): the instructions say what the coordinator does.
   const wake = `${worker.displayName ?? worker.name} lost its task "${group.title}": ${reason}. Last progress ${since}. `
     + `Last result: ${result || 'none'}.${pr && !result?.includes(pr) ? ` Pull request: ${pr}.` : ''}`
     + (resumeAt ? ` It resumes by itself when its limit resets at ${resumeAt.slice(11, 16)} UTC.` : '')
+    + (waits ? ` ${waits}: the step waits for one.` : '')
   // Named by the loss, not the task: a task resumed after a usage limit keeps its id and can be lost again (2026-10-28).
   const loss = String(now)
   return [...leadNoticeRows(toLead(state, worker, { id: stableId('work-lost', assignment.id, loss), conversationId: group.id, author: sender, replyTo: null,
     recipients: [], text: wake, source }).map(row => reachable(state, row))),
   reachable(state, { id: stableId('work-lost', assignment.id, loss, 'agent'), conversationId: group.id, author: sender, replyTo: null, recipients: [worker.id], source,
     text: `Your task "${group.title}" moved: ${reason}. Stop working on it; your status and results for it are no longer accepted.` }),
+  ...(waits ? [{ id: stableId('work-lost', assignment.id, loss, 'waits'), conversationId: group.id, author: sender, replyTo: null, recipients: [],
+    text: `${waits}: this step waits until one is.`, source: { kind: 'system' } }] : []),
   // And its project chat's thread says Stuck, as no command saw the loss (task #2693).
   ...endedReply(state, group, stableId('task-line-lost', assignment.id, loss), sender)]
 }

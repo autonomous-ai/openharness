@@ -13,7 +13,7 @@ import type { CorePorts } from '../core/api.js'
  */
 import type { CoreApi, ServiceRequests } from '../core/api.js'
 import { readCodexRateLimits, type CodexRateLimits, type CodexWindow } from '../lib/codexRateLimits.js'
-import { accountKey, readClaudeReport, type ClaudeReport, type ClaudeReportWindow, type UsageProviderId } from '../lib/quotaReports.js'
+import { accountKey, readClaudeReport, type ClaudeReport, type UsageProviderId } from '../lib/quotaReports.js'
 import { profileHome } from '../lib/claudeProfiles.js'
 import { internalOnThrow } from './requestErrors.js'
 
@@ -46,6 +46,11 @@ const DEPS: UsageDeps = { codex: readCodexRateLimits, now: Date.now, env: proces
 /** How long one Codex read stands for its home: the router asks every 3 minutes, Desktop on connect. */
 const CODEX_FRESH_MS = 3 * 60_000
 const NO_CLAUDE_REPORT = 'Claude Code has not reported its allowance on this machine yet: it does after its first reply in a session Harness started.'
+/** How long a Claude report stands: Claude Code writes one after each reply, and the account's own use elsewhere moves it
+ *  unseen, so an older one is a guess, not a reading (task #4217). */
+const CLAUDE_REPORT_FRESH_MS = 60 * 60_000
+const STALE_CLAUDE_REPORT = 'Claude Code last reported its allowance on this machine more than an hour ago: it reports again after its next reply in a session Harness started.'
+const RESET_SINCE_REPORT = 'Claude Code\'s allowance reset after its last report on this machine: it reports again after its next reply in a session Harness started.'
 const CODEX_UNREACHABLE = {
   missing: 'Codex is not installed where this machine\'s daemon can start it.',
   failed: 'Codex did not answer when asked for its allowance on this machine.',
@@ -97,22 +102,23 @@ export function startUsage(core: CoreApi, deps: UsageDeps = DEPS): ServiceReques
   }
 }
 
-/** Claude's report as Anthropic's usage answer was shaped (`utilization`, ISO `resets_at`). A report is kept however old:
- *  each window says when it resets, and one whose reset has passed is unused until Claude Code reports again. */
+/** Claude's report as Anthropic's usage answer was shaped (`utilization`, ISO `resets_at`). Only what it still knows: a report
+ *  over [CLAUDE_REPORT_FRESH_MS] old is unknown, and so is a window whose reset has passed since, which says nothing of its use
+ *  after the reset; never read as unused (task #4217). */
 function claudeReading(report: ClaudeReport | null, now: number): UsageReading {
-  if (!report) return { provider: 'claude', account: null, outcome: 'unreachable', source: 'cli', message: NO_CLAUDE_REPORT }
+  const unknown = (message: string): UsageReading => ({ provider: 'claude', account: null, outcome: 'unreachable', source: 'cli', message })
+  if (!report) return unknown(NO_CLAUDE_REPORT)
+  if (now - report.at > CLAUDE_REPORT_FRESH_MS) return unknown(STALE_CLAUDE_REPORT)
   const body: Record<string, unknown> = {}
   for (const name of ['five_hour', 'seven_day'] as const) {
     const window = report[name]
-    if (window) body[name] = claudeWindow(window, now)
+    const resetsAt = window?.resets_at == null ? null : window.resets_at * 1000
+    if (window && (resetsAt === null || resetsAt > now)) {
+      body[name] = { utilization: window.used_percentage, resets_at: resetsAt === null ? null : new Date(resetsAt).toISOString() }
+    }
   }
+  if (!Object.keys(body).length) return unknown(RESET_SINCE_REPORT)
   return { provider: 'claude', account: null, outcome: 'answered', httpStatus: 200, source: 'cli', body }
-}
-
-function claudeWindow(window: ClaudeReportWindow, now: number) {
-  const resetsAt = window.resets_at === null ? null : window.resets_at * 1000
-  if (resetsAt !== null && resetsAt <= now) return { utilization: 0, resets_at: null }
-  return { utilization: window.used_percentage, resets_at: resetsAt === null ? null : new Date(resetsAt).toISOString() }
 }
 
 /** Codex's read as its usage answer was shaped (`rate_limit.primary_window`, seconds-long windows, unix `reset_at`). */

@@ -41,10 +41,8 @@ export interface NewArgs {
   cwd: string | null
   /** A new project: its name, or '' to let the clock name it; null when `cwd` is given. */
   projectName: string | null
-  mode: string
-  /** True when `--mode`/`--plan` was typed by the person. The default `auto` is not a request: see
-   *  [newAgentPayload]. */
-  modeGiven: boolean
+  /** The mode the person typed (`--mode`, `--plan`); null when none was: the agent starts in its own default. */
+  mode: string | null
   prompt: string | null
   name: string | null
   /** A cloud coding agent's GitHub repository, `owner/name` or its address, as typed: the machine reads it. */
@@ -73,7 +71,7 @@ export const NEW_USAGE = [
   '                 of your own: Claude Code and Codex ask the person to trust a folder Harness did not make',
   '',
   '  --new [name]   a new project, named <name> or after the agent and the time',
-  '  --mode <mode>  auto (default), ask, plan or full, where the agent has it',
+  '  --mode <mode>  auto, ask, plan or full, where the agent has it (default: its own settings)',
   '  --plan         the same as --mode plan',
   '  --task <t>     the first message, sent as the harness starts (--prompt is the same)',
   '  -- <words…>    everything after -- is the first message, unquoted:',
@@ -103,8 +101,7 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
   let machine: string | null = null
   let folder: string | null = null
   let projectName: string | null = null
-  let mode = 'auto'
-  let modeGiven = false
+  let mode: string | null = null
   let prompt: string | null = null
   let name: string | null = null
   let repo: string | null = null
@@ -126,8 +123,8 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
       break
     }
     if (word === '--json') json = true
-    else if (word === '--plan') { mode = 'plan'; modeGiven = true }
-    else if (word === '--mode') { mode = value(word, i); modeGiven = true; i++ }
+    else if (word === '--plan') mode = 'plan'
+    else if (word === '--mode') { mode = value(word, i); i++ }
     else if (word === '--prompt' || word === '--task') { prompt = value(word, i); i++ }
     else if (word === '--name') { name = value(word, i); i++ }
     // The app's New Harness box sends a model the same way; `harness new` had no word for it, so an agent asked to
@@ -176,7 +173,7 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
   // What the cloud service would refuse, refused before anything is sent, in its words.
   const cloudRefusal = isCloudAgent(words[0]) ? cloudRequestRefusal(words[0], prompt ?? '', [repo]) : null
   if (cloudRefusal) throw new NewUsageError(cloudRefusal)
-  if (!MODES.has(mode)) throw new NewUsageError(`--mode is one of ${[...MODES].join(', ')}.`)
+  if (mode !== null && !MODES.has(mode)) throw new NewUsageError(`--mode is one of ${[...MODES].join(', ')}.`)
   if (words.length > 2) throw new NewUsageError(`Too many words: ${words.slice(2).join(' ')}.`)
   if (words[1] !== undefined) {
     if (projectName !== null && projectName !== '') throw new NewUsageError('Name the new project once.')
@@ -212,7 +209,7 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
     if (machine === null) cwd = env.cwd
     else projectName = ''
   }
-  return { agent: words[0] ?? 'claude', machine, cwd, projectName, mode, modeGiven, prompt, name, repo, acuLimit, model, json }
+  return { agent: words[0] ?? 'claude', machine, cwd, projectName, mode, prompt, name, repo, acuLimit, model, json }
 }
 
 /** The `agent_create` payload for [args]: the same fields the app's box sends. [baseEngine] is the
@@ -222,19 +219,13 @@ export function newAgentPayload(args: NewArgs, cwd: string | null, baseEngine = 
   const harness = args.agent.includes('/') ? args.agent : null
   const terminal = args.agent === 'terminal'
   const engine = harness ? baseEngine : args.agent
-  // A mode is only an engine's to take. The usage says `--mode` applies "where the agent has it", but
-  // the default `auto` went to every engine, and the daemon refuses a mode an engine has no
-  // `PERMISSION_MODES` row for (`INVALID_PERMISSION_MODE` in backendSocket.ts) — so the ten engines
-  // without a row (hermes, pi, amp, muse, kilo, grok, devin, commandcode, agy, copilot) could not be
-  // created from the CLI at all, and neither could a store harness running on one of them.
-  // An unasked-for default is therefore left out: the engine opens in its own default mode. A mode the
-  // person typed is still sent, so the daemon's refusal — "refused rather than quietly launched in
-  // some other mode" — stays the answer where a choice was actually made.
-  const hasMode = ENGINE_NAMES.has(engine) && permissionModeFlags(engine as AgentEngine, args.mode) !== null
-  const mode = args.modeGiven || hasMode ? args.mode : null
-  // A row that keeps claiming Auto while running without the flag is the more expensive lie, so the
-  // bypass is only claimed where the engine really has the mode it was asked for.
-  const approves = mode !== null && (mode === 'auto' || mode === 'full') && hasMode
+  // A mode is sent only when the person typed one (Swarm v3, task #4215): the agent starts with its owner's own settings.
+  // The default `auto` once went to every engine, which the daemon refused for the ten with no PERMISSION_MODES row
+  // (`INVALID_PERMISSION_MODE`), and then to every engine that had it. A typed mode is sent as typed, so the daemon's
+  // refusal stays the answer where a choice was made. A row that claims Auto while running without the flag is the more
+  // expensive lie, so the bypass is only claimed where the engine has the mode.
+  const mode = terminal ? null : args.mode
+  const approves = (mode === 'auto' || mode === 'full') && ENGINE_NAMES.has(engine) && permissionModeFlags(engine as AgentEngine, mode) !== null
   return {
     engine,
     ...(harness ? { dsh: harness } : {}),
@@ -242,8 +233,8 @@ export function newAgentPayload(args: NewArgs, cwd: string | null, baseEngine = 
       projectSource: 'new',
       ...(args.projectName ? { projectName: projectFolderSlug(args.projectName) } : {}),
     }),
-    bypassPermission: !terminal && approves,
-    ...(terminal || mode === null ? {} : { permissionMode: mode }),
+    bypassPermission: approves,
+    ...(mode === null ? {} : { permissionMode: mode }),
     ...(args.prompt ? { prompt: args.prompt } : {}),
     ...(args.name ? { name: args.name } : {}),
     ...(args.repo ? { repositoryUrl: args.repo } : {}),
@@ -563,10 +554,10 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
     // Full mode turns off the new agent's own permission checks and sandbox (`--dangerously-skip-permissions`,
     // `--dangerously-bypass-approvals-and-sandbox`). Harness's agent commands run without the person being asked
     // (engines/facets/hooks.ts HarnessAllowance), so a sandboxed agent could have started one with any task and no one
-    // asked: the review of #1232. Auto, the default, keeps each engine's own checks. The person still chooses full.
+    // asked: the review of #1232. With no mode it starts in its owner's own default. The person still chooses full.
     if (origin && args.mode === 'full') {
       throw new Error('An agent cannot start a harness in full mode: it would run with its permission checks and sandbox off, '
-        + 'and no one was asked. Start it without --mode (auto, where its own checks run), or ask the person to start it in full mode. '
+        + 'and no one was asked. Start it without --mode (its owner\'s own default mode), or ask the person to start it in full mode. '
         + 'Nothing was started.')
     }
     let machineId = deps.localMachineId
