@@ -194,9 +194,10 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
       };
       // One filled box as large as the slot, under a see-through Material that
       // only carries the rows' ink: a Material's own surface was drawn only as
-      // far as the rows, and the window's backing showed below them.
+      // far as the rows, and the window's backing showed below them. It is the
+      // Swarm's one surface, shared with the left and middle panes (#4465).
       return ColoredBox(
-        color: Theme.of(context).colorScheme.surface,
+        color: AppPalette.swarmField,
         child: SizedBox.expand(
           child: Material(
             type: MaterialType.transparency,

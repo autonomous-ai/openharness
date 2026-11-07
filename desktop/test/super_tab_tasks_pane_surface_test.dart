@@ -51,6 +51,7 @@ void main() {
     Brightness brightness,
     int count, {
     double width = windowWidth,
+    String? chat,
   }) async {
     final f = TasksFixture();
     addTearDown(f.controller.dispose);
@@ -58,6 +59,7 @@ void main() {
       ..clear()
       ..addAll(rowsOf(count));
     await f.controller.refresh();
+    if (chat != null) await f.controller.select(chat);
     final app = createApp();
     addTearDown(app.dispose);
     t.view.physicalSize = Size(width, windowHeight);
@@ -210,7 +212,8 @@ void main() {
       testWidgets(
         'the three panes are one surface split by hairlines: ${brightness.name}, $width wide',
         (t) async {
-          await mount(t, brightness, 0, width: width);
+          // An agent's chat in the middle, as after choosing it on the left.
+          await mount(t, brightness, 0, width: width, chat: 'aeef');
           expect(t.takeException(), isNull);
           // Below the left pane's rows and the chat's messages, above the composer: only grounds and dividers.
           final y = (windowHeight * .7).round();
@@ -229,11 +232,11 @@ void main() {
             runs.add('x=$x..$end ${row[x]}');
             x = end;
           }
-          // Two 1-point hairlines between three panes, and nothing else.
+          // Two 1-point hairlines between three panes, and nothing else; a hairline at a fractional x covers two pixels.
           expect(
             runs.where((r) {
               final m = RegExp(r'x=(\d+)\.\.(\d+)').firstMatch(r)!;
-              return int.parse(m[2]!) - int.parse(m[1]!) > 0;
+              return int.parse(m[2]!) - int.parse(m[1]!) > 1;
             }),
             isEmpty,
             reason: '$runs',

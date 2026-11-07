@@ -6348,6 +6348,11 @@ class _SuperTabViewState extends State<SuperTabView>
         onKeyEvent: _attentionKey,
         child: Stack(
           children: [
+            // One surface under the left, middle and right panes, split only by the layout's hairlines (anh Dee's six
+            // rules, task #4465): no pane shows its host's colour.
+            Positioned.fill(
+              child: ColoredBox(color: grid.AppPalette.swarmField),
+            ),
             ExcludeFocus(
               excluding: chatCovered,
               child: SuperTabPaneLayout(
