@@ -9,7 +9,7 @@ import { firstMachines, isReview, machineRuleRefusal } from './machineRules.js'
 import { isBuddy } from './buddies.js'
 import { sessionClosed } from './closedAgents.js'
 import { activeWork, handed, occupiesAgent, reviewsWanted, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
-import { agentProjectId, onTeamAccount, projectOf, projectsOf } from './projects.js'
+import { agentProjectId, NO_PROJECT, onTeamAccount, projectOf, projectsOf, regularMayWorkIn } from './projects.js'
 import { barredFromTeamWritten } from './teamWritten.js'
 import { digestOf, localNow } from './digest.js'
 import { DEFAULT_TIME_ZONE } from './costs/reflection.js'
@@ -100,6 +100,7 @@ const asleep = (agent: Agent): boolean => !!(agent as { asleep?: unknown }).asle
  *  closed unless asleep, no launch still pending) with nothing in their hands and fewer than `maxHanded` handed tasks;
  *  fewest handed first, then as the roster lists them. */
 export function freeCrew(state: SuperTabState, projectId: string, rules: DispatchRules, now: number): Agent[] {
+  const project = projectOf(state, projectId)
   const leads = new Set(state.conversations.flatMap(c => c.leadId ? [c.leadId] : []))
   const handedBy = new Map<string, number>(), busy = new Set<string>()
   for (const group of state.conversations) {
@@ -110,12 +111,18 @@ export function freeCrew(state: SuperTabState, projectId: string, rules: Dispatc
   }
   // A PM in a Harness Team account assigns only agents of its own machine or another Team account (store.ts teamCommand,
   // security review 2 of #2089): the main account stays out of its reach.
-  const leadId = state.conversations.find(c => c.id === projectOf(state, projectId).leadConversationId)?.leadId
+  const leadId = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
   const lead = leadId ? state.agents.find(a => a.id === leadId) : undefined
   const reachable = (agent: Agent) => !lead || !onTeamAccount(state, lead) || agent.machineId === lead.machineId || onTeamAccount(state, agent)
   const launching = (agent: Agent) => !!state.starts?.some(s => !s.poolSettled && s.poolGeneration && s.request.machineId === agent.machineId && s.harnessId === agent.harnessId)
+  // An idle Regular agent is in no project until a task places it (task #4116): it is free in each project it may work in, so a
+  // task its PM routed to it is handed over (task #4218). The assignment checks the same again (projects.ts sameProject).
+  const inProject = (agent: Agent) => {
+    const own = agentProjectId(state, agent)
+    return own === projectId || (!!agent.regular && own === NO_PROJECT && regularMayWorkIn(state, agent, project))
+  }
   return state.agents
-    .filter(agent => agentProjectId(state, agent) === projectId && !leads.has(agent.id) && !isBuddy(agent)
+    .filter(agent => inProject(agent) && !leads.has(agent.id) && !isBuddy(agent)
       // Nor a Team account's, which takes no new work (task #4120).
       && agent.workDecision !== 'stop' && !onTeamAccount(state, agent) && !moving(agent) && (asleep(agent) || !sessionClosed(state, agent, now)) && !launching(agent)
       && !busy.has(agent.id) && (handedBy.get(agent.id) ?? 0) < rules.maxHanded && reachable(agent)
@@ -169,7 +176,7 @@ const onStrongModel = (member: Agent): boolean => {
 
 /** The tasks [member] could be handed now, best first: those pinned to it (oldest pin first), then its lane's open tasks.
  *  A task it just lost to the 3-hour clock is not offered to it. */
-export function candidatesFor(state: SuperTabState, member: Agent, rules: DispatchRules, now: number, open = openTasks(state, agentProjectId(state, member)!, now),
+export function candidatesFor(state: SuperTabState, member: Agent, rules: DispatchRules, now: number, open: Conversation[],
   skip: Skip = () => false) {
   const lostByIt = (group: Conversation) => group.lostAttempt?.agentId === member.id && group.assignment?.status === 'lost'
   const pinned = open.filter(g => pinOf(g)?.agentId === member.id).sort((a, b) => pinOf(a)!.at - pinOf(b)!.at)

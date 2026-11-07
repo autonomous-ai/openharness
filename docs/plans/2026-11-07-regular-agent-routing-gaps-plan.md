@@ -23,8 +23,9 @@ against main d1f33f5ca first. All six are real; none was dropped.
 3. **Automatic picks skip idle Regular agents** (dispatch.ts freeCrew). freeCrew keeps only agents whose project is this one, and
    an idle Regular agent has none. A task the PM routed (pinned) to it is never handed over. The write-time check
    (store.ts) calls candidatesFor without the project's open tasks, so it also reads the Regular agent's empty project. Fix: an
-   idle Regular agent is free crew of every project it may work in (projects.ts regularMayWorkIn, exported). The write-time check
-   passes the project's open tasks. The sweep hands one agent at most one task per pass across projects.
+   idle Regular agent is free crew of every project it may work in (projects.ts regularMayWorkIn, exported). candidatesFor takes
+   the open tasks as a required argument, and the write-time check passes its project's. A second project's pick of an agent
+   placed in the same pass is refused at write time (DISPATCH_STALE), bounded by DISPATCH_TRIES as any stale pick is.
 4. **A closed Regular agent never returns** (closedAgents.ts). A closed session removes the agent. Its record is dropped
    because its own chat has an audience, so it counts as confidential. A restore would be refused anyway (`project-ended`) and
    would skip its chat. Fix: a Regular agent is not removed when its session closes, the same as a Buddy. It stays listed as
@@ -97,8 +98,8 @@ backend/src/superTabs/regularAssign.test.ts
 **Interfaces:** `regularMayWorkIn` exported from projects.ts.
 
 - [ ] Test: a task pinned to idle Ada is in dispatchPlan for its project; not for a project Ada's person cannot read. Watch it fail.
-- [ ] freeCrew takes idle Regular agents that may work in the project; the write-time check passes the project's open tasks; the
-      sweep skips a member it placed this pass. Watch it pass.
+- [ ] freeCrew takes idle Regular agents that may work in the project; the write-time check passes the project's open tasks.
+      Watch it pass.
 
 ### Task 4: a closed Regular agent stays and returns
 

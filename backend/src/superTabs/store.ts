@@ -2594,7 +2594,7 @@ export class SuperTabStore {
     const assigned = command.type === 'work.assign' ? command.agentId : undefined
     const rules = dispatchRules((await currentRules(tx, state.id, project.id)).rules)
     const now = this.now(), member = freeCrew(state, project.id, rules, now).find(a => a.id === assigned)
-    if (!member || !candidatesFor(state, member, rules, now).some(c => c.group.id === task.id)) {
+    if (!member || !candidatesFor(state, member, rules, now, openTasks(state, project.id, now)).some(c => c.group.id === task.id)) {
       fail('DISPATCH_STALE', 'This task is no longer one to hand out to this member.', 409)
     }
     try {

@@ -619,7 +619,7 @@ export function readAgent(state: SuperTabState, actor: Actor, agentId: string): 
 /** Whether Regular agent [target] may take a task in [project]: its person reads it (it works only where they could read it
  *  themselves), and, once it has worked in a private project, it is that one: its one conversation holds that project's
  *  content, which no other project's members may hear from it (security review 2 of #4116). Public work moves on freely. */
-function regularMayWorkIn(state: SuperTabState, target: Agent, project: SwarmProject): boolean {
+export function regularMayWorkIn(state: SuperTabState, target: Agent, project: SwarmProject): boolean {
   const member = state.people.find(p => p.id === target.contributorId)
   return !!member && canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)
     && (!target.privateProjectId || target.privateProjectId === project.id)
