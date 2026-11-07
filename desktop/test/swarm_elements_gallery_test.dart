@@ -26,12 +26,27 @@ void main() {
     // One font file on every host, so the images match on macOS, Linux and
     // Windows; text is set in the bundled Roboto Mono, icons in Lucide.
     final mono = rootBundle.load('assets/fonts/roboto-mono/RobotoMono.ttf');
-    for (final family in {
-      AppType.sansFamily,
-      terminalFontFamily,
-      'Roboto',
-    }) {
+    for (final family in {AppType.sansFamily, terminalFontFamily, 'Roboto'}) {
       await (FontLoader(family)..addFont(mono)).load();
+    }
+    // The activity marks' symbols (◌ ✓ ■ ⊘ and the spinner) come from the
+    // host's symbol font, as in the app; they are a few dozen pixels, inside
+    // the comparator's tolerance where hosts differ.
+    for (final (family, paths) in [
+      ('Apple Symbols', ['/System/Library/Fonts/Apple Symbols.ttf']),
+      (
+        'DejaVu Sans',
+        [
+          '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+          // macOS has no DejaVu; this face carries the same marks (✓).
+          '/System/Library/Fonts/Supplemental/Arial Unicode.ttf',
+        ],
+      ),
+    ]) {
+      final file = paths.map(File.new).where((f) => f.existsSync()).firstOrNull;
+      if (file == null) continue;
+      final bytes = ByteData.sublistView(file.readAsBytesSync());
+      await (FontLoader(family)..addFont(Future.value(bytes))).load();
     }
     await (FontLoader('packages/lucide_icons_flutter/Lucide400')..addFont(
           rootBundle.load(
@@ -56,7 +71,7 @@ void main() {
       grid.AppTheme.brightness.value = brightness;
       addTearDown(() => grid.AppTheme.brightness.value = old);
       tester.view.devicePixelRatio = 1;
-      tester.view.physicalSize = const Size(760, 620);
+      tester.view.physicalSize = const Size(760, 500);
       addTearDown(tester.view.reset);
       await tester.pumpWidget(
         MaterialApp(
@@ -184,11 +199,24 @@ class _Gallery extends StatelessWidget {
               ),
               title('Task status marks'),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  for (final status in _statuses) ...[
-                    SuperTabTaskStatusMark(status),
-                    gap(),
-                  ],
+                  for (final status in _statuses)
+                    SizedBox(
+                      width: 72,
+                      child: Column(
+                        children: [
+                          SuperTabTaskStatusMark(status),
+                          const SizedBox(height: 4),
+                          Text(
+                            superTabTaskStatusLabel(status),
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            style: Theme.of(context).textTheme.labelSmall,
+                          ),
+                        ],
+                      ),
+                    ),
                 ],
               ),
               title('Row and task card'),
