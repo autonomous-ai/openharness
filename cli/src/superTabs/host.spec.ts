@@ -789,7 +789,11 @@ describe('Super Tab native delivery handoff', () => {
         })
       }
       await host.reconcileReceipts()
-      for (let i = 0; i < 400; i++) { t.wait(5 * 60_000); await host.reconcileReceipts() }
+      // Backoff cadence is checked above. Jump across the deadline instead of doing 400 disk-backed journal retries,
+      // which timed out under concurrent affected checks on the Team Mac (#3845).
+      t.wait(23 * 60 * 60_000); await host.reconcileReceipts()
+      expect(t.saved().entries.delivery.stage).toBe('delivered')
+      t.wait(60 * 60_000); await host.reconcileReceipts()
       expect(t.saved().entries).toEqual({})
       expect(t.log).toHaveBeenCalledWith(expect.stringContaining(`Gave up acknowledging delivery delivery to agent agent in Swarm tab after a day: ${dropped ?? 'The Swarm is busy.'}`))
       expect(vi.mocked(t.log).mock.calls.filter(([line]) => String(line).startsWith('Gave up'))).toHaveLength(1)

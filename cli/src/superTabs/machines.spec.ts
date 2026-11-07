@@ -64,6 +64,69 @@ function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation 
     stamp: (next: string) => { stamp = next } }
 }
 
+// Ken's 2026-11-06 scan: a stale failed-start report was refused 581 times, even after CLI updates.
+describe('a failed-start report', () => {
+  function reporting(refuse: () => void) {
+    const f = fixture(), original = f.backend.getMockImplementation()!
+    let elapsed = 0
+    const attempts: Array<{ at: number; body: unknown }> = []
+    f.prepare.mockRejectedValue(new Error('Could not prepare the checkout.'))
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      if (method === 'POST' && (body as { command?: { type?: string } })?.command?.type === 'agent.startFailed') {
+        attempts.push({ at: elapsed, body: structuredClone(body) })
+        refuse()
+        return { result: {} }
+      }
+      return original(core, method, path, body)
+    })
+    return { f, attempts, pass: async (ms = 0) => { elapsed += ms; f.step(ms); await f.machine.tick() } }
+  }
+
+  it('drops NOT_FOUND once without relaunching or logging server text, and leaves other starts free', async () => {
+    const h = reporting(() => { throw new SuperTabHostError('NOT_FOUND', 'fixture-secret-server-text', 404) })
+    await h.pass()
+    for (let i = 0; i < 10; i++) await h.pass(15_000)
+    expect(h.attempts).toHaveLength(1)
+    expect(h.f.prepare).toHaveBeenCalledTimes(1)
+    const lines = h.f.log.mock.calls.flat().join('\n')
+    expect(lines).not.toContain('fixture-secret-server-text')
+    expect(lines.match(/no longer has this start/g)).toHaveLength(1)
+    h.f.pool.starts.push({ id: 'another', dispatched: false })
+    h.f.prepare.mockResolvedValue(undefined)
+    await h.pass(15_000)
+    expect(h.f.start).toHaveBeenCalledTimes(1)
+    expect((h.f.start.mock.calls as unknown[][])[0]![0]).toMatchObject({ startId: 'another' })
+    expect(h.attempts).toHaveLength(1)
+  })
+
+  it.each([
+    ['a lost reply', () => { throw new Error('fixture-secret-transport') }],
+    ['a server failure', () => { throw new SuperTabHostError('BACKEND_UNAVAILABLE', 'fixture-secret-server', 503) }],
+    ['another refusal', () => { throw new SuperTabHostError('CONFLICT', 'fixture-secret-refusal', 409) }],
+  ])('backs off with a five-minute cap after %s and retains the original report', async (_name, refuse) => {
+    const h = reporting(refuse)
+    await h.pass()
+    for (let i = 0; i < 72; i++) await h.pass(15_000)
+    expect(h.attempts.map(a => a.at)).toEqual([0, 15_000, 45_000, 105_000, 225_000, 465_000, 765_000, 1_065_000])
+    expect(h.attempts.every(a => JSON.stringify(a.body) === JSON.stringify(h.attempts[0]!.body))).toBe(true)
+    expect(h.f.prepare).toHaveBeenCalledTimes(1)
+    expect(h.f.start).not.toHaveBeenCalled()
+    expect(h.f.log.mock.calls.flat().join('\n')).not.toContain('fixture-secret')
+  })
+
+  it('reports a real failure once, including when a retry recovers', async () => {
+    for (const failFirst of [false, true]) {
+      let fail = failFirst
+      const h = reporting(() => { if (fail) { fail = false; throw new Error('lost reply') } })
+      await h.pass()
+      for (let i = 0; i < 5; i++) await h.pass(15_000)
+      expect(h.attempts).toHaveLength(failFirst ? 2 : 1)
+      expect(h.attempts[0]!.body).toEqual({ operationId: 'prepare-failed-start', command: { type: 'agent.startFailed', startId: 'start', error: 'Could not prepare the checkout.' } })
+      expect(h.f.prepare).toHaveBeenCalledTimes(1)
+    }
+  })
+})
+
 // Second review of #1991: a start in a Swarm this host is cleaning up could write into a folder the cleanup then deleted.
 describe('a Swarm this host is cleaning up', () => {
   const homes: string[] = []
