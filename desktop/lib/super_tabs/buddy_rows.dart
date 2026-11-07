@@ -61,7 +61,7 @@ class SuperTabBuddyRow extends StatelessWidget {
     this.note,
     this.detail,
     this.status,
-    this.crown = false,
+    this.lead = false,
   });
 
   /// The Buddy, for its avatar; null while none runs.
@@ -88,8 +88,8 @@ class SuperTabBuddyRow extends StatelessWidget {
   /// a PM leads.
   final String? note;
 
-  /// A PM: its crown on its avatar (anh Dee 11-07, task #4421).
-  final bool crown;
+  /// A PM: the Lead ring around its avatar (anh Dee 11-07, task #4461).
+  final bool lead;
 
   /// A line under the name, such as where a Buddy runs, with [status], its
   /// activity mark, before it.
@@ -134,7 +134,7 @@ class SuperTabBuddyRow extends StatelessWidget {
                           name: name,
                           size: 20,
                           engineBadge: false,
-                          crown: crown,
+                          lead: lead,
                         ),
                         null => SuperTabAvatar(
                           identity: agentId == null

@@ -348,21 +348,17 @@ void main() {
       expect(tester.getRect(ring('orion')), avatar.inflate(20 * (.07 + .05)));
       final painter =
           tester.widget<CustomPaint>(ring('orion')).painter! as dynamic;
-      expect((painter.stroke as double, painter.gap as double), (
-        closeTo(20 * .05, 1e-9),
-        closeTo(20 * .07, 1e-9),
-      ));
+      expect(painter.stroke as double, closeTo(20 * .05, 1e-9));
+      expect(painter.gap as double, closeTo(20 * .07, 1e-9));
       expect(
         (painter.color as Color).toARGB32(),
         HSLColor.fromAHSL(1, 42, .92, .58).toColor().toARGB32(),
       );
-      expect(
-        find.descendant(
-          of: key('super-agent-orion'),
-          matching: find.bySemanticsLabel(RegExp(r'\bLead\b')),
-        ),
-        findsOneWidget,
-      );
+      // A reader still hears it is the Lead.
+      String said(String agent) =>
+          tester.getSemantics(key('super-agent-$agent')).label;
+      expect(said('orion').split('\n'), contains('Lead'));
+      expect(said('kestrel').split('\n'), isNot(contains('Lead')));
       final name = tester.getRect(text('orion', 'Orion'));
       expect(tester.getRect(ring('orion')).right, lessThan(name.left));
       final project = tester.getRect(text('orion', 'web-project'));

@@ -647,7 +647,7 @@ class ProjectSidebar extends StatelessWidget {
   }
 
   /// My agents (Swarm v3, task #4118): the person's Buddy first, then the agents they brought, each with its face and name,
-  /// a PM's crowned and followed by the project it leads (task #4421), the name bold while its chat has unread, and + New agent in the heading.
+  /// a PM's in its Lead ring and followed by the project it leads (tasks #4421, #4461), the name bold while its chat has unread, and + New agent in the heading.
   List<Widget> _myAgents(
     BuildContext context,
     SuperTabSnapshot? snapshot,
@@ -701,7 +701,7 @@ class ProjectSidebar extends StatelessWidget {
           : onOpenAgentTerminal != null
           ? '$name · opens its terminal'
           : '$name · no chat yet',
-      crown: pm,
+      lead: pm,
       note: pm ? snapshot.leadProjectForAgent(agent.id)?.name : null,
       status: _buddyMark(agent),
       selected: _chatLit(chat),
