@@ -392,11 +392,12 @@ void main() {
       },
     );
 
-    testWidgets('says when nothing waits', (tester) async {
+    testWidgets('is empty when nothing waits', (tester) async {
       await showView(tester, swarm());
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
-      expect(find.text('All clear'), findsOneWidget);
+      // Empty means empty (rule 7, #4465).
+      expect(find.text('All clear'), findsNothing);
     });
   });
 

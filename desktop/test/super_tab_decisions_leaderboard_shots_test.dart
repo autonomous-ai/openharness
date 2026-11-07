@@ -40,7 +40,8 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('All clear'), findsOneWidget);
+      // Empty means empty (rule 7, #4465).
+      expect(find.text('All clear'), findsNothing);
       await captureWindow(
         tester,
         shots,

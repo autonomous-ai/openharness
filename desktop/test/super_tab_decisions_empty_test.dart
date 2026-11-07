@@ -1,6 +1,6 @@
-// Audit finding 14 (task #4211): with every decision answered, Decisions is a
-// calm all-clear in the middle of the page, saying how much of the crew's
-// work is moving, not a small line at the top of a blank page.
+// Empty means empty (anh Dee's rule 7, task #4465): with every decision answered, Decisions shows nothing. It
+// replaced audit finding 14's all-clear (task #4211), which said "All clear", "Your crew has what it needs" and how
+// many tasks were moving.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/activity.dart';
@@ -21,52 +21,25 @@ ConversationServer withMoving(int count) {
       'assignment': {'id': 'm$i', 'agentId': 'kestrel', 'status': 'working'},
     });
   }
-  // Done and waiting to merge, and not yet handed out: neither is moving.
-  conversations
-    ..add(<String, dynamic>{
-      ...conversationFixture('finished', 'Finished task'),
-      'projectId': 'lead',
-      'agentIds': ['kestrel'],
-      'assignment': {'id': 'f', 'agentId': 'kestrel', 'status': 'done'},
-    })
-    ..add(<String, dynamic>{
-      ...conversationFixture('queued', 'Queued task'),
-      'projectId': 'lead',
-    });
   return server;
 }
 
 void main() {
   for (final brightness in Brightness.values) {
-    testWidgets('nothing to decide is an all-clear in the middle, with the '
-        'tasks moving (${brightness.name})', (tester) async {
+    testWidgets('nothing to decide shows nothing (${brightness.name})', (
+      tester,
+    ) async {
       final SuperTabActivity activity = await loaded(tester, withMoving(4));
       await show(tester, activity, brightness: brightness);
-      expect(find.text('Nothing needs you'), findsNothing);
-      final title = find.text('All clear');
-      expect(title, findsOneWidget);
-      expect(find.text('Your crew has what it needs'), findsOneWidget);
-      expect(find.text('4 tasks moving'), findsOneWidget);
-      // In the middle of the page, not at its top.
-      final page = tester.getRect(find.byType(Scaffold));
-      final at = tester.getCenter(title);
-      expect((at.dx - page.center.dx).abs(), lessThan(4));
-      expect((at.dy - page.center.dy).abs(), lessThan(page.height / 8));
+      for (final words in [
+        'All clear',
+        'Your crew has what it needs',
+        'Nothing needs you',
+      ]) {
+        expect(find.text(words), findsNothing, reason: words);
+      }
+      expect(find.textContaining('moving'), findsNothing);
       expect(tester.takeException(), isNull);
     });
   }
-
-  testWidgets('one task moving says so in the singular', (tester) async {
-    await show(tester, await loaded(tester, withMoving(1)));
-    expect(find.text('1 task moving'), findsOneWidget);
-  });
-
-  testWidgets('with nothing moving the all-clear leaves the count out', (
-    tester,
-  ) async {
-    await show(tester, await loaded(tester, withMoving(0)));
-    expect(find.text('All clear'), findsOneWidget);
-    expect(find.text('Your crew has what it needs'), findsOneWidget);
-    expect(find.textContaining('moving'), findsNothing);
-  });
 }

@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/skeleton.dart';
@@ -10,14 +9,12 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/laid_out_list.dart';
 import 'activity.dart';
 import 'activity_rows.dart';
-import 'backlog.dart';
 import 'decisions.dart';
 import 'decisions_view.dart' show quietDecisionAction;
 import 'model.dart';
 import 'page_rows.dart';
 import 'prompt_lines.dart';
 import 'reminders.dart';
-import 'task_groups.dart';
 
 /// Decisions, the sidebar's first page (anh Dee, 11-05, task #2996): what
 /// waits on the reader's answer, as Needs you listed it. Due reminders lead,
@@ -240,13 +237,12 @@ class _DecisionsPageState extends State<SuperTabDecisionsPage> {
     ];
   }
 
-  /// Nothing waits on the reader (audit finding 14, task #4211): a calm
-  /// all-clear in the middle of the page, with how much of the work is moving
-  /// and what the PM handled today one click away.
+  /// Nothing waits on the reader. Empty means empty (anh Dee's rule 7, task #4465): no all-clear, only what the PM
+  /// handled today, one click away, when it handled any.
   Widget _allClear() {
     final a = _activity;
     final handled = a.handledToday;
-    final moving = _moving();
+    if (handled.isEmpty) return const SizedBox.shrink();
     return LayoutBuilder(
       builder: (context, box) => SingleChildScrollView(
         child: ConstrainedBox(
@@ -255,67 +251,26 @@ class _DecisionsPageState extends State<SuperTabDecisionsPage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(
-                  AppIcons.circleCheck,
-                  size: 24,
-                  color: DesktopChrome.muted,
+                Text(
+                  '${a.coordinatorFor(handled)} handled ${handled.length} '
+                  'for you today',
+                  textAlign: TextAlign.center,
+                  style: DesktopChrome.control(color: DesktopChrome.muted),
                 ),
-                superTabPageEmpty(
-                  'All clear',
-                  'Your crew has what it needs',
-                  moving == 0
-                      ? null
-                      : Padding(
-                          padding: const EdgeInsets.only(
-                            top: grid.AppDesktop.listRowGap * 2,
-                          ),
-                          child: Text(
-                            '$moving ${moving == 1 ? 'task' : 'tasks'} moving',
-                            style: DesktopChrome.metadata(),
-                          ),
-                        ),
+                quietDecisionAction(
+                  key: const ValueKey('super-activity-handled'),
+                  label: 'See what',
+                  onPressed: () =>
+                      setState(() => _handledShown = !_handledShown),
                 ),
-                if (handled.isNotEmpty) ...[
-                  Text(
-                    '${a.coordinatorFor(handled)} handled ${handled.length} '
-                    'for you today',
-                    textAlign: TextAlign.center,
-                    style: DesktopChrome.control(color: DesktopChrome.muted),
-                  ),
-                  quietDecisionAction(
-                    key: const ValueKey('super-activity-handled'),
-                    label: 'See what',
-                    onPressed: () =>
-                        setState(() => _handledShown = !_handledShown),
-                  ),
-                  if (_handledShown)
-                    for (final d in handled) _handledRow(d),
-                ],
+                if (_handledShown)
+                  for (final d in handled) _handledRow(d),
               ],
             ),
           ),
         ),
       ),
     );
-  }
-
-  /// How many tasks the reader can see are moving: those in a Board's Working
-  /// column, so open, handed to an agent and not yet done.
-  int _moving() {
-    final c = _activity.controller;
-    final now = widget.now();
-    var moving = 0;
-    for (final project in c.snapshot?.projects ?? const <SuperTabProject>[]) {
-      for (final task in superTabProjectTasks(c, project)) {
-        final place = superTabTaskPlaceOf(
-          task,
-          readerId: c.accountId,
-          now: now,
-        );
-        if (place?.column == SuperTabTaskColumn.working) moving++;
-      }
-    }
-    return moving;
   }
 
   Widget _handledRow(SuperTabDecision d) {
