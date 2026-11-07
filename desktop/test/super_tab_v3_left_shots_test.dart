@@ -26,7 +26,7 @@ Map<String, dynamic> _agent(String id, String name) => {
   'configuration': {'engine': 'codex'},
 };
 
-/// Swarm v3's left pane and middle (task #4118), in both appearances: My agents with the Buddy first, a PM's crown and an
+/// Swarm v3's left pane and middle (task #4118), in both appearances: My agents with the Buddy first, a PM's Lead ring and an
 /// unread name in bold; the chat of a selected agent in the middle; a project's Board with Projects open. Task #4192: no
 /// arrows under the org switcher, the Buddy's own avatar, only the server's My agents, and My agents folded. Task #4220:
 /// Decisions in the middle keeps Tasks on the right.

@@ -46,9 +46,9 @@ final shots = Platform.environment['HARNESS_SUPER_TAB_CAPTURE'];
 
 void main() {
   Finder key(String k) => find.byKey(ValueKey(k));
-  Finder crown(String agent) => find.descendant(
+  Finder ring(String agent) => find.descendant(
     of: key('super-agent-$agent'),
-    matching: find.byIcon(AppIcons.crown),
+    matching: key('super-lead-ring'),
   );
   Finder text(String agent, String text) =>
       find.descendant(of: key('super-agent-$agent'), matching: find.text(text));
@@ -455,25 +455,45 @@ void main() {
       );
     });
 
-    // Task #4421 (anh Dee 11-07): "let's just put a leader crown on the avatar. it's too much." and "let's put the project
-    // name next to the one that it leads".
-    testWidgets('a PM wears its crown on its avatar and names the project it '
-        'leads after its name; a Regular agent neither', (tester) async {
+    // Task #4421 (anh Dee 11-07): "let's put the project name next to the one that it leads". Task #4461 (anh Dee
+    // 11-07): a Lead wears a thin gold ring instead of the crown, outside its avatar's box so no row moves.
+    testWidgets('a PM wears the gold Lead ring around its avatar and names the '
+        'project it leads after its name; a Regular agent neither', (
+      tester,
+    ) async {
+      final semantics = tester.ensureSemantics();
       await show(tester, agents: mine, setup: agents);
-      expect(crown('orion'), findsOneWidget);
-      final avatar = tester.getRect(
+      expect(ring('orion'), findsOneWidget);
+      expect(
         find.descendant(
           of: key('super-agent-orion'),
-          matching: find.byType(SuperTabAvatar),
+          matching: find.byIcon(AppIcons.crown),
         ),
+        findsNothing,
       );
-      final badge = tester.getRect(crown('orion'));
-      // On the avatar's top right corner, not after the name.
-      expect(badge.center.dx, greaterThan(avatar.center.dx));
-      expect(badge.center.dy, lessThan(avatar.center.dy));
-      expect(badge.left, lessThan(avatar.right));
+      final avatarFinder = find.descendant(
+        of: key('super-agent-orion'),
+        matching: find.byType(SuperTabAvatar),
+      );
+      final avatar = tester.getRect(avatarFinder);
+      // The row's avatar keeps its size; the ring lies 7% + 5% of it outside.
+      expect(avatar.size, const Size.square(20));
+      expect(tester.getRect(ring('orion')), avatar.inflate(20 * (.07 + .05)));
+      final painter =
+          tester.widget<CustomPaint>(ring('orion')).painter! as dynamic;
+      expect(painter.stroke as double, closeTo(20 * .05, 1e-9));
+      expect(painter.gap as double, closeTo(20 * .07, 1e-9));
+      expect(
+        (painter.color as Color).toARGB32(),
+        HSLColor.fromAHSL(1, 42, .92, .58).toColor().toARGB32(),
+      );
+      // A reader still hears it is the Lead.
+      String said(String agent) =>
+          tester.getSemantics(key('super-agent-$agent')).label;
+      expect(said('orion').split('\n'), contains('Lead'));
+      expect(said('kestrel').split('\n'), isNot(contains('Lead')));
       final name = tester.getRect(text('orion', 'Orion'));
-      expect(badge.right, lessThan(name.left));
+      expect(tester.getRect(ring('orion')).right, lessThan(name.left));
       final project = tester.getRect(text('orion', 'web-project'));
       expect(project.left, greaterThan(name.right));
       expect((project.center.dy - name.center.dy).abs(), lessThan(4));
@@ -486,8 +506,9 @@ void main() {
         tester.widget<Text>(text('orion', 'web-project')).style?.color,
         grid.AppPalette.textFaint,
       );
-      expect(crown('kestrel'), findsNothing);
+      expect(ring('kestrel'), findsNothing);
       expect(text('kestrel', 'web-project'), findsNothing);
+      semantics.dispose();
     });
 
     testWidgets('in a narrow pane the project name is cut before the agent\'s '
@@ -550,8 +571,8 @@ void main() {
       );
       expect(avatar.name, 'Wren');
       expect(avatar.identity, 'agent:buddy');
-      // The agent's own pattern, as every other row draws it, not a letter.
-      expect(avatar.pattern, isTrue);
+      // The agent's own face, as every other row draws it, not a letter.
+      expect(avatar.face, isTrue);
     });
 
     test('the detail is "offline", else the project a Lead leads', () {
@@ -641,7 +662,7 @@ void main() {
         (Brightness.dark, 'dark'),
       ]) {
         await show(tester, agents: mine, setup: agents, brightness: brightness);
-        await captureWindow(tester, shots, 'my-agents-pm-crown-$name');
+        await captureWindow(tester, shots, 'my-agents-pm-ring-$name');
         await tester.pumpWidget(const SizedBox());
       }
     }, skip: shots == null);
@@ -1236,25 +1257,26 @@ void main() {
         expect((older.kind, older.chatId), (null, null));
       });
 
-      testWidgets('a PM by kind has the crown and opens the chat it names', (
-        tester,
-      ) async {
-        final selected = <String>[];
-        final c = await show(
-          tester,
-          agents: [
-            {..._agent('zed', 'Zed'), 'kind': 'pm', 'chatId': 'offline'},
-            {..._agent('amy', 'Amy'), 'kind': 'regular', 'chatId': null},
-          ],
-          selected: selected,
-        );
-        expect(crown('zed'), findsOneWidget);
-        expect(crown('amy'), findsNothing);
-        await tester.tap(key('super-agent-zed'));
-        await tester.pump();
-        expect(selected, ['offline']);
-        await tester.runAsync(c.flush);
-      });
+      testWidgets(
+        'a PM by kind has the Lead ring and opens the chat it names',
+        (tester) async {
+          final selected = <String>[];
+          final c = await show(
+            tester,
+            agents: [
+              {..._agent('zed', 'Zed'), 'kind': 'pm', 'chatId': 'offline'},
+              {..._agent('amy', 'Amy'), 'kind': 'regular', 'chatId': null},
+            ],
+            selected: selected,
+          );
+          expect(ring('zed'), findsOneWidget);
+          expect(ring('amy'), findsNothing);
+          await tester.tap(key('super-agent-zed'));
+          await tester.pump();
+          expect(selected, ['offline']);
+          await tester.runAsync(c.flush);
+        },
+      );
 
       testWidgets('its kind wins over the project it once led', (tester) async {
         await show(
@@ -1267,7 +1289,7 @@ void main() {
                       .firstWhere((g) => g['id'] == 'lead')['leadId'] =
                   'orion',
         );
-        expect(crown('orion'), findsNothing);
+        expect(ring('orion'), findsNothing);
       });
     },
   );

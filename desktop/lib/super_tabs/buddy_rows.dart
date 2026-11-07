@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../state/harness_activity.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/harness_activity_mark.dart';
 import 'buddy_chat.dart';
 import 'identity.dart';
 import 'section_heading.dart';
@@ -171,6 +173,8 @@ class SuperTabQuietRow extends StatelessWidget {
                   width: markWidth,
                   child: Center(child: mark),
                 ),
+              // Unread is a semibold name, and heard in words: the row says what its face, name and detail say.
+              if (unread) Semantics(label: 'unread'),
               const SizedBox(width: gap),
             ],
           ),
@@ -188,8 +192,6 @@ class SuperTabQuietRow extends StatelessWidget {
         child: Semantics(
           button: true,
           selected: selected,
-          label: [name, ?detail, if (unread) 'unread'].join(', '),
-          excludeSemantics: true,
           child: InkWell(
             onTap: onTap,
             hoverColor: grid.SidebarInk.hoverFill(context),
@@ -201,6 +203,24 @@ class SuperTabQuietRow extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// An agent's status mark in the Desktop's My agents (anh Dee 11-07): the shared activity mark, grey, but failed in the
+/// error ink. Only working, needs you and failed are ever drawn (`superTabAgentMark`).
+class SuperTabAgentMark extends StatelessWidget {
+  const SuperTabAgentMark(this.activity, {super.key});
+  final HarnessActivity activity;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    return ActivityMark(
+      activity: activity,
+      color: activity == HarnessActivity.failed
+          ? Theme.of(context).colorScheme.error
+          : grid.SidebarInk.muted(context),
     );
   }
 }

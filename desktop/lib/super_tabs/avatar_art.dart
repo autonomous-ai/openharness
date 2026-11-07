@@ -1,6 +1,9 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/swarm_palette.dart';
 import '../widgets/desktop_chrome.dart';
 import 'profile_model.dart';
 
@@ -30,24 +33,24 @@ Color _tone(BuildContext context, double hue) => HSLColor.fromAHSL(
   Theme.of(context).brightness == Brightness.dark ? .72 : .36,
 ).toColor();
 
-/// An agent's default face: a 5×5 grid mirrored left to right, and a hue, both
-/// from its name alone.
-({List<bool> cells, double hue}) superTabAgentPattern(String name) {
+/// An agent's default face (anh Dee, task #4461): its fill, top to bottom, and how far its eyes and smile shift
+/// sideways (units of a 100-unit disc) and tilt (degrees), all from its name alone.
+({Color top, Color bottom, double shift, double tilt}) superTabAgentFace(
+  String name,
+) {
   final hash = _hash(name.trim().toLowerCase());
-  final half = [for (var bit = 0; bit < 15; bit++) (hash >> bit) & 1 == 1];
-  if (!half.contains(true)) half[7] = true;
+  final (top, bottom) = SwarmPalette.faces[hash % 8];
   return (
-    cells: [
-      for (var row = 0; row < 5; row++)
-        for (final column in const [0, 1, 2, 1, 0]) half[row * 3 + column],
-    ],
-    hue: ((hash >> 16) % 360).toDouble(),
+    top: top,
+    bottom: bottom,
+    shift: const [-3.0, 0.0, 3.0][(hash >> 9) % 3],
+    tilt: const [-9.0, -4.0, 0.0, 5.0, 10.0][(hash >> 5) % 5],
   );
 }
 
 /// The face inside an avatar: [picture] when there is one, else the agent
-/// pattern when [pattern] is set, else the name's initial. Round, or a rounded
-/// square with [radius] corners.
+/// face when [face] is set, else the name's initial. Round, or a rounded
+/// square with [radius] corners; the agent face is always a disc.
 class SuperTabAvatarFace extends StatelessWidget {
   const SuperTabAvatarFace({
     super.key,
@@ -55,13 +58,13 @@ class SuperTabAvatarFace extends StatelessWidget {
     required this.name,
     required this.size,
     this.picture,
-    this.pattern = false,
+    this.face = false,
     this.radius,
   });
   final String identity, name;
   final double size;
   final SuperTabAvatarPicture? picture;
-  final bool pattern;
+  final bool face;
   final double? radius;
 
   @override
@@ -94,8 +97,7 @@ class SuperTabAvatarFace extends StatelessWidget {
     null => ClipOval(child: child),
   };
 
-  Widget _fallback(BuildContext context) =>
-      pattern ? _pattern(context) : _initial(context);
+  Widget _fallback(BuildContext context) => face ? _face() : _initial(context);
 
   Widget _disc(BuildContext context, Widget child, [Color? color]) => Container(
     width: size,
@@ -139,43 +141,56 @@ class SuperTabAvatarFace extends StatelessWidget {
     );
   }
 
-  Widget _pattern(BuildContext context) {
-    final art = superTabAgentPattern(name);
-    final color = _tone(context, art.hue);
-    return _disc(
-      context,
-      CustomPaint(
-        key: const ValueKey('super-avatar-pattern'),
-        size: Size.square(size * .56),
-        painter: _PatternPainter(art.cells, color),
-      ),
-      color,
-    );
-  }
+  Widget _face() => CustomPaint(
+    key: const ValueKey('super-agent-face'),
+    size: Size.square(size),
+    painter: _FacePainter(superTabAgentFace(name)),
+  );
 }
 
-class _PatternPainter extends CustomPainter {
-  const _PatternPainter(this.cells, this.color);
-  final List<bool> cells;
-  final Color color;
+/// The face on a 100-unit disc: a soft top-to-bottom fill, two eyes and a
+/// small smile in [SwarmPalette.faceInk], shifted and tilted around the centre.
+class _FacePainter extends CustomPainter {
+  const _FacePainter(this.face);
+  final ({Color top, Color bottom, double shift, double tilt}) face;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final cell = size.width / 5;
-    final paint = Paint()..color = color;
-    for (var i = 0; i < cells.length; i++) {
-      if (!cells[i]) continue;
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH((i % 5) * cell, (i ~/ 5) * cell, cell, cell),
-          Radius.circular(cell * .2),
-        ),
-        paint,
+    canvas.scale(size.width / 100);
+    canvas.drawCircle(
+      const Offset(50, 50),
+      50,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [face.top, face.bottom],
+        ).createShader(const Rect.fromLTWH(0, 0, 100, 100)),
+    );
+    canvas
+      ..translate(50, 50)
+      ..rotate(face.tilt * math.pi / 180)
+      ..translate(-50, -50);
+    final dx = face.shift;
+    final ink = Paint()..color = SwarmPalette.faceInk;
+    for (final x in [36.0, 64.0]) {
+      canvas.drawOval(
+        Rect.fromCenter(center: Offset(x + dx, 45), width: 10.4, height: 14),
+        ink,
       );
     }
+    canvas.drawPath(
+      Path()
+        ..moveTo(37 + dx, 62)
+        ..quadraticBezierTo(50 + dx, 74, 63 + dx, 62),
+      Paint()
+        ..color = SwarmPalette.faceInk
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 5.6
+        ..strokeCap = StrokeCap.round,
+    );
   }
 
   @override
-  bool shouldRepaint(_PatternPainter old) =>
-      old.color != color || !identical(old.cells, cells);
+  bool shouldRepaint(_FacePainter old) => old.face != face;
 }

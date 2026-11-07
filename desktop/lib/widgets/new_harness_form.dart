@@ -1721,6 +1721,24 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
+                                  if (box.integration?.heading
+                                      case final heading?) ...[
+                                    Text(
+                                      heading,
+                                      style: DesktopChrome.heading(),
+                                    ),
+                                    if (box.integration?.intro
+                                        case final intro?) ...[
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        intro,
+                                        style: DesktopChrome.text(
+                                          color: DesktopChrome.muted,
+                                        ),
+                                      ),
+                                    ],
+                                    const SizedBox(height: 14),
+                                  ],
                                   _desktopHeader(),
                                   const SizedBox(height: 12),
                                   if (_installing case final run?)
@@ -2043,7 +2061,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                     label: kind == 'lead' ? 'Lead' : 'Member',
                     semanticLabel:
                         'Starts as, ${kind == 'lead' ? 'Lead' : 'Member'}',
-                    icon: kind == 'lead' ? AppIcons.crown : AppIcons.user,
+                    icon: kind == 'lead' ? AppIcons.circleUser : AppIcons.user,
                     menu: true,
                     capsule: true,
                     tooltip: 'Start as Lead or Member',
@@ -2649,6 +2667,15 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       if (includeProjectVisibility &&
           box.integration?.projectVisibility != null)
         _desktopProjectVisibility(9.95),
+      // A Buddy is an offer: saying no is as plain as saying yes (#4442).
+      if (box.bringsBuddy && !widget.embedded)
+        TextButton(
+          key: const ValueKey('new-harness-not-now'),
+          onPressed: () {
+            if (box.requestDismiss()) widget.onClose();
+          },
+          child: const Text('Not now'),
+        ),
       _desktopStartButton(),
     ],
   );
@@ -3862,7 +3889,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       children: [
         for (final (kind, label, detail, icon) in [
           ('member', 'Member', 'Works with you in its own chat', AppIcons.user),
-          ('lead', 'Lead', 'Names and starts a project', AppIcons.crown),
+          ('lead', 'Lead', 'Names and starts a project', AppIcons.circleUser),
         ])
           AppMenuItem(
             key: ValueKey('new-harness-agent-kind-$kind'),

@@ -122,8 +122,11 @@ void main() {
       expect(unread.fontSize, 13);
       expect(unread.color, grid.AppPalette.textPrimary);
       expect(unread.fontWeight, grid.AppFont.semibold);
-      expect(find.bySemanticsLabel(RegExp('Unread, unread')), findsOneWidget);
-      expect(find.bySemanticsLabel(RegExp('Read, unread')), findsNothing);
+      expect(
+        find.bySemanticsLabel(RegExp('^Unread\nunread\$')),
+        findsOneWidget,
+      );
+      expect(find.bySemanticsLabel(RegExp('^Read\$')), findsOneWidget);
       semantics.dispose();
     });
 

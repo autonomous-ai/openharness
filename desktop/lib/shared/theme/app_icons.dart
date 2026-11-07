@@ -66,6 +66,10 @@ abstract final class AppIcons {
   static const circleMinus = LucideIcons.circleMinus400;
   static const circlePlus = LucideIcons.circlePlus400;
   static const circleSlash = LucideIcons.circleSlash400;
+
+  /// The Lead choice in New agent: a person in a ring, as a Lead wears its
+  /// gold ring; the crown is only the leaderboard's number one (task #4461).
+  static const circleUser = LucideIcons.circleUser400;
   static const circleX = LucideIcons.circleX400;
   static const clipboardPaste = LucideIcons.clipboardPaste400;
   static const clock = LucideIcons.clock400;
@@ -133,6 +137,9 @@ abstract final class AppIcons {
   static const link2 = LucideIcons.link2400;
   static const listFilter = LucideIcons.listFilter400;
   static const loaderCircle = LucideIcons.loaderCircle400;
+
+  /// A task that is a proposal (task #4461).
+  static const lightbulb = LucideIcons.lightbulb400;
   static const lock = LucideIcons.lock400;
   static const logOut = LucideIcons.logOut400;
   static const maximize = LucideIcons.maximize400;
@@ -204,6 +211,9 @@ abstract final class AppIcons {
   static const starHalf = LucideIcons.starHalf400;
   static const sun = LucideIcons.sun400;
   static const terminal = LucideIcons.terminal400;
+
+  /// A task someone rejected (task #4461).
+  static const thumbsDown = LucideIcons.thumbsDown400;
   static const trash2 = LucideIcons.trash2400;
   static const triangleAlert = LucideIcons.triangleAlert400;
   static const trophy = LucideIcons.trophy400;

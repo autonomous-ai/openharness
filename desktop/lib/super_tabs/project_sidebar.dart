@@ -609,7 +609,7 @@ class ProjectSidebar extends StatelessWidget {
           name: name,
           size: SuperTabQuietRow.faceSize,
           engineBadge: false,
-          crown: lead,
+          lead: lead,
         );
 
   /// What [agent] is doing, as the Agents list reads it; null with no app to ask, or none running.
@@ -626,23 +626,12 @@ class ProjectSidebar extends StatelessWidget {
   String? _detail(SuperTabAgent? agent, {String? leads}) =>
       superTabAgentDetail(_activity(agent), leads: leads);
 
-  /// An agent's mark in My agents ([superTabAgentMark]): grey, but red for failed.
-  Widget? _quietMark(SuperTabAgent? agent) {
-    final activity = superTabAgentMark(_activity(agent));
-    if (activity == null) return null;
-    return ActivityMark(
-      activity: activity,
-      color: activity == HarnessActivity.failed
-          ? activityColor(
-              activity,
-              terminalThemeFor(
-                grid.AppTheme.surfacePalette,
-                terminalThemeStore.value,
-              ),
-            )
-          : grid.SidebarInk.inkMuted,
-    );
-  }
+  /// An agent's mark in My agents ([superTabAgentMark]).
+  Widget? _quietMark(SuperTabAgent? agent) =>
+      switch (superTabAgentMark(_activity(agent))) {
+        final activity? => SuperTabAgentMark(activity),
+        null => null,
+      };
 
   Widget _iconRow({
     required String key,
