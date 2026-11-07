@@ -16,10 +16,14 @@ class SuperTabChip extends StatelessWidget {
     this.leading,
     this.trailing,
     this.bold = false,
+    this.capsule = false,
   });
   final String text;
   final Color? color, fill;
   final bool outlined, bold;
+
+  /// Fully rounded ends, as a repository's Public or Private label (task #4662).
+  final bool capsule;
   final Widget? leading, trailing;
 
   @override
@@ -33,7 +37,9 @@ class SuperTabChip extends StatelessWidget {
       decoration: BoxDecoration(
         color: fill ?? (outlined ? null : grid.AppSurface.wellFill),
         border: outlined ? Border.all(color: grid.AppPalette.divider) : null,
-        borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
+        borderRadius: BorderRadius.circular(
+          capsule ? 999 : DesktopChrome.controlRadius,
+        ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,

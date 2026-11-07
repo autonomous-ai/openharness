@@ -60,12 +60,17 @@ class SuperTabAvatarFace extends StatelessWidget {
     this.picture,
     this.face = false,
     this.radius,
+    this.faceCorner,
   });
   final String identity, name;
   final double size;
   final SuperTabAvatarPicture? picture;
   final bool face;
   final double? radius;
+
+  /// The corner of a rounded-square agent face: a Lead on the Projects list (task #4662). Null draws the disc, which
+  /// every other place keeps whatever its [radius].
+  final double? faceCorner;
 
   @override
   Widget build(BuildContext context) => switch (picture) {
@@ -144,29 +149,46 @@ class SuperTabAvatarFace extends StatelessWidget {
   Widget _face() => CustomPaint(
     key: const ValueKey('super-agent-face'),
     size: Size.square(size),
-    painter: _FacePainter(superTabAgentFace(name)),
+    painter: _FacePainter(
+      superTabAgentFace(name),
+      corner: switch (faceCorner) {
+        final corner? => corner / size * 100,
+        null => null,
+      },
+    ),
   );
 }
 
 /// The face on a 100-unit disc: a soft top-to-bottom fill, two eyes and a
 /// small smile in [SwarmPalette.faceInk], shifted and tilted around the centre.
 class _FacePainter extends CustomPainter {
-  const _FacePainter(this.face);
+  const _FacePainter(this.face, {this.corner});
   final ({Color top, Color bottom, double shift, double tilt}) face;
+
+  /// The corner of a rounded-square face; a disc when null.
+  final double? corner;
 
   @override
   void paint(Canvas canvas, Size size) {
     canvas.scale(size.width / 100);
-    canvas.drawCircle(
-      const Offset(50, 50),
-      50,
-      Paint()
-        ..shader = LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [face.top, face.bottom],
-        ).createShader(const Rect.fromLTWH(0, 0, 100, 100)),
-    );
+    final fill = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [face.top, face.bottom],
+      ).createShader(const Rect.fromLTWH(0, 0, 100, 100));
+    switch (corner) {
+      case final corner?:
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            const Rect.fromLTWH(0, 0, 100, 100),
+            Radius.circular(corner),
+          ),
+          fill,
+        );
+      case null:
+        canvas.drawCircle(const Offset(50, 50), 50, fill);
+    }
     canvas
       ..translate(50, 50)
       ..rotate(face.tilt * math.pi / 180)
@@ -192,5 +214,6 @@ class _FacePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_FacePainter old) => old.face != face;
+  bool shouldRepaint(_FacePainter old) =>
+      old.face != face || old.corner != corner;
 }

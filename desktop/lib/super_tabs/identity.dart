@@ -24,7 +24,8 @@ class SuperTabAvatar extends StatelessWidget {
     this.face = false,
     this.now,
     this.radius,
-  }) : lead = false;
+  }) : lead = false,
+       faceCorner = null;
 
   SuperTabAvatar.person(
     SuperTabPerson person, {
@@ -38,7 +39,8 @@ class SuperTabAvatar extends StatelessWidget {
        engine = null,
        status = person.status,
        face = false,
-       lead = false;
+       lead = false,
+       faceCorner = null;
 
   /// [engineBadge] off where the row already shows the engine beside the
   /// name (the roster, messages), so it shows once. [lead] marks a PM with
@@ -51,6 +53,7 @@ class SuperTabAvatar extends StatelessWidget {
     bool engineBadge = true,
     this.lead = false,
     this.radius,
+    this.faceCorner,
   }) : identity = 'agent:${agent.id}',
        name = name ?? agent.displayName ?? agent.name,
        picture = agent.avatar,
@@ -82,6 +85,9 @@ class SuperTabAvatar extends StatelessWidget {
   /// The corner of a rounded-square face, as a message's; round when null.
   final double? radius;
 
+  /// The corner of a rounded-square agent face ([SuperTabAvatarFace.faceCorner]); the disc when null.
+  final double? faceCorner;
+
   /// A Lead's thin gold ring around the face, outside its box so no row
   /// moves: a PM in My agents.
   final bool lead;
@@ -96,6 +102,7 @@ class SuperTabAvatar extends StatelessWidget {
       picture: picture,
       face: face,
       radius: radius,
+      faceCorner: faceCorner,
     );
     return SuperTabUntil(
       until: now == null ? status?.until : null,

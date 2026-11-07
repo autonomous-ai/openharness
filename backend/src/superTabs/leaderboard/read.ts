@@ -31,14 +31,21 @@ export function readableWeek(week: number | undefined, now: number): number {
  *  project index's order, as the read straight from Mongo gives them. */
 export async function recentDormantGroups(tx: Prisma.TransactionClient, cached: CacheView, tabId: string, projectId: string | string[],
   since: number): Promise<Conversation[]> {
+  return (await recentDormantActivity(tx, cached, tabId, projectId, since)).map(group => {
+    const { lastActivityAt: _lastActivityAt, ...data } = group
+    return data as Conversation
+  })
+}
+
+/** As recentDormantGroups, each keeping when it was last active (`lastActivityAt`, its row's indexed time), which the Projects
+ *  list shows (read/projectActivity.ts). The held records themselves: read only. */
+export async function recentDormantActivity(tx: Prisma.TransactionClient, cached: CacheView, tabId: string, projectId: string | string[],
+  since: number): Promise<Conversation[]> {
   const projects = [...new Set([projectId].flat())].sort()
   const floor = weekStart(since)
   const held = await cached.get(tabId, `board:${floor}:${projects.join(',')}`, 'main', () => loadBoardGroups(tx, tabId, projects, floor),
     boardRule(projects, floor))
-  return held.filter(p => lastActive(p.data!) >= since).sort(indexOrder).map(p => {
-    const { lastActivityAt: _lastActivityAt, ...data } = p.data!
-    return data as Conversation
-  })
+  return held.filter(p => lastActive(p.data!) >= since).sort(indexOrder).map(p => p.data as Conversation)
 }
 
 /** The profile names of the board's people (contract.ts displayName), one read by id for the few people of a Swarm. A member id

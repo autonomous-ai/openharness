@@ -18,14 +18,17 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/projects_page.dart';
 import 'package:harness/super_tabs/tasks/personal_task_card.dart';
 import 'package:harness/super_tabs/tasks/personal_tasks.dart';
 import 'package:harness/super_tabs/tasks/tasks_pane_header.dart';
 import 'package:harness/super_tabs/tasks/personal_tasks_pane.dart';
 import 'package:harness/terminal/terminal_typography.dart';
 
+import 'super_tab_activity_lists_test.dart' show swarm;
 import 'super_tab_personal_tasks_pane_test.dart' show TasksFixture;
 import 'support/buddy_engine_fixture.dart';
+import 'support/super_tab_fixture.dart';
 
 /// The Swarm elements gallery (desktop-design-system.md, Swarm elements): every
 /// element drawn in light and dark against its checked-in image. A new or
@@ -130,14 +133,16 @@ Future<List<SuperTabController>> _show(
   final member = TasksFixture().controller;
   // A Swarm with no tasks, for the empty Tasks pane (rule 7).
   final empty = (TasksFixture()..rows.clear()).controller;
-  for (final c in [buddy, member, empty]) {
+  // The Projects list (task #4662): one project with everything, one with nothing optional.
+  final projects = _projectsSwarm().controller(account: 'owner');
+  for (final c in [buddy, member, empty, projects]) {
     addTearDown(c.dispose);
     await c.refresh();
   }
   await buddy.select('swarm-buddy-peer');
   await member.select('aeef');
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 1280);
+  tester.view.physicalSize = const Size(760, 1660);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -151,13 +156,17 @@ Future<List<SuperTabController>> _show(
           faces: faces,
           bars: [buddy, member],
           empty: empty,
+          projects: projects,
         ),
       ),
     ),
   );
   await tester.pump();
+  // The list's activity read answers, and its rows draw the sparkline and Updated.
+  await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+  await tester.pump();
   expect(tester.takeException(), isNull);
-  return [buddy, member, empty];
+  return [buddy, member, empty, projects];
 }
 
 /// Takes the gallery down and lets the bars' chats save, so no timer outlives the test.
@@ -166,6 +175,80 @@ Future<void> _close(WidgetTester tester, List<SuperTabController> bars) async {
   for (final c in bars) {
     await c.flush();
   }
+}
+
+/// The Projects list's Swarm: harness with its purpose, Lead, members, work, repository and shipping; scout private,
+/// with only its Lead.
+ConversationServer _projectsSwarm() {
+  final server = swarm();
+  Map<String, dynamic> agent(String id, String projectId, String kind) => {
+    'id': id,
+    'projectId': projectId,
+    'name': id,
+    'displayName': id[0].toUpperCase() + id.substring(1),
+    'machineId': 'host',
+    'harnessId': 'session-$id',
+    'contributorId': 'owner',
+    'configuration': {'engine': 'claude'},
+    'kind': kind,
+  };
+  final groups = (server.state['conversations'] as List)
+      .cast<Map<String, dynamic>>();
+  groups.firstWhere((g) => g['id'] == 'lead')['leadId'] = 'river';
+  groups.add({
+    ...conversationFixture('scout-chat', 'scout'),
+    'projectId': 'scout',
+    'leadId': 'lark',
+  });
+  server.state['projects'] = [
+    {
+      ...projectFixture('lead', 'harness', 'lead'),
+      'about': 'The harness for coding agents and beyond.',
+      'repository': {
+        'repositoryUrl': 'https://github.com/autonomous-ai/openharness',
+      },
+    },
+    projectFixture('scout', 'scout', 'scout-chat', visibility: 'private'),
+  ];
+  server.state['agents'] = [
+    agent('river', 'lead', 'pm'),
+    for (final name in ['kai', 'sage', 'vetch', 'jules', 'quinn'])
+      agent(name, 'lead', 'regular'),
+    agent('lark', 'scout', 'pm'),
+  ];
+  Map<String, dynamic> pulse(int working, int toDo) => {
+    'pmId': null,
+    'asks': {'count': 0, 'oldestAt': null, 'personId': null, 'list': []},
+    'working': {'count': working, 'crew': 0, 'agentIds': <String>[]},
+    'nextUp': {'count': toDo, 'conversationIds': <String>[]},
+    'lost': {'count': 0, 'since': null, 'conversationIds': <String>[]},
+    'held': {'count': 0, 'withoutReason': 0, 'list': []},
+    'idleSince': null,
+    'process': null,
+    'redAt': {'asks': null, 'idle': null, 'lost': null, 'held': null},
+    'limits': {'askMinutes': 5, 'idleMinutes': 10, 'lostMinutes': 10},
+  };
+  server.state['pulse'] = {'lead': pulse(12, 3), 'scout': pulse(0, 0)};
+  // Hours ago, so the words stay the same however long the run takes.
+  final at = DateTime.now().subtract(const Duration(hours: 2, minutes: 10));
+  server.projectActivity = {
+    'through': '2026-11-07',
+    'projects': [
+      {
+        'projectId': 'lead',
+        'shipped': [
+          for (var d = 0; d < 28; d++) [2, 3, 2, 4, 5, 3, 6][d % 7],
+        ],
+        'updatedAt': at.millisecondsSinceEpoch,
+      },
+      {
+        'projectId': 'scout',
+        'shipped': List.filled(28, 0),
+        'updatedAt': at.millisecondsSinceEpoch,
+      },
+    ],
+  };
+  return server;
 }
 
 /// One element's area in the gallery and the share of it that may differ.
@@ -389,6 +472,7 @@ class _Gallery extends StatelessWidget {
     required this.faces,
     required this.bars,
     required this.empty,
+    required this.projects,
   });
   final Brightness brightness;
   final List<String> faces;
@@ -398,6 +482,9 @@ class _Gallery extends StatelessWidget {
 
   /// A Swarm with no tasks: the Tasks pane empty.
   final SuperTabController empty;
+
+  /// A Swarm of two projects: the Projects list.
+  final SuperTabController projects;
   static const boundary = ValueKey('swarm-elements-gallery');
 
   @override
@@ -653,6 +740,16 @@ class _Gallery extends StatelessWidget {
                 child: SuperTabPersonalTasksPane(
                   controller: empty,
                   onOpenTask: (_) {},
+                ),
+              ),
+              title('Projects list: a full row, and one with nothing optional'),
+              SizedBox(
+                width: 720,
+                height: 330,
+                child: SuperTabProjectsPage(
+                  controller: projects,
+                  onOpen: (_) {},
+                  onOpenRepository: (_) {},
                 ),
               ),
             ],

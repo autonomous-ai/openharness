@@ -29,13 +29,14 @@ import { canReadGroup, canReadProject, projectsOf, readConversation, readProject
 import { isBuddyReader } from '../buddies.js'
 import { workspacesRequired } from '../workspaceStore.js'
 import type { Leaderboard } from '../leaderboard/contract.js'
-import { profileNames, readableWeek, recentDormantGroups, weeklyBoard } from '../leaderboard/read.js'
+import { profileNames, readableWeek, recentDormantActivity, recentDormantGroups, weeklyBoard } from '../leaderboard/read.js'
 import { LEDGER_WEEKS } from '../leaderboard/record.js'
 import type { PeriodName } from '../leaderboard/rolling.js'
 import { leaderboard } from '../leaderboard/stats.js'
 import { readScorecards, type ScorecardDay } from '../scorecard/rows.js'
 import { scorecardThrough } from '../scorecard/job.js'
-import { WEEK_MS } from '../leaderboard/week.js'
+import { DAY_MS, WEEK_MS } from '../leaderboard/week.js'
+import { ACTIVITY_DAYS, projectActivity, readableProjects, type ProjectActivities } from './projectActivity.js'
 import { derivedEtag, marksOf } from './derivedEtag.js'
 import { READ_FORMAT, SWARM_MIGRATING, type Changes, type Derived, type ReaderMarks, type MachineReadings, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
 import { AvatarLinks } from '../avatarLinks.js'
@@ -558,6 +559,28 @@ export class SwarmReads {
     })
     const elapsedMs = performance.now() - began
     if (allProjects && !period && elapsedMs > 100) logger.warn('[weekly-leaderboard] slow read', { elapsedMs: Math.round(elapsedMs) })
+    return result
+  }
+
+  /** Each project the reader reads, with its tasks shipped per day for four weeks and when it last moved (projectActivity.ts),
+   *  for the Projects list. From the live conversations and the dormant ones of the window, through the read cache as the
+   *  board's (leaderboard/read.ts): a read at an unchanged stamp loads no document. A Team session reads none, as for the board. */
+  async projectActivity(user: AuthUser, tabId: string): Promise<ProjectActivities> {
+    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+    const now = this.now()
+    const began = performance.now()
+    const result = await this.read(user, tabId, async (tx, cached) => {
+      const state = parts.reassemble(await readParts(tx, cached, tabId), { share: true })
+      const actor = await this.store.actor(tx, user, state)
+      // A non-member is refused as on every Swarm read, not answered an empty list.
+      author(state, actor)
+      // What the reader may not read is never loaded.
+      const readable = readableProjects(state, actor).map(p => p.id)
+      const dormant = readable.length ? await recentDormantActivity(tx, cached, tabId, readable, now - ACTIVITY_DAYS * DAY_MS) : []
+      return projectActivity(state, actor, [...state.conversations.filter(g => !g.dormant), ...dormant], now)
+    })
+    const elapsedMs = performance.now() - began
+    if (elapsedMs > 100) logger.warn('[project-activity] slow read', { elapsedMs: Math.round(elapsedMs) })
     return result
   }
 
