@@ -2,13 +2,14 @@ import { AGENT_FOLDER_MARK, agentFolderFor } from './agentFolder.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { dirname, join, sep } from 'node:path'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { buddyOwnerFile, buddyOwnerOf } from '../lib/buddyGuard.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { env } from '../config/env.js'
 import { homedir, tmpdir } from 'node:os'
 import { BUDDY_CLAUDE_SIGNED_OUT, BUDDY_NOT_OWN_MACHINE, HEAVY_NOT_RECORDED, HEAVY_REFUSED, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent, TEAM_WRITTEN_CLAUDE_ONLY, TEAM_WRITTEN_WORKTREE_ONLY } from './start.js'
-import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
+import { buildEngineCommandArgv, commandAvailableInInteractiveShell, shellSingleQuote } from '../lib/engineLaunch.js'
+import { readCapabilities } from './capacity.js'
 import { readCapacityDisk } from './disk.js'
 import { SuperTabHostError } from './wire.js'
 import { PM_HOMES } from './teamDaemon.js'
@@ -79,6 +80,38 @@ function fixture(options: { state?: Record<string, unknown> | Error; refused?: s
   return { scoped, start, request, open, close, loseJoin: () => { lostJoin = true }, forget: () => { nativeState = 'missing' } }
 }
 const switchCall = (f: { request: { mock: { calls: unknown[][] } } }) => f.request.mock.calls.find(c => c[0] === 'agent_update')
+
+// Task #3945: the daemon PATH lacks a tool that the person's own login profile supplies.
+it.skipIf(process.platform === 'win32' || !existsSync('/bin/zsh'))('places a start needing a tool found only on the login shell PATH, without executing the tool', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'swarm-login-tool-'))
+  const bin = join(root, 'bin'), marker = join(root, 'executed'), tool = 'harness-login-only-tool'
+  mkdirSync(bin)
+  writeFileSync(join(bin, tool), `#!/bin/sh\ntouch ${shellSingleQuote(marker)}\n`, { mode: 0o700 })
+  writeFileSync(join(root, '.zprofile'), `export PATH=${shellSingleQuote(bin)}:/usr/bin:/bin\n`)
+  vi.stubEnv('ZDOTDIR', root)
+  vi.stubEnv('SHELL', '/bin/zsh')
+  vi.stubEnv('PATH', '/usr/bin:/bin')
+  try {
+    const capacity = await readCapabilities({ cwd: root, tools: [tool] }, {
+      resources: async () => ({ cpuPercent: 10, memoryTotalBytes: 1000, memoryUsedBytes: 100 }),
+      disk: async () => ({ freeBytes: 500, volume: 'fixture', path: root }),
+      tool: name => commandAvailableInInteractiveShell(name, undefined, undefined, true), device: async () => true,
+    })
+    expect(capacity.tools).toEqual({ [tool]: true })
+    const f = fixture()
+    f.start.request.requirements.tools = [tool]
+    const request = f.request.getMockImplementation()!
+    f.request.mockImplementation((type, payload = {}, ms) => type === 'super_tabs' && payload.action === 'capacity'
+      ? Promise.resolve(capacity) : request(type, payload, ms))
+    const result = await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)
+    expect(result).toMatchObject({ ok: true, agentId: 'worker' })
+    expect(f.start.error).toBeNull()
+    expect(existsSync(marker)).toBe(false)
+  } finally {
+    vi.unstubAllEnvs()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
 /** Runs a start on a fake clock: an agent whose frame names no model is waited for (MODEL_REPORT_WAIT_MS) before it joins. */
 async function onFakeClock<T>(run: () => Promise<T>): Promise<T> {
   vi.useFakeTimers()

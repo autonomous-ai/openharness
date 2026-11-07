@@ -29,7 +29,7 @@ export const startRequirements = (needs: Pick<Needs, 'tools' | 'devices' | 'heav
 /** A missing result is a completed check; an absent value or failed check is only unverified. */
 export function requiredToolReason(tool: string, reported: unknown, failure?: unknown): string | null {
   if (reported === true) return null
-  if (reported === false) return `Required tool missing: ${tool}.`
+  if (reported === false) return `Required tool missing: ${tool}.${typeof failure === 'string' && failure ? ` ${failure}` : ''}`
   const detail = typeof failure === 'string' && failure ? `${failure} ` : ''
   return `Required tool not verified: ${tool}. ${detail}Ask the machine owner to check it and refresh the machine reading.`
 }
@@ -65,7 +65,7 @@ export async function readCapabilities(input: Json, deps = {
     probeTools(),
     Promise.all(devices.map(async d => [d, await deps.device(d).catch(() => false)] as const)),
   ])
-  const toolProbeErrors = Object.fromEntries(toolValues.filter(([, result]) => result.status === 'unverified')
+  const toolProbeErrors = Object.fromEntries(toolValues.filter(([, result]) => result.status === 'unverified' || (result.status === 'missing' && result.detail))
     .map(([name, result]) => [name, result.detail ?? 'The tool probe did not complete.']))
   return { ok: true, sampledAt: Date.now(), resources: { ...resources, projectDiskFreeBytes: disk?.freeBytes ?? null, projectDiskTotalBytes: disk?.totalBytes ?? null,
     projectDiskVolume: disk?.volume ?? null, projectDiskPath: disk?.path ?? null },

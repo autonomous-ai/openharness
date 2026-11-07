@@ -1197,7 +1197,18 @@ describe('commandAvailableInInteractiveShell', () => {
     await expect(commandAvailableInInteractiveShell('kilo', shell)).resolves.toBe(true)
     await expect(commandAvailableInInteractiveShell('missing-engine', shell)).resolves.toBe(false)
     await expect(commandAvailableInInteractiveShell('kilo', shell, undefined, true)).resolves.toEqual({ status: 'available' })
-    await expect(commandAvailableInInteractiveShell('missing-engine', shell, undefined, true)).resolves.toEqual({ status: 'missing' })
+    await expect(commandAvailableInInteractiveShell('missing-engine', shell, undefined, true)).resolves.toEqual({
+      status: 'missing', detail: 'Checked the bash interactive shell PATH.',
+    })
+  })
+
+  it('names the Windows process PATH without starting a shell', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    try {
+      await expect(commandAvailableInInteractiveShell('harness-tool-that-is-absent', '/nonexistent/shell', undefined, true))
+        .resolves.toEqual({ status: 'missing', detail: 'Checked the Windows process PATH.' })
+    } finally { Object.defineProperty(process, 'platform', platform) }
   })
 
   it('recognizes an installed vendor path before the shell profile has it on PATH', async () => {
