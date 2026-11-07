@@ -42,6 +42,7 @@ export const GROUP_FIELDS = {
     'proposal',
     'pulse',
     'reviewOf',
+    'statusLine',
     'taskApproval',
   ],
   whenRunning: [
@@ -118,6 +119,7 @@ export const GROUP_FIELDS = {
     'teamWrittenBy',
     'unlinkedPullRequests',
     'waitingLinuxStep',
+    'waitingWindowsStep',
     'writers',
   ],
 } as const

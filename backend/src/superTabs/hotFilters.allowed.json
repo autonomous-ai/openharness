@@ -17,7 +17,6 @@
   "src/superTabs/store.ts superTab.findMany": 1,
   "src/superTabs/store.ts superTabAttachment.findMany": 2,
   "src/superTabs/store.ts superTabAttachment.updateMany": 2,
-  "src/superTabs/store.ts superTabDelivery.findFirst": 1,
   "src/superTabs/store.ts superTabDelivery.findMany": 1,
   "src/superTabs/store.ts superTabDelivery.updateMany": 11,
   "src/superTabs/store.ts superTabOperation.findMany": 1,

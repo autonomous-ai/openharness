@@ -1,6 +1,6 @@
 /**
  * Opening a planned review step (task #3401), as conversation.create opens one with `reviewOf` and `step`: a Ready opens its
- * steps here, and so do the time checks for a Linux step that waited for a Linux machine (linuxSteps.ts, task #4278).
+ * steps here, and so do the time checks for a Linux or Windows step that waited for a machine of its OS (osSteps.ts, tasks #4278, #4410).
  */
 import { bindTaskCard } from './cards.js'
 import { nextConversationNumber, stableId, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'

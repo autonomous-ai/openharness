@@ -1,4 +1,5 @@
 import { recordPulse } from './pulse.js'
+import { linesOf } from './statusCard.js'
 import { CREW_REOPEN_GRACE_MS, isCrew } from './crew.js'
 import { activeWork, forRecipients, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState, type TaskLiveness } from './model.js'
@@ -504,9 +505,11 @@ function unpurged(state: SuperTabState, now: number): MessageDraft[] {
  *  Lead's poll runs them, where the whole active Swarm is loaded and the one they wake is listening: a machine's reading
  *  loads only running work and must write no group (read/host.ts). */
 export function sweepForLead(state: SuperTabState, now: number, rulesFor: DispatchLookup = () => DISPATCH_RULES): MessageDraft[] {
+  // Each task's status line before the sweep moves any (statusCard.ts): only the lines it moves are written.
+  const before = linesOf(state, now)
   const drafts = [...sweepLiveness(state, now, rulesFor), ...recordTaskStates(state, now)]
   // Where the whole active Swarm is loaded, as for a command: a task lost here may leave Working at 0 (pulse.ts).
-  recordPulse(state, now)
+  recordPulse(state, now, undefined, before)
   return drafts
 }
 

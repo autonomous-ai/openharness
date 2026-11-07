@@ -1,6 +1,7 @@
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_icons.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
 import 'avatar_art.dart';
@@ -9,8 +10,8 @@ import 'until.dart';
 
 /// The one avatar for a person or an agent everywhere in the Swarm: rows,
 /// messages, mentions, the Glance and the leaderboard. Stable across
-/// engine/model changes. An agent wears its engine as a small badge; a person
-/// their status emoji while it lasts.
+/// engine/model changes. An agent wears its engine as a small badge, a PM its
+/// crown; a person their status emoji while it lasts.
 class SuperTabAvatar extends StatelessWidget {
   const SuperTabAvatar({
     super.key,
@@ -23,7 +24,7 @@ class SuperTabAvatar extends StatelessWidget {
     this.pattern = false,
     this.now,
     this.radius,
-  });
+  }) : crown = false;
 
   SuperTabAvatar.person(
     SuperTabPerson person, {
@@ -36,16 +37,19 @@ class SuperTabAvatar extends StatelessWidget {
        picture = person.avatar,
        engine = null,
        status = person.status,
-       pattern = false;
+       pattern = false,
+       crown = false;
 
   /// [engineBadge] off where the row already shows the engine beside the
-  /// name (the roster, messages), so it shows once.
+  /// name (the roster, messages), so it shows once. [crown] marks a PM
+  /// (task #4421).
   SuperTabAvatar.agent(
     SuperTabAgent agent, {
     super.key,
     String? name,
     this.size = 30,
     bool engineBadge = true,
+    this.crown = false,
     this.radius,
   }) : identity = 'agent:${agent.id}',
        name = name ?? agent.displayName ?? agent.name,
@@ -78,6 +82,9 @@ class SuperTabAvatar extends StatelessWidget {
   /// The corner of a rounded-square face, as a message's; round when null.
   final double? radius;
 
+  /// A leader's crown on the top right corner: a PM in My agents.
+  final bool crown;
+
   @override
   Widget build(BuildContext context) {
     final badge = size * .46;
@@ -107,6 +114,19 @@ class SuperTabAvatar extends StatelessWidget {
           clipBehavior: Clip.none,
           children: [
             face,
+            if (crown)
+              Positioned(
+                right: -badge * .2,
+                top: -badge * .2,
+                child: _Badge(
+                  size: badge,
+                  child: Icon(
+                    AppIcons.crown,
+                    size: badge * .72,
+                    color: DesktopChrome.foreground,
+                  ),
+                ),
+              ),
             if (engine case final engine? when engine.isNotEmpty)
               Positioned(
                 right: -badge * .2,
