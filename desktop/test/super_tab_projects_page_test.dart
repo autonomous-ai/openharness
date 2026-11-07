@@ -2,6 +2,7 @@ import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/avatar_art.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart' show SuperTabProject;
 import 'package:harness/super_tabs/projects_page.dart';
@@ -260,6 +261,31 @@ void main() {
       'River | +2 | 12 working · 3 to do | openharness | Updated 2 minutes ago',
     );
     expect(key('super-project-lead-face-lead'), findsOneWidget);
+    // Review of #4662: the drawn face itself is the rounded square, not only a picture's clip.
+    expect(
+      tester
+          .widget<SuperTabAvatarFace>(
+            find.descendant(
+              of: key('super-project-lead-face-lead'),
+              matching: find.byType(SuperTabAvatarFace),
+            ),
+          )
+          .faceCorner,
+      4,
+    );
+    expect(
+      tester
+          .widget<SuperTabAvatarFace>(
+            find
+                .descendant(
+                  of: key('super-project-member-faces-lead'),
+                  matching: find.byType(SuperTabAvatarFace),
+                )
+                .first,
+          )
+          .faceCorner,
+      isNull,
+    );
     expect(key('super-project-member-faces-lead'), findsOneWidget);
     expect(
       find.descendant(
@@ -319,6 +345,36 @@ void main() {
     expect(spark.values, hasLength(28));
     expect(spark.values.last, 5);
     expect(spark.color, grid.AppPalette.textFaint);
+  });
+
+  // Review of #4662: Updated, Recent and the sparkline follow the work while the page is open, read at most every 30 s.
+  testWidgets('a project\'s new message reads the activity again, at most '
+      'every 30 seconds', (tester) async {
+    final (c, server) = await show(tester, setup: projects);
+    expect(server.projectActivityReads, 1);
+    final groups = (server.state['conversations'] as List)
+        .cast<Map<String, dynamic>>();
+    Future<void> message(Duration after, int sequence) =>
+        withClock(Clock.fixed(now.add(after)), () async {
+          groups.firstWhere(
+            (g) => g['id'] == 'docs-lead',
+          )['lastMessageSequence'] = sequence;
+          await tester.runAsync(c.refresh);
+          await tester.pump();
+          await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+          await tester.pump();
+        });
+    // Within 30 s of the last read it waits; the next change after that reads.
+    await message(const Duration(seconds: 5), 41);
+    expect(server.projectActivityReads, 1);
+    await message(const Duration(seconds: 31), 42);
+    expect(server.projectActivityReads, 2);
+    // A change that moves no project's latest message reads nothing.
+    await withClock(Clock.fixed(now.add(const Duration(minutes: 5))), () async {
+      await tester.runAsync(c.refresh);
+      await tester.pump();
+    });
+    expect(server.projectActivityReads, 2);
   });
 
   testWidgets('a server without the activity read draws rows without '
