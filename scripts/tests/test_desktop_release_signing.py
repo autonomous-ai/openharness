@@ -107,6 +107,15 @@ class ReleaseSigningTests(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn('main or a vX.Y.Z_desktop tag', result.stdout + result.stderr)
 
+    def test_internal_builds_read_no_signing_material(self):
+        for job, body in jobs(INTERNAL).items():
+            with self.subTest(job=job):
+                for material in SIGNING_MATERIAL + ('KEYCHAIN_PATH',):
+                    self.assertNotIn(material, body)
+        build = jobs(INTERNAL)['build-macos']
+        self.assertIn("SIGN_IDENTITY: '-'", build)
+        self.assertIn('--no-notarize', build)
+
 
 if __name__ == '__main__':
     unittest.main()
