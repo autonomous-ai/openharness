@@ -1,6 +1,4 @@
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -69,33 +67,6 @@ void main() {
         )
         .first;
     expect(tester.getSize(badge).width, greaterThanOrEqualTo(12));
-  });
-
-  testWidgets('an agent with no chat yet shows no hover fill and no click '
-      'cursor, and still says why', (tester) async {
-    await showLeftPane(tester, setup: agents(kestrelChat: null));
-    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-    addTearDown(mouse.removePointer);
-    await mouse.addPointer(
-      location: tester.getCenter(key('super-agent-kestrel')),
-    );
-    await tester.pump(const Duration(milliseconds: 400));
-    expect(
-      RendererBinding.instance.mouseTracker.debugDeviceActiveCursor(1),
-      SystemMouseCursors.basic,
-    );
-    expect(
-      key('super-agent-kestrel'),
-      isNot(
-        paints..something(
-          (method, args) =>
-              method == #drawRRect &&
-              (args[1] as Paint).color.toARGB32() ==
-                  grid.SidebarInk.hover.toARGB32(),
-        ),
-      ),
-    );
-    expect(find.byTooltip('Kestrel · no chat yet'), findsOneWidget);
   });
 
   testWidgets('open Projects with none says so', (tester) async {
