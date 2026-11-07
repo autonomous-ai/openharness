@@ -9,8 +9,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
+import 'package:harness/super_tabs/chat/send_button.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
 import 'package:harness/super_tabs/identity.dart';
+import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/tasks/personal_task_card.dart';
 import 'package:harness/super_tabs/tasks/personal_tasks.dart';
@@ -109,7 +111,7 @@ Future<void> _show(
   grid.AppTheme.brightness.value = brightness;
   addTearDown(() => grid.AppTheme.brightness.value = old);
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 500);
+  tester.view.physicalSize = const Size(760, 680);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -447,6 +449,29 @@ class _Gallery extends StatelessWidget {
                   ),
                 ],
               ),
+              title('Chat: message rows and send'),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 440,
+                    child: Column(
+                      children: [
+                        _message(
+                          'River',
+                          'New Project is in the sidebar now.',
+                          agent: _agent('River'),
+                        ),
+                        _message('dee', 'Found it, thanks!', person: _person),
+                      ],
+                    ),
+                  ),
+                  gap(),
+                  const SwarmSendButton(tooltip: 'Send', onPressed: null),
+                  gap(),
+                  SwarmSendButton(tooltip: 'Send', onPressed: () {}),
+                ],
+              ),
             ],
           ),
         ),
@@ -454,6 +479,31 @@ class _Gallery extends StatelessWidget {
     );
   }
 }
+
+/// A chat message row, as the chat draws one; no time, so the image is the
+/// same in every time zone.
+Widget _message(
+  String author,
+  String text, {
+  SuperTabAgent? agent,
+  SuperTabPerson? person,
+}) => SuperTabMessageRow(
+  message: SuperTabMessage.fromJson({
+    'id': 'm-$author',
+    'conversationId': 'lead',
+    'text': text,
+    'sequence': 1,
+    'author': agent != null
+        ? {'kind': 'agent', 'id': agent.id, 'name': author}
+        : {'kind': 'person', 'id': person!.id, 'name': 'dee@example.com'},
+  }),
+  author: author,
+  agent: agent,
+  person: person,
+  receipts: const [],
+  onReturnToComposer: () {},
+  readerId: 'p1',
+);
 
 /// Matches when [galleryDifference] finds none. A mismatch fails with what
 /// differs and saves the image it drew to the system temp folder, never into
