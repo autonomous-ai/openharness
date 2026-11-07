@@ -18,9 +18,11 @@ import { startQueryStats } from './lib/queryStats.js'
 import { startRetryStats } from './superTabs/retryStats.js'
 import { releaseSchema } from './lib/db/schemaRelease.js'
 import { startSwarmSweeps } from './superTabs/sweeps.js'
+import { startDecisionSweep } from './superTabs/decisionSweep.js'
 import { requeueCompactedAgents } from './superTabs/agentTombstones.js'
 import { startLegacyDrop } from './superTabs/migration/dropLegacyJob.js'
 import { startInstructionsRebase } from './superTabs/migration/rebase.js'
+import { startInstructionsRestore } from './superTabs/migration/restoreRebase.js'
 import { startDeliverySettle } from './superTabs/deliverySettle.js'
 import { startDeliveryRepush } from './superTabs/deliveryRepush.js'
 import { startDeliveryCompaction } from './superTabs/deliveryCompaction.js'
@@ -81,8 +83,10 @@ async function start(): Promise<void> {
   await reconcileCommunityLikeCounts()
 
   let stopSweeps = (): void => {}
+  let stopDecisionSweep = (): void => {}
   let stopLegacyDrop = (): void => {}
   let stopInstructionsRebase = (): void => {}
+  let stopInstructionsRestore = (): void => {}
   let stopArchive = (): void => {}
   let stopPullRequestWatch = (): void => {}
   let stopTimeChecks = (): void => {}
@@ -106,8 +110,10 @@ async function start(): Promise<void> {
     machineBillingWorkerService.stop()
     productUsagePeopleRollupService.stop()
     stopSweeps()
+    stopDecisionSweep()
     stopLegacyDrop()
     stopInstructionsRebase()
+    stopInstructionsRestore()
     stopArchive()
     stopPullRequestWatch()
     stopTimeChecks()
@@ -161,11 +167,14 @@ async function start(): Promise<void> {
   // A failure leaves them compacted, as before, and never stops the worker starting.
   await requeueCompactedAgents(prisma, Date.now()).then(queued => logger.info('[swarm-sweeps] queued compacted agent tombstones for purge', { queued }),
     error => logger.warn('[swarm-sweeps] queuing compacted agent tombstones failed', { error: error instanceof Error ? error.message : String(error) }))
-  stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals(), now => swarms.leaveOverdueDecisions(now))
+  stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals())
+  stopDecisionSweep = startDecisionSweep(now => swarms.leaveOverdueDecisions(now))
   // The dead old state of migrated Swarms goes by itself, a few at a time (superTabs/migration/dropLegacyJob.ts).
   stopLegacyDrop = startLegacyDrop(prisma)
   // Every project's instructions move onto the new base once, by themselves (superTabs/migration/rebase.ts, task #3600).
   stopInstructionsRebase = startInstructionsRebase(prisma)
+  // And the lines that first move lost come back, once, after it (superTabs/migration/restoreRebase.ts, task #3679).
+  stopInstructionsRestore = startInstructionsRestore(prisma)
   // Finished groups archive once GitHub says their pull requests are merged or closed; without the app, only groups that
   // link none do (superTabs/archive.ts).
   const githubConfig = githubAppConfig(env), githubApp = githubConfig ? new GitHubApp(githubConfig) : null

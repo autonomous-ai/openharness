@@ -11,6 +11,8 @@ import { isBuddy, isBuddyChat } from './buddies.js'
 import { heldView, type HeldReason } from './heldReason.js'
 import { isLeads, type Author, type Conversation, type SuperTabState } from './model.js'
 import { agentProjectId, groupProject, type SwarmProject } from './projects.js'
+import { unconfirmedNote } from './processNotes.js'
+import { switched } from './boardRights.js'
 
 /** One person's message to the PM not settled yet: its id, who wrote it, when, and the root of the thread it is in (its own
  *  id for a top-level message). */
@@ -40,7 +42,8 @@ export function owe(state: SuperTabState, group: Conversation, message: { id: st
   if (message.author.kind !== 'person' || message.source || !counted(group)) return
   const project = projectOfGroup(state, group)
   const pm = project && pmOf(state, project)
-  if (!pm || !message.recipients.includes(pm)) return
+  // A project switched to the Board way of working owes its PM no chat messages (boardRights.ts, task #3819).
+  if (!pm || !message.recipients.includes(pm) || switched(project)) return
   group.owed = [...(group.owed ?? []).filter(ask => ask.id !== message.id), { id: message.id, personId: message.author.id, at: now, thread: message.thread ?? message.id }]
     .slice(-MAX_OWED)
 }
@@ -97,6 +100,8 @@ export interface Pulse {
   lost: { count: number; since: number | null; conversationIds: string[] }
   held: { count: number; withoutReason: number; list: Array<{ conversationId: string; reason: string | null }> }
   idleSince: number | null
+  /** The what-changed note for PMs its PM has not confirmed (processNotes.ts, task #3581), so the board shows who has not. */
+  process: { noteId: string } | null
   redAt: { asks: number | null; idle: number | null; lost: number | null; held: number | null }
   limits: PulseLimits
 }
@@ -124,6 +129,8 @@ export function heldWords(reason: HeldReason): string {
  * with #3390: the agent's result text decided it before, a second way to decide one thing.
  */
 export function holdOf(group: Conversation, today: string): { reason: string | null } | null {
+  // A pause by someone who steers its project (boardRights.ts, task #3819), with its reason when one was given.
+  if (group.paused) return { reason: group.paused.reason ? `paused: ${group.paused.reason}` : 'paused' }
   const assignment = group.assignment
   const dated = !assignment && !!group.notBefore && group.notBefore > today
   const stated = !!assignment && (assignment.status === 'blocked' || assignment.status === 'needs_human')
@@ -250,6 +257,7 @@ export function projectPulse(state: SuperTabState, project: SwarmProject, now: n
     lost: { count: counts.lost.length, since: lostAt, conversationIds: counts.lost.map(l => l.id).slice(0, PULSE_LIST_MAX) },
     held: { count: counts.held.length, withoutReason, list: counts.held.slice(0, PULSE_LIST_MAX) },
     idleSince,
+    process: (note => note ? { noteId: note.id } : null)(unconfirmedNote(state, project)),
     redAt: {
       asks: oldest ? oldest.at + limits.askMinutes * MINUTE : null,
       idle: idleSince === null ? null : idleSince + limits.idleMinutes * MINUTE,

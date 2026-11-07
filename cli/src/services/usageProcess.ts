@@ -2,8 +2,8 @@ import { join } from 'node:path'
 import { createAgentUsage } from './agentUsage.js'
 /**
  * Account usage in its own process (`harness __service usage`, in the edge host): `usage_read`, the same
- * handler as in the core's process (services/usage.ts). It asks the core nothing. Its two vendor round
- * trips and the Keychain reads through `security` are this process's alone.
+ * handler as in the core's process (services/usage.ts). It asks the core nothing. The `codex app-server` it starts
+ * for Codex's read is this process's alone.
  */
 import { runServiceProcess, type ServiceProcess } from './process.js'
 import { processCoreApi } from './processCoreApi.js'
@@ -16,7 +16,7 @@ export interface UsageServiceOptions {
   token: string
   /** Swapped in tests for one that does not touch the real socket or process. */
   run?: typeof runServiceProcess
-  /** Swapped in tests for usage that reads no Keychain and calls no vendor. */
+  /** Swapped in tests for usage that starts no codex. */
   start?: typeof startUsage
 }
 

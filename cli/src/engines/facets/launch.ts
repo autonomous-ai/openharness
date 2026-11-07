@@ -238,6 +238,24 @@ export interface SettingAttribution {
 }
 
 /**
+ * The engine's status line, which Harness's own command takes over at every launch to record the plan's rate limits
+ * the engine reports there (hook/statusline.mjs, kit/statusLine.ts), then runs the person's own status line command,
+ * so they see what they saw before. Claude Code's `statusLine` (2.1.316: `type: 'command'`, `command`, `padding`,
+ * `refreshInterval`, `hideVimModeIndicator`), given in a settings object on its command line.
+ */
+export interface StatusLineContract {
+  /** The person's settings files, lowest precedence first: `file` in `home`, then each of `folder` in the harness's folder. */
+  home: LaunchHome
+  file: string
+  folder: readonly string[]
+  /** The setting's key, and the `type` of one that runs a command (its text in `command`). */
+  key: string
+  type: string
+  /** The argv; `{settings}` is the settings object, as JSON. The engine keeps only the last, so a launch gives one. */
+  args: readonly string[]
+}
+
+/**
  * An engine with no setting for its attribution's text, which it gives its model as an instruction (Codex 0.162.1:
  * `<git_attribution>` in the developer message), and which takes more instructions in a config key `-c` sets
  * (`developer_instructions`). `-c` replaces the person's own value, so theirs comes first and ours after it; one
@@ -302,6 +320,7 @@ export interface EngineLaunch {
   bypassAcceptance?: BypassAcceptanceContract
   resumeRepair?: ResumeRepairContract
   attribution?: AttributionContract
+  statusLine?: StatusLineContract
   /** How the engine is told, as it starts, that it runs in Harness and how to use it (lib/agentAttribution.ts). */
   harnessInstructions?: HarnessInstructionsContract
 }
