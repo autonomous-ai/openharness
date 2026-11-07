@@ -8,6 +8,7 @@ import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
+import 'package:harness/widgets/engine_identity.dart';
 
 import 'super_tab_mentions_test.dart' show showView;
 import 'support/super_tab_fixture.dart';
@@ -39,6 +40,19 @@ void main() {
       server.append('From an agent that left', agent: true);
       return server;
     }
+
+    testWidgets('heads with the name and the time only: no engine mark '
+        '(River, 11-07: colour only on faces)', (tester) async {
+      await showView(tester, server());
+      expect(
+        find.descendant(
+          of: find.byType(SuperTabMessageRow),
+          matching: find.byType(EngineMark),
+        ),
+        findsNothing,
+      );
+      expect(find.text('River'), findsWidgets);
+    });
 
     for (final brightness in Brightness.values) {
       testWidgets('draws every sender as a round face at 28 '
@@ -109,6 +123,8 @@ void main() {
         const surface = 'super-message-composer-surface';
         expectField(tester, surface);
         expectNeutral(sendFill(tester, surface));
+        // Only the paperclip on the left; @ still tags when typed (River, 11-07).
+        expect(key('super-composer-tag'), findsNothing);
 
         await tester.enterText(key('super-message-composer'), 'Ship it');
         await tester.pump();
@@ -143,6 +159,7 @@ void main() {
         const surface = 'super-thread-composer-surface';
         expectField(tester, surface);
         expectNeutral(sendFill(tester, surface));
+        expect(key('super-thread-tag'), findsNothing);
 
         await tester.enterText(key('super-thread-composer'), 'Agreed');
         await tester.pump();
