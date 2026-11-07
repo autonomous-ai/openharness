@@ -1277,14 +1277,17 @@ export class ContributedMachines {
   }
   private log(message: string) { (this.deps.log ?? (line => console.warn(`[super-tabs] ${line}`)))(message) }
 
-  /** [startId], a Member's first task session in its project here, made its worktree at [path]: kept as that Member's. */
+  /** [startId], a Member's task session in its project here, works at [path]: kept as that Member's worktree there. A start that
+   *  made a new one, as the one held before went or could not be proven, takes its record over, so the next start reuses it
+   *  (review of #3553); a start that worked in the held one changes nothing. */
   private recordMemberWorktree(tabId: string, startId: string, request: Record<string, unknown>, path: string | undefined) {
     const projectId = object(request.memberProject).id
     if (!path || !identifier(projectId) || typeof request.cwd !== 'string' || !isAbsolute(request.cwd)) return
     try {
       const file = memberWorktreesFile(this.core.dataDir, this.machineId), rows = readMemberWorktrees(file)
-      if (rows.some(w => w.tabId === tabId && w.memberId === request.memberOf && w.projectId === projectId)) return
-      writeMemberWorktrees(file, [...rows, { tabId, memberId: String(request.memberOf), projectId, startId, source: request.cwd, path }])
+      const mine = (w: MemberWorktree) => w.tabId === tabId && w.memberId === request.memberOf && w.projectId === projectId
+      if (rows.some(w => mine(w) && w.path === path)) return
+      writeMemberWorktrees(file, [...rows.filter(w => !mine(w)), { tabId, memberId: String(request.memberOf), projectId, startId, source: request.cwd, path }])
     } catch (error) { this.log(`Could not record a Member's worktree: ${(error as NodeJS.ErrnoException).code ?? 'WRITE_FAILED'}`) }
   }
 
