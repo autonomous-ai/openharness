@@ -2445,7 +2445,7 @@ export class SuperTabStore {
       }
       if (effects.closedAssignment) await closeAssignment(tx, tabId, effects.closedAssignment.assignmentId, effects.closedAssignment.outcome, context.now)
       await recordEvidence(tx, tabId, original, effects.state, context.now)
-      const threads = await this.writeMessages(tx, tabId, effects.state, effects.messages, sequences)
+      const threads = await this.writeMessages(tx, tabId, effects.state, effects.messages, sequences, false, original)
       if (effects.lateDeliveries?.length) await this.writeLateDeliveries(tx, tabId, effects.state, effects.lateDeliveries)
       if (command.type === 'message.send' && actor.kind === 'person') await resolveByReply(tx, tabId, command.conversationId, actor.userId, context.now)
       // Answering an agent settles its tags in other conversations too (mentions.ts answeredAgents).
@@ -3682,13 +3682,13 @@ export class SuperTabStore {
    *  kept, and only its missing deliveries are written. One duplicate had stopped every later report and poll
    *  (2026-10-28); any other message under the id still fails, so another task's notice is never delivered as this one. */
   private async writeMessages(tx: Transaction, tabId: string, state: SuperTabState, messages: MessageDraft[], sequences: ReadonlyMap<string, number>,
-    keepStored = false): Promise<Map<string, ThreadFacet>> {
+    keepStored = false, before?: SuperTabState): Promise<Map<string, ThreadFacet>> {
     const stored = keepStored ? await storedMessages(tx, messages.map(m => m.id)) : []
     const kept = new Set(stored.filter(row => messages.some(m => m.id === row.id && row.tabId === tabId && row.conversationId === m.conversationId
       && isDeepStrictEqual(row.source ?? undefined, m.source))).map(row => row.id))
     if (kept.size) logger.warn('Kept Swarm notices already stored', { tabId, ids: [...kept] })
     // Only a person and their own agent write in their private chat (task #4547).
-    messages = checkPrivateChat(state, messages)
+    messages = checkPrivateChat(state, messages, before)
     const measured = proposalMessageMeasures(state, messages.filter(m => !kept.has(m.id)), this.now())
     if (measured.length) afterCommit(tx, () => proposalMeasures(measured))
     const rows: Prisma.SuperTabMessageCreateManyInput[] = []

@@ -15,7 +15,7 @@ export const SWARM_AUTHOR: Author = { kind: 'agent', id: 'harness', name: 'Harne
 const sourceKind = (draft: Pick<MessageDraft, 'source'>): string => String((draft.source as { kind?: unknown } | null | undefined)?.kind ?? 'message')
 
 /** [chat]'s person's own Buddy there: its main Buddy first, else one of its sessions. */
-function chatBuddy(state: SuperTabState, chat: Conversation): Agent | undefined {
+function chatBuddy(state: Pick<SuperTabState, 'agents'>, chat: Conversation): Agent | undefined {
   const owners = chat.audience?.people ?? []
   const theirs = state.agents.filter(a => chat.agentIds.includes(a.id) && isBuddy(a)
     && owners.some(p => p.id === a.buddyOf!.personId && p.generation === a.buddyOf!.generation))
@@ -24,21 +24,24 @@ function chatBuddy(state: SuperTabState, chat: Conversation): Agent | undefined 
 
 /** [drafts] as they may be written: a row into a person's Buddy chat stays when that person or their own Buddy wrote it, and a
  *  Swarm line there is written as the chat's own Buddy, else as Harness. Anything else there is refused, naming only the row's
- *  kind, never its words. */
-export function checkPrivateChat<T extends Pick<MessageDraft, 'conversationId' | 'author' | 'source'>>(state: SuperTabState, drafts: readonly T[]): T[] {
+ *  kind, never its words. [before]: the Swarm as the command found it, whose Buddies count too: a thread session signs its own
+ *  end in the command that removes it. */
+export function checkPrivateChat<T extends Pick<MessageDraft, 'conversationId' | 'author' | 'source'>>(state: SuperTabState, drafts: readonly T[],
+  before?: Pick<SuperTabState, 'agents'>): T[] {
+  const agents = before ? [...state.agents, ...before.agents.filter(a => !state.agents.some(b => b.id === a.id))] : state.agents
   return drafts.map(draft => {
     const chat = state.conversations.find(c => c.id === draft.conversationId)
     if (!chat || !isBuddyChat(chat)) return draft
     const owners = chat.audience?.people ?? []
     const { kind, id } = draft.author
     const theirs = kind === 'person' ? owners.some(p => p.id === id)
-      : state.agents.some(a => a.id === id && isBuddy(a) && owners.some(p => p.id === a.buddyOf!.personId && p.generation === a.buddyOf!.generation))
+      : agents.some(a => a.id === id && isBuddy(a) && owners.some(p => p.id === a.buddyOf!.personId && p.generation === a.buddyOf!.generation))
     const what = sourceKind(draft)
     if (theirs || (SWARM_LINES.has(what) && id === SWARM_AUTHOR.id)) return draft
     if (!SWARM_LINES.has(what)) {
       fail('PRIVATE_CHAT', `A person's chat with their own agent is theirs alone, so this ${what} is not written there. Ask them with decision.ask, or post in the project chat.`, 403)
     }
-    const buddy = chatBuddy(state, chat)
+    const buddy = chatBuddy({ agents }, chat)
     return { ...draft, author: buddy ? { kind: 'agent' as const, id: buddy.id, name: buddy.name, ...buddy.displayName ? { displayName: buddy.displayName } : {},
       membershipGeneration: buddy.membershipGeneration } : SWARM_AUTHOR }
   })

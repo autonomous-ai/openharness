@@ -1125,7 +1125,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   syncTaskLines(original, effects, sender, stableId(original.id, actorKey(actor), context.operationId))
   for (const row of effects.messages) row.recipients = row.recipients.filter(id => pmAcceptsMessage(effects.state, id, row.source))
   // Only a person and their own agent write in their private chat (task #4547); the store checks every write again.
-  effects.messages = checkPrivateChat(effects.state, effects.messages)
+  effects.messages = checkPrivateChat(effects.state, effects.messages, original)
   // Every open group is loaded for a command (parts/load.ts): the board's pulse is worked out on it (pulse.ts), for the project
   // of the conversation the command names when it names one (it moves no other), else for every project.
   const only = pulseProjectOf(effects.state, input)
