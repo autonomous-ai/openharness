@@ -791,15 +791,17 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   /// The width the Board's columns with cards share in a [view] that wide,
   /// [empty] saying which are slim lanes: all of it when they fit at
   /// [SuperTabTasksView.minColumnWidth] or more; else as many whole columns
-  /// as fit at rest, the lanes after the last of them included, so none is
-  /// cut mid-word until the reader scrolls (finding 5 of #4211).
+  /// as fit at rest with the lanes between them, so none is cut mid-word
+  /// until the reader scrolls (finding 5 of #4211). The lanes after the last
+  /// are included while they fit; the rest start at the view's edge, as the
+  /// columns then fill it exactly: lanes after Working once hid it (#4445).
   static double _fullWidth(double view, List<bool> empty) {
     const edge = grid.AppDesktop.groupGap;
     var width = SuperTabTasksView.minColumnWidth;
     var full = 0, slim = 0;
-    for (final (i, isEmpty) in empty.indexed) {
+    for (final isEmpty in empty) {
       isEmpty ? slim++ : full++;
-      if (full == 0 || i + 1 < empty.length && empty[i + 1]) continue;
+      if (full == 0) continue;
       final share =
           (view -
               2 * edge -
