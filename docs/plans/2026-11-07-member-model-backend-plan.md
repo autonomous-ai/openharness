@@ -33,8 +33,12 @@ listed computer, recorded with the person as machine owner, so the host's grant 
   (`availableSlots`); the engine's quota there is known and every window is above `QUOTA_FLOOR_PERCENT`.
 - Waiting order: priority (P0 first, P2 when unset), then age (lower task number first).
 - A person's tasks go to their Member and helpers, never to another person's crew agent.
-- Accept: a task with a requester waits for their Accept unless they chose Accept all and every engine account on their
-  computers is an API key (known quota with no windows). Accept all is refused otherwise.
+- Accept (River's call, option 2): Accept all is refused unless every engine account on the person's computers is an API key
+  (known quota with no windows), and a stored Accept all on a subscription account stages tasks. Accept on every task by
+  default, with the test sweep it needs, is its own follow-up pull request.
+- A person whose own crew agent works in the project keeps it taking their asks until the migration (#4693 part D).
+- Host contract with #4698 (Threadland): starts carry `member`, `helperOf` and `setUpSteps`; the agent keeps `member` and
+  `helperOf`; `agent.setUp` records the set-up, and a host saying `memberSetUp` gets work only after it.
 
 ## Review Focus
 
@@ -46,14 +50,13 @@ listed computer, recorded with the person as machine owner, so the host's grant 
 
 ---
 
-### Task 1: Every asked task needs its person's Accept; Accept all only for API accounts
+### Task 1: Accept all only for API accounts
 
 **Files:** `members.ts` (`mayAcceptAll`), `taskApproval.ts` (`stageTaskApproval`), `commands.ts`
 (`member.approvalMode`). Test: `members.test.ts`.
 
-- [ ] Failing tests: a person with no mode or a subscription account gets their new task staged; Accept all is refused
-  for a subscription or unknown account (`ACCEPT_ALL_SUBSCRIPTION`) and allowed for API-only; a stored Accept all on a
-  subscription account still stages.
+- [ ] Failing tests: Ask me stages; Accept all is refused for a subscription or unknown account
+  (`ACCEPT_ALL_SUBSCRIPTION`) and allowed for API-only; a stored Accept all on a subscription account still stages.
 - [ ] Implement; run; commit.
 
 ### Task 2: The first Accept starts the person's Member
