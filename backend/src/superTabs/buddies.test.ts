@@ -1121,9 +1121,12 @@ describe('Chat with PM, replaced by Buddies (Ken, 10-29)', () => {
 
   it('is never opened again, by a person or the PM', () => {
     const f = setup()
-    expect(() => f.run({ ...open(['owner']), projectId: f.app.projectId })).toThrow('Chat with PM is closed')
-    // A Lead on a skill text from before is told how it tells one person something privately now.
-    expect(() => f.run({ ...open(['peer']), projectId: f.app.projectId }, agentActor(f.pm))).toThrow('person.tell')
+    const refusal = (actor?: Actor) => { try { f.run({ ...open([actor ? 'peer' : 'owner']), projectId: f.app.projectId }, actor) } catch (e) { return String((e as Error).message) } return '' }
+    // Task #4547: neither refusal points at the retired private line; a Lead is told the project chat or a Decision.
+    expect(refusal()).toContain('Chat with PM is closed')
+    expect(refusal()).not.toMatch(/private lines/)
+    expect(refusal(agentActor(f.pm))).toMatch(/project chat.*decision\.ask|decision\.ask.*project chat/)
+    expect(refusal(agentActor(f.pm))).not.toContain('person.tell')
     expect(f.state.conversations.filter(c => c.audience && !c.kind).map(c => c.id)).toEqual([f.pmChat])
   })
 

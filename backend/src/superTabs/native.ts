@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { refuseOthersInPrivateChat } from './buddies.js'
 import type { Prisma, SuperTabNativeContext } from '@prisma/client'
 import { z } from 'zod'
 import type { AuthUser } from '../lib/ssoAuth.js'
@@ -240,6 +241,8 @@ export class SuperTabNativeStore {
       // The turn touches its agent (spec ruling 2). The person who opened the terminal is guarded by this context's row,
       // which the turn writes: removing that person, or taking away their access, revokes the context (rule b,
       // revokeNativeContexts). Touching the person instead would make one person's terminals in different groups conflict.
+      // A terminal turn in a person's private chat is theirs or their own agent's alone (task #4558, #4547).
+      refuseOthersInPrivateChat(state, [draft], loaded.state)
       await this.deps.save(tx, loaded, state, this.deps.stamp(), [{ kind: 'agent', key: target.id }])
       await tx.superTabMessage.create({ data: { id: eventId, tabId, conversationId: group.id, sequence,
         author: json(observedBy), source: json({ kind: 'native', phase: event.kind, turnId: event.turnId,

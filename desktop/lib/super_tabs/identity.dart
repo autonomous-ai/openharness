@@ -23,7 +23,6 @@ class SuperTabAvatar extends StatelessWidget {
     this.status,
     this.face = false,
     this.now,
-    this.radius,
   }) : lead = false;
 
   SuperTabAvatar.person(
@@ -31,7 +30,6 @@ class SuperTabAvatar extends StatelessWidget {
     super.key,
     this.size = 30,
     this.now,
-    this.radius,
   }) : identity = 'person:${person.id}',
        name = person.shownName,
        picture = person.avatar,
@@ -50,7 +48,6 @@ class SuperTabAvatar extends StatelessWidget {
     this.size = 30,
     bool engineBadge = true,
     this.lead = false,
-    this.radius,
   }) : identity = 'agent:${agent.id}',
        name = name ?? agent.displayName ?? agent.name,
        picture = agent.avatar,
@@ -79,9 +76,6 @@ class SuperTabAvatar extends StatelessWidget {
   /// Draw the agent face rather than an initial when there is no picture.
   final bool face;
 
-  /// The corner of a rounded-square face, as a message's; round when null.
-  final double? radius;
-
   /// A Lead's thin gold ring around the face, outside its box so no row
   /// moves: a PM in My agents.
   final bool lead;
@@ -95,7 +89,6 @@ class SuperTabAvatar extends StatelessWidget {
       size: size,
       picture: picture,
       face: face,
-      radius: radius,
     );
     return SuperTabUntil(
       until: now == null ? status?.until : null,
