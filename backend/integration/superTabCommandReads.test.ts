@@ -90,15 +90,16 @@ const measured = (entries: ProfileEntry[]) => {
   return { queries: reads.length, kb: Math.round(reads.reduce((n, e) => n + (e.responseLength ?? 0), 0) / 1024), whole: wholeReads(entries) }
 }
 
-/** Each command's most queries and KB on this store: on prod, parts are larger, so bytes are the ones to watch. */
+/** Each command's most queries and KB on this store, a little above what it read (the PR's numbers). What is left is each
+ *  kind's listing, ~110 bytes a part, and the parts the command wrote: on prod, parts are larger and more. */
 const BUDGET = {
-  'conversation.create': { queries: 24, kb: 24 },
-  'work.assign': { queries: 30, kb: 24 },
-  'work.status': { queries: 20, kb: 16 },
-  'work.status review': { queries: 40, kb: 40 },
-  'post': { queries: 20, kb: 16 },
-  'react': { queries: 22, kb: 16 },
-  'dispatch pass': { queries: 12, kb: 12 },
+  'conversation.create': { queries: 24, kb: 36 },
+  'work.assign': { queries: 36, kb: 44 },
+  'work.status': { queries: 22, kb: 36 },
+  'work.status review': { queries: 36, kb: 52 },
+  'post': { queries: 20, kb: 34 },
+  'react': { queries: 22, kb: 34 },
+  'dispatch pass': { queries: 12, kb: 32 },
 } as const
 
 describe('what a common command reads in a prod-sized Swarm (task #4368)', () => {

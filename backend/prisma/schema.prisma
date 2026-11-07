@@ -1951,6 +1951,8 @@ model SwarmMember {
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])
+  /// A command's live parts by the columns a held part is compared by (parts/held.ts): the listing reads no document (task #4368).
+  @@index([tabId, deleted, key, version, changedAt])
   /// Tombstones past their purge time, compacted by the hourly sweep (superTabs/sweeps.ts compactTombstones). Not a TTL: the tombstone stays.
   @@index([purgeAt])
 }
@@ -2030,8 +2032,9 @@ model SwarmAgent {
   @@unique([tabId, key])
   @@index([tabId, changedAt])
   /// A Swarm's live agents (parts/light.ts, load.ts, read/host.ts): without it the read planned on [tabId, changedAt] and
-  /// examined every tombstone too (prod 2026-11-02: 1,070 examined for 40 returned).
-  @@index([tabId, deleted])
+  /// examined every tombstone too (prod 2026-11-02: 1,070 examined for 40 returned). A command lists them by the columns a
+  /// held part is compared by (parts/held.ts), reading no document (task #4368).
+  @@index([tabId, deleted, key, version, changedAt])
   @@index([machineId, deleted])
   @@index([tabId, contributorId])
   /// One agent's registrations in every Swarm (confidential.ts, sessionScope.ts): host rows read them on every changed tab.
@@ -2066,6 +2069,8 @@ model SwarmMachine {
   @@unique([tabId, key])
   @@index([tabId, changedAt])
   @@index([tabId, readAt])
+  /// A command's live parts by the columns a held part is compared by (parts/held.ts): the listing reads no document (task #4368).
+  @@index([tabId, deleted, key, version, changedAt, readAt])
   @@index([machineId, deleted])
   /// Machines whose settings changed since a host's cursor (read/host.ts woken).
   @@index([tabId, hostChangedAt])
@@ -2115,6 +2120,8 @@ model SwarmProgress {
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])
+  /// A command's live parts by the columns a held part is compared by (parts/held.ts): the listing reads no document (task #4368).
+  @@index([tabId, deleted, key, version, changedAt])
   /// Removed parts go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
   @@index([purgeAt], map: "part_purge")
 }

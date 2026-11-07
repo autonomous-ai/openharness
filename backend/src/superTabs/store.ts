@@ -1030,14 +1030,13 @@ export class SuperTabStore {
   }
 
   /** Loads again with more named groups, agents or starts when the first load lacks one a command needs. */
-  private async ensure(tx: Transaction, loaded: Loaded, named: Named): Promise<Loaded> {
+  private async ensure(tx: Transaction, loaded: Loaded, named: Omit<Named, 'allGroups' | 'includeRecentStarts'>): Promise<Loaded> {
     const has = (ids: string[] | undefined, present: (id: string) => boolean) => (ids ?? []).every(present)
     const { state } = loaded
-    if (!named.allGroups && has(named.groupIds, id => state.conversations.some(c => c.id === id)) && has(named.startIds, id => !!state.starts?.some(s => s.id === id))
+    if (has(named.groupIds, id => state.conversations.some(c => c.id === id)) && has(named.startIds, id => !!state.starts?.some(s => s.id === id))
       && !named.agentIds?.length && !named.projectIds?.length && !named.startAgentIds?.length) return loaded
     recordReload()
-    // Every live group, dormant ones too, is the rare whole read; any other name adds only what it names to this load.
-    if (named.allGroups) return loadRow(tx, loaded.row, { ...named, groupIds: [...new Set([...named.groupIds ?? [], ...loaded.parts.groups.filter(g => g.dormant).map(g => g.key)])] })
+    // A name adds only what it names to this load.
     return loadedFrom(loaded.row, await loadNamed(tx, loaded.parts, named))
   }
 

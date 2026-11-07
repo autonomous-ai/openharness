@@ -114,7 +114,7 @@ describe('a full report\'s held parts (B3, #2597)', () => {
     }
   })
 
-  it('reads the machines\' columns through the Swarm\'s index, examining only what it returns, and whole only the one that changed', async () => {
+  it('lists the machines\' columns from their held index, examining no document, and reads whole only the one that changed', async () => {
     const tabId = await scene()
     await scene()
     const held = new HeldParts()
@@ -124,7 +124,7 @@ describe('a full report\'s held parts (B3, #2597)', () => {
     const entries = (await profiled(db, () => observed(tabId, held))).filter(e => e.ns.endsWith('.SwarmMachine'))
     const live = (await db.swarmMachine.count({ where: { tabId, deleted: false } }))
     expect(entries.map(e => [e.planSummary?.startsWith('IXSCAN') || e.planSummary === 'IDHACK' || e.planSummary === 'EXPRESS_IXSCAN', e.docsExamined, e.nreturned]))
-      .toEqual([[true, live, live], [true, 1, 1]])
+      .toEqual([[true, 0, live], [true, 1, 1]])
   })
   it('reads the machines that changed in one read by id, however many changed (task #3119)', async () => {
     const tabId = await scene()
@@ -138,7 +138,7 @@ describe('a full report\'s held parts (B3, #2597)', () => {
     }
     const entries = (await profiled(db, () => observed(tabId, held))).filter(e => e.ns.endsWith('.SwarmMachine'))
     expect(entries.map(e => [e.planSummary?.startsWith('IXSCAN') || e.planSummary === 'IDHACK' || e.planSummary === 'EXPRESS_IXSCAN', e.docsExamined, e.nreturned]))
-      .toEqual([[true, machines.length, machines.length], [true, 2, 2]])
+      .toEqual([[true, 0, machines.length], [true, 2, 2]])
   })
 })
 
