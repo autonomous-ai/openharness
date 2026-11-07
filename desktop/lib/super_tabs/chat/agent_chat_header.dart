@@ -51,7 +51,7 @@ class SuperTabAgentChatHeader extends StatelessWidget {
     final name = agent != null
         ? snapshot!.agentName(agent.id, fallback: agent.name)
         : group.isBuddyChat
-        ? 'Your Buddy'
+        ? 'Your agent'
         : group.label;
     final identity = Row(
       mainAxisSize: MainAxisSize.min,
