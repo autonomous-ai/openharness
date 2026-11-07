@@ -56,7 +56,7 @@ export function openBuddyChat(state: SuperTabState, projectId: string, owner: Pe
   if (!chat) {
     const number = nextConversationNumber(state)
     state.groupCounter = number
-    chat = { id, kind: 'buddy', ...(state.projects ? { projectId } : {}), number, title: defaultBuddyName(owner), leadId: null,
+    chat = { id, kind: 'buddy', ...(state.projects ? { projectId } : {}), number, title: NEW_BUDDY_TITLE, leadId: null,
       agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0,
       audience: { people: [{ id: owner.id, generation: owner.generation }] } }
     state.conversations.push(chat)
@@ -77,7 +77,7 @@ export function openSwarmBuddyChat(state: SuperTabState, owner: Person): Convers
   if (!chat) {
     const number = nextConversationNumber(state)
     state.groupCounter = number
-    chat = { id, kind: 'swarm-buddy', number, title: defaultBuddyName(owner), leadId: null, agentIds: [], archived: false, brief: '',
+    chat = { id, kind: 'swarm-buddy', number, title: NEW_BUDDY_TITLE, leadId: null, agentIds: [], archived: false, brief: '',
       checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: owner.id, generation: owner.generation }] } }
     state.conversations.push(chat)
   }
@@ -148,7 +148,7 @@ export function openNewBuddyChat(state: SuperTabState, owner: Person, id: string
   const main = openSwarmBuddyChat(state, owner)
   const number = nextConversationNumber(state)
   state.groupCounter = number
-  const chat: Conversation = { id, kind: 'swarm-buddy', number, title: defaultBuddyName(owner), leadId: null, agentIds: [], archived: false, brief: '',
+  const chat: Conversation = { id, kind: 'swarm-buddy', number, title: NEW_BUDDY_TITLE, leadId: null, agentIds: [], archived: false, brief: '',
     checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: owner.id, generation: owner.generation }] } }
   state.conversations.push(chat)
   main.buddyChats = [...main.buddyChats ?? [], id]
@@ -189,8 +189,8 @@ export function buddyFor(state: SuperTabState, person: Person, senderBuddyId: st
   return { ...agent ? { agent } : {}, chat: defaultBuddyChat(state, person) }
 }
 
-/** What a Buddy is called until its owner names it: "ken's Buddy". */
-export const defaultBuddyName = (owner: Pick<Person, 'email'>): string => `${owner.email.split('@')[0]}'s Buddy`
+/** A Buddy chat's title until its agent has its name (task #4568: never "<person>'s Buddy"), as Desktop shows it. */
+const NEW_BUDDY_TITLE = 'Your agent'
 
 /** A Buddy's name as its owner may choose it, sized like a username (usernames are 2 to 32 characters, starting with a
  *  letter or digit) but a display name: letters of any case and language, digits, single spaces, `.`, `_`, `-` and
@@ -225,7 +225,8 @@ function takenNames(state: SuperTabState, chat: Conversation, chosen: readonly C
     // An agent still starting has its name already (review of #2094): its own Buddy's start excepted.
     ...(state.starts ?? []).filter(st => !st.harnessId && !st.error && st.request.conversationId !== chat.id).map(st => st.request.name),
     ...state.people.map(p => p.email.split('@')[0]!),
-    ...state.people.filter(p => p.id !== owner).map(defaultBuddyName),
+    // The name older Buddies of another person still go by, until they become Members (redesign part 4).
+    ...state.people.filter(p => p.id !== owner).map(p => `${p.email.split('@')[0]}'s Buddy`),
     ...state.conversations.filter(c => isBuddyChat(c) && c.id !== chat.id && c.buddyName).map(c => c.buddyName!),
     ...chosen.filter(c => c.conversationId !== chat.id).map(c => c.name),
   ]
