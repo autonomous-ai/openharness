@@ -5179,7 +5179,8 @@ export class SuperTabStore {
   private async otherAccounts(tx: Transaction, state: SuperTabState, target: Agent, row: SuperTabMessage): Promise<{ message: boolean; quoted: string[] }> {
     const accounts = new Map<string, Promise<string>>()
     const from = (written: Pick<SuperTabMessage, 'author' | 'source'>) => this.otherAccount(tx, state, target, written, accounts)
-    const pointed = [...new Set([row.replyTo, row.thread].filter((id): id is string => !!id && id !== row.id))]
+    // The message it quotes, as a reply or an inline answer (task #4555), and its thread's root.
+    const pointed = [...new Set([row.replyTo, row.answers, row.thread].filter((id): id is string => !!id && id !== row.id))]
     const reads = readsRow({ kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, isBuddy(target))
     const quotedRows = (await messagesById(tx, row.tabId, row.conversationId, pointed)).filter(reads)
     const [message, ...quoted] = await Promise.all([from(row), ...quotedRows.map(async m => await from(m) ? [m.id] : [])])

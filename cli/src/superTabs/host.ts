@@ -2470,7 +2470,8 @@ export class SuperTabHost {
    * server shows only what this agent may already read there; what comes back must still be that message, in that
    * conversation, and not another agent's private notice. '' when nothing may be quoted, undefined when the read failed. */
   private async repliedTo(entry: Entry, message: Json, prefix: string, quotedOther: ReadonlySet<string>): Promise<string | undefined> {
-    const group = message.conversationId as string, id = message.replyTo
+    // A reply, or an answer shown in the chat that names what it answers (task #4555).
+    const group = message.conversationId as string, id = identifier(message.replyTo) ? message.replyTo : message.answers
     if (!identifier(id) || object(message.source).kind === 'agent-only') return ''
     let page: Json
     try {
@@ -2638,8 +2639,9 @@ export class SuperTabHost {
     const othersWords = buddy && !ownersWords
     const command = agentCommandOf(entry, prefix, buddy)
     const group = message.conversationId as string
-    const reply = quote || (identifier(message.replyTo)
-      ? `In reply to message ${message.replyTo}. Read it before interpreting the answer: ${readCommand(entry, prefix, group, message.replyTo, buddy)}\n\n`
+    const named = identifier(message.replyTo) ? message.replyTo : identifier(message.answers) ? message.answers : null
+    const reply = quote || (named
+      ? `In reply to message ${named}. Read it before interpreting the answer: ${readCommand(entry, prefix, group, named, buddy)}\n\n`
       : '')
     const source = object(message.source)
     // A Buddy's proposal is its owner's own message (anh Dee, task #2926): its goal, scope and priority ride in its source, for the PM.
