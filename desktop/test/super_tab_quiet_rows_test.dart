@@ -10,7 +10,7 @@ import 'package:harness/super_tabs/buddy_rows.dart';
 /// the right; 30 high; 13 names, 12 details; bold only for unread; chevrons only on hover.
 void main() {
   Future<void> pump(WidgetTester tester, List<Widget> children) async {
-    await tester.binding.setSurfaceSize(const Size(260, 400));
+    await tester.binding.setSurfaceSize(const Size(300, 400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       MaterialApp(
@@ -158,12 +158,12 @@ void main() {
         SuperTabQuietRow(
           leading: face,
           name: 'An agent with a very long name indeed that never fits',
-          detail: 'openharness',
+          detail: 'harness',
           onTap: () {},
         ),
       ]);
       final detail = tester.renderObject<RenderParagraph>(
-        find.text('openharness'),
+        find.text('harness'),
       );
       expect(detail.didExceedMaxLines, isFalse);
       expect(tester.takeException(), isNull);

@@ -7,7 +7,6 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import 'buddy_chat.dart';
 import 'identity.dart';
-import 'model.dart';
 import 'section_heading.dart';
 
 /// A sidebar count of what is for the reader, such as the tags waiting in
@@ -64,6 +63,21 @@ class SuperTabQuietRow extends StatelessWidget {
       _leadingStart + SuperTabSectionHeading.actionWidth / 2 - faceSize / 2;
   static double get _leadingStart => SuperTabSectionHeading.indentFor(0);
 
+  /// The least of the row a name keeps when its detail is long.
+  static const _nameShare = .6;
+
+  static double _width(BuildContext context, String text, TextStyle style) {
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: 1,
+    )..layout();
+    final width = painter.width;
+    painter.dispose();
+    return width;
+  }
+
   /// The face (20) or the icon, centred in its column.
   final Widget leading;
   final String name;
@@ -78,41 +92,71 @@ class SuperTabQuietRow extends StatelessWidget {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final strong = unread || selected;
-    final row = ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: height),
-      child: Row(
-        children: [
-          SizedBox(width: _leadingStart),
-          SizedBox(
-            width: SuperTabSectionHeading.actionWidth,
-            child: Center(child: leading),
+    final nameStyle = DesktopChrome.control(
+      color: strong
+          ? grid.SidebarInk.foreground(context)
+          : grid.SidebarInk.muted(context),
+    ).copyWith(fontWeight: unread ? grid.AppFont.semibold : null);
+    final detailStyle = DesktopChrome.metadata(
+      color: grid.SidebarInk.faint(context),
+    ).copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
+    final nameText = Text(
+      name,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: nameStyle,
+    );
+    final row = LayoutBuilder(
+      builder: (context, box) {
+        const gap = grid.AppDesktop.controlGap;
+        final detail = this.detail;
+        // What the name and the detail share: the row less its face column and the gaps.
+        final room = math.max(
+          0.0,
+          box.maxWidth -
+              _leadingStart -
+              SuperTabSectionHeading.actionWidth -
+              gap -
+              (detail == null ? 0 : gap),
+        );
+        return ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: height),
+          child: Row(
+            children: [
+              SizedBox(width: _leadingStart),
+              SizedBox(
+                width: SuperTabSectionHeading.actionWidth,
+                child: Center(child: leading),
+              ),
+              if (detail == null)
+                Expanded(child: nameText)
+              else ...[
+                // The name first: a long detail is cut before it, but always keeps the rest of the row.
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: math.max(
+                      room - _width(context, detail, detailStyle),
+                      room * _nameShare,
+                    ),
+                  ),
+                  child: nameText,
+                ),
+                const SizedBox(width: gap),
+                Expanded(
+                  child: Text(
+                    detail,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                    style: detailStyle,
+                  ),
+                ),
+              ],
+              const SizedBox(width: gap),
+            ],
           ),
-          Expanded(
-            child: Text(
-              name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: DesktopChrome.control(
-                color: strong
-                    ? grid.SidebarInk.foreground(context)
-                    : grid.SidebarInk.muted(context),
-              ).copyWith(fontWeight: unread ? grid.AppFont.semibold : null),
-            ),
-          ),
-          if (detail case final detail?) ...[
-            const SizedBox(width: grid.AppDesktop.controlGap),
-            Text(
-              detail,
-              maxLines: 1,
-              textAlign: TextAlign.right,
-              style: DesktopChrome.metadata(
-                color: grid.SidebarInk.faint(context),
-              ).copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
-            ),
-          ],
-          const SizedBox(width: grid.AppDesktop.controlGap),
-        ],
-      ),
+        );
+      },
     );
     return Padding(
       padding: const EdgeInsets.only(bottom: grid.AppDesktop.listRowGap),
@@ -236,7 +280,6 @@ class SuperTabBuddyRow extends StatelessWidget {
     required this.name,
     required this.tooltip,
     required this.onTap,
-    this.agent,
     this.project,
     this.selected = false,
     this.unread = false,
@@ -245,16 +288,11 @@ class SuperTabBuddyRow extends StatelessWidget {
     this.note,
     this.detail,
     this.status,
-    this.crown = false,
   });
 
   /// The Buddy, for its avatar; null while none runs.
   final String? agentId;
   final String name;
-
-  /// An agent in My agents: the row wears its face, picture or pattern, as
-  /// its chat, cards and Tasks pane draw it (audit finding 6 of task #4211).
-  final SuperTabAgent? agent;
 
   /// The project's name, shown when the Swarm has several.
   final String? project;
@@ -268,15 +306,11 @@ class SuperTabBuddyRow extends StatelessWidget {
   /// What hovering says: "Your Buddy · openharness".
   final String tooltip;
 
-  /// A quiet word after the name, such as a Buddy's "offline" or the project
-  /// a PM leads.
+  /// A quiet word after the name, such as a Buddy's "offline".
   final String? note;
 
-  /// A PM: its crown on its avatar (anh Dee 11-07, task #4421).
-  final bool crown;
-
   /// A line under the name, such as where a Buddy runs, with [status], its
-  /// activity mark, before it.
+  /// activity mark, before it; [status] shows only with it.
   final String? detail;
   final Widget? status;
 
@@ -312,22 +346,13 @@ class SuperTabBuddyRow extends StatelessWidget {
                   SizedBox(
                     width: _column,
                     child: Center(
-                      child: switch (agent) {
-                        final agent? => SuperTabAvatar.agent(
-                          agent,
-                          name: name,
-                          size: 20,
-                          engineBadge: false,
-                          crown: crown,
-                        ),
-                        null => SuperTabAvatar(
-                          identity: agentId == null
-                              ? 'buddy:$name'
-                              : 'agent:$agentId',
-                          name: name,
-                          size: 20,
-                        ),
-                      },
+                      child: SuperTabAvatar(
+                        identity: agentId == null
+                            ? 'buddy:$name'
+                            : 'agent:$agentId',
+                        name: name,
+                        size: 20,
+                      ),
                     ),
                   ),
                   Expanded(
@@ -438,15 +463,8 @@ class SuperTabBuddyRow extends StatelessWidget {
                     ),
                   SizedBox(
                     width: _column,
-                    // Unread is drawn as a bold name and heard in words. A row with no detail line has its status here,
-                    // quiet, at its end (task #4220).
-                    child: Semantics(
-                      label: unread ? 'Unread messages' : null,
-                      child: switch ((detail, status)) {
-                        (null, final status?) => Center(child: status),
-                        _ => null,
-                      },
-                    ),
+                    // Unread is drawn as a bold name and heard in words.
+                    child: Semantics(label: unread ? 'Unread messages' : null),
                   ),
                   const SizedBox(width: _column),
                 ],

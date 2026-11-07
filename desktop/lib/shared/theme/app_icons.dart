@@ -123,6 +123,7 @@ abstract final class AppIcons {
   static const hourglass = LucideIcons.hourglass400;
   static const house = LucideIcons.house400;
   static const imagePlus = LucideIcons.imagePlus400;
+  static const inbox = LucideIcons.inbox400;
   static const info = LucideIcons.info400;
   static const keyboard = LucideIcons.keyboard400;
   static const laptop = LucideIcons.laptop400;

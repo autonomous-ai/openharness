@@ -2118,6 +2118,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// [boardProjectId]: the project whose Board holds the middle, whose row is then lit.
   Widget _sidebar({String? boardProjectId}) => ProjectSidebar(
     board: widget.board,
+    leaderboard: _board,
     boardProjectId: boardProjectId,
     controller: c,
     compact: _phone,
@@ -3064,6 +3065,7 @@ class _SuperTabViewState extends State<SuperTabView>
             SwarmPage.leaderboard => 'Leaderboard',
             SwarmPage.mentions => 'Mentions',
             SwarmPage.threads => 'Threads',
+            SwarmPage.projects => 'Projects',
           }
         : group == null
         ? c.snapshot?.projects.isEmpty == true
@@ -6489,6 +6491,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                       inThread: true,
                                     ),
                                   ),
+                                  SwarmPage.projects ||
                                   null => const SizedBox.shrink(),
                                 },
                                 _manageVisible

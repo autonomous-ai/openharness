@@ -440,7 +440,7 @@ void main() {
         tester,
         agents: [
           {...buddy}..remove('projectId'),
-          {...mine[1], 'downSince': 1},
+          {...mine[1], 'downSince': '2026-11-07T08:00:00Z'},
           ...mine.skip(2),
         ],
         setup: agents,
@@ -502,7 +502,8 @@ void main() {
           (server.state['projects'] as List).first['name'] =
               'a-project-with-a-long-name';
         },
-        width: 200,
+        // The test font draws every letter as a square: 300 here is about 200 in the app's.
+        width: 300,
       );
       bool cut(String shown) => tester
           .renderObject<RenderParagraph>(text('orion', shown))
