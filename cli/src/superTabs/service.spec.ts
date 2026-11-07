@@ -350,7 +350,9 @@ it('gives every agent the same help, with no rule the server dropped', async () 
   // Task #2963: an unnamed post no longer reaches the PM.
   expect(String(help.post)).toContain('With no --to or @Name it reaches no agent, except the agent a reply answers and, in a task or step, its assignee. Your status tells the PM your work: never post it results, verdicts or acknowledgements.')
   expect(String(help.post)).not.toContain('your post reaches the PM')
-  expect((help.commands as Array<{ type: string }>).map(c => c.type)).toEqual(expect.arrayContaining(['decision.ask', 'person.tell']))
+  expect((help.commands as Array<{ type: string }>).map(c => c.type)).toEqual(expect.arrayContaining(['decision.ask']))
+  // Task #4547: a person's chat with their own agent is theirs alone; no help text teaches the retired private line.
+  expect(JSON.stringify(help)).not.toContain('person.tell')
   expect(help.plan).toEqual(expect.stringMatching(/^plan \[JSON\]/))
   const dropped = /prefer stop|agree an order|Only its project's Lead|without a routeDecisionId is refused|hard rule|top tier|steps the task up|"name":"Builder"|role "reviewer"/i
   expect(JSON.stringify(help)).not.toMatch(dropped)
@@ -1308,7 +1310,8 @@ describe('mentions on a post', () => {
     expect(each.commands).toContainEqual(expect.objectContaining({ type: 'work.status', status: 'needs_human',
       ask: { personId: 'PERSON', options: ['Option A', 'Option B'], recommended: 0, unblocks: 'What the answer unblocks' } }))
     expect(each.commands).toContainEqual(expect.objectContaining({ type: 'decision.ask', conversationId: 'GROUP', personId: 'PERSON' }))
-    expect(each.commands).toContainEqual(expect.objectContaining({ type: 'person.tell', personId: 'PERSON' }))
+    expect(each.commands).not.toContainEqual(expect.objectContaining({ type: 'person.tell' }))
+    expect(each.decisions).not.toContain('person.tell')
   })
 })
 

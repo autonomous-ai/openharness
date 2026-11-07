@@ -261,9 +261,9 @@ describe('the v2 text note by Swarm', () => {
     const outside = swarm()
     outside.projects![0]!.processNote = { confirmed: '2026-11-06-crew' }
     // A later note for every PM (#4459) wakes it, without the v2 text.
-    expect(wake(outside)?.processNote).toBe('2026-11-07-mktemp')
+    expect(wake(outside)?.processNote).toBe('2026-11-07-private-chat')
     expect(wake(outside)?.draft.text).not.toContain(v2.text)
-    outside.projects![0]!.processNote = { confirmed: '2026-11-07-mktemp' }
+    outside.projects![0]!.processNote = { confirmed: '2026-11-07-private-chat' }
     expect(wake(outside)).toBeNull()
     const rebased = { ...swarm(), id: REBASED }
     rebased.projects![0]!.processNote = { confirmed: '2026-11-06-crew' }

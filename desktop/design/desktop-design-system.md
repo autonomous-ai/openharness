@@ -463,7 +463,8 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
 - **Task status marks.** Proposal is Lucide `lightbulb`, Declined
   `thumbs-down`, Failed (Stuck) `triangle-alert` in the semantic error ink.
   The check, question mark and spinner stay, from the shared activity
-  vocabulary. No status in Flutter draws an X: an X means close. Terminal text
+  vocabulary. Shipped (a verified release holds the task, task #4547) wears
+  Done's check and says Shipped. No status in Flutter draws an X: an X means close. Terminal text
   and native tab marks may keep `✗`.
 - **Left pane row.** The left pane's row (`SuperTabQuietRow`,
   [Swarm left pane](#swarm-left-pane)) carries the elements above at its

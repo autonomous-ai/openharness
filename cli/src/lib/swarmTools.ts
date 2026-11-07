@@ -73,7 +73,6 @@ Task and group commands:
 - \`{"type":"proposal.close","projectId":"PROJECT","messageId":"PROPOSAL","reason":"built in #N, declined or duplicate"}\` closes a Buddy's proposal still listed as open though answered or built (before threads, or opened as a task without its proposalMessageId): it leaves the open list for good, its reason kept, and posts nothing in the chat. The project's coordinator, or a person who reads the project.
 - \`{"type":"conversation.merged","conversationId":"GROUP","pullRequestUrl":"https://github.com/OWNER/REPOSITORY/pull/NUMBER","mergedAt":"optional ISO time"}\` records a group's pull request as merged; its requester's request counts as shipped from then.
 - \`{"type":"decision.ask","conversationId":"GROUP","personId":"PERSON","questions":[{"question":"...","options":["A","B"],"recommended":0,"unblocks":"..."}]}\` puts up to 10 questions to one person at once, each with 2 to 5 options.
-- \`{"type":"person.tell","personId":"PERSON","text":"..."}\` lands in that person's Buddy chat, which you cannot read. It is not private: members watching your terminal see what you send.
 - \`{"type":"project.report","projectId":"PROJECT","through":{"GROUP":214031},"text":"..."}\` answers a scheduled project update request through the revisions it names; text null when nothing changed. An unanswered request blocks the later ones and keeps finished groups from archiving.
 - \`{"type":"project.digest","projectId":"PROJECT","time":"08:00","timeZone":"Asia/Ho_Chi_Minh"}\` sets the morning digest at a person's local time (time null turns it off).
 
