@@ -10,6 +10,12 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'support/fake_webview.dart';
 import 'support/real_fonts.dart';
 
+/// Windows asks the Linux plugin's channel nothing: it finds WebView2 by the folders its installer
+/// writes ('WebView2 on Windows' below), and a Windows runner has WebView2, so the viewer is on.
+final Object _asksNoPlugin = RuntimePlatform.isWindows
+    ? 'Linux plugin channel: Windows finds WebView2 by its install folders, tested below'
+    : false;
+
 void main() {
   setUpAll(loadRealFonts);
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -69,7 +75,7 @@ void main() {
   test('missing native plugin keeps Harness usable', () async {
     await NativeWebViewRuntime.initialize();
     expect(NativeWebViewRuntime.available, isFalse);
-  });
+  }, skip: _asksNoPlugin);
 
   test('native initialization errors disable the viewer', () async {
     messenger.setMockMethodCallHandler(NativeWebViewRuntime.channel, (_) async {
@@ -77,7 +83,7 @@ void main() {
     });
     await NativeWebViewRuntime.initialize();
     expect(NativeWebViewRuntime.available, isFalse);
-  });
+  }, skip: _asksNoPlugin);
   testWidgets('Linux recordings offer browser playback without WebKitGTK', (
     tester,
   ) async {

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/capture.dart';
@@ -72,8 +73,8 @@ void main() {
   }
 
   testWidgets(
-    'shows an Engineer\'s post in the project chat with its name and engine '
-    'mark, and its terminals stay the PM\'s alone',
+    'shows an Engineer\'s post in the project chat with its name, and its '
+    'terminals stay the PM\'s alone',
     (tester) async {
       final c = await show(tester, Brightness.dark);
       expect(
@@ -81,7 +82,15 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('Marlin'), findsWidgets);
-      expect(find.byKey(const ValueKey('engine-icon-codex')), findsWidgets);
+      // No engine mark beside the name: colour is the face's (River, 11-07,
+      // #4467).
+      expect(
+        find.descendant(
+          of: find.byType(SuperTabMessageRow),
+          matching: find.byKey(const ValueKey('engine-icon-codex')),
+        ),
+        findsNothing,
+      );
       // The chat's terminals: its PM alone, as #2207 keeps it.
       expect(c.snapshot!.paneAgentIds('lead'), ['lead-agent']);
       expect(find.byTooltip('Group terminals (1)'), findsOneWidget);

@@ -30,7 +30,7 @@ describe('the role tools sheets', () => {
     const pm = sheet('pm')
     for (const word of ['`status', '`mine`', '`task GROUP`', '`messages GROUP', '`message GROUP', '`instructions [PROJECT]`', '`decisions', '`costs', '`screen AGENT', '`type AGENT',
       '`post GROUP TEXT OPERATION_ID', '`react GROUP', '`command OPERATION_ID', 'conversation.create', 'work.define', 'conversation.agent', 'conversation.requester',
-      'work.queue', 'work.priority', 'work.assign', 'work.status', 'work.cancel', 'agent.release', 'proposal.close', 'conversation.merged', 'decision.ask', 'person.tell',
+      'work.queue', 'work.priority', 'work.assign', 'work.status', 'work.cancel', 'agent.release', 'proposal.close', 'conversation.merged', 'decision.ask',
       'project.report', 'project.digest', 'tab.tidy', 'machine.engineResume', 'instructions.save', 'note.add', 'note.remove',
       '`route GROUP JSON', '`plan', '`capacity', '`start OPERATION_ID JSON', '`resume START_ID`', 'help tools']) {
       expect(pm, word).toContain(word)

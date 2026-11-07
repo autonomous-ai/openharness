@@ -118,6 +118,7 @@ import 'buddy_rows.dart';
 import 'task_groups.dart';
 import 'tasks_view.dart';
 import 'chat/agent_chat_header.dart';
+import 'chat/send_button.dart';
 import 'tasks/personal_tasks_pane.dart';
 import 'tasks/task_header.dart';
 import 'voice_length.dart';
@@ -1422,14 +1423,6 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  /// [path] as it goes into a message: as it is, or in double quotes when it
-  /// holds a space or anything else a shell reads specially, with `"`, `\`,
-  /// `$` and `` ` `` escaped, so it reads back as the same path.
-  static String _pathText(String path) =>
-      path.contains(RegExp(r'''[\s"'$`\\!*?\[\]{}()<>|&;]'''))
-      ? '"${path.replaceAllMapped(RegExp(r'["\\$`]'), (m) => '\\${m[0]}')}"'
-      : path;
-
   /// Puts dropped folders' paths into chat [id]'s message at the cursor,
   /// space-separated, as a terminal takes a dropped folder.
   void _pasteFolders(String id, List<String> paths) {
@@ -1443,7 +1436,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final after = text.substring(selection.end);
     final pasted =
         '${before.isEmpty || RegExp(r'\s$').hasMatch(before) ? '' : ' '}'
-        '${paths.map(_pathText).join(' ')}'
+        '${paths.map(folderPathText).join(' ')}'
         '${after.startsWith(RegExp(r'\s')) ? '' : ' '}';
     final next = before + pasted + after;
     c.setDraft(id, next);
@@ -1460,7 +1453,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The dropped folders whose paths are still in chat [id]'s message.
   List<String> _foldersInMessage(String id) => [
     for (final path in _droppedFolders[id] ?? const <String>[])
-      if (_composer.text.contains(_pathText(path))) path,
+      if (_composer.text.contains(folderPathText(path))) path,
   ];
 
   /// Whether an agent of [group] runs on another computer than this one,
@@ -1518,7 +1511,7 @@ class _SuperTabViewState extends State<SuperTabView>
     ];
     String withoutPaths(String text) {
       for (final folder in attached) {
-        final path = _pathText(folder);
+        final path = folderPathText(folder);
         text = text.contains('$path ')
             ? text.replaceFirst('$path ', '')
             : text.contains(' $path')
@@ -2732,11 +2725,7 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() => _finding = null);
     if (target == null) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        SnackBar(
-          content: Text(
-            note ?? 'The original message is no longer in this conversation.',
-          ),
-        ),
+        SnackBar(content: Text(note ?? 'Original message removed')),
       );
       return;
     }
@@ -3387,7 +3376,6 @@ class _SuperTabViewState extends State<SuperTabView>
     required double room,
     required Widget field,
     required Widget attach,
-    required Widget tag,
     required List<Widget> options,
     required List<Widget> trailing,
     required Widget send,
@@ -3395,8 +3383,7 @@ class _SuperTabViewState extends State<SuperTabView>
   }) {
     // Too little height for a second row (a phone on its side with its keyboard
     // up): the actions take the row's end. A narrow phone with so little
-    // height gets the squeezed row, which beats a composer that overflows; it
-    // has no room for @ Tag there, and an @ typed still opens the list.
+    // height gets the squeezed row, which beats a composer that overflows.
     final target = _phone ? kFingerTarget : grid.AppControl.height;
     final row = composerRowInsets(target: target);
     if (_phone && room < _phoneComposerTwoRowsFrom && voice == null) {
@@ -3438,8 +3425,9 @@ class _SuperTabViewState extends State<SuperTabView>
               Row(
                 key: const ValueKey('super-message-composer-actions'),
                 children: [
+                  // Only the paperclip on the left: an @ typed tags
+                  // (River, 11-07, #4467).
                   attach,
-                  tag,
                   Expanded(
                     child: Wrap(
                       crossAxisAlignment: WrapCrossAlignment.center,
@@ -3453,13 +3441,6 @@ class _SuperTabViewState extends State<SuperTabView>
         ),
       ],
     );
-  }
-
-  /// @ Tag: `@` at the caret, reported as an edit so the tag list opens.
-  void _promptTag() {
-    _composer.value = superTabTagPrompt(_composer.value);
-    _composerEdited(_composer.text);
-    _focus.requestFocus();
   }
 
   /// Whether ⋮ carries the views a wider header draws as icons.
@@ -6058,7 +6039,7 @@ class _SuperTabViewState extends State<SuperTabView>
                               bottom: grid.AppDesktop.controlGap,
                             ),
                             child: Text(
-                              'Your message starts its own thread and Buddy session',
+                              'Starts its own thread and Buddy session',
                               key: const ValueKey('super-chat-session-note'),
                               style: DesktopChrome.metadata(
                                 color: DesktopChrome.muted,
@@ -6198,14 +6179,6 @@ class _SuperTabViewState extends State<SuperTabView>
                               NewHarnessAttachButton(
                                 attachments: _files,
                                 enabled: writable && !busy,
-                                icon: AppIcons.plus,
-                              ),
-                            ),
-                            tag: fingerTarget(
-                              enabled: _phone,
-                              SuperTabComposerTagButton(
-                                key: const ValueKey('super-composer-tag'),
-                                onPressed: writable ? _promptTag : null,
                               ),
                             ),
                             options: [
@@ -6252,10 +6225,8 @@ class _SuperTabViewState extends State<SuperTabView>
                               listenable: Listenable.merge([_composer, _files]),
                               builder: (context, _) => fingerTarget(
                                 enabled: _phone,
-                                AppIconButton(
-                                  icon: AppIcons.arrowUp,
+                                SwarmSendButton(
                                   tooltip: 'Send message',
-                                  color: DesktopChrome.accent,
                                   onPressed:
                                       writable &&
                                           !c.uploading &&
@@ -6308,7 +6279,7 @@ class _SuperTabViewState extends State<SuperTabView>
               maintainAnimation: true,
               maintainState: true,
               child: Text(
-                'Your message starts its own thread and Buddy session',
+                'Starts its own thread and Buddy session',
                 key: const ValueKey('super-chat-session-note'),
                 style: DesktopChrome.metadata(color: DesktopChrome.muted),
               ),

@@ -55,7 +55,28 @@ export const BUDDY_DECISION = 'buddy'
 export const BUDDY_SEND = 'buddy-send'
 export const SEND_OPTIONS = ['Send', 'Not now']
 export const isBuddyDecision = (kind: string | null | undefined): boolean => kind === BUDDY_DECISION || kind === BUDDY_SEND
-type DecisionKind = typeof REFLECTION_DECISION | typeof BUDDY_DECISION | typeof BUDDY_SEND
+/** A PM's question on a proposal card (proposal.ask) as its person's Decision (task #4547): its default answer is the option, a
+ *  typed answer any other; answering it answers the card, and an answer on the card closes it. */
+export const PROPOSAL_QUESTION = 'proposal-question'
+type DecisionKind = typeof REFLECTION_DECISION | typeof BUDDY_DECISION | typeof BUDDY_SEND | typeof PROPOSAL_QUESTION
+
+/** The Decision a proposal card's question is, by the question's id, so the card finds it again. */
+export const proposalQuestionDecisionId = (questionId: string): string => stableId(questionId, 'decision')
+
+/** [q] on [card] as a Decision for the person asked: its deadline the default time, or with required agreement the time the PM
+ *  is told (mustAgree). The card's own clock answers it too; whichever comes first counts. */
+export function proposalQuestionDecision(state: SuperTabState, card: Conversation, q: { id: string; personId: string; question: string; defaultAnswer: string;
+  deadline: number; requiresConsent: boolean }, askerAgentId: string, operationId: string): DecisionDraft {
+  return { id: proposalQuestionDecisionId(q.id), batchId: operationId, conversationId: card.id, projectId: groupProject(state, card).id, personId: q.personId,
+    askerAgentId, assignmentId: null, question: `${card.title}: ${q.question}`, options: [q.defaultAnswer], recommended: 0, unblocks: 'The PM\'s decision on this proposal',
+    defaultAt: new Date(q.deadline).toISOString(), ...q.requiresConsent ? { mustAgree: true as const } : {}, kind: PROPOSAL_QUESTION }
+}
+
+/** Closes decisions whose question was answered elsewhere: answered, with no choice, as a withdrawn one is (withdrawIn). One by
+ *  one by id: a command closes one. */
+export async function closeDecisions(tx: Tx, tabId: string, ids: readonly string[], now: number): Promise<void> {
+  for (const id of new Set(ids)) await tx.superTabDecision.updateMany({ where: { id, tabId, ...waiting }, data: { answeredAt: new Date(now), withdrawn: true } })
+}
 /** What Send posts, as buddy.propose takes it: the words shown, and what goes to the PM with them. */
 export interface SendPayload { text: string; projectId: string; goal: string; scope: string; priority: string; title?: string; why?: string; doneWhen?: string; evidence?: string[] }
 
@@ -559,7 +580,7 @@ export async function listDecisions(tx: Tx, tabId: string, state: SuperTabState,
       createdAt: row.createdAt, answeredAt: row.answeredAt ?? null, choice: row.choice ?? null, note: row.note ?? null,
       delegated: row.delegated === true, overdue: row.overdue === true, defaultAt: row.defaultAt ?? null, defaulted: row.defaulted === true,
       // What the 24-hour sweep can take: the sweep skips required agreement, reflections and an invalid recommended option.
-      pmTakesOver: row.mustAgree !== true && row.kind !== REFLECTION_DECISION && !isBuddyDecision(row.kind) && row.recommended >= 0 && row.recommended < row.options.length,
+      pmTakesOver: row.mustAgree !== true && row.kind !== REFLECTION_DECISION && !isBuddyDecision(row.kind) && row.kind !== PROPOSAL_QUESTION && row.recommended >= 0 && row.recommended < row.options.length,
       // A person's own Buddy asked it (no Let PM decide), and whether it is a line waiting to be sent (task #4525).
       fromBuddy: isBuddyDecision(row.kind), send: row.kind === BUDDY_SEND,
       // A typed answer (no option) reads as its words.

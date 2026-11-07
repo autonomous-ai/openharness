@@ -6,23 +6,21 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/finger_target.dart';
 import '../widgets/markdown_style.dart';
 
-/// The Swarm's text, at Slack desktop's sizes, weights and line heights, in the system font (task #2312, Huy,
-/// 2026-11-03). Slack reads a message at 15 px on 22 px lines with its sender in the heaviest weight and the time at
-/// 12 px, and lists its sidebar at 15 px on 28 px rows; the app's own defaults (14 px on 1.45, names semibold, a 13 px
-/// sidebar) made a Swarm chat read smaller and flatter beside it. Only the Swarm's screens use these: the terminal,
-/// Settings and every other screen keep [DesktopChrome]'s.
+/// The Swarm's text in the system font (task #2312, Huy, 2026-11-03). The chat reads by anh Dee's three sizes (11-07,
+/// #4467): 14 for chat text on 20 px lines, 13 for names in semibold, 12 for details such as the time, in tertiary ink.
+/// The sidebar keeps Slack's 15 px on 28 px rows. Only the Swarm's screens use these: the terminal, Settings and every
+/// other screen keep [DesktopChrome]'s.
 ///
 /// A phone's layout (`workspaceIsCompact`) keeps the app's sizes: its rows, composer and finger targets were measured
 /// on them (Huy, 2026-11-02), and Slack's numbers are its desktop app's.
 abstract final class SwarmType {
-  static const double bodySize = 15;
-  static const double bodyLine = 22;
+  static const double bodySize = 14;
+  static const double bodyLine = 20;
+  static const double nameSize = 13;
   static const double timeSize = 12;
   static const double sidebarSize = 15;
+  static const double sidebarLine = 22;
   static const double sidebarRow = 28;
-
-  /// Slack's names are Lato Black; the system font draws its heaviest face for it.
-  static const FontWeight nameWeight = FontWeight.w900;
 
   static TextStyle body(BuildContext context, {Color? color}) =>
       workspaceIsCompact(context)
@@ -35,15 +33,25 @@ abstract final class SwarmType {
           color: color,
           medium: true,
         ).copyWith(fontWeight: FontWeight.w600)
-      : _body(color).copyWith(fontWeight: nameWeight);
+      : DesktopChrome.text(
+          color: color,
+          size: nameSize,
+          height: bodyLine / nameSize,
+        ).copyWith(
+          fontWeight: FontWeight.w600,
+          letterSpacing: grid.AppType.trackingFor(nameSize),
+        );
 
+  /// A detail beside a name, such as a message's time: 12 px in tertiary ink.
   static TextStyle time(BuildContext context, {Color? color}) =>
-      DesktopChrome.metadata(color: color).copyWith(fontSize: timeSize);
+      DesktopChrome.metadata(color: color ?? DesktopChrome.hint)
+          .copyWith(fontSize: timeSize);
 
   static TextStyle composer(BuildContext context, {Color? color}) =>
       body(context, color: color);
 
-  /// A sidebar row's text: 15 px on 22 px lines, as Slack lists its channels; a phone's ([compact]) the app's 13 px.
+  /// A sidebar row's text: 15 px on [sidebarLine] lines, as Slack lists its channels; a phone's ([compact]) the app's
+  /// 13 px.
   static TextStyle sidebar({
     required bool compact,
     Color? color,
@@ -53,7 +61,7 @@ abstract final class SwarmType {
       : DesktopChrome.text(
           color: color,
           size: sidebarSize,
-          height: bodyLine / sidebarSize,
+          height: sidebarLine / sidebarSize,
           medium: medium,
         ).copyWith(letterSpacing: grid.AppType.trackingFor(sidebarSize));
 
@@ -68,11 +76,11 @@ abstract final class SwarmType {
 
   /// The room above and below a project's or a task's line.
   static double projectRowPadding({required bool compact}) =>
-      compact ? 8 : (projectRowHeight(compact: false) - bodyLine) / 2;
+      compact ? 8 : (projectRowHeight(compact: false) - sidebarLine) / 2;
 
   /// The room above and below a sidebar row's line.
   static double sidebarRowPadding({required bool compact}) =>
-      compact ? 8 : (sidebarRow - 2 - bodyLine) / 2;
+      compact ? 8 : (sidebarRow - 2 - sidebarLine) / 2;
 
   static TextStyle _body(Color? color) => DesktopChrome.text(
     color: color,
