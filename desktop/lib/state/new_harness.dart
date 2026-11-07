@@ -2355,7 +2355,8 @@ class NewHarnessController extends ChangeNotifier {
   /// lost has still to be checked on.
   bool get locked => busy || checking || linkingProfile;
 
-  /// + New agent's Member or Lead (task #4196), or null outside one.
+  /// + New agent's Agent (`member`) or Product Manager (`lead`) (task #4196),
+  /// or null outside one.
   String? get agentKind => integration?.agentKind;
 
   void setAgentKind(String kind) {
@@ -3698,8 +3699,7 @@ class NewHarnessController extends ChangeNotifier {
     ])
       if (!machine.machine.isShared &&
           (integration?.ownMachinesOnly != true ||
-              !machine.belongsToOtherAccount &&
-                  !machine.machine.isTeamAccount))
+              !machine.belongsToOtherAccount && !machine.machine.isTeamAccount))
         NewHarnessOption(
           id: machine.machine.machineId,
           title: machine.machine.displayName,
@@ -4564,7 +4564,7 @@ class NewHarnessController extends ChangeNotifier {
       warn('Linking the profile. You can close once it is done.');
       return false;
     }
-    if (busy) {
+    if (busy && integration?.stopBuddy?.call() != true) {
       warn('Still working on it. You can close once it is done.');
       return false;
     }

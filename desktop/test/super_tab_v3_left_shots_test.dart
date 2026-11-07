@@ -26,9 +26,10 @@ Map<String, dynamic> _agent(String id, String name) => {
   'configuration': {'engine': 'codex'},
 };
 
-/// Swarm v3's left pane and middle (task #4118), in both appearances: My agents with the Buddy first, a PM's crown and an
+/// Swarm v3's left pane and middle (task #4118), in both appearances: My agents with the Buddy first, a PM's Lead ring and an
 /// unread name in bold; the chat of a selected agent in the middle; a project's Board with Projects open. Task #4192: no
-/// arrows under the org switcher, the Buddy's own avatar, only the server's My agents, and My agents folded.
+/// arrows under the org switcher, the Buddy's own avatar, only the server's My agents, and My agents folded. Task #4220:
+/// folded Projects keeps a project that tags you, and Decisions in the middle keeps Tasks on the right.
 void main() {
   setUpAll(() async {
     await loadCaptureFonts(shots);
@@ -41,7 +42,14 @@ void main() {
   });
 
   for (final brightness in Brightness.values) {
-    for (final scene in ['agent-chat', 'no-agents', 'board', 'folded']) {
+    for (final scene in [
+      'agent-chat',
+      'no-agents',
+      'board',
+      'folded',
+      'tagged',
+      'decisions',
+    ]) {
       testWidgets('$scene (${brightness.name})', (tester) async {
         await tester.binding.setSurfaceSize(const Size(1500, 800));
         addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -56,8 +64,9 @@ void main() {
         } else {
           server.state['swarmBuddy'] = true;
           server.state['agents'] = [
+            // The person's one Buddy is of no project, as the server sends it.
             {
-              ..._agent('buddy', 'Buddy'),
+              ...(_agent('buddy', 'Buddy')..remove('projectId')),
               'buddyScope': 'swarm',
               'buddyOf': {'personId': 'owner'},
               'kind': 'buddy',
@@ -117,6 +126,7 @@ void main() {
           };
         }
         server.append('Working on the fix.', conversationId: 'offline');
+        if (scene == 'tagged') server.tag('message-1', conversationId: 'lead');
         final c = server.controller(
           account: 'owner',
           initial: {
@@ -171,6 +181,9 @@ void main() {
           await settle();
         } else if (scene == 'board') {
           await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+          await settle();
+        } else if (scene == 'decisions') {
+          await tester.tap(find.byKey(const ValueKey('super-decisions')));
           await settle();
         }
         await captureWindow(tester, shots, '$scene-${brightness.name}');

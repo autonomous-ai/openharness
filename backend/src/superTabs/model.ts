@@ -514,6 +514,9 @@ export interface Conversation {
   lostAttempt?: { id: string; agentId: string; machineId?: string; engine?: string }
   /** Counts reaction changes here (reactions.ts), so readers see a new reaction on an older message. */
   reactionSeq?: number
+  /** The tasks its work goes on in, as its cancel's reason names them (commands.ts goesOnIn, task #4462): a duplicate, or
+   *  work folded or split into others. It leaves people's Tasks feeds and stays in its project's archived list, which can open them. */
+  foldedInto?: string[]
   /** A durable proposal on this card (#3817); retained when its accepted work becomes a task. */
   proposal?: import('./proposalCards.js').ProposalRecord
   /** A Buddy chat's owner messages its Buddy already proposed for (buddies.ts): each asks once. */

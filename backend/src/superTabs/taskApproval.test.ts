@@ -116,6 +116,24 @@ describe('personal approval enforced before work', () => {
     expect(() => f.runCommand({ type: 'task.approve', conversationId: id })).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_DECIDED' }))
     expect(() => f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm)).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
   })
+  // Task #4218: a rejection wrote only the approval, so the PM was told the proposal still waited and could accept it into a task
+  // that could never run.
+  it('settles the proposal its person rejects, which its PM can no longer accept', () => {
+    const f = fixture(); f.mode('review'); f.propose()
+    const card = f.state.conversations.find(c => c.proposal)!
+    f.runCommand({ type: 'task.reject', conversationId: card.id, reason: 'Not now' })
+    expect(f.card(card.id).proposal).toMatchObject({ decision: { kind: 'no', reason: 'Not now', at: NOW } })
+    expect(() => f.runCommand({ type: 'proposal.decide', conversationId: card.id, decision: 'accept', reason: 'Build it', task,
+      checks: [{ description: 'Restores drafts' }] }, f.pm)).toThrow(expect.objectContaining({ code: 'PROPOSAL_DECIDED' }))
+  })
+  // Task #4218: approval is the requesting membership's, so once they left nobody could approve or reject it again, and the task
+  // stayed open for good. A rejoined person decides nothing of the membership they left.
+  it('rejects a leaving requester\'s pending approvals and tells the PM', () => {
+    const f = fixture(); f.mode('review'); const id = f.create()
+    const left = f.runCommand({ type: 'member.remove', userId: peer.userId })
+    expect(f.card(id).taskApproval).toMatchObject({ state: 'rejected', decidedAt: NOW, reason: 'Its requester left the Swarm.' })
+    expect(left.messages.some(m => m.conversationId === id && m.recipients.includes(f.lead))).toBe(true)
+  })
   it.each([undefined, owner.userId])('stages personal approval when an unassigned task is attributed from %s to a Review requester', previous => {
     const f = fixture(); f.mode('review')
     const id = f.runCommand({ type: 'conversation.create', title: 'PM maintenance', task, priority: 'P2',
@@ -177,11 +195,29 @@ describe('personal approval enforced before work', () => {
   })
   it('refuses invalid suggestions and rechecks a changed agent atomically on approval', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
-    for (const agentId of [f.buddy, f.worker, 'missing']) expect(() => f.runCommand({ type: 'task.suggest', conversationId: id, agentId })).toThrow()
+    for (const agentId of [f.buddy, 'missing']) expect(() => f.runCommand({ type: 'task.suggest', conversationId: id, agentId })).toThrow()
+    // A busy agent may be suggested: the task waits for it, and its assignment checks it is free (task #4252).
+    f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.worker })
     f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate })
     f.state.agents.find(a => a.id === f.candidate)!.workDecision = 'stop'
     expect(() => f.runCommand({ type: 'task.approve', conversationId: id })).toThrow()
     expect(f.card(id)).toMatchObject({ assignment: null, taskApproval: { state: 'proposal' } })
+  })
+  // Task #4252 (audit 20): Approve is the person's consent to the agent shown; whether it is free is the assignment's to check.
+  it('records approval of a busy suggested agent, and the assignment still waits for it to be free', () => {
+    const f = fixture(); f.mode('review'); const id = f.create()
+    f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate })
+    f.edit(s => { s.conversations.find(c => c.id === f.web)!.assignment!.agentId = f.candidate })
+    f.runCommand({ type: 'task.approve', conversationId: id })
+    expect(f.card(id).taskApproval?.state).toBe('approved')
+    expect(() => f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm)).toThrow(expect.objectContaining({ code: 'AGENT_BUSY' }))
+  })
+  it('says the suggested agent is gone when it was removed before the approval', () => {
+    const f = fixture(); f.mode('review'); const id = f.create()
+    f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate })
+    f.edit(s => { s.agents = s.agents.filter(a => a.id !== f.candidate) })
+    expect(() => f.runCommand({ type: 'task.approve', conversationId: id })).toThrow(expect.objectContaining({ code: 'SUGGESTED_AGENT_GONE' }))
+    expect(f.card(id).taskApproval?.state).toBe('proposal')
   })
   it('keeps a legacy proposal’s decision when the PM converts it to a task and refuses a second conversion', () => {
     const f = fixture(false); f.mode('review'); const sent = f.propose()
@@ -276,6 +312,17 @@ describe('personal approval enforced before work', () => {
     f.runCommand({ type: 'proposal.close', projectId: 'lead', messageId: row.id, reason: 'Not planned' }, f.pm,
       { proposal: { id: row.id, conversationId: row.conversationId, author: row.author, source: row.source ?? null } })
     expect(f.state.conversations.find(c => c.proposal?.legacyMessageId === row.id)?.archived).toBe(true)
+  })
+  it('tells the person, through their Buddy, that the PM closed their proposal and why (task #4252, audit 18)', () => {
+    const f = fixture(false); const sent = f.propose()
+    const row = sent.messages.find(m => m.source?.kind === 'buddy-proposal')!
+    const closed = f.runCommand({ type: 'proposal.close', projectId: 'lead', messageId: row.id, reason: 'Out of scope' }, f.pm,
+      { proposal: { id: row.id, conversationId: row.conversationId, author: row.author, source: row.source ?? null } })
+    const notice = closed.messages.find(m => m.source?.kind === 'proposal-notice')
+    const mirror = f.state.conversations.find(c => c.proposal?.legacyMessageId === row.id)!
+    // Routed as a board decision's notice is (buddies.ts buddyFor).
+    expect(notice).toMatchObject({ source: { moment: 'decided', cardId: mirror.id } })
+    expect(notice!.text).toContain('Out of scope')
   })
   it('redacts a pasted credential from a rejection before its reason reaches stored parts or messages', () => {
     const token = ['sk', 'AbCdEf0123456789'.repeat(3)].join('-') // Synthetic fixture, never a provider credential.

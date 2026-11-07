@@ -69,8 +69,8 @@ vi.mock('./src/lib/agentTmp.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('./src/lib/agentTmp.js')>()
   return {
     ...real,
-    agentTmpEnv: vi.fn((engine: Parameters<typeof real.agentTmpEnv>[0], role: string | undefined, deps?: Parameters<typeof real.agentTmpEnv>[2]) =>
-      deps ? real.agentTmpEnv(engine, role, deps) : {}),
+    agentTmpLaunch: vi.fn((engine: Parameters<typeof real.agentTmpLaunch>[0], skill: Parameters<typeof real.agentTmpLaunch>[1],
+      deps?: Parameters<typeof real.agentTmpLaunch>[2]) => deps ? real.agentTmpLaunch(engine, skill, deps) : { env: {}, args: [] }),
     agentTmpRoot: vi.fn((deps?: Parameters<typeof real.agentTmpRoot>[0]) => deps ? real.agentTmpRoot(deps) : null),
     buddyTmpEnv: vi.fn((engine: Parameters<typeof real.buddyTmpEnv>[0], root: string, deps?: Parameters<typeof real.buddyTmpEnv>[2]) =>
       deps ? real.buddyTmpEnv(engine, root, deps) : {}),

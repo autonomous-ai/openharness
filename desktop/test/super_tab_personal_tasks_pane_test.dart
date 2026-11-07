@@ -24,6 +24,15 @@ import 'support/memory_key_value_store.dart';
 class TasksFixture {
   final store = MemoryKeyValueStore();
   bool supported = true, fail = false;
+
+  /// Every read of the Swarm fails, as when the backend or this computer's Harness is gone.
+  bool offline = false;
+
+  /// The server's answer to the next command: refused, as a 4xx.
+  SuperTabFailure? refuse;
+
+  /// Change reads, so a test sees the pane read its tasks again.
+  int reads = 0;
   Completer<void>? hold;
   String mode = 'autoApprove';
   var rows = [task('old', 1, 10), task('new', 1, 20)];
@@ -45,6 +54,13 @@ class TasksFixture {
     pollInterval: Duration.zero,
     save: (value) => store.write('controller', value.toString()),
     request: (method, path, {body}) async {
+      if (offline) {
+        throw const SuperTabFailure(
+          'BACKEND_UNREACHABLE',
+          'Could not reach the Harness backend.',
+          statusCode: 502,
+        );
+      }
       if (path.contains('/messages')) {
         return {'messages': <dynamic>[], 'next': null};
       }
@@ -60,6 +76,7 @@ class TasksFixture {
         commands.add(command);
         await hold?.future;
         if (fail) throw StateError('fixture private payload');
+        if (refuse case final refusal?) throw refusal;
         if (command['type'] == 'member.approvalMode') {
           mode = command['mode'] as String;
         }
@@ -77,6 +94,7 @@ class TasksFixture {
         }
         return {'result': <String, dynamic>{}};
       }
+      reads++;
       final result = path.endsWith('/parts')
           ? recorded('first_load')
           : {
@@ -139,7 +157,7 @@ void main() {
     );
     expect(find.text('Tasks'), findsOneWidget);
     expect(find.byTooltip('Proposal'), findsNWidgets(2));
-    expect(find.byIcon(AppIcons.circleDashed), findsNWidgets(2));
+    expect(find.byIcon(AppIcons.lightbulb), findsNWidgets(2));
     f.rows.first['status'] = 'working';
     f.rows.first['version'] = 2;
     await f.controller.refresh();
@@ -278,7 +296,11 @@ void main() {
       'conversationId': 'new',
       'reason': 'Too much scope',
     });
-    expect(find.byTooltip('Rejected'), findsOneWidget);
+    // The mark says why on hover (finding 17).
+    expect(
+      inCard('new', find.byTooltip('Rejected: Too much scope')),
+      findsOneWidget,
+    );
   });
   testWidgets('retry uses the same receipt and never displays raw error', (
     t,
@@ -294,6 +316,180 @@ void main() {
     await t.pumpAndSettle();
     expect(f.operations.toSet().length, 1);
     expect(f.commands.length, 2);
+  });
+  testWidgets('every status shows its own word and mark (finding 4)', (
+    t,
+  ) async {
+    const statuses = <(String, String, HarnessActivity?)>[
+      ('planned', 'Planned', HarnessActivity.starting),
+      ('working', 'Working', HarnessActivity.working),
+      ('needs_human', 'Needs a human', HarnessActivity.needsInput),
+      ('blocked', 'Stuck', null),
+      ('review', 'Ready for review', HarnessActivity.needsInput),
+      ('done', 'Done', HarnessActivity.done),
+      ('stopped', 'Stopped', HarnessActivity.paused),
+      ('cancelled', 'Cancelled', HarnessActivity.paused),
+      ('reconciling', 'Checking its agent', HarnessActivity.unknown),
+      ('lost', 'Agent lost', HarnessActivity.offline),
+      ('proposal', 'Proposal', null),
+      ('rejected', 'Rejected', null),
+      ('a-later-status', 'Status unavailable', HarnessActivity.unknown),
+    ];
+    await mount(t);
+    f.rows
+      ..clear()
+      ..addAll([
+        for (final (i, (status, _, _)) in statuses.indexed)
+          {...task(status, 1, 100 - i), 'status': status, 'canApprove': false},
+      ]);
+    f.controller.personalTasks!.apply(feed(f.rows, reset: true));
+    await t.binding.setSurfaceSize(const Size(340, 4000));
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    await t.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SuperTabPersonalTasksPane(
+            controller: f.controller,
+            onOpenTask: (_) {},
+          ),
+        ),
+      ),
+    );
+    await t.pump();
+    for (final (status, word, activity) in statuses) {
+      expect(
+        inCard(status, find.byTooltip(word)),
+        findsOneWidget,
+        reason: status,
+      );
+      if (activity != null) {
+        final mark = t.widget<ActivityMark>(
+          inCard(status, find.byType(ActivityMark)),
+        );
+        expect(mark.activity, activity, reason: status);
+      }
+    }
+    // Its own icon (task #4461): no ActivityMark, so no terminal ✗.
+    expect(
+      inCard('blocked', find.byIcon(AppIcons.triangleAlert)),
+      findsOneWidget,
+    );
+  });
+  group('a refused change unlocks the pane and says why (finding 3)', () {
+    FilledButton approve(String id) =>
+        find
+                .ancestor(
+                  of: inCard(id, find.text('Approve')),
+                  matching: find.byType(FilledButton),
+                )
+                .evaluate()
+                .single
+                .widget
+            as FilledButton;
+    for (final (status, code, sentence) in [
+      (409, 'CONFLICT', 'The suggested agent changed. Read the task again.'),
+      (403, 'FORBIDDEN', 'You can no longer approve this task.'),
+    ]) {
+      testWidgets('$status: the server\'s sentence, no Retry, cards work', (
+        t,
+      ) async {
+        await mount(t);
+        f.refuse = SuperTabFailure(code, sentence, statusCode: status);
+        final before = f.reads;
+        await t.tap(inCard('new', find.text('Approve')));
+        await t.pumpAndSettle();
+        expect(find.text(sentence), findsOneWidget);
+        expect(find.text('Retry'), findsNothing);
+        expect(approve('old').onPressed, isNotNull);
+        expect(approve('new').onPressed, isNotNull);
+        expect(f.reads, greaterThan(before), reason: 'reads the task again');
+        f.refuse = null;
+        await t.tap(inCard('old', find.text('Approve')));
+        await t.pumpAndSettle();
+        expect(f.commands.length, 2);
+        expect(f.operations.toSet().length, 2, reason: 'a new change');
+        expect(find.text(sentence), findsNothing);
+      });
+    }
+    testWidgets('a refused Retry of a lost answer unlocks too', (t) async {
+      await mount(t);
+      f.fail = true;
+      await t.tap(inCard('new', find.text('Approve')));
+      await t.pumpAndSettle();
+      expect(find.text('Retry'), findsOneWidget);
+      expect(approve('old').onPressed, isNull);
+      f
+        ..fail = false
+        ..refuse = const SuperTabFailure(
+          'CONFLICT',
+          'This task is archived.',
+          statusCode: 409,
+        );
+      await t.tap(find.text('Retry'));
+      await t.pumpAndSettle();
+      expect(find.text('This task is archived.'), findsOneWidget);
+      expect(find.text('Retry'), findsNothing);
+      expect(approve('old').onPressed, isNotNull);
+    });
+    testWidgets('an update required says so, with no Retry', (t) async {
+      await mount(t);
+      f.refuse = const SuperTabFailure(
+        'UPDATE_REQUIRED',
+        'fixture private payload',
+        statusCode: 426,
+      );
+      await t.tap(inCard('new', find.text('Approve')));
+      await t.pumpAndSettle();
+      expect(find.text('Update Harness to change Tasks.'), findsOneWidget);
+      expect(find.textContaining('fixture private'), findsNothing);
+      expect(find.text('Retry'), findsNothing);
+    });
+    testWidgets('a refused mode change unlocks the cards', (t) async {
+      await mount(t);
+      f.refuse = const SuperTabFailure(
+        'FORBIDDEN',
+        'Only members choose how their tasks are approved.',
+        statusCode: 403,
+      );
+      await t.tap(find.byKey(const ValueKey('tasks-approval-mode')));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Review').last);
+      await t.pumpAndSettle();
+      expect(
+        find.text('Only members choose how their tasks are approved.'),
+        findsOneWidget,
+      );
+      expect(find.text('Retry'), findsNothing);
+      expect(approve('new').onPressed, isNotNull);
+    });
+  });
+  // Task #4220: the controller drops a refused change, but the pane kept it, so Tasks stayed disabled and its Retry sent
+  // the refused change again.
+  testWidgets('a refused change says the server\'s reason and Tasks works '
+      'again', (t) async {
+    await mount(t);
+    f.refuse = const SuperTabFailure(
+      'FORBIDDEN',
+      'Only the project\'s owner changes this.',
+      statusCode: 403,
+    );
+    await t.tap(find.byKey(const ValueKey('tasks-approval-mode')));
+    await t.pumpAndSettle();
+    await t.tap(find.text('Review').last);
+    await t.pumpAndSettle();
+    expect(
+      find.text('Only the project\'s owner changes this.'),
+      findsOneWidget,
+    );
+    expect(find.text('Retry'), findsNothing);
+    f.refuse = null;
+    await t.tap(find.byKey(const ValueKey('tasks-approval-mode')));
+    await t.pumpAndSettle();
+    await t.tap(find.text('Review').last);
+    await t.pumpAndSettle();
+    expect(f.commands.length, 2);
+    expect(f.operations.toSet().length, 2);
+    expect(f.controller.personalTasks!.mode, 'review');
   });
   testWidgets('old backend has no approval controls', (t) async {
     await mount(t);
@@ -586,5 +782,57 @@ void main() {
           .onPressed,
       isNotNull,
     );
+  });
+
+  // anh Dee's pick (task #4461): Proposal is a lightbulb, Rejected a thumbs-down, Failed a triangle in the error ink;
+  // the check, question mark and spinner stay. No Flutter status draws an X: an X means close.
+  testWidgets('each task status has its own mark and none is an X', (t) async {
+    late BuildContext context;
+    Future<void> show(String status) => t.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (c) {
+              context = c;
+              return SuperTabTaskStatusMark(status);
+            },
+          ),
+        ),
+      ),
+    );
+    Icon? icon() => t.widgetList<Icon>(find.byType(Icon)).firstOrNull;
+    await show('proposal');
+    expect(icon()?.icon, AppIcons.lightbulb);
+    await show('rejected');
+    expect(icon()?.icon, AppIcons.thumbsDown);
+    await show('blocked');
+    expect(icon()?.icon, AppIcons.triangleAlert);
+    expect(icon()?.color, Theme.of(context).colorScheme.error);
+    expect(find.bySemanticsLabel('Stuck'), findsOneWidget);
+    for (final status in [
+      'proposal',
+      'rejected',
+      'planned',
+      'working',
+      'needs_human',
+      'blocked',
+      'review',
+      'done',
+      'stopped',
+      'cancelled',
+      'lost',
+    ]) {
+      await show(status);
+      expect(
+        {AppIcons.circleX, AppIcons.close}.contains(icon()?.icon),
+        isFalse,
+        reason: status,
+      );
+      expect(
+        find.textContaining(RegExp('[✗✕×]')),
+        findsNothing,
+        reason: status,
+      );
+    }
   });
 }

@@ -23,7 +23,7 @@ Future<Map<String, dynamic>?> showBringAgentForm(
   bool Function()? isCurrent,
 }) async {
   final accountId = app.currentUser?.id;
-  final here = app.machineStates.values
+  MachineState? thisComputer() => app.machineStates.values
       .where(
         (m) =>
             m.isLocalMachine &&
@@ -40,24 +40,14 @@ Future<Map<String, dynamic>?> showBringAgentForm(
       !controller.accessRevoked &&
       (isCurrent?.call() ?? true);
   if (!current()) return null;
-  if (here == null) {
-    await showAppDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Connect this computer'),
-        content: const Text(
-          'Wait for this computer’s Harness connection, then try bringing your agent again.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
-    );
-    return null;
-  }
+  // Before this computer's Harness connection is up, the box waits for it and goes on by itself (task #4220).
+  final here =
+      thisComputer() ??
+      await showAppDialog<MachineState>(
+        context: context,
+        builder: (_) => _ConnectThisComputer(app: app, find: thisComputer),
+      );
+  if (here == null || !context.mounted || !current()) return null;
   // One start per computer chosen, each keeping its receipt across retries.
   final launchers = <String, (SwarmAgentLauncher, String)>{};
   SwarmAgentLauncher launcherFor(String machineId) => SwarmAgentLauncher(
@@ -78,11 +68,7 @@ Future<Map<String, dynamic>?> showBringAgentForm(
             'operationId': operation,
           })
           .timeout(const Duration(seconds: 20));
-      if (prepared['state'] == 'preparing') {
-        throw const SwarmAgentLaunchFailure(
-          'Your agent’s folder is still being prepared. Try again to check it.',
-        );
-      }
+      if (prepared['state'] == 'preparing') return prepared;
       if (prepared['state'] != 'ready' ||
           prepared['cwd'] is! String ||
           prepared['engines'] is! List) {
@@ -100,13 +86,25 @@ Future<Map<String, dynamic>?> showBringAgentForm(
       final pending = controller.pendingCommand;
       if (pending != null && jsonEncode(pending) != jsonEncode(command)) {
         throw const SwarmAgentLaunchFailure(
-          'Finish or retry the pending action in this org first.',
+          'Finish or retry the pending action in this Swarm first.',
         );
       }
       final result = pending == null
           ? await controller.command(command, operationId: operation)
           : await controller.retry();
       if (result != null) return result;
+      final refusal = controller.operationError;
+      if (controller.pendingCommand == null &&
+          refusal != null &&
+          !const {
+            'INVALID_COMMAND',
+            'VALIDATION_ERROR',
+            'UPDATE_REQUIRED',
+          }.contains(controller.operationErrorCode)) {
+        // Refused, with nothing kept to retry: the server's own sentence
+        // (a full or paused computer, say).
+        throw SwarmAgentLaunchFailure(refusal);
+      }
       if (const {
         'INVALID_COMMAND',
         'VALIDATION_ERROR',
@@ -123,9 +121,16 @@ Future<Map<String, dynamic>?> showBringAgentForm(
   );
   Map<String, dynamic>? started;
   String? startedOn;
+  SwarmAgentLauncher? starting;
+  final swarm = controller.snapshot?.name ?? 'this Swarm';
   final integration = HarnessLaunchIntegration(
     creationId: superTabOperationId(),
     actionLabel: 'Bring agent',
+    heading: 'Bring your agent to $swarm',
+    intro:
+        'Your Buddy is your own agent in $swarm: it runs on your computer, '
+        'under your sign-in, and you can also start it later from your Buddy '
+        'chat.',
     engines: const ['claude', 'codex'],
     ownMachinesOnly: true,
     prepare: (_, task, _) async => task,
@@ -136,7 +141,13 @@ Future<Map<String, dynamic>?> showBringAgentForm(
         launcherFor(machineId),
         superTabOperationId(),
       );
-      final result = await launcher.create(engine, operation);
+      starting = launcher;
+      final Map<String, dynamic> result;
+      try {
+        result = await launcher.create(engine, operation);
+      } finally {
+        starting = null;
+      }
       if (result['agentId'] is! String && result['startId'] is! String) {
         throw const SwarmAgentLaunchFailure(
           'Your agent’s start is not confirmed. Try again to check it.',
@@ -145,6 +156,7 @@ Future<Map<String, dynamic>?> showBringAgentForm(
       started = result;
       startedOn = machineId;
     },
+    stopBuddy: () => starting?.stop() ?? false,
   );
   final box = NewHarnessController(
     app,
@@ -161,6 +173,9 @@ Future<Map<String, dynamic>?> showBringAgentForm(
       context: context,
       transitionDuration: Duration.zero,
       veilBlur: 0,
+      // The offer doesn't come back by itself: only ×, Not now or Esc, each
+      // a choice, close it; a stray click outside doesn't (#4442).
+      barrierDismissible: false,
       builder: (dialog) => Padding(
         padding: const EdgeInsets.all(DesktopChrome.panelPadding),
         child: NewHarnessForm(
@@ -193,4 +208,70 @@ Future<Map<String, dynamic>?> showBringAgentForm(
     }
   }
   return current() ? result : null;
+}
+
+/// "Connect this computer": waits for this computer's Harness connection and closes with it once it is up, so the
+/// agent box goes on by itself; Open Machines is where a computer that needs its link is connected (task #4220).
+class _ConnectThisComputer extends StatefulWidget {
+  const _ConnectThisComputer({required this.app, required this.find});
+  final AppNotifier app;
+  final MachineState? Function() find;
+
+  @override
+  State<_ConnectThisComputer> createState() => _ConnectThisComputerState();
+}
+
+class _ConnectThisComputerState extends State<_ConnectThisComputer> {
+  bool _done = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.app.addListener(_follow);
+  }
+
+  @override
+  void dispose() {
+    widget.app.removeListener(_follow);
+    super.dispose();
+  }
+
+  void _follow() {
+    if (_done || !mounted) return;
+    if (widget.find() case final here?) _close(here);
+  }
+
+  void _close([MachineState? here]) {
+    _done = true;
+    Navigator.pop(context, here);
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Connect this computer'),
+    content: const Row(
+      children: [
+        SizedBox.square(
+          dimension: 16,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+        SizedBox(width: 12),
+        Flexible(
+          child: Text(
+            'Waiting for this computer’s Harness connection. This goes on by itself once it is up.',
+          ),
+        ),
+      ],
+    ),
+    actions: [
+      TextButton(onPressed: _close, child: const Text('Cancel')),
+      TextButton(
+        onPressed: () {
+          _close();
+          widget.app.requestMachines();
+        },
+        child: const Text('Open Machines'),
+      ),
+    ],
+  );
 }

@@ -180,7 +180,9 @@ describe('the handoff in the edge host', () => {
       expect(publicationErrors).toEqual([])
       expect(readFileSync(join(ws, handed2.file!), 'utf8')).toContain('add a search box')
     } finally { rmSync(ws, { recursive: true, force: true }) }
-  })
+  // A real git repository and SQLite store: 1.6 s alone, 5.5 s in a full test:core run on a busy Mac (2026-11-07, #4252),
+  // past vitest's 5 s default.
+  }, 20_000)
 })
 
 it('refuses malformed read/publication replies and never sends a revoked publication', async () => {

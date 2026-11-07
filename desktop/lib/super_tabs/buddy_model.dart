@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../core/runtime_model_name.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
@@ -135,10 +136,14 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
             request.gridModel == null
                 ? 'Switching to your subscription…'
                 : 'Switching to ${request.name ?? nameOf(request.gridModel!)}…',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: DesktopChrome.metadata(),
           )
         : _anchor(
-            label: current == null ? 'Your subscription' : nameOf(current),
+            label: current == null
+                ? _subscriptionModel(agent)
+                : nameOf(current),
             offers: offers,
             phone: phone,
             busy: busy,
@@ -161,7 +166,13 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
             ),
             const SizedBox(width: grid.AppDesktop.controlGap),
           ],
-          KeyedSubtree(key: const ValueKey('super-buddy-model'), child: picker),
+          // The model gives way with "…" in a narrow header, not the Buddy's name or ⋮ (#4444).
+          Flexible(
+            child: KeyedSubtree(
+              key: const ValueKey('super-buddy-model'),
+              child: picker,
+            ),
+          ),
           // A picked shared model that stopped is a failure the reader acts on, so it stays (review 4 of #3464).
           if (request == null && current != null && on == null) ...[
             const SizedBox(width: grid.AppDesktop.menuInset),
@@ -196,6 +207,14 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
     required bool busy,
   }) {
     final current = widget.agent.gridModel;
+    // Only Claude switches to a shared model: on its subscription, any other engine's menu would hold the one row
+    // already chosen.
+    if (current == null && widget.agent.engine != 'claude') {
+      return Text(
+        label,
+        style: DesktopChrome.metadata(color: DesktopChrome.foreground),
+      );
+    }
     final pool = c.snapshot!.pool(widget.agent.machineId);
     Widget row(AppMenuItem item) => fingerTarget(enabled: phone, item);
     Widget words(String text) => Padding(
@@ -258,6 +277,8 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
               Flexible(
                 child: Text(
                   label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: DesktopChrome.metadata(
                     color: DesktopChrome.foreground,
                   ),
@@ -275,3 +296,13 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
     );
   }
 }
+
+/// The model a Buddy on its own subscription runs, as people know it ("Opus 5.5"); while its configuration names none
+/// but the engine's default, the subscription it runs on.
+String _subscriptionModel(SuperTabAgent agent) =>
+    switch (agent.configuration['model']) {
+      final String id when id.isNotEmpty && id != 'default' => modelDisplayName(
+        id,
+      ),
+      _ => 'Your subscription',
+    };
