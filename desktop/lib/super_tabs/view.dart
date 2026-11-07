@@ -869,31 +869,6 @@ class _SuperTabViewState extends State<SuperTabView>
   Timer? _historyRetry;
   static const _historyRetryAfter = Duration(seconds: 5);
 
-  /// The band's [today] (the unread bar or the jump pill, or nothing), under
-  /// the row naming [id]'s unread tags in threads when it has any (#2814).
-  Widget? _withThreadTags(String id, Widget? today) {
-    final tags = SuperTabAttention.of(c).threadTagsIn(id);
-    if (tags.isEmpty) return today;
-    final bar = SuperTabThreadTagBar(
-      count: tags.length,
-      onOpen: () => _openThreadTag(tags.first),
-    );
-    if (today == null) return bar;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [bar, today],
-    );
-  }
-
-  /// Opens [tag]'s thread at its reply, lit; opening it reads it, which
-  /// clears the tag from the row and the red number.
-  void _openThreadTag(SuperTabMention tag) {
-    final root = tag.threadId;
-    if (root == null) return;
-    c.openThread(root, at: tag.messageId);
-  }
-
   /// Brings [id]'s New messages line into view near the top, and stops
   /// following the end there: what came since the reader's mark is below.
   /// The bar or the pill clicked: the line, with typing back in the composer,
@@ -2631,25 +2606,17 @@ class _SuperTabViewState extends State<SuperTabView>
     WidgetsBinding.instance.scheduleFrame();
   }
 
-  /// The messages [id]'s list shows, in order.
-  /// A thread reply shows in its thread, and here only when also sent.
-  /// No Threads ([SuperTabView.threads]): a chat is one flat list, old thread replies inline in time order, and a
-  /// reply quotes its message rather than opening a thread.
-  bool get _flatChat => widget.board;
-
-  List<SuperTabMessage> _shownMessages(String id, {bool replies = false}) {
+  /// The messages [id]'s list shows, in order. No threads (anh Dee, 11-07
+  /// 18:56, #4529): a chat is one flat list, old thread replies inline in time
+  /// order, and a reply quotes its message, as iMessage does.
+  List<SuperTabMessage> _shownMessages(String id) {
     final messages = c.taskMessages(id);
     final answered = answeredPromptAlerts(
       messages,
       (agentId) => c.snapshot?.agent(agentId),
     );
     return messages
-        .where(
-          (m) =>
-              _shown(m) &&
-              (replies || _flatChat || m.inMainStream) &&
-              !answered.contains(m.id),
-        )
+        .where((m) => _shown(m) && !answered.contains(m.id))
         .toList();
   }
 
@@ -4919,9 +4886,8 @@ class _SuperTabViewState extends State<SuperTabView>
     final agent = message.fromAgent
         ? c.snapshot?.agent(message.authorId)
         : null;
-    // In a flat chat a thread reply answers the message it names, else its thread's root (task #3787).
-    final flatReply =
-        _flatChat && message.threadReply && message.thread != message.id;
+    // A thread reply answers the message it names, else its thread's root (task #3787).
+    final flatReply = message.threadReply && message.thread != message.id;
     final answers = message.replyTo ?? (flatReply ? message.thread : null);
     // An original outside the pages read is read by itself for its quote.
     final quoted = answers == null || byId.containsKey(answers)
@@ -4934,15 +4900,6 @@ class _SuperTabViewState extends State<SuperTabView>
         c.canWrite &&
         c.selected?.archived == false &&
         !c.isEarlierBuddyChat(c.selected);
-    final root = message.thread;
-    // A message that started a session has its line before any reply comes,
-    // so the session is found again after its pane closes.
-    final thread = inThread || root != message.id
-        ? null
-        : c.thread(message.conversationId, message.id) ??
-              (c.threadSession(message.id) != null
-                  ? SuperTabThread.empty(message.id)
-                  : null);
     final group = inThread
         ? null
         : c.snapshot?.conversation(message.conversationId);
@@ -5022,54 +4979,13 @@ class _SuperTabViewState extends State<SuperTabView>
       onDelete: c.canDelete(message)
           ? () => unawaited(_deleteMessage(message))
           : null,
-      // A message with a thread is answered there; one from before threads
-      // keeps the inline reply.
+      // A reply quotes its message in the composer; no thread opens.
       onReply: !writable || inThread
           ? null
-          : root != null && !_flatChat
-          ? () => c.openThread(root)
           : () {
               setState(() => _replies[c.selectedId] = message);
               _focus.requestFocus();
             },
-      thread: _flatChat ? null : thread,
-      threadUnread: !_flatChat && thread != null && c.threadUnread(thread),
-      threadTagged:
-          thread != null &&
-          SuperTabAttention.of(c).hasUnreadTagInThread(c.selectedId, thread.id),
-      threadFresh: thread == null
-          ? 0
-          : SuperTabAttention.of(c).newRepliesIn(c.selectedId, thread.id),
-      // A thread its own Buddy session answers says so on its line.
-      threadTrailing: switch (thread == null || inThread
-          ? null
-          : c.threadSession(thread.id)) {
-        final session? => SuperTabThreadSessionMark(
-          key: ValueKey('super-thread-session-mark-${thread!.id}'),
-          activity: superTabSessionActivity(c, widget.app, session),
-          alone: thread.replies == 0,
-        ),
-        null => null,
-      },
-      threadEnd:
-          thread == null ||
-              inThread ||
-              !c.canWrite ||
-              c.threadSession(thread.id) == null
-          ? null
-          : SuperTabSessionEnd(
-              key: ValueKey('super-thread-session-end-${thread.id}'),
-              controller: c,
-              root: thread.id,
-              metadata: true,
-            ),
-      onOpenThread:
-          !_flatChat &&
-              !inThread &&
-              root != null &&
-              (thread != null || message.threadReply)
-          ? () => c.openThread(root)
-          : null,
       onReturnToComposer: _focus.requestFocus,
       readerId: c.accountId,
       reactorName: (kind, id) => kind == 'agent'
@@ -5665,33 +5581,29 @@ class _SuperTabViewState extends State<SuperTabView>
                     SuperTabUnreadBand(
                       key: ValueKey('super-unread-band-${c.selectedId}'),
                       scroll: _scroll[c.selectedId],
-                      child: _withThreadTags(
-                        c.selectedId,
-                        _showsBar(c.selectedId)
-                            ? SuperTabUnreadBar(
-                                count: _newFromLine(c.selectedId),
-                                more: c.hasNewer(c.selectedId),
-                                onPressed: () =>
-                                    _jumpToUnreadLine(c.selectedId),
-                                onMarkRead: _markReadFromBar,
-                              )
-                            : _unread.offersDown(c.selectedId)
-                            ? Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  grid.AppDesktop.panelPadding,
-                                  grid.AppDesktop.controlGap,
-                                  grid.AppDesktop.panelPadding,
-                                  0,
+                      child: _showsBar(c.selectedId)
+                          ? SuperTabUnreadBar(
+                              count: _newFromLine(c.selectedId),
+                              more: c.hasNewer(c.selectedId),
+                              onPressed: () => _jumpToUnreadLine(c.selectedId),
+                              onMarkRead: _markReadFromBar,
+                            )
+                          : _unread.offersDown(c.selectedId)
+                          ? Padding(
+                              padding: const EdgeInsets.fromLTRB(
+                                grid.AppDesktop.panelPadding,
+                                grid.AppDesktop.controlGap,
+                                grid.AppDesktop.panelPadding,
+                                0,
+                              ),
+                              child: Center(
+                                child: SuperTabJumpToUnread(
+                                  onPressed: () =>
+                                      _jumpToUnreadLine(c.selectedId),
                                 ),
-                                child: Center(
-                                  child: SuperTabJumpToUnread(
-                                    onPressed: () =>
-                                        _jumpToUnreadLine(c.selectedId),
-                                  ),
-                                ),
-                              )
-                            : null,
-                      ),
+                              ),
+                            )
+                          : null,
                     ),
                     Expanded(
                       child: Stack(
