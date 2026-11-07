@@ -225,3 +225,50 @@ describe('crew wake and move times (#3462)', () => {
     expect(figures.crewWake).toEqual({ count: 0, medianSeconds: null, slowestSeconds: null })
   })
 })
+
+
+describe('PM first-answer time (#3609)', () => {
+  it('times each main ask, thread follow-up and Buddy relay to its first PM answer in place', () => {
+    const main = person('chat', at(1), { id: 'main', recipientIds: ['pm'] })
+    const follow = person('chat', at(2), { id: 'follow', thread: 'root', recipientIds: ['pm'] })
+    const relay = person('chat', at(3), { id: 'relay', source: { kind: 'buddy-proposal' }, recipientIds: ['pm'] })
+    const messages = [main, follow, relay,
+      row({ conversationId: 'chat', createdAt: at(1) + 10_000, answers: 'main' }),
+      row({ conversationId: 'chat', createdAt: at(1) + 90_000, answers: 'main' }),
+      row({ conversationId: 'chat', createdAt: at(2) + 30_000, thread: 'root' }),
+      row({ conversationId: 'chat', createdAt: at(3) + 50_000, answers: 'relay' })]
+    expect(scorecardDay(input({ messages: [...messages, ...messages] })).pmAnswer).toEqual({ count: 3, medianSeconds: 30, slowestSeconds: 50 })
+  })
+
+  it('ignores other agents, wrong places, earlier thread answers, cards, and reaction/delivery timestamps', () => {
+    const ask = person('chat', at(1), { id: 'ask', thread: 'root', recipientIds: ['pm'] })
+    const unseen = person('task', at(1), { id: 'unseen', recipientIds: ['worker'] })
+    const messages = [ask, unseen,
+      row({ conversationId: 'chat', createdAt: at(0), thread: 'root' }),
+      row({ conversationId: 'chat', createdAt: at(2), answers: 'ask', author: { kind: 'agent', id: 'worker' } }),
+      row({ conversationId: 'other', createdAt: at(3), answers: 'ask', thread: 'root' }),
+      row({ conversationId: 'chat', createdAt: at(4), source: { kind: 'task-line' }, answers: 'ask' }),
+      row({ conversationId: 'task', createdAt: at(4), answers: 'unseen' })]
+    expect(scorecardDay(input({ messages, answeredDeliveries: [{ messageId: 'ask', answeredAt: at(2) }] })).pmAnswer)
+      .toEqual({ count: 0, medianSeconds: null, slowestSeconds: null })
+  })
+
+  it('counts first answers completed today across midnight, never a second answer today or one after the day', () => {
+    const messages = [
+      person('chat', START - 20_000, { id: 'overnight', recipientIds: ['pm'] }),
+      row({ conversationId: 'chat', createdAt: START + 10_000, answers: 'overnight' }),
+      person('chat', START - 60_000, { id: 'yesterday', recipientIds: ['pm'] }),
+      row({ conversationId: 'chat', createdAt: START - 30_000, answers: 'yesterday' }),
+      row({ conversationId: 'chat', createdAt: START + 20_000, answers: 'yesterday' }),
+      person('chat', END - 20_000, { id: 'tomorrow', recipientIds: ['pm'] }),
+      row({ conversationId: 'chat', createdAt: END, answers: 'tomorrow' })]
+    expect(scorecardDay(input({ messages })).pmAnswer).toEqual({ count: 1, medianSeconds: 30, slowestSeconds: 30 })
+  })
+})
+
+
+it('orders a same-millisecond PM answer after its ask by stored sequence', () => {
+  const ask = person('chat', at(1), { id: 'instant', recipientIds: ['pm'], sequence: 10 })
+  const answer = row({ conversationId: 'chat', createdAt: at(1), answers: 'instant', sequence: 11 })
+  expect(scorecardDay(input({ messages: [answer, ask] })).pmAnswer).toEqual({ count: 1, medianSeconds: 0, slowestSeconds: 0 })
+})

@@ -10,7 +10,7 @@ import { isCrew } from './crew.js'
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
 import { phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
-import { admitMachineStart, joiningTeamMacs, type TeamMachineRow, accountMachineName, availableSlots, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, ownAccountWork, ownAccountNote, type MachineObservation } from './machines.js'
+import { admitMachineStart, accountMachineName, availableSlots, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, ownAccountWork, ownAccountNote, type MachineObservation } from './machines.js'
 import { expireAccess } from './machineAccess.js'
 import { authorForAgent, lazyUsernames, namesPerson, rowForAgent, shownNameOf } from './personNames.js'
 import { machineSuspensionReason, readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
@@ -131,7 +131,7 @@ import { closeAssignment, closeUnassignedStart, LIST_SIZE, newestConversations, 
 import { answeredAgents, dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByAnswer, resolveByReply, resolveTags, resolveWhenWorked, writeMentions } from './mentions.js'
 import { stuckAlerts } from './stuck.js'
 import { OVERDUE_PER_PASS, overdueDecisions, dueDefaultDecisions } from './overdueDecisions.js'
-import { answerable, askDecisions, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingConversations, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
+import { answerable, askDecisions, DECISION_ASKED_KIND, keepWaiting, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingConversations, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
 import { recordMessageReach } from './messageReachStats.js'
@@ -923,19 +923,6 @@ export class SuperTabStore {
       versions: Object.fromEntries(rows.flatMap(r => r.clientVersion ? [[r.machineId, r.clientVersion] as const] : [])) }
   }
 
-  /** The Swarm's Macs whose owner's Harness Team account on it is not listed yet (machines.ts joiningTeamMacs): they read
-   *  joining, not "not set up" (#3122). One read of those owners' Team machines on their account index; none with no Mac. */
-  async joiningTeams(tx: Transaction, state: SuperTabState): Promise<string[]> {
-    const macs = (state.machines ?? []).filter(m => !m.hostMachineId && !m.removal && !m.buddyOnly)
-    if (!macs.length) return []
-    const teams = await tx.machine.aggregateRaw({ pipeline: [
-      { $match: { userId: { $in: [...new Set(macs.map(m => m.contributorId))] }, sessionKind: 'team', hostMachineId: { $in: macs.map(m => m.machineId) },
-        autonomousEnv: state.environment, deletedAt: null } },
-      { $limit: 200 }, { $project: { _id: 0, machineId: 1, userId: 1, hostMachineId: 1 } }],
-    options: { hint: { userId: 1 } } }) as unknown as TeamMachineRow[]
-    return joiningTeamMacs(state, teams)
-  }
-
   /** This Swarm's contributed machines that are also contributed to a Swarm of another Workspace: their Harness Team account
    *  takes no teammate's work here (machines.ts teamWorkRefusal). One indexed read of the machines' parts, one of rows. */
   async otherWorkspaceMachines(tx: Transaction, state: SuperTabState): Promise<string[]> {
@@ -1582,13 +1569,12 @@ export class SuperTabStore {
     const facts = visible.machines?.length ? await this.machineFacts(tx, state) : { team: [], versions: {} as Record<string, string> }
     const teamMachines = facts.team
     const otherWorkspace = visible.machines?.length ? await this.otherWorkspaceMachines(tx, state) : []
-    const joining = visible.machines?.length ? await this.joiningTeams(tx, state) : []
     const slots = slotCounter(state)
     return { lastChangedAt: await readLastChangedAt(tx, view, tabId) ?? 0, state: { ...visible, ...mentions, machines: visible.machines?.map(pool => {
       const stored = state.machines!.find(m => m.machineId === pool.machineId)!
       // Whether it takes teammates' projects now, and if not why (machines.ts teamWorkRefusal): what routing leaves it
       // out for, and what Desktop can show on the machine.
-      const refusal = machineTeamWork(state, stored, now, teamMachines, otherWorkspace, joining)
+      const refusal = machineTeamWork(stored, now, teamMachines, otherWorkspace)
       const suspended = suspendedEngines(stored, now)
       const machineSuspended = machineSuspensionReason(stored, now)
       return { ...pool, availableSlots: availableSlots(state, stored, slots(stored)),
@@ -1653,9 +1639,11 @@ export class SuperTabStore {
         const person = await this.db.user.findUnique({ where: { id: row.personId }, select: { email: true } })
         if (!autonomousEnv || !person) { await withdrawDefault(row); result.skipped++; continue }
         const user: AuthUser = { sub: row.personId, email: person.email, autonomousEnv, role: 'user' }
-        await this.executeOnce(user, row.tabId, { operationId: `${row.defaulted ? 'default' : 'overdue'}-decision-${row.id}`, command: { type: 'decision.answer', decisionId: row.id, delegate: true } },
+        const done = await this.executeOnce(user, row.tabId, { operationId: `${row.defaulted ? 'default' : 'overdue'}-decision-${row.id}`, command: { type: 'decision.answer', decisionId: row.id, delegate: true } },
           undefined, undefined, false, row.defaulted ? { defaulted: true } : { overdue: true })
-        result.answered++
+        // One its person must agree to waits for them: not answered, so skipped.
+        if (done.result.keptWaiting) result.skipped++
+        else result.answered++
       } catch (error) {
         const code = error instanceof SuperTabError ? error.code : 'unknown'
         // Answered meanwhile, a recommendation out of range, or the person or Swarm gone: nothing for the sweep to do.
@@ -2216,6 +2204,14 @@ export class SuperTabStore {
       if (decisionId) context.routeDecision = await readDecision(tx, tabId, decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
       if (command.type === 'project.boardMode' && command.on) context.legacyProposals = await this.legacyProposalBodies(tx, original, command.projectId)
       const effects = applyCommand(original, actor, command, context)
+      // Resolve repeats before numbering or writing Buddy notices: a repeated ask is the existing decision, already told.
+      const decisionIds = effects.decisions ? await writeDecisions(tx, tabId, effects.decisions, context.now) : []
+      const newDecisions = effects.decisions?.filter((draft, i) => decisionIds[i] === draft.id) ?? []
+      if (effects.decisions) {
+        if (command.type === 'decision.ask') effects.result.decisionIds = decisionIds
+        const fresh = new Set(newDecisions.map(d => d.id))
+        effects.messages = effects.messages.filter(m => m.source?.kind !== DECISION_ASKED_KIND || fresh.has(String(m.source.decisionId)))
+      }
       hasWorkers = effects.state.agents.some(a => !isBuddy(a) && !ledProject(effects.state, a.id))
       // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
       const shown = effects.messages.filter(message => !agentOnly(message.source, message.recipients))
@@ -2476,14 +2472,10 @@ export class SuperTabStore {
         if (taken.count !== 1) fail('AVATAR_UNAVAILABLE', 'Upload this picture again before using it.', 400)
       }
       if (effects.closedProposal) await closeProposal(tx, tabId, effects.closedProposal, actor.kind === 'person' ? actor.userId : actor.agentId, new Date(context.now))
-      if (effects.decisions) {
-        const ids = await writeDecisions(tx, tabId, effects.decisions, context.now)
-        if (command.type === 'decision.ask') effects.result.decisionIds = ids
-        // A decision new in this write reaches its person's phones (task #3248); one asked again is the open one, told already.
-        const asked = effects.decisions.filter((draft, i) => ids[i] === draft.id)
-        this.tellPhones(tx, tabId, effects.state, { replies: [], tags: [], decisions: asked }, [])
-      }
+      // A new decision reaches its person's phones (task #3248); a repeat was already brought to them.
+      if (newDecisions.length) this.tellPhones(tx, tabId, effects.state, { replies: [], tags: [], decisions: newDecisions }, [])
       if (effects.decisionAnswer) await recordAnswer(tx, tabId, effects.decisionAnswer, context.now)
+      if (effects.decisionKeptWaiting) await keepWaiting(tx, tabId, effects.decisionKeptWaiting)
       // Work this command ended (done, cancelled, archived) closes the decisions still waiting there (Dee, 10-31). After this
       // command's own answer and asks, so an answer in the same write counts and a reopened task's new ask is a new decision.
       const over = workEnded(original, effects.state)
@@ -2633,7 +2625,7 @@ export class SuperTabStore {
     const assigned = command.type === 'work.assign' ? command.agentId : undefined
     const rules = dispatchRules((await currentRules(tx, state.id, project.id)).rules)
     const now = this.now(), member = freeCrew(state, project.id, rules, now).find(a => a.id === assigned)
-    if (!member || !candidatesFor(state, member, rules, now).some(c => c.group.id === task.id)) {
+    if (!member || !candidatesFor(state, member, rules, now, openTasks(state, project.id, now)).some(c => c.group.id === task.id)) {
       fail('DISPATCH_STALE', 'This task is no longer one to hand out to this member.', 409)
     }
     try {
@@ -3675,7 +3667,7 @@ export class SuperTabStore {
       if (!kept.has(message.id)) rows.push({ id: message.id, tabId, conversationId: message.conversationId,
         sequence: sequences.get(message.id)!, author: json(message.author), ...(message.source ? { source: json(message.source) } : {}),
         ...(message.attachments ? { attachments: json(message.attachments) } : {}),
-        text: message.text, replyTo: message.replyTo, recipientIds: message.recipients, mentions: message.mentions ?? [],
+        text: message.text, replyTo: message.replyTo, ...message.answers ? { answers: message.answers } : {}, recipientIds: message.recipients, mentions: message.mentions ?? [],
         // A top-level message is its own thread's root; only a row written before threads has none (its replies stay inline).
         thread: message.thread ?? message.id, ...(message.alsoInChat ? { alsoInChat: true } : {}),
         ...(message.buddySession ? { buddySession: true } : {}), ...(message.buddyProject ? { buddyProject: message.buddyProject } : {}) })
@@ -4755,7 +4747,8 @@ export class SuperTabStore {
     const last = await this.polls.get(key).catch(error => { pollMemoryFailed(error); return undefined })
     // A PM whose inbox is due gets it now, not at the next full poll (#3545): only its host sends `turn`, and only a read
     // whose gathered rows are due (inboxDue) skips the fast answer, by one indexed read.
-    const releasing = turn !== undefined && inboxDue(await agentGatheredDeliveries(this.db, tabId, agentId, NOTICE_DIGEST_MAX), this.now(), turn)
+    const gathered = turn !== undefined ? await agentGatheredDeliveries(this.db, tabId, agentId, NOTICE_DIGEST_MAX) : []
+    const releasing = gathered.some(d => d.inboxSection === 'people') || inboxDue(gathered, this.now(), turn)
     if (!releasing && last !== undefined && this.now() - last.at < SWEEP_EVERY_MS) {
       const open = await openDeliveries(this.db, tabId, agentId, last.open?.prioritized)
       if (!open.length) return []
@@ -4818,10 +4811,10 @@ export class SuperTabStore {
       let gathered = led ? await agentGatheredDeliveries(tx, tabId, agentId, NOTICE_DIGEST_MAX) : []
       // A read that sends no turn, from a PM whose machine says its host does (#3545): the people's messages and crew needs it
       // gathered go now, in this read, as they would to an older host; the notices keep their digest.
-      if (turn === undefined && gathered.length && turnInboxHost(loaded.state, agent(loaded.state, agentId))) {
+      if (gathered.some(d => d.inboxSection === 'people') || turn === undefined && gathered.length && turnInboxHost(loaded.state, agent(loaded.state, agentId))) {
         const requeued = new Set<string>()
         // By the section recorded when each was gathered: no message is read for it.
-        for (const delivery of gathered.filter(d => d.inboxSection)) {
+        for (const delivery of gathered.filter(d => d.inboxSection === 'people' || turn === undefined && d.inboxSection)) {
           if ((await tx.superTabDelivery.updateMany({ where: { id: delivery.id, tabId, status: 'gathered' }, data: { status: 'queued' } })).count) requeued.add(delivery.id)
         }
         gathered = gathered.filter(d => !requeued.has(d.id))
@@ -5139,6 +5132,21 @@ export class SuperTabStore {
       // A Buddy reads no machine names, in what it is handed too (security review 2 of #2178). News from outside its chat
       // (buddyNews.ts) is marked, so its host words it as news to note, never a message to answer there.
       const target = agent(state, agentId), group = conversation(state, delivery.conversationId)
+      // #3609: only a confirmed native receipt means the PM has received a person's words. Keep the eyes
+      // and receipt in one transaction, using the same identity as a manual reaction; eyes never answers the ask.
+      if (action.type === 'ack' && !action.uncertain && !delivery.deliveredAt && row && !row.deletedAt
+        && delivery.authorKind === 'person' && ledProject(state, agentId)) {
+        const actor: Actor = { kind: 'agent', agentId, machineOwnerId: target.machineOwnerId }
+        const command: ReactCommand = { type: 'message.react', conversationId: group.id, messageId: row.id, emoji: 'eyes', on: true }
+        if (!await tx.superTabReaction.findUnique({ where: { id: reactionId(tabId, actor, command) } })) {
+          // Delivery authority uses light groups. Read the complete one before updating, so no task fields are lost.
+          const stored = await tx.swarmGroup.findUniqueOrThrow({ where: { id: partId(tabId, group.id) } })
+          const data = stored.data as unknown as Conversation
+          await this.writeReaction(tx, tabId, actor, command, this.now())
+          await guardedWrite(tx, tabId, { op: 'update', kind: 'group', key: group.id, seen: stored.version,
+            data: { ...data, reactionSeq: (data.reactionSeq ?? 0) + 1 } }, stamp)
+        }
+      }
       // An agent reads people by name, never email (task #2954).
       const named = row && namesPerson(row) ? rowForAgent(state, lazyUsernames(state), row) : row
       const shown = named && isBuddy(target) ? rowForBuddy(named) : named
@@ -5683,7 +5691,8 @@ export class SuperTabStore {
             ...earlier.filter(a => a.conversationId === group.id).map(a => a.agentId)].filter((id): id is string => typeof id === 'string' && !!id))]
             .map(id => `agent:${id}`)
           entry.pulls.push({ taskId: group.id, url: own, task: { checks: group.checks,
-            pullRequestHeads: (group as { pullRequestHeads?: TrainTask['pullRequestHeads'] }).pullRequestHeads, steps, builders } })
+            pullRequestHeads: (group as { pullRequestHeads?: TrainTask['pullRequestHeads'] }).pullRequestHeads, steps, builders,
+            done: group.assignment?.status === 'done' } })
         }
       }
       projects.push(...found.values())

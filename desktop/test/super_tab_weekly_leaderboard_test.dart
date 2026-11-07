@@ -267,6 +267,32 @@ void main() {
     },
   );
 
+  // Task #4220: every change in the Swarm cleared the board and showed a spinner until the next read landed.
+  testWidgets('a change in the Swarm refreshes the board without blanking '
+      'it, and a failed refresh keeps it', (tester) async {
+    final server = weeklySwarm();
+    final c = await showBoard(tester, server);
+    await tester.pumpAndSettle();
+    final peer = find.byKey(const ValueKey('weekly-person-peer'));
+    expect(peer, findsOneWidget);
+    final gate = Completer<void>();
+    server.leaderboardGate = gate.future;
+    server.state['name'] = 'Changed';
+    await c.refresh();
+    await tester.pump();
+    expect(server.leaderboardReads, hasLength(2));
+    expect(peer, findsOneWidget);
+    gate.complete();
+    await tester.pumpAndSettle();
+    expect(peer, findsOneWidget);
+    server.leaderboardGate = null;
+    server.failLeaderboardReads = 1;
+    await tester.tap(find.byTooltip('Refresh leaderboard'));
+    await tester.pumpAndSettle();
+    expect(peer, findsOneWidget);
+    expect(find.text('No connection.'), findsOneWidget);
+  });
+
   testWidgets('empty week and narrow pane remain usable', (tester) async {
     final server = weeklySwarm();
     server.leaderboard!['people'] = <dynamic>[];

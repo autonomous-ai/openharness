@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import type { ContributedMachine } from './machines.js'
+import { AGENT_MEMORY_BYTES, type ContributedMachine } from './machines.js'
 import { createSuperTab, SuperTabError, type Actor, type SuperTabState } from './model.js'
 import { agentKind } from './agentKind.js'
 import { hostTab } from './read/hostRows.js'
@@ -71,6 +71,12 @@ describe('+ New agent, Regular', () => {
     expect((f.state.projects ?? []).filter(p => p.id !== 'lead')).toHaveLength(0)
   })
 
+  it('asks an agent\'s memory, not a Buddy\'s smaller one: it takes tasks (#3738)', () => {
+    const f = swarm()
+    const made = f.add({ kind: 'regular', name: 'Ada' })
+    expect(f.state.starts!.find(s => s.id === made.result.startId)!.request.requirements.memoryBytes).toBe(AGENT_MEMORY_BYTES)
+  })
+
   it('once started, is a Regular agent in its own chat', () => {
     const f = swarm()
     const made = f.add({ kind: 'regular', name: 'Ada' })
@@ -118,6 +124,12 @@ describe('a Regular agent\'s chat', () => {
     f.run(say(f.chat, 'Hello'), { kind: 'agent', agentId: f.agentId, machineOwnerId: 'mate' })
   })
 
+  // Task #4252 (audit 29): it is a talk with its person, as a Buddy's is, where a short reply is the answer.
+  it('takes the agent\'s short reply to its person, which a task would refuse as only an acknowledgement', () => {
+    const f = running()
+    expect(code(() => f.run(say(f.chat, 'Thanks!'), { kind: 'agent', agentId: f.agentId, machineOwnerId: 'mate' }))).toBeNull()
+  })
+
   it('is read and written by nobody else: not the Swarm\'s owner, nor another agent', () => {
     const f = running()
     expect(code(() => f.run(say(f.chat, 'Peeking'), owner))).toBe('NOT_FOUND')
@@ -146,6 +158,48 @@ describe('joining by bringing your own agent', () => {
   })
 })
 
+// Task #4252 (audit 12): join, Bring agent, then + New agent before the Buddy settles. Desktop lists the computer first.
+describe('listing your computer while your Buddy is starting there', () => {
+  const contribute = (machineId: string) => ({ type: 'machine.contribute', machineId, name: machineId, cwd: '/home/mate/swarm', scope: 'swarm',
+    engines: ['claude', 'codex'], maxAgents: 2 }) as Command
+  const configuration = { engine: 'codex' as const, model: 'gpt-6.1-sol', effort: 'high', contextWindow: null, engineVersion: null }
+
+  it('lists it, and the Buddy still starts there', () => {
+    const f = swarm()
+    const made = f.run({ type: 'buddy.create', machineId: 'mate-laptop', engine: 'codex',
+      setup: { name: 'Mate laptop', cwd: '/home/mate/swarm', engines: ['codex'] } } as Command, mate, own('mate'))
+    const startId = made.result.startId as string
+    f.run(contribute('mate-laptop'), mate, own('mate'))
+    const listed = f.state.machines!.find(m => m.machineId === 'mate-laptop')!
+    expect(listed.buddyOnly).toBeUndefined()
+    expect(f.state.starts!.find(s => s.id === startId)!.poolGeneration).toBe(listed.generation)
+    listed.observation = reading // its host's next report
+    f.run({ type: 'agent.startDispatch', startId }, mate, own('mate'))
+    expect(f.run({ type: 'agent.started', startId, harnessId: 'h-buddy', configuration }, mate, own('mate')).result.agentId).toBeTruthy()
+  })
+
+  it('is still refused while any other start is pending there', () => {
+    const f = swarm()
+    f.add({ kind: 'regular', name: 'Ada' })
+    expect(code(() => f.run(contribute('mate-mac'), mate, own('mate')))).toBe('STARTS_PENDING')
+  })
+})
+
+// Task #4252 (audit 15): leave with the host online, get invited again, then Bring agent before the host reports its cleanup.
+describe('bringing an agent after leaving and rejoining', () => {
+  it('says the computer is finishing its cleanup, not that its contribution was withdrawn', () => {
+    const f = swarm()
+    f.run({ type: 'member.remove', userId: 'mate' }, mate)
+    const invited = f.run({ type: 'invite.create', email: mate.email, role: 'collaborator', conversationId: 'lead' }, owner)
+    f.run({ type: 'invite.accept', inviteId: invited.result.inviteId as string }, mate)
+    let refusal: unknown
+    try {
+      f.run({ type: 'buddy.create', machineId: 'mate-mac', engine: 'codex', setup: { name: 'mate-mac', cwd: '/swarm', engines: ['codex'] } } as Command, mate, own('mate'))
+    } catch (error) { refusal = error }
+    expect(refusal).toMatchObject({ code: 'MACHINE_CLEANING', message: expect.stringContaining('cleaning up') })
+  })
+})
+
 // A host from before Regular agents would launch one as a project's agent, in a project folder it does not have: the start is
 // listed apart, and a computer whose host cannot run one is told to update instead.
 describe('a Regular agent\'s start on its computer', () => {
@@ -165,6 +219,18 @@ describe('a Regular agent\'s start on its computer', () => {
     const f = swarm()
     f.state.machines!.find(m => m.machineId === 'mate-mac')!.observation!.capabilities = ['leadStart']
     expect(code(() => f.add({ kind: 'regular', name: 'Ada' }))).toBe('HOST_OUTDATED')
+    expect(f.state.starts ?? []).toEqual([])
+  })
+
+  // Task #4252 (audit 11): Desktop lists a computer and creates its first agent at once, before the host has reported.
+  it('on a computer just listed, with no reading yet, says it is connecting rather than to update it', () => {
+    const f = swarm()
+    delete f.state.machines!.find(m => m.machineId === 'mate-mac')!.observation
+    for (const kind of [{ kind: 'regular', name: 'Ada' }, { kind: 'pm', projectName: 'Docs site' }]) {
+      let refusal: unknown
+      try { f.add(kind) } catch (error) { refusal = error }
+      expect(refusal).toMatchObject({ code: 'HOST_CONNECTING', message: expect.stringContaining('connecting') })
+    }
     expect(f.state.starts ?? []).toEqual([])
   })
 })

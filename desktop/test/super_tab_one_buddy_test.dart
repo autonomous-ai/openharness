@@ -257,7 +257,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text(unavailable), findsNothing);
-      expect(find.text('Remove Buddy?'), findsOneWidget);
+      expect(find.text('Remove Wren?'), findsOneWidget);
       expect(commands(server, 'buddy.remove'), isEmpty);
       await tester.tap(find.widgetWithText(FilledButton, 'Remove'));
       await tester.pumpAndSettle();

@@ -292,7 +292,7 @@ export function startPreparing(state: SuperTabState, start: AgentStart, now: num
 // work. It would run as that machine's owner, with their files, logins and subscriptions, so it is admitted only on a
 // Team machine — the Mac's Harness Team account, or a machine used only for agents — that shows its privacy now.
 // Everything else refuses it and says why; a person's own projects on their own machines are unchanged.
-// Until that is required everywhere (teamAccountRequired), it holds only on machines that have a team account.
+// Swarm v3 (task #4120) runs a person's own agent on their own computer instead: this holds only on a Team account (#4218).
 
 /** How long a passed privacy check counts, from when this server first received it. The team account checks again
  *  every 5 minutes (cli/src/team/privacy.ts PRIVACY_RECHECK_MS) and reports within a 15-second beat, so a healthy
@@ -314,7 +314,7 @@ export function observedPrivacy(previous: StoredPrivacy | undefined, reported: M
 }
 
 export type TeamWorkCode = 'TEAM_WRITTEN_WORK' | 'MACHINE_OFFLINE' | 'TEAM_ACCOUNT_REQUIRED' | 'PRIVACY_UNCHECKED' | 'PRIVACY_CHECK_FAILED' | 'PRIVACY_CHECK_STALE'
-  | 'MACHINE_IN_OTHER_WORKSPACE' | 'NOT_SWARM_MACHINE' | 'MACHINE_PROJECTS' | 'ACCESS_MISSING' | 'TEAM_ACCOUNT_JOINING' | 'TEAM_ACCOUNTS_REMOVED' | 'NOT_YOUR_COMPUTER' | 'READ_ONLY' | 'STEP_OS'
+  | 'MACHINE_IN_OTHER_WORKSPACE' | 'NOT_SWARM_MACHINE' | 'MACHINE_PROJECTS' | 'ACCESS_MISSING' | 'TEAM_ACCOUNTS_REMOVED' | 'NOT_YOUR_COMPUTER' | 'READ_ONLY' | 'STEP_OS'
 export interface TeamWorkRefusal { code: TeamWorkCode; reason: string }
 /** Refusals that hold until a person acts on the machine; a stale check or an offline machine may pass again by itself. */
 export const LASTING_TEAM_REFUSALS: readonly string[] = ['TEAM_ACCOUNT_REQUIRED', 'PRIVACY_UNCHECKED', 'PRIVACY_CHECK_FAILED', 'MACHINE_IN_OTHER_WORKSPACE']
@@ -344,11 +344,12 @@ export function teamAccountRequired(): boolean {
 }
 
 /** Why this contributed machine may not run a teammate's project now, or null when it may. `teamRow`: its account row
- *  says it is signed in as a team account (`Machine.sessionKind`), read by the store. `required`: whether the Swarm it is
- *  in needs a team account on every machine ([teamAccountRequired] of that Swarm). */
+ *  says it is signed in as a team account (`Machine.sessionKind`), read by the store. A machine that is not a Team account
+ *  runs its own person's agents, whatever they work on (teamWorkCheck), so it reads no rule: it read "has no Harness Team
+ *  account yet" where the rule was required or it was added at join, and the route left those agents out (task #4218). */
 /** `otherWorkspace`: the machine is contributed to a Swarm of another Workspace too (store.ts otherWorkspaceMachines). Its Team account
  *  runs every teammate's work as one macOS user, so it serves one Workspace's teammates at a time (swarm-workspaces design). */
-export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow = false, required = teamAccountRequired(), otherWorkspace = false): TeamWorkRefusal | null {
+export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow = false, otherWorkspace = false): TeamWorkRefusal | null {
   const reading = pool.observation, name = pool.name
   // A Mac's Harness Team account whose machine is no longer a Team machine was removed (`harness team remove` deletes it).
   // Its last reading stays fresh for a minute, and in that minute it read as taking teammates' work and a Lead's route
@@ -357,7 +358,7 @@ export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow =
   // Its owner let teammates' work run in their own account here: their explicit choice wins over the Swarm-wide rule, for
   // this machine only (River, 11-04).
   if (ownAccountWork(pool)) return null
-  if (!teamRow && reading?.sessionKind !== 'team' && !required) return null
+  if (!teamRow && reading?.sessionKind !== 'team') return null
   if (otherWorkspace) return { code: 'MACHINE_IN_OTHER_WORKSPACE', reason: `The Harness Team account on ${name} also serves another ${WORKSPACE_LABEL}'s Swarms, ${ONLY_OWN} here.` }
   if (!reading || now - reading.receivedAt > MACHINE_FRESH_MS) {
     // A Mac's team account goes by its Mac's name ("One machine"), and the Mac itself may well be online.
@@ -468,39 +469,13 @@ export function teamPoolOf(state: SuperTabState, pool: ContributedMachine, live?
 }
 
 /**
- * Whether [pool] takes teammates' work, as a Swarm's reads say it: a Mac whose Harness Team account is in this Swarm runs
- * that work there (teamMachineFor), so it reads as its account does. Read as itself, every Mac read "has no Harness
- * Team account yet" next to the very account that took the work, and a Lead took that to mean the Mac could not
- * (2026-10-28). Any other machine, and a Mac without one, reads as itself.
+ * Whether [pool] takes teammates' work, as a Swarm's reads say it. Every machine reads as itself: a teammate's agent on a Mac
+ * runs in its own person's account there, never in the Mac's Harness Team account (task #4120), so that account's privacy check
+ * no longer speaks for the Mac (task #4218).
  */
-export function machineTeamWork(state: SuperTabState, pool: ContributedMachine, now: number, teamMachines: readonly string[],
-  otherWorkspaceMachines: readonly string[] = [], joiningTeams: readonly string[] = []): TeamWorkRefusal | null {
-  // Its owner lets teammates' work run in their own account: starts stay on the Mac, so the Mac itself is what routing reads
-  // (security review 2 of #2981).
-  const team = !pool.hostMachineId && !ownAccountWork(pool) ? teamPoolOf(state, pool, teamMachines) : undefined
-  const subject = team ?? pool
-  const refusal = teamWorkRefusal(subject, now, teamMachines.includes(subject.machineId), teamAccountRequired(), otherWorkspaceMachines.includes(subject.machineId))
-  // Its owner's Team account is on it and joins on the Mac's next poll (read/hostRows.ts joinTeam): not "not set up" meanwhile,
-  // which offered Set up for those seconds (Scholes, 11-05).
-  if (refusal?.code === 'TEAM_ACCOUNT_REQUIRED' && !team && joiningTeams.includes(pool.machineId)) {
-    return { code: 'TEAM_ACCOUNT_JOINING', reason: `The Harness Team account on ${pool.name} is joining this Swarm, ${ONLY_OWN} until it has.` }
-  }
-  return refusal
-}
-
-/** A Harness Team machine of an account (its account row): the Mac it lives on. */
-export interface TeamMachineRow { machineId: string; userId: string; hostMachineId: string }
-
-/**
- * The Macs of the Swarm whose owner has a Harness Team account on it that the Swarm does not list yet, and room for it: the
- * ones its host adds on its next poll (read/hostRows.ts joinTeam), from [teams], those owners' Team machines. A Team account
- * of another account names that account's own Mac, never this one (#3122).
- */
-export function joiningTeamMacs(state: SuperTabState, teams: readonly TeamMachineRow[]): string[] {
-  const listed = (machineId: string) => state.machines?.some(m => m.machineId === machineId) || state.machineCleanups?.some(c => c.machineId === machineId)
-  return (state.machines ?? []).filter(mac => !mac.hostMachineId && !mac.removal && !mac.buddyOnly && mac.scope === 'swarm'
-    && teams.some(t => t.hostMachineId === mac.machineId && t.userId === mac.contributorId && !listed(t.machineId))
-    && machineRoom(state, mac.contributorId, { team: true }) > 0).map(mac => mac.machineId)
+export function machineTeamWork(pool: ContributedMachine, now: number, teamMachines: readonly string[],
+  otherWorkspaceMachines: readonly string[] = []): TeamWorkRefusal | null {
+  return teamWorkRefusal(pool, now, teamMachines.includes(pool.machineId), otherWorkspaceMachines.includes(pool.machineId))
 }
 
 /** The projects with work on [machineId]: its agents' and its pending starts'. */
@@ -603,7 +578,11 @@ export function recordAgentPresence(state: SuperTabState, machineId: string, run
     if (running.includes(target.harnessId)) {
       delete target.downSince
       delete target.downNamed
-    } else target.downSince = downSince(state, target, now) ?? new Date(now).toISOString()
+    } else {
+      // A stop is counted once, when a reading first shows the session gone; the last hour's, at most five (task #3662).
+      if (!target.downSince) target.stops = [...(target.stops ?? []).filter(at => now - at < 3_600_000), now].slice(-5)
+      target.downSince = downSince(state, target, now) ?? new Date(now).toISOString()
+    }
   }
 }
 
@@ -652,6 +631,10 @@ export function machineContribution(state: SuperTabState, machineId: string) {
   const pool = state.machines?.find(m => m.machineId === machineId)
   if (!pool) return null
   const contributor = person(state, pool.contributorId)
+  // Its person left and came back while their host still removes what the Swarm had there (task #4252): that ends by itself.
+  if (contributor.role !== 'viewer' && contributor.generation !== pool.membershipGeneration && pool.removal) {
+    fail('MACHINE_CLEANING', `${pool.name ?? 'This machine'} is still cleaning up after its person left the Swarm. Try again once that finishes, in a minute or two.`)
+  }
   if (contributor.role === 'viewer' || contributor.generation !== pool.membershipGeneration) {
     fail('CONTRIBUTION_REVOKED', 'This machine contribution was withdrawn.', 403)
   }
@@ -872,7 +855,7 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   }
   // A Buddy-only machine is recorded with its Buddy's start, before its host ever read the Swarm: the start waits for it.
   if (machineOffline(pool, now) && !(pool.buddyOnly && !pool.observation)) fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')
-  if (!start) admitByRoom(state, pool, slots(pool), request.requirements.memoryBytes)
+  if (!start) admitByRoom(state, pool, slots(pool), request.requirements.memoryBytes, request.buddyOf ? 'a Buddy' : 'an agent')
   const machineReason = !start ? machineSuspensionReason(pool, now) : null
   if (machineReason) fail('MACHINE_UNAVAILABLE', machineReason)
   // A new start only: a grid model runs without the engine's subscription, and one already asked for is settled by its host.
@@ -943,9 +926,9 @@ export function availableSlots(state: SuperTabState, pool: ContributedMachine, u
   return free === null ? 0 : Math.min(ceiling, Math.floor(free / AGENT_MEMORY_BYTES))
 }
 
-const gib = (bytes: number) => `${Math.round(bytes / 1024 ** 3 * 10) / 10} GB`
+const gib = (bytes: number) => `${Math.round(bytes / 1024 ** 3 * 100) / 100} GB`
 /** A new start's room on [pool], said in words its owner can act on: its own count, or its free memory. */
-export function admitByRoom(state: SuperTabState, pool: ContributedMachine, used: number, memoryBytes: number) {
+export function admitByRoom(state: SuperTabState, pool: ContributedMachine, used: number, memoryBytes: number, who = 'an agent') {
   const limit = agentLimit(pool)
   if (limit !== null) {
     if (used >= limit) fail('MACHINE_FULL', `${pool.name} is set to run at most ${limit} agent${limit === 1 ? '' : 's'} and runs ${used}. Its owner can change that in its settings, or try again when one finishes.`)
@@ -954,7 +937,7 @@ export function admitByRoom(state: SuperTabState, pool: ContributedMachine, used
   if (used >= MACHINE_AGENTS_CEILING) fail('MACHINE_FULL', `${pool.name} already runs ${used} agents, the most any machine runs.`)
   const free = startableMemoryBytes(state, pool)
   if (free !== null && free < memoryBytes) {
-    fail('MACHINE_FULL', `${pool.name} is out of free memory: ${gib(free)} free, and an agent needs ${gib(memoryBytes)}. Try again when an agent there finishes, or pick another machine.`,
+    fail('MACHINE_FULL', `${pool.name} is out of free memory: ${gib(free)} free, and ${who} needs ${gib(memoryBytes)}. Try again when an agent there finishes, or pick another machine.`,
       409, { reason: 'memory' })
   }
 }

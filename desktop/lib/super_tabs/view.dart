@@ -20,6 +20,8 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/finger_target.dart';
 import '../widgets/new_harness_attachments.dart';
 import '../widgets/new_harness_paste.dart';
+import '../widgets/terminal_name_prompt.dart';
+import '../widgets/terminal_prompt.dart';
 import '../core/local_key_value_store.dart';
 import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
@@ -266,6 +268,18 @@ class _SuperTabViewState extends State<SuperTabView>
       _taskInMiddle = null;
     });
     c.select(id);
+    _closeSidebar();
+  }
+
+  /// Opens the terminal of an agent chosen in My agents that has no chat to open (task #4220), as Members opens one.
+  void _openAgentTerminal(SuperTabAgent agent) {
+    setState(() {
+      _showPullRequests = _showTasks = false;
+      _rosterOpen = false;
+      _showManage = false;
+      _page = null;
+    });
+    (widget.onChooseAgentTerminal ?? widget.onOpenTerminal)(agent);
     _closeSidebar();
   }
 
@@ -2103,14 +2117,17 @@ class _SuperTabViewState extends State<SuperTabView>
     c.select(selected);
   }
 
-  Widget _sidebar() => ProjectSidebar(
+  /// [boardProjectId]: the project whose Board holds the middle, whose row is then lit.
+  Widget _sidebar({String? boardProjectId}) => ProjectSidebar(
     board: widget.board,
+    boardProjectId: boardProjectId,
     controller: c,
     compact: _phone,
     app: widget.app,
     onNewProject: widget.onNewProject,
     onNewAgent: widget.onNewAgent,
     onOpenAgentChat: _openAgentChat,
+    onOpenAgentTerminal: _openAgentTerminal,
     onNewSwarm: widget.onNewSwarm,
     page: _pageShown,
     places: SuperTabPlaces.of(c),
@@ -3302,8 +3319,32 @@ class _SuperTabViewState extends State<SuperTabView>
       // A Buddy's name is its person's and long: a phone's one line says Buddy.
       return _phone ? 'Message Buddy' : 'Message $buddy';
     }
+    // An agent's own chat keeps the title it was opened with; a rename changes the agent (audit finding 8 of #4436).
+    if (_ownAgent(group) case final agent?) {
+      return 'Message ${snapshot.agentName(agent.id, fallback: agent.name)}';
+    }
     return 'Message ${group.title}';
   }
+
+  /// The agent whose own chat [group] is (#4116), not a project's PM, whose chat is its project's.
+  SuperTabAgent? _ownAgent(SuperTabConversation group) =>
+      c.snapshot?.isProjectLead(group.id) == true
+      ? null
+      : c.snapshot?.agents.where((a) => a.chatId == group.id).firstOrNull;
+
+  /// Renames [agent] for everyone in the Swarm, in the app's one rename prompt.
+  void _renameAgent(SuperTabAgent agent) => unawaited(
+    showTerminalPrompt<void>(
+      context,
+      builder: (_) => TerminalNamePrompt(
+        title: 'Rename agent',
+        name: c.snapshot!.agentName(agent.id, fallback: agent.name),
+        fieldKey: const Key('agent-rename-input'),
+        fieldLabel: 'Agent name',
+        save: (name) => c.renameAgent(agent.id, name),
+      ),
+    ),
+  );
 
   /// On a phone the header's bar holds Chat and ⋮, each a finger's size, and
   /// ⋮ names the rest (terminals, pull requests, people) instead of five bare
@@ -3546,8 +3587,10 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   /// A task's chat, opened from its card: read first when it is one of the
-  /// shipped tasks only the Tasks view holds.
+  /// shipped tasks only the Tasks view holds. With the Tasks pane on the right the chat has no room beside the Board,
+  /// so it opens in the middle as a Tasks card's does (audit of 1.3.89, #4441: the card only turned grey).
   Future<void> _openTask(String id) async {
+    if (_hasTasksPane) return _openPersonalTask(id);
     if (!await c.loadGroup(id) || !mounted) return;
     _openConversation(id);
   }
@@ -3558,6 +3601,10 @@ class _SuperTabViewState extends State<SuperTabView>
     _openAgentChat(id);
     setState(() => _taskInMiddle = id);
   }
+
+  /// Whether the right pane is the Tasks slot (Swarm v3), so no chat sits beside the Board.
+  bool get _hasTasksPane =>
+      widget.rightPane != null || c.personalTasks?.supported == true;
 
   /// The task opened from its Tasks card, shown under the task's header while it stays the selected chat; the same
   /// chat chosen another way is under its agent's header.
@@ -3628,22 +3675,45 @@ class _SuperTabViewState extends State<SuperTabView>
           padding: const EdgeInsetsDirectional.only(
             end: grid.AppDesktop.listRowGap,
           ),
-          child: TextButton(
-            key: ValueKey(key),
-            onPressed: selected ? null : open,
-            style: TextButton.styleFrom(
-              backgroundColor: selected ? grid.AppSurface.selectedFill : null,
-              foregroundColor: selected
-                  ? DesktopChrome.foreground
-                  : DesktopChrome.muted,
-              // The tab shown has no action, so a disabled button would grey it: it reads as selected instead.
-              disabledForegroundColor: DesktopChrome.foreground,
+          child: _withTasksCount(
+            project,
+            open,
+            show: !board && key == 'super-board-tab-board',
+            TextButton(
+              key: ValueKey(key),
+              onPressed: selected ? null : open,
+              style: TextButton.styleFrom(
+                backgroundColor: selected ? grid.AppSurface.selectedFill : null,
+                foregroundColor: selected
+                    ? DesktopChrome.foreground
+                    : DesktopChrome.muted,
+                // The tab shown has no action, so a disabled button would grey it: it reads as selected instead.
+                disabledForegroundColor: DesktopChrome.foreground,
+              ),
+              child: Text(label),
             ),
-            child: Text(label),
           ),
         ),
     ],
   );
+
+  /// The Board tab seen from the chat wears the Tasks icon's count, the icon it replaces there (audit finding 18).
+  Widget _withTasksCount(
+    SuperTabProject project,
+    VoidCallback open,
+    Widget tab, {
+    required bool show,
+  }) {
+    if (!show) return tab;
+    final count = _tasksNeedingYou(project);
+    return _withCountBadge(
+      tab,
+      count,
+      key: const ValueKey('super-tasks-badge'),
+      tooltip: count == 1 ? '1 task needs you' : '$count tasks need you',
+      onTap: open,
+    );
+  }
 
   /// The project's chat in the middle, as before the Board: the Chat tab. Its
   /// Tasks icon brings the Board back with projects and the Buddy.
@@ -4046,6 +4116,16 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget _header(SuperTabConversation? group, bool narrow) {
     final isProject =
         group != null && c.snapshot?.isProjectLead(group.id) == true;
+    // A project's chat on the Board: its Board / Chat tabs follow its name on this one row, at the Board header's height
+    // and inset so they stay put on Board → Chat, and the Board tab is its one way to the Board (audit finding 18).
+    final tabsOf =
+        isProject &&
+            widget.board &&
+            !_manageVisible &&
+            !_notificationsVisible &&
+            _pageShown == null
+        ? c.snapshot!.projectFor(group.id)
+        : null;
     // The one Buddy has one chat, as a project does; it has no pull requests.
     final oneBuddy = group?.isSwarmBuddyChat == true;
     final restsOnChat = isProject || oneBuddy;
@@ -4057,11 +4137,13 @@ class _SuperTabViewState extends State<SuperTabView>
         !group.isBuddyChat &&
         c.snapshot?.projectById(group.projectId) != null;
     return Container(
-      constraints: const BoxConstraints(minHeight: 52),
+      constraints: BoxConstraints(minHeight: tabsOf != null ? 44 : 52),
       // A phone's rows line up (Huy, 2026-11-02): the sidebar icon starts at
       // the top bar's edge, and the people icon sits under its avatar.
       padding: _phone
           ? kPhoneBarRowPadding
+          : tabsOf != null
+          ? const EdgeInsets.symmetric(horizontal: grid.AppDesktop.menuInset)
           : const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
@@ -4108,6 +4190,14 @@ class _SuperTabViewState extends State<SuperTabView>
                             ),
                           ),
                         ),
+                      ],
+                    )
+                  else if (tabsOf case final project?)
+                    Row(
+                      children: [
+                        Flexible(child: _title(group)),
+                        const SizedBox(width: 12),
+                        _projectTabs(project, board: false),
                       ],
                     )
                   else
@@ -4179,7 +4269,7 @@ class _SuperTabViewState extends State<SuperTabView>
                 ),
               ),
             ],
-            if (isProject || isTask) ...[
+            if ((isProject && tabsOf == null) || isTask) ...[
               const SizedBox(width: 4),
               _tasksButton(group, task: isTask),
             ],
@@ -4506,7 +4596,11 @@ class _SuperTabViewState extends State<SuperTabView>
           if (group.audience == null)
             item('Work details', () => _groupAction('work', group)),
           if (editable) ...[
-            item('Rename', () => _groupAction('rename', group)),
+            // An agent's own chat renames the agent, whose name its header shows (audit finding 16 of #4436).
+            item('Rename', switch (_ownAgent(group)) {
+              final agent? => () => _renameAgent(agent),
+              null => () => _groupAction('rename', group),
+            }),
             item(
               group.archived ? 'Reopen conversation' : 'Archive',
               group.assignment == null ||
@@ -4527,7 +4621,14 @@ class _SuperTabViewState extends State<SuperTabView>
       builder: (context, menu, _) => AppIconButton(
         key: const ValueKey('super-group-options'),
         icon: AppIcons.ellipsisVertical,
-        tooltip: _isBuddyChat(group) ? 'Buddy options' : 'Workgroup options',
+        // On the Board the Buddy card holds the Buddy's own options, so this one is the chat's (audit finding 15).
+        tooltip: _isBuddyChat(group)
+            ? widget.board
+                  ? 'Chat options'
+                  : 'Buddy options'
+            : _ownAgent(group) != null
+            ? 'Agent options'
+            : 'Workgroup options',
         onPressed: () => menu.isOpen ? menu.close() : menu.open(),
       ),
     );
@@ -6218,9 +6319,7 @@ class _SuperTabViewState extends State<SuperTabView>
       final agentChat =
           widget.board && _agentChatId != null && c.selectedId == _agentChatId;
       // The chat is in the middle, by the reader's choice of an agent or once the right pane is the Tasks slot.
-      final hasTasksPane =
-          widget.rightPane != null || c.personalTasks?.supported == true;
-      final chatInMiddle = agentChat || hasTasksPane;
+      final chatInMiddle = agentChat || _hasTasksPane;
       final boardLayout =
           widget.board &&
           (!_projectChatOnly || chatInMiddle) &&
@@ -6232,15 +6331,24 @@ class _SuperTabViewState extends State<SuperTabView>
           !_terminalsVisible &&
           !_showPullRequests &&
           _pageShown == null;
+      // The Desktop's Tasks pane stays on the right under a page or Manage too, unless a thread or Members takes that
+      // side (task #4220).
+      final tasksStay =
+          widget.board &&
+          _hasTasksPane &&
+          thread == null &&
+          !_rosterOpen &&
+          !_terminalsVisible;
+      final fixedSides = boardLayout || tasksStay;
       // The fixed layout never drops a side pane; every other surface keeps
       // its own width rules.
       final narrow =
-          !boardLayout &&
+          !fixedSides &&
           constraints.maxWidth < MediaQuery.textScalerOf(context).scale(720);
       // Wide enough for a right column beside the chat; it shows only an
       // open thread or Members, closed at rest (Quiet Swarm, 2026-11-02).
       final wide =
-          boardLayout ||
+          fixedSides ||
           constraints.maxWidth >= MediaQuery.textScalerOf(context).scale(1080);
       final threadDrawer = thread != null && !wide;
       // A terminal on screen keeps its chat beside it, in the right pane, as
@@ -6257,7 +6365,7 @@ class _SuperTabViewState extends State<SuperTabView>
           c.snapshot?.projects.isEmpty != true;
       // With the Tasks slot, a project that is selected shows its Board first, though its chat is the selected
       // conversation (Swarm v3, task #4118).
-      final impliedBoard = hasTasksPane && !agentChat
+      final impliedBoard = _hasTasksPane && !agentChat
           ? c.snapshot?.projects
                 .where((p) => p.leadConversationId == c.selectedId)
                 .firstOrNull
@@ -6325,11 +6433,11 @@ class _SuperTabViewState extends State<SuperTabView>
               child: SuperTabPaneLayout(
                 storage: widget.paneStore ?? widget.app?.localStore,
                 onLeave: _leaveResize,
-                left: narrow ? null : _sidebar(),
+                left: narrow ? null : _sidebar(boardProjectId: boardProject),
                 // An open thread takes the roster's side, as in Slack.
                 right: !wide
                     ? null
-                    : boardLayout
+                    : fixedSides
                     ? widget.rightPane?.call(context) ??
                           (c.personalTasks?.supported == true
                               ? SuperTabPersonalTasksPane(
@@ -6347,14 +6455,14 @@ class _SuperTabViewState extends State<SuperTabView>
                               : chatBeside
                               ? chat
                               : null),
-                rightDefault: boardLayout
+                rightDefault: fixedSides
                     ? SuperTabPaneLayout.boardRightWidth
                     : !boardLayout && thread == null && !chatBeside
                     ? SuperTabPaneLayout.rightWidth
                     : SuperTabPaneLayout.threadWidth,
                 // The Desktop's right pane is the Tasks pane's 340, giving back only to keep two Board columns
-                // in a small window (River, Swarm v3; #4211).
-                rightFixed: boardLayout,
+                // in a small window (River, Swarm v3; #4211). It stays under a page or Manage too (#4220).
+                rightFixed: fixedSides,
                 // Over the chat, beside an open thread, as in Slack.
                 over: wide ? viewer : null,
                 // A project's own chat keeps its header and tabs (Project options, Tasks): the full chat view.
@@ -6366,31 +6474,8 @@ class _SuperTabViewState extends State<SuperTabView>
                         children: [
                           if (boardProject != null)
                             _boardHeader(c.snapshot!.projectById(boardProject)!)
-                          else ...[
-                            if (widget.board &&
-                                !_manageVisible &&
-                                !_notificationsVisible &&
-                                _pageShown == null)
-                              if (c.snapshot?.projects
-                                      .where(
-                                        (p) =>
-                                            p.leadConversationId ==
-                                            c.selectedId,
-                                      )
-                                      .firstOrNull
-                                  case final project?)
-                                Padding(
-                                  padding: const EdgeInsetsDirectional.only(
-                                    start: grid.AppDesktop.controlGap,
-                                    top: grid.AppDesktop.listRowGap,
-                                  ),
-                                  child: Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: _projectTabs(project, board: false),
-                                  ),
-                                ),
+                          else
                             _header(c.selected, narrow),
-                          ],
                           if (_manageOpen)
                             Align(
                               alignment: Alignment.centerLeft,
