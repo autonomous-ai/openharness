@@ -6,6 +6,7 @@ import 'package:harness/core/config.dart';
 import 'package:harness/core/engine_availability.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_launch_integration.dart';
 import 'package:harness/state/new_harness.dart';
@@ -160,12 +161,16 @@ Future<NewHarnessController> _mount(
   return box;
 }
 
+Future<void> _openMenu(WidgetTester tester) async {
+  await tester.tap(_key('new-harness-field-main-project'));
+  await tester.pumpAndSettle();
+}
+
 void main() {
-  testWidgets('a project list replaces the folder, worktree and branch rows '
-      'and the Member or Lead pill', (tester) async {
+  testWidgets('a Main project pill replaces the folder, worktree and branch '
+      'rows and the Member or Lead pill', (tester) async {
     final choices = await _list();
     await _mount(tester, _newAgent(starts: [], choices: choices));
-    expect(find.text('Main project'), findsOneWidget);
     for (final gone in [
       'new-harness-field-project',
       'new-harness-field-worktree',
@@ -174,13 +179,22 @@ void main() {
     ]) {
       expect(_key(gone), findsNothing, reason: gone);
     }
+    // The pill names the server's pick.
+    expect(
+      find.descendant(
+        of: _key('new-harness-field-main-project'),
+        matching: find.text('lamp'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Anything for it to start with? (optional)'),
+      findsOneWidget,
+    );
+    await _openMenu(tester);
+    expect(find.text('Main project'), findsWidgets);
     final harness = _key('new-harness-main-project-lead');
-    for (final text in [
-      'harness',
-      'The Harness app and Swarm',
-      'River',
-      '12',
-    ]) {
+    for (final text in ['harness', 'The Harness app and Swarm', '12 waiting']) {
       expect(
         find.descendant(of: harness, matching: find.text(text)),
         findsOneWidget,
@@ -195,11 +209,26 @@ void main() {
       ),
       findsOneWidget,
     );
-    // New project is last.
+    // New project is last, and says what it means.
     expect(
       tester.getTopLeft(_key('new-harness-main-project-new')).dy,
       greaterThan(tester.getTopLeft(_key('new-harness-main-project-lamp')).dy),
     );
+    expect(find.text('You lead it'), findsOneWidget);
+  });
+
+  testWidgets('a project with nothing waiting says so in words', (
+    tester,
+  ) async {
+    await _mount(
+      tester,
+      _newAgent(
+        starts: [],
+        choices: (projects: (await _list())!.projects, pick: null),
+      ),
+    );
+    await _openMenu(tester);
+    expect(find.text('3 waiting'), findsOneWidget);
   });
 
   testWidgets('the server\'s pick starts picked, and a click picks another', (
@@ -207,17 +236,23 @@ void main() {
   ) async {
     final integration = _newAgent(starts: [], choices: await _list());
     await _mount(tester, integration);
-    bool picked(String id) => tester
-        .widget<Semantics>(_key('new-harness-main-project-$id'))
-        .properties
-        .checked!;
     expect(integration.mainProjectId, 'lamp');
+    await _openMenu(tester);
+    bool picked(String id) => tester
+        .widget<AppMenuItem>(_key('new-harness-main-project-$id'))
+        .highlighted;
     expect(picked('lamp'), isTrue);
     expect(picked('lead'), isFalse);
     await tester.tap(_key('new-harness-main-project-lead'));
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(integration.mainProjectId, 'lead');
-    expect(picked('lead'), isTrue);
+    expect(
+      find.descendant(
+        of: _key('new-harness-field-main-project'),
+        matching: find.text('harness'),
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets('with no pick the first project is picked; with no project only '
@@ -228,8 +263,10 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     final none = _newAgent(starts: [], choices: (projects: [], pick: null));
     await _mount(tester, none);
-    expect(_key('new-harness-main-project-new'), findsOneWidget);
     expect(none.mainProjectId, kNewProjectChoice);
+    expect(_key('new-harness-new-project-name'), findsOneWidget);
+    await _openMenu(tester);
+    expect(_key('new-harness-main-project-new'), findsOneWidget);
   });
 
   testWidgets('Start sends the pick once: a Member of the picked project, or '
@@ -251,8 +288,9 @@ void main() {
       tester,
       _newAgent(starts: again, choices: await _list()),
     );
+    await _openMenu(tester);
     await tester.tap(_key('new-harness-main-project-new'));
-    await tester.pump();
+    await tester.pumpAndSettle();
     await tester.enterText(_key('new-harness-new-project-name'), 'radio');
     await lead.create();
     expect(again.single.mainProjectId, isNull);
@@ -283,13 +321,13 @@ void main() {
     expect(find.text('Couldn\'t load the projects.'), findsOneWidget);
     await tester.tap(find.widgetWithText(TextButton, 'Retry'));
     expect(retried, 1);
-    expect(_key('new-harness-main-project-new'), findsOneWidget);
+    expect(_key('new-harness-new-project-name'), findsOneWidget);
   });
 
   testWidgets('against a backend with no list the form is today\'s, pill '
       'included', (tester) async {
     await _mount(tester, _newAgent(starts: [], list: false));
-    expect(find.text('Main project'), findsNothing);
+    expect(_key('new-harness-field-main-project'), findsNothing);
     expect(_key('new-harness-field-agent-kind'), findsOneWidget);
     expect(_key('new-harness-field-project'), findsOneWidget);
   });
@@ -304,11 +342,12 @@ void main() {
           brightness: brightness,
           width: width,
         );
+        await _openMenu(tester);
         expect(tester.takeException(), isNull);
         final count = tester.renderObject<RenderParagraph>(
           find.descendant(
             of: _key('new-harness-main-project-lead'),
-            matching: find.text('12'),
+            matching: find.text('12 waiting'),
           ),
         );
         expect(count.didExceedMaxLines, isFalse);
