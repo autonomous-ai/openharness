@@ -211,8 +211,11 @@ Member's good behaviour.
   - the Member's computer holds no private project's files other than this task's own project: its clone, a chat
     copy, or a task worktree. The server keeps that list itself, per computer (`privateOnDisk` on the machine), adding a
     project whenever it sends that computer a start that clones it, copies it into a chat home (`buddyProjects`) or
-    makes a worktree of it. It removes a project only when the host reports every one of those dropped; it never takes
-    the host's word for what was added;
+    makes a worktree of it. It also adds every private project the host reports present: a chat copy is made on the
+    computer itself, from checkouts already there and refreshed hourly (`refreshBuddyHome`), so a person who starts
+    reading a private project whose checkout is already there gets a copy with no start from the server. Trusting the
+    host to add only makes the check stricter. The server removes a project only when the host reports every clone,
+    copy and worktree of it dropped;
   - the Member's main project is not private, unless this task is in it;
   - the Member holds no other task;
   - the host says `memberProjects` for any project other than the main one.
@@ -359,7 +362,8 @@ Each with no content, paths or identifiers:
 Reviewed revision: 3. Security reviews 1 and 2 of 2b4558e: a Member's chat and task sessions kept apart, the
 private-folder check in `work.assign`, migrated sessions never doing tasks, the ask only to owners who can read the
 project, attachment checks in the CLI. Security review 2 of 81687b4: the private check counts every private file
-Harness put on the computer, chat copies included, and Members are limited to 50 per person in a Swarm. Each line:
+Harness put on the computer, chat copies included (also any the host reports present), and Members are limited to
+50 per person in a Swarm. Each line:
 answered.
 
 New data, all small and replaced in place, nothing appended per event:
@@ -369,7 +373,8 @@ New data, all small and replaced in place, nothing appended per event:
   `projectsHeld` (the projects whose worktree its task home holds, written by the server at each assignment, at most 5),
   `mainAsked` (when it asked its person for a main project);
 - on each machine: `privateOnDisk` (the private projects whose clone, chat copy or task worktree Harness put on that
-  computer, written by the server, at most the Swarm's 100 projects);
+  computer, written by the server from the starts it sends and from every private project the host reports present,
+  at most the Swarm's 100 projects);
 - a task session: an agent record like a project's agent (`projectId`, its session scope), plus `memberOf` (its
   Member's id); at most one per Member and project, so at most 5 per Member;
 - on each project: `about` (plain text, at most 80 characters), `moreAsked` (per computer, when its Lead last asked
@@ -392,7 +397,7 @@ stores a role.
    | `setUp` | from the host's report after a set-up | replaced on each report; capped at 5 | n/a | on a move, the new machine reports its own (empty) | n/a | with the agent | with the agent; a deleted project's entry leaves on the next report | n/a |
    | Chat project copies (host), one set per person per computer | at the first Member's start there, from existing checkouts | refreshed to the default branch at most hourly | a project the person no longer reads leaves before the next turn (`pruneBuddyHome`) | stay with the old machine's set; the new machine's set is made from its own checkouts | n/a | the person's last Member on that computer stopping removes the set | with that last Member | a new first Member makes a new set |
    | `projectsHeld` entry | at an assignment in a project not yet held | n/a (ids only) | removed when the host reports that worktree dropped | kept on a move until the old host reports it dropped; the new machine's task home starts empty and adds its own | n/a | with the agent | with the agent; a deleted project's entry stays until its worktree is dropped | n/a |
-   | `privateOnDisk` entry | when the server sends that computer a start that clones a private project, copies it into a chat home or makes a worktree of it | n/a (ids only) | removed when the host reports every clone, copy and worktree of it there dropped | the machine leaving the Swarm removes its list | n/a | n/a (a machine, not a member) | with the machine; a deleted project's entry stays until its files are dropped | a machine that rejoins starts empty and adds again from the starts it receives |
+   | `privateOnDisk` entry | when the server sends that computer a start that clones a private project, copies it into a chat home or makes a worktree of it, or the host reports a private project present (a chat copy made from a checkout already there) | n/a (ids only) | removed when the host reports every clone, copy and worktree of it there dropped | the machine leaving the Swarm removes its list | n/a | n/a (a machine, not a member) | with the machine; a deleted project's entry stays until its files are dropped | a machine that rejoins starts empty and adds again from the starts it receives |
    | Task session record | at a Member's first task in a project | its engine session id, by the host | closed when its worktree is dropped | today's lost-work path; the next task starts it again | n/a | removed with its Member | with its Member or its project | a new task session for the same pair is a new record, scoped again |
    | `mainAsked` | when the Member asks | never (asked once) | cleared when answered | kept | n/a | with the agent | with the agent | n/a |
    | `about` | set by the owner or Lead | replaced | n/a | n/a | n/a | n/a | with the project | n/a |
