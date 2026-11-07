@@ -145,7 +145,8 @@ person's chat can carry every project the person reads, private ones and their d
 steered by outside text (an issue, a pull request, a file). So the two are kept apart by the server, not by the
 Member's good behaviour.
 
-- **The chat session** talks with its person, in the Member's chat. It reads what a Buddy reads today (the projects
+- **The chat session** talks with its person, in the Member's chat. It is always a session that has never run a task:
+  a Buddy's session qualifies, since Buddies never take tasks; a Regular agent's does not (section 7). It reads what a Buddy reads today (the projects
   its person reads, the decisions and lines addressed to them) and sends only the Buddy's commands (`BUDDY_COMMANDS`:
   talk, propose, answer on the cards it sent). It never takes a task, never receives a task's brief or thread, and
   never posts in one. It runs in its own home folder, as a Buddy's does (`buddyHome.ts`), with no task worktree in it.
@@ -290,9 +291,12 @@ Member's good behaviour.
 - Until the person picks, it is a Member with no main project: it talks with its person and proposes as today, and helps
   where needed when free (section 3, steps 2 and 3, public projects only). Nothing waits on the answer and no default is
   applied for them.
-- Regular agents become Members too. A Regular agent's one session has been in every project it worked in, so it
-  becomes the chat session as well, and its tasks start in new task sessions. A Regular agent working on a task takes
-  that task's project as its main project; an idle one asks like a Buddy. PM agents become Leads of their project,
+- Regular agents become Members too, but **a Regular agent's old session never becomes the chat session**: it has
+  worked tasks that outside text could steer. It keeps its Regular scope, narrowed to the project of the task it holds:
+  no person's chat, decisions, other projects or chat copies. It finishes that task there and then stops; an idle one
+  stops at once. The Member's chat session is a new one that has never run a task, started in the chat home; it reads
+  the Member's chat history as any chat session does. Its tasks start in new task sessions. A Regular agent working on
+  a task takes that task's project as its main project; an idle one asks like a Buddy. PM agents become Leads of their project,
   unchanged.
 - The person's first Member (the one they joined with, their old Buddy) is their **default Member**: the decisions,
   needs-you lines and late lines addressed to the person go to its chat, as they went to their default Buddy.
@@ -371,7 +375,8 @@ Reviewed revision: 3. Security reviews 1 and 2 of 2b4558e: a Member's chat and t
 private-folder check in `work.assign`, migrated sessions never doing tasks, the ask only to owners who can read the
 project, attachment checks in the CLI. Security review 2 of 81687b4: the private check counts every private file
 Harness put on the computer, chat copies included (also any the host reports present), and Members are bounded
-per Swarm (1,000), with each computer's room deciding how many a person runs. Each line:
+per Swarm (1,000), with each computer's room deciding how many a person runs. Security review 2 of 8b0329f: a migrated
+Regular agent's old session keeps its Regular scope and stops after its task; the chat session is always new. Each line:
 answered.
 
 New data, all small and replaced in place, nothing appended per event:
@@ -467,7 +472,8 @@ stores a role.
    - *Backend:* `agentKind.ts` and `read/views.ts` (send a second value, `role: lead | member`, beside `kind`; a task
      session is shown as its Member, never as an agent of its own); `buddies.ts` (`BUDDY_COMMANDS`, `refuseBuddyRouting`
      and `BUDDY_FORBIDDEN` keep guarding the chat session; the cap counts awake chat sessions, never Members or task sessions); `sessionScope.ts`
-     (a task session binds its project's scope; a chat session keeps the Swarm Buddy or Regular scope it has); `dispatch.ts` (`freeCrew` takes Members, `takes` and `candidatesFor` follow section 3); `crew.ts`
+     (a task session binds its project's scope; a migrated Buddy's chat session keeps the Swarm Buddy scope; a migrated Regular agent's old session keeps the Regular
+     scope, narrowed to its task's project, until that task ends and it stops; every other chat session is new); `dispatch.ts` (`freeCrew` takes Members, `takes` and `candidatesFor` follow section 3); `crew.ts`
      (`CREW_BUDDY` still refuses a chat session; a task session may be crew); `projects.ts` (`regularMayWorkIn`, `sameProject` and `PROJECT_SESSION` follow section
      3); `crewKeep.ts` and `buddySleep.ts` (section 4); `buddyNews.ts`, `commands.ts person.tell` and `crewNeeds.ts`
      (lines go to the default Member's chat, which is the default Buddy's chat); `leaderboard`, `statusCard.ts`,
@@ -488,8 +494,9 @@ stores a role.
 6. **Migration and rollback.** Order: backend, then CLI, then Desktop, each released on its own (the build tasks
    below). No record is rewritten: a Buddy keeps `buddyOf` and its chat, and the new release treats it as a Member with
    no main project, whose Buddy session is its chat session; a Regular agent with an active task gets its
-   `mainProjectId` from that task at its next change and keeps that task in its old session until it finishes (it was
-   assigned under today's rules); its next task starts a task session. Task sessions are new records, made only by the
+   `mainProjectId` from that task at its next change and keeps that task in its old session, in its Regular scope
+   narrowed to that project, until it finishes (it was assigned under today's rules); then that session stops. Its
+   chat session is new and has never run a task, and its next task starts a task session. Task sessions are new records, made only by the
    new release. No
    production write and no backfill; persistence and reload are checked in the isolated integration store, and the
    read-only anomaly queries count Buddies, Regular agents and people with more Buddies than the cap on production's secondaries before
@@ -516,6 +523,9 @@ stores a role.
      private project's clone, chat copy or task worktree (`privateOnDisk`, written by the server); the shared chat
      copies are counted, since an engine under the same login could open them; a migrated Buddy's home is never used
      for tasks;
+   - *sessions that ran tasks:* no session that has run a task ever gets a chat session's reads. A migrated Regular
+     agent's old session keeps its Regular scope, narrowed to its task's project (no person's chat, decisions, other
+     projects or chat copies), until that task ends and it stops; the Member's chat session is new;
    - *the ask to start more* goes only to a computer owner who can read the project, in their own Tasks pane and chat,
      and names only the project and the count;
    - *attachments in a task thread* follow the thread's readers, and the CLI refuses files outside the project's
