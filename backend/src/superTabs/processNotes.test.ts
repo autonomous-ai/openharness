@@ -1,9 +1,8 @@
-import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { owedLines } from './inbox.js'
 import { createSuperTab, type Actor, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
-import { PM_SCHEDULE_TEXT, recordWake, SCHEDULE_SLOT_MS, scheduleRequest } from './pmSchedule.js'
+import { recordWake, SCHEDULE_SLOT_MS, scheduleRequest } from './pmSchedule.js'
 import { latestProcessNote, PROCESS_NOTES } from './processNotes.js'
 import { projectPulse } from './pulse.js'
 import { REBASE_SWARMS } from './migration/rebase.js'
@@ -37,15 +36,13 @@ const project = (state: SuperTabState) => state.projects![0]!
 const note = latestProcessNote()!
 
 describe('a release\'s what-changed note for PMs', () => {
-  it('pins the built-in PM schedule to the newest note: changing it needs a new note', () => {
+  it('starts with the Swarm v2 crew note', () => {
     expect(PROCESS_NOTES.length).toBeGreaterThan(0)
-    expect(createHash('sha256').update(PM_SCHEDULE_TEXT).digest('hex').slice(0, 12),
-      'the built-in PM schedule changed: add a note for it in processNotes.ts, with this fingerprint').toBe(note.schedule)
     // The first note teaches the Swarm v2 process (Faye's case).
     expect(PROCESS_NOTES[0]!.text).toMatch(/crew\.add/)
   })
 
-  it('never says how the PM answers people: that stays in the built-in PM text alone, which a project can switch (Ken\'s spec)', () => {
+  it('never says how the PM answers people (Ken\'s spec)', () => {
     for (const each of PROCESS_NOTES) expect(each.text, each.id).not.toMatch(/answer/i)
   })
 

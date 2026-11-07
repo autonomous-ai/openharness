@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Assignment, Conversation, SuperTabState, WorkStatus } from './model.js'
-import { BUILT_IN_HEADING, PM_SCHEDULE_TEXT, pmScheduleText, recordTidy, recordWake, SCHEDULE_SLOT_MS, scheduleMessageId, scheduleRequest, scheduleSlot, tidyMessageId, tidyRequest, tidySaved } from './pmSchedule.js'
+import { recordTidy, recordWake, SCHEDULE_SLOT_MS, scheduleMessageId, scheduleRequest, scheduleSlot, tidyMessageId, tidyRequest, tidySaved } from './pmSchedule.js'
 import { ARCHIVE_QUIET_MS } from './tidy.js'
 import { latestProcessNote, PROCESS_NOTES } from './processNotes.js'
 import { REBASE_SWARMS } from './migration/rebase.js'
-import { SEED_RULES } from './policy.js'
 
 /** 10:00 on 4 November in Vietnam (03:00 UTC): a slot's first millisecond. */
 const T = Date.UTC(2026, 10, 4, 3, 0)
@@ -92,79 +91,11 @@ describe('the built-in PM schedule', () => {
     const draft = wake(swarm(task(1, null)))!.draft!
     expect(draft.text.startsWith('Built-in schedule, 10:00 (Asia/Ho_Chi_Minh). This is a scheduled request from the Swarm, not a new task.')).toBe(true)
     expect(draft.text).toContain('Skip a job your project\'s instructions schedule on their own clock.')
-    // On its own, for a coordinator whose CLI predates the built-in section.
+    // In the wake itself: the Swarm adds no text to the coordinator's instructions (#4673).
     expect(draft.text).toContain('Set no timer of your own')
     expect(draft).toMatchObject({ conversationId: 'lead-p1', recipients: ['lead'], source: { kind: 'schedule-request', projectId: 'p1', slot: SLOT } })
   })
 
-  // anh Dee, 11-06: every project's PM runs the v2 process today, through the one text the server adds to every coordinator's instructions.
-  it('holds the v2 process section word for word, above the schedule', () => {
-    const v2 = [
-      '## Swarm process v2 (from the Swarm, 2026-11-06): this replaces every process line in your project\'s instructions. Follow this, not them; your instructions keep only your project\'s own facts.',
-      '- Keep a standing crew. Mark agents as crew once, each with its role and area (backend, CLI, Desktop, mobile, docs: only the areas your project has), plus reviewers and a tester. Start a new agent only to replace a broken one or to fill an area that has none.',
-      '- Give each task its area, or let its files choose it. A free crew member takes the next task in its area by itself. Review and test steps open by themselves when a pull request is ready; don\'t open them by hand.',
-      '- Answer each person\'s message once, in its place. Your inbox lists every unanswered message until it is answered.',
-      '- A rule a program can check belongs in code, not in your instructions. Your instructions keep only judgment and your project\'s own facts.',
-      '- Releases run 09:00-18:00 Vietnam time. Sign-in, tokens, access, encryption, the Buddy guard, device links and deleting data get two security reviews.',
-    ].join('\n')
-    expect(PM_SCHEDULE_TEXT).toContain(`${v2}\n`)
-    expect(PM_SCHEDULE_TEXT.indexOf(v2)).toBeLessThan(PM_SCHEDULE_TEXT.indexOf('- Every 30 minutes, the open-task sweep'))
-    expect(PM_SCHEDULE_TEXT.indexOf(v2)).toBeLessThan(PM_SCHEDULE_TEXT.indexOf(BUILT_IN_HEADING))
-  })
-
-  it('says in its own section that the Swarm runs it and that it is never saved', () => {
-    expect(PM_SCHEDULE_TEXT).toContain(`${BUILT_IN_HEADING}\n`)
-    expect(PM_SCHEDULE_TEXT).toContain('Set no timer of your own')
-    expect(PM_SCHEDULE_TEXT).toContain('never save it into the document')
-  })
-
-  // Task #3022 (Ken, 11-05): lamp's PM was taught the same rule three times and forgot it again within the hour.
-  it('tells the coordinator to save what a person teaches it in the same turn, naming who said it, without asking', () => {
-    const taught = PM_SCHEDULE_TEXT.slice(PM_SCHEDULE_TEXT.indexOf('What people teach you')).replace(/\s+/g, ' ')
-    expect(PM_SCHEDULE_TEXT).toContain('What people teach you')
-    for (const words of ['from now on', 'always', 'don\'t', 'I told you', 'again you forgot', 'remember']) expect(taught).toContain(`"${words}"`)
-    expect(taught).toContain('save it into the instructions in that same turn, before you answer')
-    expect(taught).toContain('naming who said it')
-    // Review of #3112: an undated "(Ken)" is no rule the Swarm can keep.
-    expect(taught).toContain('naming who said it and the date, as (Name, YYYY-MM-DD)')
-    expect(taught).toContain('Don\'t ask whether to save it')
-  })
-
-  // River, 11-05, from a case on lamp: a PM asked directly to write code wrote it, and followed the repository's agent files over
-  // the project's instructions.
-  it('tells the coordinator it never writes code itself, and that the project\'s instructions outrank the repository\'s agent files', () => {
-    const text = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
-    expect(text).toContain('You never write code yourself, even when a person asks you directly: open a task and give it to an Engineer.')
-    expect(text).toContain('The project\'s instructions outrank the repository\'s own agent files (CLAUDE.md, AGENTS.md)')
-    expect(text).toContain('follow the instructions and say so')
-  })
-
-  // Ken, 11-05: River's own script started Poplar on Gray.local at 14:01 and waited in the foreground until the start failed
-  // at 14:09; for 6.5 minutes no person's message was read. The CLI's start returns in about 20 s; the wait was the PM's.
-  it('tells the coordinator to run a start in the background and keep answering people', () => {
-    const text = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
-    expect(text).toContain('while a command runs you read no one\'s messages')
-    expect(text).toContain('When your tool runs commands in the background (Claude Code: run_in_background)')
-    // Only resume finishes a pending start, and an assignment before it settles is refused (START_PENDING): a PM without
-    // background commands needs the command by name, once a turn (review of #3121).
-    expect(text).toContain('on your next turn run `resume START_ID` once')
-    expect(text).toContain('Never repeat `resume` in a loop in the foreground')
-  })
-
-  // Ken, 11-05: River ran 1,389 Swarm commands in a day in its own session, and long reads fill its context until it is
-  // compacted and the instructions fall out of it.
-  it('tells the coordinator to hand long reading to a background subagent, which never writes code or decides', () => {
-    const text = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
-    expect(text).toContain('to a subagent that runs in the background')
-    expect(text).toContain('take back only its summary')
-    expect(text).toContain('A subagent never writes code and never decides')
-  })
-
-  it('keeps the instructions short, and counts what a person had to repeat in the nightly reflection', () => {
-    expect(PM_SCHEDULE_TEXT).toContain('past 150 lines')
-    expect(PM_SCHEDULE_TEXT).toContain('is a repeat')
-    expect(PM_SCHEDULE_TEXT).toContain('nightly reflection')
-  })
 })
 
 // Task #3022, as River amended it after Ken's proposal (11-05): lamp's PM forgot a rule 15 to 60 minutes after it was taught,
@@ -219,7 +150,7 @@ describe('the built-in wake\'s jobs for what people teach the coordinator', () =
   })
 
   // Anh Dee, 11-05 (#3387): rereading the whole instructions every wake (#3151) cost 7-9k tokens 20-30 times a day. The CLI
-  // tells the coordinator when they change and names the file to read again (cli swarmInstructionsSkill.ts), so a wake rereads
+  // tells the coordinator when they change, to read them again (cli superTabs/instructionsNotice.ts), so a wake rereads
   // nothing that did not change.
   it('a wake rereads nothing that did not change', () => {
     for (const state of [swarm(task(1, null)), (() => { const s = busy(); chat(s).heardAt = T - 1; return s })()]) {
@@ -230,10 +161,6 @@ describe('the built-in wake\'s jobs for what people teach the coordinator', () =
     const heard = busy()
     chat(heard).heardAt = T - 1
     expect(wake(heard)!.draft.text).toContain('read only what people sent you since the last wake')
-    const built = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
-    expect(built).not.toContain('Every wake: reread')
-    expect(built).toContain('read only what people sent you since then')
-    expect(built).toContain('Don\'t reread the whole instructions for it')
   })
 
   it('records what a written wake carried, and only the slot of one held back, so its jobs stay due', () => {
@@ -250,38 +177,6 @@ describe('the built-in wake\'s jobs for what people teach the coordinator', () =
     expect(wake(state, T + 2 * SCHEDULE_SLOT_MS)).toBeNull()
   })
 
-  // Ken, 11-05: lamp-gtm's PM saved dee's "start what dee asks at once, on the PM's account if needed" (revision 14) beside
-  // the older routing line that keeps the PM's own account for the PM, left both, and then asked dee three options.
-  it('tells the coordinator to fix a contradicted line in the same save, and to settle a conflict without asking', () => {
-    const text = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
-    expect(text).toContain('fix every line it contradicts in that same save')
-    // Review of #3134: replacing a line drops another person's rule, which the tidy keeps.
-    expect(text).toContain('replace a line only when it names no one or the same person gave both')
-    expect(text).toContain('When two rules still disagree, don\'t ask; settle it by the first that applies')
-    // A rule that says to ask a person (spending money, say) is never overridden by this order.
-    expect(text).toContain('a rule that says to ask a person still holds')
-    // Ken, 11-05 (#3112 with #3134): another person's rule the PM asks that person once to change, since the Swarm needs
-    // their approval, and never holds the work waiting for the answer.
-    expect(text).toContain('Another person\'s rule you ask that person once to change (the Swarm needs their approval to change it), '
-      + 'and never hold the work waiting for the answer.')
-    expect(text).toContain('an account owner\'s rule beats a default about their account; the newer beats the older')
-    expect(text).toContain('say what you changed')
-  })
-
-  // Ken, 11-05: a project's own instructions guard only its own PM's account, and a copy made before this rule has none.
-  it('tells the coordinator an account any project\'s PM runs on keeps that PM running for its week', () => {
-    const text = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
-    expect(text).toContain('Never ask anyone about quota or whose account to use: pick by Routing and go.')
-    expect(text).toContain('An account the route notes as running a PM, yours or another project\'s, takes no new work while it has less than 20% of its weekly quota left')
-    // Review of #3134: a project copied before this keeps an older line about its own PM's account; this one still holds.
-    expect(text).toContain('even where an older Routing line in your instructions says otherwise')
-    expect(text).not.toContain('except work that account\'s owner asks for')
-  })
-
-  it('says in the built-in section when the Swarm wakes it for them', () => {
-    expect(PM_SCHEDULE_TEXT).toContain('when a person wrote to you since the last wake')
-    expect(PM_SCHEDULE_TEXT).toContain('Once a day, when the instructions changed')
-  })
 })
 
 // Task #3151 (Ken, 11-05, from lamp): a tidy from revision 70 to 71 dropped Leo's rule, judged impossible, and the "(0xken15,
@@ -354,42 +249,12 @@ describe('the daily tidy', () => {
     expect(text).toContain('Mark that save as the tidy ("tidy": true)')
   })
 
-  it('tells the coordinator, in the built-in section, never to drop or weaken a person\'s rule on its own judgment', () => {
-    const text = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
-    const taught = text.slice(text.indexOf('What people teach you'))
-    expect(text).toContain('Once a day, when the instructions changed, at 23:00 in its own message')
-    for (const where of [text.slice(0, text.indexOf('How you work')), taught]) {
-      expect(where).toContain('Never drop or weaken a person\'s rule on your own judgment, even one you think cannot be done: ask that person, and keep the rule until they answer.')
-    }
-    expect(text).not.toContain('Keep every rule a person gave and who gave it.')
-  })
 })
 
-// Diego 11-06 (#4097): the v2 section replaces a project's process lines only where its instructions were moved onto the base
-// (migration/rebase.ts REBASE_SWARMS). Elsewhere the project's own lines and people's rules keep their force, and the release
-// window is the project's own (its rules record), not Vietnam's.
-describe('the built-in PM text by Swarm', () => {
+// Diego 11-06 (#4097): the v2 note is for the Swarms whose instructions were moved onto the base (migration/rebase.ts
+// REBASE_SWARMS) alone.
+describe('the v2 text note by Swarm', () => {
   const REBASED = REBASE_SWARMS[0]!.tabId
-  const berlin = { start: '13:00', end: '22:00', timeZone: 'Europe/Berlin' }
-  const project = { boardMode: undefined }
-
-  it('outside the rebased Swarm, is the built-in schedule with the project\'s own release window, and no v2 section', () => {
-    const text = pmScheduleText({ id: 'other-swarm' }, project, berlin)
-    expect(text).not.toContain('replaces every process line')
-    expect(text).not.toContain('Swarm process v2')
-    expect(text).not.toContain('Vietnam time')
-    expect(text).toContain('Releases run 13:00-22:00 Europe/Berlin time')
-    expect(text).toContain(`${BUILT_IN_HEADING}\n`)
-    expect(text.slice(text.indexOf(BUILT_IN_HEADING))).toBe(PM_SCHEDULE_TEXT.slice(PM_SCHEDULE_TEXT.indexOf(BUILT_IN_HEADING)))
-  })
-
-  it('in the rebased Swarm, is today\'s text word for word with its rules\' window, and shows another window as written', () => {
-    expect(pmScheduleText({ id: REBASED }, project, SEED_RULES.releaseWindow)).toBe(PM_SCHEDULE_TEXT)
-    const text = pmScheduleText({ id: REBASED }, project, berlin)
-    expect(text).toContain('Swarm process v2')
-    expect(text).toContain('- Releases run 13:00-22:00 Europe/Berlin time. Sign-in')
-    expect(text).not.toContain('Vietnam time')
-  })
 
   it('wakes no PM outside the rebased Swarm for the v2 text note; the rebased Swarm\'s PM still hears it', () => {
     const v2 = PROCESS_NOTES.find(note => note.id === '2026-11-06-v2-text')!
