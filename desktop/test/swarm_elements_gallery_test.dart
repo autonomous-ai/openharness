@@ -14,6 +14,9 @@ import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/tasks/personal_task_card.dart';
 import 'package:harness/super_tabs/tasks/personal_tasks.dart';
+import 'package:harness/super_tabs/project_choices.dart';
+import 'package:harness/widgets/new_harness_form.dart'
+    show newHarnessProjectRows;
 import 'package:harness/terminal/terminal_typography.dart';
 
 /// The Swarm elements gallery (desktop-design-system.md, Swarm elements): every
@@ -109,7 +112,7 @@ Future<void> _show(
   grid.AppTheme.brightness.value = brightness;
   addTearDown(() => grid.AppTheme.brightness.value = old);
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 500);
+  tester.view.physicalSize = const Size(760, 760);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -447,6 +450,27 @@ class _Gallery extends StatelessWidget {
                   ),
                 ],
               ),
+              // Cmd-N's Main project menu (task #4541): its rows as the menu draws them.
+              title('Main project menu'),
+              SizedBox(
+                width: 420,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: grid.AppMenu.fill,
+                    borderRadius: BorderRadius.circular(
+                      grid.AppDesktop.menuRadius,
+                    ),
+                    border: Border.all(color: grid.AppMenu.rim),
+                  ),
+                  child: Column(
+                    children: newHarnessProjectRows(
+                      projects: _mainProjects,
+                      picked: 'lamp',
+                      onPick: (_) {},
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -454,6 +478,35 @@ class _Gallery extends StatelessWidget {
     );
   }
 }
+
+/// The projects the Main project menu lists in the gallery: a Lead's face each, a purpose or a repository, and
+/// waiting counts with none among them.
+final _mainProjects = [
+  for (final row in [
+    {
+      'id': 'lamp',
+      'name': 'lamp',
+      'about': 'lampOS, the voice lamp',
+      'lead': {'agentId': 'id-Faye', 'name': 'Faye'},
+      'waiting': 6,
+    },
+    {
+      'id': 'harness',
+      'name': 'harness',
+      'about': 'The Harness app and Swarm',
+      'lead': {'agentId': 'id-River', 'name': 'River'},
+      'waiting': 12,
+    },
+    {
+      'id': 'pod',
+      'name': 'pod',
+      'repositoryName': 'autonomous-ai/pod',
+      'lead': null,
+      'waiting': 0,
+    },
+  ])
+    superTabProjectChoiceForTest(row),
+];
 
 /// Matches when [galleryDifference] finds none. A mismatch fails with what
 /// differs and saves the image it drew to the system temp folder, never into

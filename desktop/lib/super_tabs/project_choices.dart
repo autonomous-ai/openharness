@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import 'controller.dart';
 import 'model.dart' show superTabMap;
 
@@ -37,6 +39,11 @@ class SuperTabProjectChoice {
   static String? _words(Object? value) =>
       value is String && value.trim().isNotEmpty ? value.trim() : null;
 }
+
+/// One project as the list sends it, for a gallery or a test that draws rows without a read.
+@visibleForTesting
+SuperTabProjectChoice superTabProjectChoiceForTest(Map<String, dynamic> row) =>
+    SuperTabProjectChoice._(row);
 
 /// The project list, read once when the Cmd-N form or Join's Bring agent opens.
 abstract final class SuperTabProjectChoices {

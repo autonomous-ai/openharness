@@ -23,6 +23,7 @@ import '../state/device_form.dart';
 import '../state/lead_placement.dart';
 import '../state/harness_launch_integration.dart' show kNewProjectChoice;
 import '../super_tabs/identity.dart' show SuperTabAvatar;
+import '../super_tabs/project_choices.dart' show SuperTabProjectChoice;
 import '../super_tabs/project_visibility.dart';
 import 'box_chrome.dart' show kTerminalCornerRadius, terminalPaneBorder;
 import 'dsh_install_panel.dart' show describeInstallFailure;
@@ -4647,43 +4648,11 @@ class _NewHarnessMainProjectState extends State<NewHarnessMainProject> {
           style: DesktopChrome.metadata(color: DesktopChrome.muted),
         ),
       ),
-      children: [
-        for (final project in projects)
-          AppMenuItem(
-            key: ValueKey('new-harness-main-project-${project.id}'),
-            label: project.name,
-            detail: project.purpose.isEmpty ? null : project.purpose,
-            highlighted: picked == project.id,
-            leading: switch (project.lead) {
-              // A Lead's face is a rounded square (#4563).
-              final lead? => SuperTabAvatar(
-                identity: 'agent:${lead.agentId}',
-                name: lead.name,
-                size: _faceSize,
-                face: true,
-                radius: _faceSize * .28,
-              ),
-              null => const SizedBox.square(dimension: _faceSize),
-            },
-            trailing: Text(
-              project.waiting == 0
-                  ? 'none waiting'
-                  : '${project.waiting} waiting',
-              style: DesktopChrome.metadata(color: DesktopChrome.muted)
-                  .copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
-            ),
-            onPressed: box.locked ? null : () => pick(project.id),
-          ),
-        if (projects.isNotEmpty) const AppMenuDivider(),
-        AppMenuItem(
-          key: const ValueKey('new-harness-main-project-new'),
-          icon: AppIcons.plus,
-          label: 'New project',
-          detail: 'You lead it',
-          highlighted: picked == kNewProjectChoice,
-          onPressed: box.locked ? null : () => pick(kNewProjectChoice),
-        ),
-      ],
+      children: newHarnessProjectRows(
+        projects: projects,
+        picked: picked,
+        onPick: box.locked ? null : pick,
+      ),
       builder: (context, menu, _) => DesktopPill(
         key: const ValueKey('new-harness-field-main-project'),
         label: label,
@@ -4701,8 +4670,56 @@ class _NewHarnessMainProjectState extends State<NewHarnessMainProject> {
     );
   }
 
-  static const _faceSize = 24.0;
   static const _menuWidth = 420.0;
+}
+
+/// The Main project menu's rows (task #4541): each project with its Lead's face, what it is and how many tasks wait,
+/// then New project. [picked] is lit; [onPick] null while the form is locked. The gallery draws these same rows.
+List<Widget> newHarnessProjectRows({
+  required List<SuperTabProjectChoice> projects,
+  required String picked,
+  required ValueChanged<String>? onPick,
+}) {
+  const face = 24.0;
+  return [
+    for (final project in projects)
+      AppMenuItem(
+        key: ValueKey('new-harness-main-project-${project.id}'),
+        label: project.name,
+        detail: project.purpose.isEmpty ? null : project.purpose,
+        highlighted: picked == project.id,
+        leading: switch (project.lead) {
+          // A Lead's face is a rounded square (#4563).
+          final lead? => SuperTabAvatar(
+            identity: 'agent:${lead.agentId}',
+            name: lead.name,
+            size: face,
+            face: true,
+            radius: face * .28,
+          ),
+          null => const SizedBox.square(dimension: face),
+        },
+        trailing: Text(
+          project.waiting == 0 ? 'none waiting' : '${project.waiting} waiting',
+          style: DesktopChrome.metadata(
+            // On the lit row, the selection's own detail ink, as the row's other words turn.
+            color: picked == project.id
+                ? grid.AppDesktop.selectionDetail
+                : DesktopChrome.muted,
+          ).copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
+        ),
+        onPressed: onPick == null ? null : () => onPick(project.id),
+      ),
+    if (projects.isNotEmpty) const AppMenuDivider(),
+    AppMenuItem(
+      key: const ValueKey('new-harness-main-project-new'),
+      icon: AppIcons.plus,
+      label: 'New project',
+      detail: 'You lead it',
+      highlighted: picked == kNewProjectChoice,
+      onPressed: onPick == null ? null : () => onPick(kNewProjectChoice),
+    ),
+  ];
 }
 
 /// New project's name, under the pills while New project is the pick.
