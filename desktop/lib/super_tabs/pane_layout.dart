@@ -20,7 +20,6 @@ class SuperTabPaneLayout extends StatefulWidget {
     this.right,
     this.storage,
     this.rightDefault = rightWidth,
-    this.rightMinimum = rightWidth,
     this.rightFixed = false,
     this.over,
   });
@@ -45,6 +44,11 @@ class SuperTabPaneLayout extends StatefulWidget {
   /// The Desktop's right pane, the Tasks pane: a fixed width, the middle taking the rest (River, Swarm v3).
   static const boardRightWidth = 340.0;
 
+  /// Two Board columns: what the fixed layout's middle keeps while the side
+  /// panes can give, the left pane first, then the Tasks pane down to
+  /// [rightWidth]. At 900 the middle showed one and a half columns (#4211).
+  static const boardCenterWidth = 560.0;
+
   /// The roster drawer's share of a narrow window at most. On a phone it filled the screen, leaving no
   /// veil to tap, so closing it was hard (owner, 2026-10-23).
   static const drawerMaxFraction = 0.7;
@@ -63,10 +67,8 @@ class SuperTabPaneLayout extends StatefulWidget {
   /// width, saved, wins): [threadWidth] while it shows a thread.
   final double rightDefault;
 
-  /// The narrowest the right pane goes, before text scaling.
-  final double rightMinimum;
-
-  /// The right pane is always [rightDefault] wide: no divider, and a width saved earlier is not used.
+  /// The right pane is [rightDefault] wide, narrower only to keep [boardCenterWidth] in the middle: no divider, and
+  /// a width saved earlier is not used.
   final bool rightFixed;
 
   /// Drawn over the left and centre panes, leaving the right one as it is:
@@ -149,21 +151,30 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
       final width = constraints.maxWidth;
       final scale = MediaQuery.textScalerOf(context);
       final hasLeft = widget.left != null, hasRight = widget.right != null;
-      final centerMin = math.min(scale.scale(360), width);
+      final fixed = widget.rightFixed;
+      final centerMin = math.min(
+        math.max(
+          scale.scale(360),
+          fixed ? SuperTabPaneLayout.boardCenterWidth : 0,
+        ),
+        width,
+      );
       // Text scaling widens the side panes only while the Board keeps its
       // floor: the chat's scaled minimum gives back first, down to its own
       // 420, then projects, down to 180 (reviews of #3863). The centre then
       // yields before either side pane: a side's minimum wins over the room
       // the centre's own preference asks for.
       var leftMin = hasLeft ? scale.scale(_leftBase) : 0.0;
-      var rightMin = hasRight ? scale.scale(widget.rightMinimum) : 0.0;
+      var rightMin = hasRight
+          ? scale.scale(SuperTabPaneLayout.rightWidth)
+          : 0.0;
       var short =
           leftMin +
           rightMin +
           math.min(SuperTabPaneLayout.boardFloor, width) -
           width;
       if (hasRight && short > 0) {
-        final give = math.min(short, rightMin - widget.rightMinimum);
+        final give = math.min(short, rightMin - SuperTabPaneLayout.rightWidth);
         rightMin -= give;
         short -= give;
       }
@@ -172,16 +183,27 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
       }
       double limit(double value, double floor, double ceiling) =>
           value.clamp(floor, math.max(floor, ceiling)).toDouble();
+      // A fixed right pane keeps its width until the left pane is at its
+      // minimum: the left pane gives back first.
       final left = hasLeft
-          ? math.min(width, limit(_left, leftMin, width - centerMin - rightMin))
+          ? math.min(
+              width,
+              limit(
+                _left,
+                leftMin,
+                width -
+                    centerMin -
+                    (fixed
+                        ? math.max(rightMin, widget.rightDefault)
+                        : rightMin),
+              ),
+            )
           : 0.0;
       final right = hasRight
           ? math.min(
               width - left,
               limit(
-                widget.rightFixed
-                    ? widget.rightDefault
-                    : _right ?? widget.rightDefault,
+                fixed ? widget.rightDefault : _right ?? widget.rightDefault,
                 rightMin,
                 width - centerMin - left,
               ),

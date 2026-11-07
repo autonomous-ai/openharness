@@ -1,0 +1,88 @@
+// Task #4251 (finding 10 of #4211): Reject's dialog names the task, and the open row's agent picker reads at the
+// row's own text size.
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/super_tabs/tasks/personal_tasks_pane.dart';
+import 'package:harness/super_tabs/zone_time.dart';
+
+import 'super_tab_personal_tasks_pane_test.dart' show TasksFixture;
+
+void main() {
+  setUpAll(superTabLoadZones);
+
+  Future<TasksFixture> mount(WidgetTester t, String title) async {
+    final f = TasksFixture();
+    addTearDown(f.controller.dispose);
+    f.rows.last['title'] = title;
+    await f.controller.refresh();
+    await t.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 340,
+            child: SuperTabPersonalTasksPane(
+              controller: f.controller,
+              onOpenTask: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await t.tap(find.text(title));
+    await t.pump();
+    return f;
+  }
+
+  TextStyle drawn(WidgetTester t, Finder text) =>
+      t.renderObject<RenderParagraph>(text).text.style!;
+
+  testWidgets('the Reject dialog names the task', (t) async {
+    await mount(t, 'Add the project export');
+    await t.tap(find.text('Reject'));
+    await t.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('Reject “Add the project export”?'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Reject task'), findsOneWidget, reason: 'the button');
+  });
+
+  testWidgets('a long title wraps in the dialog without overflowing', (
+    t,
+  ) async {
+    final title = 'Add the project export ${'with every column ' * 12}';
+    await mount(t, title);
+    await t.tap(find.text('Reject'));
+    await t.pumpAndSettle();
+    final heading = find.descendant(
+      of: find.byType(AlertDialog),
+      matching: find.textContaining('Reject “Add the project export'),
+    );
+    expect(heading, findsOneWidget);
+    expect(t.takeException(), isNull);
+  });
+
+  testWidgets("the suggested-agent picker uses the row's text style", (
+    t,
+  ) async {
+    await mount(t, 'Add the project export');
+    final picker = find.byKey(const ValueKey('task-agent-new'));
+    final choice = find.descendant(of: picker, matching: find.byType(Text));
+    final title = drawn(t, find.text('Add the project export'));
+    // The field's label is its own; the chosen agent's name is the row's size.
+    final name = choice
+        .evaluate()
+        .map((e) => e.widget as Text)
+        .firstWhere((w) => w.data != 'Suggested agent');
+    final agent = drawn(
+      t,
+      find.descendant(of: picker, matching: find.text(name.data!)).first,
+    );
+    expect(agent.fontSize, title.fontSize);
+    expect(agent.fontWeight, title.fontWeight);
+  });
+}

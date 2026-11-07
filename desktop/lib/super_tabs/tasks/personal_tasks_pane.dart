@@ -115,7 +115,12 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, update) => AlertDialog(
-          title: const Text('Reject task'),
+          // Names the task, so the person knows which one they turn down.
+          title: Text(
+            'Reject “${task.title}”?',
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+          ),
           content: TextField(
             key: const ValueKey('task-reject-reason'),
             controller: reason,
