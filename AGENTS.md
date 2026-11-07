@@ -70,6 +70,8 @@ Every change, by a person or an agent, meets these. Component rules are in each 
     one thing; a file holds one idea.
 12. **The pull request.** One task, one pull request, as small as the task allows. It says what changed, why, and the
     evidence: the red then green test, hot-path numbers, screenshots, the platforms it ran on.
+13. **Code over prompts.** A rule a program can check runs as code. A rule in a prompt says why it can't be code, and its
+    prompt line goes once its code ships ([audit](docs/prompt-rules-audit.md)).
 
 # Tech limits
 
