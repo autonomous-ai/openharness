@@ -28,6 +28,7 @@ void main() {
   Future<(SuperTabController, ConversationServer)> showDesktop(
     WidgetTester tester, {
     void Function(ConversationServer server)? setup,
+    Widget Function(BuildContext)? rightPane,
   }) async {
     await tester.binding.setSurfaceSize(const Size(1500, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -62,6 +63,7 @@ void main() {
             machineName: (_) => 'Mac Studio',
             paneStore: MemoryKeyValueStore(),
             board: true,
+            rightPane: rightPane,
           ),
         ),
       ),
@@ -91,5 +93,24 @@ void main() {
     await tester.pumpAndSettle();
     expect(_lit('super-swarm-buddy'), isTrue);
     expect(_lit('super-group-lead'), isFalse);
+  });
+
+  // Finding 3: a page or Manage in the middle turned the board layout off, and the Tasks pane with it.
+  testWidgets('the Tasks pane stays on the right while Decisions, the '
+      'Leaderboard or Manage holds the middle', (tester) async {
+    await showDesktop(
+      tester,
+      rightPane: (_) => const Text('Tasks pane', key: ValueKey('tasks-pane')),
+    );
+    final tasks = find.descendant(
+      of: _key('super-right-pane'),
+      matching: _key('tasks-pane'),
+    );
+    expect(tasks, findsOneWidget);
+    for (final row in ['super-decisions', 'super-leaderboard', 'super-manage']) {
+      await tester.tap(_key(row));
+      await tester.pumpAndSettle();
+      expect(tasks, findsOneWidget, reason: row);
+    }
   });
 }
