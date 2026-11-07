@@ -67,6 +67,7 @@ describe('a helper starts from its Member\'s ready setup', () => {
   // Security reviews of #3579: a helper's checkout may hold a tracked link where the Member has a folder.
   it('never copies through a link in the helper\'s checkout, so nothing lands outside its folder', async () => {
     const p = project(), outside = root()
+    rmSync(join(p.helper, 'cli'), { recursive: true })
     symlinkSync(outside, join(p.helper, 'cli'))
     symlinkSync(join(outside, 'missing'), join(p.helper, 'build'))
     const result = await copySetup(p.member, p.helper, async (from, to) => { mkdirSync(to, { recursive: true }); execFileSync('cp', ['-R', `${from}/.`, to]) })
