@@ -175,15 +175,13 @@ void main() {
     expect(find.text('Loading Tasks…'), findsNothing);
   });
 
-  testWidgets('the empty pane says what will show there', (t) async {
+  // anh Dee's rule 7 (task #4465): empty means empty, no words where there is nothing.
+  testWidgets('the empty pane says nothing', (t) async {
     f = TasksFixture()..rows = [];
     addTearDown(() => f.controller.dispose());
     await f.controller.refresh();
     await pumpPane(t);
-    expect(
-      find.text('No tasks yet. Tasks your agents start or propose show here.'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('No tasks yet'), findsNothing);
   });
 
   for (final merged in [false, true]) {

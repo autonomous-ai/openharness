@@ -204,6 +204,9 @@ Future<SuperTabController> showWindow(
     ),
   );
   await tester.pumpAndSettle();
+  // A project's Board opens from the Projects grid (task #4466).
+  await tester.tap(_key('super-projects'));
+  await tester.pumpAndSettle();
   await tester.tap(_key('super-group-lead'));
   await tester.pumpAndSettle();
   expect(_key('super-tasks-lead'), findsOneWidget);
@@ -408,16 +411,16 @@ void main() {
     expect(tester.getCenter(_key('super-tasks-mine')).dy, closeTo(bar, 1));
     await tester.tap(menu);
     await tester.pumpAndSettle();
-    expect(_key('super-group-lead'), findsOneWidget);
+    expect(_key('super-projects'), findsOneWidget);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
-    expect(_key('super-group-lead'), findsNothing);
+    expect(_key('super-projects'), findsNothing);
     expect(_key('super-tasks-lead'), findsOneWidget, reason: 'the Board stays');
     await tester.tap(menu);
     await tester.pumpAndSettle();
     await tester.tapAt(const Offset(860, 430));
     await tester.pumpAndSettle();
-    expect(_key('super-group-lead'), findsNothing);
+    expect(_key('super-projects'), findsNothing);
     expect(tester.takeException(), isNull);
     await closeWindow(tester, c);
   });

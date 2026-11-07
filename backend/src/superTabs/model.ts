@@ -872,7 +872,7 @@ export const NOTICE_READERS = {
   // A member removed one of the coordinator's notes: told to the coordinator alone (instructions.ts).
   'note-removed': 'recipients',
   'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-proposal-sent': 'people', 'buddy-session-ended': 'people',
-  // Proposal history and private Buddy notices are visible to the people who can read their card/chat.
+  // Proposal history, and the private Buddy notices stored before task #4558, are visible to the people who can read their card/chat.
   'proposal-card': 'people', 'proposal-answer': 'people', 'proposal-notice': 'people', 'proposal-merged': 'people', 'proposal-overdue': 'people',
   'decision-delegated': 'people', 'machine-removed': 'people', ship: 'people',
   // An agent's question to a person in a switched project, in their default Buddy chat (decisions.ts askedThroughBuddy, #3826).
@@ -886,9 +886,11 @@ export const NOTICE_READERS = {
   'machine-left': 'agent',
   // A task's one line in its project chat, edited as it moves (taskLine.ts): people read a task's state there.
   'task-line': 'people',
-  // A project PM's private line in a person's one Buddy chat, marked with its project (commands.ts person.tell): its person
-  // reads it, as they read the line in their older project chat.
+  // A project PM's private line in a person's one Buddy chat, no longer written (task #4558: only the person and their own agent
+  // post there): its person reads the rows stored before.
   'pm-line': 'people',
+  // A decider's override of a person's rule, told to them by their own Buddy in their Buddy chats (commands.ts instructions.save).
+  'rule-approved': 'people',
   // Their one Buddy cannot start in a person's older project chat, told to them there once per outage (commands.ts buddyDownLine).
   'buddy-cannot-start': 'people',
   'auto-archive': 'people', native: 'people',
