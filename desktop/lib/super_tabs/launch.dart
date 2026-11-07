@@ -242,10 +242,11 @@ class SuperTabLaunch {
                 ? saved['agentKind'] as String?
                 : null,
             ownMachinesOnly: saved['newAgent'] == true,
+            // + New agent's Product Manager makes a project too (audit
+            // finding 14); the form shows the choice only while it is chosen.
             projectVisibility:
-                saved['newAgent'] != true &&
-                    saved['lead'] == true &&
-                    saved['coordinator'] != true
+                saved['newAgent'] == true ||
+                    saved['lead'] == true && saved['coordinator'] != true
                 ? saved['visibility'] as String? ?? 'public'
                 : null,
             projectVisibilityLocked:
@@ -1290,17 +1291,37 @@ class SuperTabLaunch {
       return;
     }
     final base = engine ?? saved['engine'] as String? ?? 'claude';
-    saved['chatRequest'] ??= {
-      'operationId': '${saved['operationId']}-chat',
-      'command': {
-        'type': 'agent.new',
-        'kind': 'regular',
-        'machineId': machine,
-        'engine': base,
-        'name': base == 'codex' ? 'Codex' : 'Claude Code',
-        'local': true,
-      },
-    };
+    if (saved['chatRequest'] == null) {
+      // The first free of Claude Code, Claude Code 2, …: two agents of one
+      // engine read apart in the left pane.
+      final tab = saved['tabId'] as String;
+      final snapshot =
+          app.superTabs.peek(tab)?.snapshot ??
+          await app.superTabs.readSnapshot(tab);
+      checkAccount();
+      final taken = {
+        for (final agent in snapshot.agents) ...[
+          agent.name,
+          ?agent.displayName,
+        ],
+      };
+      final label = base == 'codex' ? 'Codex' : 'Claude Code';
+      var name = label;
+      for (var n = 2; taken.contains(name); n++) {
+        name = '$label $n';
+      }
+      saved['chatRequest'] = {
+        'operationId': '${saved['operationId']}-chat',
+        'command': {
+          'type': 'agent.new',
+          'kind': 'regular',
+          'machineId': machine,
+          'engine': base,
+          'name': name,
+          'local': true,
+        },
+      };
+    }
     await persist();
     final Map<String, dynamic> created;
     try {
