@@ -49,17 +49,20 @@ void main() {
   Future<TasksFixture> mount(
     WidgetTester t,
     Brightness brightness,
-    int count,
-  ) async {
+    int count, {
+    double width = windowWidth,
+    String? chat,
+  }) async {
     final f = TasksFixture();
     addTearDown(f.controller.dispose);
     f.rows
       ..clear()
       ..addAll(rowsOf(count));
     await f.controller.refresh();
+    if (chat != null) await f.controller.select(chat);
     final app = createApp();
     addTearDown(app.dispose);
-    t.view.physicalSize = const Size(windowWidth, windowHeight);
+    t.view.physicalSize = Size(width, windowHeight);
     t.view.devicePixelRatio = 1;
     addTearDown(t.view.reset);
     grid.AppTheme.brightness.value = brightness;
@@ -93,10 +96,28 @@ void main() {
     return f;
   }
 
-  Color surface(WidgetTester t) =>
-      Theme.of(t.element(find.byType(SuperTabPersonalTasksPane)))
-          .colorScheme
-          .surface;
+  /// The Swarm's one surface: the left, middle and right panes share it (anh Dee's six rules, task #4465).
+  Color surface(WidgetTester t) => grid.AppPalette.swarmField;
+
+  Future<List<List<int>>> pixelRow(WidgetTester t, int y) async {
+    final row = <List<int>>[];
+    await t.runAsync(() async {
+      final view = t.binding.renderViews.first;
+      final image = await (view.debugLayer! as OffsetLayer).toImage(
+        Offset.zero & view.size,
+        pixelRatio: 1,
+      );
+      final data = (await image.toByteData(
+        format: ui.ImageByteFormat.rawRgba,
+      ))!;
+      for (var x = 0; x < image.width; x++) {
+        final i = (y * image.width + x) * 4;
+        row.add([for (var k = 0; k < 4; k++) data.getUint8(i + k)]);
+      }
+      image.dispose();
+    });
+    return row;
+  }
 
   /// The pane's pixels down a strip no row reaches: every one must be the
   /// pane's surface, fully opaque.
@@ -157,8 +178,14 @@ void main() {
         final pane = t.getRect(find.byType(SuperTabPersonalTasksPane));
         expect(pane.size, const Size(340, windowHeight));
         if (count == 0) {
-          // Empty means empty (anh Dee, 11-07): no words under the header.
-          expect(find.text('No tasks yet'), findsNothing);
+          // Empty means empty (anh Dee's rule 7): no words where there is nothing.
+          expect(
+            find.descendant(
+              of: find.byType(SuperTabPersonalTasksPane),
+              matching: find.text('No tasks yet'),
+            ),
+            findsNothing,
+          );
         } else {
           expect(find.text('Task number 0'), findsOneWidget);
           // The card with no agent is on screen, as the person's own task, with no agent avatar (#4204's cards
@@ -184,6 +211,51 @@ void main() {
           'tasks-surface-${brightness.name}-$count',
         );
       });
+    }
+  }
+
+  for (final brightness in Brightness.values) {
+    for (final width in [880.0, 1600.0]) {
+      testWidgets(
+        'the three panes are one surface split by hairlines: ${brightness.name}, $width wide',
+        (t) async {
+          // An agent's chat in the middle, as after choosing it on the left.
+          await mount(t, brightness, 0, width: width, chat: 'aeef');
+          expect(t.takeException(), isNull);
+          // Below the left pane's rows and the chat's messages, above the composer: only grounds and dividers.
+          final y = (windowHeight * .7).round();
+          final want = surface(t);
+          int byte(double channel) => (channel * 255).round();
+          final field = [byte(want.r), byte(want.g), byte(want.b), 255];
+          final row = await pixelRow(t, y);
+          final runs = <String>[];
+          for (var x = 0; x < row.length; x++) {
+            if (row[x].join(',') == field.join(',')) continue;
+            var end = x;
+            while (end + 1 < row.length &&
+                row[end + 1].join(',') != field.join(',')) {
+              end++;
+            }
+            runs.add('x=$x..$end ${row[x]}');
+            x = end;
+          }
+          // Two 1-point hairlines between three panes, and nothing else; a hairline at a fractional x covers two pixels.
+          expect(
+            runs.where((r) {
+              final m = RegExp(r'x=(\d+)\.\.(\d+)').firstMatch(r)!;
+              return int.parse(m[2]!) - int.parse(m[1]!) > 1;
+            }),
+            isEmpty,
+            reason: '$runs',
+          );
+          expect(runs.length, lessThanOrEqualTo(2), reason: '$runs');
+          await captureWindow(
+            t,
+            shots,
+            'one-surface-${brightness.name}-${width.round()}',
+          );
+        },
+      );
     }
   }
 
