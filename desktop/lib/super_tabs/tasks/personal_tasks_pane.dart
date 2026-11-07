@@ -237,21 +237,21 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                       ],
                     ),
                   ),
-                if (!supported)
+                // Empty means empty (anh Dee, 11-07): words only say why Tasks can't be used, never that it is
+                // loading or has nothing yet.
+                if (!supported && (c.accessRevoked || c.snapshot != null))
                   Padding(
                     padding: const EdgeInsets.all(AppDesktop.groupGap),
                     child: Text(
                       c.accessRevoked
                           ? 'Tasks are unavailable.'
-                          : c.snapshot == null
-                          ? 'Loading Tasks…'
                           : 'Update Harness to use Tasks.',
                     ),
                   )
-                else
+                else if (supported)
                   Expanded(
                     child: tasks!.rows.isEmpty
-                        ? const Center(child: Text('No tasks yet'))
+                        ? const SizedBox.shrink()
                         : NotificationListener<ScrollNotification>(
                             onNotification: _onScroll,
                             child: LaidOutListView.builder(
