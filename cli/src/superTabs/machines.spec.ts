@@ -2772,6 +2772,39 @@ describe('removed machine cleanup', () => {
     }
   })
 
+  // Security review 2 of #3579: the copy writes only into the helper's own new worktree, never a person's or the Member's folder.
+  it('copies into no folder but a helper\'s own new worktree', async () => {
+    for (const [request, cwd] of [
+      [{ worktree: false, cwd: '/clone' }, '/clone'],
+      [{ cwd: '/clone' }, '/somewhere'],
+      [{ worktree: true, cwd: '/clone' }, '/clone'],
+      [{ worktree: true, cwd: '/clone' }, '/worktrees/project/member'],
+      [{ worktree: true, cwd: '/clone' }, '/worktrees/project/member/inner'],
+    ] as const) {
+      const root = mkdtempSync(join(tmpdir(), 'swarm-helper-')); roots.push(root)
+      mkdirSync(join(root, 'super-tabs'), { recursive: true })
+      writeFileSync(swarmWorktreesFile(root, 'host'), JSON.stringify({ version: 1, worktrees: [
+        { tabId: 'tab', startId: 'member-start', harnessId: 'member-harness', source: '/clone', path: '/worktrees/project/member' }] }))
+      const core = fakeCore({ dataDir: root, agents: { byAgent: vi.fn(id => id === 'h-new' ? session('h-new', cwd, 'agent') : undefined) } })
+      const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['claude'], paused: false },
+        harnessIds: [], starts: [{ id: 'new', dispatched: true, request: { ...request, helperOf: { agentId: 'member', harnessId: 'member-harness' } } }], paused: false }
+      const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
+      const open = vi.fn(async () => ({ machineId: 'host', request: vi.fn(async () => ({})), close: vi.fn() }))
+      const start = vi.fn(async (input: Record<string, unknown>) => {
+        // Its Member's commands only for a start that makes the helper a worktree of its own.
+        expect(input.memberHere).toBe(request.worktree === true)
+        await (input.beforeJoin as (harnessId: string) => Promise<void>)('h-new')
+        return { ok: true, harnessId: 'h-new' }
+      })
+      const readySetup = vi.fn(async () => ({ copied: [] }))
+      const log = vi.fn()
+      await new ContributedMachines(core, 'host', { backend, open, start, now: () => 0, log, readySetup,
+        capabilities: vi.fn(async () => ({ ok: true, resources: {}, tools: {} })) } as never).tick()
+      expect(readySetup).not.toHaveBeenCalled()
+      expect(log).toHaveBeenCalledWith('Started a helper without its Member\'s setup: HELPER_FOLDER_NOT_OWN')
+    }
+  })
+
   it('says so when readying a helper fails, and never fails its start', async () => {
     const root = mkdtempSync(join(tmpdir(), 'swarm-helper-')); roots.push(root)
     mkdirSync(join(root, 'super-tabs'), { recursive: true })

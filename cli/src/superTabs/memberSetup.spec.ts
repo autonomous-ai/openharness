@@ -75,6 +75,22 @@ describe('a helper starts from its Member\'s ready setup', () => {
     expect(readdirSync(outside)).toEqual([])
   })
 
+  // Security review 2 of #3579: taking back a failed copy removes only what the copy made.
+  it('leaves a folder that appeared during the copy, and takes back only its own', async () => {
+    const p = project()
+    const result = await copySetup(p.member, p.helper, async (from, to) => {
+      if (to.endsWith('node_modules') && !to.includes('cli')) {
+        mkdirSync(join(to, 'theirs'), { recursive: true })
+        throw Object.assign(new Error('exists'), { code: 'ERR_FS_CP_EEXIST' })
+      }
+      mkdirSync(to, { recursive: true }); execFileSync('cp', ['-R', `${from}/.`, to])
+    })
+    expect(result).toEqual({ copied: [], skipped: 'COPY_FAILED' })
+    expect(existsSync(join(p.helper, 'node_modules', 'theirs'))).toBe(true)
+    expect(existsSync(join(p.helper, 'build'))).toBe(false)
+    expect(existsSync(join(p.helper, 'cli', 'node_modules'))).toBe(false)
+  })
+
   it('copies nothing from a Member folder that is gone, and starts the helper anyway', async () => {
     const p = project()
     rmSync(p.member, { recursive: true, force: true })
