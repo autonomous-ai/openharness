@@ -1,6 +1,6 @@
 name: Windows Authenticode signing
 description: >-
-  Sign every .exe and .dll under a folder that carries no signature yet, through Azure Artifact Signing, then check
+  Sign every .exe, .dll and .cat under a folder that carries no signature yet, through Azure Artifact Signing, then check
   every one of them: a valid signature, a timestamp, and ours naming the expected publisher. Files that already carry
   a valid signature (Microsoft's ConPTY) are left as they are. Windows x64 runners only: the Artifact Signing action
   does not run on Windows Arm, so arm64 builds are signed here too (Authenticode does not depend on the CPU).
@@ -8,7 +8,7 @@ description: >-
 
 inputs:
   path:
-    description: The folder whose .exe and .dll files are signed, searched recursively
+    description: The folder whose .exe, .dll and .cat files are signed, searched recursively
     required: true
   publisher:
     description: The certificate's common name every signature we add must carry (the validated identity)
@@ -43,8 +43,8 @@ runs:
         SIGN_PATH: ${{ inputs.path }}
       run: |
         $ErrorActionPreference = 'Stop'
-        $files = @(Get-ChildItem -LiteralPath $env:SIGN_PATH -Recurse -File | Where-Object { $_.Extension -in '.exe', '.dll' })
-        if ($files.Count -eq 0) { throw "no .exe or .dll under $env:SIGN_PATH" }
+        $files = @(Get-ChildItem -LiteralPath $env:SIGN_PATH -Recurse -File | Where-Object { $_.Extension -in '.exe', '.dll', '.cat' })
+        if ($files.Count -eq 0) { throw "no .exe, .dll or .cat under $env:SIGN_PATH" }
         $unsigned = @()
         foreach ($file in $files) {
           $status = (Get-AuthenticodeSignature -LiteralPath $file.FullName).Status
@@ -97,7 +97,7 @@ runs:
         $ErrorActionPreference = 'Stop'
         $ours = @(Get-Content -LiteralPath $env:SIGN_LIST -Encoding utf8)
         $failed = @()
-        foreach ($file in (Get-ChildItem -LiteralPath $env:SIGN_PATH -Recurse -File | Where-Object { $_.Extension -in '.exe', '.dll' })) {
+        foreach ($file in (Get-ChildItem -LiteralPath $env:SIGN_PATH -Recurse -File | Where-Object { $_.Extension -in '.exe', '.dll', '.cat' })) {
           $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
           $signer = if ($signature.SignerCertificate) { $signature.SignerCertificate.GetNameInfo('SimpleName', $false) } else { '' }
           $problem = if ($signature.Status -ne 'Valid') { "status $($signature.Status)" }

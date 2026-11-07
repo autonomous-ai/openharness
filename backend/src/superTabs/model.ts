@@ -159,6 +159,10 @@ export interface Agent {
   buddyScope?: 'swarm'
   /** A Regular agent (agent.new, task #4116): in no project but its active task's (projects.ts agentProjectId). */
   regular?: true
+  /** The one project this Member belongs to (task #4540; spec 2026-11-07-members-and-leads): picked in Cmd-N or when its person
+   *  joined. Readers get it in the derived row, never in this part (read/views.ts), and only when they read that project. A
+   *  Lead's is the project it leads, derived (agentKind.ts ledProjects). Cleared when the project is deleted. */
+  mainProjectId?: string
   /** The private project a Regular agent first worked in: its one conversation holds that project's content, so it takes tasks
    *  only there from then on (projects.ts regularMayWorkIn; security review 2 of #4116). Set at its assignment, never cleared. */
   privateProjectId?: string
@@ -216,6 +220,8 @@ export interface AgentStartRequest {
   buddyScope?: 'swarm'
   /** A Regular agent's start (agent.new, task #4116): in its person's own chat, in no project's folder. Written by the server alone. */
   regular?: true
+  /** The main project its person picked (agent.new, buddy.create; task #4540), kept on the agent when it starts. */
+  mainProjectId?: string
   /** A one-project Buddy's start (Agent.buddyNarrow), written by message.send alone. */
   buddyNarrow?: true
   /** The person's messages in an older project chat its start waits on, delivered when it joins (ids only). */
@@ -261,6 +267,9 @@ export interface AgentStart {
   /** When it was asked for (absent on starts from before 2026-10-29): a Buddy's fails if its machine never takes it, and a
    *  task's start never launched leaves the task orphaned (liveness.ts). */
   requestedAt?: number
+  /** Why its machine holds it without launching it, from the machine's report (cli superTabs/machines.ts), with when it was first
+   *  told: gone once the start launches or fails. Read whole by the readers of its raw reason, as what it means by the rest. */
+  waiting?: { reason: string; at: number }
   /** On reads only, never stored: its machine's fresh report says it is preparing (machines.ts startPreparing). */
   preparing?: true
   error: string | null
@@ -863,7 +872,7 @@ export const NOTICE_READERS = {
   // A member removed one of the coordinator's notes: told to the coordinator alone (instructions.ts).
   'note-removed': 'recipients',
   'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-proposal-sent': 'people', 'buddy-session-ended': 'people',
-  // Proposal history and private Buddy notices are visible to the people who can read their card/chat.
+  // Proposal history, and the private Buddy notices stored before task #4558, are visible to the people who can read their card/chat.
   'proposal-card': 'people', 'proposal-answer': 'people', 'proposal-notice': 'people', 'proposal-merged': 'people', 'proposal-overdue': 'people',
   'decision-delegated': 'people', 'machine-removed': 'people', ship: 'people',
   // An agent's question to a person in a switched project, in their default Buddy chat (decisions.ts askedThroughBuddy, #3826).
@@ -877,9 +886,11 @@ export const NOTICE_READERS = {
   'machine-left': 'agent',
   // A task's one line in its project chat, edited as it moves (taskLine.ts): people read a task's state there.
   'task-line': 'people',
-  // A project PM's private line in a person's one Buddy chat, marked with its project (commands.ts person.tell): its person
-  // reads it, as they read the line in their older project chat.
+  // A project PM's private line in a person's one Buddy chat, no longer written (task #4558: only the person and their own agent
+  // post there): its person reads the rows stored before.
   'pm-line': 'people',
+  // A decider's override of a person's rule, told to them by their own Buddy in their Buddy chats (commands.ts instructions.save).
+  'rule-approved': 'people',
   // Their one Buddy cannot start in a person's older project chat, told to them there once per outage (commands.ts buddyDownLine).
   'buddy-cannot-start': 'people',
   'auto-archive': 'people', native: 'people',
@@ -1320,7 +1331,9 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   }
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) visible.invitations = []
   for (const start of visible.starts ?? []) {
-    if (start.error && !readsRawReason(actor, start, state.conversations.find(c => c.id === start.request.conversationId))) start.error = publicReason(start.error)
+    const raw = readsRawReason(actor, start, state.conversations.find(c => c.id === start.request.conversationId))
+    if (start.error && !raw) start.error = publicReason(start.error)
+    if (start.waiting && !raw) start.waiting = { ...start.waiting, reason: publicReason(start.waiting.reason) }
   }
   // A Buddy brainstorms; where agents run and how work is routed are none of its business (buddies.ts). A start names the
   // machine and the folder on it, so it reads none, though it reads their workgroups.

@@ -99,6 +99,7 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/scorecard', `${t}/scorecard?projectId=${project}`),
     json('GET', 'GET /api/super-tabs/:tabId/machine-readings', `${t}/machine-readings`),
     json('GET', 'GET /api/super-tabs/:tabId/proposals', `${t}/proposals?projectId=${project}`),
+    json('GET', 'GET /api/super-tabs/:tabId/project-list', `${t}/project-list?invitedTo=${project}`),
     json('GET', 'GET /api/super-tabs/:tabId/sharing', `${t}/sharing`),
     json('POST', 'POST /api/super-tabs/:tabId/sharing', `${t}/sharing`, { operationId: op(), revision: 0, access: { mode: 'link', role: 'viewer' } }),
     json('GET', 'GET /api/super-tabs/:tabId/routing-policy', `${t}/routing-policy`),
@@ -222,6 +223,12 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
       const got = await answer(call, member), absent = await answer(missing[hidden.indexOf(call)]!, member)
       expect(got, call.url).toEqual(absent)
       if (before.includes(call.route)) continue
+      // The project to pick first is only a hint (task #4540): the member's own list, alike for a private project and a missing one.
+      if (call.route === 'GET /api/super-tabs/:tabId/project-list') {
+        expect(got.status, call.url).toBe(200)
+        expect(got.body, call.url).not.toContain(f.privateProject)
+        continue
+      }
       expect(got.status, call.url).toBe(404)
       expect(got.body, call.url).toBe(NOT_AVAILABLE_BODY)
       expect(JSON.parse(got.body).error.message).not.toMatch(about)
@@ -247,5 +254,22 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
     const refused = await answer(sharing, member)
     expect(refused.status).toBe(403)
     expect(JSON.parse(refused.body).error.code).toBe('OWNER_REQUIRED')
+  })
+})
+
+// Task #4540: the Cmd-N and join project list shows only the projects its reader can read, decided by the server.
+describe('the project list', () => {
+  it('lists a private project only to the people who read it', async () => {
+    const f = await swarm()
+    const list = async (as: AuthUser) => {
+      const res = await app.inject({ method: 'GET', url: `/api/super-tabs/${f.tab}/project-list?invitedTo=${f.privateProject}`, headers: { 'x-user': as.sub } })
+      expect(res.statusCode).toBe(200)
+      return JSON.parse(res.body).data as { projects: Array<{ id: string }>; pick: string | null }
+    }
+    const mine = await list(owner), theirs = await list(member)
+    expect(mine.pick).toBe(f.privateProject)
+    expect(theirs.projects.map(p => p.id)).toEqual(['lead'])
+    expect(theirs.pick).toBe('lead')
+    expect(JSON.stringify(theirs)).not.toContain(f.privateProject)
   })
 })

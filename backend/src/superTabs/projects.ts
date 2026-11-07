@@ -33,6 +33,9 @@ export const roleVersion = (text: string): string => createHash('sha256').update
 export interface SwarmProject {
   id: string
   name: string
+  /** What the project is, in one line (at most 80 characters), set by its owner or Lead (project.about, task #4540): the Cmd-N
+   *  and join project list shows it. Absent shows the repository's name. */
+  about?: string
   /** The owner's id; '' for a private project whose owner left with no member left to take it (settleOwners): nobody's. */
   ownerId: string
   /** The owner's membership generation when they became its owner (task #3073): the same account at a later membership

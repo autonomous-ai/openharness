@@ -559,4 +559,34 @@ describe('lost work goes to an ordinary project worker', () => {
     s.state.agents.find(a => a.id === s.ids.New)!.gridModel = 'grid-model'
     expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, NOW)).toEqual([])
   })
+
+  // Removing OS filtering from recovery must send the Windows check to the first free Mac Tester.
+  it.each(['Windows', 'Linux', null])('recovers a lost Windows test only on Windows (replacement reports %s)', os => {
+    const s = crewSwarm(['Builder', 'Old', 'MacTester', 'WinTester'])
+    for (const agent of s.state.agents) agent.configuration = { ...config, model: 'opus' }
+    const task = s.task('Desktop', ['desktop/lib/view.dart'])
+    s.run({ type: 'work.assign', conversationId: task, agentId: s.ids.Builder! })
+    s.group(task).assignment!.status = 'review'
+    const step = s.run({ type: 'conversation.create', title: 'Test on Windows', brief: 'Check the Windows flow.', reviewOf: task,
+      step: 'Test on Windows', checks: [] }).result.conversationId as string
+    const machines = (list: Array<[string, string | null]>) => list.map(([machineId, platform]) => ({ machineId, name: machineId, contributorId: 'owner',
+      membershipGeneration: 'g', generation: 'g1', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 8, paused: false,
+      observation: { generation: 'g1', receivedAt: NOW, sessionKind: 'computer', resources: { os: platform }, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
+        readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] },
+        quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }] } })) as never
+    // Old took the step on a Windows machine (a Windows step is assigned only there, #3926), then was lost.
+    s.state.machines = machines([['old-win', 'Windows']])
+    s.state.agents.find(a => a.id === s.ids.Old)!.machineId = 'old-win'
+    s.run({ type: 'work.assign', conversationId: step, agentId: s.ids.Old! })
+    s.group(step).assignment!.status = 'lost'
+    s.group(step).lostAttempt = { id: s.group(step).assignment!.id, agentId: s.ids.Old! }
+    for (const [name, machineId] of [['MacTester', 'mac'], ['WinTester', 'win']] as const) {
+      const agent = s.state.agents.find(a => a.id === s.ids[name])!
+      agent.roleName = 'Tester'; agent.machineId = machineId
+    }
+    s.state.machines = machines([['mac', 'macOS'], ['win', os]])
+    expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, NOW).map(p => [p.conversationId, p.agentId]))
+      .toEqual(os === 'Windows' ? [[step, s.ids.WinTester]] : [])
+  })
+
 })

@@ -8,6 +8,7 @@ import 'package:harness/settings/sections/about_section.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/update/desktop_updater.dart';
 import 'package:harness/update/manual_update_check.dart';
+import 'package:harness/update/update_signature.dart';
 import 'package:harness/widgets/update_notice.dart';
 import 'package:harness/measurement/product_runtime_health.dart';
 
@@ -82,6 +83,19 @@ void main() {
       expect(health.expected, isNull);
     },
   );
+
+  test('a refused signature reaches the banner in plain words', () async {
+    final installing = app.installAvailableUpdate();
+    await Future<void>.delayed(Duration.zero);
+    installer.staged.completeError(notFromPublisher('Autonomous Inc.'));
+    expect(await installing, isFalse);
+    expect(
+      app.updateError,
+      'Could not install Harness 1.2.3: it is not signed by Autonomous Inc., '
+      'who made the Harness you are using, so it may not be genuine. You are '
+      'still on your current version.',
+    );
+  });
 
   testWidgets('the banner counts the download, then goes quiet to unpack', (
     tester,
