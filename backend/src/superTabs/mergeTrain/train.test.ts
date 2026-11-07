@@ -261,6 +261,43 @@ describe('the merge train finishes batches', () => {
     expect(repo.state.squashes.map(s => s.number)).toEqual([batch!.number])
   })
 
+  it('rebuilds a batch closed because main moved on the next pass, while GitHub still reads its members as not worked out', async () => {
+    const { repo, swarm, pass } = setup()
+    const a = repo.addPull(7, ['backend/src/a.ts']), b = repo.addPull(8, ['cli/src/b.ts'])
+    swarm.approve(a); swarm.approve(b)
+    await pass()
+    const first = repo.batches()[0]!
+    // A hand merge moves main mid-batch; GitHub answers mergeable null for every open pull request until it has worked it out.
+    repo.state.main = 'd'.repeat(40)
+    a.mergeable = null; b.mergeable = null
+    await pass()
+    expect(repo.state.pulls.get(first.number)!.state).toBe('closed')
+    const [second] = repo.batches()
+    expect(second!.body).toContain('d'.repeat(12))
+    expect(repo.state.contents.get(second!.head)).toEqual([a.head, b.head])
+  })
+
+  it('leaves out a member that now conflicts with the new main, with its reason, and rebuilds the rest', async () => {
+    const { repo, swarm, pass } = setup()
+    const a = repo.addPull(7, ['backend/src/a.ts']), b = repo.addPull(8, ['cli/src/b.ts'])
+    swarm.approve(a); swarm.approve(b)
+    await pass()
+    repo.state.main = 'd'.repeat(40)
+    a.mergeable = null; b.mergeable = null
+    repo.state.conflicts.add(b.head)
+    await pass()
+    expect(repo.batches().map(p => repo.state.contents.get(p.head))).toEqual([[a.head]])
+    expect(swarm.told.map(t => [t.taskId, t.key])).toEqual([['task-8', `train-conflict:${b.head}`]])
+  })
+
+  it('never merges a docs pull request GitHub has not worked out yet: the fast lane merges on GitHub, with no batch to test it', async () => {
+    const { repo, swarm, pass } = setup()
+    swarm.approve(repo.addPull(7, ['docs/a.md'], { mergeable: null }))
+    await pass()
+    expect(repo.state.squashes).toEqual([])
+    expect(repo.batches()).toEqual([])
+  })
+
   it('never merges a member pushed after its batch went green: the heads are read again first', async () => {
     const { repo, swarm, pass } = setup()
     const a = repo.addPull(7, ['backend/src/a.ts']), b = repo.addPull(8, ['backend/src/b.ts'])
