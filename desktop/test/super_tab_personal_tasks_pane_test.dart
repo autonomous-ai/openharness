@@ -24,6 +24,12 @@ import 'support/memory_key_value_store.dart';
 class TasksFixture {
   final store = MemoryKeyValueStore();
   bool supported = true, fail = false;
+
+  /// Thrown by the next commands, as the server's refusal.
+  Object? refusal;
+
+  /// Change reads, so a test sees the pane read its tasks again.
+  int reads = 0;
   Completer<void>? hold;
   String mode = 'autoApprove';
   var rows = [task('old', 1, 10), task('new', 1, 20)];
@@ -60,6 +66,7 @@ class TasksFixture {
         commands.add(command);
         await hold?.future;
         if (fail) throw StateError('fixture private payload');
+        if (refusal case final refusal?) throw refusal;
         if (command['type'] == 'member.approvalMode') {
           mode = command['mode'] as String;
         }
@@ -77,6 +84,7 @@ class TasksFixture {
         }
         return {'result': <String, dynamic>{}};
       }
+      reads++;
       final result = path.endsWith('/parts')
           ? recorded('first_load')
           : {
@@ -294,6 +302,79 @@ void main() {
     await t.pumpAndSettle();
     expect(f.operations.toSet().length, 1);
     expect(f.commands.length, 2);
+  });
+  group('a refused change unlocks the pane and says why (finding 3)', () {
+    FilledButton approve(String id) => find
+        .ancestor(
+          of: inCard(id, find.text('Approve')),
+          matching: find.byType(FilledButton),
+        )
+        .evaluate()
+        .single
+        .widget as FilledButton;
+    for (final (status, code, sentence) in [
+      (409, 'CONFLICT', 'The suggested agent changed. Read the task again.'),
+      (403, 'FORBIDDEN', 'You can no longer approve this task.'),
+    ]) {
+      testWidgets('$status: the server\'s sentence, no Retry, cards work', (
+        t,
+      ) async {
+        await mount(t);
+        f.refusal = SuperTabFailure(code, sentence, statusCode: status);
+        final before = f.reads;
+        await t.tap(inCard('new', find.text('Approve')));
+        await t.pumpAndSettle();
+        expect(find.text(sentence), findsOneWidget);
+        expect(find.text('Retry'), findsNothing);
+        expect(approve('old').onPressed, isNotNull);
+        expect(approve('new').onPressed, isNotNull);
+        expect(f.reads, greaterThan(before), reason: 'reads the task again');
+        f.refusal = null;
+        await t.tap(inCard('old', find.text('Approve')));
+        await t.pumpAndSettle();
+        expect(f.commands.length, 2);
+        expect(f.operations.toSet().length, 2, reason: 'a new change');
+        expect(find.text(sentence), findsNothing);
+      });
+    }
+    testWidgets('a refused Retry of a lost answer unlocks too', (t) async {
+      await mount(t);
+      f.fail = true;
+      await t.tap(inCard('new', find.text('Approve')));
+      await t.pumpAndSettle();
+      expect(find.text('Retry'), findsOneWidget);
+      expect(approve('old').onPressed, isNull);
+      f
+        ..fail = false
+        ..refusal = const SuperTabFailure(
+          'CONFLICT',
+          'This task is archived.',
+          statusCode: 409,
+        );
+      await t.tap(find.text('Retry'));
+      await t.pumpAndSettle();
+      expect(find.text('This task is archived.'), findsOneWidget);
+      expect(find.text('Retry'), findsNothing);
+      expect(approve('old').onPressed, isNotNull);
+    });
+    testWidgets('a refused mode change unlocks the cards', (t) async {
+      await mount(t);
+      f.refusal = const SuperTabFailure(
+        'FORBIDDEN',
+        'Only members choose how their tasks are approved.',
+        statusCode: 403,
+      );
+      await t.tap(find.byKey(const ValueKey('tasks-approval-mode')));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Review').last);
+      await t.pumpAndSettle();
+      expect(
+        find.text('Only members choose how their tasks are approved.'),
+        findsOneWidget,
+      );
+      expect(find.text('Retry'), findsNothing);
+      expect(approve('new').onPressed, isNotNull);
+    });
   });
   testWidgets('old backend has no approval controls', (t) async {
     await mount(t);
