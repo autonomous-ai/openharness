@@ -5,12 +5,14 @@
  * where the project can test on Linux; otherwise CI's Linux unit checks stand in, the task says so once, and the time checks
  * open the step once such a machine is there. Mac and Windows steps open as before (the task's constraint).
  */
+import { agentDisplayName } from './agentNames.js'
 import { isBuddy } from './buddies.js'
 import { machineOffline, machineProjectRefusal, swarmMachines } from './machines.js'
-import type { Conversation, SuperTabState } from './model.js'
-import { agentProjectId, onTeamAccount, teamAccountPool, type SwarmProject } from './projects.js'
+import { activeWork, stableId, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { agentProjectId, groupProject, onTeamAccount, teamAccountPool, type SwarmProject } from './projects.js'
 import { reportsOs, type PlannedStep } from './reviewTable.js'
-import type { StepPull } from './stepOpen.js'
+import { openReviewStep, type StepPull } from './stepOpen.js'
+import { stepName, stepsOf } from './steps.js'
 
 /** What the task says while its Linux step waits. */
 export const LINUX_WAIT_LINE = 'No Linux machine: CI\'s Linux runs stand in.'
@@ -41,4 +43,27 @@ export function waitForLinux(task: Conversation, step: PlannedStep, pulls: reado
   const first = !task.waitingLinuxStep
   task.waitingLinuxStep = { step, pulls: pulls.map(({ url, head, base }) => ({ url, head, ...base ? { base } : {} })) }
   return first
+}
+
+/**
+ * The time checks' pass (store.ts runTimeChecks): each open task's waiting Linux step opens once its project can test on
+ * Linux, and the PM hears it in the task, to give it a Tester there. Written as the PM; a project with none keeps waiting.
+ */
+export function openWaitingSteps(state: SuperTabState, now: number): MessageDraft[] {
+  const waiting = state.conversations.filter(task => task.waitingLinuxStep && !task.archived && activeWork(task))
+  const can = new Map<string, boolean>()
+  const linux = (project: SwarmProject) => can.get(project.id) ?? can.set(project.id, testsOnLinux(state, project, now)).get(project.id)!
+  return waiting.flatMap(task => {
+    const project = groupProject(state, task), pm = coordinatorOf(state, project)
+    if (!pm || !linux(project)) return []
+    const { step, pulls } = task.waitingLinuxStep!
+    delete task.waitingLinuxStep
+    // One its PM opened by hand meanwhile is that step.
+    if (stepsOf(state, task.id).some(s => !s.archived && stepName(s) === step.name)) return []
+    const author: Author = { kind: 'agent', id: pm.id, name: pm.name, displayName: agentDisplayName(state.agents, pm.id), membershipGeneration: pm.membershipGeneration }
+    const id = stableId(task.id, 'linux-step', ...pulls.map(pull => pull.head ?? ''))
+    const { brief } = openReviewStep(state, task, step, pulls, id, author)
+    return [brief, { id: stableId(id, 'told'), conversationId: task.id, author, replyTo: null, recipients: [pm.id], source: { kind: 'system' },
+      text: `${step.name} of #${task.number} is open: a Linux machine is here now. Give it a Tester there.` }]
+  })
 }
