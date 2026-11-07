@@ -5,9 +5,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/agent_details.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/machines.dart';
+import 'package:harness/ws/local_cli_discovery.dart';
 
 import 'support/super_tab_fixture.dart';
+import 'swarm_state_test.dart' show createApp;
 
 const _offlineAge = 10 * 60 * 1000;
 
@@ -92,6 +95,50 @@ String? _problemText(WidgetTester tester, String id) =>
     tester.widget<Text>(_problem(id)).data;
 
 void main() {
+  testWidgets('Manage names this computer by its local port, in mono', (
+    tester,
+  ) async {
+    final app = createApp(connected: true);
+    addTearDown(app.dispose);
+    app.machineStates['m']!.localOnly = true;
+    app.machineStates['m']!.localEndpoint = LocalCliEndpoint(
+      computerId: 'test-computer',
+      wsUri: Uri.parse('ws://127.0.0.1:18473'),
+      protocolVersion: 1,
+      terminalProtocolVersion: 1,
+    );
+    final server = _swarm();
+    server.state['machines'] = [_pool('m', contributor: 'owner')];
+    final c = server.controller();
+    await c.refresh();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SuperTabMachines(
+            controller: c,
+            app: app,
+            manage: true,
+            ticks: false,
+            onAddAgent: (_) {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final metadata = tester.widget<Text>(
+      find.byKey(const ValueKey('machines-metadata-m')),
+    );
+    expect(
+      metadata.textSpan!.toPlainText(),
+      contains('This machine · m · port 18473'),
+    );
+    final identity = (metadata.textSpan! as TextSpan).children!
+        .whereType<TextSpan>()
+        .first;
+    expect(identity.style!.fontFamily, grid.AppType.monoFamily);
+    await _unmount(tester, c);
+  });
+
   testWidgets(
     'a Mac and its Harness Team account are one row, with every agent of both under it',
     (tester) async {

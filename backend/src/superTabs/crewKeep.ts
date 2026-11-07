@@ -16,7 +16,7 @@ import { barredFromTeamWritten, teamWrittenTask } from './teamWritten.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
 import { quotaOf, resetMs } from './reviewSeats.js'
 import { groupsOf, idleSince } from './tidy.js'
-import { DISK_FLOOR_BYTES, FOLDER_ASLEEP_MS, HELD_TASK_MS, MOVE_LOW_DISK_BYTES, MOVE_OFFLINE_MS, MOVE_QUOTA_OUT_MS, MOVE_REFUSED_WAIT_MS, SLEEP_IDLE_MS } from './crewRules.js'
+import { DISK_FLOOR_BYTES, FOLDER_ASLEEP_MS, HELD_TASK_MS, MOVE_LOW_DISK_BYTES, MOVE_OFFLINE_MS, MOVE_QUOTA_OUT_MS, MOVE_REFUSED_WAIT_MS, QUOTA_FLOOR_PERCENT, QUOTA_FLOOR_PM_PERCENT, SLEEP_IDLE_MS, UNSTABLE_STOPS, UNSTABLE_WINDOW_MS } from './crewRules.js'
 
 export type CrewAction =
   | { kind: 'sleep'; agentId: string }
@@ -78,8 +78,27 @@ export function crewTrouble(state: SuperTabState, pool: ContributedMachine | nul
   })) return 'quota'
   const disk = freeDisk(pool)
   if (typeof disk === 'number' && disk < MOVE_LOW_DISK_BYTES) return 'disk'
+  // Below the routing's quota floor (task #3662): a member there stops again and again as the weekly quota runs out, so it moves
+  // to a better account rather than reopening in place. An unknown reading is never trouble.
+  const weekly = quota?.known ? quota.windows.find(w => w.name === 'weekly') : undefined
+  // Used up (100%) is the 'quota' rule's above: it waits when the window resets within the hour.
+  if (weekly && weekly.usedPercent < 100 && 100 - weekly.usedPercent < (runsPm(state, pool, engine) ? QUOTA_FLOOR_PM_PERCENT : QUOTA_FLOOR_PERCENT)) return 'quota-low'
   return null
 }
+
+/** Whether a project's coordinator runs on [pool]'s account for [engine]: its weekly quota is the PM's, so a crew member leaves it
+ *  sooner. An account is a machine (a Team account's machine counts with the Mac that hosts it). */
+function runsPm(state: SuperTabState, pool: ContributedMachine, engine: string): boolean {
+  return state.conversations.some(c => {
+    const lead = c.leadId ? state.agents.find(a => a.id === c.leadId) : undefined
+    if (!lead || lead.configuration.engine !== engine) return false
+    const home = state.machines?.find(m => m.machineId === lead.machineId)
+    return lead.machineId === pool.machineId || (!!pool.hostMachineId && pool.hostMachineId === lead.machineId) || (!!home?.hostMachineId && home.hostMachineId === pool.machineId)
+  })
+}
+
+/** Whether [agent] stopped [UNSTABLE_STOPS] times within the last [UNSTABLE_WINDOW_MS]. */
+const unstable = (agent: Agent, now: number): boolean => (agent.stops ?? []).filter(at => now - at < UNSTABLE_WINDOW_MS).length >= UNSTABLE_STOPS
 
 /** The fallback machines for [agent], best first, in the route's order: the same account kind as the machine it leaves, then
  *  the account whose weekly quota resets soonest, then the most left, then the fewest agents working, then by name. Only
@@ -128,7 +147,7 @@ export function crewKeep(state: SuperTabState, now: number, deps: CrewDeps): Cre
   const actions: CrewAction[] = []
   const members = state.agents.filter(a => isCrew(a) && !isBuddy(a) && !isLead(state, a) && !a.movedTo)
   for (const agent of members) {
-    const trouble = crewTrouble(state, standingPool(state, agent.machineId), agent.configuration.engine, now)
+    const trouble = crewTrouble(state, standingPool(state, agent.machineId), agent.configuration.engine, now) ?? (unstable(agent, now) ? 'unstable' : null)
     // An asleep member, or an awake one with no work on a machine gone offline (a laptop closed for the night), stays where it
     // is: it holds nothing to move, and a wake or new work moves it then (review of #3229).
     const stays = !!agent.asleep || (trouble === 'offline' && !heldTasks(state, agent, now).length)
@@ -169,6 +188,8 @@ export function troubleText(state: SuperTabState, agent: Agent, reason: CrewTrou
   return reason === 'offline' ? `${from} has been offline over 5 minutes`
     : reason === 'signed-out' ? `${engine} is signed out on ${from}`
     : reason === 'quota' ? `${from} is out of ${engine} quota for over an hour`
+    : reason === 'quota-low' ? `${engine} on ${from} is nearly out of weekly quota`
+    : reason === 'unstable' ? `${nameOf(agent)} stopped ${UNSTABLE_STOPS} times in the last hour on ${from}`
     : `${from} is low on disk`
 }
 const nameOf = (agent: Agent) => agent.displayName ?? agent.name
@@ -238,7 +259,16 @@ export function applyCrewKeep(state: SuperTabState, now: number, deps: CrewDeps)
         request: { ...request, handoffNote: handoffNote(state, agent, action.reason, pool, now) }, harnessId: null, dispatched: false, error: null, requestedAt: now }
       state.starts.push(start)
       // At the head of the list now, before the old session's loss of it (offline, or its host closing it) can come first.
-      for (const group of heldTasks(state, agent, now)) toHead(state, group)
+      for (const group of heldTasks(state, agent, now)) {
+        // A member that keeps stopping hands its task on now, back to its area for whoever is free, rather than waiting 5 minutes for
+        // each reopen and then for its move (task #3662).
+        if (action.reason === 'unstable' && activeWork(group)) {
+          group.assignment!.status = 'lost'
+          group.assignment!.lost = { reason: 'crew-unstable', at: now }
+          group.lostAttempt = { id: group.assignment!.id, agentId: agent.id, machineId: agent.machineId, engine: agent.configuration.engine }
+        }
+        toHead(state, group)
+      }
       agent.movedTo = { machineId: pool.machineId, startId: id, reason: action.reason, at: now }
       delete agent.crewStuck
       drafts.push(...notice(state, agent, stableId('crew-move', agent.id, id),

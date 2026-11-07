@@ -45,7 +45,7 @@ export interface AgentConfiguration {
   engineVersion: string | null
 }
 /** Why a crew member must leave its machine (crewKeep.ts). */
-export type CrewTrouble = 'offline' | 'signed-out' | 'quota' | 'disk'
+export type CrewTrouble = 'offline' | 'signed-out' | 'quota' | 'disk' | 'quota-low' | 'unstable'
 
 export interface Agent {
   id: string
@@ -130,6 +130,9 @@ export interface Agent {
    *  work.assign clears it and the host reopens it in place. `folderDropped` once a cleanup rule removed its folder, so a
    *  wake starts it fresh. Set only by the server. */
   asleep?: { since: number; folderDropped?: boolean }
+  /** When a reading first showed its session gone, in the last hour, at most five (machines.ts recordAgentPresence): a crew member
+   *  that stops three times in an hour is moved, not reopened in place (crewKeep.ts, task #3662). */
+  stops?: number[]
   /** A crew member being moved off a failing machine (crewKeep.ts): its start on [machineId] takes over under the same name;
    *  until then nothing is assigned to it and its old host closes the session. Set only by the server. */
   movedTo?: { machineId: string; startId: string; reason: CrewTrouble; at: number }
@@ -787,6 +790,8 @@ export interface MessageDraft {
   author: Author
   text: string
   replyTo: string | null
+  /** Explicit answer in main chat, without a thread. */
+  answers?: string
   recipients: string[]
   /** Buddies this row is news for (buddyNews.ts): a delivery each, never listed among its recipients. */
   buddyRecipients?: string[]
@@ -858,6 +863,10 @@ export const NOTICE_READERS = {
   // Proposal history and private Buddy notices are visible to the people who can read their card/chat.
   'proposal-card': 'people', 'proposal-answer': 'people', 'proposal-notice': 'people', 'proposal-merged': 'people', 'proposal-overdue': 'people',
   'decision-delegated': 'people', 'machine-removed': 'people', ship: 'people',
+  // An agent's question to a person in a switched project, in their default Buddy chat (decisions.ts askedThroughBuddy, #3826).
+  'decision-asked': 'people',
+  // A decision its person must agree to reached its time unanswered, told to the PM alone (decisions.ts mustAgreePassed).
+  'decision-must-agree': 'recipients',
   // A computer signed in as another account now, told to its old owner in their Buddy chat (commands.ts machine.moved, #3122).
   'computer-moved': 'people',
   // "<machine> left the Swarm: ..." in every project chat, no longer written (anh Dee, 11-04, #2742): the rows stored before are
@@ -959,6 +968,8 @@ export interface CommandEffects {
   /** Decisions asked, and a decision answered, written outside the tab state by the store (decisions.ts). */
   decisions?: import('./decisions.js').DecisionDraft[]
   decisionAnswer?: import('./decisions.js').DecisionAnswer
+  /** A must-agree decision past its time, kept waiting for its person (decisions.ts keepWaiting). */
+  decisionKeptWaiting?: string
   /** Deliveries of messages already stored: a Buddy thread session's first messages, sent while it started (buddySessions.ts). */
   /** `lead`: a project's Lead hearing its person's messages sent while the chat had none (leadStart.ts leadArrived). */
   lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string }; lead?: true }>
