@@ -176,6 +176,12 @@ export interface Agent {
    *  its session running again (`runningAt`, the first reading that did) and the wake's timing row is written (task #3462). Set
    *  only by the server. */
   crewWaking?: { at: number; conversationId: string; runningAt?: number }
+  /** A Member's task session (taskSessions.ts, task #4543): the Member, its chat session's agent id, it works for. It is an agent of
+   *  its one project ([projectId]) and of that project's scope; set only by the server, from its start. */
+  memberOf?: string
+  /** On a Member's chat session: the projects whose worktree its task home holds, the most recently used last, at most five
+   *  (taskSessions.ts). Written by the server at each assignment and as a task session joins; ids only. */
+  projectsHeld?: string[]
 }
 /** A thread session's thread root and the main chat's last sequence it may read (buddySessions.ts). A project session also
  *  names its project (buddies.ts; Dee, 10-31): it reads that project alone, and is the only Buddy that writes into it. */
@@ -580,6 +586,9 @@ export interface Conversation {
   /** The member it waits for, without active work (dispatch.ts): its builder, after another agent's failed check, red CI or a
    *  merge conflict. The next assignment clears it. */
   pin?: { agentId: string; why: 'findings' | 'ci' | 'conflict'; at: number }
+  /** A Member's task session starting for this task (taskSessions.ts, task #4543): it takes the task once it runs, unless someone
+   *  took it meanwhile. Cleared by that, by any assignment, or by the start's failure. */
+  sessionStart?: { startId: string; memberId: string; at: number }
   /** What its project's PM owes here (pulse.ts): people's messages that reached it, not answered, reacted to or made a task
    *  yet, at most MAX_OWED. Bookkeeping: readers get it counted in the pulse, never this list. */
   owed?: import('./pulse.js').OwedAsk[]

@@ -8,6 +8,7 @@ import { crewMoveFailed, takeOverCrewMember, wakeCrewMember } from './crewKeep.j
 import { moveTimingRow, startWake } from './crewTimes.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from './repositoryReach.js'
+import { isMember, memberRefusal, sessionAssigned, startTaskSession, taskSessionFailed, taskSessionJoined, taskSessionOf, taskSessionStartId } from './taskSessions.js'
 import { admitByRoom, admitMachineStart, notePrivateOnDisk, AGENT_MEMORY_BYTES, noRepositoryStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamAccountPool, teamPoolsOf, teamWorkCheck, TEAM_ACCOUNTS_GONE, NOT_YOUR_COMPUTER, type ContributedMachine } from './machines.js'
 import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
@@ -2017,6 +2018,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     rememberAttempt(group)
     // Whoever it was pinned to (dispatch.ts), it is in someone's hands now.
     delete group.pin
+    // Nor is it held for a Member's task session any more; a Member's own session records its project as used now.
+    delete group.sessionStart
+    const memberOfWorker = worker.memberOf && state.agents.find(a => a.id === worker.memberOf)
+    if (memberOfWorker) sessionAssigned(memberOfWorker, worker)
     group.assignment = { id: assignmentId, agentId: worker.id, status: 'working', configuration: structuredClone(worker.configuration),
       execution: { machineId: worker.machineId, harnessId: worker.harnessId, machineOwnerId: worker.machineOwnerId, contributorId: worker.contributorId }, result: null }
     renewLease(group.assignment, context.now)
@@ -3914,6 +3919,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         start.error = command.error
         // A crew member's move that did not start leaves it where it was, for the keeper's next pass (crewKeep.ts).
         if (start.request.crewMoveOf) crewMoveFailed(state, start, context.now)
+        // A Member's task session that did not start: the task held for it waits again (taskSessions.ts).
+        if (start.request.memberOf) taskSessionFailed(state, start)
         const suspended = counted ? noteStartFailed(state, start, context.now) : null
         // A thread session's says so in its thread (buddySessions.ts), and frees its place.
         if (start.request.buddySession) {
@@ -4014,6 +4021,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       start.harnessId = command.harnessId
       noteStartSucceeded(state, start)
       result.agentId = agentId
+      // A Member's task session: its Member's in this project, and it takes the task held for it (taskSessions.ts).
+      if (start.request.memberOf) {
+        const held = taskSessionJoined(state, start, state.agents.find(a => a.id === agentId)!)
+        if (held) assignTo(held, state.agents.find(a => a.id === agentId)!, stableId(start.id, 'task-session-assign'))
+      }
       // A crew member's move: its new session becomes the same member, and the old one is retired (crewKeep.ts).
       if (start.request.crewMoveOf) {
         const move = state.agents.find(a => a.id === start.request.crewMoveOf)?.movedTo
@@ -4827,7 +4839,25 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       chatOnly(command.conversationId)
       projectChatWork(command.conversationId)
       const group = open(state, command.conversationId)
-      const worker = agent(state, command.agentId)
+      const named = agent(state, command.agentId)
+      // A Member's chat session never runs a task: its task session for this project does, started now if it has none, and the
+      // task is held for it until it runs (taskSessions.ts, task #4543).
+      const member = isMember(state, named) ? named : null
+      if (member) memberRefusal(state, member, group)
+      const session = member && taskSessionOf(state, member, groupProject(state, group).id)
+      if (member && !session) {
+        requireTaskApproval(group, member.id)
+        if (undecidedProposal(group)) fail('PROPOSAL_UNDECIDED', 'The PM must accept or reshape this proposal before assigning work.', 409)
+        if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
+        pausedTask(group)
+        if (activeWork(group)) fail('WORK_ACTIVE', 'The current assignment must finish or be reconciled before reassignment.')
+        refuseByMachineRules(context, { machineId: member.machineId, engine: member.configuration.engine, review: isReview(group) })
+        const unreached = accessRefusal(state, member.machineId, groupProject(state, group), taskAccess(group))
+        if (unreached) failTeamWork(unreached)
+        result.startId = startTaskSession(state, member, group, taskSessionStartId(operationId), context.now, context).id
+        break
+      }
+      const worker = session || named
       assignRefusal(group, worker)
       const home = groupProject(state, group)
       // An older client assigns in a custom role: kept for older readers, and the role name it means for a worker without

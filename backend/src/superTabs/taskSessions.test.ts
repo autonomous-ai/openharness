@@ -68,7 +68,9 @@ describe('a Member\'s task', () => {
     const app = f.project('app'), secret = f.project('secret', 'private')
     const person = f.state.people.find(p => p.id === 'mate')!
     f.state.projects!.find(p => p.id === secret.projectId)!.members.push({ id: person.id, generation: person.generation } as never)
-    expect(code(() => assign(f, secret.task, secret.asPm))).toBe('MEMBER_PRIVATE')
+    // Its Lead never sees a Member there; its own person, who reads it, is refused by name.
+    expect(code(() => assign(f, secret.task, secret.asPm))).toBe('AGENT_UNAVAILABLE')
+    expect(code(() => assign(f, secret.task, mate))).toBe('MEMBER_PRIVATE')
     f.machine().privateOnDisk = [secret.projectId]
     expect(code(() => assign(f, app.task, app.asPm))).toBe('MEMBER_PRIVATE_ON_DISK')
     delete f.machine().privateOnDisk
@@ -76,7 +78,8 @@ describe('a Member\'s task', () => {
     expect(code(() => assign(f, app.newTask('second'), app.asPm))).toBe('MEMBER_BUSY')
     const older = swarm(['regularAgent', 'swarmBuddy'])
     const there = older.project('app')
-    expect(code(() => assign(older, there.task, there.asPm))).toBe('BUDDY_NOT_ASSIGNABLE')
+    expect(code(() => assign(older, there.task, there.asPm))).toBe('AGENT_UNAVAILABLE')
+    expect(code(() => assign(older, there.task, mate))).toBe('BUDDY_NOT_ASSIGNABLE')
     expect(older.state.starts ?? []).toEqual([])
   })
 
@@ -96,10 +99,11 @@ describe('a Member\'s task', () => {
     assign(f, bAgain, b.asPm)
     finish(f, bAgain, sessions[1]!)
     const sixth = f.project('f')
-    const start = f.state.starts!.find(s => s.id === assign(f, sixth.task, sixth.asPm).result.startId)!
+    const sixthStart = assign(f, sixth.task, sixth.asPm).result.startId
+    const start = f.state.starts!.find(s => s.id === sixthStart)!
     expect(start.request.dropProjectId).toBe(projects[0]!.projectId)
     host(f, start.id, 'h-sixth')
-    expect(f.agent(f.buddy).projectsHeld).toEqual(['c', 'd', 'e', 'b', 'f'].map(n => (n === 'b' ? b : n === 'f' ? sixth : projects['abcde'.indexOf(n)]!).projectId))
+    expect(f.agent(f.buddy).projectsHeld).toEqual([projects[2]!, projects[3]!, projects[4]!, b, sixth].map(p => p.projectId))
     expect(f.agent(sessions[0]!).workDecision).toBe('stop')
   })
 
@@ -108,7 +112,7 @@ describe('a Member\'s task', () => {
     const app = f.project('app')
     const startId = assign(f, app.task, app.asPm).result.startId as string
     const other = f.run({ type: 'agent.add', conversationId: app.conversationId, machineId: 'app-mac', harnessId: 'h-other', name: 'Other',
-      configuration: config }, { kind: 'person', userId: 'owner', email: 'owner@example.com' }, own('owner')).result.agentId as string
+      configuration: config, lead: false }, { kind: 'person', userId: 'owner', email: 'owner@example.com' }, own('owner')).result.agentId as string
     f.run({ type: 'work.assign', conversationId: app.task, agentId: other }, app.asPm)
     expect(f.group(app.task).sessionStart).toBeUndefined()
     const session = host(f, startId, 'h-app')
@@ -122,7 +126,7 @@ describe('a Member\'s task', () => {
     const startId = assign(f, app.task, app.asPm).result.startId as string
     f.run({ type: 'agent.startDispatch', startId }, mate, own('mate'))
     const failed = f.run({ type: 'agent.startFailed', startId, error: 'The oldest project folder still has unpushed work.' } as Command, mate, own('mate'))
-    expect(failed.messages.some(m => m.conversationId === app.task && m.text.includes('unpushed work'))).toBe(true)
+    expect(failed.messages.some(m => m.conversationId === app.task && m.text.startsWith('Could not start Bo'))).toBe(true)
     expect(f.group(app.task).sessionStart).toBeUndefined()
     expect(f.group(app.task).assignment).toBeNull()
     // Free again: a new assignment starts it again.

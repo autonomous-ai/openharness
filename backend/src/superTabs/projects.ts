@@ -1,3 +1,4 @@
+import { isMember } from './taskSessions.js'
 import { createHash } from 'node:crypto'
 import { activeWork, agent, agentRole, author, conversation, fail, isLeads, leadsRemoved, nextConversationNumber, person, type Actor, type Agent, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 import type { SwarmRule } from './rules.js'
@@ -462,7 +463,14 @@ export function audienceOf(state: SuperTabState, project: SwarmProject, personId
 
 export function canReadAgent(state: SuperTabState, actor: Actor, target: Agent): boolean {
   // A Swarm-wide Buddy belongs to no project and writes only in its person's chat: its person reads it, and so does it.
-  if (isSwarmBuddy(target)) return actor.kind === 'person' ? actor.userId === target.buddyOf!.personId : actor.agentId === target.id
+  // A Member's chat session (taskSessions.ts, task #4543) is also seen by the Lead of a public project its person reads, which
+  // may give it a task there: the record only, never its chat (readsAgentChat).
+  if (isSwarmBuddy(target)) {
+    if (actor.kind === 'person') return actor.userId === target.buddyOf!.personId
+    if (actor.agentId === target.id) return true
+    const led = isMember(state, target) ? ledProject(state, actor.agentId) : null
+    return !!led && led.visibility === 'public' && !!buddyPerson(state, target, led)
+  }
   // An idle Regular agent (task #4116): its person, itself, and the PM of a project its person reads, which may give it a task.
   if (target.regular && agentProjectId(state, target) === NO_PROJECT) {
     if (actor.kind === 'person') return actor.userId === target.contributorId
