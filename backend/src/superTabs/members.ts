@@ -4,6 +4,7 @@
  * three checks; and every asked task needs its person's Accept.
  */
 import { openTasks } from './dispatch.js'
+import { agentProjectId } from './projects.js'
 import { downSince, type ContributedMachine } from './machines.js'
 import { occupiesAgent, type Agent, type AgentStart, type Conversation, type SuperTabState } from './model.js'
 
@@ -69,6 +70,9 @@ export function setUpReady(state: SuperTabState, agent: Agent, projectId: string
   return agent.setUp?.projectId === projectId && !agent.setUp.failed
 }
 
+const ownCrewIn = (state: SuperTabState, personId: string, projectId: string): boolean =>
+  state.agents.some(a => a.crew && a.contributorId === personId && a.workDecision !== 'stop' && agentProjectId(state, a) === projectId)
+
 export type MemberPick = { kind: 'assign'; conversationId: string; agentId: string } | { kind: 'start'; conversationId: string }
 
 /** What [projectId]'s dispatch pass does for the people whose tasks wait there (store.ts): each person's free, set-up Member
@@ -81,6 +85,9 @@ export function memberPlan(state: SuperTabState, projectId: string, now: number)
     const [next] = memberQueue(state, projectId, personId, now)
     if (!next) continue
     const member = memberOf(state, personId, projectId)
+    // A person whose own crew agent works in this project keeps it taking their asks (crew.ts), until the migration
+    // (#4693 part D) makes it their Member: never two agents of theirs racing for one task.
+    if (!member && ownCrewIn(state, personId, projectId)) continue
     if (!member) out.push({ kind: 'start', conversationId: next.id })
     else if (member.agent && freeAgent(state, member.agent, now) && setUpReady(state, member.agent, projectId)) {
       out.push({ kind: 'assign', conversationId: next.id, agentId: member.agent.id })
