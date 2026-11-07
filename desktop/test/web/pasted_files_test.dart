@@ -43,14 +43,27 @@ void main() {
   });
   tearDown(() => stop());
 
-  Future<bool> dispatch(web.ClipboardEvent event) async {
+  // Whether the paste was taken is decided while it is dispatched (the listener's preventDefault); a
+  // paste not taken is never read, so nothing more can arrive for it.
+  bool dispatch(web.ClipboardEvent event) {
     web.document.body!.dispatchEvent(event);
-    await Future<void>.delayed(const Duration(milliseconds: 50));
     return event.defaultPrevented;
   }
 
+  // A paste taken is read after the event: wait for its files to be handed over, not for a fixed
+  // time (task #3730: 50 ms was not always enough on a busy machine).
+  Future<void> heardPastes(int count) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 10));
+    while (heard.length < count) {
+      if (DateTime.now().isAfter(deadline)) {
+        fail('expected $count paste(s) handed over, heard ${heard.length}');
+      }
+      await Future<void>.delayed(Duration.zero);
+    }
+  }
+
   test('a pasted picture is handed over, with its bytes, not typed', () async {
-    final taken = await dispatch(
+    final taken = dispatch(
       _paste(
         files: [
           _file('image.png', [1, 2, 3]),
@@ -58,24 +71,29 @@ void main() {
       ),
     );
     expect(taken, isTrue);
+    await heardPastes(1);
     expect(heard.single.single.name, 'image.png');
     expect(heard.single.single.bytes, [1, 2, 3]);
   });
 
   test('every file of one paste arrives together', () async {
-    await dispatch(
-      _paste(
-        files: [
-          _file('a.png', [1]),
-          _file('b.png', [2, 2]),
-        ],
+    expect(
+      dispatch(
+        _paste(
+          files: [
+            _file('a.png', [1]),
+            _file('b.png', [2, 2]),
+          ],
+        ),
       ),
+      isTrue,
     );
+    await heardPastes(1);
     expect([for (final file in heard.single) file.name], ['a.png', 'b.png']);
   });
 
   test('text beside the files is left for the field', () async {
-    final taken = await dispatch(
+    final taken = dispatch(
       _paste(
         files: [
           _file('image.png', [1]),
@@ -88,7 +106,7 @@ void main() {
   });
 
   test("a copied image's own address does not hide the image", () async {
-    final taken = await dispatch(
+    final taken = dispatch(
       _paste(
         files: [
           _file('image.png', [1]),
@@ -97,14 +115,15 @@ void main() {
       ),
     );
     expect(taken, isTrue);
+    await heardPastes(1);
     expect(heard, hasLength(1));
   });
 
   test('a paste of text alone, or one nobody wants, is not touched', () async {
-    expect(await dispatch(_paste(text: 'hello')), isFalse);
+    expect(dispatch(_paste(text: 'hello')), isFalse);
     wanted = false;
     expect(
-      await dispatch(
+      dispatch(
         _paste(
           files: [
             _file('image.png', [1]),
@@ -119,7 +138,7 @@ void main() {
   test('after stopping, nothing is heard', () async {
     stop();
     expect(
-      await dispatch(
+      dispatch(
         _paste(
           files: [
             _file('image.png', [1]),
