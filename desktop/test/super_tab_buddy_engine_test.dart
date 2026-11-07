@@ -271,17 +271,18 @@ void main() {
     await closeBuddyEngine(tester, c);
   });
 
-  testWidgets('a Codex Buddy model menu names the Codex subscription', (
+  // Only Claude switches to a shared model, so a Codex Buddy's one choice is no menu (Desktop 1.3.89 audit).
+  testWidgets('a Codex Buddy names its subscription with no model menu', (
     tester,
   ) async {
     final c = await showBuddyEngine(tester, buddyEngineSwarm(engine: 'codex'));
-    await tester.tap(model);
-    await tester.pumpAndSettle();
-    final subscription = row('Your subscription');
     expect(
-      find.descendant(of: subscription, matching: find.text('Codex')),
+      find.descendant(of: model, matching: find.text('Your subscription')),
       findsOneWidget,
     );
+    await tester.tap(model);
+    await tester.pumpAndSettle();
+    expect(row('Your subscription'), findsNothing);
     expect(find.text('Claude Code'), findsNothing);
     expect(find.text('SHARED IN THIS SWARM'), findsNothing);
     await closeBuddyEngine(tester, c);

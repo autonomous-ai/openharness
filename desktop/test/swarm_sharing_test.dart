@@ -718,9 +718,80 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.text('Retry'), findsOneWidget);
+    // Audit finding 13 (#4442): a link that can't work offers only Close.
+    expect(find.text('Retry'), findsNothing);
+    expect(
+      tester.widget<FilledButton>(find.byKey(const Key('swarm-join-confirm'))),
+      isA<FilledButton>().having(
+        (b) => (b.child as Text).data,
+        'label',
+        'Close',
+      ),
+    );
     expect(find.text('private server text'), findsNothing);
     expect(opened, false);
+  });
+
+  testWidgets(
+    'while the invitation loads the button reads Join Swarm, greyed',
+    (tester) async {
+      final answer = Completer<Map<String, dynamic>>();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SwarmJoinDialog(
+              link: _link,
+              accountEmail: 'leo@example.com',
+              isCurrent: () => true,
+              onJoined: (_, _) {},
+              request: (_, _, {body}) => answer.future,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      final button = tester.widget<FilledButton>(
+        find.byKey(const Key('swarm-join-confirm')),
+      );
+      expect((button.child as Text).data, 'Join Swarm');
+      expect(button.onPressed, isNull);
+      expect(find.text('Retry'), findsNothing);
+      answer.complete({'id': _link.tabId, 'name': 'Pilot', 'role': 'viewer'});
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets('a lost connection keeps Retry, which loads again', (
+    tester,
+  ) async {
+    var asks = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SwarmJoinDialog(
+            link: _link,
+            accountEmail: 'leo@example.com',
+            isCurrent: () => true,
+            onJoined: (_, _) {},
+            request: (_, _, {body}) async {
+              if (asks++ == 0) throw const SocketException('offline');
+              return {'id': _link.tabId, 'name': 'Pilot', 'role': 'viewer'};
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Could not open this Swarm. Check your connection and try again.',
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    expect(find.text('Pilot'), findsOneWidget);
+    expect(find.text('Join Swarm'), findsWidgets);
   });
 
   // Scholes, 2026-10-29: joining adds this computer, so only a join that made

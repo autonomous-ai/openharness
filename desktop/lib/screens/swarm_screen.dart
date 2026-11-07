@@ -85,7 +85,6 @@ import '../state/new_harness.dart';
 import '../state/harness_launch_integration.dart';
 import '../super_tabs/launch.dart';
 import '../super_tabs/message_link.dart' show swarmMessageLinkInbox;
-import '../super_tabs/buddy_chat.dart' show countText;
 import '../super_tabs/buddy_chat_shortcut.dart';
 import '../super_tabs/workspace.dart';
 import '../super_tabs/quick_switcher.dart';
@@ -122,7 +121,6 @@ import '../widgets/session_work_dialog.dart';
 import '../widgets/web_download_button.dart';
 import '../widgets/workspace_share_button.dart';
 import '../widgets/workspace_account_button.dart';
-import '../widgets/workspace_store_button.dart';
 import '../widgets/grid_model_picker.dart';
 import '../widgets/workspace_subscription_usage.dart';
 import '../store/store_mark.dart';
@@ -2520,8 +2518,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
   Future<void> _actOnNative(MethodCall call) async {
     if (mounted && call.method == 'keymapCommand') {
       final command = (call.arguments as Map?)?['command'];
-      if (command is String && dispatchSwarmQuickSwitcherCommand(command))
+      if (command is String && dispatchSwarmQuickSwitcherCommand(command)) {
         return;
+      }
     }
 
     if (mounted && call.method == 'keymapPending') {
@@ -3865,6 +3864,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     final search = source == _NewHarnessSource.workspace ? _search : null;
+    // Nothing but "a new agent here": Cmd-N, File ▸ New Agent, search.
+    final plain =
+        source == _NewHarnessSource.workspace &&
+        !newSwarmProject &&
+        superTabConversationId == null &&
+        (split ?? search?.split) == null &&
+        (placement ?? search?.placement) == null &&
+        engine == null &&
+        folder == null &&
+        projectName == null &&
+        (search == null || _superTabAddTarget == null);
     // A pane never lands in the store tab: New Harness from there goes to
     // the empty starter tab (or a fresh one), the way New Tab does.
     placement ??= search?.placement;
@@ -3876,6 +3886,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final superTab = app.swarms
         .where((s) => s.id == target && s.isSuperTab)
         .firstOrNull;
+    // Where the left pane offers + New agent, a plain new agent is that one
+    // (audit 1.3.89 finding 11), and a reader it is hidden from gets nothing.
+    final board = superTab?.superTabId == null || kIsWeb
+        ? null
+        : app.superTabs.peek(superTab!.superTabId!);
+    if (plain && board != null) {
+      if (!board.canWrite) return;
+      newSwarmAgent = true;
+    }
     final conversation =
         superTabConversationId ??
         (superTab?.superTabId == null

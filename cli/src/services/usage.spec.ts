@@ -11,6 +11,15 @@ import { usageTarget } from '../lib/agentUsageWire.js'
 import { accountKey, claudeReportPath } from '../lib/quotaReports.js'
 import type { CodexRateLimits } from '../lib/codexRateLimits.js'
 import { quotaOf, quotaUnknownReason } from '../superTabs/capacity.js'
+import { env } from '../config/env.js'
+
+// The person's login shell, as the daemon reads it (lib/loginShellEnv.ts): never a real shell here.
+const shell = vi.hoisted(() => ({ env: {} as NodeJS.ProcessEnv }))
+vi.mock('../lib/loginShellEnv.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../lib/loginShellEnv.js')>(),
+  loginShellEnvironment: () => shell.env,
+  warmLoginShellEnvironment: async () => shell.env,
+}))
 
 const ASKER = { local: false, owner: true }
 const NOW = Date.parse('2026-11-07T01:00:00Z')
@@ -25,8 +34,8 @@ const STALE_REPORT = 'Claude Code last reported its allowance on this machine mo
 const RESET_SINCE = 'Claude Code\'s allowance reset after its last report on this machine: it reports again after its next reply in a session Harness started.'
 
 let dataDir: string
-beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'usage-service-')) })
-afterEach(() => rmSync(dataDir, { recursive: true, force: true }))
+beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'usage-service-')); shell.env = {} })
+afterEach(() => { rmSync(dataDir, { recursive: true, force: true }); vi.unstubAllEnvs() })
 
 /** What the status line (hook/statusline.mjs) writes for [configDir]. */
 function report(windows: Record<string, unknown>, configDir?: string, at = NOW - 60_000) {
@@ -35,7 +44,7 @@ function report(windows: Record<string, unknown>, configDir?: string, at = NOW -
 }
 
 function usage(over: Partial<UsageDeps> = {}) {
-  const deps: UsageDeps = { codex: vi.fn(async () => CODEX), now: () => NOW, env: {}, ...over }
+  const deps: UsageDeps = { codex: vi.fn(async () => CODEX), now: () => NOW, env: async () => ({}), ...over }
   return { deps, requests: startUsage(fakeCore({ dataDir }), deps) }
 }
 
@@ -64,8 +73,8 @@ describe('the usage service', () => {
           secondary_window: { used_percent: 7, limit_window_seconds: 604_800, reset_at: s('2026-11-12T00:00:00Z') },
         } } },
     ] })
-    // The default accounts: the owner's own CODEX_HOME, nothing injected.
-    expect(deps.codex).toHaveBeenCalledWith({ codexHome: undefined })
+    // The default accounts: the CODEX_HOME a session launches with, none moved.
+    expect(deps.codex).toHaveBeenCalledWith({ codexHome: env.CODEX_HOME })
     // The router reads both, by the windows' own lengths.
     expect(quotaOf(reply, 'claude', false)).toMatchObject({ known: true, windows: [
       { name: '5-hour', usedPercent: 23.5, resetsAt: '2026-11-07T04:00:00.000Z' }, { name: 'weekly', usedPercent: 41, resetsAt: null }] })
@@ -73,14 +82,30 @@ describe('the usage service', () => {
       { name: '5-hour', usedPercent: 42 }, { name: 'weekly', usedPercent: 7 }] })
   })
 
-  it('usage_read: the default Claude account is the daemon\'s own CLAUDE_CONFIG_DIR, and a window Codex leaves out is left out', async () => {
+  it('usage_read: the default accounts are the folders a session launches with, and a window Codex leaves out is left out', async () => {
     report({ seven_day: { used_percentage: 12, resets_at: null } }, '/fixture/claude-own')
-    const { requests } = usage({ env: { CLAUDE_CONFIG_DIR: '/fixture/claude-own' },
-      codex: async () => ({ ok: true, accountId: null, primary: null, secondary: { usedPercent: 3, windowDurationMins: null, resetsAt: null } }) })
+    const codex = vi.fn(async () => ({ ok: true as const, accountId: null, primary: null, secondary: { usedPercent: 3, windowDurationMins: null, resetsAt: null } }))
+    const { requests } = usage({ env: async () => ({ CLAUDE_CONFIG_DIR: '/fixture/claude-own/', CODEX_HOME: '/fixture/codex-own' }), codex })
     expect(await requests.usage_read!({}, ASKER)).toEqual({ providers: [
       expect.objectContaining({ provider: 'claude', body: { seven_day: { utilization: 12, resets_at: null } } }),
       expect.objectContaining({ provider: 'codex', account: null,
         body: { rate_limit: { secondary_window: { used_percent: 3, limit_window_seconds: null, reset_at: null } } } }),
+    ] })
+    expect(codex.mock.calls).toEqual([[{ codexHome: '/fixture/codex-own' }]])
+  })
+
+  // People move CLAUDE_CONFIG_DIR in their shell profile; the daemon, started by the app or launchd, never read it, and
+  // the report the status line wrote under that folder read as "not reported yet" for good (#4252).
+  it('usage_read: the Claude folder the login shell sets outranks the daemon\'s own', async () => {
+    vi.stubEnv('CLAUDE_CONFIG_DIR', '/fixture/claude-daemon')
+    // The default deps read the real clock, so the reports are written now: older than an hour reads as stale (#4217).
+    report({ five_hour: { used_percentage: 1, resets_at: null } }, '/fixture/claude-daemon', Date.now())
+    report({ five_hour: { used_percentage: 77, resets_at: null } }, '/fixture/claude-shell', Date.now())
+    shell.env = { CLAUDE_CONFIG_DIR: '/fixture/claude-shell' }
+    // The default deps, with Codex left out by asking for the default Claude account alone.
+    const requests = startUsage(fakeCore({ dataDir }))
+    expect(await requests.usage_read!({ profile: { engine: 'claude', id: 'default' } }, ASKER)).toEqual({ providers: [
+      expect.objectContaining({ provider: 'claude', outcome: 'answered', body: { five_hour: { utilization: 77, resets_at: null } } }),
     ] })
   })
 
@@ -157,14 +182,14 @@ describe('the usage service', () => {
   it('usage_read for a default profile reads that provider only, by either of its ids', async () => {
     const core = fakeCore({ dataDir })
     const codex = vi.fn(async () => CODEX)
-    const requests = startUsage(core, { codex, now: () => NOW, env: {} })
+    const requests = startUsage(core, { codex, now: () => NOW, env: async () => ({}) })
     const providers = async (engine: 'claude' | 'codex', id: string) =>
       ((await requests.usage_read!({ profile: { engine, id } }, ASKER)) as { providers: Array<{ provider: string }> }).providers.map(p => p.provider)
     expect(await providers('claude', 'default')).toEqual(['claude'])
     expect(await providers('codex', 'default')).toEqual(['codex'])
     expect(await providers('claude', profileId(core.daemon.machineId(), 'claude', 'default'))).toEqual(['claude'])
     expect(await providers('codex', profileId(core.daemon.machineId(), 'codex', 'default'))).toEqual(['codex'])
-    expect(codex.mock.calls).toEqual([[{ codexHome: undefined }]])
+    expect(codex.mock.calls).toEqual([[{ codexHome: env.CODEX_HOME }]])
   })
 
   it('usage_read finds a Claude and a Codex profile by id, and reads each under its own folder', async () => {

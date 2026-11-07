@@ -91,8 +91,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   final _headerMachineMenu = MenuController();
   final _headerMachineFocus = FocusNode(debugLabel: 'New harness computer');
   final _kindMenu = MenuController();
-  final _kindFocus = FocusNode(debugLabel: 'New agent Member or Lead');
-  final _kindAnchor = GlobalKey();
+  final _kindFocus = FocusNode(debugLabel: 'New agent role');
   final _leadRowFocus = <String, FocusNode>{};
   final _headerMachineAnchor = GlobalKey();
   bool get _desktopStartEnabled =>
@@ -1721,6 +1720,24 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
+                                  if (box.integration?.heading
+                                      case final heading?) ...[
+                                    Text(
+                                      heading,
+                                      style: DesktopChrome.heading(),
+                                    ),
+                                    if (box.integration?.intro
+                                        case final intro?) ...[
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        intro,
+                                        style: DesktopChrome.text(
+                                          color: DesktopChrome.muted,
+                                        ),
+                                      ),
+                                    ],
+                                    const SizedBox(height: 14),
+                                  ],
                                   _desktopHeader(),
                                   const SizedBox(height: 12),
                                   if (_installing case final run?)
@@ -1887,6 +1904,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         .lastOrNull;
     // A guest starts in its workspace or a folder the owner shares (NewHarnessController.asGuest).
     if (box.project.newRepository case final ask?) return '${ask.slug} · new';
+    // Not its generated name (claude-2026-11-07-13-54): Start creates it.
+    if (box.project.generated != null) return 'New folder';
     return box.asGuest
         ? lastPart ?? 'My workspace'
         : box.project.name ??
@@ -2031,33 +2050,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                   ),
                 ),
               ),
-            if (box.agentKind case final kind?)
-              _desktopField(
-                order: 3.5,
-                finger: phone,
-                anchor: _kindAnchor,
-                child: _desktopKindMenu(
-                  child: DesktopPill(
-                    key: const ValueKey('new-harness-field-agent-kind'),
-                    focusNode: _kindFocus,
-                    label: kind == 'lead' ? 'Lead' : 'Member',
-                    semanticLabel:
-                        'Starts as, ${kind == 'lead' ? 'Lead' : 'Member'}',
-                    icon: kind == 'lead' ? AppIcons.crown : AppIcons.user,
-                    menu: true,
-                    capsule: true,
-                    tooltip: 'Start as Lead or Member',
-                    textSize: 13,
-                    surfaceColor: DesktopChrome.surface,
-                    onPressed:
-                        box.locked || box.integration?.agentKindLocked == true
-                        ? null
-                        : () => _kindMenu.isOpen
-                              ? _kindMenu.close()
-                              : _kindMenu.open(),
-                  ),
-                ),
-              ),
           ]),
         ),
         if (!widget.embedded) ...[
@@ -2122,7 +2114,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     if (attachments == null) {
       return Align(
         alignment: Alignment.centerRight,
-        child: _desktopLaunchActions(includeProjectVisibility: true),
+        child: _desktopLaunchActions(includeChoices: true),
       );
     }
     return LayoutBuilder(
@@ -2161,7 +2153,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                 constraints.maxWidth - grid.AppControl.height - 6 - 12,
               ),
             ),
-            child: _desktopLaunchActions(includeProjectVisibility: true),
+            child: _desktopLaunchActions(includeChoices: true),
           ),
         ],
       ),
@@ -2626,7 +2618,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     child: const Text('Use the existing folder'),
   );
 
-  Widget _desktopLaunchActions({bool includeProjectVisibility = false}) => Wrap(
+  /// [includeChoices]: the project's visibility and the agent's role, which
+  /// the box under the task shows and the starting view does not.
+  Widget _desktopLaunchActions({bool includeChoices = false}) => Wrap(
     spacing: 8,
     runSpacing: 8,
     alignment: WrapAlignment.end,
@@ -2646,11 +2640,48 @@ class NewHarnessFormState extends State<NewHarnessForm> {
             box.integration!.roleName = name.isEmpty ? null : name;
           },
         ),
-      if (includeProjectVisibility &&
-          box.integration?.projectVisibility != null)
+      // In + New agent, only a Product Manager makes a project.
+      if (includeChoices &&
+          box.integration?.projectVisibility != null &&
+          (box.agentKind ?? 'lead') == 'lead')
         _desktopProjectVisibility(9.95),
+      // A Buddy is an offer: saying no is as plain as saying yes (#4442).
+      if (box.bringsBuddy && !widget.embedded)
+        TextButton(
+          key: const ValueKey('new-harness-not-now'),
+          onPressed: () {
+            if (box.requestDismiss()) widget.onClose();
+          },
+          child: const Text('Not now'),
+        ),
+      // Chosen where the agent is started, directly left of Start (product owner, task #4445).
+      if (includeChoices)
+        if (box.agentKind case final kind?) _desktopKindChip(kind),
       _desktopStartButton(),
     ],
+  );
+
+  Widget _desktopKindChip(String kind) => FocusTraversalOrder(
+    // Just before Start.
+    order: const NumericFocusOrder(9.97),
+    child: _desktopKindMenu(
+      child: DesktopPill(
+        key: const ValueKey('new-harness-field-agent-kind'),
+        focusNode: _kindFocus,
+        label: kind == 'lead' ? 'Product Manager' : 'Agent',
+        semanticLabel:
+            'Starts as, ${kind == 'lead' ? 'Product Manager' : 'Agent'}',
+        icon: kind == 'lead' ? AppIcons.circleUser : AppIcons.user,
+        menu: true,
+        capsule: true,
+        tooltip: 'Start as an agent or a Product Manager',
+        textSize: 13,
+        surfaceColor: DesktopChrome.surface,
+        onPressed: box.locked || box.integration?.agentKindLocked == true
+            ? null
+            : () => _kindMenu.isOpen ? _kindMenu.close() : _kindMenu.open(),
+      ),
+    ),
   );
 
   Widget _desktopProjectVisibility(double order) => FocusTraversalOrder(
@@ -3843,13 +3874,38 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   }
 
   // Computer selection belongs to the header, independently of repo search.
-  /// Member or Lead (task #4196): the one choice + New agent adds to Cmd-N.
+  /// Agent or Product Manager (task #4196): the one choice + New agent adds
+  /// to Cmd-N. Wire values stay `member` and `lead`.
   Widget _desktopKindMenu({required Widget child}) {
     final locked = box.locked || box.integration?.agentKindLocked == true;
+    final rows = [
+      for (final (kind, label, detail, icon) in [
+        ('member', 'Agent', 'Works with you in its own chat', AppIcons.user),
+        (
+          'lead',
+          'Product Manager',
+          'Leads a project and its crew',
+          AppIcons.circleUser,
+        ),
+      ])
+        AppMenuItem(
+          key: ValueKey('new-harness-agent-kind-$kind'),
+          autofocus: kind == box.agentKind,
+          selected: kind == box.agentKind,
+          icon: icon,
+          label: label,
+          detail: detail,
+          onPressed: locked ? null : () => box.setAgentKind(kind),
+        ),
+    ];
     return AppDropdown(
       controller: _kindMenu,
       childFocusNode: _kindFocus,
-      width: _machineMenuWidth,
+      // As wide as its lines need at any text size, so a detail is never cut.
+      width: math.max(
+        _machineMenuWidth,
+        AppMenuItem.fitWidth(context, rows) ?? 0,
+      ),
       onOpen: () => setState(() {}),
       onClose: () {
         if (!mounted) return;
@@ -3859,21 +3915,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         _chooserTraversal = null;
         _focusEditor();
       },
-      children: [
-        for (final (kind, label, detail, icon) in [
-          ('member', 'Member', 'Works with you in its own chat', AppIcons.user),
-          ('lead', 'Lead', 'Names and starts a project', AppIcons.crown),
-        ])
-          AppMenuItem(
-            key: ValueKey('new-harness-agent-kind-$kind'),
-            autofocus: kind == box.agentKind,
-            selected: kind == box.agentKind,
-            icon: icon,
-            label: label,
-            detail: detail,
-            onPressed: locked ? null : () => box.setAgentKind(kind),
-          ),
-      ],
+      children: rows,
       child: child,
     );
   }

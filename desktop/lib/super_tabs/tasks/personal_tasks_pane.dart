@@ -3,10 +3,14 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../shared/theme/app_theme.dart';
+import '../../shared/widgets/app_select_field.dart';
+import '../../shared/widgets/skeleton.dart';
+import '../../widgets/desktop_chrome.dart';
 import '../../widgets/laid_out_list.dart';
 import '../controller.dart';
 import '../identity.dart';
 import '../model.dart';
+import '../task_card.dart';
 import 'personal_task_card.dart';
 import 'personal_tasks.dart';
 
@@ -29,6 +33,9 @@ class SuperTabPersonalTasksPane extends StatefulWidget {
 
 /// Who asked, a step smaller than the agent beside it, as on a Board tile.
 const _requesterSize = 18.0;
+
+/// Why Approve, Reject and the approval mode are disabled while a change is unconfirmed.
+const _waitingWhy = 'Waiting for the last change to be confirmed';
 
 class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
   String? _error, _operationId;
@@ -87,16 +94,28 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
           ? await owner.retry()
           : await owner.command(_action!, operationId: _operationId);
       if (!mounted || !identical(owner, c)) return;
+      // The controller keeps an action whose answer was lost and drops one the server refused. The pane follows it:
+      // a copy kept after a refusal locked every card, and its Retry sent the refused change again (audit #4436, 3).
+      final lost = answer == null && owner.hasPendingAction;
+      final updateRequired = owner.operationErrorCode == 'UPDATE_REQUIRED';
+      final refusal = answer == null && !lost
+          ? owner.takeOperationError()
+          : null;
       setState(() {
-        if (answer != null) {
+        if (lost) {
+          _error = 'The change is not confirmed. Retry to check it.';
+        } else {
           _action = null;
           _operationId = null;
-        } else {
-          _error = owner.operationErrorCode == 'UPDATE_REQUIRED'
-              ? 'Update Harness to change Tasks.'
-              : 'The change is not confirmed. Retry to check it.';
+          if (answer == null) {
+            _error = updateRequired
+                ? 'Update Harness to change Tasks.'
+                : refusal ?? 'The change was refused.';
+          }
         }
       });
+      // A refusal means the task changed under the person: what it is now is in the next read.
+      if (answer == null && !lost) unawaited(owner.refresh());
     } catch (_) {
       if (mounted && identical(owner, c)) {
         setState(
@@ -170,6 +189,15 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
           !c.saving &&
           !c.hasPendingAction &&
           _action == null;
+      final waitingOnChange =
+          _sending || c.saving || c.hasPendingAction || _action != null;
+      // The decision being sent, by its task: its button spins.
+      final sendingOn = _sending ? _action!['conversationId'] as String? : null;
+      final sendingKind = switch (_action?['type']) {
+        'task.approve' => 'approve',
+        'task.reject' => 'reject',
+        _ => null,
+      };
       final snapshot = c.snapshot;
       final agents = {
         for (final a in snapshot?.agents ?? <SuperTabAgent>[]) a.id: a,
@@ -205,38 +233,67 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                         ),
                       ),
                       if (supported)
-                        DropdownButtonHideUnderline(
-                          child: DropdownButton<String>(
-                            key: const ValueKey('tasks-approval-mode'),
-                            value: tasks!.mode,
-                            style: Theme.of(context).textTheme.bodySmall,
-                            items: const [
-                              DropdownMenuItem(
-                                value: 'autoApprove',
-                                child: Text('Auto approve'),
+                        // Disabled as the decisions are; the shared select has no disabled state of its own.
+                        ExcludeFocus(
+                          excluding: !enabled,
+                          child: IgnorePointer(
+                            ignoring: !enabled,
+                            child: AppSelectField<String>(
+                              key: const ValueKey('tasks-approval-mode'),
+                              value: tasks!.mode,
+                              semanticLabel: 'Approval',
+                              textStyle: DesktopChrome.metadata(
+                                color: DesktopChrome.foreground,
                               ),
-                              DropdownMenuItem(
-                                value: 'review',
-                                child: Text('Review'),
+                              width: AppSelectField.fitWidth(
+                                context,
+                                labels: const ['Auto approve', 'Review'],
+                                textStyle: DesktopChrome.metadata(),
                               ),
-                            ],
-                            onChanged: enabled
-                                ? (value) {
-                                    if (value != null) {
-                                      unawaited(
-                                        _send({
-                                          'type': 'member.approvalMode',
-                                          'mode': value,
-                                        }),
-                                      );
-                                    }
-                                  }
-                                : null,
+                              menuWidth: 300,
+                              menuAlignedToEnd: true,
+                              options: const [
+                                SelectOption(
+                                  value: 'autoApprove',
+                                  label: 'Auto approve',
+                                  detail: 'Tasks you ask for start right away.',
+                                ),
+                                SelectOption(
+                                  value: 'review',
+                                  label: 'Review',
+                                  detail: 'Tasks you ask for wait until you approve them.',
+                                ),
+                              ],
+                              onChanged: (value) {
+                                if (value != tasks.mode) {
+                                  unawaited(
+                                    _send({
+                                      'type': 'member.approvalMode',
+                                      'mode': value,
+                                    }),
+                                  );
+                                }
+                              },
+                            ),
                           ),
                         ),
                     ],
                   ),
                 ),
+                // Offline, the rows are what was last read: said once, quietly, until the Swarm answers again.
+                if (supported && c.backendUnreachable && snapshot != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppDesktop.groupGap,
+                    ),
+                    child: Text(
+                      'May be out of date',
+                      key: const ValueKey('tasks-stale'),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
                 if (_error != null)
                   Padding(
                     padding: const EdgeInsets.symmetric(
@@ -251,30 +308,40 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                             color: Theme.of(context).colorScheme.error,
                           ),
                         ),
-                        TextButton(
-                          onPressed: _sending
-                              ? null
-                              : () => _send(_action!, retry: true),
-                          child: const Text('Retry'),
-                        ),
+                        // Only a change whose answer was lost is retried: a refused one would be refused again.
+                        if (_action case final action?)
+                          TextButton(
+                            onPressed: _sending
+                                ? null
+                                : () => _send(action, retry: true),
+                            child: const Text('Retry'),
+                          ),
                       ],
                     ),
                   ),
-                if (!supported)
+                if (!supported && !c.accessRevoked && c.snapshot == null)
+                  const Expanded(child: _SkeletonCards())
+                else if (!supported)
                   Padding(
                     padding: const EdgeInsets.all(AppDesktop.groupGap),
                     child: Text(
                       c.accessRevoked
                           ? 'Tasks are unavailable.'
-                          : c.snapshot == null
-                          ? 'Loading Tasks…'
                           : 'Update Harness to use Tasks.',
                     ),
                   )
                 else
                   Expanded(
                     child: tasks!.rows.isEmpty
-                        ? const Center(child: Text('No tasks yet'))
+                        ? const Center(
+                            child: Padding(
+                              padding: EdgeInsets.all(AppDesktop.groupGap),
+                              child: Text(
+                                'No tasks yet. Tasks your agents start or propose show here.',
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          )
                         : NotificationListener<ScrollNotification>(
                             onNotification: _onScroll,
                             child: LaidOutListView.builder(
@@ -336,7 +403,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                                                 SuperTabAvatarPicture.fromJson(
                                                   task.agent['avatar'],
                                                 ),
-                                            pattern: true,
+                                            face: true,
                                           ),
                                     waiting: waiting,
                                     onApprove: waiting && enabled
@@ -350,6 +417,12 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                                         : null,
                                     onReject: waiting && enabled
                                         ? () => _reject(task)
+                                        : null,
+                                    pending: sendingOn == task.id
+                                        ? sendingKind
+                                        : null,
+                                    disabledReason: waitingOnChange
+                                        ? _waitingWhy
                                         : null,
                                   ),
                                 );
@@ -383,4 +456,59 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
       );
     },
   );
+}
+
+/// Cards on their way: the shape of a task card (its tag, two lines of title, then who asked and its agent), on the
+/// card's own surface so nothing jumps when the rows land.
+class _SkeletonCards extends StatelessWidget {
+  const _SkeletonCards();
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final title = DesktopChrome.control().copyWith(height: 1.35);
+    return SkeletonList(
+      rows: 5,
+      semanticsLabel: 'Loading Tasks',
+      itemBuilder: (context, i) => Padding(
+        padding: const EdgeInsets.fromLTRB(
+          AppDesktop.groupGap,
+          0,
+          AppDesktop.groupGap,
+          AppDesktop.controlGap,
+        ),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: AppCard.base,
+            borderRadius: BorderRadius.circular(AppCard.insetRadius),
+            border: Border.all(color: AppCard.insetHair),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(SuperTabTaskCard.tilePadding),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Skeleton(
+                  width: 64 + 16.0 * (i % 3),
+                  height: 16,
+                  radius: AppDesktop.paneCloseInset,
+                ),
+                const SizedBox(height: AppDesktop.controlGap),
+                SkeletonText(style: title, widthFactor: .9 - .1 * (i % 2)),
+                SkeletonText(style: title, widthFactor: .55 + .1 * (i % 3)),
+                const SizedBox(height: AppDesktop.controlGap),
+                const Row(
+                  children: [
+                    Skeleton.circle(size: _requesterSize),
+                    SizedBox(width: AppDesktop.listRowGap * 2),
+                    Skeleton.circle(size: SuperTabAvatar.rowSize),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

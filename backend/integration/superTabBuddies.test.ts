@@ -483,6 +483,46 @@ describe('a Buddy through the store', () => {
     await expect(f.execute({ type: 'message.send', conversationId: 'lead', text: '', replyTo: null, recipientIds: [], attachmentIds: [loose] }, peer, agentId))
       .rejects.toThrow('Attach this file again')
   })
+  it('carries a picture it showed its owner in their chat, for the project to open, and no file it did not show them (#4470)', async () => {
+    const f = await swarm()
+    const { chat, agentId, swarmChat, main } = await buddy(f)
+    const upload = async (name: string, bytes: Buffer, conversationId = chat, as: string | null = agentId, user = peer) =>
+      (await f.store.upload(user, f.tab, conversationId, { name, mime: 'image/png', body: Readable.from([bytes]) }, as ?? undefined)).attachment.id
+    const show = async (attachmentIds: string[], conversationId = chat, as = agentId) => String((await f.execute({ type: 'message.send', conversationId,
+      text: 'Here is the mockup', replyTo: null, recipientIds: [], attachmentIds }, peer, as)).result.messageId)
+    const ask = async () => String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send it to the PM with the mockup', replyTo: null, recipientIds: [] }, peer)).result.messageId)
+    const propose = async (attachmentIds: string[]) => f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: await ask(),
+      text: 'Send it to the PM with the mockup', goal: 'New board', scope: 'Desktop only', priority: 'normal', attachmentIds }, peer, agentId)
+
+    // The picture it drew and showed its owner, on its own message in their chat.
+    const mockup = await upload('mockup.png', png())
+    const shownIn = await show([mockup])
+    // Not one it showed in another chat, even its owner's other Buddy chat, nor one its owner's other Buddy showed there.
+    const elsewhere = await upload('elsewhere.png', png(), swarmChat, main)
+    await show([elsewhere], swarmChat, main)
+    // Nor one another person posted in the project chat.
+    const projects = await upload('project.png', png(), 'lead', null, owner)
+    await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Board idea', replyTo: null, recipientIds: [], attachmentIds: [projects] })
+    // Nor one over the 10 MB a proposal file may be, which it could have sent by an upload link.
+    const large = await upload('large.png', png())
+    await db.superTabAttachment.update({ where: { id: large }, data: { size: 10 * 1024 * 1024 + 1 } })
+    await show([large])
+    for (const id of [elsewhere, projects]) await expect(propose([id])).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
+    await expect(propose([large])).rejects.toMatchObject({ code: 'ATTACHMENT_TOO_LARGE', status: 413 })
+    await expect(propose([mockup, 'a'.repeat(24), 'b'.repeat(24), 'c'.repeat(24), 'd'.repeat(24), 'e'.repeat(24)])).rejects.toThrow('at most 5 files')
+
+    const id = String((await propose([mockup])).result.messageId)
+    // The project's members open it on the proposal, its owner's message in the project chat, as the PM does.
+    for (const as of [f.lead, undefined]) {
+      const read = (await f.store.messages(owner, f.tab, 'lead', {}, as)).messages.find(m => m.id === id)
+      expect(read?.attachments?.map(a => [a.name, a.mime])).toEqual([['mockup.png', 'image/png']])
+      expect(openPng(f.files.open(read!.attachments![0]!.link!)!)).toEqual({ width: 1, height: 1, pixel: [255, 0, 0, 255] })
+    }
+    // It stays on the message its owner saw, and goes with one proposal at most.
+    expect(await db.superTabAttachment.findUniqueOrThrow({ where: { id: mockup } })).toMatchObject({ usedBy: shownIn, proposedBy: id })
+    expect((await f.store.messages(peer, f.tab, chat, { messageId: shownIn }, agentId)).messages[0]?.attachments?.map(a => a.id)).toEqual([mockup])
+    await expect(propose([mockup])).rejects.toThrow('already went with a proposal')
+  })
   it('persists approved files on a proposal card for the PM to open after the switch', async () => {
     const f = await swarm()
     const { chat, agentId } = await buddy(f)

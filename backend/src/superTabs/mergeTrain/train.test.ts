@@ -317,6 +317,20 @@ describe('the merge train finishes batches', () => {
     expect(swarm.told).toHaveLength(1)
   })
 
+  it('names the pull request a member left waiting after main moved shares a file with', async () => {
+    const { repo, swarm, pass } = setup()
+    const a = repo.addPull(7, ['backend/src/a.ts'])
+    swarm.approve(a)
+    await pass()
+    const first = repo.batches()[0]!
+    // Main moves, and an older pull request changing the same file is ready now: it goes first.
+    repo.state.main = 'd'.repeat(40)
+    swarm.approve(repo.addPull(5, ['backend/src/a.ts']))
+    await pass()
+    expect(swarm.told.map(t => t.key)).toEqual([`train-moved:${first.number}:${a.head}`])
+    expect(swarm.told[0]!.text).toContain('changes a file that #5 also changes')
+  })
+
   it('says nothing on a member merged by hand meanwhile, often why main moved', async () => {
     const { repo, swarm, pass } = setup()
     const a = repo.addPull(7, ['backend/src/a.ts']), b = repo.addPull(8, ['cli/src/b.ts'])
@@ -503,6 +517,83 @@ describe('the merge train finishes batches', () => {
     expect(repo.batches()).toEqual([first])
     for (let i = 0; i < 9; i++) await pass()
     expect(repo.state.pulls.get(first.number)!.state).toBe('closed')
+    expect(repo.batches()).toHaveLength(1)
+  })
+})
+
+describe('the merge train says why it passes over a done task\'s pull request (task #3902)', () => {
+  const doneTask = (swarm: ReturnType<typeof fakeSwarm>, pull: FakePull) => { swarm.approve(pull); swarm.tasks.get(`task-${pull.number}`)!.task.done = true }
+  const unpassedCheck: Check = { id: 'c0', description: 'A widget test per first-join path', independent: false, evidence: null, passedBy: null }
+
+  it('writes the rule once after two passes in a row, as for #3367: the steps passed but the task\'s own check never did', async () => {
+    const { repo, swarm, pass } = setup()
+    const a = repo.addPull(7, ['desktop/lib/a.dart'])
+    doneTask(swarm, a)
+    swarm.tasks.get('task-7')!.task.checks = [unpassedCheck]
+    await pass()
+    expect(swarm.told).toEqual([])
+    await pass()
+    expect(swarm.told).toEqual([expect.objectContaining({ taskId: 'task-7', key: expect.stringContaining('train-skip:'), text: expect.stringContaining('for 2 passes in a row') })])
+    expect(swarm.told[0]!.text).toContain('the task\'s check "A widget test per first-join path": nobody has passed it yet')
+    await pass(); await pass()
+    expect(swarm.told).toHaveLength(1)
+    expect(repo.batches()).toEqual([])
+  })
+
+  it('writes again only when the reason changes', async () => {
+    const { repo, swarm, pass } = setup()
+    const a = repo.addPull(7, ['desktop/lib/a.dart'])
+    doneTask(swarm, a)
+    swarm.tasks.get('task-7')!.task.checks = [unpassedCheck]
+    await pass(); await pass()
+    a.labels = ['hold']
+    await pass()
+    expect(swarm.told).toHaveLength(1)
+    await pass()
+    expect(swarm.told).toHaveLength(2)
+    expect(swarm.told[1]!.text).toContain('it has the hold label')
+  })
+
+  it('counts passes in a row: a pass that read it eligible starts the count again', async () => {
+    const { repo, swarm, pass } = setup()
+    const a = repo.addPull(7, ['desktop/lib/a.dart'], { draft: true })
+    doneTask(swarm, a)
+    await pass()
+    a.draft = false
+    await pass()
+    a.draft = true
+    await pass()
+    expect(swarm.told).toEqual([])
+  })
+
+  it('tells nothing for a task that is not done, a conflict or too few reads (their own lines), or an eligible pull request', async () => {
+    const { repo, swarm, pass } = setup()
+    const working = repo.addPull(7, ['desktop/lib/a.dart'], { draft: true })
+    swarm.approve(working)
+    const conflicting = repo.addPull(8, ['cli/src/b.ts'], { mergeable: false })
+    doneTask(swarm, conflicting)
+    const ready = repo.addPull(9, ['backend/src/c.ts'])
+    doneTask(swarm, ready)
+    for (let i = 0; i < 4; i++) await pass()
+    expect(swarm.told.map(t => t.key)).toEqual([`train-conflict:${conflicting.head}`])
+  })
+
+  it('says a ready pull request waits for the next batch when it shares a file with one in the batch, pass after pass', async () => {
+    const { repo, swarm, pass } = setup()
+    const a = repo.addPull(7, ['backend/src/a.ts']), b = repo.addPull(8, ['backend/src/a.ts'])
+    doneTask(swarm, a); doneTask(swarm, b)
+    await pass()
+    repo.state.main = 'f'.repeat(40)
+    await pass()
+    expect(swarm.told).toEqual([expect.objectContaining({ taskId: 'task-8', key: `train-skip:files:7:${b.head}` })])
+    expect(swarm.told[0]!.text).toContain('changes a file that #7 also changes')
+  })
+
+  it('still batches a verdict at the current head by an agent that has since left the project', async () => {
+    const { repo, swarm, pass } = setup()
+    doneTask(swarm, repo.addPull(7, ['backend/src/a.ts']))
+    swarm.approve(repo.state.pulls.get(7)!, ['agent:rowtest-who-left'])
+    await pass()
     expect(repo.batches()).toHaveLength(1)
   })
 })

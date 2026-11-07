@@ -11,7 +11,7 @@
  *
  * Claude Code hands its status line command a JSON status on stdin, with the plan's rate limits in it
  * (`rate_limits.five_hour` / `seven_day`: `used_percentage` 0-100, `resets_at` in epoch seconds; null for an API key).
- * Those numbers, and nothing else of the status, go to `<data>/quota/claude-<sha256(CLAUDE_CONFIG_DIR)[0..16]>.json`,
+ * Those numbers, and nothing else of the status, go to `<data>/quota/claude-<sha256(reportKey(CLAUDE_CONFIG_DIR))[0..16]>.json`,
  * which the daemon reads for the router's quota (lib/quotaReports.ts). Then the person's own command runs with the
  * same input and its output is the status line, exactly as without Harness. Nothing in the recording may stop that:
  * every error there is swallowed.
@@ -19,8 +19,9 @@
 
 import { spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { delimiter, dirname, join } from 'node:path'
+import { mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { delimiter, dirname, join, resolve } from 'node:path'
 
 // Claude Code closes stdin once it has written the status. Should it not, the person's line still shows, a little late.
 const INPUT_WAIT_MS = 2000
@@ -65,8 +66,26 @@ function resetSeconds(value) {
 function windowOf(value) {
   if (!value || typeof value !== 'object') return null
   const used = value.used_percentage ?? value.utilization
-  if (typeof used !== 'number' || !Number.isFinite(used) || used < 0 || used > 100) return null
-  return { used_percentage: used, resets_at: resetSeconds(value.resets_at) }
+  if (typeof used !== 'number' || !Number.isFinite(used) || used < 0) return null
+  // A window Claude Code ran past reads above 100: used up, not unmeasured (#4252).
+  return { used_percentage: Math.min(used, 100), resets_at: resetSeconds(value.resets_at) }
+}
+
+/** The real path, in the case the file system keeps; the path itself while there is none. */
+function realPath(path) {
+  try { return realpathSync.native(path) } catch { return path }
+}
+
+/**
+ * What names the report of a Claude config folder: '' for the default one (unset, or `~/.claude` however written), else
+ * its absolute real path. lib/quotaReports.ts claudeReportKey is the same rule: the daemon reads the folder from its
+ * own launch environment, which may spell it otherwise than this session's shell.
+ */
+function reportKey(configDir) {
+  const dir = configDir?.trim()
+  if (!dir) return ''
+  const key = realPath(resolve(dir))
+  return key === realPath(join(homedir(), '.claude')) ? '' : key
 }
 
 function record(input, data) {
@@ -80,7 +99,7 @@ function record(input, data) {
   }
   if (!Object.keys(windows).length) return
   const folder = join(data, 'quota')
-  const key = createHash('sha256').update(process.env.CLAUDE_CONFIG_DIR || '').digest('hex').slice(0, 16)
+  const key = createHash('sha256').update(reportKey(process.env.CLAUDE_CONFIG_DIR)).digest('hex').slice(0, 16)
   const file = join(folder, `claude-${key}.json`)
   try {
     const { at, five_hour, seven_day } = JSON.parse(readFileSync(file, 'utf8'))

@@ -76,6 +76,8 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
   }
 
   Agent? get _agent => buddyMachineAgent(c, widget.projectId, app);
+  AgentRestartAttempt? get _unconfirmed =>
+      unconfirmedBuddyRestart(c, widget.projectId, app);
 
   void _open() {
     final box = context.findRenderObject() as RenderBox?;
@@ -93,8 +95,11 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
       _flagsFocused = false;
       if (_busy) return;
       _words = [...?_agent?.launchArgs];
-      _marked = _message = null;
-      _warning = false;
+      _marked = null;
+      // A restart whose answer was lost is still unconfirmed when it reopens.
+      final unconfirmed = _unconfirmed != null;
+      _message = unconfirmed ? BuddyRestartResult.unconfirmed.message : null;
+      _warning = unconfirmed;
     });
     _portal.show();
     // The card takes the focus from the button so Esc and Tab act in it.
@@ -119,12 +124,14 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
     return KeyEventResult.ignored;
   }
 
-  Future<void> _restart(Agent agent) async {
+  /// Restarts the Buddy with the card's flags, or with [check] asks the
+  /// machine whether that unconfirmed restart happened.
+  Future<void> _restart(Agent agent, {AgentRestartAttempt? check}) async {
     final app = this.app;
     if (_busy || app == null) return;
     // Text typed but not yet a chip is part of the flags.
     final field = _fieldKey.currentState;
-    final words = field == null ? _words : field.takePending();
+    final words = field == null || check != null ? _words : field.takePending();
     if (words == null) {
       setState(() {
         _marked = null;
@@ -144,6 +151,7 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
       app,
       text: launchArgsLine(words),
       saved: launchArgsLine(agent.launchArgs),
+      check: check,
     );
     // The card may have been closed meanwhile: the result is kept for the
     // next open.
@@ -156,7 +164,9 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
     setState(() {
       _busy = false;
       _message = result.message;
-      _warning = result.outcome == BuddyRestartOutcome.ignored;
+      _warning =
+          result.outcome == BuddyRestartOutcome.ignored ||
+          result.outcome == BuddyRestartOutcome.unconfirmed;
       _marked = result.outcome == BuddyRestartOutcome.refused
           ? _named(result.message)
           : null;
@@ -244,7 +254,7 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
           identity: 'buddy:${widget.projectId}',
           name: widget.label,
           size: size,
-          pattern: true,
+          face: true,
         )
       : SuperTabAvatar.agent(
           buddy,
@@ -285,7 +295,17 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
   Widget _card(BuildContext context) {
     final highContrast = MediaQuery.highContrastOf(context);
     final buddy = readerBuddy(c, widget.projectId);
-    final agent = _agent;
+    final state = buddy == null ? null : app?.stateOf(buddy.machineId);
+    // What an offline computer last listed, or a list not read yet, says
+    // nothing true of the Buddy now: neither Running nor Stopped.
+    final unreachable =
+        buddy != null &&
+        app != null &&
+        (state == null ||
+            state.isOffline ||
+            state.needsLink ||
+            state.agentLoadStatus != AgentLoadStatus.loaded);
+    final agent = unreachable ? null : _agent;
     final editable = c.canWrite && !c.saving && !c.hasPendingAction;
     final canRestart =
         editable &&
@@ -304,7 +324,11 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
         ? grid.AppPalette.online
         : DesktopChrome.hint;
     final status = _busy
-        ? 'Restarting…'
+        ? _unconfirmed != null
+              ? 'Checking…'
+              : 'Restarting…'
+        : unreachable
+        ? "Can't reach $machine"
         : live
         ? 'Running'
         : 'Stopped';
@@ -374,7 +398,15 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
                                 child: const SizedBox.square(dimension: _gap),
                               ),
                               const SizedBox(width: _gap),
-                              Text(status, style: DesktopChrome.metadata()),
+                              // A long computer name ends in an ellipsis.
+                              Flexible(
+                                child: Text(
+                                  status,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: DesktopChrome.metadata(),
+                                ),
+                              ),
                             ],
                           ),
                         ],
@@ -383,6 +415,14 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
                   ],
                 ),
                 fact('Runs on', machine),
+                if (unreachable) ...[
+                  const SizedBox(height: _gap),
+                  Text(
+                    'Restart and launch flags come back when $machine '
+                    'answers.',
+                    style: DesktopChrome.metadata(),
+                  ),
+                ],
                 if (canRestart) ..._flags(agent, engine, machine),
                 if (_message case final message?) ...[
                   const SizedBox(height: _gap),
@@ -440,6 +480,8 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
     required bool editable,
   }) {
     final stopped = agent?.isStopped ?? true;
+    // Another restart could restart it twice: the button checks this one.
+    final unconfirmed = _unconfirmed;
     return Row(
       children: [
         // Restart and Rename on the left; Remove is pushed to the right edge.
@@ -452,7 +494,9 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
               if (canRestart)
                 FilledButton.icon(
                   key: const ValueKey('super-buddy-card-restart'),
-                  onPressed: _busy ? null : () => unawaited(_restart(agent!)),
+                  onPressed: _busy
+                      ? null
+                      : () => unawaited(_restart(agent!, check: unconfirmed)),
                   icon: _busy
                       ? const SizedBox.square(
                           dimension: AppIcons.inlineSize,
@@ -464,7 +508,11 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
                         ),
                   label: Text(
                     _busy
-                        ? 'Restarting'
+                        ? unconfirmed != null
+                              ? 'Checking'
+                              : 'Restarting'
+                        : unconfirmed != null
+                        ? 'Check status'
                         : stopped
                         ? 'Start'
                         : 'Restart',
