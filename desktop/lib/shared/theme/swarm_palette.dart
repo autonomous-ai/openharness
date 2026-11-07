@@ -20,6 +20,10 @@ abstract final class SwarmPalette {
 
   /// The thin ring a Lead wears around its avatar.
   static final leadRing = _hsl(42, 92, 58);
+
+  /// Your own chat bubbles, as iMessage draws them (anh Dee's mockup, 11-07): the same in light and dark, under
+  /// white text.
+  static const ownBubble = Color(0xFF0A84FF);
 }
 
 Color _hsl(double hue, double saturation, double lightness) =>

@@ -52,10 +52,12 @@ void main() {
   });
 
   testWidgets(
-    'the sender is named at 13 px in semibold on the body\'s line, the time '
-    'at 12 px in tertiary ink',
+    'another sender is named over their bubble at 13 px, plain, in '
+    'secondary ink; your own bubble carries no name',
     (tester) async {
-      final server = ConversationServer()..append('Shipped');
+      final server = ConversationServer()
+        ..append('Shipped')
+        ..append('Thanks', agent: true);
       await showView(tester, server);
       final row = find.byType(SuperTabMessageRow);
       final texts = tester
@@ -63,16 +65,11 @@ void main() {
             find.descendant(of: row, matching: find.byType(Text)),
           )
           .toList();
-      // The reader's own message: its author reads You.
-      final name = texts.firstWhere((t) => t.data == 'You');
+      expect(texts.where((t) => t.data == 'You'), isEmpty);
+      final name = texts.firstWhere((t) => t.data == 'Lead');
       expect(name.style!.fontSize, 13);
-      expect(name.style!.fontWeight, FontWeight.w600);
-      expect(lineOf(name.style!), closeTo(20, 0.01));
-      final time = texts.firstWhere(
-        (t) => RegExp(r'^\d{1,2}:\d{2}').hasMatch(t.data ?? ''),
-      );
-      expect(time.style!.fontSize, 12);
-      expect(time.style!.color, DesktopChrome.hint);
+      expect(name.style!.fontWeight, FontWeight.w400);
+      expect(name.style!.color, DesktopChrome.muted);
     },
   );
 

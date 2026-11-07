@@ -136,27 +136,21 @@ void main() {
       ('one line', 'Check the release notes.'),
       ('five lines', fiveLines),
     ]) {
-      testWidgets('$lines: the chips stay on one row under the last line, '
-          'send at the bottom-right', (tester) async {
+      testWidgets('$lines: the chips sit in the pill by the last line, send '
+          'beside the pill at its bottom (#4529)', (tester) async {
         await show(tester);
         final box = field(thread: false);
         await type(tester, box, text);
         final line = lastLine(tester, box);
-        final row = tester.getRect(chips.last);
-        for (final chip in chips) {
+        final pill = tester.getRect(surface);
+        for (final chip in chips.take(2)) {
           final rect = tester.getRect(chip);
-          expect(rect.top, greaterThanOrEqualTo(line.bottom), reason: '$chip');
-          expect((rect.center.dy - row.center.dy).abs(), lessThan(1));
-          expect(
-            rect.bottom,
-            lessThanOrEqualTo(tester.getRect(surface).bottom),
-          );
+          expect(rect.bottom, lessThanOrEqualTo(pill.bottom), reason: '$chip');
+          expect(rect.bottom, greaterThanOrEqualTo(line.bottom - 1));
         }
-        expect(row.right, greaterThan(tester.getRect(surface).right - 16));
-        expect(
-          tester.getRect(surface).bottom - row.bottom,
-          lessThanOrEqualTo(16),
-        );
+        final send = tester.getRect(chips.last);
+        expect(send.left, greaterThanOrEqualTo(pill.right));
+        expect((send.bottom - pill.bottom).abs(), lessThanOrEqualTo(4));
       });
     }
   });

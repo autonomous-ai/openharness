@@ -9,9 +9,11 @@ import 'package:video_player/video_player.dart';
 import '../core/open_in_browser.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/swarm_palette.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/finger_target.dart';
 import 'attachment_viewer.dart';
+import 'chat/bubble.dart';
 import 'file_links.dart';
 import 'model.dart';
 import 'voice_length.dart';
@@ -183,9 +185,12 @@ class _SuperTabVoiceBubbleState extends State<SuperTabVoiceBubble> {
         ? (position.inMilliseconds / length.inMilliseconds).clamp(0.0, 1.0)
         : 0.0;
     final finger = workspaceIsCompact(context);
+    // Your own voice message is your bubble's blue, under white ink; anyone
+    // else's their grey (anh Dee's mockup, 11-07, #4529).
+    final own = SwarmBubbleSide.ownOf(context);
+    final ink = own ? SwarmBubble.ownInk : null;
     return Material(
-      // The file chip's fill: the bubble is the chip of a voice file.
-      color: DesktopChrome.foreground.withValues(alpha: .055),
+      color: own ? SwarmPalette.ownBubble : DesktopChrome.field,
       shape: const StadiumBorder(),
       child: Padding(
         // The length ends it, a group's gap in from the bubble's round end.
@@ -202,18 +207,18 @@ class _SuperTabVoiceBubbleState extends State<SuperTabVoiceBubble> {
               enabled: finger,
               _PlayButton(
                 key: ValueKey('super-voice-play:$id'),
+                own: own,
                 playing: playing,
                 onPressed: _loading ? null : () => unawaited(_toggle()),
               ),
             ),
             const SizedBox(width: grid.AppDesktop.controlGap),
-            _Waveform(id: id, bars: voice.waveform, played: played),
+            _Waveform(id: id, bars: voice.waveform, played: played, own: own),
             const SizedBox(width: grid.AppDesktop.controlGap),
             Text(
               superTabVoiceLength(position > Duration.zero ? position : length),
-              style: DesktopChrome.metadata().copyWith(
-                fontFeatures: const [FontFeature.tabularFigures()],
-              ),
+              style: DesktopChrome.metadata(color: ink)
+                  .copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
             ),
           ],
         ),
@@ -223,15 +228,20 @@ class _SuperTabVoiceBubbleState extends State<SuperTabVoiceBubble> {
 }
 
 class _PlayButton extends StatelessWidget {
-  const _PlayButton({super.key, required this.playing, this.onPressed});
-  final bool playing;
+  const _PlayButton({
+    super.key,
+    required this.own,
+    required this.playing,
+    this.onPressed,
+  });
+  final bool own, playing;
   final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) => Tooltip(
     message: playing ? 'Pause' : 'Play',
     child: Material(
-      color: DesktopChrome.accent,
+      color: own ? SwarmBubble.ownInk : DesktopChrome.accent,
       shape: const CircleBorder(),
       child: InkWell(
         customBorder: const CircleBorder(),
@@ -241,7 +251,7 @@ class _PlayButton extends StatelessWidget {
           child: Icon(
             playing ? AppIcons.pause : AppIcons.play,
             size: AppIcons.metadataSize,
-            color: DesktopChrome.onSelection,
+            color: own ? SwarmPalette.ownBubble : DesktopChrome.onSelection,
           ),
         ),
       ),
@@ -252,10 +262,16 @@ class _PlayButton extends StatelessWidget {
 /// The clip's loudness, one bar per slice: the [played] fraction in the
 /// accent, the rest muted.
 class _Waveform extends StatelessWidget {
-  const _Waveform({required this.id, required this.bars, required this.played});
+  const _Waveform({
+    required this.id,
+    required this.bars,
+    required this.played,
+    required this.own,
+  });
   final String id;
   final List<int> bars;
   final double played;
+  final bool own;
 
   /// A bar, and the gap after it, are each a list row's gap wide; the
   /// tallest is an icon's height, the quietest a dot.
@@ -278,7 +294,11 @@ class _Waveform extends StatelessWidget {
               child: DecoratedBox(
                 key: ValueKey('super-voice-bar:$id:$i'),
                 decoration: BoxDecoration(
-                  color: i < filled
+                  color: own
+                      ? SwarmBubble.ownInk.withValues(
+                          alpha: i < filled ? 1 : .55,
+                        )
+                      : i < filled
                       ? DesktopChrome.accent
                       : DesktopChrome.muted,
                   borderRadius: BorderRadius.circular(_bar / 2),

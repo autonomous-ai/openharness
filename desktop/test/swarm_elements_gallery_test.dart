@@ -7,8 +7,15 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
-import 'package:harness/state/harness_activity.dart';
 import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/state/harness_activity.dart';
+import 'package:harness/super_tabs/chat/chat_card.dart';
+import 'package:harness/super_tabs/chat/chat_time.dart';
+import 'package:harness/super_tabs/chat/composer_pill.dart';
+import 'package:harness/super_tabs/chat/fold.dart';
+import 'package:harness/super_tabs/chat/send_button.dart';
+import 'package:harness/super_tabs/swarm_type.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/shared/widgets/app_icon_button.dart';
 import 'package:harness/state/harness_attachments.dart';
@@ -169,7 +176,7 @@ Future<List<SuperTabController>> _show(
   await buddy.select('swarm-buddy-peer');
   await member.select('aeef');
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 1740);
+  tester.view.physicalSize = const Size(760, 1950);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -189,6 +196,8 @@ Future<List<SuperTabController>> _show(
       ),
     ),
   );
+  await tester.pump();
+  // A fold says More a frame after it measures what it holds.
   await tester.pump();
   expect(tester.takeException(), isNull);
   return [buddy, member, empty];
@@ -637,27 +646,78 @@ class _Gallery extends StatelessWidget {
                   ),
                 ],
               ),
-              title('Chat: message rows, and the composer empty and typed'),
-              SizedBox(
-                width: 440,
-                child: Column(
-                  children: [
-                    _message(
-                      'River',
-                      'New Project is in the sidebar now.',
-                      agent: _agent('River'),
-                    ),
-                    _message('dee', 'Found it, thanks!', person: _person),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 8),
-              const Row(
+              title('Chat: bubbles, a time after a pause, cards, a fold'),
+              Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SizedBox(width: 340, child: _Composer('empty', '')),
-                  SizedBox(width: 16),
-                  SizedBox(width: 340, child: _Composer('typed', 'Ship it')),
+                  SizedBox(
+                    width: 400,
+                    child: Column(
+                      children: [
+                        _message(
+                          'River',
+                          'New Project is in the sidebar now.',
+                          agent: _agent('River'),
+                          joinsBelow: true,
+                        ),
+                        _message(
+                          'River',
+                          'Press it and name the project.',
+                          agent: _agent('River'),
+                          id: 'm-River-2',
+                          grouped: true,
+                        ),
+                        SwarmChatTime(DateTime.utc(2026, 11, 7, 9, 12)),
+                        _message('dee', 'Found it, thanks!', person: _person),
+                      ],
+                    ),
+                  ),
+                  gap(),
+                  SizedBox(
+                    width: 300,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SwarmChatCard(
+                          icon: AppIcons.send,
+                          label: 'Sent to River',
+                          title: 'Everything waiting on me shows in Decisions',
+                          action: 'View brief',
+                          details: SizedBox.shrink(),
+                        ),
+                        const SizedBox(height: 8),
+                        const SwarmChatCard(
+                          icon: AppIcons.circleCheck,
+                          label: 'Shipped',
+                          title: 'Wake fix: the mic closes after 1 second',
+                          action: 'What changed',
+                          details: SizedBox.shrink(),
+                        ),
+                        const SizedBox(height: 8),
+                        SwarmFold(
+                          child: Text(
+                            [for (var i = 1; i <= 9; i++) 'Line $i of a plan.']
+                                .join('\n'),
+                            style: SwarmType.body(context),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              title('Chat composer: the pill empty and typed, a thread box'),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(width: 210, child: _pill(context, typed: false)),
+                  gap(),
+                  SizedBox(width: 210, child: _pill(context, typed: true)),
+                  gap(),
+                  const SizedBox(
+                    width: 250,
+                    child: _Composer('typed', 'Ship it'),
+                  ),
                 ],
               ),
               title('Top bar: your Buddy, a member agent'),
@@ -774,9 +834,14 @@ Widget _message(
   String text, {
   SuperTabAgent? agent,
   SuperTabPerson? person,
+  String? id,
+  bool grouped = false,
+  bool joinsBelow = false,
 }) => SuperTabMessageRow(
+  grouped: grouped,
+  joinsBelow: joinsBelow,
   message: SuperTabMessage.fromJson({
-    'id': 'm-$author',
+    'id': id ?? 'm-$author',
     'conversationId': 'lead',
     'text': text,
     'sequence': 1,
@@ -793,7 +858,45 @@ Widget _message(
   readerId: 'p1',
 );
 
-/// A chat composer ([SuperTabReplyBox], the box both composers draw) holding
+/// The chat's composer as it draws itself: the pill around the paperclip and
+/// the text, the mic beside it while empty, send once [typed].
+Widget _pill(BuildContext context, {required bool typed}) => Row(
+  crossAxisAlignment: CrossAxisAlignment.end,
+  children: [
+    Expanded(
+      child: SwarmComposerPill(
+        child: SizedBox(
+          height: grid.AppControl.heightFieldScaled,
+          child: Row(
+            children: [
+              const SizedBox(width: 10),
+              Icon(AppIcons.paperclip, size: 16, color: DesktopChrome.muted),
+              const SizedBox(width: 10),
+              Text(
+                typed ? 'Ship it' : 'Message #Pilot',
+                style: SwarmType.composer(
+                  context,
+                  color: typed ? null : DesktopChrome.hint,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+    const SizedBox(width: 8),
+    SizedBox(
+      height: grid.AppControl.heightFieldScaled,
+      child: Center(
+        child: typed
+            ? SwarmSendButton(tooltip: 'Send', onPressed: () {})
+            : Icon(AppIcons.mic, size: 16, color: DesktopChrome.muted),
+      ),
+    ),
+  ],
+);
+
+/// A thread's reply box ([SuperTabReplyBox]) holding
 /// [typed]: the round send grey while empty, blue once there is text.
 class _Composer extends StatefulWidget {
   const _Composer(this.name, this.typed);

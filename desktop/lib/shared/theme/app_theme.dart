@@ -1561,9 +1561,9 @@ abstract final class AppDesktop {
 
   /// The Swarm composer's box, as the phone draws it (Huy, 11-04): the text
   /// [composerTop] below the top and [composerSide] in from each side, and
-  /// [composerRowGap] between the text and the row of actions under it. Its
-  /// corners are Cmd-N's field's (anh Dee, 11-07, #4467).
-  static const double composerRadius = 12;
+  /// [composerRowGap] between the text and the row of actions under it. A
+  /// rounded pill, as iMessage's (anh Dee's mockup, 11-07, #4529).
+  static const double composerRadius = 20;
   static const double composerTop = 12;
   static const double composerSide = groupGap;
   static const double composerRowGap = 12;
@@ -1580,6 +1580,29 @@ abstract final class AppDesktop {
   /// A chat or thread message's face: round at 28, as every other avatar
   /// (anh Dee, 11-07, #4467; was Slack's 36 rounded square).
   static const double messageAvatarSize = 28;
+
+  /// A chat bubble's text from its edges (anh Dee's mockup, 11-07, #4529).
+  static const EdgeInsets bubblePadding = EdgeInsets.symmetric(
+    horizontal: 12,
+    vertical: 7,
+  );
+
+  /// A chat card's content from its edges: a little more than a bubble's.
+  static const EdgeInsets chatCardPadding = EdgeInsets.fromLTRB(14, 10, 14, 10);
+
+  /// A centered chat time: a pause's room above it, its line's below.
+  static const EdgeInsets chatTimePadding = EdgeInsets.only(top: 12, bottom: 4);
+
+  /// A small line under or beside a bubble (a fold's More, a line's status)
+  /// from it.
+  static const double bubbleNoteGap = 4;
+
+  /// A group chat's name over its first bubble: in from the bubble's edge as
+  /// its text is, and close above it.
+  static const EdgeInsets bubbleNamePadding = EdgeInsets.only(
+    left: 12,
+    bottom: 2,
+  );
   static const double formWidth = 460;
   static const double focusWidth = 1.5;
 
