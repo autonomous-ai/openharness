@@ -1030,7 +1030,7 @@ export class SuperTabStore {
   }
 
   /** Loads again with more named groups, agents or starts when the first load lacks one a command needs. */
-  private async ensure(tx: Transaction, loaded: Loaded, named: Omit<Named, 'allGroups' | 'includeRecentStarts'>): Promise<Loaded> {
+  private async ensure(tx: Transaction, loaded: Loaded, named: Named): Promise<Loaded> {
     const has = (ids: string[] | undefined, present: (id: string) => boolean) => (ids ?? []).every(present)
     const { state } = loaded
     if (has(named.groupIds, id => state.conversations.some(c => c.id === id)) && has(named.startIds, id => !!state.starts?.some(s => s.id === id))
