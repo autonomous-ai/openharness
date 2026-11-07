@@ -6,6 +6,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
+import { loadMachineAccounts } from '../src/superTabs/parts/index.js'
 import { filterOf, planDatabase, profiled } from './plans.test-support.js'
 import type { ProfileEntry } from './bench/profile.js'
 
@@ -154,5 +155,12 @@ describe('what a common command reads in a prod-sized Swarm (task #4368)', () =>
   it('the dispatch pass a write schedules', async () => {
     await measure('dispatch pass', () => s.store.dispatchCrew(s.tab))
     within('dispatch pass')
+  })
+  // Its match names the Swarm and live rows as the held index does: read by `_id`, named, it examines one machine of 60.
+  it('an agent\'s machine account, read by id', async () => {
+    const { key } = await db.swarmMachine.findFirstOrThrow({ where: { tabId: s.tab, deleted: false } })
+    const machines = (await profiled(db, () => db.$transaction(tx => loadMachineAccounts(tx, s.tab, [key]))))
+      .filter(e => e.ns.endsWith('.SwarmMachine') && e.op !== 'getmore')
+    expect(machines.map(e => [e.planSummary, e.docsExamined])).toEqual([['IXSCAN { _id: 1 }', 1]])
   })
 })

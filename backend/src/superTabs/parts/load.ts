@@ -183,14 +183,15 @@ export async function loadGroupUnless(tx: Transaction, tabId: string, key: strin
 
 /** These live machine parts by key, in one read by `_id`, with only what says which account an agent there runs as
  *  (projects.ts teamAccountPool): its host Mac and its session kind. Its lists read empty. What a one-group read checks an
- *  agent's host against (read/service.ts oneGroup), never a whole machine row with its readings. */
+ *  agent's host against (read/service.ts oneGroup), never a whole machine row with its readings. By `_id`, named: with `tabId`
+ *  and `deleted` in its match, Mongo could plan it on the held index and examine every machine of the Swarm (task #4368). */
 export async function loadMachineAccounts(tx: Transaction, tabId: string, keys: string[]): Promise<Part<MachineData>[]> {
   if (!keys.length) return []
   const none = { $literal: [] }
-  const rows = await tx.swarmMachine.aggregateRaw({ pipeline: [{ $match: { _id: { $in: [...new Set(keys)].map(key => partId(tabId, key)) }, tabId, deleted: false } },
+  const rows = await readBy(tx, 'SwarmMachine', 'id', [{ $match: { _id: { $in: [...new Set(keys)].map(key => partId(tabId, key)) }, tabId, deleted: false } },
     { $project: { tabId: 1, key: 1, version: 1, changedAt: 1, deleted: 1, ordinal: 1, 'data.machineId': 1, 'data.contribution.machineId': 1,
       'data.contribution.hostMachineId': 1, 'data.contribution.observation.sessionKind': 1, 'data.reservations': none, 'data.released': none,
-      'data.closingSessions': none, 'data.cleanups': none } }] }) as unknown as Array<Record<string, unknown>>
+      'data.closingSessions': none, 'data.cleanups': none } }])
   return rows.map(row => toPart<MachineData>('machine', rawPartRow(row)))
 }
 
