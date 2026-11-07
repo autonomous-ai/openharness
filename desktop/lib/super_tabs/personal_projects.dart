@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 
 import '../logging/app_log.dart';
 import '../state/app_state.dart';
+import '../state/desk_sync.dart' show isDeskId;
 import '../state/pane_arrangement.dart';
 import '../state/pane_layout_store.dart';
 import '../state/pane_preset.dart';
@@ -726,10 +727,12 @@ class PersonalProjects extends ChangeNotifier {
         // project is made (a later rename of the tab keeps the project, and its
         // name).
         // A project tab's no-repo panes are its project's (panesFor): no
-        // project is made for that tab, on any computer.
+        // project is made for that tab, on any computer. A window-local
+        // swarm-N ID is not shared; wait for the desk to assign its real ID.
         final wanted = <String, String>{
           for (final p in personalPanes(app, projectTabs: _projectTabs(c)))
-            if (!_isProjectTab(p.repo))
+            if (!_isProjectTab(p.repo) &&
+                (!_isTab(p.repo) || isDeskId(p.tab.id)))
               p.repo: _isTab(p.repo)
                   ? tabProjectName(p.tab.name)
                   : repoName(p.repo),

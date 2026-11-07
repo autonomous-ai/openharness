@@ -69,6 +69,18 @@ var _paneIds = 9000;
 TerminalPane _pane(String machineId, String agentId) =>
     TerminalPane(id: _paneIds++, machineId: machineId, agentId: agentId);
 
+// Existing scenarios use readable names; the desk gives each tab a shared ID.
+String _deskId(String name) =>
+    const {
+      'one': '00000000000000000000000000000001',
+      'two': '00000000000000000000000000000002',
+      'three': '00000000000000000000000000000003',
+      'mixed': '00000000000000000000000000000004',
+      'desk-monitor': '00000000000000000000000000000005',
+      'desk-code': '00000000000000000000000000000006',
+    }[name] ??
+    name;
+
 /// A desk tab of the person's, holding [panes] in this order.
 Swarm _tab(
   AppNotifier app,
@@ -76,7 +88,7 @@ Swarm _tab(
   List<TerminalPane> panes, {
   String? name,
 }) {
-  final tab = Swarm(id: id, name: name ?? id)..panes.addAll(panes);
+  final tab = Swarm(id: _deskId(id), name: name ?? id)..panes.addAll(panes);
   app.swarms.add(tab);
   return tab;
 }
@@ -274,8 +286,14 @@ void main() {
         _shots,
         'personal-panes-open-${brightness.name}',
       );
-      f.app.swarms.firstWhere((s) => s.id == 'one').panes.remove(p.api);
-      f.app.swarms.firstWhere((s) => s.id == 'two').panes.remove(p.api2);
+      f.app.swarms
+          .firstWhere((s) => s.id == _deskId('one'))
+          .panes
+          .remove(p.api);
+      f.app.swarms
+          .firstWhere((s) => s.id == _deskId('two'))
+          .panes
+          .remove(p.api2);
       f.app.notifyListeners();
       for (var i = 0; i < 10; i++) {
         await tester.pump(const Duration(milliseconds: 20));
@@ -366,7 +384,7 @@ void main() {
       expect(id, personalProjectOperation('github.com/acme/api'));
       expect(id, isNot(personalProjectOperation('github.com/other/api')));
       expect(
-        personalProjectOperation(personalTabKey('desk-code')),
+        personalProjectOperation(personalTabKey(_deskId('desk-code'))),
         allOf(startsWith('personal-tab-'), isNot(contains('desk-code'))),
       );
     });
@@ -376,6 +394,29 @@ void main() {
       expect(repoLongName('github.com/acme/api'), 'api (acme/api)');
       expect(repoLongName('gitlab.com/team/sub/api'), 'api (sub/api)');
     });
+  });
+
+  test('a swarm-N tab makes no project before the desk join', () async {
+    final f = SuperTabLaunchFixture();
+    f.app.machineStates['m']!.agents = [
+      _agent('notes'),
+      _agent('api', remote: 'github.com/acme/api'),
+    ];
+    final tab = _tab(f.app, 'swarm-1', [
+      _pane('m', 'notes'),
+      _pane('m', 'api'),
+    ], name: 'Notes');
+    final c = await _personal(f);
+    final projects = PersonalProjects.of(f.app);
+    await projects.sync(c);
+    expect(_commands(f), hasLength(1));
+    expect(c.snapshot!.projects.where((p) => p.name == 'Notes'), isEmpty);
+    expect(c.snapshot!.projects.where((p) => p.name == 'api'), hasLength(1));
+
+    tab.id = '0123456789abcdef0123456789abcdef';
+    await projects.sync(c);
+    expect(_commands(f), hasLength(2));
+    expect(c.snapshot!.projects.where((p) => p.name == 'Notes'), hasLength(1));
   });
 
   group('the person\'s panes, by repo', () {
@@ -388,7 +429,7 @@ void main() {
         [for (final e in panes) e.repo],
         [
           'github.com/acme/api',
-          personalTabKey('one'),
+          personalTabKey(_deskId('one')),
           'github.com/acme/web',
           'github.com/acme/api',
         ],
@@ -398,14 +439,14 @@ void main() {
     test('a pane twice in the tabs counts once, where it is first', () {
       final f = SuperTabLaunchFixture();
       final p = _desk(f);
-      f.app.swarms.firstWhere((s) => s.id == 'two').panes.add(p.api);
+      f.app.swarms.firstWhere((s) => s.id == _deskId('two')).panes.add(p.api);
       expect(
         personalPanes(f.app)
             .where((e) => identical(e.pane, p.api))
             .single
             .tab
             .id,
-        'one',
+        _deskId('one'),
       );
     });
 
@@ -449,7 +490,7 @@ void main() {
         [for (final p in creates) p['operationId']],
         [
           personalProjectOperation('github.com/acme/api'),
-          personalProjectOperation(personalTabKey('one')),
+          personalProjectOperation(personalTabKey(_deskId('one'))),
           personalProjectOperation('github.com/acme/web'),
         ],
       );
@@ -766,7 +807,10 @@ void main() {
         ...f.app.machineStates['m']!.agents,
         _agent('n2', remote: 'git@github.com:kim/api.git'),
       ];
-      f.app.swarms.firstWhere((s) => s.id == 'one').panes.add(_pane('m', 'n2'));
+      f.app.swarms
+          .firstWhere((s) => s.id == _deskId('one'))
+          .panes
+          .add(_pane('m', 'n2'));
       await PersonalProjects.of(f.app).sync(c);
       final renames = _commands(f, 'project.rename');
       expect(renames, hasLength(1));
@@ -804,11 +848,11 @@ void main() {
       final api = c.snapshot!.projects
           .firstWhere((p) => p.name == 'api')
           .leadConversationId;
-      f.app.swarms.firstWhere((s) => s.id == 'one')
+      f.app.swarms.firstWhere((s) => s.id == _deskId('one'))
         ..name = 'Renamed'
         ..nameIsCustom = true;
       expect(PersonalProjects.of(f.app).panesFor(c, api), [p.api, p.api2]);
-      f.app.swarms.removeWhere((s) => s.id == 'one');
+      f.app.swarms.removeWhere((s) => s.id == _deskId('one'));
       expect(PersonalProjects.of(f.app).panesFor(c, api), [p.api2]);
       await PersonalProjects.of(f.app).sync(c);
       expect(_commands(f), hasLength(3));
@@ -851,7 +895,7 @@ void main() {
       expect(keys[p.api], 'github.com/acme/api');
       expect(keys[p.api2], 'github.com/acme/api');
       expect(keys[p.web], 'github.com/acme/web');
-      expect(keys[p.folder], personalTabKey('one'));
+      expect(keys[p.folder], personalTabKey(_deskId('one')));
     });
 
     test(
@@ -869,7 +913,11 @@ void main() {
         _tab(f.app, 'two', [_pane('laptop', 'a2')]);
         expect(
           [for (final e in personalPanes(f.app)) e.repo],
-          ['gh-work/acme/api', personalTabKey('one'), 'gh-work/acme/api'],
+          [
+            'gh-work/acme/api',
+            personalTabKey(_deskId('one')),
+            'gh-work/acme/api',
+          ],
         );
         final c = await _personal(f);
         await PersonalProjects.of(f.app).sync(c);
@@ -957,7 +1005,7 @@ void main() {
       final c = await _personal(f);
       await PersonalProjects.of(f.app).sync(c);
       final code = c.snapshot!.projects.firstWhere((p) => p.name == 'code');
-      f.app.swarms.firstWhere((s) => s.id == 'desk-code')
+      f.app.swarms.firstWhere((s) => s.id == _deskId('desk-code'))
         ..name = 'backend'
         ..nameIsCustom = true;
       await PersonalProjects.of(f.app).sync(c);
@@ -1015,7 +1063,7 @@ void main() {
         ..clear()
         ..addAll(f.connection.server.state);
       final lp = _huyDesk(laptop);
-      laptop.app.swarms.firstWhere((s) => s.id == 'desk-code')
+      laptop.app.swarms.firstWhere((s) => s.id == _deskId('desk-code'))
         ..name = 'backend'
         ..nameIsCustom = true;
       final lc = await _personal(laptop);
@@ -1105,8 +1153,9 @@ void main() {
     test('a tab with no usable name still gets a project, under a name the server takes', () async {
       final f = SuperTabLaunchFixture();
       final p = _huyDesk(f);
-      f.app.swarms.firstWhere((s) => s.id == 'desk-code').name = '   ';
-      f.app.swarms.firstWhere((s) => s.id == 'desk-monitor').name = 'M' * 300;
+      f.app.swarms.firstWhere((s) => s.id == _deskId('desk-code')).name = '   ';
+      f.app.swarms.firstWhere((s) => s.id == _deskId('desk-monitor')).name =
+          'M' * 300;
       final c = await _personal(f);
       await PersonalProjects.of(f.app).sync(c);
       final names = [for (final p in c.snapshot!.projects) p.name];
@@ -1256,8 +1305,8 @@ void main() {
       final api = named(c, 'api'), web = named(c, 'web');
       expect(projects.hidden(c, api.id), isFalse);
 
-      final one = f.app.swarms.firstWhere((s) => s.id == 'one');
-      final two = f.app.swarms.firstWhere((s) => s.id == 'two');
+      final one = f.app.swarms.firstWhere((s) => s.id == _deskId('one'));
+      final two = f.app.swarms.firstWhere((s) => s.id == _deskId('two'));
       one.panes.remove(p.api);
       // One of its panes is still open, on the laptop.
       expect(projects.hidden(c, api.id), isFalse);
@@ -1284,8 +1333,14 @@ void main() {
       await projects.sync(c);
       final api = named(c, 'api');
       expect(projects.hiddenIn(c), isEmpty);
-      f.app.swarms.firstWhere((s) => s.id == 'one').panes.remove(p.api);
-      f.app.swarms.firstWhere((s) => s.id == 'two').panes.remove(p.api2);
+      f.app.swarms
+          .firstWhere((s) => s.id == _deskId('one'))
+          .panes
+          .remove(p.api);
+      f.app.swarms
+          .firstWhere((s) => s.id == _deskId('two'))
+          .panes
+          .remove(p.api2);
       expect(projects.hiddenIn(c), {api.id});
       for (final project in c.snapshot!.projects) {
         expect(
@@ -1310,7 +1365,7 @@ void main() {
         final projects = PersonalProjects.of(f.app);
         await projects.sync(c);
         final code = named(c, 'code');
-        f.app.swarms.firstWhere((s) => s.id == 'desk-code').panes
+        f.app.swarms.firstWhere((s) => s.id == _deskId('desk-code')).panes
           ..remove(p.a1)
           ..remove(p.a2);
         expect(projects.hidden(c, code.id), isTrue);
@@ -1326,7 +1381,10 @@ void main() {
       final projects = PersonalProjects.of(f.app);
       await projects.sync(c);
       final api = named(c, 'api');
-      f.app.swarms.firstWhere((s) => s.id == 'one').panes.remove(p.api);
+      f.app.swarms
+          .firstWhere((s) => s.id == _deskId('one'))
+          .panes
+          .remove(p.api);
       // The laptop just came back and has not said what runs there: its
       // pane may well be the api's.
       f.app.machineStates['laptop']!
@@ -1339,7 +1397,10 @@ void main() {
         ..agentsListedOnce = true
         ..agentLoadStatus = AgentLoadStatus.loaded;
       expect(projects.hidden(c, api.id), isFalse);
-      f.app.swarms.firstWhere((s) => s.id == 'two').panes.remove(p.api2);
+      f.app.swarms
+          .firstWhere((s) => s.id == _deskId('two'))
+          .panes
+          .remove(p.api2);
       expect(projects.hidden(c, api.id), isTrue);
     });
 
@@ -1350,7 +1411,9 @@ void main() {
       final c = await _personal(f);
       final projects = PersonalProjects.of(f.app);
       await projects.sync(c);
-      f.app.swarms.removeWhere((s) => s.id == 'one' || s.id == 'two');
+      f.app.swarms.removeWhere(
+        (s) => s.id == _deskId('one') || s.id == _deskId('two'),
+      );
       expect(projects.hidden(c, named(c, 'api').id), isTrue);
       final byHand = c.snapshot!.projects
           .firstWhere((p) => p.leadConversationId == 'lead')
@@ -1398,8 +1461,14 @@ void main() {
       expect(row(api), findsOneWidget);
 
       c.select(api.leadConversationId);
-      f.app.swarms.firstWhere((s) => s.id == 'one').panes.remove(p.api);
-      f.app.swarms.firstWhere((s) => s.id == 'two').panes.remove(p.api2);
+      f.app.swarms
+          .firstWhere((s) => s.id == _deskId('one'))
+          .panes
+          .remove(p.api);
+      f.app.swarms
+          .firstWhere((s) => s.id == _deskId('two'))
+          .panes
+          .remove(p.api2);
       redraw.value++;
       await tester.pump();
       // Open now: it stays until the person goes elsewhere.
@@ -1415,7 +1484,7 @@ void main() {
         isNot(contains(api.leadConversationId)),
       );
 
-      f.app.swarms.firstWhere((s) => s.id == 'two').panes.add(p.api2);
+      f.app.swarms.firstWhere((s) => s.id == _deskId('two')).panes.add(p.api2);
       redraw.value++;
       await tester.pump();
       expect(row(api), findsOneWidget);
@@ -1445,8 +1514,8 @@ void main() {
         late SuperTabController c;
         c = await _personal(f);
         await PersonalProjects.of(f.app).sync(c);
-        final one = f.app.swarms.firstWhere((s) => s.id == 'one');
-        final two = f.app.swarms.firstWhere((s) => s.id == 'two');
+        final one = f.app.swarms.firstWhere((s) => s.id == _deskId('one'));
+        final two = f.app.swarms.firstWhere((s) => s.id == _deskId('two'));
         final before = (
           one: [...one.panes],
           two: [...two.panes],
@@ -1551,7 +1620,7 @@ void main() {
         expect(swarm.panes, [p.api, p.api2]);
 
         // Tab `one` holds the api pane [term] is showing.
-        await f.app.closeSwarm('one');
+        await f.app.closeSwarm(_deskId('one'));
         for (var i = 0; i < 20; i++) {
           await tester.pump(const Duration(milliseconds: 20));
         }
@@ -1561,7 +1630,7 @@ void main() {
         );
         expect(added, hasLength(1));
         expect(added.single, isA<ClosedSwarm>());
-        expect((added.single as ClosedSwarm).id, 'one');
+        expect((added.single as ClosedSwarm).id, _deskId('one'));
         await tester.pumpWidget(const SizedBox());
         await c.flush();
         f.app.superTabs.dispose();
