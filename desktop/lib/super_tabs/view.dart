@@ -5146,9 +5146,12 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// [underHeader]: the chat is under the middle's one-row header, which carries the Buddy's pickers.
   Widget _conversation(bool narrow, {bool underHeader = false}) {
-    if (!widget.board &&
+    // The Desktop keeps an agent's chat open in a Swarm with no projects; with none open, there is nothing to load and
+    // the way to start shows instead (task #4219).
+    if ((!widget.board || c.selected == null) &&
         c.snapshot?.projects.isEmpty == true &&
         !c.accessRevoked) {
+      final newAgent = widget.board && widget.app != null ? _newAgent : null;
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -5159,13 +5162,23 @@ class _SuperTabViewState extends State<SuperTabView>
                 'Create a project to get started.',
                 style: DesktopChrome.text(color: DesktopChrome.muted),
               ),
-              if (WorkspaceChrome.of(context).superTabRecovers &&
+              if ((widget.board ||
+                      WorkspaceChrome.of(context).superTabRecovers) &&
                   widget.onNewProject != null) ...[
                 const SizedBox(height: 12),
                 FilledButton(
                   style: _thumb,
                   onPressed: c.canWrite ? widget.onNewProject : null,
                   child: const Text('New project'),
+                ),
+              ],
+              if (newAgent != null) ...[
+                const SizedBox(height: 8),
+                TextButton.icon(
+                  key: const ValueKey('super-empty-new-agent'),
+                  onPressed: c.canWrite ? newAgent : null,
+                  icon: const Icon(AppIcons.plus, size: 16),
+                  label: const Text('New agent'),
                 ),
               ],
               if (c.operationError != null) ...[
