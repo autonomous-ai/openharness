@@ -101,3 +101,8 @@ details})`; `SwarmFold({required int lines, required Widget child})`.
       the pill composer empty and typed; fails before the images. Update, inspect, commit.
 - [ ] Doc: Chat message and Chat composer rewritten; blue is for the main action and your own bubbles.
 - [ ] Screenshots light and dark at 1440 and 880 in the PR.
+
+## Follow-up: no threads (this branch, its own PR after #4555)
+
+- Before #4555's server change ships, Desktop must read a reply's inline-answer field and show its one-line quote;
+  agents' replies arrive that way after #4555, and without it they show with no quote (Mac test of #3563, Auditflow).
