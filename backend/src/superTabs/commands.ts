@@ -24,10 +24,12 @@ import {
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
 import { jobKindOf } from './evidence/jobKind.js'
-import { endSteps, stepEndedRows, isStep, stepName, stepsOf, taskOwner } from './steps.js'
+import { endSteps, listStep, stepEndedRows, isStep, stepName, stepsOf, taskOwner } from './steps.js'
 import { closeMerged } from './mergedTasks.js'
 import { noteWriter } from './stuck.js'
-import { reviewPlan, stepBrief, stepCheck, refreshStepBrief, type PlannedStep, type StepKind } from './reviewTable.js'
+import { reviewPlan, refreshStepBrief, type PlannedStep, type StepKind } from './reviewTable.js'
+import { openReviewStep, type StepPull } from './stepOpen.js'
+import { LINUX_WAIT_LINE, testsOnLinux, waitForLinux } from './linuxSteps.js'
 import { builtBy, reviewerCandidates, STRENGTH_RULE } from './reviewerPick.js'
 import { checkedPullRequest, deriveCheck, recordCheckVerdict } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
@@ -93,14 +95,6 @@ import { inThread, leadsGroup, recordAnswered, requireUnanswered } from './answe
 import { laneNamed, pinBuilder, spokenList, stampLane } from './dispatch.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
-/** The most steps a task lists (Conversation.stepIds): production's most was 14 (2026-11-05). */
-const STEPS_LISTED = 200
-/** [task] lists its new step [id], so a new head of its pull request re-derives the step's checks even once it is dormant
- *  (#3394), however the step opened (conversation.create, or a Ready's review steps). A task from before lists none until its
- *  PR watch looks its dormant steps up (review of #3218, round 3): listing only this one would hide those. */
-function listStep(task: Conversation, id: string): void {
-  if (task.stepIds) task.stepIds = [...task.stepIds, id].slice(-STEPS_LISTED)
-}
 /** A route override's reason when its agent gave none, on a decision whose chosen candidate was not a pick (a person's choice, or an older record). */
 const NO_REASON = 'No reason given.'
 /** What a pick-less route's only candidate is chosen for, when its start gives no reason (task #2901). */
@@ -1951,24 +1945,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     const name = stepName(step)
     return /security/i.test(name) ? 'security' : /test/i.test(name) ? 'test' : /review|read/i.test(name) ? 'review' : null
   }
-  /** A new step [planned] of [task], opened as conversation.create opens one with `reviewOf` and `step`. */
-  const openStep = (task: Conversation, planned: PlannedStep, read: NonNullable<CommandContext['pullRequestFiles']>) => {
-    const project = groupProject(state, task)
-    const leadId = conversation(state, project.leadConversationId).leadId
-    const id = stableId(operationId, 'review-step', planned.name)
-    const number = nextConversationNumber(state)
-    state.groupCounter = number
-    const pulls = read.heads ?? read.urls.map((url, i) => ({ url, head: i === 0 ? read.head : null }))
-    const brief = stepBrief(planned, { number: task.number ?? number, title: task.title, pulls })
-    state.conversations.push({ id, ...(state.projects ? { projectId: project.id } : {}), number, title: planned.name, leadId,
-      agentIds: leadId ? [leadId] : [], archived: false, brief, reviewOf: task.id,
-      // A step keeps its task's mark, as conversation.create's does (teamWritten.ts stepMark).
-      ...stepMark(state, task), step: planned.name, openedBy: 'server',
-      assignment: null, lastMessageSequence: 0, codePullRequestUrls: [], checks: storedChecks([{ description: stepCheck(planned), independent: true }], id) })
-    const step = state.conversations.at(-1)!
-    listStep(task, id)
-    message(id, brief, [], null, SYSTEM_ROW, undefined, undefined, undefined, stableId(id, 'brief'))
-    bindTaskCard(step, effects.messages.at(-1)!)
+  /** A new step [planned] of [task] (stepOpen.ts), its brief written as the sender. */
+  const openStep = (task: Conversation, planned: PlannedStep, pulls: readonly StepPull[]) => {
+    const { step, brief } = openReviewStep(state, task, planned, pulls, stableId(operationId, 'review-step', planned.name), sender)
+    effects.messages.push(brief)
+    result.messageId = operationId
     return step
   }
   /**
@@ -1981,19 +1962,28 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   const openReviewSteps = (task: Conversation, read: NonNullable<CommandContext['pullRequestFiles']>) => {
     const existing = stepsOf(state, task.id).filter(step => !step.archived)
     const taken = new Set<string>(), unassigned: Array<{ name: string; kind: StepKind }> = []
+    const pulls = read.heads ?? read.urls.map((url, i) => ({ url, head: i === 0 ? read.head : null }))
     for (const planned of reviewPlan(read.files, context.projectRules?.rules)) {
       const free = (step: Conversation) => !taken.has(step.id)
       let step = existing.find(s => free(s) && stepName(s) === planned.name) ?? existing.find(s => free(s) && stepKind(s) === planned.kind)
       if (step) {
         taken.add(step.id)
-        step.brief = refreshStepBrief(step.brief ?? '', planned, { number: task.number!, title: task.title,
-          pulls: read.heads ?? read.urls.map((url, i) => ({ url, head: i === 0 ? read.head : null })) })
+        step.brief = refreshStepBrief(step.brief ?? '', planned, { number: task.number!, title: task.title, pulls })
+      }
+      // A new Linux step opens only where the project can test on Linux (linuxSteps.ts, task #4278): else it waits, and the
+      // task says once that CI's Linux runs stand in. A step the PM closed is not open, so a later head never brings it back.
+      if (!step && planned.os === 'linux') {
+        if (!testsOnLinux(state, groupProject(state, task), context.now)) {
+          if (waitForLinux(task, planned, pulls)) message(task.id, LINUX_WAIT_LINE, [], null, SYSTEM_ROW, undefined, undefined, undefined, stableId(operationId, 'linux-wait'))
+          continue
+        }
+        delete task.waitingLinuxStep
       }
       if (step && activeWork(step)) continue
       // A step whose every check passed at this very head keeps its verdict: a repeated Ready (a CI rerun) asks nothing again.
       if (step && read.head && step.checks.length && step.checks.every(check => check.passedBy
         && (check.verdicts ?? []).some(verdict => verdict.passed && (verdict as { head?: string }).head === read.head))) continue
-      step ??= openStep(task, planned, read)
+      step ??= openStep(task, planned, pulls)
       const previous = step.assignment?.agentId
       const ranked = reviewerCandidates(state, task, planned.kind, read.head, context.now, planned.os)
       const ordered = [...ranked.filter(a => a.id === previous), ...ranked.filter(a => a.id !== previous)]
