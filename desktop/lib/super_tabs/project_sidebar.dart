@@ -172,10 +172,8 @@ class ProjectSidebar extends StatelessWidget {
     bool? unread,
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 2),
-    child: Material(
+    child: SuperTabRowGround(
       color: selected ? grid.SidebarInk.selected : Colors.transparent,
-      borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-      clipBehavior: Clip.antiAlias,
       child: Semantics(
         button: true,
         selected: selected,
@@ -183,7 +181,7 @@ class ProjectSidebar extends StatelessWidget {
           key: ValueKey(key),
           onTap: onTap,
           hoverColor: grid.SidebarInk.hover,
-          focusColor: grid.SidebarInk.hover,
+          focusColor: Colors.transparent,
           borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
           child: Row(
             children: [
@@ -393,7 +391,7 @@ class ProjectSidebar extends StatelessWidget {
                 key: ValueKey(key ?? 'super-group-${group.id}'),
                 onTap: !tappable ? null : onTap ?? () => onSelect(group.id),
                 hoverColor: Colors.transparent,
-                focusColor: grid.SidebarInk.hover,
+                focusColor: Colors.transparent,
                 borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
                 child: Row(
                   children: [
@@ -1017,8 +1015,9 @@ class ProjectSidebar extends StatelessWidget {
   }
 }
 
-/// A sidebar row's ground: the selected fill, or the hover fill while the
-/// pointer is anywhere over it, one shape across the row's whole width.
+/// A project row's ground: the selected fill, or the hover fill while the
+/// pointer is anywhere over it, one shape across the row's whole width, and
+/// the focus ring ([SuperTabRowGround]).
 class _RowSurface extends StatefulWidget {
   const _RowSurface({required this.selected, required this.child});
   final bool selected;
@@ -1035,14 +1034,12 @@ class _RowSurfaceState extends State<_RowSurface> {
   Widget build(BuildContext context) => MouseRegion(
     onEnter: (_) => setState(() => _hovered = true),
     onExit: (_) => setState(() => _hovered = false),
-    child: Material(
+    child: SuperTabRowGround(
       color: widget.selected
           ? grid.SidebarInk.selected
           : _hovered
           ? grid.SidebarInk.hover
           : Colors.transparent,
-      borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-      clipBehavior: Clip.antiAlias,
       child: widget.child,
     ),
   );

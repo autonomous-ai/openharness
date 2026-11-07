@@ -102,9 +102,7 @@ class SuperTabSectionHeading extends StatelessWidget {
         constraints: const BoxConstraints(minHeight: 32),
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final shownWaiting = collapsed == true && collapsible
-                ? waiting
-                : 0;
+            final shownWaiting = collapsed == true && collapsible ? waiting : 0;
             final ordinaryStyle =
                 this.titleStyle ??
                 DesktopChrome.metadata().copyWith(fontWeight: FontWeight.w600);
