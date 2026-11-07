@@ -209,7 +209,9 @@ describe('personal approval enforced before work', () => {
     const closed = f.runCommand({ type: 'proposal.close', projectId: 'lead', messageId: row.id, reason: 'Out of scope' }, f.pm,
       { proposal: { id: row.id, conversationId: row.conversationId, author: row.author, source: row.source ?? null } })
     const notice = closed.messages.find(m => m.source?.kind === 'proposal-notice')
-    expect(notice).toMatchObject({ conversationId: f.buddyChat, source: { moment: 'decided' } })
+    const mirror = f.state.conversations.find(c => c.proposal?.legacyMessageId === row.id)!
+    // Routed as a board decision's notice is (buddies.ts buddyFor).
+    expect(notice).toMatchObject({ source: { moment: 'decided', cardId: mirror.id } })
     expect(notice!.text).toContain('Out of scope')
   })
   it('redacts a pasted credential from a rejection before its reason reaches stored parts or messages', () => {

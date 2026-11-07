@@ -848,7 +848,7 @@ describe('a Buddy\'s proposal to the PM', () => {
   })
 
   // River, 11-04 (task #2926): proposals answered before threads, or opened as tasks without the link, still read as open.
-  it('is closed with a reason by its project\'s PM or a person in the project, posting nothing, and by nobody else', () => {
+  it('is closed with a reason by its project\'s PM or a person in the project, posting only its person\'s notice, and by nobody else', () => {
     const { f, propose } = asked()
     const root = propose().messages[0]!
     const context = { proposal: { id: root.id, conversationId: f.app.conversationId, author: root.author, source: root.source as Record<string, unknown> } }
@@ -856,7 +856,9 @@ describe('a Buddy\'s proposal to the PM', () => {
       f.run({ type: 'proposal.close', projectId: f.app.projectId, messageId, reason: '  Built in #2901 ' }, actor, loaded)
     const closed = close(agentActor(f.pm))
     expect(closed.closedProposal).toEqual({ messageId: root.id, conversationId: f.app.conversationId, reason: 'Built in #2901' })
-    expect(closed.messages).toEqual([])
+    // Nothing in the project's chat: only the notice to its person (task #4252).
+    expect(closed.messages.map(m => m.source?.kind)).toEqual(['proposal-notice'])
+    expect(closed.messages.some(m => m.conversationId === f.app.conversationId)).toBe(false)
     expect(close(peer).closedProposal).toMatchObject({ messageId: root.id })
     const webPm = group(f, f.web.conversationId).leadId!
     for (const actor of [agentActor('buddy'), agentActor(webPm)]) expect(() => close(actor)).toThrow()

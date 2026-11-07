@@ -44,17 +44,20 @@ export function personalTasksFor(changed: readonly Part[], view: ReaderView, act
     const own = approval ? approval.personId === member.id && approval.generation === member.generation
       : group.proposal ? group.proposal.senders.some(s => s.personId === member.id && s.generation === member.generation)
       : group.requesterId === member.id
-    if (part.deleted || part.dormant || group.archived || group.dormant || group.proposal?.mergedInto || !own) {
+    // A proposal the PM declined stays, as rejected with its reason, until it goes dormant (task #4252): it is archived only
+    // to leave the PM's board.
+    const declined = !group.proposal?.mergedInto && group.proposal?.decision?.kind === 'no'
+    if (part.deleted || part.dormant || (group.archived && !declined) || group.dormant || group.proposal?.mergedInto || !own) {
       if (!reset) out.removed.push(part.key)
       continue
     }
     const worker = agents.get(group.assignment?.agentId ?? approval?.suggestedAgentId ?? '')
-    const status = approval?.state === 'proposal' || approval?.state === 'rejected' ? approval.state
+    const status = declined ? 'rejected' : approval?.state === 'proposal' || approval?.state === 'rejected' ? approval.state
       : group.assignment?.status ?? (group.proposal && !['accept', 'reshape'].includes(group.proposal.decision?.kind ?? '') ? 'proposal' : 'planned')
     out.upserts.push({ id: group.id, version: part.version, at: part.changedAt, projectId: project.id, projectName: project.name,
       title: group.title, status, suggested: !group.assignment && !!approval?.suggestedAgentId, canApprove: approval?.state === 'proposal',
       agent: worker ? { id: worker.id, name: worker.displayName ?? worker.name, ...worker.avatar ? { avatar: worker.avatar } : {} } : null,
-      ...approval?.reason ? { reason: approval.reason } : {} })
+      ...declined ? { reason: group.proposal!.decision!.reason } : approval?.reason ? { reason: approval.reason } : {} })
   }
   out.upserts.sort((a, b) => b.at - a.at || a.id.localeCompare(b.id))
   return out
