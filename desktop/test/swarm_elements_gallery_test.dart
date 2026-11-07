@@ -455,8 +455,9 @@ class _Gallery extends StatelessWidget {
   }
 }
 
-/// Matches when [galleryDifference] finds none; anything else fails as the
-/// stock comparator does, writing its diff images, with what differs first.
+/// Matches when [galleryDifference] finds none. A mismatch fails with what
+/// differs and saves the image it drew to the system temp folder, never into
+/// the source tree, where CI's runner would count it as a changed source.
 class _NearlyComparator extends LocalFileComparator {
   _NearlyComparator(super.testFile);
 
@@ -471,12 +472,12 @@ class _NearlyComparator extends LocalFileComparator {
     final file = File.fromUri(basedir.resolveUri(golden));
     final problem = file.existsSync()
         ? await galleryDifference(imageBytes, file.readAsBytesSync(), parts)
-        : 'no image yet';
+        : 'no image yet; make it with --update-goldens';
     if (problem == null) return true;
-    try {
-      return await super.compare(imageBytes, golden);
-    } on FlutterError catch (error) {
-      throw FlutterError('$problem\n${error.message}');
-    }
+    final drawn = File(
+      '${Directory.systemTemp.createTempSync('swarm-gallery-').path}/'
+      '${golden.pathSegments.last}',
+    )..writeAsBytesSync(imageBytes);
+    throw FlutterError('$golden: $problem. What it drew: ${drawn.path}');
   }
 }
