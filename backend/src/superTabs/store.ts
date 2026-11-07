@@ -32,7 +32,7 @@ import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, isPersonalSwarm, notThere } from './deletion.js'
 import type { ApprovalRow, DroppedLine } from './ruleGuard.js'
-import { applyCommand, authorizeCommandAccess, tasksNamedIn, IGNORED_NOTE, SWARM_INVITATION_MS, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
+import { applyCommand, authorizeCommandAccess, goesOnIn, tasksNamedIn, IGNORED_NOTE, SWARM_INVITATION_MS, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
@@ -5734,6 +5734,37 @@ export class SuperTabStore {
       if (!owner || !by) return false
       const rows: MessageDraft[] = [{ id, conversationId: group.id, text, replyTo: null, recipients: [owner.id], source: { kind: 'system' },
         author: { kind: 'agent', id: by.id, name: by.name, displayName: agentDisplayName(state.agents, by.id), membershipGeneration: by.membershipGeneration } }]
+      const sequences = numberMessages(state, rows, this.now())
+      await this.save(tx, loaded, state, clock.next())
+      await this.writeMessages(tx, tabId, state, rows, sequences)
+      return true
+    })
+  }
+
+  /** Links task [groupId], closed before #4480 with a [reason] naming the tasks its work goes on in, to those tasks as a cancel
+   *  naming them does (commands.ts work.cancel), and says so in it as its project's Lead: it leaves people's Tasks. The worker's
+   *  start pass (read/olderDuplicates.ts). False when it is linked already, open, names no task of its project or has no Lead. */
+  async linkFolded(tabId: string, groupId: string, reason: string): Promise<boolean> {
+    return transaction(this.db, async tx => {
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      if (!row || row.deletedAt) return false
+      const first = await loadRow(tx, requireParts(row), { groupIds: [groupId] })
+      const named = first.state.conversations.find(c => c.id === groupId)
+      if (!named) return false
+      const numbers = tasksNamedIn(reason, named.number).filter(n => !first.state.conversations.some(c => c.number === n))
+      const loaded = await this.ensure(tx, first, { groupIds: await loadGroupKeysByNumber(tx, tabId, numbers) }), state = cloneData(loaded.state)
+      const group = state.conversations.find(c => c.id === groupId)!
+      const closed = group.assignment?.status === 'cancelled' || group.archived && !group.assignment
+      const leadId = state.conversations.find(c => c.id === groupProject(state, group).leadConversationId)?.leadId
+      const lead = state.agents.find(a => a.id === leadId)
+      const { ids } = goesOnIn(state, group, reason)
+      if (!closed || group.foldedInto || !ids.length || !lead) return false
+      group.foldedInto = ids
+      const where = ids.map(id => `#${state.conversations.find(c => c.id === id)!.number}`).join(', ')
+      // Said in the task, so it never leaves anyone's Tasks without a word (AGENTS.md: nothing hidden silently).
+      const rows: MessageDraft[] = [{ id: stableId('folded', groupId), conversationId: group.id, replyTo: null, recipients: [], source: { kind: 'system' },
+        text: `This task's work goes on in ${where}, so it is no longer listed in Tasks.`,
+        author: { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id), membershipGeneration: lead.membershipGeneration } }]
       const sequences = numberMessages(state, rows, this.now())
       await this.save(tx, loaded, state, clock.next())
       await this.writeMessages(tx, tabId, state, rows, sequences)

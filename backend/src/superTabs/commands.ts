@@ -1073,7 +1073,7 @@ export function tasksNamedIn(reason: string, self: number | undefined): number[]
 
 /** The tasks of [group]'s project its cancel's reason says its work goes on in, as the Swarm knows them now: a number that
  *  names no task there (mistyped, a chat, a step, a private conversation) links nothing (review of #3534). */
-function goesOnIn(state: SuperTabState, group: Conversation, reason: string): { ids: string[]; unknown: number[] } {
+export function goesOnIn(state: SuperTabState, group: Conversation, reason: string): { ids: string[]; unknown: number[] } {
   const isTask = (c: Conversation) => !c.kind && !c.audience && !c.reviewOf && c.id !== groupProject(state, c).leadConversationId
   if (!isTask(group)) return { ids: [], unknown: [] }
   const project = groupProject(state, group).id

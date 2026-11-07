@@ -230,12 +230,23 @@ describe('a duplicate of a quiet task (task #4480)', () => {
     await cancel(f, inside, `Being done inside #${real}`)
     await cancel(f, across, `Duplicate of #${elsewhere}`)
     await cancel(f, waiting, `Waiting on #${real}`)
-    // As a backend from before #4480 stored them: no number column and no link, so each is still in the feed.
-    await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { tabId: f.tab }, u: { $unset: { number: '', feedIds: '', 'data.foldedInto': '' } }, multi: true }] })
+    // As a backend from before #4480 stored them: no number column and no link, so each is still in the feed. A new version, as
+    // any write leaves, so no reader holds the linked one.
+    await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { tabId: f.tab }, u: { $unset: { number: '', feedIds: '', 'data.foldedInto': '' },
+      $inc: { version: 1 }, $currentDate: { changedAt: true } }, multi: true }] })
     await markFeedIds(db)
     expect(await feedOf(f)).toEqual(expect.arrayContaining([assigned, inside, across, waiting]))
 
-    expect(await linkOlderDuplicates(db, f.store)).toBe(2)
+    let linked = 0
+    const entries = await profiled(db, async () => { linked = await linkOlderDuplicates(db, f.store) })
+    expect(linked).toBe(2)
+    // A cancel line is read by its conversation's index, and so is a real task by its number.
+    const lines = plan(reads(entries, 'SuperTabMessage', ['source.status']))
+    expect(lines.length).toBeGreaterThan(0)
+    for (const read of lines) expect(read.plan).toContain('IXSCAN { tabId: 1, conversationId: 1, sequence: 1, _id: 1 }')
+    const byNumber = plan(reads(entries, 'SwarmGroup', ['number'], ['$exists']))
+    expect(byNumber.length).toBeGreaterThan(0)
+    for (const read of byNumber) expect(read.plan).toContain('IXSCAN { tabId: 1, number: 1 }')
     const feed = await feedOf(f)
     expect(feed).not.toContain(assigned)
     expect(feed).not.toContain(inside)

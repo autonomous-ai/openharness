@@ -28,6 +28,7 @@ import { startDeliveryRepush } from './superTabs/deliveryRepush.js'
 import { startDeliveryCompaction } from './superTabs/deliveryCompaction.js'
 import { startThreadBackfill } from './superTabs/threadBackfill.js'
 import { markFeedIds } from './superTabs/read/feedIds.js'
+import { linkOlderDuplicates } from './superTabs/read/olderDuplicates.js'
 import { appPullRequests, markFinishedGroups, startSwarmArchive, unknownPullRequests } from './superTabs/archive.js'
 import { appPullRequestWatch, startPullRequestWatch } from './superTabs/pullRequestEvents.js'
 import { startTimeChecks } from './superTabs/timeChecks.js'
@@ -172,6 +173,11 @@ async function start(): Promise<void> {
   // A failure leaves them compacted, as before, and never stops the worker starting.
   await requeueCompactedAgents(prisma, Date.now()).then(queued => logger.info('[swarm-sweeps] queued compacted agent tombstones for purge', { queued }),
     error => logger.warn('[swarm-sweeps] queuing compacted agent tombstones failed', { error: error instanceof Error ? error.message : String(error) }))
+  // Duplicates cancelled before #4480 leave people's Tasks, each with a line, and older rows take the number column a cancel
+  // finds its real task by (superTabs/read/olderDuplicates.ts). Remove after 2026-12-07. A failure never stops the worker starting.
+  await linkOlderDuplicates(prisma, swarms).then(linked => logger.info('[swarm] older duplicates linked to their real tasks', { linked }), error =>
+    logger.error('[swarm] older duplicates not linked: they stay in people\'s Tasks, and cancels cannot find tasks written before this start by number, until the next worker start',
+      { error: error instanceof Error ? error.message : String(error) }))
   stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals())
   stopDecisionSweep = startDecisionSweep(now => swarms.leaveOverdueDecisions(now))
   // The dead old state of migrated Swarms goes by itself, a few at a time (superTabs/migration/dropLegacyJob.ts).
