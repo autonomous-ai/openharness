@@ -8,6 +8,7 @@ import 'buddy_chat.dart';
 import 'identity.dart';
 import 'model.dart';
 import 'section_heading.dart';
+import 'swarm_type.dart';
 
 /// A sidebar count of what is for the reader, such as the tags waiting in
 /// Notifications or in a conversation: Slack's red number, white on the
@@ -62,6 +63,7 @@ class SuperTabBuddyRow extends StatelessWidget {
     this.detail,
     this.status,
     this.lead = false,
+    this.compact = false,
   });
 
   /// The Buddy, for its avatar; null while none runs.
@@ -92,9 +94,12 @@ class SuperTabBuddyRow extends StatelessWidget {
   final bool lead;
 
   /// A line under the name, such as where a Buddy runs, with [status], its
-  /// activity mark, before it.
+  /// activity mark, before it. Without one the mark sits at the row's right.
   final String? detail;
   final Widget? status;
+
+  /// A phone's sidebar, whose rows keep the app's sizes ([SwarmType.sidebar]).
+  final bool compact;
 
   static const _column = SuperTabSectionHeading.actionWidth;
 
@@ -175,9 +180,11 @@ class SuperTabBuddyRow extends StatelessWidget {
                                       name,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      // Unread is the name in bold, no dot (Dee, 2026-10-29).
+                                      // Unread is the name in bold, no dot (Dee, 2026-10-29). The pane's one
+                                      // row size, as + New agent and the projects (#4444).
                                       style:
-                                          DesktopChrome.control(
+                                          SwarmType.sidebar(
+                                            compact: compact,
                                             medium: selected,
                                             color: color,
                                           ).copyWith(
@@ -252,19 +259,19 @@ class SuperTabBuddyRow extends StatelessWidget {
                         child: SuperTabCountBadge(badge, tooltip: badgeTooltip),
                       ),
                     ),
-                  SizedBox(
-                    width: _column,
-                    // Unread is drawn as a bold name and heard in words. A row with no detail line has its status here,
-                    // quiet, at its end (task #4220).
-                    child: Semantics(
-                      label: unread ? 'Unread messages' : null,
-                      child: switch ((detail, status)) {
-                        (null, final status?) => Center(child: status),
-                        _ => null,
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: _column),
+                  // Unread is drawn as a bold name and heard in words.
+                  Semantics(label: unread ? 'Unread messages' : null),
+                  // With no second line the activity mark is at the right, where two empty columns cut names
+                  // early (audit finding 9 of #4436).
+                  if (detail == null && status != null)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: grid.AppDesktop.controlGap,
+                      ),
+                      child: status,
+                    )
+                  else
+                    const SizedBox(width: 12),
                 ],
               ),
             ),
