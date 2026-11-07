@@ -4981,7 +4981,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (!allowed) fail('FORBIDDEN', WHO_CANCELS_LIVE, 403)
         if (group.foldedInto) break
         // Its whole point is the link: one it cannot make is said, by number (review 2 of #3534).
-        if (!goesOn.length) fail('FOLD_TARGET', `No task ${unknown.map(n => `#${n}`).join(', ')} of this project is open to link to: check the number. A task quiet for a day cannot be checked.`, 400)
+        if (!goesOn.length) fail('FOLD_TARGET', `No task ${unknown.map(n => `#${n}`).join(', ')} of this project to link to: check the number.`, 400)
         group.foldedInto = goesOn
         message(group.id, `${who} noted where this task's work goes on: ${command.reason.replace(/[.\s]+$/, '')}.`, [], null, SYSTEM_ROW)
         break

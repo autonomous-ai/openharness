@@ -32,7 +32,7 @@ import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, isPersonalSwarm, notThere } from './deletion.js'
 import type { ApprovalRow, DroppedLine } from './ruleGuard.js'
-import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, SWARM_INVITATION_MS, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
+import { applyCommand, authorizeCommandAccess, tasksNamedIn, IGNORED_NOTE, SWARM_INVITATION_MS, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
@@ -88,7 +88,7 @@ import { endedReply, taskLineChats } from './taskLine.js'
 import { owedAsk } from './timeChecks.js'
 import { ledgerGroupIds, settleReleases, type ReleaseFacts, type ReleaseRules, type SettledReleases } from './releases.js'
 import { groupsOf, archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
-import { clock, insertParts, loadActive, loadGroups, loadGroupsByKey, loadLightGroups, loadMachineParts, loadNamed, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
+import { clock, insertParts, loadActive, loadGroups, loadGroupKeysByNumber, loadGroupsByKey, loadLightGroups, loadMachineParts, loadNamed, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { autoJoinSwarms, machineSwarms, memberSwarms } from './swarmRows.js'
 import type { MachineRename } from './machineRenames.js'
@@ -1087,6 +1087,12 @@ export class SuperTabStore {
     const swarmChat = (id: string | null | undefined) => {
       const owner = state.people.find(p => p.id === id)
       if (owner) groupIds.push(swarmBuddyChatId(owner))
+    }
+    // A cancel's reason names the tasks its work goes on in by number: quiet ones too, which a command does not hold (task #4480).
+    if (command.type === 'work.cancel') {
+      const group = state.conversations.find(c => c.id === command.conversationId)
+      const numbers = tasksNamedIn(command.reason, group?.number).filter(n => !state.conversations.some(c => c.number === n))
+      groupIds.push(...await loadGroupKeysByNumber(tx, tabId, numbers))
     }
     // A person's decision may sit in a quiet or archived conversation: it is loaded to answer it (review of #1753).
     if (command.type === 'decision.answer') {

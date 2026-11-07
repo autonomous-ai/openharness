@@ -16,6 +16,8 @@ export const GROUP_INDEX = {
   proposalDue: { deleted: 1, proposalDueAt: 1, tabId: 1, key: 1 },
   key: { tabId: 1, key: 1 },
   running: { tabId: 1, executionMachineId: 1 },
+  /** The tasks a cancel's reason names by number (parts/load.ts loadGroupKeysByNumber, task #4480). */
+  number: { tabId: 1, number: 1 },
   agents: { tabId: 1, agentIds: 1 },
   /** A person's Tasks feed pages, newest activity first (read/personalTasks.ts, task #4203). */
   feed: { tabId: 1, feedIds: 1, lastActivityAt: 1, key: 1 },
