@@ -524,15 +524,32 @@ class _RenameBuddyDialogState extends State<_RenameBuddyDialog> {
 /// terminal, and, while it is down, a way to start it again. Before its
 /// agent is there, how its start is going (backend: the start carries the
 /// add's progress and failure).
+/// The Buddy that [chat] is with: the reader's own main Buddy in the Swarm's one Buddy chat, else its project's.
+SuperTabAgent? superTabChatBuddy(
+  SuperTabController c,
+  SuperTabConversation chat,
+) => chat.isSwarmBuddyChat && c.snapshot!.buddyCap != null
+    ? chat.agentIds
+          .map(c.snapshot!.agent)
+          .whereType<SuperTabAgent>()
+          .where((a) => a.isMainBuddy && a.buddyOf == c.accountId)
+          .firstOrNull
+    : c.buddy(chat.projectId);
+
 class SuperTabBuddyBar extends StatelessWidget {
   const SuperTabBuddyBar({
     super.key,
     required this.controller,
     required this.chat,
     this.app,
+    this.line = true,
   });
   final SuperTabController controller;
   final SuperTabConversation chat;
+
+  /// The bar's line of engine, model, machine and who reads the chat. Off under the middle chat's one-row header,
+  /// which carries the pickers and nothing else (anh Dee, #4204); the limit and Start again rows stay.
+  final bool line;
 
   /// For the Start bar's Add this Mac, as Add a Buddy has it (#2105).
   final AppNotifier? app;
@@ -692,13 +709,7 @@ class SuperTabBuddyBar extends StatelessWidget {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final c = controller;
-    final agent = chat.isSwarmBuddyChat && c.snapshot!.buddyCap != null
-        ? chat.agentIds
-              .map(c.snapshot!.agent)
-              .whereType<SuperTabAgent>()
-              .where((a) => a.isMainBuddy && a.buddyOf == c.accountId)
-              .firstOrNull
-        : c.buddy(chat.projectId);
+    final agent = superTabChatBuddy(c, chat);
     if (agent == null) return _starting(c);
     final name = c.snapshot!.agentName(agent.id, fallback: agent.name);
     final machine = buddyMachineName(c, agent.machineId, app: app);
@@ -721,6 +732,17 @@ class SuperTabBuddyBar extends StatelessWidget {
     final busy = !c.canWrite || c.saving || c.hasPendingAction;
     final offer = agent.downSince == null && _mustStartAgain(c, agent);
     final held = offer ? _restartHeld(c, agent, machine) : null;
+    final limited =
+        chat.isSwarmBuddyChat &&
+        agent.gridModel == null &&
+        agent.downSince == null &&
+        agent.switchRequest == null &&
+        agent.modelRequest == null &&
+        agent.limitedUntil?.isAfter(DateTime.now()) == true &&
+        buddyEngineCapable(c.snapshot!, agent);
+    if (!line && !limited && !offer && agent.downSince == null) {
+      return const SizedBox.shrink();
+    }
     return Padding(
       key: const ValueKey('super-buddy-bar'),
       padding: _padding,
@@ -730,7 +752,9 @@ class SuperTabBuddyBar extends StatelessWidget {
         children: [
           // The one Buddy switches between its person's subscription and a
           // model shared in the Swarm (task #2354); a project's Buddy cannot.
-          if (chat.isSwarmBuddyChat)
+          if (!line)
+            const SizedBox.shrink()
+          else if (chat.isSwarmBuddyChat)
             BuddyModelLine(
               controller: c,
               agent: agent,
@@ -760,13 +784,7 @@ class SuperTabBuddyBar extends StatelessWidget {
             )
           else
             Text(where, style: DesktopChrome.metadata()),
-          if (chat.isSwarmBuddyChat &&
-              agent.gridModel == null &&
-              agent.downSince == null &&
-              agent.switchRequest == null &&
-              agent.modelRequest == null &&
-              agent.limitedUntil?.isAfter(DateTime.now()) == true &&
-              buddyEngineCapable(c.snapshot!, agent))
+          if (limited)
             Row(
               key: const ValueKey('super-buddy-engine-limit'),
               children: [

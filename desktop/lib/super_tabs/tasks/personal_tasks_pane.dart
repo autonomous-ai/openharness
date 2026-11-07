@@ -2,15 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../../state/harness_activity.dart';
-import '../../shared/theme/app_icons.dart';
 import '../../shared/theme/app_theme.dart';
-import '../../widgets/harness_activity_mark.dart';
 import '../../widgets/laid_out_list.dart';
-import '../../widgets/desktop_chrome.dart';
 import '../controller.dart';
 import '../identity.dart';
 import '../model.dart';
+import 'personal_task_card.dart';
 import 'personal_tasks.dart';
 
 /// The person's active work, from the same authenticated cursor as the chat.
@@ -19,26 +16,52 @@ class SuperTabPersonalTasksPane extends StatefulWidget {
     super.key,
     required this.controller,
     required this.onOpenTask,
+    this.selectedId,
   });
   final SuperTabController controller;
   final ValueChanged<String> onOpenTask;
+
+  /// The task open in the middle, whose card shows as selected.
+  final String? selectedId;
   @override
   State<SuperTabPersonalTasksPane> createState() => _TasksPaneState();
 }
 
+/// Who asked, a step smaller than the agent beside it, as on a Board tile.
+const _requesterSize = 18.0;
+
 class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
-  String? _expanded, _error, _operationId;
+  String? _error, _operationId;
   Map<String, dynamic>? _action;
-  bool _sending = false;
+  bool _sending = false, _olderFailed = false;
   SuperTabController get c => widget.controller;
+
+  /// Near the end of the list, the next older page is read; the controller sends one read at a time.
+  bool _onScroll(ScrollNotification note) {
+    final m = note.metrics;
+    if (!_olderFailed &&
+        c.personalTasks?.olderCursor != null &&
+        m.pixels >= m.maxScrollExtent - m.viewportDimension) {
+      unawaited(_loadOlder());
+    }
+    return false;
+  }
+
+  Future<void> _loadOlder() async {
+    final owner = c;
+    final ok = await owner.loadOlderPersonalTasks();
+    if (mounted && identical(owner, c) && ok == _olderFailed) {
+      setState(() => _olderFailed = !ok);
+    }
+  }
 
   @override
   void didUpdateWidget(SuperTabPersonalTasksPane old) {
     super.didUpdateWidget(old);
     if (!identical(old.controller, c)) {
-      _expanded = _error = _operationId = null;
+      _error = _operationId = null;
       _action = null;
-      _sending = false;
+      _sending = _olderFailed = false;
     }
   }
 
@@ -154,6 +177,9 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
       final projects = {
         for (final p in snapshot?.projects ?? <SuperTabProject>[]) p.id: p,
       };
+      final people = {
+        for (final p in snapshot?.people ?? <SuperTabPerson>[]) p.id: p,
+      };
       // One filled box as large as the slot, under a see-through Material that
       // only carries the rows' ink: a Material's own surface was drawn only as
       // far as the rows, and the window's backing showed below them.
@@ -249,231 +275,106 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                   Expanded(
                     child: tasks!.rows.isEmpty
                         ? const Center(child: Text('No tasks yet'))
-                        : LaidOutListView.builder(
-                            itemCount: tasks.rows.length,
-                            itemBuilder: (context, index) {
-                              final task = tasks.rows[index];
-                              final agent = agents[task.agentId];
-                              final name =
-                                  agent?.displayName ??
-                                  agent?.name ??
-                                  task.agent['name'] as String? ??
-                                  'Not assigned';
-                              final project =
-                                  projects[task.projectId]?.name ??
-                                  task.projectName;
-                              final pending =
-                                  task.status == 'proposal' && task.canApprove;
-                              return Column(
-                                key: ValueKey('personal-task-${task.id}'),
-                                children: [
-                                  InkWell(
-                                    onTap: () {
-                                      if (pending) {
-                                        setState(
-                                          () => _expanded = _expanded == task.id
-                                              ? null
-                                              : task.id,
-                                        );
-                                      } else {
-                                        widget.onOpenTask(task.id);
-                                      }
-                                    },
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: AppDesktop.groupGap,
-                                        vertical: AppDesktop.controlGap,
-                                      ),
-                                      child: Column(
-                                        children: [
-                                          Row(
-                                            children: [
-                                              Flexible(
-                                                child: Container(
-                                                  padding:
-                                                      const EdgeInsets.symmetric(
-                                                        horizontal: AppDesktop
-                                                            .badgeInset,
-                                                        vertical: AppDesktop
-                                                            .listRowGap,
-                                                      ),
-                                                  decoration: BoxDecoration(
-                                                    color: Theme.of(context)
-                                                        .colorScheme
-                                                        .surfaceContainerHighest,
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          AppDesktop.rowRadius,
-                                                        ),
-                                                  ),
-                                                  child: Text(
-                                                    project,
-                                                    maxLines: 1,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    style: Theme.of(context)
-                                                        .textTheme
-                                                        .labelSmall,
-                                                  ),
-                                                ),
-                                              ),
-                                              const SizedBox(width: 7),
-                                              Expanded(
-                                                flex: 2,
-                                                child: Text(
-                                                  task.title,
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                          const SizedBox(height: 5),
-                                          Row(
-                                            children: [
-                                              if (task.agentId != null) ...[
-                                                SuperTabAvatar(
-                                                  identity:
-                                                      'agent:${task.agentId}',
-                                                  name: name,
-                                                  size: 20,
-                                                  picture:
-                                                      agent?.avatar ??
-                                                      SuperTabAvatarPicture.fromJson(
-                                                        task.agent['avatar'],
-                                                      ),
-                                                  pattern: true,
-                                                ),
-                                                const SizedBox(width: 6),
-                                              ],
-                                              Expanded(
-                                                child: Text(
-                                                  name,
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  style: Theme.of(context)
-                                                      .textTheme
-                                                      .bodySmall
-                                                      ?.copyWith(
-                                                        color:
-                                                            DesktopChrome.muted,
-                                                      ),
-                                                ),
-                                              ),
-                                              if (pending)
-                                                Text(
-                                                  'Waiting for you',
-                                                  style: Theme.of(context)
-                                                      .textTheme
-                                                      .bodySmall
-                                                      ?.copyWith(
-                                                        color:
-                                                            DesktopChrome.muted,
-                                                      ),
-                                                ),
-                                              const SizedBox(width: 8),
-                                              _TaskMark(task.status),
-                                            ],
-                                          ),
-                                        ],
-                                      ),
-                                    ),
+                        : NotificationListener<ScrollNotification>(
+                            onNotification: _onScroll,
+                            child: LaidOutListView.builder(
+                              itemCount: tasks.rows.length,
+                              itemBuilder: (context, index) {
+                                final task = tasks.rows[index];
+                                final agent = agents[task.agentId];
+                                final person = people[task.requesterId];
+                                final waiting =
+                                    task.status == 'proposal' &&
+                                    task.canApprove;
+                                return Padding(
+                                  key: ValueKey('personal-task-${task.id}'),
+                                  padding: const EdgeInsets.fromLTRB(
+                                    AppDesktop.groupGap,
+                                    0,
+                                    AppDesktop.groupGap,
+                                    AppDesktop.controlGap,
                                   ),
-                                  if (_expanded == task.id && pending)
-                                    Padding(
-                                      padding: const EdgeInsets.fromLTRB(
-                                        AppDesktop.groupGap,
-                                        0,
-                                        AppDesktop.groupGap,
-                                        AppDesktop.controlGap,
-                                      ),
-                                      child: Column(
-                                        children: [
-                                          DropdownButtonFormField<String>(
-                                            key: ValueKey(
-                                              'task-agent-${task.id}',
-                                            ),
-                                            initialValue:
-                                                agents.containsKey(
-                                                      task.agentId,
-                                                    ) &&
-                                                    !agents[task.agentId]!
-                                                        .isBuddy
-                                                ? task.agentId
-                                                : null,
-                                            // The row's own text size: a dropdown's default is
-                                            // larger and bolder than the task titles around it.
-                                            style: DefaultTextStyle.of(context)
-                                                .style,
-                                            decoration: const InputDecoration(
-                                              labelText: 'Suggested agent',
-                                              isDense: true,
-                                            ),
-                                            items: [
-                                              for (final a
-                                                  in agents.values.where(
-                                                    (a) => !a.isBuddy,
-                                                  ))
-                                                DropdownMenuItem(
-                                                  value: a.id,
-                                                  child: Text(
-                                                    a.displayName ?? a.name,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                  ),
+                                  child: SuperTabPersonalTaskCard(
+                                    task: task,
+                                    project:
+                                        projects[task.projectId]?.name ??
+                                        task.projectName,
+                                    selected: task.id == widget.selectedId,
+                                    onOpen: () => widget.onOpenTask(task.id),
+                                    requester: task.requesterId == null
+                                        ? null
+                                        : person != null
+                                        ? SuperTabAvatar.person(
+                                            person,
+                                            size: _requesterSize,
+                                          )
+                                        : SuperTabAvatar(
+                                            identity:
+                                                'person:${task.requesterId}',
+                                            name:
+                                                task.requester['name']
+                                                    as String? ??
+                                                'Person',
+                                            size: _requesterSize,
+                                            picture:
+                                                SuperTabAvatarPicture.fromJson(
+                                                  task.requester['avatar'],
                                                 ),
-                                            ],
-                                            onChanged: enabled
-                                                ? (id) {
-                                                    if (id != null) {
-                                                      unawaited(
-                                                        _send({
-                                                          'type':
-                                                              'task.suggest',
-                                                          'conversationId':
-                                                              task.id,
-                                                          'agentId': id,
-                                                        }),
-                                                      );
-                                                    }
-                                                  }
-                                                : null,
                                           ),
-                                          Row(
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.end,
-                                            children: [
-                                              TextButton(
-                                                onPressed: enabled
-                                                    ? () => _reject(task)
-                                                    : null,
-                                                child: const Text('Reject'),
-                                              ),
-                                              FilledButton(
-                                                onPressed: enabled
-                                                    ? () => _send({
-                                                        'type': 'task.approve',
-                                                        'conversationId':
-                                                            task.id,
-                                                        // The agent shown, null for none: a suggestion changed
-                                                        // since is refused (task #4217).
-                                                        'suggestedAgentId':
-                                                            task.agentId,
-                                                      })
-                                                    : null,
-                                                child: const Text('Approve'),
-                                              ),
-                                            ],
+                                    agent: task.agentId == null
+                                        ? null
+                                        : SuperTabAvatar(
+                                            identity: 'agent:${task.agentId}',
+                                            name:
+                                                agent?.displayName ??
+                                                agent?.name ??
+                                                task.agent['name'] as String? ??
+                                                'Agent',
+                                            size: SuperTabAvatar.rowSize,
+                                            picture:
+                                                agent?.avatar ??
+                                                SuperTabAvatarPicture.fromJson(
+                                                  task.agent['avatar'],
+                                                ),
+                                            pattern: true,
                                           ),
-                                        ],
-                                      ),
-                                    ),
-                                ],
-                              );
-                            },
+                                    waiting: waiting,
+                                    onApprove: waiting && enabled
+                                        ? () => _send({
+                                            'type': 'task.approve',
+                                            'conversationId': task.id,
+                                            // The agent shown, null for none: a suggestion changed since is refused
+                                            // (task #4217).
+                                            'suggestedAgentId': task.agentId,
+                                          })
+                                        : null,
+                                    onReject: waiting && enabled
+                                        ? () => _reject(task)
+                                        : null,
+                                  ),
+                                );
+                              },
+                            ),
                           ),
+                  ),
+                if (supported && _olderFailed)
+                  Padding(
+                    padding: const EdgeInsets.all(AppDesktop.groupGap),
+                    child: Row(
+                      children: [
+                        const Expanded(
+                          child: Text('Could not load older tasks.'),
+                        ),
+                        TextButton(
+                          key: const ValueKey('tasks-older-retry'),
+                          onPressed: () {
+                            setState(() => _olderFailed = false);
+                            unawaited(_loadOlder());
+                          },
+                          child: const Text('Retry'),
+                        ),
+                      ],
+                    ),
                   ),
               ],
             ),
@@ -482,35 +383,4 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
       );
     },
   );
-}
-
-class _TaskMark extends StatelessWidget {
-  const _TaskMark(this.status);
-  final String status;
-  @override
-  Widget build(BuildContext context) {
-    if (status == 'proposal' || status == 'rejected') {
-      final label = status == 'proposal' ? 'Proposal' : 'Rejected';
-      return Tooltip(
-        message: label,
-        child: Icon(
-          status == 'proposal' ? AppIcons.circleDashed : AppIcons.circleX,
-          size: AppIcons.metadataSize,
-          semanticLabel: label,
-        ),
-      );
-    }
-    final activity = switch (status) {
-      'done' || 'shipped' => HarnessActivity.done,
-      'working' => HarnessActivity.working,
-      'needs_human' || 'needs_human_approval' => HarnessActivity.needsInput,
-      'blocked' || 'stuck' => HarnessActivity.failed,
-      'stopped' => HarnessActivity.paused,
-      _ => HarnessActivity.starting,
-    };
-    return ActivityMark(
-      activity: activity,
-      color: Theme.of(context).colorScheme.onSurface,
-    );
-  }
 }
