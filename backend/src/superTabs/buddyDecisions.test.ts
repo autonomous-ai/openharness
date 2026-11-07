@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { openSwarmBuddyChat, swarmBuddyChatId } from './buddies.js'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { BUDDY_DECISION, BUDDY_SEND, SEND_OPTIONS } from './decisions.js'
-import { createSuperTab, SuperTabError, type Actor, type Agent } from './model.js'
+import { createSuperTab, SuperTabError, type Actor, type Agent, type MessageDraft } from './model.js'
 
 // Task #4525 (anh Dee, 11-07): everything waiting on a person shows in their Decisions, their own Buddy's questions
 // included. A Buddy asks only its own owner, in its own chat; the server refuses everyone else.
@@ -108,5 +108,101 @@ describe('a line waiting for its owner’s OK to send becomes a Send decision', 
     const group = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Copy', brief: '', checks: [] }).result.conversationId as string
     f.run({ type: 'conversation.agent', conversationId: group, agentId: f.worker, present: true, lead: false })
     expect(refused(() => f.run({ type: 'decision.ask', conversationId: group, personId: 'peer', questions: [{ send: { ...send, projectId: f.app.projectId } }] }, asWorker(f.worker)))).toBe('BUDDY_ONLY')
+  })
+})
+
+describe('an answer settles a Buddy’s decision in Decisions and in its chat', () => {
+  const send = { text: 'Drop the old flag from the CLI.', goal: 'No dead flags', scope: 'The CLI flag only', priority: 'normal' as const }
+  type Fixture = ReturnType<typeof fixture>
+  /** Peer's Buddy asks [ask] (a question, or one made from the fixture); the decision as the store reads it back for an answer. */
+  function asked(ask: Record<string, unknown> | ((f: Fixture) => Record<string, unknown>) = question) {
+    const f = fixture()
+    const q = typeof ask === 'function' ? ask(f) : ask
+    const draft = f.run({ type: 'decision.ask', conversationId: f.peerBuddy.chat, personId: 'peer', questions: [q] } as Command, asAgent(f.peerBuddy.id)).decisions![0]!
+    const decision = { ...draft, answeredAt: null, createdAt: NOW, withdrawn: false, mustAgree: false, defaultAt: draft.defaultAt ? Date.parse(draft.defaultAt) : null }
+    const generation = f.state.people.find(p => p.id === 'peer')!.generation
+    /** Peer's message in their Buddy chat, as the store reads it for the Buddy's settle. */
+    const said = (extra: Record<string, unknown> = {}) => ({ ownerAnswer: { id: 'said', conversationId: f.peerBuddy.chat, source: false, createdAt: NOW + 1, newest: true,
+      author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: generation }, ...extra } })
+    const answer = (command: Record<string, unknown>, actor: Actor = peer, context: Record<string, unknown> = {}) =>
+      f.run({ type: 'decision.answer', decisionId: decision.id, ...command } as Command, actor, { decision, ...context } as Partial<CommandContext>)
+    return { f, decision, answer, said }
+  }
+  const asSend = (f: Fixture) => ({ send: { ...send, projectId: f.app.projectId } })
+  const inChat = (f: Fixture, effects: { messages: MessageDraft[] }) => effects.messages.filter(m => m.conversationId === f.peerBuddy.chat)
+  const inProject = (f: Fixture, effects: { messages: MessageDraft[] }) => effects.messages.filter(m => m.conversationId === f.app.conversationId)
+
+  it('the owner’s answer in Decisions tells the Buddy in its chat, and tells no PM', () => {
+    const { f, decision, answer } = asked()
+    const done = answer({ choice: 0 })
+    expect(done.decisionAnswer).toEqual({ id: decision.id, choice: 0, note: null })
+    expect(inChat(f, done)).toEqual([expect.objectContaining({ recipients: [f.peerBuddy.id], text: 'Keep it — Keep the old flag?',
+      source: { kind: 'decision-answered', decisionId: decision.id } })])
+    expect(done.messages.filter(m => m.recipients.includes(f.pm))).toEqual([])
+  })
+
+  it('takes the owner’s own words as an answer', () => {
+    const { f, answer } = asked()
+    expect(inChat(f, answer({ note: 'Keep it a week' }))[0]!.text).toBe('Keep it a week — Keep the old flag?')
+  })
+
+  it('is never left to the PM, and applies its own default at its time', () => {
+    const defaultAt = new Date(NOW + 60 * 60_000).toISOString()
+    const { f, decision, answer } = asked({ ...question, defaultAt })
+    expect(refused(() => answer({ delegate: true }))).toBe('INVALID_DECISION')
+    const done = answer({ delegate: true }, peer, { defaulted: true, now: NOW + 2 * 60 * 60_000 })
+    expect(done.decisionAnswer).toMatchObject({ id: decision.id, choice: 1, delegated: true, defaulted: true })
+    expect(inChat(f, done)[0]!.text).toBe('Default applied: Drop it — Keep the old flag?')
+  })
+
+  it('Send posts exactly the stored words in the project chat as the owner, and tells the Buddy', () => {
+    const { f, decision, answer } = asked(asSend)
+    const done = answer({ choice: 0 })
+    expect(inProject(f, done)).toEqual([expect.objectContaining({ text: send.text, recipients: [f.pm], author: expect.objectContaining({ kind: 'person', id: 'peer' }),
+      source: expect.objectContaining({ kind: 'buddy-proposal', personId: 'peer', buddyId: f.peerBuddy.id, goal: send.goal, scope: send.scope, priority: send.priority }) })])
+    expect(inChat(f, done)).toEqual([expect.objectContaining({ recipients: [f.peerBuddy.id] })])
+    expect(done.decisionAnswer).toEqual({ id: decision.id, choice: 0, note: null })
+  })
+
+  it('Not now posts nothing to the project', () => {
+    const { f, decision, answer } = asked(asSend)
+    const done = answer({ choice: 1 })
+    expect(inProject(f, done)).toEqual([])
+    expect(done.decisionAnswer).toEqual({ id: decision.id, choice: 1, note: null })
+  })
+
+  it('the Buddy settles it from its owner’s answer in chat, naming their message', () => {
+    const { f, decision, answer, said } = asked()
+    const done = answer({ choice: 1, ownerMessageId: 'said' }, asAgent(f.peerBuddy.id), said())
+    expect(done.decisionAnswer).toEqual({ id: decision.id, choice: 1, note: null })
+    // Their words are in the chat already: no second line.
+    expect(inChat(f, done)).toEqual([])
+  })
+
+  it('refuses the Buddy’s settle without its owner’s message after the question, and never leaves it to the PM', () => {
+    const { f, answer, said } = asked()
+    const buddy = asAgent(f.peerBuddy.id)
+    expect(refused(() => answer({ choice: 1 }, buddy))).toBe('BUDDY_DECISION_UNASKED')
+    expect(refused(() => answer({ choice: 1, ownerMessageId: 'said' }, buddy, said({ createdAt: NOW - 1 })))).toBe('BUDDY_DECISION_UNASKED')
+    expect(refused(() => answer({ choice: 1, ownerMessageId: 'said' }, buddy, said({ source: true })))).toBe('BUDDY_DECISION_UNASKED')
+    expect(refused(() => answer({ choice: 1, ownerMessageId: 'said' }, buddy, said({ author: { kind: 'agent', id: f.peerBuddy.id, name: 'b', membershipGeneration: 'x' } })))).toBe('BUDDY_DECISION_UNASKED')
+    expect(refused(() => answer({ choice: 1, ownerMessageId: 'other' }, buddy, said()))).toBe('BUDDY_DECISION_UNASKED')
+    expect(refused(() => answer({ delegate: true, ownerMessageId: 'said' }, buddy, said()))).toBe('INVALID_DECISION')
+  })
+
+  it('refuses another person’s Buddy, and a person who was not asked', () => {
+    const { f, answer, said } = asked()
+    expect(refused(() => answer({ choice: 1, ownerMessageId: 'said' }, asAgent(f.ownerBuddy.id), said()))).toBe('NOT_FOUND')
+    expect(refused(() => answer({ choice: 1 }, owner))).toBe('NOT_FOUND')
+  })
+
+  it('the Buddy sends from its owner’s ok in chat only while that ok is their newest message or under an hour old', () => {
+    const { f, answer, said } = asked(asSend)
+    const buddy = asAgent(f.peerBuddy.id)
+    expect(refused(() => answer({ choice: 0, ownerMessageId: 'said' }, buddy, { ...said({ newest: false }), now: NOW + 2 * 60 * 60_000 }))).toBe('PROPOSAL_STALE')
+    const done = answer({ choice: 0, ownerMessageId: 'said' }, buddy, said())
+    expect(inProject(f, done).map(m => m.text)).toEqual([send.text])
+    // The owner hears it went, whatever the Buddy says.
+    expect(inChat(f, done)).toHaveLength(1)
   })
 })
