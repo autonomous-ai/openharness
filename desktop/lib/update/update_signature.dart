@@ -280,6 +280,10 @@ Future<void> verifyMacUpdate({
 const windowsReportScript = r"""
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+# 5.1's own module by path: a PSModulePath handed on by PowerShell 7 (a pwsh
+# window that started Harness, CI) makes autoload pick 7's, which 5.1 cannot
+# load, and the signature cmdlets are then not found.
+Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1')
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 function Signer($signature) {
   $certificate = $signature.SignerCertificate
