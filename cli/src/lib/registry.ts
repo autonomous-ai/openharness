@@ -446,7 +446,9 @@ function normalizedAgentEngine(value: unknown): AgentEngine {
     : 'claude'
 }
 const LOCK_WAIT_MS = 20
-const LOCK_ATTEMPTS = 100
+/** How long a write waits for a live holder, on the clock: a pause can take far longer than asked (an agent's process
+ *  on the Mac Studio, 2026-11-07: 20 ms took ~150 ms), and counted as 100 pauses the wait blocked for ~15 s, not 2. */
+const LOCK_BUDGET_MS = 2_000
 /** A lock directory with no owner.json, or one that names no one, is a crash (or a full disk) between mkdir and the
  *  owner write: a window of microseconds. Older than this it is debris, not a lock (daemonSpawnLock.ts does the same);
  *  left alone it made every registry write fail with "registry lock is busy" until someone removed it by hand. */
@@ -468,7 +470,8 @@ function withRegistryFileLock<T>(apply: () => T): T {
   secureStateDirectory(env.ADAPTER_DATA_DIR)
   const uid = typeof process.getuid === 'function' ? process.getuid() : null
   const processIdentity = processLockIdentity(process.pid)
-  for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt++) {
+  const deadline = Date.now() + LOCK_BUDGET_MS
+  for (;;) {
     const token = randomUUID()
     let created = false
     try {
@@ -495,6 +498,7 @@ function withRegistryFileLock<T>(apply: () => T): T {
     } catch (error) {
       if (created) removeRegistryLockOwnedBy(token)
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      if (Date.now() >= deadline) throw new Error('registry lock is busy')
       let ownerPid = 0
       let ownerStartMarker = ''
       let ownerToken = ''
@@ -539,7 +543,6 @@ function withRegistryFileLock<T>(apply: () => T): T {
       sleepSync(LOCK_WAIT_MS)
     }
   }
-  throw new Error('registry lock is busy')
 }
 
 function rowId(row: unknown): string {

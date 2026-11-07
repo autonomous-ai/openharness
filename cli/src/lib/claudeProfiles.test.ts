@@ -7,6 +7,11 @@ import type * as ClaudeProfilesModule from './claudeProfiles.js'
 let dataDir = ''
 let home = ''
 const machineId = 'machine-1'
+const host = vi.hoisted(() => ({ win32: false }))
+vi.mock('../engines/kit/windowsFiles.js', async original => {
+  const actual = await original<typeof import('../engines/kit/windowsFiles.js')>()
+  return { ...actual, hostPlatform: () => host.win32 ? 'win32' : actual.hostPlatform() }
+})
 
 async function loadModule(): Promise<typeof ClaudeProfilesModule> {
   vi.resetModules()
@@ -168,6 +173,19 @@ describe('claudeProfiles', () => {
     expect(linkClaudeProfile(join(home, 'nope'), machineId)).toEqual({ error: 'NOT_FOUND' })
     writeFileSync(join(home, 'file'), '')
     expect(linkClaudeProfile(join(home, 'file'), machineId)).toEqual({ error: 'NOT_FOUND' })
+  })
+
+  // #4183: on Windows a profile folder is `C:\\…`, and the check that wanted a leading '/' refused every one.
+  it('on Windows takes a drive-letter folder and refuses a POSIX one', async () => {
+    host.win32 = true
+    try {
+      const { linkClaudeProfile, offerAccount } = await loadModule()
+      expect(linkClaudeProfile('Z:\\no\\such\\.claude-work', machineId)).toEqual({ error: 'NOT_FOUND' })
+      expect(linkClaudeProfile('/Users/u/.claude-work', machineId)).toEqual({ error: 'INVALID_PATH' })
+      expect(offerAccount('claude', 'Z:\\no\\such\\.claude-work', true, { home, environment: {} })).toEqual({ error: 'NOT_FOUND' })
+    } finally {
+      host.win32 = false
+    }
   })
 
   it('profileId is stable, 16 hex and depends on machine, engine and path', async () => {
