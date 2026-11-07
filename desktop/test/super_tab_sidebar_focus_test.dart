@@ -66,7 +66,8 @@ void main() {
 
   for (final (row, label) in [
     ('super-agent-orion', 'an agent row'),
-    ('super-project-lead', 'a project row'),
+    // The Desktop's Projects is one link (task #4466).
+    ('super-projects', 'the Projects row'),
     ('super-decisions', 'a page row'),
   ]) {
     testWidgets('Tab to $label that is not selected: a ring, and its fill '
@@ -74,13 +75,8 @@ void main() {
       final c = await showLeftPane(tester, setup: agents);
       c.select('offline');
       await tester.pump();
-      await tester.tap(find.byTooltip('Expand Projects'));
-      await tester.pump();
       await tabTo(tester, key(row));
-      // A page row's key is on its click, inside the ground that draws it.
-      final drawn = row == 'super-decisions'
-          ? find.ancestor(of: key(row), matching: find.byType(Padding)).first
-          : key(row);
+      final drawn = key(row);
       expect(drawn, isNot(fill(grid.SidebarInk.hover)));
       expect(drawn, ring());
       // The selected row keeps its fill and wears no ring.
