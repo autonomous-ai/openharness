@@ -1,5 +1,5 @@
 /**
- * A PM's host carrying out the switch the Swarm asked for (docs/superpowers/specs/2026-11-02-pm-switch-engine-account-design.md,
+ * A PM or Buddy's host carrying out the switch the Swarm asked for (docs/superpowers/specs/2026-11-02-pm-switch-engine-account-design.md,
  * section 7). It does what Desktop's Change agent does for its owner, over this machine's own daemon socket (which answers as
  * the machine owner), so #2493's guards (leadSwitch.ts) apply unchanged: prepare the handoff, close with the change id, create
  * the new session with that id as its creation id, complete the handoff. Success is the PM rebinding to the new session.
@@ -11,12 +11,14 @@ import { join } from 'node:path'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import type { CoreApi } from '../core/api.js'
 import type { AgentEngine } from '../engines/types.js'
-import { asRecord, jwtClaims, parseJson, readClaudeStored, readText, stringField, type CredentialReadDeps } from '../lib/agentCredentials.js'
+import { cliSignedIn, type EngineStatusRun } from '../lib/engineAccount.js'
+import { buddyAccountFile, buddyOwnerOf, signedInAccount } from '../lib/buddyGuard.js'
 import { handoffBaseName } from '../lib/agentHandoff.js'
 import { profileHome } from '../lib/claudeProfiles.js'
-import { defaultCodexHome } from '../lib/codexProfiles.js'
+import { oneShotParentEnv } from '../lib/loginShellEnv.js'
 import { permissionModeApproves, permissionModeFlags } from '../lib/engineLaunch.js'
 import { parseSwarmSkill, wireRole } from '../lib/swarmSkills.js'
+import { trustBuddyHome } from './buddyHome.js'
 import { leadSwitchOf, leadSwitching, SWITCH_ADOPT_MS, switchWithin } from './leadSwitch.js'
 import { githubPromptLine, LAUNCH_MODEL_REFUSALS, leadPrompt } from './start.js'
 import { pmEngineHome } from './teamDaemon.js'
@@ -24,7 +26,7 @@ import { backend, identifier, object } from './wire.js'
 
 const GONE = 'that account is no longer on this machine'
 const NO_HANDOFF = 'the handoff could not be prepared'
-const NO_STOP = 'the PM could not be stopped'
+const NO_STOP = 'the session could not be stopped'
 const NO_START = 'the new session could not start'
 const LATE = 'the new session did not start in time'
 const SIGNED_OUT = 'that account is signed out'
@@ -34,13 +36,15 @@ const RETRY_MS = 10_000
 const CLAUDE_KEY_VARIABLES = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']
 const LABELS: Record<string, string> = { claude: 'Claude', codex: 'Codex' }
 
-/** The row of a PM of this machine, as the host reads it (cli read/hostRows.ts). */
+/** The row of a PM or Buddy on this machine, as the host reads it (cli read/hostRows.ts). */
 export interface SwitchRow {
   tabId: string
   /** The conversation the PM leads and the name of its role, as the host row has them (backend read/hostRows.ts). */
   ledConversationId?: unknown
   roleName?: unknown
-  agent: { id: string; harnessId: string; switchRequest?: { id?: unknown; engine?: unknown; profileId?: unknown; model?: unknown; effort?: unknown; targetMachineId?: unknown };
+  /** A Buddy's private chat; never substitute the project's PM conversation. */
+  buddyConversationId?: unknown
+  agent: { id: string; harnessId: string; buddyOf?: unknown; buddyScope?: unknown; buddySession?: unknown; modelRequest?: unknown; switchRequest?: { id?: unknown; engine?: unknown; profileId?: unknown; model?: unknown; effort?: unknown; targetMachineId?: unknown; requestedBy?: unknown };
     switchLanded?: { id?: unknown; candidateAgentId?: unknown } }
 }
 export interface LeadSwitchDeps {
@@ -52,8 +56,8 @@ export interface LeadSwitchDeps {
   home: () => string
   /** Whether the account (a profile folder, or 'default') holds a usable sign-in. */
   signedIn: (engine: string, home: string) => Promise<boolean>
-  /** Where the default [signedIn] reads from (the Keychain on macOS, the folder's files elsewhere); injected by specs. */
-  credentials?: CredentialReadDeps
+  /** What the default [signedIn] runs to ask the engine; injected by specs. */
+  run?: EngineStatusRun
   /** Reads only the daemon-prepared handoff file, with a strict byte limit; injected by host specs. */
   readHandoff: (cwd: string, file: string, maxBytes: number) => string | null
   log: (message: string) => void
@@ -62,25 +66,16 @@ interface Run { switchId: string; harnessId: string; changeId: string; busy: boo
   /** Why the new session did not start. Reported only once the old PM is back: a late start can still land the switch. */
   failed?: string }
 
-/** A sign-in the account holds: a token that is not past its expiry, or one that Claude Code / Codex can renew with its refresh
- *  token, or for the default account a key its engine reads instead. Missing, or expired with no refresh token, is signed out.
- *  Reads only; nothing is renewed or sent anywhere. */
-export async function profileSignedIn(engine: string, home: string, now: number, read: CredentialReadDeps = {}, environment: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+/** Whether the account (a profile folder, or 'default') is signed in, as its engine says (lib/engineAccount.ts `cliSignedIn`):
+ *  the folder as its CLAUDE_CONFIG_DIR or CODEX_HOME, the default account under the daemon's environment, where a key its engine
+ *  reads also counts. An engine that cannot say is taken as signed out: the switch would stop at a sign-in screen nobody sees. */
+export async function profileSignedIn(engine: string, home: string, environment: NodeJS.ProcessEnv = oneShotParentEnv(), run?: EngineStatusRun): Promise<boolean> {
   const isDefault = home === 'default'
   if (engine === 'claude') {
     if (isDefault && CLAUDE_KEY_VARIABLES.some(name => environment[name])) return true
-    const configDir = isDefault ? environment.CLAUDE_CONFIG_DIR || undefined : home
-    const oauth = asRecord(asRecord(parseJson((await readClaudeStored({ ...read, ...(configDir ? { configDir } : {}) }))?.raw ?? null))?.claudeAiOauth)
-    if (!oauth || !stringField(oauth.accessToken)) return false
-    return typeof oauth.expiresAt !== 'number' || oauth.expiresAt > now || !!stringField(oauth.refreshToken)
+    return await cliSignedIn('claude', isDefault ? environment : { ...environment, CLAUDE_CONFIG_DIR: home }, run) === true
   }
-  const auth = asRecord(parseJson(await readText(join(isDefault ? defaultCodexHome(read.home ?? homedir(), environment) : home, 'auth.json'))))
-  if (stringField(auth?.OPENAI_API_KEY)) return true
-  const tokens = asRecord(auth?.tokens)
-  const token = stringField(tokens?.access_token)
-  if (!token) return false
-  const exp = jwtClaims(token)?.exp
-  return typeof exp !== 'number' || exp * 1000 > now || !!stringField(tokens?.refresh_token)
+  return await cliSignedIn('codex', isDefault ? environment : { ...environment, CODEX_HOME: home }, run) === true
 }
 
 /** A request's one change id, so a record of #2493 (which holds only this) tells which switch it belongs to, and a create repeated
@@ -98,7 +93,7 @@ export class LeadSwitchRequests {
   private readonly deps: LeadSwitchDeps
   constructor(private readonly core: CoreApi, private readonly machineId: string, deps: Partial<LeadSwitchDeps> = {}) {
     this.deps = { now: Date.now, open: openDaemon, profiles: profileHome, team: () => false, home: homedir, log: () => {},
-      signedIn: (engine, home) => profileSignedIn(engine, home, this.deps.now(), this.deps.credentials),
+      signedIn: (engine, home) => profileSignedIn(engine, home, undefined, this.deps.run),
       readHandoff: (cwd, relativeFile, maxBytes) => {
         try {
           const file = join(cwd, relativeFile), stats = lstatSync(file)
@@ -136,6 +131,8 @@ export class LeadSwitchRequests {
       return
     }
     if (leadSwitching(this.core.dataDir, agent.harnessId, changeId, now)) return
+    // A sleeping Buddy is reopened by the host first; claiming now would fail its handoff before that resume finishes.
+    if (agent.buddyOf && !this.core.agents.byAgent(agent.harnessId)) return
     // Held before the claim is awaited, so a poll that comes while it is in flight starts nothing.
     const created: Run = { switchId, harnessId: agent.harnessId, changeId, busy: true, closed: false,
       crossMachine: identifier(request.targetMachineId) && request.targetMachineId !== this.machineId }
@@ -144,7 +141,7 @@ export class LeadSwitchRequests {
       await this.post(tabId, agent.id, operationId('claim', switchId), { type: 'agent.switchClaim', agentId: agent.id, switchId })
     } catch { this.runs.delete(agent.id); this.claimRetryAt.set(switchId, now + RETRY_MS); return }
     try { created.outcome = await this.carryOut(row, created, request) } catch (error) {
-      this.deps.log(`PM switch failed: ${error instanceof Error ? error.name : typeof error}`)
+      this.deps.log(`Engine switch failed: ${error instanceof Error ? error.name : typeof error}`)
       if (created.closed) created.failed = NO_START
       else created.outcome = { ok: false, error: NO_HANDOFF }
     } finally { created.busy = false }
@@ -161,10 +158,25 @@ export class LeadSwitchRequests {
     const old = this.core.agents.byAgent(run.harnessId)
     // The PM comes back as a Swarm PM, from what it was started as: with no saved role or no conversation to rebuild its prompt
     // from, it would come back role-less, with no Swarm skill and the machine owner's own GitHub login.
-    const skill = parseSwarmSkill(old?.swarmSkill), conversation = row.ledConversationId
+    const skill = parseSwarmSkill(old?.swarmSkill), buddy = !!row.agent.buddyOf
+    const conversation = buddy ? row.buddyConversationId : row.ledConversationId
     if (!old?.cwd || !skill || !identifier(conversation)) return { ok: false, error: NO_HANDOFF }
-    // The default account too; a Team daemon's is signed in through its owner's relay (team/relay.ts), which this cannot read.
-    if (!team && !await this.deps.signedIn(engine, home)) return { ok: false, error: SIGNED_OUT }
+    const buddyOwnerCurrent = async () => {
+      const owner = object(row.agent.buddyOf).personId
+      // A separate service has no synchronous sign-in state. Ask the core for its account, then check the sign-out mark.
+      const identity = await this.core.account.identity().catch(() => null)
+      return identifier(owner) && identity?.accountId === owner && request.requestedBy === owner
+        && buddyOwnerOf(old.cwd!, this.core.dataDir) === owner && signedInAccount(buddyAccountFile(this.core.dataDir)) === owner
+    }
+    if (buddy) {
+      // Check before the handoff stops anything: the launch guard also checks the recorded owner when the new engine starts.
+      if (team || skill.role !== 'buddy' || row.agent.buddySession || row.agent.modelRequest || !['claude', 'codex'].includes(engine)
+        || home !== 'default' || run.crossMachine || !await buddyOwnerCurrent()) {
+        return { ok: false, error: 'the Buddy owner or session could not be verified on this computer' }
+      }
+    }
+    // The default account too, in a Team daemon as well: each is its own sign-in, which its CLI reports.
+    if (!await this.deps.signedIn(engine, home)) return { ok: false, error: SIGNED_OUT }
     const daemon = await this.deps.open({ dataDir: this.core.dataDir, port: this.core.daemon.port, machineId: this.machineId })
     try {
       const { changeId } = run, agentId = run.harnessId
@@ -184,19 +196,28 @@ export class LeadSwitchRequests {
           switchId: run.switchId, handoffChangeId: changeId, note })
         return undefined
       }
-      const closed = await daemon.request('agent_close', { agentId, mode: 'now', changeId }, 60_000)
+      if (buddy && !await buddyOwnerCurrent()) return { ok: false, error: 'the Buddy owner or session could not be verified on this computer' }
+      if (buddy && row.agent.buddyScope === 'swarm') {
+        // The same Harness-owned home was trusted for the source engine; the target otherwise waits in a hidden pane.
+        await trustBuddyHome(old.cwd, engine)
+        if (!await buddyOwnerCurrent()) return { ok: false, error: 'the Buddy owner or session could not be verified on this computer' }
+      }
+      const closed = await daemon.request('agent_close', { agentId, sessionId: old.sessionId ?? '', createdAt: new Date(old.registeredAt).toISOString(), mode: 'now', changeId }, 60_000)
       if (closed.error || closed.closed !== true) return { ok: false, error: NO_STOP }
       run.closed = true
       // What superTabs/start.ts sends when it first starts a Lead: its start prompt first, then the handoff.
       const roleName = typeof row.roleName === 'string' ? row.roleName.replace(/\s+/g, ' ').trim().slice(0, 80) : ''
-      const prompt = `${leadPrompt(row.tabId, conversation, roleName)}${skill.github ? ` ${githubPromptLine()}` : ''}${handoff ? ` ${handoff}` : ''}`
+      const startPrompt = buddy
+        ? `You are a person's ${row.agent.buddyScope === 'swarm' ? 'one Buddy for every project they read' : 'Buddy'} in a shared Super Tab. Your chat with your owner is conversation ${conversation}: read it with harness super-tab --tab ${row.tabId} messages ${conversation}, and reply there with harness super-tab --tab ${row.tabId} post ${conversation} 'your message' UNIQUE_OPERATION_ID. Continue helping your owner in that chat.`
+        : leadPrompt(row.tabId, conversation, roleName)
+      const prompt = `${startPrompt}${!buddy && skill.github ? ` ${githubPromptLine()}` : ''}${handoff ? ` ${handoff}` : ''}`
       // Desktop's rule (_changeAgent): a mode the new engine lacks becomes ask, and bypass follows the mode.
       const mode = old.permissionMode && permissionModeFlags(engine as AgentEngine, old.permissionMode) ? old.permissionMode : old.permissionMode ? 'ask' : undefined
       // A Team user's Codex PM keeps an engine home of its own, as at its first start (start.ts, security re-check 2 of #2089).
       const pmHome = pmEngineHome(engine, changeId, team, this.deps.home())
       if (pmHome) mkdirSync(pmHome, { recursive: true, mode: 0o700 })
       const payload: Record<string, unknown> = { engine, cwd: old.cwd, creationId: changeId, startedBy: 'agent',
-        swarmRole: wireRole(skill), ...(skill.mode ? { swarmSkillMode: skill.mode } : {}), ...(skill.github ? { swarmGitHub: true } : {}),
+        swarmRole: wireRole(skill), ...(skill.mode ? { swarmSkillMode: skill.mode } : {}), ...(!buddy && skill.github ? { swarmGitHub: true } : {}),
         ...(mode ? { permissionMode: mode, bypassPermission: permissionModeApproves(mode) } : old.bypassPermission !== undefined ? { bypassPermission: old.bypassPermission } : {}),
         ...(old.defaultName ? { name: old.defaultName } : {}),
         ...(pmHome ? { codexHome: pmHome } : home !== 'default' ? { [engine === 'claude' ? 'claudeHome' : 'codexHome']: home } : {}),
@@ -231,7 +252,7 @@ export class LeadSwitchRequests {
         try {
           const daemon = await this.deps.open({ dataDir: this.core.dataDir, port: this.core.daemon.port, machineId: this.machineId })
           try {
-            const closed = await daemon.request('agent_close', { agentId: run.harnessId, mode: 'now', changeId: run.changeId }, 60_000)
+            const closed = await daemon.request('agent_close', { agentId: run.harnessId, sessionId: old.sessionId ?? '', createdAt: new Date(old.registeredAt).toISOString(), mode: 'now', changeId: run.changeId }, 60_000)
             if (closed.error || closed.closed !== true) { run.retryAt = now + RETRY_MS; return }
           } finally { daemon.close() }
         } catch { run.retryAt = now + RETRY_MS; return }

@@ -1,7 +1,7 @@
 import { AGENT_FOLDER_MARK, agentFolderFor } from './agentFolder.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { dirname, join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { buddyOwnerFile, buddyOwnerOf } from '../lib/buddyGuard.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
@@ -12,9 +12,8 @@ import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 import { readCapacityDisk } from './disk.js'
 import { SuperTabHostError } from './wire.js'
 import { PM_HOMES } from './teamDaemon.js'
-const teamDaemon = vi.hoisted(() => ({ value: false, relayed: true, offered: null as null | { slugs: string[]; listed: string[] } }))
+const teamDaemon = vi.hoisted(() => ({ value: false }))
 vi.mock('./teamDaemon.js', async (original) => ({ ...await original<object>(), isTeamDaemon: () => teamDaemon.value }))
-vi.mock('../team/relay.js', async (original) => ({ ...await original<object>(), teamRelayed: () => teamDaemon.relayed, offeredCodexModels: async () => teamDaemon.offered }))
 // What this computer's Claude Code reads as: signed in unless a test says otherwise (lib/engineAccount.ts).
 const claudeAccount = vi.hoisted(() => ({ signedIn: true as boolean | null }))
 vi.mock('../lib/engineAccount.js', async (original) => ({ ...await original<object>(), engineAccount: async () => ({ signedIn: claudeAccount.signedIn, lastUsedAt: null }) }))
@@ -134,7 +133,10 @@ describe('Swarm permission mode', () => {
       expect(result).toMatchObject({ ok: true })
       const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
       expect(payload).toMatchObject({ permissionMode: 'full', bypassPermission: true, swarmRole: 'dev' })
-      const argv = buildEngineCommandArgv(engine, { permissionMode: String(payload.permissionMode) })
+      // On Windows a launch first verifies the flags the engine's startup takes (lib/windows/engineStart.ts); given here as a
+      // verified launch gives them, so this reads the permission flags alone (Window of Tim, #3815).
+      const argv = buildEngineCommandArgv(engine, { permissionMode: String(payload.permissionMode),
+        ...(process.platform === 'win32' ? { native: { startupArgs: [] } as never } : {}) })
       expect(argv).toContain(engine === 'claude' ? '--dangerously-skip-permissions' : '--dangerously-bypass-approvals-and-sandbox')
     }
   })
@@ -162,7 +164,7 @@ describe('Swarm permission mode', () => {
       expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
       const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
       expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: true })
-      expect(String(payload.codexHome)).toContain(`/${PM_HOMES}/`)
+      expect(String(payload.codexHome)).toContain(`${sep}${PM_HOMES}${sep}`)
       rmSync(dirname(String(payload.codexHome)), { recursive: true, force: true })
     } finally { teamDaemon.value = false }
   })
@@ -445,6 +447,26 @@ it.each(['claude', 'codex'])('starts a %s Buddy with the built-in swarm-buddy sk
   expect(payload.prompt).not.toContain('swarm-dev')
 })
 
+it.each([
+  ['main', {}],
+  ['Swarm', { buddyScope: 'swarm' }],
+  ['thread', { buddySession: { thread: 'root-1', from: 1 } }],
+  ['project session', { buddySession: { thread: 'root-1', from: 1, projectId: 'project' } }],
+])('tells the %s Buddy to offer ready ideas once and wait for consent (task #3865)', async (_name, context) => {
+  const f = fixture()
+  Object.assign(f.start.request, { buddyOf: { personId: 'peer', generation: 'g' }, ...context })
+  ownMachine(f)
+  await startAgent({ ...OWN_HOST, action: 'start', tabId: 'tab', operationId: 'buddy-offer', request: f.start.request } as never, f.scoped, where, f.open)
+  const prompt = String(f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!.prompt)
+  expect(prompt).toContain('clear goal, why it matters and how to know it is done')
+  expect(prompt).toContain('check the project for an existing proposal or task')
+  expect(prompt).toContain('point to a match instead of duplicating it')
+  expect(prompt).toContain('offer without waiting to be asked: "Want me to propose this to <project>?"')
+  expect(prompt).toContain('show the exact proposal')
+  expect(prompt).toContain('Send only after your owner says yes to that proposal')
+  expect(prompt).toContain('One offer per idea; never repeat an ignored or declined offer')
+})
+
 it('admits a person\'s one Buddy by the disk its folder is made on, as the folder its start names is never made', async () => {
   // The real disk reading, on a folder that is not there: measured as it stands it is refused, and the Buddy never starts (2026-11-02).
   const root = mkdtempSync(join(tmpdir(), 'swarm-buddy-disk-'))
@@ -669,58 +691,18 @@ it('starts a Codex Product Manager on a Team daemon in an engine home of its own
   teamDaemon.value = false
 })
 
-// Security re-check 3 of #2089: a Codex Product Manager in a Team account starts signed in on the owner's relay, or is
-// refused with why. Its own engine home holds no sign-in, so with no relay it started signed out.
-it('refuses a Codex Product Manager on a Team daemon with no owner relay before anything launches, saying why', async () => {
+// No owner subscription relay (task #4137): a Codex Product Manager and any Codex model start in a Team account as anywhere
+// else, on the account's own sign-in. Nothing is refused for want of a relay or for the owner's list of models.
+it('starts a Codex Product Manager and any Codex model on a Team daemon, on its own sign-in', async () => {
   teamDaemon.value = true
-  teamDaemon.relayed = false
   try {
-    const f = fixture()
-    f.start.request = { ...f.start.request, engine: 'codex', leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } } as typeof f.start.request
-    const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'no-relay', request: f.start.request }, f.scoped, where, f.open)
-    const reason = 'The owner\'s subscription relay is not available on this machine, so a Codex Product Manager cannot sign in here.'
-    expect(result).toMatchObject({ error: 'START_FAILED', detail: reason })
-    expect(f.request.mock.calls.map(call => call[0])).not.toContain('agent_create')
-    expect(f.scoped.mock.calls.map(([input]) => (input as { command?: { type?: string; error?: string } }).command)).toContainEqual({ type: 'agent.startFailed', startId: expect.any(String), error: reason })
-    // A Claude Code one, and a Codex worker, are not this check's.
-    for (const request of [{ engine: 'claude', leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } }, { engine: 'codex' }]) {
-      const g = fixture()
-      g.start.request = { ...g.start.request, ...request } as typeof g.start.request
-      await startAgent({ action: 'start', tabId: 'tab', operationId: `other-${request.engine}`, request: g.start.request }, g.scoped, where, g.open)
-      expect(g.request.mock.calls.map(call => call[0])).toContain('agent_create')
+    for (const request of [{ engine: 'codex', leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } }, { engine: 'codex', model: 'gpt-6.1-sol', effort: 'medium' }]) {
+      const f = fixture()
+      f.start.request = { ...f.start.request, ...request } as typeof f.start.request
+      await startAgent({ action: 'start', tabId: 'tab', operationId: `team-${String(request.model)}`, request: f.start.request }, f.scoped, where, f.open)
+      expect(f.request.mock.calls.map(call => call[0])).toContain('agent_create')
     }
-  } finally { teamDaemon.value = false; teamDaemon.relayed = true }
-})
-
-// Mac Auto, 2026-10-29: a Codex start for gpt-6.1-sol, which its owner's ChatGPT account does not offer, launched and then
-// failed every request. In a Team account on the relay such a start is refused before anything launches, with what is offered.
-it('refuses a Codex start in a Team account for a model its owner is not offered, naming what is', async () => {
-  teamDaemon.value = true
-  teamDaemon.offered = { slugs: ['gpt-6-luna', 'gpt-reserve', 'gpt-5.6-terra'], listed: ['gpt-6-luna', 'gpt-5.6-terra'] }
-  try {
-    const f = fixture()
-    f.start.request = { ...f.start.request, engine: 'codex', model: 'gpt-6.1-sol', effort: 'medium' } as typeof f.start.request
-    const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'not-offered', request: f.start.request }, f.scoped, where, f.open)
-    const reason = 'This machine\'s ChatGPT account (its owner\'s subscription, used through the owner\'s relay) does not offer gpt-6.1-sol; it offers gpt-6-luna, gpt-5.6-terra.'
-    expect(result).toMatchObject({ error: 'START_FAILED', detail: reason })
-    expect(f.request.mock.calls.map(call => call[0])).not.toContain('agent_create')
-    expect(f.start.error).toBe(reason)
-    // An offered model, the default, a list that cannot be read, Claude Code and a Mac's own daemon all start as before.
-    const starts = async (request: Record<string, unknown>, offered: { slugs: string[]; listed: string[] } | null, team = true) => {
-      teamDaemon.offered = offered
-      teamDaemon.value = team
-      const g = fixture()
-      g.start.request = { ...g.start.request, ...request } as typeof g.start.request
-      await startAgent({ action: 'start', tabId: 'tab', operationId: `ok-${String(request.model)}`, request: g.start.request }, g.scoped, where, g.open)
-      return g.request.mock.calls.map(call => call[0]).includes('agent_create')
-    }
-    const list = { slugs: ['gpt-6-luna'], listed: ['gpt-6-luna'] }
-    expect(await starts({ engine: 'codex', model: 'gpt-6-luna', effort: 'medium' }, list)).toBe(true)
-    expect(await starts({ engine: 'codex', model: 'default', effort: 'default' }, list)).toBe(true)
-    expect(await starts({ engine: 'codex', model: 'gpt-6.1-sol', effort: 'medium' }, null)).toBe(true)
-    expect(await starts({ engine: 'claude', model: 'sonnet', effort: 'medium' }, list)).toBe(true)
-    expect(await starts({ engine: 'codex', model: 'gpt-6.1-sol', effort: 'medium' }, list, false)).toBe(true)
-  } finally { teamDaemon.value = false; teamDaemon.offered = null }
+  } finally { teamDaemon.value = false }
 })
 
 describe('the skills of the project the agent joins', () => {
@@ -818,9 +800,17 @@ describe('which branch a worktree starts from', () => {
   })
   // Scholes, 11-06 (#3713): computer's Dee started in a Claude scratchpad, asked "Do you trust this folder?" on every run.
   it('is a permanent folder Harness makes and marks when the folder named is a temporary one', async () => {
-    const [payload] = await created(request => { request.worktree = false; request.cwd = '/private/tmp/claude-501/-Users-mac/abc/scratchpad' })
+    const [payload] = await created(request => { request.worktree = false; request.cwd = join(tmpdir(), 'claude-501', '-Users-mac', 'abc', 'scratchpad') })
     const folder = agentFolderFor(projectsRoot(), 'start')
     expect(payload).toMatchObject({ cwd: folder })
+    expect(existsSync(join(folder, AGENT_FOLDER_MARK))).toBe(true)
+  })
+  // Task #4116 (Swarm v3): a Regular agent starts in no project, in a permanent folder of its own Harness makes and marks.
+  it('is a permanent folder of its own for a Regular agent, never the folder the request names', async () => {
+    const [payload] = await created(request => { request.worktree = false; request.regular = true })
+    const folder = agentFolderFor(projectsRoot(), 'start')
+    expect(payload).toMatchObject({ cwd: folder })
+    expect(payload).not.toHaveProperty('projectSource')
     expect(existsSync(join(folder, AGENT_FOLDER_MARK))).toBe(true)
   })
   it('is not asked for when the agent works in the folder itself', async () => {

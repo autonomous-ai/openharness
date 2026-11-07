@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:collection/collection.dart';
 
 import 'attention.dart';
@@ -113,13 +115,84 @@ Duration? superTabMergeWait(SuperTabConversation task, DateTime now) {
 /// Past this a merge waiting turns to a warning, so a merge bottleneck shows.
 const superTabMergeWarnAfter = Duration(hours: 1);
 
-/// Whether [task] is done, not merged, and has waited past the warning.
-bool superTabMergeOverdue(SuperTabConversation task, DateTime now) =>
+/// Whether [task] is done and waits for its pull request to merge.
+bool _waitingToMerge(SuperTabConversation task) =>
     task.assignment?['status'] == 'done' &&
     !task.closed &&
     !superTabTaskReleasing(task) &&
-    !superTabTaskShipped(task) &&
+    !superTabTaskShipped(task);
+
+/// Whether [task] is done, not merged, and has waited past the warning.
+bool superTabMergeOverdue(SuperTabConversation task, DateTime now) =>
+    _waitingToMerge(task) &&
     (superTabMergeWait(task, now) ?? Duration.zero) > superTabMergeWarnAfter;
+
+/// The state chips a Board card wears (task #3869), each a colour and its words: green Ready to merge, red CI failing,
+/// yellow Needs you. A chip says its state once: the card's quiet line leaves the same words out ([superTabQuietState]).
+enum SuperTabStateChip {
+  readyToMerge('Ready to merge'),
+  ciFailing('CI failing'),
+  needsYou('Needs you');
+
+  const SuperTabStateChip(this.label);
+  final String label;
+}
+
+/// The chips of [entry]'s card, in the order they read.
+List<SuperTabStateChip> superTabStateChips(SuperTabTaskEntry entry) {
+  final task = entry.task;
+  final checks = task == null ? null : _checksOf(task);
+  return [
+    if (checks == 'red') SuperTabStateChip.ciFailing,
+    if (task != null && checks == 'green' && _waitingToMerge(task))
+      SuperTabStateChip.readyToMerge,
+    if (entry.needsYou) SuperTabStateChip.needsYou,
+  ];
+}
+
+/// A card's quiet line with what its chips and footer already say left out: the red checks (a chip), the green that leads
+/// "green, waiting 12 min" and the pull request (the footer's); null when nothing is left.
+String? superTabQuietState(String? state) => switch (state) {
+  'CI red' => null,
+  // The footer names the pull request.
+  final String text when RegExp(r'^PR #\d+$').hasMatch(text) => null,
+  final String text when text.startsWith('green, ') => text.substring(7),
+  _ => state,
+};
+
+/// A task's checks as the server recorded them for the pull requests it still links, the worst first: `red`, then `running`,
+/// then `green`; null when it recorded none (an older server, or the watch has not read one).
+String? _checksOf(SuperTabConversation task) {
+  final states = {
+    for (final url in task.pullRequestUrls)
+      if (task.pullRequestChecks[url] case final state?
+          when const {'red', 'running', 'green'}.contains(state))
+        state,
+  };
+  return const ['red', 'running', 'green'].firstWhereOrNull(states.contains);
+}
+
+/// When the next release of any of [parts] may open, as the Merged card says it, in the reader's time: "about 15:30", with
+/// "tomorrow" or the date for another day, and "due now" when it may already; null when none of them has a time.
+String? _nextRelease(List<String> parts, Map<String, int> times, DateTime now) {
+  final known = [for (final part in parts) ?times[part]];
+  if (known.isEmpty) return null;
+  final first = known.reduce(math.min);
+  if (first <= now.millisecondsSinceEpoch) return 'next release due now';
+  final at = DateTime.fromMillisecondsSinceEpoch(first);
+  String two(int n) => n.toString().padLeft(2, '0');
+  final day = DateTime(
+    at.year,
+    at.month,
+    at.day,
+  ).difference(DateTime(now.year, now.month, now.day)).inDays;
+  final when = switch (day) {
+    0 => '',
+    1 => ' tomorrow',
+    _ => ' ${_months[at.month - 1]} ${at.day}',
+  };
+  return 'next release about ${two(at.hour)}:${two(at.minute)}$when';
+}
 
 String _waited(Duration wait) {
   final (hours, minutes) = (wait.inHours, wait.inMinutes % 60);
@@ -142,6 +215,7 @@ SuperTabTaskPlace? superTabTaskPlaceOf(
   int mentions = 0,
   int needsHuman = 0,
   String? Function(String personId)? personName,
+  Map<String, int> releaseTimes = const {},
 }) {
   final assignment = task.assignment;
   final status = assignment?['status'];
@@ -163,9 +237,12 @@ SuperTabTaskPlace? superTabTaskPlaceOf(
   // waits for one, whatever else the task is (it is often closed already).
   if (superTabTaskReleasing(task)) {
     final parts = _parts(task.releasing!);
+    final next = _nextRelease(task.releasing!, releaseTimes, now);
     return at(
       SuperTabTaskColumn.merged,
-      parts.isEmpty ? 'waiting for a release' : 'waiting for $parts',
+      parts.isEmpty
+          ? 'waiting for a release'
+          : ['waiting for $parts', ?next].join(' · '),
     );
   }
   // Shipped means released; finished with nothing to merge is Done (#2872).
@@ -187,13 +264,18 @@ SuperTabTaskPlace? superTabTaskPlaceOf(
     return null;
   }
   if (status == 'done') {
+    // Red checks put it back in Working: Done is waiting to merge, with the checks green (task #3827).
+    final checks = _checksOf(task);
+    if (checks == 'red') return mark('CI red');
     final wait = superTabMergeWait(task, now);
-    return at(
-      SuperTabTaskColumn.done,
-      wait == null
-          ? 'waiting to merge'
-          : 'waiting to merge for ${_waited(wait)}',
-    );
+    final waited = wait == null ? null : _waited(wait);
+    return at(SuperTabTaskColumn.done, switch (checks) {
+      'green' =>
+        'green, ${waited == null ? 'waiting to merge' : 'waiting $waited'}',
+      'running' =>
+        'CI running, ${waited == null ? 'waiting to merge' : 'waiting $waited'}',
+      _ => waited == null ? 'waiting to merge' : 'waiting to merge for $waited',
+    });
   }
   if (assignment == null) {
     final date = task.notBefore;
@@ -264,11 +346,13 @@ List<SuperTabConversation> superTabQueueOrder(
 Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabTaskBoard(
   Iterable<SuperTabConversation> tasks, {
   Iterable<SuperTabProposal> proposals = const [],
+  bool boardMode = false,
   required String readerId,
   required DateTime now,
   int Function(SuperTabConversation task)? mentions,
   int Function(SuperTabConversation task)? needsHuman,
   String? Function(String personId)? personName,
+  Map<String, int> releaseTimes = const {},
 }) {
   final board = {
     for (final column in SuperTabTaskColumn.values)
@@ -279,6 +363,21 @@ Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabTaskBoard(
       (task: null, proposal: proposal, needsYou: false, state: null),
   ]);
   for (final task in tasks) {
+    // On the Board (#3817) a proposal is its own card: in Proposals until the PM makes it a task, and marked when
+    // its question waits on the reader. A duplicate merged into another card is not shown.
+    final proposal = boardMode ? task.proposal : null;
+    final asked = proposal?.openQuestion?.personId == readerId;
+    if (proposal != null && proposal.mergedInto != null) continue;
+    if (proposal != null && !proposal.becameTask) {
+      if (task.closed) continue;
+      board[SuperTabTaskColumn.proposals]!.add((
+        task: task,
+        proposal: null,
+        needsYou: asked || (mentions?.call(task) ?? 0) > 0,
+        state: null,
+      ));
+      continue;
+    }
     final place = superTabTaskPlaceOf(
       task,
       readerId: readerId,
@@ -287,12 +386,13 @@ Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabTaskBoard(
       // A closed task's agent asks nothing: only open ones are asked.
       needsHuman: task.closed ? 0 : needsHuman?.call(task) ?? 0,
       personName: personName,
+      releaseTimes: releaseTimes,
     );
     if (place == null) continue;
     board[place.column]!.add((
       task: task,
       proposal: null,
-      needsYou: place.needsYou,
+      needsYou: place.needsYou || asked,
       state: place.state,
     ));
   }
@@ -354,10 +454,12 @@ Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabProjectBoard(
       ],
     ),
     proposals: c.proposalsOf(project.id),
+    boardMode: project.boardMode,
     readerId: c.accountId,
     now: now,
     mentions: (task) => tags.mentionsIn(task.id),
     needsHuman: needsHuman,
     personName: (id) => people[id],
+    releaseTimes: c.snapshot?.releaseTimesOf(project.id) ?? const {},
   );
 }

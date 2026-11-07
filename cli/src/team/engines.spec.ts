@@ -46,16 +46,16 @@ describe('the team account\'s engines', () => {
     expect(failing.claude).toEqual({ installed: true, signedIn: null })
   })
 
-  it('reads a home it is given, never the owner\'s: an executable, and a credential file\'s presence', async () => {
+  // The team's CLIs are in its own home's .local/bin, which a daemon's PATH need not name: each is asked there (#4137, no
+  // login file read).
+  it.skipIf(process.platform === 'win32')('reads a home it is given, never the owner\'s: an executable, and its own CLI\'s sign-in', async () => {
     const home = mkdtempSync(join(tmpdir(), 'team-engines-'))
     cleanup.push(home)
     mkdirSync(join(home, '.local', 'bin'), { recursive: true })
-    writeFileSync(join(home, '.local', 'bin', 'codex'), '#!/bin/sh\n', { mode: 0o755 })
+    // `codex login status` exits 0 when signed in.
+    writeFileSync(join(home, '.local', 'bin', 'codex'), '#!/bin/sh\n[ "$1 $2" = "login status" ] && exit 0\nexit 2\n', { mode: 0o755 })
     writeFileSync(join(home, '.local', 'bin', 'claude'), 'not executable', { mode: 0o644 })
-    mkdirSync(join(home, '.codex'))
-    writeFileSync(join(home, '.codex', 'auth.json'), JSON.stringify({ tokens: { refresh_token: 'present' } }))
-    // Codex's answer is read from the files; Claude Code's would also look in this Mac's Keychain, which a test leaves alone.
-    const real = realEngineCheckDeps(home, {})
+    const real = realEngineCheckDeps(home, { PATH: '/usr/bin:/bin' })
     const result = await checkTeamEngines({ ...real, now: () => 7,
       account: (engine) => engine === 'codex' ? real.account(engine) : Promise.resolve({ signedIn: null, lastUsedAt: null }) })
     expect(result.codex).toEqual({ installed: true, signedIn: true })
@@ -79,8 +79,8 @@ describe('the team account\'s engines', () => {
     expect(lines).toContain('Or from a terminal on this Mac, as harnessteam:')
     // Windows has no sudo: its sign-in stays the Harness terminal's.
     expect(engineLines(engines({ claude: { installed: true, signedIn: false } }), ago, 'win32').join('\n')).not.toContain('sudo -u')
-    // Why a server reads "not signed in": the subscription is lent through this computer's own daemon while it runs.
-    expect(linux).toContain('when that is not running (harness start, or harness service install), there is nothing to lend')
+    // Nothing is lent: the owner's subscription is never used for the account (task #4137).
+    expect(linux).not.toContain('nothing to lend')
     expect(lines).toContain('    claude                      Claude Code')
     expect(lines).not.toContain('codex login')
     expect(lines).toContain('Your own sign-ins are not copied into the team account')
@@ -92,17 +92,6 @@ describe('the team account\'s engines', () => {
     expect(ready).toContain('(checked 1000s ago)')
     expect(ready).not.toContain('To sign')
     expect(engineLines(undefined, ago)).toEqual(['  engines     ? not reported yet: the team daemon reports them once it runs'])
-    // Not signed in, but its owner's relay is there: nothing to sign in.
-    const relayed = engineLines(engines({ claude: { installed: true, signedIn: false, relayed: true }, codex: { installed: true, signedIn: null, relayed: true } }), ago).join('\n')
-    expect(relayed).toContain('Claude Code ✓ installed · ✓ uses your subscription')
-    expect(relayed).not.toContain('To sign')
-  })
-
-  it('says an engine it has not signed in uses the owner\'s subscription when the owner\'s relay is there', async () => {
-    const result = await checkTeamEngines({ home: '/h', executable: () => true, now: () => 1, relayed: () => true,
-      account: async (engine) => ({ signedIn: engine === 'codex', lastUsedAt: null }) })
-    expect(result.claude).toEqual({ installed: true, signedIn: false, relayed: true })
-    expect(result.codex).toEqual({ installed: true, signedIn: true })
   })
 })
 

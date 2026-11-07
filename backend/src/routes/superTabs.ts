@@ -96,7 +96,6 @@ const costsQuery = z.object({ days: z.coerce.number().int().min(1).max(MAX_DAYS)
 const scorecardQuery = z.object({ projectId: id, scope: z.literal('all').optional() }).strict()
 const leaderboardQuery = z.object({ projectId: id, week: z.coerce.number().int().nonnegative().safe().optional(), period: z.enum(PERIODS).optional(), scope: z.literal('all').optional() }).strict()
   .refine(query => query.week === undefined || query.period === undefined, 'Ask for a week or a period, not both.')
-  .refine(query => query.scope === undefined || query.period !== undefined, 'All projects is read by period.')
 const dormantQuery = agentQuery.extend({ dormant: z.literal('1'), projectId: id.optional(), before: cursor.optional() })
 const groupParams = tabParams.extend({ conversationId: id })
 const hostChangesQuery = z.object({ cursor: cursor.optional(), full: z.literal('1').optional() }).strict()
@@ -876,6 +875,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof projectParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/rules',
     { preHandler: [validateParams(projectParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.projectRules(req.user!, req.params.tabId, req.params.projectId, req.query.asAgentId)))
+  // Its machine rules alone, from the newest revision: what the route applies (task #3964).
+  app.get<{ Params: z.infer<typeof projectParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/machine-rules',
+    { preHandler: [validateParams(projectParams), validateQuery(agentQuery)] },
+    (req, reply) => respond(reply, () => store.projectMachineRules(req.user!, req.params.tabId, req.params.projectId, req.query.asAgentId)))
   app.get<{ Params: z.infer<typeof decisionParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/route-decisions/:decisionId',
     { preHandler: [validateParams(decisionParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.routeDecision(req.user!, req.params.tabId, req.params.decisionId, req.query.asAgentId)))

@@ -716,7 +716,7 @@ describe('role names and the coordinator\'s name', () => {
     expect(f.state.agents.find(a => a.id === tester)!.roleName).toBe('Tester')
     expect(f.state.agents.find(a => a.id === plain)).not.toHaveProperty('roleName')
     expect(() => f.add('long', group, false, { roleName: 'x'.repeat(41) })).toThrow()
-    const contribution = { machineOwnerId: 'host-owner', contributorId: 'owner', hostGrant: null }
+    const contribution = { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }
     const request = { conversationId: group, machineId: 'host', engine: 'claude', name: 'Designer', cwd: '/repo', worktree: true, roleName: 'Designer',
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const startId = f.run({ type: 'agent.start', request }, owner, { contribution }).result.startId as string
