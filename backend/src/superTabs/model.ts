@@ -918,7 +918,8 @@ export const groupForBuddy = <T extends Pick<Conversation, 'assignment' | 'lostA
 }
 export const groupWithoutMachines = <T extends Pick<Conversation, 'assignment' | 'lostAttempt'>>(group: T): T => {
   const assignment = group.assignment && { ...group.assignment,
-    ...(group.assignment.execution ? { execution: { ...group.assignment.execution, machineId: '', harnessId: '', machineOwnerId: '' } } : {}),
+    ...(group.assignment.execution ? { execution: { ...group.assignment.execution, machineId: '', harnessId: '', machineOwnerId: '',
+      ...group.assignment.execution.contributorId !== undefined ? { contributorId: '' } : {} } } : {}),
     ...(group.assignment.lost ? { lost: { ...group.assignment.lost, reason: lostReasonWithoutMachine(group.assignment.lost.reason) } } : {}) }
   return { ...group, ...(assignment ? { assignment } : {}),
     ...(group.lostAttempt ? { lostAttempt: { id: group.lostAttempt.id, agentId: group.lostAttempt.agentId } } : {}) }
