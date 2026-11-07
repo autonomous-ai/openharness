@@ -56,7 +56,7 @@ class SuperTabAgentChatHeader extends StatelessWidget {
     final name = agent != null
         ? snapshot!.agentName(agent.id, fallback: agent.name)
         : group.isBuddyChat
-        ? 'Your Buddy'
+        ? 'Your agent'
         : group.label;
     // A Lead's private chat: its project's chat is one quiet link away (task #4664).
     final project = agent != null && group.isAgentChat && onOpenProject != null

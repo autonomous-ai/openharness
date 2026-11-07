@@ -1617,7 +1617,8 @@ class ConversationServer {
         output['conversationId'] = chatId;
       } else if (command['type'] == 'buddy.rename') {
         // As the backend's: the reader's own Buddy chat keeps the name, or
-        // drops it for the default, and its Buddy shows it at once.
+        // takes a fresh real one when cleared (task #4568), and its Buddy
+        // shows it at once.
         final person = reader ?? 'owner';
         final chat = (state['conversations'] as List)
             .cast<Map<String, dynamic>>()
@@ -1636,19 +1637,8 @@ class ConversationServer {
           );
         }
         revision++;
-        final owner = (state['people'] as List? ?? const [])
-            .cast<Map>()
-            .where((p) => p['id'] == person)
-            .firstOrNull;
-        final name = command['name'] as String?;
-        final shown =
-            name ??
-            "${(owner?['email'] as String? ?? person).split('@').first}'s Buddy";
-        if (name == null) {
-          chat.remove('buddyName');
-        } else {
-          chat['buddyName'] = name;
-        }
+        final shown = command['name'] as String? ?? 'Atlas';
+        chat['buddyName'] = shown;
         chat['title'] = shown;
         for (final agent in (state['agents'] as List).cast<Map>()) {
           if ((chat['agentIds'] as List).contains(agent['id'])) {
