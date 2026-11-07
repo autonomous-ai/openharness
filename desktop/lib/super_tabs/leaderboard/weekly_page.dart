@@ -25,7 +25,7 @@ class _WeeklyBoardState extends State<SuperTabWeeklyLeaderboardPage> {
   static const _rowHeight = 56.0;
   SuperTabLeaderboard? _board;
   String? _error;
-  Object? _stamp;
+  (int?, (bool, String?))? _stamp;
   bool _busy = false, _again = false;
   int _generation = 0;
   SuperTabController get c => widget.controller;
@@ -48,21 +48,23 @@ class _WeeklyBoardState extends State<SuperTabWeeklyLeaderboardPage> {
   }
 
   void _follow() {
-    final stamp = (
-      c.lastChangedAt,
+    final audience = (
       c.accessRevoked,
       c.snapshot?.projects.map((p) => p.id).join(','),
     );
+    final stamp = (c.lastChangedAt, audience);
     if (stamp == _stamp) return;
+    final audienceChanged = _stamp?.$2 != audience;
     _stamp = stamp;
-    _refresh();
+    _refresh(clear: audienceChanged);
   }
 
-  void _refresh() {
+  /// Reads the board again, keeping the one shown until the answer lands (task #4220); [clear] drops it at once, for
+  /// another audience, including while a request is in flight.
+  void _refresh({bool clear = false}) {
     _generation++;
-    // Clear old audience data immediately, including while a request is in flight.
     setState(() {
-      _board = null;
+      if (clear) _board = null;
       _error = null;
     });
     if (_busy) {
@@ -97,13 +99,17 @@ class _WeeklyBoardState extends State<SuperTabWeeklyLeaderboardPage> {
           board.people.any(
             (p) => p.accepted == null || p.agentsBrought == null,
           )) {
+        _board = null;
         _error = 'The weekly org leaderboard needs a newer server.';
       } else {
         _board = board;
       }
     } on SuperTabFailure catch (failure) {
       if (!mounted || generation != _generation) return;
-      _error = failure.statusCode == 403 || failure.statusCode == 404
+      // A board the reader may no longer read goes; any other failure keeps the last one beside why.
+      final gone = failure.statusCode == 403 || failure.statusCode == 404;
+      if (gone) _board = null;
+      _error = gone
           ? 'This leaderboard is no longer available.'
           : failure.message;
     } catch (_) {
@@ -167,7 +173,7 @@ class _WeeklyBoardState extends State<SuperTabWeeklyLeaderboardPage> {
               ],
             ),
             const SizedBox(height: 24),
-            if (_error case final error?)
+            if (_error case final error? when board == null)
               Expanded(
                 child: Center(
                   child: Column(
@@ -186,7 +192,7 @@ class _WeeklyBoardState extends State<SuperTabWeeklyLeaderboardPage> {
                   ),
                 ),
               )
-            else if (_busy)
+            else if (_busy && board == null)
               const Expanded(
                 child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
               )
@@ -202,8 +208,16 @@ class _WeeklyBoardState extends State<SuperTabWeeklyLeaderboardPage> {
                   ),
                 ),
               )
-            else
+            else ...[
+              if (_error case final error?)
+                Row(
+                  children: [
+                    Flexible(child: Text(error, style: DesktopChrome.text())),
+                    TextButton(onPressed: _refresh, child: const Text('Retry')),
+                  ],
+                ),
               Expanded(child: _table(board)),
+            ],
             const SizedBox(height: 16),
             Text(
               'Agents brought earn no points.',
