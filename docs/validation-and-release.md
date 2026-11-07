@@ -253,6 +253,26 @@ branch, tags, open PRs and existing branches are preserved. For a read-only prev
 run `python3 scripts/prune-finished-caches.py --repo OWNER/REPO --pull-request N`
 or use `--deleted-branch NAME`; `--apply` performs the selected cleanup.
 
+### The Swarm flows gate
+
+Every Swarm feature has a click-through test in `desktop/test/swarm_flows/` (task #4651): the real Desktop screens,
+headless in `flutter_tester` with no window, driven the way a person does it, against the real backend and the real
+daemon of `scripts/swarm-flows-stack.mts` (a throwaway MongoDB and Redis, a stub sign-in, fake Claude Code and Codex
+engines). Nothing reads or changes the machine's own login, daemon or `~/.harness`. Run them with
+`bash scripts/swarm-flows.sh [file ...]`; each failing flow prints `FAILED FLOW: <name>`.
+
+- PR CI runs them as `swarm-flows` whenever the Desktop suite runs.
+- The Desktop release workflow runs them as its `swarm-flows` job. The candidate (`--prepare`) and the publish both
+  need it, so a failing flow stops the release, and the run summary names the flow. A reused candidate passed it in
+  the run that made it.
+- A bug found in a Swarm feature adds its flow, in the fix's pull request.
+
+**Phase 2 (spec; the machine and the staging Swarm are Ken's decision).** The same flows on a real Mac, signed build,
+against a staging Swarm before publish, and once more on the published build after it. Each run reports one line —
+the version, the flows passed and any that failed by name — to anh Dee and the v3 quality watch (#4634). It needs a
+Mac that is not anyone's working machine (the shared Mac never installs a build), a staging backend with its own
+accounts, and a sign-in for that staging account kept by the runner, never a person's.
+
 ### Package Desktop while final checks run
 
 When the final implementation is pushed, start `make release-desktop ARGS="--prepare"`
