@@ -23,6 +23,8 @@ import { git, sweepOne, WorktreeKept } from '../lib/worktreeSweep.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { agentFolderEmpty, removableAgentFolder } from './agentFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
+import { memberBranch, memberProjectIds, memberSetUp, memberWorktreesFile, readMemberWorktrees, writeMemberWorktrees, type MemberWorktree } from './memberHome.js'
+import { BUDDY_HOMES, buddyHomesProjectIds } from './buddyHome.js'
 import { teamPrivacyObserver } from '../team/observer.js'
 import type { PrivacyObservation } from '../team/privacy.js'
 import { repositoryKey } from './route.js'
@@ -117,14 +119,14 @@ const within = (parent: string, path: string) => {
   const rel = relative(resolve(parent), resolve(path))
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
 }
-/** Whether `path` is the worktree a Swarm start made from `source`: in Harness's worktrees folder, named for that start
- *  (start.ts names its branch super-tab/<start>; a taken name gets -2, -3), and still a linked worktree of `source`'s
+/** Whether `path` is the worktree a Swarm start made from `source`: in Harness's worktrees folder, named [leaf] for that start
+ *  (start.ts names its branch super-tab/<start>, or a Member's memberBranch; a taken name gets -2, -3), and still a linked worktree of `source`'s
  *  repository. A person's own worktree, of the same repository or in the same folder, or one at the path now, is not.
  *  The agent's registry folder alone is not proof: it can change after the launch. */
-async function swarmWorktree(path: string, source: string, startId: string): Promise<boolean> {
+async function swarmWorktree(path: string, source: string, leaf: string): Promise<boolean> {
   try {
     const real = await realpath(path), home = await realpath(join(projectsRoot(), 'worktrees'))
-    const leaf = worktreeFolderName(`super-tab/${startId}`), name = basename(real)
+    const name = basename(real)
     if (!within(home, real) || real === home || (name !== leaf && !/^\d+$/.test(name.startsWith(`${leaf}-`) ? name.slice(leaf.length + 1) : ''))) return false
     if (within(path, source) || !(await lstat(join(path, '.git'))).isFile()) return false
     const gitdir = /^gitdir: (.+)$/m.exec(await readFile(join(path, '.git'), 'utf8'))?.[1]?.trim()
@@ -133,6 +135,10 @@ async function swarmWorktree(path: string, source: string, startId: string): Pro
     return dirname(await realpath(resolve(path, gitdir))) === join(await realpath(resolve(source, common)), 'worktrees')
   } catch { return false }
 }
+
+/** The folder name a worker start's worktree gets, and a Member's (memberHome.ts memberBranch). */
+const startLeaf = (startId: string) => worktreeFolderName(`super-tab/${startId}`)
+const memberLeaf = (projectId: string, startId: string) => worktreeFolderName(memberBranch(projectId, startId))
 
 /** Whether `path` is not there at all: any other failure to read it (a permission, a file in its place) is not "gone". */
 const folderGone = (path: string) => realpath(path).then(() => false, (error: NodeJS.ErrnoException) => error?.code === 'ENOENT')
@@ -205,6 +211,9 @@ CAPABILITIES.push('buddyEngine')
 /** This host sends its PM's turn with the PM's delivery list read (host.ts, task #3545): only then does the backend keep people's
  *  messages and crew needs to that PM for its inbox, which goes when its turn ends. */
 CAPABILITIES.push('turnInbox')
+/** A Member's task session per project, in its own worktree apart from its chat home, with its set-ups reported (task #4543):
+ *  the backend sends a task session's start only to a host that says so. */
+CAPABILITIES.push('memberProjects')
 /** The backend's answer that this machine may no longer act in the Swarm: signed out, its contribution revoked or its host
  *  unavailable (backend store.ts observeMachine), or the Swarm gone. */
 const lostAccess = (error: unknown) => error instanceof SuperTabHostError && [401, 403, 404].includes(error.status)
@@ -401,6 +410,21 @@ export class ContributedMachines {
         .finally(() => this.checkoutReading.delete(root))
     }
     return read?.value ?? null
+  }
+  /**
+   * What this machine holds of the Swarm's projects (task #4543): each Member's set-up projects here, and every project whose
+   * files Harness put on this computer, its clones, Buddy homes' copies and Members' worktrees, in any Swarm, and whether it serves
+   * another Swarm too. The backend keeps
+   * Members' public tasks off a computer that holds a private one's. Its clones not read yet, the list is left out, so it never
+   * says less than is there.
+   */
+  private memberReport(tabId: string, pool: Record<string, unknown>, otherSwarms: boolean): { memberSetUp: Record<string, string[]>; projectsOnDisk?: string[]; otherSwarms?: true } {
+    const rows = readMemberWorktrees(memberWorktreesFile(this.core.dataDir, this.machineId))
+    const clones = pool.scope === 'swarm' ? this.checkoutReadiness(String(pool.cwd))?.map(c => c.folder) ?? null : ['lead']
+    const onDisk = clones && [...new Set([...clones, ...buddyHomesProjectIds(join(projectsRoot(), 'worktrees', BUDDY_HOMES)), ...memberProjectIds(rows)])]
+    // Another Swarm's projects here are files this Swarm cannot judge private or not, so it is told they are there.
+    return { memberSetUp: memberSetUp(rows, tabId), ...(onDisk ? { projectsOnDisk: onDisk.filter(identifier).slice(0, 200) } : {}),
+      ...(otherSwarms ? { otherSwarms: true as const } : {}) }
   }
   /** This pass's privacy reading, read once a pass (the check itself runs at most every five minutes). */
   private privacy(): PrivacyObservation | null {
@@ -697,6 +721,7 @@ export class ContributedMachines {
           ...(idleBuddies ? { idleBuddyHarnessIds: running.filter(id => idleBuddies[id] === 'idle').slice(0, 1000) } : {}),
           ...(profiles.length ? { profiles } : {}),
           ...(row.capabilitiesWanted === true ? { capabilities: CAPABILITIES } : {}),
+          ...(row.memberProjectsWanted === true ? this.memberReport(String(row.tabId), pool, pools.some(other => other.tabId !== row.tabId)) : {}),
           ...(preparing.length ? { preparingStartIds: preparing } : {}),
           ...(refusedStarts.length ? { refusedStarts } : {}),
           ...(Object.keys(uncommitted).length ? { harnessUncommitted: uncommitted } : {}),
@@ -798,7 +823,11 @@ export class ContributedMachines {
               // A Buddy launches only where the account signed in here is its owner's (superTabs/start.ts buddyOnOwnMachine): read
               // at each start, as the start itself says whether it is a Buddy's. One that cannot be read is none: a Buddy refuses.
               const signedIn = await Promise.resolve().then(() => this.core.account.identity()).then(identity => identity?.accountId ?? null, () => null)
-              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, signedIn, ...(github ? { github } : {}) },
+              // A Member's task session works in its Member's worktree of the project, once its host has one (memberHome.ts).
+              const member = identifier(object(start.request).memberOf) ? await this.memberStart(String(row.tabId), start, scoped) : {}
+              if (!member) continue
+              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, signedIn, ...(github ? { github } : {}),
+                ...(member.folder ? { memberFolder: member.folder } : {}) },
                 scoped, where, this.deps.open)
               this.refused.delete(String(start.id))
               const refused = result.ok !== true && !start.dispatched && !NOT_REFUSED.has(String(result.error))
@@ -1180,7 +1209,7 @@ export class ContributedMachines {
     // that is not there drops it; one that cannot be read for any other reason keeps it. Nothing on disk is touched.
     if (await folderGone(record.path)) return this.removed(file, record, mine)
     if (record.kind === 'agent-folder') return this.removeAgentFolder(file, record, mine)
-    if (!await swarmWorktree(record.path, record.source, record.startId)) {
+    if (!await swarmWorktree(record.path, record.source, startLeaf(record.startId))) {
       // The record no longer proves this belongs to Harness. Keep it; never loosen the proof to recover it.
       if (await folderGone(record.path)) return this.removed(file, record, mine)
       this.log('Kept a Swarm worktree: WORKTREE_UNPROVEN')
@@ -1236,6 +1265,8 @@ export class ContributedMachines {
   /** A removal deletes only what is provably the Swarm's: the record says which worktree, or agent folder, each start made. */
   private recordWorktree(tabId: string, startId: string, harnessId: string, request: Record<string, unknown>) {
     const path = this.core.agents.byAgent(harnessId)?.cwd
+    // A Member's task session's worktree is its Member's for that project, kept when the session stops (memberHome.ts).
+    if (identifier(request.memberOf)) return this.recordMemberWorktree(tabId, startId, request, path ?? undefined)
     const agentFolder = request.worktree !== true && !!path && removableAgentFolder(path, projectsRoot())
     if ((request.worktree !== true && !agentFolder) || typeof request.cwd !== 'string' || !path) return
     try {
@@ -1245,6 +1276,53 @@ export class ContributedMachines {
     } catch (error) { this.log(`Could not record the worktree of Swarm start ${startId}: ${error instanceof Error ? error.message : String(error)}`) }
   }
   private log(message: string) { (this.deps.log ?? (line => console.warn(`[super-tabs] ${line}`)))(message) }
+
+  /** [startId], a Member's task session in its project here, works at [path]: kept as that Member's worktree there. A start that
+   *  made a new one, as the one held before went or could not be proven, takes its record over, so the next start reuses it
+   *  (review of #3553); a start that worked in the held one changes nothing. */
+  private recordMemberWorktree(tabId: string, startId: string, request: Record<string, unknown>, path: string | undefined) {
+    const projectId = object(request.memberProject).id
+    if (!path || !identifier(projectId) || typeof request.cwd !== 'string' || !isAbsolute(request.cwd)) return
+    try {
+      const file = memberWorktreesFile(this.core.dataDir, this.machineId), rows = readMemberWorktrees(file)
+      const mine = (w: MemberWorktree) => w.tabId === tabId && w.memberId === request.memberOf && w.projectId === projectId
+      if (rows.some(w => mine(w) && w.path === path)) return
+      writeMemberWorktrees(file, [...rows.filter(w => !mine(w)), { tabId, memberId: String(request.memberOf), projectId, startId, source: request.cwd, path }])
+    } catch (error) { this.log(`Could not record a Member's worktree: ${(error as NodeJS.ErrnoException).code ?? 'WRITE_FAILED'}`) }
+  }
+
+  /**
+   * Before a Member's task session launches: the worktree it works in when its Member already holds one of that project here,
+   * and, for a sixth project, the held one the backend names removed first, only when nothing in it is uncommitted or unpushed
+   * (lib/worktreeSweep.ts sweepOne, as a stopped worker's). One that holds work fails the start, and nothing is made.
+   */
+  private async memberStart(tabId: string, start: Record<string, unknown>, scoped: ScopedRequest): Promise<{ folder?: string } | null> {
+    const request = object(start.request), projectId = object(request.memberProject).id
+    const file = memberWorktreesFile(this.core.dataDir, this.machineId)
+    const mine = (projectId: unknown) => (w: MemberWorktree) => w.tabId === tabId && w.memberId === request.memberOf && w.projectId === projectId
+    if (!start.dispatched && identifier(request.dropProjectId)) {
+      const dropped = readMemberWorktrees(file).find(mine(request.dropProjectId))
+      if (dropped && !await this.dropMemberWorktree(dropped)) {
+        await scoped({ action: 'command', operationId: `member-drop-${start.id}`, command: { type: 'agent.startFailed', startId: start.id,
+          error: 'The oldest project folder still has unpushed work.' } })
+        return null
+      }
+      writeMemberWorktrees(file, readMemberWorktrees(file).filter(w => !mine(request.dropProjectId)(w)))
+    }
+    const held = readMemberWorktrees(file).find(mine(projectId))
+    return held && await swarmWorktree(held.path, held.source, memberLeaf(held.projectId, held.startId)) ? { folder: held.path } : {}
+  }
+
+  /** Removes [row]'s worktree when it is provably the Member's, no session works in it and nothing in it is unpushed. */
+  private async dropMemberWorktree(row: MemberWorktree): Promise<boolean> {
+    if (await folderGone(row.path)) return true
+    if (!await swarmWorktree(row.path, row.source, memberLeaf(row.projectId, row.startId))) { this.log('Kept a Member\'s worktree: WORKTREE_UNPROVEN'); return false }
+    const unused = () => !this.core.agents.all().some(a => !!a.cwd && within(row.path, a.cwd))
+    if (!unused()) return false
+    return sweepOne(row.path, Date.now(), 0, unused).catch(error => {
+      this.log(`Kept a Member's worktree: ${error instanceof WorktreeKept ? error.code : 'WORKTREE_CHECK_FAILED'}`); return false
+    })
+  }
 
   /** Its owner removed this machine from the tab's Swarm (docs: 2026-10-23-remove-machine): close the Swarm's sessions
    *  here, delete the tab's Swarm folders and the worktrees its starts made, and acknowledge. Each step is safe to repeat,
@@ -1322,7 +1400,10 @@ export class ContributedMachines {
     const swarm = new Set(recorded.map(w => w.harnessId))
     /** Each Swarm start's receipt on this machine, by the agent it names: what lets the core close one its host no longer retains. */
     const receipts = new Map<string, string>()
-    const candidates = recorded.map(w => ({ source: w.source, path: w.path, startId: w.startId, proven: true, teamWritten: w.teamWritten === true }))
+    // A Member's worktrees in this Swarm (memberHome.ts) go with the Swarm's folders too, by the same proof.
+    const members = readMemberWorktrees(memberWorktreesFile(this.core.dataDir, this.machineId)).filter(w => w.tabId === tabId)
+    const candidates = [...members.map(w => ({ source: w.source, path: w.path, leaf: memberLeaf(w.projectId, w.startId), proven: true, teamWritten: false })),
+      ...recorded.map(w => ({ source: w.source, path: w.path, leaf: startLeaf(w.startId), proven: true, teamWritten: w.teamWritten === true }))]
     for (const start of starts) {
       const request = object(start.request)
       if (request.machineId !== this.machineId || !identifier(start.id) || !identifier(start.harnessId) || !identifier(start.creationId)) continue
@@ -1331,13 +1412,13 @@ export class ContributedMachines {
       if (proven) { swarm.add(start.harnessId); receipts.set(start.harnessId, start.creationId) }
       const agent = this.core.agents.all().find(a => a.agentId === start.harnessId)
       if (request.worktree === true && typeof request.cwd === 'string' && agent?.cwd && !candidates.some(c => c.path === agent.cwd)) {
-        candidates.push({ source: request.cwd, path: agent.cwd, startId: start.id, proven: proven && agent.startedBy === 'agent',
+        candidates.push({ source: request.cwd, path: agent.cwd, leaf: startLeaf(start.id), proven: proven && agent.startedBy === 'agent',
           teamWritten: request.projectSettings === 'off' })
       }
     }
     const worktrees: string[] = []
     for (const c of candidates) {
-      if (c.proven && await swarmWorktree(c.path, c.source, c.startId)) worktrees.push(c.path)
+      if (c.proven && await swarmWorktree(c.path, c.source, c.leaf)) worktrees.push(c.path)
       else if (existsSync(c.path)) this.log(`Kept ${basename(c.path)}: it is not provably a worktree a Swarm start made.`)
     }
     if (addedAgain(await read())) return
@@ -1377,6 +1458,8 @@ export class ContributedMachines {
     if (kept.size) throw new Error(`Did not finish cleaning up Swarm ${tabId} yet: a session still runs in ${[...kept].join(', ')}. It tries again later.`)
     if (addedAgain(await read())) return
     writeWorktrees(file, readWorktrees(file).filter(w => w.tabId !== tabId))
+    const memberFile = memberWorktreesFile(this.core.dataDir, this.machineId)
+    if (members.length) writeMemberWorktrees(memberFile, readMemberWorktrees(memberFile).filter(w => w.tabId !== tabId))
     await this.deps.backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `machine-cleaned-${removalId}`,
       command: { type: 'machine.cleaned', machineId: this.machineId, removalId } })
   }

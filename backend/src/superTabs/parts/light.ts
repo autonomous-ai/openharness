@@ -42,6 +42,7 @@ export const GROUP_FIELDS = {
     'proposal',
     'pulse',
     'reviewOf',
+    'sessionStart',
     'statusLine',
     'taskApproval',
   ],

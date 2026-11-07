@@ -791,6 +791,25 @@ it('uses one native creation receipt and joins its captured group after a lost j
   expect(commands.find(c => c.type === 'agent.started')).toMatchObject({ startId: 'start', harnessId: 'native', configuration: { engine: 'claude', model: 'fixture-model', effort: 'high' } })
   expect(commands.some(c => c.type === 'work.assign')).toBe(false)
 })
+// Task #4543: a Member's task session works in its own worktree of its project, on a branch named short for its project, so its
+// folder stays short on Windows; a later task session there works in the worktree its host already holds.
+describe('a Member\'s task session\'s folder', () => {
+  const launch = async (input: Record<string, unknown> = {}) => {
+    const f = fixture()
+    Object.assign(f.start.request, { memberOf: 'member-1', memberProject: { id: '0123456789abcdef01234567', name: 'app' } })
+    await startAgent({ action: 'start', tabId: 'tab', operationId: 'op', request: f.start.request, ...input }, f.scoped, where, f.open)
+    return f.request.mock.calls.filter(c => c[0] === 'agent_create').map(c => c[1])
+  }
+  it('is a new worktree of its project on a short branch at its first set-up there', async () => {
+    const [payload] = await launch()
+    expect(payload).toMatchObject({ projectSource: 'worktree', gitSource: '/repo', branchName: 'm/01234567-start', branchBase: 'default' })
+  })
+  it('is the worktree its host holds for that Member and project', async () => {
+    const [payload] = await launch({ memberFolder: '/home/harnesses/worktrees/repo/m-01234567-earlier' })
+    expect(payload).toMatchObject({ cwd: '/home/harnesses/worktrees/repo/m-01234567-earlier' })
+    expect(payload).not.toHaveProperty('projectSource')
+  })
+})
 describe('which branch a worktree starts from', () => {
   const created = async (change: (request: Record<string, unknown>) => void) => {
     const f = fixture(); change(f.start.request)

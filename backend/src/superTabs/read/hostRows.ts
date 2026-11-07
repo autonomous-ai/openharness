@@ -162,7 +162,7 @@ function pool(tabId: string, state: SuperTabState, machineId: string, user: Auth
     ...(githubApp ? { githubApp: true as const } : {}),
     // Asks the host to say what it launches beyond workers (machines.ts `capabilities`): a host never sends a field this
     // server did not ask for, so an older server, which would refuse every reading with it, never sees it.
-    buddySleepWanted: true as const, capabilitiesWanted: true as const }
+    buddySleepWanted: true as const, capabilitiesWanted: true as const, memberProjectsWanted: true as const }
 }
 
 function assignments(tabId: string, state: SuperTabState, machineId: string, user: AuthUser) {

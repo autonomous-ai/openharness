@@ -8,7 +8,7 @@
  * longer reads leaves the folder before the Buddy's next turn (pruneBuddyHome).
  */
 import { execFile } from 'node:child_process'
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
 import { launchEnvironment } from '../engines/kit/launchExecutable.js'
@@ -74,6 +74,13 @@ const listed = (home: string): Listed[] => {
     return Array.isArray(rows) ? rows.filter((r): r is Listed => !!r && typeof r.id === 'string' && ID.test(r.id) && typeof r.dir === 'string'
       && SAFE_DIR.test(r.dir) && typeof r.name === 'string') : []
   } catch { return [] }
+}
+/** The projects every Buddy home in [homes] holds a copy of now (task #4543): files of theirs on this computer, which an engine
+ *  under the same login could open, so the backend counts its private ones before a Member's public task runs here. */
+export function buddyHomesProjectIds(homes: string): string[] {
+  let names: string[]
+  try { names = readdirSync(homes) } catch { return [] }
+  return [...new Set(names.flatMap(name => listed(join(homes, name)).filter(r => existsSync(join(homes, name, 'projects', r.dir))).map(r => r.id)))]
 }
 function writeListed(home: string, rows: Listed[]): void {
   const path = join(home, MANIFEST), next = `${path}.next`

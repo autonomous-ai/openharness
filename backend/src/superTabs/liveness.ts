@@ -1,3 +1,4 @@
+import { besidePrivate, PRIVATE_BESIDE } from './taskSessions.js'
 import { recordPulse } from './pulse.js'
 import { linesOf } from './statusCard.js'
 import { CREW_REOPEN_GRACE_MS, isCrew } from './crew.js'
@@ -339,6 +340,9 @@ export function unavailableReason(state: SuperTabState, worker: Agent, now: numb
 
 /** Why a worker has lost its task now, or null while it still holds it. */
 function lostReason(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment, now: number, steps: StepIndex, rulesFor: DispatchLookup): string | null {
+  // A Member's task session ends its work where a private project's files are on its computer, or are on their way, whatever its
+  // task waits on (taskSessions.ts; security review 2 of #3553).
+  if (besidePrivate(state, worker)) return PRIVATE_BESIDE
   // A handed task waits on its Reviewers and CI, not on its Engineer, which may be down or at work elsewhere (task #3399).
   if (handed(group)) return null
   // A crew member its host is reopening keeps its task for the reopen's grace (crew.ts).
@@ -358,6 +362,15 @@ function lostReason(state: SuperTabState, group: Conversation, worker: Agent, as
     return progress === undefined ? 'no progress seen' : `no progress for ${plural(Math.floor((now - progress) / 60_000), 'minute')}`
   }
   return null
+}
+
+/** [machineId]'s Member task sessions beside a private project's files: each loses its task and stops (taskSessions.ts). */
+export function endBesidePrivate(state: SuperTabState, machineId: string, now: number): MessageDraft[] {
+  const sessions = new Set(state.agents.filter(a => a.machineId === machineId && besidePrivate(state, a)))
+  if (!sessions.size) return []
+  const rows = loseTasks(state, now, worker => sessions.has(worker))
+  for (const session of sessions) session.workDecision = 'stop'
+  return rows
 }
 
 /** Marks a worker's task lost and fences its agent. The Lead hears who, why, how long since progress and the last result;

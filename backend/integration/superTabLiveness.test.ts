@@ -1164,6 +1164,25 @@ describe('a start that never runs', () => {
       .rejects.toMatchObject({ code: 'START_FAILED' })
   })
 
+  // Task #4543: a Member's public task runs under its person's login, so a computer where Harness put a private project's files
+  // takes none. The host's own list of what is on its disk is stored with its machine, and no reader gets it.
+  it('keeps the private projects its machine reports on its disk, until a report leaves them out, and shows them to nobody', async () => {
+    const f = await swarm()
+    const secret = String((await f.execute({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' })).result.projectId)
+    const stored = async () => parts.reassemble(await db.$transaction(tx => parts.loadAll(tx, f.tab))).machines!
+      .find(m => m.machineId === 'test-host')!.privateOnDisk
+    await f.observe('test-host', [f.harness.worker], { projectsOnDisk: [secret, 'not-a-project'] })
+    expect(await stored()).toEqual([secret])
+    for (const reader of [owner, host]) {
+      for (const machine of (await f.timed.read(reader, f.tab)).state.machines ?? []) {
+        expect(machine).not.toHaveProperty('privateOnDisk')
+        expect(machine.observation ?? {}).not.toHaveProperty('projectsOnDisk')
+      }
+    }
+    await f.observe('test-host', [f.harness.worker], { projectsOnDisk: [] })
+    expect(await stored()).toBeUndefined()
+  })
+
   it('fails an undispatched start its machine reports refused', async () => {
     const f = await swarm()
     await f.beat(f.clock.now)

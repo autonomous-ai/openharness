@@ -176,6 +176,15 @@ export interface Agent {
    *  its session running again (`runningAt`, the first reading that did) and the wake's timing row is written (task #3462). Set
    *  only by the server. */
   crewWaking?: { at: number; conversationId: string; runningAt?: number }
+  /** A Member's task session (taskSessions.ts, task #4543): the Member, its chat session's agent id, it works for. It is an agent of
+   *  its one project ([projectId]) and of that project's scope; set only by the server, from its start. */
+  memberOf?: string
+  /** On a Member's chat session: the projects whose worktree its task home holds, the most recently used last, at most five
+   *  (taskSessions.ts). Written by the server at each assignment and as a task session joins; ids only. */
+  projectsHeld?: string[]
+  /** On a Member's chat session: the projects its host reports set up in its task home, each since when (taskSessions.ts
+   *  applyMemberSetUp), at most five. Replaced from each report that changes it. */
+  setUp?: Array<{ projectId: string; at: number }>
 }
 /** A thread session's thread root and the main chat's last sequence it may read (buddySessions.ts). A project session also
  *  names its project (buddies.ts; Dee, 10-31): it reads that project alone, and is the only Buddy that writes into it. */
@@ -223,6 +232,12 @@ export interface AgentStartRequest {
   /** The projects a Swarm-wide Buddy's folder holds, one read-only worktree each, made from that project's own checkout on its
    *  machine (spec: Folder). Ids, names and folders only. */
   buddyProjects?: Array<{ id: string; name: string; cwd: string }>
+  /** A Member's task session's start (taskSessions.ts, task #4543): the Member (its chat session's agent id) it works for, and the
+   *  one project it works in, from a worktree of that project's folder ([cwd]) in the Member's task home. `dropProjectId`: its
+   *  Member's held project whose worktree its host removes first, when clean and pushed, to stay within five. Server-written. */
+  memberOf?: string
+  memberProject?: { id: string; name: string }
+  dropProjectId?: string
   /** The offered account selected for a destination PM switch. */
   profileId?: string
   /** A crew member's move (crewKeep.ts): the agent its start takes over from once it runs. Written by the server alone. */
@@ -287,6 +302,8 @@ export interface Check {
 }
 /** One checker's verdict on a check: its actor key (`agent:ID` or `person:ID`), what it found and when. */
 export interface CheckVerdict { by: string; passed: boolean; evidence: string; at: number
+  /** The Member whose task session gave it (taskSessions.ts): another of its sessions is the same checker to review rules. */
+  member?: string
   /** The checker's name when it gave the verdict: once it leaves the Swarm, the line that clears its failure still names it
    *  (#2656). Absent on verdicts given before. */
   name?: string
@@ -323,7 +340,8 @@ export interface Assignment {
   configuration: AgentConfiguration
   /** `contributorId`: whose login its agent runs under (Agent.contributorId), so the person's Tasks feed keeps it after the agent
    *  is closed (read/feedIds.ts). Absent on assignments made before 2026-11-07. */
-  execution: { machineId: string; harnessId: string; machineOwnerId: string; contributorId?: string }
+  /** `memberOf`: the Member whose task session ran it (taskSessions.ts), kept so review rules know it after that session goes. */
+  execution: { machineId: string; harnessId: string; machineOwnerId: string; contributorId?: string; memberOf?: string }
   result: string | null
   /** Explicit progress fences delayed recording gaps; absent on older backends. */
   recordingProgress?: { at: number; revision: number }
@@ -574,6 +592,9 @@ export interface Conversation {
   /** The member it waits for, without active work (dispatch.ts): its builder, after another agent's failed check, red CI or a
    *  merge conflict. The next assignment clears it. */
   pin?: { agentId: string; why: 'findings' | 'ci' | 'conflict'; at: number }
+  /** A Member's task session starting for this task (taskSessions.ts, task #4543): it takes the task once it runs, unless someone
+   *  took it meanwhile. Cleared by that, by any assignment, or by the start's failure. */
+  sessionStart?: { startId: string; memberId: string; at: number }
   /** What its project's PM owes here (pulse.ts): people's messages that reached it, not answered, reacted to or made a task
    *  yet, at most MAX_OWED. Bookkeeping: readers get it counted in the pulse, never this list. */
   owed?: import('./pulse.js').OwedAsk[]
@@ -1201,6 +1222,12 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   }
   // Rows by day and project that only the leaderboard read uses, and it takes them from the Swarm itself.
   for (const pool of visible.machines ?? []) delete pool.lentDays
+  // Which projects' files are on a computer, private ones among them, is the server's own check (machines.ts privateOnDisk, task
+  // #4543): no reader gets it, nor the host's lists it is made from.
+  for (const pool of visible.machines ?? []) {
+    delete pool.privateOnDisk
+    if (pool.observation) { delete pool.observation.projectsOnDisk; delete pool.observation.memberSetUp; delete pool.observation.otherSwarms }
+  }
   // Where teammates' work ran was a Team-account choice; Swarm v3 runs every agent as its own person (#4120, #4289). It stays
   // stored for teamWorkRefusal until the Team entries go (#4290), and no reader gets it.
   for (const pool of visible.machines ?? []) delete pool.ownAccountChoice

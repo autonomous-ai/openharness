@@ -85,6 +85,11 @@ export interface ContributedMachine {
   machineFailures?: number
   machineBackoff?: number
   machineSuspension?: { at: number; durationMs: number }
+  /** The private projects whose clone, chat copy or task worktree Harness put on this computer (task #4543; spec #4489 section 3):
+   *  a Member's task session, which outside text can steer and which runs under its person's own login, runs no task outside
+   *  them here. Added from every start the server sends here and every private project its host reports present; removed only
+   *  when its host's list leaves it out (applyDiskReport). Ids only, at most the Swarm's projects; gone with the machine. */
+  privateOnDisk?: string[]
 }
 /** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll.
  *  [requestedAt]: when its removal was asked for; none on one recorded before 2026-10-28. */
@@ -204,6 +209,15 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
    *  (task #2441). The store keeps only this machine's own starts that neither run nor failed; no reader reads them. Absent from
    *  hosts before it. */
   refusedStarts: z.array(z.object({ startId: z.string().min(1).max(160), reason: z.string().min(1).max(300) }).strict()).max(100).optional(),
+  /** Every project whose files Harness put on this computer: its clones, the chat copies in its Buddy homes and the worktrees in
+   *  its Members' task homes (task #4543). Ids only. Absent from hosts before it, whose list the server never shrinks. */
+  projectsOnDisk: z.array(z.string().min(1).max(160)).max(200).optional(),
+  /** Per Member (its chat session's agent id, which its task sessions' starts name), the projects its task home holds a set-up
+   *  worktree of (task #4543). A project it leaves out was dropped. */
+  /** Whether this host also serves another Swarm, whose projects' privacy this one cannot see: a Member here takes none of this
+   *  Swarm's public tasks (task #4543, security review 1 of #3553). */
+  otherSwarms: z.boolean().optional(),
+  memberSetUp: z.record(z.string().max(160), z.array(z.string().min(1).max(160)).max(5)).refine(v => Object.keys(v).length <= 1000).optional(),
   /** What this host can launch beyond workers: `leadStart`, a project's Product Manager (leadStart.ts). Absent from hosts
    *  before it, which are never given one. */
   capabilities: z.array(z.string().regex(/^[a-zA-Z]{1,40}$/)).max(16).optional(),
@@ -259,6 +273,9 @@ const sameSet = (a: readonly string[] = [], b: readonly string[] = []) => {
   return left.size === right.size && [...left].every(id => right.has(id))
 }
 
+const sameSetUp = (a: Record<string, string[]> = {}, b: Record<string, string[]> = {}) =>
+  sameSet(Object.keys(a), Object.keys(b)) && Object.entries(a).every(([id, projects]) => sameSet(projects, b[id]))
+
 /**
  * Whether [next] changes nothing a report decides from, against [previous] (DB 2.5 spec, section 1 condition 2): the same
  * running and stopped sessions, no stop proof, no refused start, the same preparing starts. Progress renews leases (liveness.ts
@@ -273,7 +290,9 @@ export function readingOnly(previous: StoredReading | undefined, next: StoredRea
   if (!sameSet(previous.runningHarnessIds, next.runningHarnessIds) || !sameSet(previous.stoppedHarnessIds, next.stoppedHarnessIds)
     || !sameSet(previous.closedHarnessIds ?? [], next.closedHarnessIds ?? [])
     || !sameSet(previous.preparingStartIds, next.preparingStartIds)
-    || !sameSet(previous.idleBuddyHarnessIds, next.idleBuddyHarnessIds)) return false
+    || !sameSet(previous.idleBuddyHarnessIds, next.idleBuddyHarnessIds)
+    || !sameSet(previous.projectsOnDisk, next.projectsOnDisk) || !sameSetUp(previous.memberSetUp, next.memberSetUp)
+    || !!previous.otherSwarms !== !!next.otherSwarms) return false
   if (!previous.harnessProgress || !next.harnessProgress) return !previous.harnessProgress && !next.harnessProgress
   const before = previous.harnessProgress, after = next.harnessProgress
   return sameSet(Object.keys(before), Object.keys(after)) && Object.entries(before).every(([id, at]) => after[id]! >= at)
@@ -525,6 +544,51 @@ export function noRepositoryStart(pool: ContributedMachine | undefined, project:
   if (!request.worktree && !request.branchRef) return request
   const { branchRef: _branchRef, ...rest } = request
   return { ...rest, worktree: false }
+}
+
+/** What a host reports (`capabilities`) when it keeps a Member's chat home apart from its task home, with a worktree and an
+ *  engine session per project there (task #4543): only such a host is sent a task session's start. */
+export const MEMBER_PROJECTS_CAPABILITY = 'memberProjects'
+
+/** The project whose files [request] puts on its computer, if any: a task session's, a Lead's, a project session's, or its
+ *  conversation's project. A Regular agent's chat and a Swarm Buddy's chat have none of their own (admitMachineStart). */
+export function startProjectId(state: SuperTabState, request: AgentStartRequest): string | undefined {
+  if (request.memberProject) return request.memberProject.id
+  if (request.leadFor) return request.leadFor.projectId
+  const group = state.conversations.find(c => c.id === request.conversationId)
+  if (!group || isAgentChat(group)) return undefined
+  return isSwarmBuddyChat(group) ? request.buddySession?.projectId : groupProject(state, group).id
+}
+
+/** Records on [start]'s computer the private projects it puts there: its own project, and the chat copies a Buddy's home gets.
+ *  Called as the server sends it (agent.startDispatch). Only ever adds: a removal waits for the host's own list. */
+export function notePrivateOnDisk(state: SuperTabState, start: AgentStart): void {
+  const pool = machineContribution(state, start.request.machineId)
+  if (pool) addPrivate(state, pool, startPrivateIds(state, start))
+}
+
+/** The private projects [start] puts on its computer: its own project's, and a Buddy home's private copies. */
+export function startPrivateIds(state: SuperTabState, start: AgentStart): string[] {
+  const ids = [startProjectId(state, start.request), ...(start.request.buddyProjects ?? []).map(p => p.id)]
+  return [...new Set(ids.filter((id): id is string => !!id && projectsOf(state).some(p => p.id === id && p.visibility === 'private')))]
+}
+
+const addPrivate = (state: SuperTabState, pool: ContributedMachine, ids: Array<string | undefined>) => {
+  const held = new Set(pool.privateOnDisk ?? [])
+  for (const id of ids) if (id && projectsOf(state).some(p => p.id === id && p.visibility === 'private')) held.add(id)
+  if (held.size) pool.privateOnDisk = [...held]
+}
+
+/** [pool]'s new [reading]: every private project it lists is added, and one it leaves out is removed, unless a start to it is
+ *  still on its way (a list made before that start's clone). A host that sends no list removes nothing. */
+export function applyDiskReport(state: SuperTabState, pool: ContributedMachine, reading: StoredReading): void {
+  const listed = reading.projectsOnDisk
+  if (!listed) return
+  addPrivate(state, pool, listed)
+  if (state.starts?.some(s => s.request.machineId === pool.machineId && !s.harnessId && !s.error)) return
+  const kept = (pool.privateOnDisk ?? []).filter(id => listed.includes(id))
+  if (kept.length) pool.privateOnDisk = kept
+  else delete pool.privateOnDisk
 }
 
 /** What a host reports (`capabilities`) when it runs a Swarm-wide Buddy in its folder of project worktrees (Dee, 10-31). */
