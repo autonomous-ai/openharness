@@ -42,15 +42,15 @@ N/A because nothing new is stored, synced or exposed: a refusal and a reassignme
 
 **Interfaces:** `otherSecurityReviewers(state, task, stepId): Set<string>`; `reviewerCandidates(..., os?, stepId?)`.
 
-- [ ] Tests: `stepCandidates` for Security review 1 leaves out the agent done with Security review 2, and offers it Security
+- [x] Tests: `stepCandidates` for Security review 1 leaves out the agent done with Security review 2, and offers it Security
   review 2 again; a Ready after Security review 1 was cancelled never gives it to Security review 2's reviewer;
   `work.assign` of that reviewer, or of the builder, to a step is refused naming who is eligible.
-- [ ] Run `npx vitest run src/superTabs/reviewerPick.test.ts src/superTabs/reviewSteps.test.ts`: fail. Code it. Pass. Commit.
+- [x] Run `npx vitest run src/superTabs/reviewerPick.test.ts src/superTabs/reviewSteps.test.ts`: fail. Code it. Pass. Commit.
 
 ## Task 2: a stuck step moves without a cancel
 
 **Files:** `backend/src/superTabs/commands.ts`; Test `backend/src/superTabs/reviewSteps.test.ts`.
 
-- [ ] Test: Security review 1 held by Security review 2's reviewer, who reports it blocked: the builder's `work.assign` to a
+- [x] Test: Security review 1 held by Security review 2's reviewer, who reports it blocked: the builder's `work.assign` to a
   free Reviewer moves it, the old holder is told and freed; a blocked step whose holder is independent is still refused.
-- [ ] Run: fails. Code it. Pass. Commit.
+- [x] Run: fails. Code it. Pass. Commit.
