@@ -303,6 +303,59 @@ void main() {
     expect(f.operations.toSet().length, 1);
     expect(f.commands.length, 2);
   });
+  testWidgets('every status shows its own word and mark (finding 4)', (
+    t,
+  ) async {
+    const statuses = <(String, String, HarnessActivity?)>[
+      ('planned', 'Planned', HarnessActivity.starting),
+      ('working', 'Working', HarnessActivity.working),
+      ('needs_human', 'Needs a human', HarnessActivity.needsInput),
+      ('blocked', 'Stuck', HarnessActivity.failed),
+      ('review', 'Ready for review', HarnessActivity.needsInput),
+      ('done', 'Done', HarnessActivity.done),
+      ('stopped', 'Stopped', HarnessActivity.paused),
+      ('cancelled', 'Cancelled', HarnessActivity.paused),
+      ('reconciling', 'Checking its agent', HarnessActivity.unknown),
+      ('lost', 'Agent lost', HarnessActivity.offline),
+      ('proposal', 'Proposal', null),
+      ('rejected', 'Rejected', null),
+      ('a-later-status', 'Status unavailable', HarnessActivity.unknown),
+    ];
+    await mount(t);
+    f.rows
+      ..clear()
+      ..addAll([
+        for (final (i, (status, _, _)) in statuses.indexed)
+          {...task(status, 1, 100 - i), 'status': status, 'canApprove': false},
+      ]);
+    f.controller.personalTasks!.apply(feed(f.rows, reset: true));
+    await t.binding.setSurfaceSize(const Size(340, 4000));
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    await t.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SuperTabPersonalTasksPane(
+            controller: f.controller,
+            onOpenTask: (_) {},
+          ),
+        ),
+      ),
+    );
+    await t.pump();
+    for (final (status, word, activity) in statuses) {
+      expect(
+        inCard(status, find.byTooltip(word)),
+        findsOneWidget,
+        reason: status,
+      );
+      if (activity != null) {
+        final mark = t.widget<ActivityMark>(
+          inCard(status, find.byType(ActivityMark)),
+        );
+        expect(mark.activity, activity, reason: status);
+      }
+    }
+  });
   group('a refused change unlocks the pane and says why (finding 3)', () {
     FilledButton approve(String id) =>
         find
