@@ -245,6 +245,8 @@ describe('creating an agent', () => {
     expect(acceptFullMode).toHaveBeenLastCalledWith('claude', expect.objectContaining({ CLAUDE_CONFIG_DIR: '/moved' }))
     await setup().create(request({ swarmRole: 'coordinator', permissionMode: 'auto' }))
     await setup().create(request({ permissionMode: 'full' }))
+    // Team-written work runs in its owner's own mode, which skips nothing (review of #3485), so nothing is accepted for it.
+    await setup().create(request({ swarmRole: 'agent', permissionMode: 'teamWritten' }))
     expect(acceptFullMode).toHaveBeenCalledTimes(2)
     // A settings file it cannot write leaves the engine to ask, and the launch goes on.
     vi.mocked(acceptFullMode).mockImplementationOnce(() => { throw new Error('settings locked') }).mockImplementationOnce(() => { throw 'worse' })

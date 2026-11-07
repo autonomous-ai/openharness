@@ -827,9 +827,12 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
     // An older Claude Buddy's saved mode: relaunched like its owner's own session, in full mode (Ken, 11-04, task #2832).
     expect(buildEngineCommandArgv('claude', { permissionMode: 'buddy', bypassPermission: true }))
       .toEqual([engineBin('claude'), '--dangerously-skip-permissions'])
-    // Team-written work reads none of the branch's own settings, `settings.local.json` included (audit H2).
+    // Team-written work reads none of the branch's own settings, `settings.local.json` included (audit H2), and since v3 runs
+    // as its owner on their own computer, so it skips no permission check and no sandbox (review of #3485).
     expect(buildEngineCommandArgv('claude', { permissionMode: 'teamWritten', bypassPermission: true }))
-      .toEqual([engineBin('claude'), '--dangerously-skip-permissions', '--setting-sources', 'user', '--strict-mcp-config'])
+      .toEqual([engineBin('claude'), '--setting-sources', 'user', '--strict-mcp-config'])
+    expect(buildEngineCommandArgv('codex', { permissionMode: 'teamWritten', bypassPermission: true }))
+      .toEqual([engineBin('codex'), ...CODEX_SCREEN])
     // An older Codex Buddy's saved mode: full access, as its owner's own session (task #2832).
     expect(buildEngineCommandArgv('codex', { permissionMode: 'readOnlyAsk', bypassPermission: true }))
       .toEqual([engineBin('codex'), '--dangerously-bypass-approvals-and-sandbox', ...CODEX_SCREEN])
