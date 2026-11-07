@@ -373,7 +373,7 @@ void main() {
       'Too much scope',
     );
     await t.pump();
-    await t.tap(find.text('Decline task').last);
+    await t.tap(find.text('Decline').last);
     await t.pumpAndSettle();
     expect(f.commands.single, {
       'type': 'task.reject',
@@ -394,6 +394,8 @@ void main() {
     await t.tap(inCard('new', find.text('Accept')));
     await t.pumpAndSettle();
     expect(find.textContaining('fixture private'), findsNothing);
+    // What happened and what to do, in two short sentences (anh Dee, 11-07).
+    expect(find.text('Not confirmed. Retry to check.'), findsOneWidget);
     expect(find.text('Retry'), findsOneWidget);
     f.fail = false;
     await t.tap(find.text('Retry'));
@@ -621,7 +623,7 @@ void main() {
           ),
         ),
       );
-      await t.tap(find.text('Decline task').last);
+      await t.tap(find.text('Decline').last);
       await t.pumpAndSettle();
       expect(f.commands, isEmpty);
       expect(replacement.commands, isEmpty);

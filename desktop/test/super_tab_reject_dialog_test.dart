@@ -48,7 +48,15 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.text('Decline task'), findsOneWidget, reason: 'the button');
+    // A button is one or two words, verb first; the title already names the task.
+    expect(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.widgetWithText(TextButton, 'Decline'),
+      ),
+      findsOneWidget,
+      reason: 'the button',
+    );
   });
 
   testWidgets('a long title wraps in the dialog without overflowing', (
