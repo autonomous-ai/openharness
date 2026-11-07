@@ -7,7 +7,7 @@ import { buddyOwnerFile, buddyOwnerOf } from '../lib/buddyGuard.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { env } from '../config/env.js'
 import { homedir, tmpdir } from 'node:os'
-import { BUDDY_CLAUDE_SIGNED_OUT, BUDDY_NOT_OWN_MACHINE, HEAVY_NOT_RECORDED, HEAVY_REFUSED, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent, TEAM_WRITTEN_CLAUDE_ONLY } from './start.js'
+import { BUDDY_CLAUDE_SIGNED_OUT, BUDDY_NOT_OWN_MACHINE, HEAVY_NOT_RECORDED, HEAVY_REFUSED, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent, TEAM_WRITTEN_CLAUDE_ONLY, TEAM_WRITTEN_WORKTREE_ONLY } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 import { readCapacityDisk } from './disk.js'
 import { SuperTabHostError } from './wire.js'
@@ -239,6 +239,16 @@ describe('Swarm permission mode', () => {
     expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
     expect(f.start.error).toContain('Claude Code')
     expect(existsSync(join(homedir(), PM_HOMES, f.start.creationId))).toBe(false)
+  })
+
+  // Task #4353: its Claude trust is saved for the folder it runs in and cleared with the worktree Harness made for it. The
+  // owner's main checkout is neither Harness's to trust for it nor to delete, so it never runs there.
+  it('refuses Team-written work that names no worktree, the owner\'s main checkout, before anything is made', async () => {
+    const f = fixture()
+    Object.assign(f.start.request, { engine: 'claude', projectSettings: 'off', worktree: false, cwd: '/repo' })
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ error: 'START_FAILED', detail: TEAM_WRITTEN_WORKTREE_ONLY })
+    expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
+    expect(f.start.error).toContain('worktree')
   })
 
   it('gives a normal Codex start no engine home of its own', async () => {

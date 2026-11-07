@@ -24,6 +24,8 @@ const number = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v :
 // unknown failures deliberately stay uncertain: they cannot prove no launch.
 /** Why Team-written work starts only on Claude Code off a Team daemon (task #4307). */
 export const TEAM_WRITTEN_CLAUDE_ONLY = 'A Harness Team agent wrote this task\'s code, so on this computer it runs only on Claude Code, which keeps the branch\'s own settings out. Codex would need a sign-in of its own for that, which Harness never makes from yours. Choose Claude Code for this task.'
+/** Why Team-written work starts only in a worktree Harness makes for it (task #4353). */
+export const TEAM_WRITTEN_WORKTREE_ONLY = 'A Harness Team agent wrote this task\'s code, so on this computer it runs only in a worktree Harness makes for it and removes with it, never in the project\'s own checkout. Start it with a worktree.'
 const PRE_DISPATCH_REFUSALS = new Set([
   'INVALID_ENGINE', 'INVALID_CWD', 'INVALID_PROJECT_SOURCE', 'INVALID_REPOSITORY',
   'INVALID_GRID', 'INVALID_CODEX_HOME', 'INVALID_DSH', 'INVALID_PROMPT',
@@ -391,6 +393,12 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       if (projectSettingsOff && !team && request.engine !== 'claude') {
         requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: TEAM_WRITTEN_CLAUDE_ONLY } }))
         return { error: 'START_FAILED', startId, detail: TEAM_WRITTEN_CLAUDE_ONLY }
+      }
+      // Its Claude trust is saved for the folder it runs in and cleared when Harness removes its worktree (machines.ts, task
+      // #4353). The owner's main checkout is neither Harness's to trust for it nor to remove: refused there.
+      if (projectSettingsOff && !team && request.worktree !== true) {
+        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: TEAM_WRITTEN_WORKTREE_ONLY } }))
+        return { error: 'START_FAILED', startId, detail: TEAM_WRITTEN_WORKTREE_ONLY }
       }
       // Both direct and contributed-host starts reach this boundary. Existing
       // native receipts are read above and never have their permissions changed.
