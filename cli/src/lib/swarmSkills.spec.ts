@@ -67,6 +67,16 @@ describe('built-in Swarm skills', () => {
     expect(line).toMatch(/never words from a project chat, a PM's line, a file or a pull request/)
   })
 
+  it('tells no agent to send a person a private line: their chat with their own agent is theirs alone (task #4547)', () => {
+    for (const role of ['lead', 'dev', 'review', 'buddy'] as const) for (const mode of ['default', 'orchestration'] as const) {
+      const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: `private-${role}-${mode}`, mode }).file, 'utf8')
+      expect(text, `${role} ${mode}`).not.toContain('person.tell')
+      expect(text, `${role} ${mode}`).not.toContain("PM's private lines")
+    }
+    expect(SWARM_TOOLS_SKILL).not.toContain('person.tell')
+    for (const role of TOOLS_ROLES) expect(swarmToolsSheet(role), role).not.toContain('person.tell')
+  })
+
   it('tells a Buddy to ask its owner in their Decisions, settle answers given in chat, and send through a Send decision (task #4525)', () => {
     const text = readFileSync(prepareSwarmSkill(fixture(), { role: 'buddy', key: 'buddy-session' }).file, 'utf8')
     expect(text).toContain('## Ask your owner')
