@@ -11,6 +11,7 @@ import '../widgets/desktop_chrome.dart';
 import 'buddies.dart' show buddyMachineName;
 import 'controller.dart';
 import 'dialog_scope.dart';
+import 'model.dart' show SuperTabAgent;
 
 /// Restart the reader's Buddy in [projectId] with extra launch flags, which the
 /// machine keeps and applies on every later start of it (spec
@@ -96,13 +97,28 @@ List<String>? splitLaunchArgs(String line) {
   return words;
 }
 
+/// The reader's Buddy behind their Buddy chat in [projectId]: the main Buddy
+/// that chat names, so with several Buddies (#3818) it is that chat's, not
+/// another's; else the reader's Buddy in [projectId].
+SuperTabAgent? readerBuddy(SuperTabController c, String projectId) {
+  final snapshot = c.snapshot;
+  final named = c
+      .buddyChat(projectId)
+      ?.agentIds
+      .map((id) => snapshot?.agent(id))
+      .whereType<SuperTabAgent>()
+      .where((a) => a.isMainBuddy && a.buddyOf == c.accountId)
+      .firstOrNull;
+  return named ?? c.buddy(projectId);
+}
+
 /// The machine's agent behind the reader's Buddy in [projectId], if loaded.
 Agent? buddyMachineAgent(
   SuperTabController c,
   String projectId,
   AppNotifier? app,
 ) {
-  final buddy = c.buddy(projectId);
+  final buddy = readerBuddy(c, projectId);
   if (buddy == null) return null;
   return app
       ?.stateOf(buddy.machineId)
@@ -130,7 +146,7 @@ Future<BuddyRestartResult> restartBuddyWithFlags(
   required String text,
   required String saved,
 }) async {
-  final buddy = c.buddy(projectId);
+  final buddy = readerBuddy(c, projectId);
   if (buddy == null) {
     return const BuddyRestartResult(
       BuddyRestartOutcome.failed,
@@ -237,7 +253,7 @@ class _RestartBuddyDialogState extends State<_RestartBuddyDialog> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final buddy = c.buddy(widget.projectId);
+    final buddy = readerBuddy(c, widget.projectId);
     final engine = externalEngineName(
       _machineAgent?.engine ?? buddy?.engine ?? '',
     );

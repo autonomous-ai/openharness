@@ -14,6 +14,7 @@ import 'super_tab_activity_lists_test.dart' show swarm;
 import 'support/buddy_fixture.dart';
 import 'support/restart_connection.dart';
 import 'support/capture.dart';
+import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show createApp;
 
 /// The Board's Buddy card (spec 2026-11-06-board-buddy-card): Restart with
@@ -71,7 +72,13 @@ void main() {
         });
     final c = server.controller(
       account: 'owner',
-      initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
+      initial: {
+        'tabId': 'tab',
+        'accountId': 'owner',
+        'selectedId': 'lead',
+        // v3 folds Projects while the person has an agent.
+        'projectsGroupOpen': true,
+      },
     );
     await tester.runAsync(c.refresh);
     await tester.pumpWidget(
@@ -124,8 +131,8 @@ void main() {
     expect(find.text('Running'), findsOneWidget);
     expect(find.text('Runs on'), findsOneWidget);
     expect(find.text('Test host'), findsWidgets);
-    expect(find.text('Engine'), findsOneWidget);
-    expect(find.textContaining('Claude Code'), findsWidgets);
+    // The facts line under the header shows and switches the engine.
+    expect(find.text('Engine'), findsNothing);
     expect(
       find.descendant(
         of: key('launch-flag-chip-0'),
@@ -198,6 +205,147 @@ void main() {
     expect(button, findsNothing);
     expect(card, findsNothing);
     await end(tester, c);
+  });
+
+  group('Swarm v3: the Buddy chat in the middle', () {
+    /// The reader's one Buddy for the Swarm (spec 2026-10-31-one-buddy-per-swarm), opened from My agents, with the
+    /// Tasks slot on the right, as the app lays it out.
+    Future<SuperTabController> middle(
+      WidgetTester tester, {
+      Brightness brightness = Brightness.light,
+    }) async {
+      await tester.binding.setSurfaceSize(const Size(1600, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final server = swarm();
+      server.state['buddies'] = true;
+      server.state['swarmBuddy'] = true;
+      (server.state['agents'] as List).add({
+        'id': 'wren',
+        'name': 'Wren',
+        'buddyScope': 'swarm',
+        'buddyOf': {'personId': 'owner', 'generation': 'fixture'},
+        'machineId': 'm',
+        'harnessId': 'h-wren',
+        'contributorId': 'owner',
+        'machineOwnerId': 'owner',
+        'configuration': {'engine': 'claude', 'model': 'default'},
+      });
+      (server.state['conversations'] as List).add({
+        ...conversationFixture('swarm-buddy-owner', 'Buddy'),
+        'kind': 'swarm-buddy',
+        'buddyOwnerId': 'owner',
+        'agentIds': ['wren'],
+      });
+      // An agent of the reader's at work on a task, in My agents too.
+      (server.state['agents'] as List).add({
+        'id': 'kestrel',
+        'projectId': 'lead',
+        'name': 'Kestrel',
+        'machineId': 'm',
+        'harnessId': 'h-kestrel',
+        'contributorId': 'owner',
+        'configuration': {'engine': 'codex'},
+      });
+      (server.state['conversations'] as List)
+          .cast<Map<String, dynamic>>()
+          .firstWhere((g) => g['id'] == 'offline')['assignment'] = {
+        'id': 'a1',
+        'agentId': 'kestrel',
+        'status': 'working',
+      };
+      final c = server.controller(
+        account: 'owner',
+        initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
+      );
+      await tester.runAsync(c.refresh);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: brightness),
+          home: Scaffold(
+            body: SuperTabView(
+              controller: c,
+              app: app,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Mac Studio',
+              board: true,
+              rightPane: (_) => const SizedBox.expand(),
+            ),
+          ),
+        ),
+      );
+      await settle(tester);
+      await tester.tap(key('super-swarm-buddy'));
+      await settle(tester);
+      return c;
+    }
+
+    testWidgets("the middle header's name opens the card", (tester) async {
+      final c = await middle(tester);
+      expect(c.selectedId, 'swarm-buddy-owner');
+      expect(
+        find.descendant(of: key('super-middle-chat'), matching: button),
+        findsOneWidget,
+      );
+      await open(tester);
+      expect(card, findsOneWidget);
+      expect(find.text('Running'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: key('launch-flag-chip-0'),
+          matching: find.text('--chrome'),
+        ),
+        findsOneWidget,
+      );
+      await end(tester, c);
+    });
+
+    testWidgets('Restart restarts the Buddy that chat names, with the chips', (
+      tester,
+    ) async {
+      final c = await middle(tester);
+      await open(tester);
+      await addFlag(tester, '--foo');
+      await tester.tap(restart);
+      await tester.pump();
+      expect(connection.types.single, 'agent_restart');
+      expect(connection.requests.single['agentId'], 'h-wren');
+      expect(connection.requests.single['launchArgs'], '--chrome --foo');
+      connection.restartReplies.single.complete({
+        ...restartReceipt(creationId(), agentId: 'h-wren'),
+        'launchArgs': ['--chrome', '--foo'],
+      });
+      await settle(tester);
+      expect(card, findsNothing);
+      await end(tester, c);
+    });
+
+    testWidgets('the open card over the middle Buddy chat, dark', (
+      tester,
+    ) async {
+      final c = await middle(tester, brightness: Brightness.dark);
+      await open(tester);
+      await captureWindow(
+        tester,
+        Platform.environment['HARNESS_SUPER_TAB_CAPTURE'],
+        'buddy-card-middle-dark',
+      );
+      expect(card, findsOneWidget);
+      await end(tester, c);
+    });
+
+    testWidgets("another agent's chat in the middle keeps its plain header", (
+      tester,
+    ) async {
+      final c = await middle(tester);
+      await tester.tap(key('super-agent-kestrel'));
+      await settle(tester);
+      expect(c.selectedId, 'offline');
+      expect(key('super-middle-chat'), findsOneWidget);
+      expect(button, findsNothing);
+      await end(tester, c);
+    });
   });
 
   testWidgets('Restart sends the chips as one line and closes on success', (

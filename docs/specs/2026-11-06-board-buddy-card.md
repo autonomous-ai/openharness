@@ -13,8 +13,11 @@ card, with option C's chip field for the flags).
 ## Behaviour
 
 ### The header
-- On the Board's right pane, while the Buddy chat is shown, the title becomes a button: the Buddy's avatar, the name the
-  header shows today ("Your Buddy"), and a chevron.
+- Swarm v3 (#3445, 2026-11-07) opens the Buddy chat in the middle, from My agents, under a header that is only the words
+  "Your Buddy" (`_middleChat`), so nothing on Desktop reached Restart Buddy any more. Mockup:
+  `desktop/mockup/buddy-card-v3.html`.
+- In that middle header, and in the Board's right pane while it shows the Buddy chat, the title becomes a button: the
+  Buddy's avatar, "Your Buddy", and a chevron.
 - Clicking it opens the Buddy card, anchored under it. Esc, a click outside, or a second click closes it.
 - While a card's chat is shown (the "‹ Your Buddy" back button), the header stays as today, with no card.
 
@@ -23,7 +26,7 @@ Top to bottom:
 - **Name and status.** The status is "Running" with a green dot when the Buddy's machine agent is live, "Stopped" with
   a grey dot otherwise, and "Restarting…" with an amber dot while a restart runs.
 - **Runs on:** the machine name (`buddyMachineName`).
-- **Engine:** `externalEngineName(engine)`, plus " · <model>" when the agent reports one.
+- No Engine row: the facts line under the header already shows and switches the engine.
 - **Launch flags:** the chip field below, with the help line under it. The help line is the dialog's copy:
   "Added to <engine>'s command line each time this Buddy starts on <machine>. Your Buddy runs with full permissions.
   Don't put secrets here: other people on that computer can see them." While the field has focus, the help line reads
@@ -32,13 +35,16 @@ Top to bottom:
   **Remove** at the right in the destructive style (`confirmRemoveBuddy`).
 
 What the card shows when it applies:
+- The Buddy is the main Buddy the chat names (`readerBuddy`), so with several Buddies (#3818) it is that chat's; a
+  per-project Buddy chat falls back to `c.buddy(projectId)`.
 - The flags field and Restart/Start show only for the reader's own Buddy with an agent on a machine (`c.buddy(...)` with
   a non-empty `harnessId` and `machineId`, as the old menu item required) whose machine agent is loaded, so the card
   knows its saved flags and whether it runs (audit). The card opens only on the reader's own Buddy chat.
 - Rename and Remove follow the old menu's rule (`editable`).
 
 ### The chip field
-- Each saved word (the machine agent's `Agent.launchArgs`) is a chip in monospace with a × that removes it.
+- Each saved word (the machine agent's `Agent.launchArgs`) is a chip in monospace with a × that removes it. There are
+  no default flags: a Buddy that never saved any shows an empty field.
 - After the chips, an input with the hint "add a flag…".
 - Enter or Space turns the typed text into chips. Enter never restarts the Buddy; only the Restart button does. The text is split as a shell would split it, so `--add-dir "a b"` gives
   two chips, `--add-dir` and `a b`. An unclosed quote waits for more typing instead of splitting.
@@ -69,7 +75,7 @@ What the card shows when it applies:
 - **Growth, read cost, scale:** none. The card reads what the controller and `AppNotifier` already hold. Nothing new is
   stored.
 - **Compatibility:** the same daemon requests as #3351. An older daemon gives the "Update Harness" line, as today.
-- **Platforms:** Desktop's Board only (`SuperTabView.board`). The web keeps the old menu and dialog.
+- **Platforms:** Desktop's Board layout only (`SuperTabView.board`): the middle Buddy chat and the Board's right pane. The web keeps the old menu and dialog.
 - **Audience:** the card's actions apply only to the reader's own Buddy, as the menu did.
 - **Failure:** every failure is shown in the card and nothing closes on its own. A lost reply shows its error and
   Restart can be pressed again (each press is a fresh intent).

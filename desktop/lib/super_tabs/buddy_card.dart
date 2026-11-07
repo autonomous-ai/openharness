@@ -199,7 +199,7 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
   }
 
   Widget _button(BuildContext context) {
-    final buddy = c.buddy(widget.projectId);
+    final buddy = readerBuddy(c, widget.projectId);
     return Semantics(
       button: true,
       label: '${widget.label}, Buddy options',
@@ -284,7 +284,7 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
 
   Widget _card(BuildContext context) {
     final highContrast = MediaQuery.highContrastOf(context);
-    final buddy = c.buddy(widget.projectId);
+    final buddy = readerBuddy(c, widget.projectId);
     final agent = _agent;
     final editable = c.canWrite && !c.saving && !c.hasPendingAction;
     final canRestart =
@@ -298,7 +298,6 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
         ? 'its machine'
         : buddyMachineName(c, buddy.machineId, app: app);
     final engine = externalEngineName(agent?.engine ?? buddy?.engine ?? '');
-    final model = agent?.modelName;
     final dot = _busy
         ? grid.AppPalette.warn
         : live
@@ -384,7 +383,6 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
                   ],
                 ),
                 fact('Runs on', machine),
-                fact('Engine', model == null ? engine : '$engine · $model'),
                 if (canRestart) ..._flags(agent, engine, machine),
                 if (_message case final message?) ...[
                   const SizedBox(height: _gap),
@@ -491,7 +489,8 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
           style: _compact.copyWith(
             foregroundColor: WidgetStatePropertyAll(grid.AppPalette.dangerFill),
           ),
-          onPressed: editable && !_busy && c.buddy(widget.projectId) != null
+          onPressed:
+              editable && !_busy && readerBuddy(c, widget.projectId) != null
               ? () => _then(
                   () => confirmRemoveBuddy(context, c, widget.projectId),
                 )

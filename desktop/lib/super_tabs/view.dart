@@ -3650,6 +3650,9 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The chat of the selected agent in the middle (Swarm v3, task #4118), under its name.
   Widget _middleChat(Widget chat) {
     final group = c.selected;
+    // The reader's own Buddy chat: its name opens the Buddy card (Restart
+    // with launch flags, Rename, Remove), which nothing else here reaches.
+    final ownBuddy = group != null && _isBuddyChat(group);
     return Column(
       key: const ValueKey('super-middle-chat'),
       children: [
@@ -3658,18 +3661,30 @@ class _SuperTabViewState extends State<SuperTabView>
           child: Row(
             children: [
               const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  group?.isBuddyChat == true
-                      ? 'Your Buddy'
-                      : group?.label ?? '',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: DesktopChrome.control().copyWith(
-                    fontWeight: grid.AppFont.semibold,
+              if (ownBuddy) ...[
+                Flexible(
+                  child: BuddyCardButton(
+                    key: ValueKey(group.id),
+                    controller: c,
+                    projectId: group.projectId,
+                    app: widget.app,
+                    label: 'Your Buddy',
                   ),
                 ),
-              ),
+                const Spacer(),
+              ] else
+                Expanded(
+                  child: Text(
+                    group?.isBuddyChat == true
+                        ? 'Your Buddy'
+                        : group?.label ?? '',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.control().copyWith(
+                      fontWeight: grid.AppFont.semibold,
+                    ),
+                  ),
+                ),
               const SizedBox(width: 8),
             ],
           ),
