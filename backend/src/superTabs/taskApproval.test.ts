@@ -232,7 +232,8 @@ describe('personal approval enforced before work', () => {
     const f = fixture(); f.mode('review'); f.propose()
     const card = f.state.conversations.find(c => c.proposal)!
     f.runCommand({ type: 'task.suggest', conversationId: card.id, agentId: f.candidate })
-    f.runCommand({ type: 'task.approve', conversationId: card.id })
+    // Approved while undecided, as a server before #4249 allowed.
+    f.edit(s => Object.assign(s.conversations.find(c => c.id === card.id)!.taskApproval!, { state: 'approved', decidedAt: NOW }))
     const target = f.runCommand({ type: 'proposal.create', projectId: 'lead', title: 'Other', text: 'Other', goal: 'Other', why: 'Other',
       doneWhen: 'Other', evidence: ['Reproduction'], priority: 'P2' }, owner).result.conversationId
     expect(() => f.runCommand({ type: 'proposal.merge', conversationId: card.id, intoConversationId: target, reason: 'Same' }, f.pm)).toThrow()

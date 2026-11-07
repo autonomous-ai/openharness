@@ -212,6 +212,11 @@ export function applyProposalAction(state: SuperTabState, actor: Actor, command:
       card.checks = command.checks.map((check, i) => ({ id: stableId(operationId, 'check', String(i)), description: check.description, independent: check.independent ?? false, evidence: null, passedBy: null, verdicts: [] }))
       stampLane(card)
       recordAsked(card, card.requesterId, now)
+      // The person approves the task the PM shaped: an approval stored before this decision never carries over (#4249).
+      if (card.taskApproval?.state === 'approved') {
+        card.taskApproval.state = 'proposal'
+        delete card.taskApproval.decidedAt
+      }
     }
     card.proposal.decision = { kind: command.decision, reason: command.reason, at: now, by: sender.id,
       ...(command.decision === 'later' ? { revisitAt: command.revisitAt } : {}) }

@@ -22,6 +22,9 @@ export function stageTaskApproval(state: SuperTabState, group: Conversation, now
     personId: member.id, generation: member.generation, state: 'proposal', createdAt: now,
   }
 }
+/** A proposal the PM has not accepted or reshaped is not yet a task its person can approve (#4249): Later is undecided too. */
+export const undecidedProposal = (group: Conversation): boolean =>
+  !!group.proposal && !['accept', 'reshape'].includes(group.proposal.decision?.kind ?? '')
 export function requireTaskApproval(group: Conversation, agentId?: string | null): void {
   if (group.taskApproval && group.taskApproval.state !== 'approved')
     fail('TASK_APPROVAL_REQUIRED', 'The person who requested this task must approve it before work starts.', 409)
