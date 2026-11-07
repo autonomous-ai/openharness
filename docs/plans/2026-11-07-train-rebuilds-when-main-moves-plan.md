@@ -36,7 +36,7 @@ moved main to a89280b (02:28:56), so the next pass closed it again. On 11-06, 20
 - Main moving again while the pass reads candidates: the batch is built on the main read just before `createBranch`.
 - A closed batch's member merged by hand (often why main moved): no longer open, so no line.
 - A member that waits for a reason already told by its own line (conflict, reads, workflows): no second line.
-- Another batch still open (a split red batch): the moved batch's members are told they wait for it.
+- Every open batch is built in one pass on one main, so main moving closes them all: none is left open to wait for.
 
 ### Task 1: build on the main read just before building
 
@@ -78,6 +78,5 @@ moved main to a89280b (02:28:56), so the next pass closed it again. On 11-06, 20
 - [ ] Test: a member merged by hand meanwhile gets no line; a conflicting one gets only its conflict line.
 - [ ] Run: FAIL. Commit the tests.
 - [ ] Code: collect the batches closed for "main moved" this pass; record each candidate's wait reason (none where its own
-  line went); after building, tell each closed member that is open, read, and in no new batch. With another batch still
-  open, the reason is that batch.
+  line went); after building, tell each closed member that is open, read, and in no new batch.
 - [ ] Run the mergeTrain tests and `npx tsc --noEmit -p .`: PASS. Commit.
