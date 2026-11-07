@@ -5141,6 +5141,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         message(group.id, `${who} noted where this task's work goes on: ${command.reason.replace(/[.\s]+$/, '')}.`, [], null, SYSTEM_ROW)
         break
       }
+      // A person's ask is one card from Proposal to shipped (task #4538): the Lead took six of them by cancelling the card and
+      // starting its own task, and each stayed in the person's Tasks as a card that opens to "cancelled". It takes the card with
+      // proposal.decide and runs the work on it, declines it there (the person sees why), or joins a duplicate with proposal.merge.
+      // So the Lead cannot cancel an ask nobody decided yet, whatever it says, nor any card for another task; the work of an
+      // accepted card is cancelled as before (a builder that is down: cancel, route, assign again). Review of #3558.
+      const undecided = !!group.proposal && !['accept', 'reshape'].includes(group.proposal.decision?.kind ?? '')
+      if (group.proposal && actor.kind === 'agent' && (undecided || goesOn.length)) {
+        fail('USE_PROPOSAL_COMMAND', `This is a person's ask, and it stays one card until it ships: do not cancel it. Accept or reshape it with proposal.decide and the work runs on this card, decline it with proposal.decide (the person sees why), or join a duplicate to the card it repeats with proposal.merge.`, 409)
+      }
       if (group.archived) open(state, group.id)
       // A task nobody was ever assigned, such as a review nobody was free for, has no assignment to name: whoever may cancel
       // work cancels it by "current", and it archives with the reason (Ken, 2026-10-30: 28 reviews waited for a Reviewer with

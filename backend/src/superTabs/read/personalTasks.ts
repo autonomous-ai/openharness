@@ -3,7 +3,7 @@ import type { GroupData, Part } from '../parts/types.js'
 import { FEED_IDS, FEED_PAGE, FEED_READS } from '../parts/load.js'
 import { canReadGroup, canReadProject, groupProject } from '../projects.js'
 import { logger } from '../../utils/logger.js'
-import { askedKey } from './feedIds.js'
+import { askedKey, closedCancelled } from './feedIds.js'
 import { undecidedProposal, type ApprovalMode } from '../taskApproval.js'
 import type { AgentView } from './contract.js'
 import { decodeDormantPage } from './dormantPage.js'
@@ -79,7 +79,9 @@ function summary(part: Part, reader: Reader): PersonalTask | 'gone' | null {
   // reader's login, closed since (read/feedIds.ts).
   const worker = group.assignment?.agentId ?? approval?.suggestedAgentId
   const own = asked || (!!worker && reader.agents.has(worker)) || group.assignment?.execution?.contributorId === member.id
-  if (part.deleted || group.proposal?.mergedInto || group.foldedInto || !own) return 'gone'
+  // A cancelled task leaves a person's Tasks once its card is closed (task #4538), as a merged or folded card does; while the card is
+  // open its cancelled work may be assigned again, and it stays their ask.
+  if (part.deleted || group.proposal?.mergedInto || group.foldedInto || closedCancelled(group) || !own) return 'gone'
   const agent = view.parts.agents.find(a => a.key === worker)?.data
   const asker = group.requesterId ? view.state.people.find(p => p.id === group.requesterId) : undefined
   const askerName = asker && (asker.name ?? asker.username)
