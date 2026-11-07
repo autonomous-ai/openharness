@@ -1787,3 +1787,56 @@ describe('neutral start prompts', () => {
     expect(String(payload.prompt)).not.toContain('Tester')
   })
 })
+
+// Task #4698: a Member sets its project up once on its person's computer; a helper starts from that ready setup.
+describe('a Member and its helpers', () => {
+  it('tells a Member to set its project up once in its folder and report it', async () => {
+    const f = fixture()
+    f.start.request = { ...f.start.request, member: { projectId: 'project-1' } } as typeof f.start.request
+    await startAgent({ action: 'start', tabId: 'tab', operationId: 'member-prompt', request: f.start.request }, f.scoped, where, f.open)
+    const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+    expect(payload.prompt).toContain('set the project up once')
+    expect(payload.prompt).toContain('"type":"agent.setUp","projectId":"project-1"')
+    expect(payload).toMatchObject({ projectSource: 'worktree', gitSource: '/repo' })
+  })
+
+  it('readies a helper\'s folder from its Member\'s setup before it joins, and gives it the Member\'s steps', async () => {
+    const f = fixture()
+    f.start.request = { ...f.start.request, helperOf: { agentId: 'member', harnessId: 'member-harness' }, setUpSteps: ['npm ci', 'npm run build\nrm -rf /'] } as typeof f.start.request
+    const order: string[] = []
+    const scoped = vi.fn(async (payload: Record<string, unknown>) => {
+      if ((payload.command as { type?: string } | undefined)?.type === 'agent.started') order.push('joined')
+      return f.scoped(payload)
+    })
+    const beforeJoin = vi.fn(async (harnessId: string) => { order.push(`readied ${harnessId}`) })
+    await startAgent({ action: 'start', tabId: 'tab', operationId: 'helper-prompt', request: f.start.request, beforeJoin, memberHere: true }, scoped, where, f.open)
+    const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+    expect(payload.prompt).toContain('You are a helper')
+    expect(payload.prompt).toContain('\n> npm ci\n')
+    expect(payload.prompt).not.toContain('rm -rf')
+    expect(order).toEqual(['readied native', 'joined'])
+  })
+
+  // Security review 1 of #3579: the Member's commands are another agent's words, run only when that Member is this computer's own.
+  it('gives a helper no Member commands unless its host found that Member on this computer', async () => {
+    for (const memberHere of [false, undefined]) {
+      const f = fixture()
+      f.start.request = { ...f.start.request, helperOf: { agentId: 'member', harnessId: 'member-harness' }, setUpSteps: ['npm ci'] } as typeof f.start.request
+      await startAgent({ action: 'start', tabId: 'tab', operationId: 'helper-elsewhere', request: f.start.request, ...(memberHere === undefined ? {} : { memberHere }) }, f.scoped, where, f.open)
+      const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+      expect(payload.prompt).toContain('You are a helper')
+      expect(payload.prompt).not.toContain('npm ci')
+      expect(payload.prompt).not.toContain('set-up copy')
+    }
+  })
+
+  it('starts a helper whose folder could not be readied, as a helper still', async () => {
+    const f = fixture()
+    f.start.request = { ...f.start.request, helperOf: { agentId: 'member', harnessId: 'member-harness' } } as typeof f.start.request
+    const beforeJoin = vi.fn(async () => { throw new Error('gone') })
+    const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'helper-unready', request: f.start.request, beforeJoin }, f.scoped, where, f.open)
+    expect(beforeJoin).toHaveBeenCalledWith('native')
+    expect(f.scoped.mock.calls.some(([payload]) => (payload.command as { type?: string } | undefined)?.type === 'agent.started')).toBe(true)
+    expect(result).not.toHaveProperty('error')
+  })
+})

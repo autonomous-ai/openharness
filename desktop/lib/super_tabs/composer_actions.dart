@@ -34,21 +34,6 @@ EdgeInsets composerFieldInsets({required double target}) => EdgeInsets.fromLTRB(
   ),
 );
 
-/// @ Tag on a composer's row, as on the phone: it types `@` at the caret
-/// ([superTabTagPrompt]), and the tag list opens as for one typed.
-class SuperTabComposerTagButton extends StatelessWidget {
-  const SuperTabComposerTagButton({super.key, required this.onPressed});
-
-  final VoidCallback? onPressed;
-
-  @override
-  Widget build(BuildContext context) => AppIconButton(
-    icon: AppIcons.atSign,
-    tooltip: 'Tag someone',
-    onPressed: onPressed,
-  );
-}
-
 /// The mic left of send: starts a voice message (voice_recorder.dart). A
 /// composer draws it only with a recorder.
 class SuperTabComposerMic extends StatelessWidget {

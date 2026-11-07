@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { SEED_SETTLE_MS } from '../src/superTabs/proposals.js'
+import { AGENT_NAMES } from '../src/superTabs/agentNames.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
@@ -11,7 +12,8 @@ import { storeOldLeads } from './oldLeads.test-support.js'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { SuperTabStore } from '../src/superTabs/store.js'
+import { SuperTabStore, transaction } from '../src/superTabs/store.js'
+import type { Author, MessageDraft, SuperTabState } from '../src/superTabs/model.js'
 import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import { sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
 import { commandSchema, type Command } from '../src/superTabs/commands.js'
@@ -169,6 +171,30 @@ function openPng(bytes: Buffer): { width: number; height: number; pixel: number[
   return { width, height, pixel: [...inflateSync(Buffer.concat(data)).subarray(1, 5)] }
 }
 
+describe('a person\'s private chat at the store\'s write (security review of #3557)', () => {
+  // The command's rows are checked in applyCommand; the store checks every write again, so a notice written off that path with
+  // the wrong author still never puts a Lead in a person's chat with their own agent.
+  type Write = (tx: unknown, tabId: string, state: SuperTabState, rows: MessageDraft[], sequences: Map<string, number>) => Promise<unknown>
+  const write = (f: Swarm, author: (state: SuperTabState) => Author, chat: string) => transaction(db, async tx => {
+    const { state } = await f.store.load(tx, peer, f.tab, { groupIds: [chat] })
+    const row: MessageDraft = { id: randomUUID(), conversationId: chat, author: author(state), text: 'A line', replyTo: null, recipients: [] }
+    return (f.store as unknown as { writeMessages: Write }).writeMessages.call(f.store, tx, f.tab, state, [row], new Map([[row.id, 1_000_000]]))
+  })
+  const asAgent = (id: string) => (state: SuperTabState): Author => {
+    const a = state.agents.find(x => x.id === id)!
+    return { kind: 'agent', id: a.id, name: a.name, membershipGeneration: a.membershipGeneration }
+  }
+
+  it('refuses any agent but the person\'s own, a Lead included, and writes their own agent\'s line', async () => {
+    const f = await swarm()
+    const { swarmChat, main } = await swarmBuddy(f)
+    await expect(write(f, asAgent(f.lead), swarmChat)).rejects.toMatchObject({ code: 'PRIVATE_CHAT' })
+    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: swarmChat, text: 'A line' } })).toBe(0)
+    await write(f, asAgent(main), swarmChat)
+    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: swarmChat, text: 'A line' } })).toBe(1)
+  })
+})
+
 describe('a Buddy through the store', () => {
   it('starts on its owner\'s machine from a list older hosts do not read, and joins its owner\'s one Buddy chat', async () => {
     const f = await swarm()
@@ -178,7 +204,10 @@ describe('a Buddy through the store', () => {
     const read = await f.store.read(peer, f.tab)
     expect(read.state.agents.find(a => a.id === agentId)).toMatchObject({ buddyOf: { personId: peer.sub } })
     const messages = await f.store.messages(peer, f.tab, chat, {})
-    expect(messages.messages.map(m => m.text)).toEqual(['peer\'s Buddy is ready. Tell it what you have in mind.'])
+    // A real name from the list (task #4568), never "peer's Buddy".
+    const name = read.state.agents.find(a => a.id === agentId)!.name
+    expect(AGENT_NAMES).toContain(name)
+    expect(messages.messages.map(m => m.text)).toEqual([`${name} is ready. Tell it what you have in mind.`])
   })
 
   it('is read by its owner and its Buddy alone: neither the Swarm owner nor the PM reads its chat, the one Buddy\'s or an older one', async () => {
@@ -765,10 +794,11 @@ describe('naming a Buddy through the store (Diego, 10-29)', () => {
   it('is refused for the Swarm owner, the PM and the Buddy itself', async () => {
     const f = await swarm()
     const { chat, agentId } = await buddy(f)
+    const was = await shown(f, owner, agentId)
     await expect(rename(f, chat, 'Mine now', owner)).rejects.toThrow('unavailable')
     await expect(rename(f, chat, 'Mine now', owner, f.lead)).rejects.toThrow()
     await expect(rename(f, chat, 'Mine now', peer, agentId)).rejects.toThrow('A Buddy only talks with its owner')
-    expect(await shown(f, owner, agentId)).toBe('peer\'s Buddy')
+    expect(await shown(f, owner, agentId)).toBe(was)
   })
 
   it('renamed while it starts, it joins and says it is ready under the new name', async () => {
@@ -823,12 +853,12 @@ describe('naming a Buddy through the store (Diego, 10-29)', () => {
     expect(named.filter(g => (g.data as { buddyName?: string }).buddyName === 'Sparky')).toHaveLength(1)
   })
 
-  it('goes back to the default when cleared, and is kept when the Buddy is removed and added again', async () => {
+  it('takes a fresh real name when cleared, and is kept when the Buddy is removed and added again', async () => {
     const f = await swarm()
     const first = await swarmBuddy(f)
     await rename(f, first.swarmChat, 'Sparky')
     await rename(f, first.swarmChat, null)
-    expect(await shown(f, peer, first.main)).toBe('peer\'s Buddy')
+    expect(AGENT_NAMES).toContain(await shown(f, peer, first.main))
     await rename(f, first.swarmChat, 'Sparky')
     await f.execute({ type: 'buddy.remove' }, peer)
     expect(await shown(f, peer, first.main)).toBeUndefined()

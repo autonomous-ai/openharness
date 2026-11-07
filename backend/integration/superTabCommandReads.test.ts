@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
+import { logger } from '../src/utils/logger.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
 import { loadMachineAccounts } from '../src/superTabs/parts/index.js'
@@ -162,5 +163,36 @@ describe('what a common command reads in a prod-sized Swarm (task #4368)', () =>
     const machines = (await profiled(db, () => db.$transaction(tx => loadMachineAccounts(tx, s.tab, [key]))))
       .filter(e => e.ns.endsWith('.SwarmMachine') && e.op !== 'getmore')
     expect(machines.map(e => [e.planSummary, e.docsExamined])).toEqual([['IXSCAN { _id: 1 }', 1]])
+  })
+})
+
+// Task #4560: commands waited ~3.5 s in prod with ~23 ms of DB time. A command over a second logs its time by phase.
+describe('a slow command names its phases', () => {
+  it('logs its type, total and each phase, never its words, and nothing for a fast one', async () => {
+    let now = 1_000_000, step = 0
+    // Each read of the clock moves it on by `step`: a command that reads it a few times takes seconds, with no wait in the test.
+    const store = new SuperTabStore(db, () => (now += step), null, { pushOrigin: async () => 'clean', repositoryReach: async () => undefined,
+      pullRequestFiles: async () => null, pullRequestReader: () => { throw new Error('No pull request is read here') } })
+    const tab = (await store.create(owner, randomUUID(), 'Phases', 'public')).id
+    const create = (title: string) => store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'conversation.create', title, checks: [],
+      task: { goal: `${title}.`, changes: 'The change.', constraints: 'None.', owns: ['backend/a.ts'] } } as Command })
+    const warn = vi.spyOn(logger, 'warn')
+    try {
+      await create('Fast words')
+      expect(warn.mock.calls.filter(call => call[0] === 'Swarm command slow')).toEqual([])
+      step = 300
+      await create('Secret words')
+      const lines = warn.mock.calls.filter(call => call[0] === 'Swarm command slow')
+      expect(lines).toHaveLength(1)
+      const fields = lines[0]![1] as { totalMs: number; phases: Record<string, number> }
+      expect(fields).toMatchObject({ tabId: tab, type: 'conversation.create', byAgent: false })
+      expect(fields.totalMs).toBeGreaterThanOrEqual(1_000)
+      expect(Object.keys(fields.phases)).toEqual(expect.arrayContaining(['read:pushOrigin', 'read:repositoryReach', 'attempts', 'pool', 'body',
+        'commit', 'stamps', 'afterCommit', 'other']))
+      expect(fields.phases.attempts).toBe(1)
+      expect(JSON.stringify(lines)).not.toContain('Secret words')
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

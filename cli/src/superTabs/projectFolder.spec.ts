@@ -49,6 +49,16 @@ describe('per-project checkouts on a contributed swarm machine', () => {
     await expect(f.run()).rejects.toThrow('no authorized project')
     expect(f.prepare).toHaveBeenCalledOnce()
   })
+  // Task #4698: a Member starts in its person's own chat, which is in no project's list, and names the project it sets up.
+  it('finds a Member\'s project by the project its start names, and only one this machine was told of', async () => {
+    const f = fixture()
+    Object.assign(f.start.request, { conversationId: 'person-chat', member: { projectId: 'project-a' } })
+    await f.run()
+    expect(f.prepare).toHaveBeenCalledOnce()
+    Object.assign(f.start.request, { member: { projectId: 'project-b' } })
+    await expect(f.run()).rejects.toThrow('no authorized project')
+    expect(f.prepare).toHaveBeenCalledOnce()
+  })
   it('does not widen a legacy contribution or substitute a different filesystem path', async () => {
     const f = fixture()
     f.row.machine.scope = ''
@@ -215,6 +225,15 @@ describe('preparing another person\'s start with the Harness GitHub App', () => 
     expect(app.backend).not.toHaveBeenCalled()
     expect(app.prepare).not.toHaveBeenCalled()
     expect(app.fetch).not.toHaveBeenCalled()
+  })
+
+  // Task #4698: a Member's start is a Regular agent's in its person's chat, but it sets a project up: cloned, and fetched.
+  it('prepares a Member\'s project though its start is a Regular agent\'s', async () => {
+    const app = hosted()
+    Object.assign(app.start.request, { regular: true, conversationId: 'person-chat', member: { projectId: 'project-a' } })
+    expect(await app.ready()).toEqual({ requester: 'olive@example.com' })
+    expect(app.prepare).toHaveBeenCalledOnce()
+    expect(app.fetch).toHaveBeenCalledOnce()
   })
 
   it('in a team account, always asks for a token, and fails without one rather than using any other login', async () => {

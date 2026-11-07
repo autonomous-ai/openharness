@@ -570,15 +570,13 @@ class ProjectSidebar extends StatelessWidget {
     final chat = reading.buddyChat;
     final agent = controller.buddy(project.id);
     final name = agent == null
-        ? chat?.buddyName ?? 'Buddy'
+        ? chat?.buddyName ?? 'Your agent'
         : controller.snapshot!.agentName(agent.id, fallback: agent.name);
     return SuperTabQuietRow(
       key: ValueKey('super-buddy-${project.id}'),
       leading: _face(agent, name),
       name: name,
       tooltip: 'Your Buddy · ${project.name}',
-      mark: _quietMark(agent),
-      markColumn: true,
       detail:
           _detail(agent) ??
           switch ((agent, controller.buddyStart(project.id))) {
@@ -625,13 +623,6 @@ class ProjectSidebar extends StatelessWidget {
   /// An agent's one quiet detail in My agents ([superTabAgentDetail]).
   String? _detail(SuperTabAgent? agent, {String? leads}) =>
       superTabAgentDetail(_activity(agent), leads: leads);
-
-  /// An agent's mark in My agents ([superTabAgentMark]).
-  Widget? _quietMark(SuperTabAgent? agent) =>
-      switch (superTabAgentMark(_activity(agent))) {
-        final activity? => SuperTabAgentMark(activity),
-        null => null,
-      };
 
   Widget _iconRow({
     required String key,
@@ -744,10 +735,10 @@ class ProjectSidebar extends StatelessWidget {
     final chat = reading.buddyChat;
     final agent = controller.buddy(project.id);
     // With no Buddy running it reads as the name the reader chose for it, or
-    // plain "Buddy" (its chat's default title names the owner, which the
-    // reader is): one name everywhere is the point of renaming (Lead, 10-29).
+    // "Your agent" (task #4568): one name everywhere is the point of renaming
+    // (Lead, 10-29).
     final name = agent == null
-        ? chat?.buddyName ?? 'Buddy'
+        ? chat?.buddyName ?? 'Your agent'
         : snapshot.agentName(agent.id, fallback: agent.name);
     return SuperTabBuddyRow(
       key: ValueKey('super-buddy-${project.id}'),
@@ -804,7 +795,7 @@ class ProjectSidebar extends StatelessWidget {
           chat != null && controller.notifyOf(chat.id) == SuperTabNotify.muted;
       // Its own name and face, as the header draws it (audit finding 8 of #4436).
       final name = agent == null
-          ? chat?.buddyName ?? 'Buddy'
+          ? chat?.buddyName ?? 'Your agent'
           : controller.snapshot!.agentName(agent.id, fallback: agent.name);
       return SuperTabQuietRow(
         key: const ValueKey('super-swarm-buddy'),
@@ -812,8 +803,6 @@ class ProjectSidebar extends StatelessWidget {
         name: name,
         tooltip: 'Your Buddy',
         detail: _detail(agent),
-        mark: _quietMark(agent),
-        markColumn: true,
         selected: _chatLit(chat),
         unread: chat != null && !muted && controller.unreadShown(chat),
         onTap: switch (chat) {
@@ -825,7 +814,7 @@ class ProjectSidebar extends StatelessWidget {
     }
     return _drawRow(
       chat ?? _unopenedSwarmBuddyChat,
-      label: 'Buddy',
+      label: 'Your agent',
       key: 'super-swarm-buddy',
       selected: _chatLit(chat),
       // Muted, it is greyed and never bold, as every chat (_drawRow).
@@ -837,10 +826,11 @@ class ProjectSidebar extends StatelessWidget {
   }
 
   /// My agents (Swarm v3, task #4118): the person's Buddy first, then the agents they brought, each with its face and
-  /// name, a Lead's naming the project it leads (task #4421), the name bold while its chat has unread, and + New agent
-  /// as the last row.
+  /// name, a Lead's naming the project it leads (task #4421), the name bold while its chat has unread. The heading's +
+  /// opens New agent (task #4645); a person with no agents of their own also gets it as a row, to start from.
   List<Widget> _myAgents(SuperTabSnapshot? snapshot, _SidebarReading reading) {
     if (snapshot == null) return const [];
+    final newAgent = controller.canWrite ? onNewAgent : null;
     return [
       SuperTabQuietHeading(
         'My agents',
@@ -848,6 +838,9 @@ class ProjectSidebar extends StatelessWidget {
         // It folds, remembered (task #4192); its chevron shows on hover.
         collapsed: !controller.agentsGroupOpen,
         onTap: controller.toggleAgentsGroup,
+        onAdd: newAgent,
+        addTooltip: 'New agent',
+        addKey: const ValueKey('project-sidebar-agents-add'),
       ),
       if (controller.agentsGroupOpen) ...[
         if (controller.oneBuddy)
@@ -856,13 +849,13 @@ class ProjectSidebar extends StatelessWidget {
           ..._buddies([...snapshot.projects], reading),
         for (final (agent, chat) in reading.myAgents)
           _agentRow(snapshot, agent, chat),
-        // The last row opens the creation dialog, where Regular or PM is chosen.
-        if (controller.canWrite && onNewAgent != null)
+        // With no agents yet, a row says where to start; the creation dialog chooses Regular or PM.
+        if (newAgent != null && reading.myAgents.isEmpty)
           _iconRow(
             key: 'super-new-agent-row',
             icon: AppIcons.plus,
             name: 'New agent',
-            onTap: onNewAgent,
+            onTap: newAgent,
           ),
       ],
       const SizedBox(height: grid.AppDesktop.groupGap),
@@ -888,8 +881,6 @@ class ProjectSidebar extends StatelessWidget {
         agent,
         leads: pm ? snapshot.leadProjectForAgent(agent.id)?.name : null,
       ),
-      mark: _quietMark(agent),
-      markColumn: true,
       selected: _chatLit(chat),
       unread: chat != null && controller.unreadShown(chat),
       onTap: switch ((chat, onOpenAgentTerminal)) {
@@ -1374,13 +1365,3 @@ Set<String> superTabHiddenProjects(
 /// An agent's one quiet detail in the Desktop's My agents (task #4466): "offline", else the project a Lead [leads].
 String? superTabAgentDetail(HarnessActivity? activity, {String? leads}) =>
     activity == HarnessActivity.offline ? 'offline' : leads;
-
-/// The status a My agents row marks (anh Dee 11-07): only while its agent works, needs the person or failed. Idle,
-/// finished and the rest show nothing; a finished agent's unread reply is its name in semibold.
-HarnessActivity? superTabAgentMark(HarnessActivity? activity) =>
-    switch (activity) {
-      HarnessActivity.working ||
-      HarnessActivity.needsInput ||
-      HarnessActivity.failed => activity,
-      _ => null,
-    };

@@ -27,6 +27,9 @@ class SuperTabPersonalTask {
       json['requester'] == null ? const {} : superTabMap(json['requester']);
   String? get requesterId => requester['id'] as String?;
   String? get pullRequestUrl => json['pullRequestUrl'] as String?;
+
+  /// A verified release holds it: its card says Shipped (task #4547).
+  bool get shipped => json['shipped'] == true;
 }
 
 /// Lives with the parts cursor and is discarded with it on access revocation.
