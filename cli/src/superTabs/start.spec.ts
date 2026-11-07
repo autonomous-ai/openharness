@@ -1809,12 +1809,25 @@ describe('a Member and its helpers', () => {
       return f.scoped(payload)
     })
     const beforeJoin = vi.fn(async (harnessId: string) => { order.push(`readied ${harnessId}`) })
-    await startAgent({ action: 'start', tabId: 'tab', operationId: 'helper-prompt', request: f.start.request, beforeJoin }, scoped, where, f.open)
+    await startAgent({ action: 'start', tabId: 'tab', operationId: 'helper-prompt', request: f.start.request, beforeJoin, memberHere: true }, scoped, where, f.open)
     const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
     expect(payload.prompt).toContain('You are a helper')
     expect(payload.prompt).toContain('\n> npm ci\n')
     expect(payload.prompt).not.toContain('rm -rf')
     expect(order).toEqual(['readied native', 'joined'])
+  })
+
+  // Security review 1 of #3579: the Member's commands are another agent's words, run only when that Member is this computer's own.
+  it('gives a helper no Member commands unless its host found that Member on this computer', async () => {
+    for (const memberHere of [false, undefined]) {
+      const f = fixture()
+      f.start.request = { ...f.start.request, helperOf: { agentId: 'member', harnessId: 'member-harness' }, setUpSteps: ['npm ci'] } as typeof f.start.request
+      await startAgent({ action: 'start', tabId: 'tab', operationId: 'helper-elsewhere', request: f.start.request, ...(memberHere === undefined ? {} : { memberHere }) }, f.scoped, where, f.open)
+      const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+      expect(payload.prompt).toContain('You are a helper')
+      expect(payload.prompt).not.toContain('npm ci')
+      expect(payload.prompt).not.toContain('set-up copy')
+    }
   })
 
   it('starts a helper whose folder could not be readied, as a helper still', async () => {

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -62,6 +62,16 @@ describe('a helper starts from its Member\'s ready setup', () => {
     expect(result).toEqual({ copied: [], skipped: 'COPY_FAILED' })
     expect(existsSync(join(p.helper, 'build'))).toBe(false)
     expect(git(p.helper, 'status', '--porcelain', '--ignored')).toBe('')
+  })
+
+  // Security reviews of #3579: a helper's checkout may hold a tracked link where the Member has a folder.
+  it('never copies through a link in the helper\'s checkout, so nothing lands outside its folder', async () => {
+    const p = project(), outside = root()
+    symlinkSync(outside, join(p.helper, 'cli'))
+    symlinkSync(join(outside, 'missing'), join(p.helper, 'build'))
+    const result = await copySetup(p.member, p.helper, async (from, to) => { mkdirSync(to, { recursive: true }); execFileSync('cp', ['-R', `${from}/.`, to]) })
+    expect(result).toEqual({ copied: ['node_modules'] })
+    expect(readdirSync(outside)).toEqual([])
   })
 
   it('copies nothing from a Member folder that is gone, and starts the helper anyway', async () => {

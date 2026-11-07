@@ -2754,6 +2754,7 @@ describe('removed machine cleanup', () => {
       const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
       const open = vi.fn(async () => ({ machineId: 'host', request: vi.fn(async () => ({})), close: vi.fn() }))
       const start = vi.fn(async (input: Record<string, unknown>) => {
+        expect(input.memberHere).toBe(memberHere)
         await (input.beforeJoin as (harnessId: string) => Promise<void>)('h-new')
         return { ok: true, harnessId: 'h-new' }
       })
@@ -2769,6 +2770,28 @@ describe('removed machine cleanup', () => {
         expect(log).toHaveBeenCalledWith('Started a helper without its Member\'s setup: HELPER_SETUP_NOT_HERE')
       }
     }
+  })
+
+  it('says so when readying a helper fails, and never fails its start', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'swarm-helper-')); roots.push(root)
+    mkdirSync(join(root, 'super-tabs'), { recursive: true })
+    writeFileSync(swarmWorktreesFile(root, 'host'), JSON.stringify({ version: 1, worktrees: [
+      { tabId: 'tab', startId: 'member-start', harnessId: 'member-harness', source: '/clone', path: '/worktrees/project/member' }] }))
+    const core = fakeCore({ dataDir: root, agents: { byAgent: vi.fn(id => id === 'h-new' ? session('h-new', '/worktrees/project/new', 'agent') : undefined) } })
+    const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['claude'], paused: false },
+      harnessIds: [], starts: [{ id: 'new', dispatched: true, request: { worktree: true, cwd: '/clone', helperOf: { agentId: 'member', harnessId: 'member-harness' } } }], paused: false }
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
+    const open = vi.fn(async () => ({ machineId: 'host', request: vi.fn(async () => ({})), close: vi.fn() }))
+    let readied: unknown = 'not called'
+    const start = vi.fn(async (input: Record<string, unknown>) => {
+      readied = await (input.beforeJoin as (harnessId: string) => Promise<void>)('h-new').then(() => 'resolved', () => 'rejected')
+      return { ok: true, harnessId: 'h-new' }
+    })
+    const log = vi.fn()
+    await new ContributedMachines(core, 'host', { backend, open, start, now: () => 0, log, readySetup: vi.fn(async () => { throw new Error('/secret/path') }),
+      capabilities: vi.fn(async () => ({ ok: true, resources: {}, tools: {} })) } as never).tick()
+    expect(readied).toBe('resolved')
+    expect(log).toHaveBeenCalledWith('Started a helper without its Member\'s setup: HELPER_SETUP_FAILED')
   })
 
   it('gives no readying step to a start that is not a helper\'s', async () => {
