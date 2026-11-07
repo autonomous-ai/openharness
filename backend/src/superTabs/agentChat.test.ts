@@ -100,6 +100,21 @@ describe('a Lead\'s private chat with its person', () => {
     expect(f.state.conversations.filter(c => c.kind === 'agent-chat')).toHaveLength(1)
   })
 
+  // Security review of #3570: a chat opened at an old membership is not its person's any more (readsAgentChat), so after they
+  // leave and rejoin the Lead's row opens a new one, never the old, unreadable chat.
+  it('opens a new chat after its person leaves and rejoins, never the old one they no longer read', () => {
+    const f = swarm()
+    const old = f.open(f.faye)
+    f.state.people.find(p => p.id === 'mate')!.generation = 'rejoined'
+    f.state.agents.find(a => a.id === f.faye)!.membershipGeneration = 'rejoined'
+    expect(code(() => readConversation(f.state, mate, old))).toBe('NOT_FOUND')
+    expect(agentChatId(f.state, f.state.agents.find(a => a.id === f.faye)!)).toBeNull()
+    const chat = f.open(f.faye)
+    expect(chat).not.toBe(old)
+    expect(code(() => readConversation(f.state, mate, chat))).toBeNull()
+    expect(f.open(f.faye)).toBe(chat)
+  })
+
   it('opens only for a Lead running on its person\'s own computer, which is who reads the chat', () => {
     const f = swarm()
     f.state.agents.find(a => a.id === f.faye)!.machineOwnerId = 'owner'
