@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/join/new_agent_dialog.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'super_tab_activity_lists_test.dart' show swarm;
+import 'swarm_state_test.dart' show createApp;
 import 'support/memory_key_value_store.dart';
 import 'support/super_tab_fixture.dart';
 
@@ -107,10 +111,76 @@ void main() {
       matching: _key('tasks-pane'),
     );
     expect(tasks, findsOneWidget);
-    for (final row in ['super-decisions', 'super-leaderboard', 'super-manage']) {
+    for (final row in [
+      'super-decisions',
+      'super-leaderboard',
+      'super-manage',
+    ]) {
       await tester.tap(_key(row));
       await tester.pumpAndSettle();
       expect(tasks, findsOneWidget, reason: row);
     }
+  });
+
+  // Finding 6: with this computer not connected yet, the box said to wait and try again, with only Close.
+  group('Connect this computer', () {
+    /// The agent box opened before this computer's Harness connection is up: the app knows only another computer.
+    Future<(AppNotifier, Future<Map<String, dynamic>?>)> open(
+      WidgetTester tester,
+    ) async {
+      final server = swarm();
+      final c = server.controller(account: 'owner');
+      addTearDown(c.dispose);
+      await tester.runAsync(c.refresh);
+      final app = createApp()
+        ..status = AppStatus.authenticated
+        ..currentUser = const CurrentUserProfile(
+          id: 'owner',
+          email: 'owner@example.com',
+        );
+      addTearDown(app.dispose);
+      late BuildContext context;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (c) {
+              context = c;
+              return const SizedBox();
+            },
+          ),
+        ),
+      );
+      var open = true;
+      final result = showSwarmNewAgentDialog(
+        context,
+        controller: c,
+        app: app,
+        isCurrent: () => open,
+      );
+      addTearDown(() => open = false);
+      await tester.pumpAndSettle();
+      expect(find.text('Connect this computer'), findsOneWidget);
+      return (app, result);
+    }
+
+    testWidgets('the box waits, and goes on by itself once this computer '
+        'connects', (tester) async {
+      final (app, _) = await open(tester);
+      expect(find.text('Close'), findsNothing);
+      app.machineStates['m']!.localOnly = true;
+      app.notifyListeners();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('Connect this computer'), findsNothing);
+    });
+
+    testWidgets('Open Machines closes it and opens Machines', (tester) async {
+      final (app, result) = await open(tester);
+      await tester.tap(find.text('Open Machines'));
+      await tester.pumpAndSettle();
+      expect(find.text('Connect this computer'), findsNothing);
+      expect(app.machinesRequest, isNotNull);
+      expect(await result, isNull);
+    });
   });
 }
