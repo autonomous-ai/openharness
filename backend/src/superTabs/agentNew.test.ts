@@ -146,6 +146,32 @@ describe('joining by bringing your own agent', () => {
   })
 })
 
+// Task #4252 (audit 12): join, Bring agent, then + New agent before the Buddy settles. Desktop lists the computer first.
+describe('listing your computer while your Buddy is starting there', () => {
+  const contribute = (machineId: string) => ({ type: 'machine.contribute', machineId, name: machineId, cwd: '/home/mate/swarm', scope: 'swarm',
+    engines: ['claude', 'codex'], maxAgents: 2 }) as Command
+  const configuration = { engine: 'codex' as const, model: 'gpt-6.1-sol', effort: 'high', contextWindow: null, engineVersion: null }
+
+  it('lists it, and the Buddy still starts there', () => {
+    const f = swarm()
+    const made = f.run({ type: 'buddy.create', machineId: 'mate-laptop', engine: 'codex',
+      setup: { name: 'Mate laptop', cwd: '/home/mate/swarm', engines: ['codex'] } } as Command, mate, own('mate'))
+    const startId = made.result.startId as string
+    f.run(contribute('mate-laptop'), mate, own('mate'))
+    const listed = f.state.machines!.find(m => m.machineId === 'mate-laptop')!
+    expect(listed.buddyOnly).toBeUndefined()
+    expect(f.state.starts!.find(s => s.id === startId)!.poolGeneration).toBe(listed.generation)
+    f.run({ type: 'agent.startDispatch', startId }, mate, own('mate'))
+    expect(f.run({ type: 'agent.started', startId, harnessId: 'h-buddy', configuration }, mate, own('mate')).result.agentId).toBeTruthy()
+  })
+
+  it('is still refused while any other start is pending there', () => {
+    const f = swarm()
+    f.add({ kind: 'regular', name: 'Ada' })
+    expect(code(() => f.run(contribute('mate-mac'), mate, own('mate')))).toBe('STARTS_PENDING')
+  })
+})
+
 // A host from before Regular agents would launch one as a project's agent, in a project folder it does not have: the start is
 // listed apart, and a computer whose host cannot run one is told to update instead.
 describe('a Regular agent\'s start on its computer', () => {
