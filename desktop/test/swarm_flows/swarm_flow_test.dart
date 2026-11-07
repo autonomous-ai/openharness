@@ -358,8 +358,5 @@ void main() {
       expect(key('super-project-menu'), findsOneWidget);
       await flow.close();
     },
-    skip:
-        'bug: the Buddy chat the Board opens is selected when the server '
-        'answers, replacing the project chat chosen meanwhile',
   );
 }
