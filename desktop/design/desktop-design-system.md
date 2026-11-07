@@ -404,7 +404,8 @@ quarter of its box, and nothing else outside the words more than 38 pixels.
 - **Task status marks.** Proposal is Lucide `lightbulb`, Rejected
   `thumbs-down`, Failed (Stuck) `triangle-alert` in the semantic error ink.
   The check, question mark and spinner stay, from the shared activity
-  vocabulary. No status in Flutter draws an X: an X means close. Terminal text
+  vocabulary. Shipped (a verified release holds the task, task #4547) wears
+  Done's check and says Shipped. No status in Flutter draws an X: an X means close. Terminal text
   and native tab marks may keep `✗`.
 - **Task card and row.** The Tasks pane card (`SuperTabPersonalTaskCard`) and
   the sidebar row (`SuperTabBuddyRow`) carry the elements above at their
