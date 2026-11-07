@@ -9,7 +9,7 @@ import { activeWork, agent, isLeads, SuperTabError, conversation, type Agent, ty
 import { buddyChatOf, isSwarmBuddy, isSwarmBuddyChat } from '../buddies.js'
 import { buddyEngineChat } from '../buddyEngine.js'
 import { hostLocalGrid, machineContribution, machineLimitReached, machineRoom, type MachineCleanup } from '../machines.js'
-import { agentProjectId, agentSetRole, canWatchAgent, isConfidential, groupProject, ledProject, projectsOf, skillModeOf, startProject, skillSetOf, watchClosed } from '../projects.js'
+import { agentProjectId, agentSetRole, canWatchAgent, confidentialSets, isConfidential, groupProject, ledProject, projectsOf, skillModeOf, startProject, skillSetOf, watchClosed, type ConfidentialSets } from '../projects.js'
 import type { HostAgentRow, HostPool, HostRosterRow, HostTabRows } from './contract.js'
 import { hostEtag } from './hostEtag.js'
 import { coordinatorNameOf, FIRST_INSTRUCTIONS, instructionsHash, roleNameOf } from '../instructions.js'
@@ -56,9 +56,11 @@ async function roster(tabId: string, state: SuperTabState, machineId: string, us
   for (const team of missing.slice(0, machineRoom(state, user.sub, { team: true }))) {
     rows.push({ tabId, joinTeam: { machineId: team.machineId, name: mac!.name, maxAgents: mac!.maxAgents } })
   }
+  // Once per read: each row asks it for each person (task #4504). The state is this read's own, so nothing changes it meanwhile.
+  const sets = confidentialSets(state)
   for (const target of state.agents.filter(a => a.machineId === machineId && a.machineOwnerId === user.sub)) {
     try { agent(state, target.id); await lookups.agentGrant(target) } catch (error) { if (error instanceof SuperTabError) continue; throw error }
-    rows.push(agentRow(tabId, state, machineId, user, lastChangedAt, lookups, target))
+    rows.push(agentRow(tabId, state, machineId, user, lastChangedAt, lookups, target, sets))
   }
   for (const { agentId: id, harnessId } of (state.closingSessions ?? []).filter(c => c.machineId === machineId && c.machineOwnerId === user.sub)) {
     rows.push({ tabId, agent: { id, harnessId, machineId }, closeSession: true, active: false })
@@ -68,7 +70,8 @@ async function roster(tabId: string, state: SuperTabState, machineId: string, us
   return rows
 }
 
-function agentRow(tabId: string, state: SuperTabState, machineId: string, user: AuthUser, lastChangedAt: number | null, lookups: HostLookups, target: Agent): HostAgentRow {
+function agentRow(tabId: string, state: SuperTabState, machineId: string, user: AuthUser, lastChangedAt: number | null, lookups: HostLookups, target: Agent,
+  sets: ConfidentialSets): HostAgentRow {
   const closed = lookups.confidential.has(target.id)
   const waiting = state.conversations.find(c => activeWork(c) && c.assignment!.agentId === target.id &&
     c.assignment!.execution.machineId === machineId && ['needs_human', 'blocked'].includes(c.assignment!.status))?.assignment
@@ -115,12 +118,12 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     ledConversationId: ledProject(state, target.id)?.leadConversationId ?? null,
     ...(isSwarmBuddy(target) && !target.buddySession ? { buddyConversationId: buddyChat?.id ?? buddyEngineChat(state, target) } : {}),
     stopRequested: target.workDecision === 'stop' && !state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id),
-    observers: lookups.people.filter(p => p.id !== user.sub && canWatchAgent(state, { kind: 'person', userId: p.id, email: p.email }, target, closed))
+    observers: lookups.people.filter(p => p.id !== user.sub && canWatchAgent(state, { kind: 'person', userId: p.id, email: p.email }, target, closed, sets))
       .map(p => ({ email: p.email, userId: p.id })),
     // The host refuses every share of a confidential session, ordinary ones too, and remembers it (cli observers.ts).
-    confidential: isConfidential(state, target, closed),
+    confidential: isConfidential(state, target, closed, sets),
     // But for this Swarm's current Lead: its listed observers watch it while this row is in force (Ken, 2026-10-28).
-    membersWatch: isConfidential(state, target, closed) && !watchClosed(state, target, closed),
+    membersWatch: isConfidential(state, target, closed, sets) && !watchClosed(state, target, closed, sets),
     // Which of its person's Buddies' chats it is in (task #3818).
     ...isSwarmBuddy(target) || (target.buddySession && target.buddyOf) ? { buddyChatId: buddyChat?.id ?? null } : {},
   }
