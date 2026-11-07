@@ -269,6 +269,18 @@ class _SuperTabViewState extends State<SuperTabView>
     _closeSidebar();
   }
 
+  /// Opens the terminal of an agent chosen in My agents that has no chat to open (task #4220), as Members opens one.
+  void _openAgentTerminal(SuperTabAgent agent) {
+    setState(() {
+      _showPullRequests = _showTasks = false;
+      _rosterOpen = false;
+      _showManage = false;
+      _page = null;
+    });
+    (widget.onChooseAgentTerminal ?? widget.onOpenTerminal)(agent);
+    _closeSidebar();
+  }
+
   bool get _projectChatOnly {
     final group = c.selected;
     return _boardProjectId == null &&
@@ -2107,14 +2119,17 @@ class _SuperTabViewState extends State<SuperTabView>
     c.select(selected);
   }
 
-  Widget _sidebar() => ProjectSidebar(
+  /// [boardProjectId]: the project whose Board holds the middle, whose row is then lit.
+  Widget _sidebar({String? boardProjectId}) => ProjectSidebar(
     board: widget.board,
+    boardProjectId: boardProjectId,
     controller: c,
     compact: _phone,
     app: widget.app,
     onNewProject: widget.onNewProject,
     onNewAgent: widget.onNewAgent,
     onOpenAgentChat: _openAgentChat,
+    onOpenAgentTerminal: _openAgentTerminal,
     onNewSwarm: widget.onNewSwarm,
     page: _pageShown,
     places: SuperTabPlaces.of(c),
@@ -6287,10 +6302,19 @@ class _SuperTabViewState extends State<SuperTabView>
           !_terminalsVisible &&
           !_showPullRequests &&
           _pageShown == null;
+      // The Desktop's Tasks pane stays on the right under a page or Manage too, unless a thread or Members takes that
+      // side (task #4220).
+      final tasksStay =
+          widget.board &&
+          hasTasksPane &&
+          thread == null &&
+          !_rosterOpen &&
+          !_terminalsVisible;
+      final fixedSides = boardLayout || tasksStay;
       // Wide enough for a right column beside the chat; it shows only an
       // open thread or Members, closed at rest (Quiet Swarm, 2026-11-02).
       final wide =
-          boardLayout ||
+          fixedSides ||
           constraints.maxWidth >= MediaQuery.textScalerOf(context).scale(1080);
       final threadDrawer = thread != null && !wide;
       // A terminal on screen keeps its chat beside it, in the right pane, as
@@ -6323,7 +6347,9 @@ class _SuperTabViewState extends State<SuperTabView>
           ? boardProject != null &&
                 constraints.maxWidth <
                     MediaQuery.textScalerOf(context).scale(1000)
-          : constraints.maxWidth < MediaQuery.textScalerOf(context).scale(720);
+          : !fixedSides &&
+                constraints.maxWidth <
+                    MediaQuery.textScalerOf(context).scale(720);
       // The chat alone in the middle, under its one-row header (#4204); a project's own chat keeps the full view.
       final fullView =
           !boardLayout ||
@@ -6383,11 +6409,11 @@ class _SuperTabViewState extends State<SuperTabView>
               child: SuperTabPaneLayout(
                 storage: widget.paneStore ?? widget.app?.localStore,
                 onLeave: _leaveResize,
-                left: narrow ? null : _sidebar(),
+                left: narrow ? null : _sidebar(boardProjectId: boardProject),
                 // An open thread takes the roster's side, as in Slack.
                 right: !wide
                     ? null
-                    : boardLayout
+                    : fixedSides
                     ? widget.rightPane?.call(context) ??
                           (c.personalTasks?.supported == true
                               ? SuperTabPersonalTasksPane(
@@ -6405,14 +6431,14 @@ class _SuperTabViewState extends State<SuperTabView>
                               : chatBeside
                               ? chat
                               : null),
-                rightDefault: boardLayout
+                rightDefault: fixedSides
                     ? SuperTabPaneLayout.boardRightWidth
                     : !boardLayout && thread == null && !chatBeside
                     ? SuperTabPaneLayout.rightWidth
                     : SuperTabPaneLayout.threadWidth,
                 // The Desktop's right pane is the Tasks pane's 340, giving back only to keep two Board columns
-                // in a small window (River, Swarm v3; #4211).
-                rightFixed: boardLayout,
+                // in a small window (River, Swarm v3; #4211). It stays under a page or Manage too (#4220).
+                rightFixed: fixedSides,
                 // Over the chat, beside an open thread, as in Slack.
                 over: wide ? viewer : null,
                 // A project's own chat keeps its header and tabs (Project options, Tasks): the full chat view.

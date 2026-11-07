@@ -17,8 +17,13 @@ export interface ScorecardMessage {
   source: Record<string, unknown> | null
   text: string
   replyTo: string | null
+  /** Durable main-chat answer link; absent on older messages. */
+  answers?: string | null
+  recipientIds?: string[]
+  private?: boolean
   thread: string | null
   createdAt: number
+  sequence?: number
   /** People the post tagged. */
   mentions?: string[]
 }
@@ -71,7 +76,9 @@ export interface ScorecardFigures {
   typedIntoPm: number
   ackPosts: number
   agentPosts: number
-  /** The day's crew wakes and moves, from start to running again (crewTimes.ts, task #3462). Absent on days stored before. */
+  /** First PM replies completed in this day, in seconds; absent on older scorecards. */
+  pmAnswer?: CrewTimes
+  /** The day's crew wakes and moves; absent on older scorecards. */
   crewWake?: CrewTimes
   crewMove?: CrewTimes
 }
@@ -131,7 +138,7 @@ export function scorecardDay(input: ScorecardInput): ScorecardFigures {
   const { start, end } = input
   const limits = input.limits ?? { ...SCORECARD_LIMITS }
   const inDay = (t: number) => t >= start && t < end
-  const messages = [...new Map(input.messages.map(m => [m.id, m])).values()].sort((a, b) => a.createdAt - b.createdAt)
+  const messages = [...new Map(input.messages.map(m => [m.id, m])).values()].sort((a, b) => a.createdAt - b.createdAt || (a.sequence ?? 0) - (b.sequence ?? 0))
   const byId = new Map(messages.map(m => [m.id, m]))
   const pm = new Set(input.pmAgentIds)
   const dayRows = messages.filter(m => inDay(m.createdAt))
@@ -168,7 +175,39 @@ export function scorecardDay(input: ScorecardInput): ScorecardFigures {
     ackPosts: ownPosts.filter(m => isAcknowledgement(m.text)).length,
     agentPosts: ownPosts.length,
     ...crewTimesOf(dayRows, input.chatId),
+    pmAnswer: pmAnswerTimes(input, messages),
   }
+}
+
+/** Consume rows in time order, removing a pending ask on its first PM reply. Reactions and task creation
+ *  never count as replies. Per-thread sets avoid comparing every ask with every message in a busy week. */
+function pmAnswerTimes(input: ScorecardInput, messages: ScorecardMessage[]): CrewTimes {
+  const pm = new Set(input.pmAgentIds), pending = new Map<string, ScorecardMessage>()
+  const threads = new Map<string, Set<string>>(), times: number[] = []
+  const key = (m: ScorecardMessage) => JSON.stringify([m.conversationId, m.thread ?? m.id])
+  const settle = (id: string, reply: ScorecardMessage) => {
+    const ask = pending.get(id)
+    if (!ask || ask.conversationId !== reply.conversationId) return
+    pending.delete(id)
+    threads.get(key(ask))?.delete(id)
+    if (reply.createdAt >= input.start && reply.createdAt < input.end) times.push((reply.createdAt - ask.createdAt) / 1000)
+  }
+  for (const message of messages) {
+    if (message.createdAt >= input.end || message.private) continue
+    if (isAsk(message) && message.recipientIds?.some(id => pm.has(id))) {
+      pending.set(message.id, message)
+      const thread = key(message)
+      if (!threads.has(thread)) threads.set(thread, new Set())
+      threads.get(thread)!.add(message.id)
+    } else if (message.author.kind === 'agent' && pm.has(message.author.id) && !message.source) {
+      const direct = message.answers ?? message.replyTo
+      if (direct) settle(direct, message)
+      if (message.thread && message.thread !== message.id) {
+        for (const id of threads.get(key(message)) ?? []) settle(id, message)
+      }
+    }
+  }
+  return { count: times.length, medianSeconds: median(times), slowestSeconds: times.length ? Math.max(...times) : null }
 }
 
 /** The day's crew wakes and moves (crewTimes.ts): the server's timing rows in the project chat, never a person's row or one in

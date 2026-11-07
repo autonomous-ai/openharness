@@ -93,7 +93,14 @@ void main() {
       'Swarm',
       'Backlog',
     ]) {
-      expect(find.text(label), findsOneWidget, reason: label);
+      expect(
+        find.descendant(
+          of: find.byType(SuperTabManageTabs),
+          matching: find.text(label),
+        ),
+        findsOneWidget,
+        reason: label,
+      );
     }
     await tester.tap(find.text('Swarm'));
     await tester.pump();
@@ -106,7 +113,7 @@ void main() {
   });
 
   group('Machines', () {
-    testWidgets('one line each: name, owner, status', (tester) async {
+    testWidgets('56pt rows name their status accessibly', (tester) async {
       await show(tester);
       final row = find.byKey(const ValueKey('super-machine-entry-m1'));
       expect(
@@ -114,24 +121,20 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.descendant(of: row, matching: find.text('online')),
+        find.bySemanticsLabel(RegExp('Mac Studio, online')),
         findsOneWidget,
       );
+      expect(find.bySemanticsLabel(RegExp('Old Mac, offline')), findsOneWidget);
       expect(
-        find.descendant(
-          of: find.byKey(const ValueKey('super-machine-entry-m2')),
-          matching: find.text('offline'),
-        ),
-        findsOneWidget,
+        tester.getSize(find.byKey(const ValueKey('machines-line-m1'))).height,
+        56,
       );
-      expect(tester.getSize(row).height, lessThanOrEqualTo(44));
     });
 
-    testWidgets('has Add machine, and no Machines heading of its own', (
-      tester,
-    ) async {
+    testWidgets('has Add machine and its screen title', (tester) async {
       await show(tester);
       expect(find.text('Add machine'), findsOneWidget);
+      expect(find.text('Machines'), findsNWidgets(2));
       expect(find.byTooltip('Add machine'), findsNothing);
     });
   });

@@ -30,6 +30,8 @@ export interface TrainTask {
   /** Each linked pull request's head and patch id as the PR watch last read them (task #3394). */
   pullRequestHeads?: Record<string, PullRequestHead>
   steps: Array<Pick<Conversation, 'step' | 'title' | 'checks' | 'archived' | 'assignment'>>
+  /** Whether its Engineer set it done: only a done task hears why its pull request keeps waiting (skipReason). */
+  done?: boolean
   /** Who built the task, as verdicts name checkers (`agent:ID`): its assignee and every earlier attempt's agent. Their verdicts
    *  on its steps count for nothing: a builder is never its own review or test (review 1 of #3226). */
   builders?: string[]
@@ -48,45 +50,57 @@ const plainBase = (base: string | undefined): base is string => !!base && !HIDDE
 const countsFor = (verdict: CheckVerdict, url: string, heads: PullRequestHeads): boolean =>
   verdict.pullRequest === url && !!verdict.head && verdict.stale === undefined && verdictCounts(verdict, heads)
 
-/** The checkers whose passes count on [check], or null when it has no pass that counts or a failure that does. */
-function passers(check: Check, url: string, heads: PullRequestHeads, ignored: ReadonlySet<string> = new Set()): string[] | null {
-  const counting = (check.verdicts ?? []).filter(v => !ignored.has(v.by) && countsFor(v, url, heads))
-  if (!counting.length || counting.some(v => !v.passed)) return null
-  return counting.map(v => v.by)
+/** The checkers whose passes count on [check], or in plain words why none does: a failure that counts, only the builders'
+ *  passes (ignored), no verdict at this head and base, or no verdict at all. A verdict by an agent that has since left the
+ *  project counts like any other: the train reads no roster. */
+function passers(check: Check, url: string, heads: PullRequestHeads, ignored: ReadonlySet<string> = new Set()): string[] | string {
+  const verdicts = check.verdicts ?? []
+  const counting = verdicts.filter(v => countsFor(v, url, heads)), others = counting.filter(v => !ignored.has(v.by))
+  if (others.some(v => !v.passed)) return 'a failed verdict counts at this head'
+  if (others.length) return others.map(v => v.by)
+  if (counting.length) return 'only the task\'s own builders passed it, and a builder is never its own review or test'
+  return verdicts.length ? 'no verdict was read at this head on this base: it moved since, or the verdict is marked stale' : 'nobody has passed it yet'
 }
 
 /**
  * How many independent reads [task]'s pull request [url] has at [head], the head GitHub shows now: the reviewers whose review
- * steps passed there, each once. Null when it may not merge whatever the count: the PR watch has not seen this head yet, no
+ * steps passed there, each once. Otherwise, in plain words, the rule it fails: the PR watch has not seen this head yet, no
  * review step passed, or the task's own checks or another step (a test) did not pass at this head. A cancelled step does not
  * count either way; any other step must be done.
  */
-export function headReads(task: TrainTask, url: string, head: string, base: string): number | null {
+export function headReads(task: TrainTask, url: string, head: string, base: string): number | string {
   const heads = task.pullRequestHeads, now = heads?.[url]
   // GitHub's live head and base must be the ones the watch read (task #3493, Ledger's case on #3218): a pull request retargeted
   // since then carries verdicts read against another branch, which the shared check still counts until the watch reads it.
-  if (!heads || !now || now.head.toLowerCase() !== head.toLowerCase() || !plainBase(now.base) || !plainBase(base) || now.base !== base) return null
-  if (!task.checks.every(check => passers(check, url, heads))) return null
+  if (!heads || !now) return 'the pull request watch has not read this pull request yet'
+  if (now.head.toLowerCase() !== head.toLowerCase()) return 'the pull request watch has not read its head on GitHub yet'
+  if (!plainBase(now.base) || !plainBase(base) || now.base !== base) return 'its base branch is not the one the pull request watch recorded'
+  for (const check of task.checks) {
+    const found = passers(check, url, heads)
+    if (typeof found === 'string') return `the task's check "${check.description.slice(0, 60)}": ${found}`
+  }
   const readers = new Set<string>(), builders = new Set(task.builders ?? [])
   let reviewed = false
   for (const step of task.steps) {
-    const status = step.assignment?.status
+    const status = step.assignment?.status, name = step.step ?? step.title
     if (status === 'cancelled') continue
-    if (status !== 'done' || !step.checks.length) return null
+    if (status !== 'done') return `the ${name} step is not done`
+    if (!step.checks.length) return `the ${name} step has no checks`
     const found = step.checks.map(check => passers(check, url, heads, builders))
-    if (found.some(list => !list)) return null
-    if (REVIEW_STEP.test(step.step ?? step.title)) {
+    const refused = found.find((list): list is string => typeof list === 'string')
+    if (refused) return `the ${name} step: ${refused}`
+    if (REVIEW_STEP.test(name)) {
       reviewed = true
-      for (const list of found) for (const by of list!) readers.add(by)
+      for (const list of found) for (const by of list as string[]) readers.add(by)
     }
   }
-  return reviewed ? readers.size : null
+  return reviewed ? readers.size : 'no Review step has passed'
 }
 
 export type Ineligible = 'closed' | 'draft' | 'base' | 'hold' | 'ci' | 'mergeable' | 'conflict' | 'verdict' | 'reads'
 
 /** Whether [candidate] may join a batch, given its [reads] at its head (headReads) and the reads its files need. */
-export function eligible(candidate: TrainCandidate, reads: number | null, required: number): { ok: true } | { ok: false; why: Ineligible } {
+export function eligible(candidate: TrainCandidate, reads: number | string, required: number): { ok: true } | { ok: false; why: Ineligible } {
   const no = (why: Ineligible) => ({ ok: false as const, why })
   if (candidate.state !== 'open') return no('closed')
   if (candidate.draft) return no('draft')
@@ -95,9 +109,24 @@ export function eligible(candidate: TrainCandidate, reads: number | null, requir
   if (candidate.ciRequired !== 'success') return no('ci')
   if (candidate.mergeable === null) return no('mergeable')
   if (candidate.mergeable === false) return no('conflict')
-  if (reads === null) return no('verdict')
+  if (typeof reads === 'string') return no('verdict')
   if (reads < required) return no('reads')
   return { ok: true }
+}
+
+/** Why the train passes over [candidate] in plain words, with a key that changes only when the reason does; null when the
+ *  Engineer already hears it as its own line (a conflict, too few reads) or there is nothing to say (closed). [verdict] is the
+ *  rule headReads named. */
+export function skipReason(why: Ineligible, candidate: TrainCandidate, verdict: string): { key: string; text: string } | null {
+  switch (why) {
+    case 'closed': case 'conflict': case 'reads': return null
+    case 'draft': return { key: why, text: 'it is still a draft' }
+    case 'base': return { key: why, text: `it targets ${candidate.base}, and the train merges only into main` }
+    case 'hold': return { key: why, text: 'it has the hold label' }
+    case 'ci': return { key: `${why}:${candidate.ciRequired}`, text: `ci/required is ${candidate.ciRequired ?? 'not reported'} at its head` }
+    case 'mergeable': return { key: why, text: 'GitHub has not yet worked out whether it merges cleanly' }
+    case 'verdict': return { key: `${why}:${verdict}`, text: `the train does not count its reviews and tests: ${verdict}` }
+  }
 }
 
 /** `fast` when every file only documents or scripts (FAST_LANE): such a pull request merges on its own green CI. */

@@ -14,6 +14,7 @@ import 'package:harness/super_tabs/model.dart' show SuperTabAgent;
 import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/widgets/harness_activity_mark.dart' show ActivityMark;
 
 import 'super_tab_activity_lists_test.dart' show load, swarm;
 import 'support/capture.dart';
@@ -64,6 +65,7 @@ void main() {
     void Function(ConversationServer server)? setup,
     List<String>? selected,
     List<String>? created,
+    List<String>? terminals,
     double width = 300,
     Brightness brightness = Brightness.light,
   }) async {
@@ -96,6 +98,7 @@ void main() {
                 c.select(id);
               },
               onNewAgent: () => created?.add('new'),
+              onOpenAgentTerminal: (agent) => terminals?.add(agent.id),
               places: SuperTabPlaces.of(c),
               onNewSwarm: () {},
               onNewProject: () {},
@@ -170,6 +173,24 @@ void main() {
         agents: [_agent('tuan-agent', 'Tuan agent', contributor: 'tuan')],
       );
       expect(key('super-project-lead'), findsOneWidget);
+    });
+
+    // Task #4220: the Desktop has no Mentions row, so a tag in a folded project's chat showed nowhere.
+    testWidgets('folded, it still lists a project whose chat tags you, with '
+        'its number', (tester) async {
+      await show(
+        tester,
+        setup: (server) => server.tag('message-1', conversationId: 'lead'),
+      );
+      expect(find.byTooltip('Expand Projects'), findsOneWidget);
+      expect(key('super-project-lead'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: key('super-project-lead'),
+          matching: key('super-mentions-lead'),
+        ),
+        findsOneWidget,
+      );
     });
 
     testWidgets('its heading opens and closes it', (tester) async {
@@ -271,6 +292,34 @@ void main() {
       expect(key('super-agent-kestrel'), findsOneWidget);
       expect(key('super-agent-avatarrow'), findsNothing);
       expect(key('super-agent-fir'), findsNothing);
+    });
+
+    // Task #4220: the row drew its status only beside a detail line, and My agents rows have none.
+    testWidgets('each row shows its status, quietly, at its end', (
+      tester,
+    ) async {
+      // The person's one running Buddy, of no project.
+      await show(
+        tester,
+        agents: [
+          {...buddy}..remove('projectId'),
+          ...mine.skip(1),
+        ],
+        setup: agents,
+      );
+      for (final row in ['super-swarm-buddy', 'super-agent-kestrel']) {
+        final mark = find.descendant(
+          of: key(row),
+          matching: find.byType(ActivityMark),
+        );
+        expect(mark, findsOneWidget, reason: row);
+        // At the row's end, in the column the unread state is heard in.
+        expect(
+          tester.getRect(mark).left,
+          greaterThan(tester.getRect(key(row)).right - 64),
+          reason: row,
+        );
+      }
     });
 
     // Task #4421 (anh Dee 11-07): "let's just put a leader crown on the avatar. it's too much." and "let's put the project
@@ -378,10 +427,9 @@ void main() {
       await tester.runAsync(c.flush);
     });
 
-    testWidgets('an agent with no chat yet opens nothing and says why', (
-      tester,
-    ) async {
-      final selected = <String>[];
+    // Task #4220: an agent from before its own chat (#4116), with no open task, was a row that did nothing.
+    testWidgets('an agent with no chat opens its terminal', (tester) async {
+      final selected = <String>[], terminals = <String>[];
       await show(
         tester,
         agents: mine,
@@ -392,11 +440,13 @@ void main() {
               .remove('assignment');
         },
         selected: selected,
+        terminals: terminals,
       );
       await tester.tap(key('super-agent-kestrel'));
       await tester.pump();
       expect(selected, isEmpty);
-      expect(find.byTooltip('Kestrel · no chat yet'), findsOneWidget);
+      expect(terminals, ['kestrel']);
+      expect(find.byTooltip('Kestrel · opens its terminal'), findsOneWidget);
     });
 
     testWidgets('+ New agent is the last row, below the agents, and hands on '
