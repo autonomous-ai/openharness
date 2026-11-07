@@ -22,7 +22,7 @@ void main() {
       'lib',
     ).listSync(recursive: true).whereType<File>()) {
       if (!file.path.endsWith('.dart') ||
-          file.path.endsWith('/app_icons.dart')) {
+          file.path.endsWith('${Platform.pathSeparator}app_icons.dart')) {
         continue;
       }
       final lines = file.readAsLinesSync();

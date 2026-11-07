@@ -13,6 +13,13 @@ import 'package:harness/ws/ws_conn.dart';
 
 const _computerId = '0123456789abcdef0123456789abcdef';
 
+/// "No socket can exist" is the macOS and Linux data folder too long for one. Windows has no such
+/// case: every local route goes over the daemon's proven pipe, and the credential is never shown to
+/// a port (`LocalDaemonTransport.tcpHeaders`, CLI `localCredentialHeaders`, audit W1).
+final Object _portCredentialSkip = Platform.isWindows
+    ? 'macOS and Linux only: Windows reaches the daemon over its pipe and never sends the credential to a port'
+    : false;
+
 /// A stand-in daemon: `/api/status`, `/api/auth/me` and the local WebSocket,
 /// on whatever [HttpServer] it is given, counting what reached it.
 class _Daemon {
@@ -237,7 +244,7 @@ void main() {
 
       expect(await api.me(), {'via': 'tcp'});
       expect(tcp.credentials.last, credential);
-    });
+    }, skip: _portCredentialSkip);
 
     test('is not offered to a port while a socket can exist', () {
       final transport = LocalDaemonTransport(
@@ -271,7 +278,7 @@ void main() {
 
       expect(tcp.selects, 1);
       expect(tcp.credentials, [credential]);
-    });
+    }, skip: _portCredentialSkip);
   });
 
   group('discovery', () {

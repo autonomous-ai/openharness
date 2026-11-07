@@ -7,7 +7,6 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
-import 'package:harness/state/harness_activity.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/shared/widgets/app_icon_button.dart';
@@ -108,6 +107,32 @@ void main() {
       },
     );
   }
+
+  // Task #4645 (anh Dee 22:25): every row's right-side detail ends at one edge, in every section of the left pane, and
+  // the + on a heading ends there too.
+  testWidgets('the left pane\'s details end at one edge', (tester) async {
+    final bars = await _show(tester, Brightness.light);
+    final details = find.descendant(
+      of: find.byKey(_Gallery.leftPane),
+      matching: find.byWidgetPredicate(
+        (w) => w is Text && w.textAlign == TextAlign.right,
+      ),
+    );
+    final rights = {
+      for (final e in details.evaluate())
+        tester.getRect(find.byWidget(e.widget)).right,
+    };
+    expect(details.evaluate().length, greaterThan(2));
+    expect(rights, hasLength(1), reason: '$rights');
+    // The heading's +: its glyph's box ends on the same edge.
+    final plus = find.descendant(
+      of: find.byKey(_Gallery.leftPane),
+      matching: find.byIcon(AppIcons.plus),
+    );
+    expect(plus, findsOneWidget);
+    expect(tester.getRect(plus).right, moreOrLessEquals(rights.single));
+    await _close(tester, bars);
+  });
 
   // Review of task #4461: a whole-image tolerance let a changed element pass. Ellis has Kai's colour with another
   // tilt: only its eyes and smile move.
@@ -215,7 +240,9 @@ Future<List<SuperTabController>> _show(
   await buddy.select('swarm-buddy-peer');
   await member.select('aeef');
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 1820);
+  // Taller than the gallery needs, so a section that grows changes only its own lines and images (task #4717): the
+  // sections are each their own image, whatever the page's height.
+  tester.view.physicalSize = const Size(760, 4000);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -261,8 +288,9 @@ const _glyph = .25;
 
 /// Everything else but words (fills, pills, borders, where each element sits)
 /// is drawn alike on every host: at most 38 pixels of a section's image may
-/// differ, as the whole gallery's image allowed before it was split (task
-/// #4717), under the smallest Lead ring's 80, so a lost element fails too.
+/// differ (task #4717; the whole gallery's image allowed 0.01% of itself, 132
+/// pixels at its last size), under the smallest Lead ring's 80, so a lost
+/// element fails too.
 /// Words are left out: macOS and Linux smooth their edges too differently to
 /// compare by pixel (14,638 pixels on one image), and their copy is tested
 /// where they are written.
@@ -295,7 +323,6 @@ List<GalleryRegion> _regions(WidgetTester tester) {
     of: find.byType(SuperTabTaskStatusMark),
     matching: find.byType(Icon),
   );
-  final agentMarks = find.byType(SuperTabAgentMark);
   return [
     for (var i = 0; i < faces.evaluate().length; i++)
       if (tester.widget<SuperTabAvatarFace>(faces.at(i)) case final face)
@@ -323,13 +350,6 @@ List<GalleryRegion> _regions(WidgetTester tester) {
       (
         name: 'status mark ${tester.widget<Icon>(marks.at(i)).semanticLabel}',
         rect: tester.getRect(marks.at(i)),
-        limit: _glyph,
-      ),
-    for (var i = 0; i < agentMarks.evaluate().length; i++)
-      (
-        name:
-            'agent mark ${tester.widget<SuperTabAgentMark>(agentMarks.at(i)).activity.name}',
-        rect: tester.getRect(agentMarks.at(i)),
         limit: _glyph,
       ),
   ];
@@ -508,6 +528,7 @@ class _Gallery extends StatelessWidget {
 
   /// A Swarm with no tasks: the Tasks pane empty.
   final SuperTabController empty;
+  static const leftPane = ValueKey('gallery-left-pane');
 
   /// Whose answers the decision cards read.
   final SuperTabDecisions decisions;
@@ -632,10 +653,11 @@ class _Gallery extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   SizedBox(
+                    key: _Gallery.leftPane,
                     width: 280,
                     child: Column(
                       children: [
-                        // The Desktop left pane (task #4466).
+                        // The Desktop left pane (tasks #4466, #4645).
                         SuperTabQuietHeading.org('autonomous.ai', onTap: () {}),
                         SuperTabQuietRow(
                           leading: const Icon(
@@ -651,19 +673,16 @@ class _Gallery extends StatelessWidget {
                           'My agents',
                           collapsed: false,
                           onTap: () {},
+                          onAdd: () {},
+                          addTooltip: 'New agent',
                         ),
-                        for (final (name, lead, detail, mark, selected) in [
-                          ('River', true, 'harness', null, false),
-                          ('Quinn', false, null, null, true),
-                          ('Kai', false, null, HarnessActivity.working, false),
-                          (
-                            'Sage',
-                            false,
-                            'offline',
-                            HarnessActivity.needsInput,
-                            false,
-                          ),
-                          ('Lark', false, null, HarnessActivity.failed, false),
+                        // No status marks (task #4645): an agent with something new is its bold name.
+                        for (final (name, lead, detail, unread, selected) in [
+                          ('River', true, 'harness', false, false),
+                          ('Quinn', false, null, false, true),
+                          ('Kai', false, null, true, false),
+                          ('Sage', false, 'offline', false, false),
+                          ('Lark', false, null, false, false),
                         ])
                           SuperTabQuietRow(
                             leading: SuperTabAvatar.agent(
@@ -675,8 +694,7 @@ class _Gallery extends StatelessWidget {
                             name: name,
                             detail: detail,
                             selected: selected,
-                            mark: mark == null ? null : SuperTabAgentMark(mark),
-                            markColumn: true,
+                            unread: unread,
                             onTap: () {},
                           ),
                         SuperTabQuietHeading('Humans', onTap: () {}),

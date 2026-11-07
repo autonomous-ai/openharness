@@ -155,41 +155,34 @@ void main() {
       expect(styleOf(tester, 'Open').fontWeight, FontWeight.w400);
     });
 
-    testWidgets('marks sit in one column at the right edge, after the detail, '
-        'and a row without one keeps the column', (tester) async {
-      const mark = SizedBox.square(key: ValueKey('mark'), dimension: 12);
+    // Task #4645: no marks' column, so every row's detail ends at one right inset.
+    testWidgets('every detail ends at the row\'s one right inset', (
+      tester,
+    ) async {
       await pump(tester, [
         SuperTabQuietRow(
-          key: const ValueKey('working'),
+          key: const ValueKey('lead'),
           leading: face,
           name: 'River',
           detail: 'harness',
-          mark: mark,
           onTap: () {},
         ),
         SuperTabQuietRow(
-          key: const ValueKey('idle'),
+          key: const ValueKey('person'),
           leading: face,
-          name: 'Kestrel',
-          detail: 'web',
-          markColumn: true,
+          name: 'dee',
+          detail: '120',
           onTap: () {},
         ),
       ]);
-      final markRect = tester.getRect(find.byKey(const ValueKey('mark')));
       expect(
-        markRect.left,
-        greaterThan(tester.getRect(find.text('harness')).right),
+        tester.getRect(find.byKey(const ValueKey('lead'))).right -
+            tester.getTopRight(find.text('harness')).dx,
+        grid.AppDesktop.controlGap,
       );
-      expect(
-        tester.getRect(find.byKey(const ValueKey('working'))).right -
-            markRect.right,
-        lessThan(SuperTabQuietRow.markWidth),
-      );
-      // Details end on one line whether the row has a mark or not.
       expect(
         tester.getTopRight(find.text('harness')).dx,
-        tester.getTopRight(find.text('web')).dx,
+        tester.getTopRight(find.text('120')).dx,
       );
     });
 
