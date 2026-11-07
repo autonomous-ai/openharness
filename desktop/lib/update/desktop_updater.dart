@@ -11,6 +11,7 @@ import '../core/runtime_architecture.dart';
 import '../core/runtime_platform.dart';
 import '../core/app_version.dart';
 import '../core/staging_build.dart';
+import 'update_signature.dart';
 import 'windows_update_swap.dart';
 
 /// Published by `scripts/upload-desktop.sh` (`make upload-desktop`) — see
@@ -73,6 +74,14 @@ class UpdateInfo {
     required this.size,
   });
 }
+
+/// Refuses a staged update with [UpdateRefused] unless its signer is the
+/// running app's: [staged] is the macOS bundle or the Windows version folder,
+/// [launcher] the staged Windows `Harness.exe`.
+typedef UpdateSignatureCheck = Future<void> Function(
+  String staged, {
+  String? launcher,
+});
 
 enum DesktopUpdateCheckStatus { upToDate, available, disabled, failed }
 
@@ -236,6 +245,7 @@ class DesktopUpdater {
   final String _architecture;
   final String? _windowsInstallRoot;
   final Future<void> Function(String, List<String>)? _startDetached;
+  final UpdateSignatureCheck? _verifySignature;
   final _checksInFlight = <String?, Future<DesktopUpdateCheck>>{};
 
   /// How often the background poll asks the manifest.
@@ -276,6 +286,9 @@ class DesktopUpdater {
     String? windowsInstallRoot,
     Future<void> Function(String executable, List<String> arguments)?
     startDetached,
+    // Defaults to checking against the running app's own signature. Tests
+    // whose fixtures are not signed pass their own.
+    UpdateSignatureCheck? verifySignature,
   }) : _dio =
            dio ??
            Dio(
@@ -298,7 +311,27 @@ class DesktopUpdater {
        // ignore: prefer_initializing_formals
        _windowsInstallRoot = windowsInstallRoot,
        // ignore: prefer_initializing_formals
-       _startDetached = startDetached;
+       _startDetached = startDetached,
+       // ignore: prefer_initializing_formals
+       _verifySignature = verifySignature;
+
+  Future<void> _checkSignature(String staged, {String? launcher}) =>
+      (_verifySignature ?? _signedLikeThisApp)(staged, launcher: launcher);
+
+  /// Linux AppImages carry no signature, so Linux keeps the sha256 check.
+  Future<void> _signedLikeThisApp(String staged, {String? launcher}) async {
+    if (_isWindows) {
+      return verifyWindowsUpdate(
+        stagedFolder: staged,
+        stagedLauncher: launcher!,
+        runningExe: RuntimePlatform.resolvedExecutable,
+      );
+    }
+    if (_isLinux) return;
+    final running = currentBundlePath(isLinux: false, isWindows: false);
+    if (running == null) throw cannotCheckSignature;
+    return verifyMacUpdate(stagedBundle: staged, runningBundle: running);
+  }
 
   /// The manifest entries this build may install, most preferred first — [_newestEntry] takes the
   /// newest of them, an earlier key winning a tie.
@@ -425,7 +458,10 @@ class DesktopUpdater {
   /// holds more than the hash alone authenticates. On Linux, the download itself is the artifact (a
   /// single AppImage file), so the sha256 check already covers everything there is: it is made
   /// executable and staged as-is, with nothing to unpack or recheck.
-  /// Returns null (and cleans up anything partially written) on any verification failure.
+  /// On macOS and Windows the unpacked build must also be signed by whoever
+  /// signed the running app ([UpdateSignatureCheck]); a refusal deletes what
+  /// was staged and throws [UpdateRefused], whose message says why.
+  /// Returns null (and cleans up anything partially written) on any other verification failure.
   /// [onProgress] reports the DOWNLOAD only — bytes received out of
   /// [UpdateInfo.size]. The manifest's size is the denominator rather than the
   /// response's, because a CDN that omits `Content-Length` leaves Dio reporting
@@ -484,6 +520,15 @@ class DesktopUpdater {
           debugPrint('DesktopUpdater: Windows staging failed: $error');
           await stagingDir.delete(recursive: true);
           return null;
+        }
+        try {
+          await _checkSignature(
+            swap.stagedFolder!,
+            launcher: swap.stagedLauncher,
+          );
+        } on UpdateRefused {
+          await swap.discardStaged();
+          rethrow;
         }
         return StagedUpdate._windows(
           version: info.version,
@@ -545,20 +590,28 @@ class DesktopUpdater {
         await stagingDir.delete(recursive: true);
         return null;
       }
+      await _checkSignature(bundlePath);
 
       return StagedUpdate(
         version: info.version,
         bundlePath: bundlePath,
         stagingDirPath: stagingDir.path,
       );
+    } on UpdateRefused {
+      await _deleteQuietly(stagingDir);
+      rethrow;
     } catch (error) {
       debugPrint('DesktopUpdater.downloadAndStage: $error');
-      try {
-        await stagingDir?.delete(recursive: true);
-      } catch (_) {
-        // best-effort cleanup
-      }
+      await _deleteQuietly(stagingDir);
       return null;
+    }
+  }
+
+  static Future<void> _deleteQuietly(Directory? dir) async {
+    try {
+      await dir?.delete(recursive: true);
+    } catch (_) {
+      // best-effort cleanup
     }
   }
 
