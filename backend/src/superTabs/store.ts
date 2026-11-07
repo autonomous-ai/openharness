@@ -570,6 +570,13 @@ const machineKey = (environment: string, machineId: string, ownerId: string) => 
 export const teamByRecord = (state: SuperTabState, machineId: string): boolean =>
   !!state.machines?.find(m => m.machineId === machineId)?.hostMachineId || state.agents.some(a => a.machineId === machineId && onTeamAccount(state, a))
 /** A Team account's machine refused to its owner's own sign-in (notTeamMachine). */
+/** A PM from before Swarm v3 still in a Harness Team account, which assigns and starts no agent (store.ts teamCommand, #4248). */
+export const PM_IN_TEAM_ACCOUNT = 'PM_IN_TEAM_ACCOUNT'
+/** What such a PM is told: who moves it, and how (commands.ts lead.switch, which only the project's owner may run). */
+const pmInTeamAccount = (state: SuperTabState, project: SwarmProject): string =>
+  `This ${coordinatorNameOf(project)} runs in a Harness Team account, which assigns and starts no agents now. ${shownNameOf(state, project.ownerId) ?? 'The project\'s owner'} `
+  + 'moves it with Switch PM to their own computer, where it keeps its chat and tasks and starts agents in their own account. Until then it keeps coordinating.'
+
 export const TEAM_HOST_ONLY = 'TEAM_HOST_ONLY'
 export const TEAM_HOST_ONLY_MESSAGE = 'Only this computer\'s Harness Team account runs its Swarm agents. Its owner\'s own sign-in cannot act for them.'
 
@@ -826,7 +833,17 @@ export class SuperTabStore {
    * or reading another machine's terminal stays refused, whatever account it runs in. Messages and work reports go to the
    * Swarm as from any agent. An agent that is gone is left to the command's own answer.
    */
-  private teamCommand(state: SuperTabState, team: string, user: AuthUser, command: Command): void {
+  private teamCommand(state: SuperTabState, team: string, user: AuthUser, command: Command, actorId?: string): void {
+    // A PM from before Swarm v3 still in a Team account (#4248, finding 7 of #4212): what it may not do is refused in words that
+    // say who moves it and how, since nothing else tells it; it keeps coordinating meanwhile. Only a PM on this Team computer: the
+    // agent a request names is not checked yet here, and another project's PM would read that project's names (review of #3476).
+    const pm = actorId && ['work.assign', 'conversation.agent', 'agent.start'].includes(command.type)
+      ? state.agents.find(a => a.id === actorId && a.machineId === team) : undefined
+    const led = pm && ledProject(state, pm.id)
+    if (led) {
+      logger.warn('[super-tab] team command refused', { tabId: state.id, command: command.type, teamMachineId: team, code: PM_IN_TEAM_ACCOUNT })
+      fail(PM_IN_TEAM_ACCOUNT, pmInTeamAccount(state, led), 403)
+    }
     const refuse = (target?: Agent) => {
       // Refusals were counted only from agents saying so in chat (15 lines in 10 days): the log says which command, and
       // whether its target was in a Team account, so a workflow the check blocks shows up before people work around it.
@@ -1882,7 +1899,7 @@ export class SuperTabStore {
         fail('FORBIDDEN', 'Only the execution host can confirm this removal.', 403)
       }
       if (hostMachineId && !['agent.startDispatch', 'agent.started', 'agent.startFailed', 'agent.startSettled', 'route.modelResult'].includes(command.type)) fail('FORBIDDEN', 'A host can only settle its queued starts.', 403)
-      if (team !== null && !hostMachineId) this.teamCommand(original, team, user, command)
+      if (team !== null && !hostMachineId) this.teamCommand(original, team, user, command, asAgentId)
       // A Team account's session is closed by its own team session: the Mac's owner is its machine owner too, and from an
       // ordinary sign-in confirmed it, ending its hold with its data still there. A held one is on a Team account by
       // definition, whatever the account row says now (review of #2142).
@@ -2623,7 +2640,7 @@ export class SuperTabStore {
     }
     try {
       await this.agentGrant(tx, state, pm)
-      if (onTeamAccount(state, pm)) this.teamCommand(state, pm.machineId, user, command)
+      if (onTeamAccount(state, pm)) this.teamCommand(state, pm.machineId, user, command, pm.id)
     } catch (error) { return pmRefused(error) }
     return { kind: 'agent', agentId, machineOwnerId: pm.machineOwnerId }
   }
@@ -2728,6 +2745,13 @@ export class SuperTabStore {
       if (periodic && !this.periodicDue(tabId, project.id, rules, now)) continue
       this.rememberDispatch(tabId, project.id, now)
       if (this.pmWaiting(tabId, state, project, now)) continue
+      const leadId = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
+      const lead = leadId ? state.agents.find(a => a.id === leadId) : undefined
+      // Its PM is still in a Team account, which assigns no agent (teamCommand): counted while work waits, so the pass says why.
+      if (lead && onTeamAccount(state, lead)) {
+        if (openTasks(state, project.id, now).length) skipCode(PM_IN_TEAM_ACCOUNT)
+        continue
+      }
       const free = freeCrew(state, project.id, rules, now)
       if (!free.length) continue
       for (const lane of laneCapacity(state, project.id, rules, now)) {
@@ -2735,8 +2759,6 @@ export class SuperTabStore {
         total.waiting += lane.waiting
         total.busy += lane.busy
       }
-      const leadId = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
-      const lead = leadId ? state.agents.find(a => a.id === leadId) : undefined
       if (!lead) { skipCode('NO_PM'); continue }
       // No one's sign-in: the Swarm's environment for its reads, and the PM as the actor (executeOnce asProjectPm).
       const user: AuthUser = { sub: lead.machineOwnerId, email: '', autonomousEnv: row.autonomousEnv as AuthUser['autonomousEnv'], role: 'user' }

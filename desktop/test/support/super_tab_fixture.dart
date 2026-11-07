@@ -1749,6 +1749,21 @@ class ConversationServer {
           'machineId': ?machineId,
           'requestedAt': revision,
         };
+      } else if (command['type'] == 'agent.new' && command['local'] == true) {
+        // As backend agent.new with `local` (task #4196): a Member's own chat,
+        // and no start; its person's Desktop starts the agent itself.
+        revision++;
+        final id = 'agent-chat-$revision';
+        (state['conversations'] as List).add({
+          ...conversationFixture(id, command['name'] as String),
+          'kind': 'agent-chat',
+          'audience': {
+            'people': [
+              {'id': 'owner', 'generation': 'g'},
+            ],
+          },
+        });
+        output['conversationId'] = id;
       } else if (command['type'] == 'project.create') {
         revision++;
         final projects = state['projects'] ??= <dynamic>[

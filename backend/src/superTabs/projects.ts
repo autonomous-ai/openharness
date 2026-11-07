@@ -358,9 +358,10 @@ export function readConversation(state: SuperTabState, actor: Actor, conversatio
  *  (2026-10-26); this is the one place that decides it (design section 4.8). */
 export const PRIVATE_VISIBLE_TO_OWNERS = false
 
-/** A Chat with PM from before Buddies replaced it (Ken, 10-29): a private conversation that is no Buddy chat. Nobody opens
- *  one any more, and nobody reads one, the PM and its person included; its rows stay in the database. */
-export const isClosedPmChat = (group: Pick<Conversation, 'kind' | 'audience'>): boolean => !!group.audience && !isBuddyChat(group)
+/** A Chat with PM from before Buddies replaced it (Ken, 10-29): a private conversation that is no Buddy chat and no Regular agent's
+ *  chat (#4248: counted as one, a Regular agent's chat was never listed or delivered). Nobody opens one any more, and nobody reads
+ *  one, the PM and its person included; its rows stay in the database. */
+export const isClosedPmChat = (group: Pick<Conversation, 'kind' | 'audience'>): boolean => !!group.audience && !isBuddyChat(group) && !isAgentChat(group)
 
 /** Who reads a conversation: nobody the removed Leads conversation (model.ts leadsRemoved); a project conversation's readers; and a Buddy
  *  chat's owner and Buddy (buddies.ts), the PM never. A closed Chat with PM is nobody's. A Buddy reads what its person
