@@ -262,9 +262,8 @@ describe('the cleanup script', () => {
 
 describe("a Mac whose owner's Team account is about to join", () => {
   const run = (tab: string, command: Command, as: AuthUser = owner) => store.execute(as, tab, { operationId: randomUUID(), command })
-  // Swarm v3 has no Team accounts (#4248, finding 8 of #4212): the Mac takes teammates' projects through its person's own agents
-  // meanwhile, and the read of the owners' Team machines it still makes stays indexed.
-  it('reads as taking teammates\' projects, from an indexed read of the owners\' Team machines', async () => {
+  // Swarm v3 (task #4218): the Mac reads as itself, which takes its person's agents' work, so it never reads "not set up".
+  it('reads as taking its person\'s agents\' work while its Team account is not listed', async () => {
     const tab = (await store.create(owner, randomUUID(), 'Joining')).id
     const invitation = await run(tab, { type: 'invite.create', email: kelvinUser.email, role: 'collaborator', conversationId: 'lead' })
     await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, kelvinUser)
@@ -280,11 +279,6 @@ describe("a Mac whose owner's Team account is about to join", () => {
     const teamWork = async () => ((await store.read(kelvinUser, tab)).state.machines!.find(m => m.machineId === 'kelvin-joining') as { teamWork?: { code?: string } })
       .teamWork?.code
     expect(await teamWork()).toBeUndefined()
-    const { state } = await store.readLoad(kelvinUser, tab)
-    const entries = await profiled(db, () => store.joiningTeams(db, state))
-    const rows = reads(entries, 'machines', ['hostMachineId'])
-    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
-    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ userId: 1/)
   })
 })
 
