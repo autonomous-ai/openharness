@@ -10,7 +10,7 @@ import { isBuddy, isSwarmBuddy } from '../buddies.js'
 import { agentProjectId, canReadProject, NO_PROJECT, projectOf } from '../projects.js'
 import { firstAssignedAt, waitedOn, waitsNow, type RanOn, type Unblock } from './record.js'
 import { lentIn, periodSpans, reviewsIn, weekSpan, within, type PeriodName, type Span } from './rolling.js'
-import { broughtMachines, contributorsIn } from './brought.js'
+import { broughtMachines, contributorsIn, shippedByMerge } from './brought.js'
 import { DAY_MS, WEEK_MS } from './week.js'
 import type { AgentScore, Leaderboard, Medal, ModelScore, ModelShare, PersonDetails, PersonScore, RecentModel, WeekGoal } from './contract.js'
 
@@ -58,9 +58,9 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
   const leadConversations = new Set([...projectIds].map(id => projectOf(state, id).leadConversationId))
   const shared = visible.filter(g => !leadConversations.has(g.id))
   const requests = shared.filter(g => !g.reviewOf)
-  // Shipped with a PR: what agents and models are credited for. A person's points also need them to have asked (review
-  // of #2097: a group opened from a Buddy's proposal may name no requester).
-  const shippedRequests = requests.filter(g => g.ledger?.shippedAt != null && (g.pullRequestUrls?.length ?? 0) > 0)
+  // Shipped by a recorded merge: what agents and models are credited for (Done with a PR nobody merged is not, task #4217). A
+  // person's points also need them to have asked (review of #2097: a group opened from a Buddy's proposal may name no requester).
+  const shippedRequests = requests.filter(shippedByMerge)
   const landed = shippedRequests.filter(g => g.requesterId)
   const players = allProjects ? state.people : state.people.filter(p => canReadProject(state, { kind: 'person', userId: p.id, email: p.email }, project))
   const { current, previous } = period ? periodSpans(period, now) : { current: weekSpan(week), previous: weekSpan(week - WEEK_MS) }

@@ -1,4 +1,5 @@
 import { proposalNotices } from './proposalCards.js'
+import { shippedNotice } from './buddyNews.js'
 /**
  * Releases scheduled by the Swarm (task #3405, anh Dee's Swarm redesign, 2026-11-05: the server does the routine). A merge
  * recorded on a task puts it on its project's release list; the worker (releaseWatch.ts) reads GitHub for each component's
@@ -278,12 +279,20 @@ export function settleReleases(state: SuperTabState, projectId: string, facts: R
   }
 
 
+  // Shipped once a verified release holds all of it (task #4217: a merge alone is not shipped): a proposal's card says so, and a
+  // task's requester's Buddy hears it, by an id the release fixes, so a settle retried tells nobody twice.
   if (lead) for (const id of new Set(outcome.shipped)) {
     const group = state.conversations.find(c => c.id === id)
-    if (!group?.proposal || group.releasing) continue
+    if (!group || group.releasing) continue
     const sender = { kind: 'agent' as const, id: lead.id, name: lead.name, membershipGeneration: lead.membershipGeneration }
-    outcome.messages.push(...proposalNotices(state, group as Conversation & { proposal: NonNullable<Conversation['proposal']> },
-      'shipped', `${group.title} shipped.`, sender, stableId(group.id, 'shipped', String(group.released!.at))))
+    const once = stableId(group.id, 'shipped', String(group.released!.at))
+    if (group.proposal) {
+      outcome.messages.push(...proposalNotices(state, group as Conversation & { proposal: NonNullable<Conversation['proposal']> },
+        'shipped', `${group.title} shipped.`, sender, once))
+    } else {
+      const news = shippedNotice(state, group, sender, once)
+      if (news) outcome.messages.push(news)
+    }
   }
 
   for (const component of RELEASE_COMPONENTS) {
