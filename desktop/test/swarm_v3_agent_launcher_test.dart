@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/join/agent_launcher.dart';
@@ -70,7 +72,10 @@ void main() {
         return {'startId': 'one'};
       },
     );
-    await expectLater(launcher.create('claude', 'op'), throwsStateError);
+    await expectLater(
+      launcher.create('claude', 'op'),
+      throwsA(isA<SwarmAgentLaunchFailure>()),
+    );
     await launcher.create('claude', 'op');
     expect(prepares, 1);
     expect(ops.toSet(), {'op-start'});
@@ -167,5 +172,55 @@ void main() {
         ),
       );
     });
+  });
+
+  // Audit finding 10 (#4442): never a raw TimeoutException or daemon error.
+  test('a computer that doesn\'t answer times out in plain words', () {
+    fakeAsync((async) {
+      final launcher = SwarmAgentLauncher(
+        machineId: 'local',
+        machineName: 'Mac',
+        inSwarm: false,
+        isCurrent: () => true,
+        prepare: (op) => Completer<Map<String, dynamic>>().future,
+        command: (command, op) async => throw StateError('must not send'),
+      );
+      Object? failure;
+      launcher.create('claude', 'op').catchError((Object e) {
+        failure = e;
+        return <String, dynamic>{};
+      });
+      async.elapse(const Duration(seconds: 30));
+      expect(
+        failure,
+        isA<SwarmAgentLaunchFailure>().having(
+          (f) => f.message,
+          'message',
+          'Mac didn’t answer in time. Check that Harness is running there, then try again.',
+        ),
+      );
+    });
+  });
+
+  test('a raw failure becomes a sentence without its text', () async {
+    final launcher = SwarmAgentLauncher(
+      machineId: 'local',
+      machineName: 'Mac',
+      inSwarm: true,
+      isCurrent: () => true,
+      prepare: (op) async => throw StateError('unused'),
+      command: (command, op) async =>
+          throw StateError('/Users/someone/private path'),
+    );
+    await expectLater(
+      launcher.create('claude', 'op'),
+      throwsA(
+        isA<SwarmAgentLaunchFailure>().having(
+          (f) => f.message,
+          'message',
+          'Couldn’t reach Harness on Mac. Check that it’s running, then try again.',
+        ),
+      ),
+    );
   });
 }

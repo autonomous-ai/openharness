@@ -10,6 +10,12 @@ import 'super_tab_launch_test.dart' show tabId;
 
 import 'dart:io';
 
+import 'package:harness/ws/ws_conn.dart';
+
+const bringAgentIntro =
+    'Your Buddy is your own agent in Pilot: it runs on your computer, under '
+    'your sign-in, and you can also start it later from your Buddy chat.';
+
 void main() {
   final shots = Platform.environment['HARNESS_V3_JOIN_SHOTS'];
   setUpAll(() => loadCaptureFonts(shots));
@@ -50,10 +56,20 @@ void main() {
       );
       expect(find.text('Separate Harness Team account'), findsNothing);
       expect(find.text('Add machine'), findsNothing);
+      // Audit finding 10 (#4442): it names the Swarm, says what it does and
+      // that it can wait.
+      expect(find.text('Bring your agent to Pilot'), findsOneWidget);
+      expect(find.text(bringAgentIntro), findsOneWidget);
+      expect(find.text('Not now'), findsOneWidget);
       await captureWindow(tester, shots, 'bring-agent-${brightness.name}');
       if (brightness == Brightness.dark) {
-        await tester.tap(find.byKey(const ValueKey('new-harness-close')));
+        // A stray click outside keeps the offer; Not now closes it.
+        await tester.tapAt(const Offset(4, 4));
         await tester.pumpAndSettle();
+        expect(find.byType(NewHarnessForm), findsOneWidget);
+        await tester.tap(find.text('Not now'));
+        await tester.pumpAndSettle();
+        expect(find.byType(NewHarnessForm), findsNothing);
         await tester.runAsync(() => joining);
         expectNoEnrollment(f);
       } else {
@@ -100,4 +116,54 @@ void main() {
       f.dispose();
     });
   }
+
+  // Audit finding 10 (#4442): a refused start says the server's reason, not
+  // "not confirmed".
+  testWidgets('a refused Bring agent shows the server\'s reason', (
+    tester,
+  ) async {
+    final f = newMember();
+    await tester.binding.setSurfaceSize(const Size(1000, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.light),
+        home: SwarmJoinHost(app: f.app, child: const Scaffold()),
+      ),
+    );
+    late Future<void> joining;
+    await tester.runAsync(() async {
+      joining = f.app.addMachineOnJoin(tabId, role: 'collaborator');
+      await pumpEventQueue();
+    });
+    await tester.pump();
+    await tester.runAsync(() async => pumpEventQueue());
+    await tester.pumpAndSettle();
+    f.connection
+      ..backendFailureOnCommandsOnly = true
+      ..backendFailure = const WsRequestFailure(
+        responseType: 'super_tabs_result',
+        code: 'MACHINE_FULL',
+        detail: 'My Mac is running as many agents as it allows.',
+        payload: {'status': 409},
+      );
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Bring agent'));
+      await pumpEventQueue();
+    });
+    const reason = 'My Mac is running as many agents as it allows.';
+    for (var i = 0; i < 100 && find.text(reason).evaluate().isEmpty; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)),
+      );
+      await tester.pump();
+    }
+    expect(find.text(reason), findsOneWidget);
+    expect(find.textContaining('not confirmed'), findsNothing);
+    await tester.tap(find.text('Not now'));
+    await tester.pumpAndSettle();
+    await tester.runAsync(() => joining);
+    await tester.pumpWidget(const SizedBox());
+    f.dispose();
+  });
 }
