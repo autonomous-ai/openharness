@@ -165,6 +165,22 @@ describe('personal approval enforced before work', () => {
     expect(() => f.runCommand({ type: 'task.approve', conversationId: id })).toThrow()
     expect(f.card(id)).toMatchObject({ assignment: null, taskApproval: { state: 'proposal' } })
   })
+  // Task #4252 (audit 20): Approve is the person's consent to the agent shown; whether it is free is the assignment's to check.
+  it('records approval of a busy suggested agent, and the assignment still waits for it to be free', () => {
+    const f = fixture(); f.mode('review'); const id = f.create()
+    f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate })
+    f.edit(s => { s.conversations.find(c => c.id === f.web)!.assignment!.agentId = f.candidate })
+    f.runCommand({ type: 'task.approve', conversationId: id })
+    expect(f.card(id).taskApproval?.state).toBe('approved')
+    expect(() => f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm)).toThrow(expect.objectContaining({ code: 'AGENT_BUSY' }))
+  })
+  it('says the suggested agent is gone when it was removed before the approval', () => {
+    const f = fixture(); f.mode('review'); const id = f.create()
+    f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate })
+    f.edit(s => { s.agents = s.agents.filter(a => a.id !== f.candidate) })
+    expect(() => f.runCommand({ type: 'task.approve', conversationId: id })).toThrow(expect.objectContaining({ code: 'SUGGESTED_AGENT_GONE' }))
+    expect(f.card(id).taskApproval?.state).toBe('proposal')
+  })
   it('keeps a legacy proposal’s decision when the PM converts it to a task and refuses a second conversion', () => {
     const f = fixture(false); f.mode('review'); const sent = f.propose()
     const row = sent.messages.find(m => m.source?.kind === 'buddy-proposal')!
