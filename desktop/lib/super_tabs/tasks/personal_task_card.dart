@@ -9,8 +9,8 @@ import '../task_card.dart';
 import 'personal_tasks.dart';
 
 /// One task in the Tasks pane, quiet (anh Dee, 11-07): a hairline card with the project's grey capsule and the
-/// status mark on top, the title in up to three lines, then who asked and the agent as two faces, with Reject and
-/// Approve on the right only while the task waits for the reader.
+/// status mark on top, the title in up to three lines, then who asked and the agent as two faces, with Decline and
+/// Accept on the right only while the task waits for the reader.
 class SuperTabPersonalTaskCard extends StatelessWidget {
   const SuperTabPersonalTaskCard({
     super.key,
@@ -105,7 +105,7 @@ class SuperTabPersonalTaskCard extends StatelessWidget {
                         ],
                         const Spacer(),
                         if (waiting) ...[
-                          // Plain text: only Approve, the main action, is a capsule.
+                          // Plain text: only Accept, the main action, is a capsule.
                           TextButton(
                             onPressed: onReject,
                             style: TextButton.styleFrom(
@@ -116,7 +116,7 @@ class SuperTabPersonalTaskCard extends StatelessWidget {
                               padding: _buttonPadding,
                               minimumSize: Size.zero,
                             ),
-                            child: const Text('Reject'),
+                            child: const Text('Decline'),
                           ),
                           const SizedBox(width: grid.AppDesktop.listRowGap * 2),
                           FilledButton(
@@ -127,7 +127,7 @@ class SuperTabPersonalTaskCard extends StatelessWidget {
                               padding: _buttonPadding,
                               minimumSize: Size.zero,
                             ),
-                            child: const Text('Approve'),
+                            child: const Text('Accept'),
                           ),
                         ],
                       ],
@@ -143,7 +143,7 @@ class SuperTabPersonalTaskCard extends StatelessWidget {
   }
 }
 
-/// Approve and Reject fit beside two faces in the pane's fixed 340.
+/// Accept and Decline fit beside two faces in the pane's fixed 340.
 const _buttonPadding = EdgeInsets.symmetric(
   horizontal: grid.AppDesktop.controlGap,
   vertical: grid.AppDesktop.menuInset,
@@ -238,7 +238,7 @@ HarnessActivity superTabTaskActivity(String status) => switch (status) {
 /// as the Board says them.
 String superTabTaskStatusLabel(String status) => switch (status) {
   'proposal' => 'Proposal',
-  'rejected' => 'Rejected',
+  'rejected' => 'Declined',
   'planned' => 'Planned',
   'working' => 'Working',
   'needs_human' => 'Needs a human',

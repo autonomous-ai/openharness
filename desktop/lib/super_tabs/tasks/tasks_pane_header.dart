@@ -5,8 +5,8 @@ import '../../shared/theme/app_theme.dart' as grid;
 import '../../shared/widgets/app_menu.dart';
 import '../../widgets/desktop_chrome.dart';
 
-/// The top of the Tasks pane (anh Dee, 11-07): "Tasks" in semibold on the left, and the reader's Auto approve or
-/// Review choice on the right, shown only when [mode] is known.
+/// The top of the Tasks pane (anh Dee, 11-07): "Tasks" in semibold on the left, and the reader's Accept all or
+/// Ask me choice on the right, shown only when [mode] is known.
 class SuperTabTasksPaneHeader extends StatelessWidget {
   const SuperTabTasksPaneHeader({super.key, this.mode, this.onChanged});
 
@@ -45,7 +45,7 @@ class SuperTabTasksPaneHeader extends StatelessWidget {
   }
 }
 
-/// The Auto approve or Review choice: plain secondary text at rest, its chevron and a faint fill only on hover,
+/// The Accept all or Ask me choice: plain secondary text at rest, its chevron and a faint fill only on hover,
 /// focus or while open (anh Dee, 11-07: dropdowns stay plain text until you hover).
 class _ApprovalModeChoice extends StatefulWidget {
   const _ApprovalModeChoice({
@@ -64,7 +64,8 @@ class _ApprovalModeChoice extends StatefulWidget {
   State<_ApprovalModeChoice> createState() => _ChoiceState();
 }
 
-const _modes = {'autoApprove': 'Auto approve', 'review': 'Review'};
+/// As a meeting invite (anh Dee, 11-07): Accept all, or Ask me before a task starts. The stored values stay.
+const _modes = {'autoApprove': 'Accept all', 'review': 'Ask me'};
 
 class _ChoiceState extends State<_ApprovalModeChoice> {
   bool _hovered = false, _focused = false;

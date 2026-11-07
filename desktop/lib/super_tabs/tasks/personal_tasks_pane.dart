@@ -130,7 +130,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
         builder: (context, update) => AlertDialog(
           // Names the task, so the person knows which one they turn down.
           title: Text(
-            'Reject “${task.title}”?',
+            'Decline “${task.title}”?',
             maxLines: 3,
             overflow: TextOverflow.ellipsis,
           ),
@@ -153,7 +153,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
               onPressed: reason.text.trim().isEmpty
                   ? null
                   : () => Navigator.pop(context, reason.text.trim()),
-              child: const Text('Reject task'),
+              child: const Text('Decline task'),
             ),
           ],
         ),
