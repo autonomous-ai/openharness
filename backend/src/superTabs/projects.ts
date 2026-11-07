@@ -144,7 +144,13 @@ export const GITHUB_SEEN = ['not-installed', 'not-approved', 'covered'] as const
 export type GitHubSeen = typeof GITHUB_SEEN[number]
 
 /** A project's status card: its text, when (ISO time) and by which agent it was written. */
-export interface ProjectStatus { text: string; at: string; by: string }
+export interface ProjectStatus { text: string; at: string; by: string
+  /** The text is the coordinator's own lines, shown after the server's (statusCard.ts, task #3593). Absent on a card saved before:
+   *  that text was the whole card, whose lines the server now writes, so it is not shown beside them. */
+  own?: true
+  /** Set by visibleState on the text it shows readers (the server's lines with the coordinator's own): a view applied again to a
+   *  view leaves it as it is. Never stored. */
+  shown?: true }
 export const PROJECT_STATUS_MAX = 2_000
 
 export const skillModeOf = (project: SwarmProject): SkillMode => project.skillMode ?? 'orchestration'
