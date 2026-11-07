@@ -107,6 +107,13 @@ void main() {
     };
     expect(details.evaluate().length, greaterThan(2));
     expect(rights, hasLength(1), reason: '$rights');
+    // The heading's +: its glyph's box ends on the same edge.
+    final plus = find.descendant(
+      of: find.byKey(_Gallery.leftPane),
+      matching: find.byIcon(AppIcons.plus),
+    );
+    expect(plus, findsOneWidget);
+    expect(tester.getRect(plus).right, moreOrLessEquals(rights.single));
     await _close(tester, bars);
   });
 

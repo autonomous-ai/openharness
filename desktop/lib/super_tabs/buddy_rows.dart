@@ -4,10 +4,8 @@ import 'package:flutter/material.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import '../state/harness_activity.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
-import '../widgets/harness_activity_mark.dart';
 import 'buddy_chat.dart';
 import 'identity.dart';
 import 'section_heading.dart';

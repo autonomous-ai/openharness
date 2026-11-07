@@ -13,13 +13,16 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/leaderboard/reader.dart';
 import 'package:harness/super_tabs/model.dart' show SuperTabAgent;
 import 'package:harness/super_tabs/places.dart';
-import 'package:harness/state/harness_activity.dart' show HarnessActivity;
+import 'package:harness/core/models.dart' show Agent;
+import 'package:harness/state/harness_activity.dart'
+    show HarnessActivity, harnessActivity;
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/widgets/harness_activity_mark.dart' show ActivityMark;
 
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
 
+import 'harness_activity_test.dart' show activityQuestion;
 import 'super_tab_activity_lists_test.dart' show load, swarm, wait;
 import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
@@ -76,14 +79,15 @@ void main() {
     SwarmPage? page,
     String? boardProjectId,
     SuperTabLeaderboardReader? leaderboard,
+    AppNotifier? withApp,
   }) async {
     final server = swarm();
     if (agents != null) server.state['agents'] = agents;
     setup?.call(server);
     final activity = (await tester.runAsync(() => load(server)))!;
     final c = activity.controller;
-    final AppNotifier app = createApp();
-    addTearDown(app.dispose);
+    final app = withApp ?? createApp();
+    if (withApp == null) addTearDown(app.dispose);
     // The design tokens follow the app's brightness, which main.dart sets from the theme.
     final previous = grid.AppTheme.brightness.value;
     grid.AppTheme.brightness.value = brightness;
@@ -980,6 +984,49 @@ void main() {
       await show(tester, agents: [buddy], setup: agents);
       expect(heading, findsOneWidget);
       expect(key('super-new-agent-row'), findsOneWidget);
+    });
+
+    // The old mark test went with the marks: an agent that works, needs you or failed still draws none.
+    testWidgets('a working, waiting or failed agent\'s row draws no mark', (
+      tester,
+    ) async {
+      final app = createApp(connected: true);
+      addTearDown(app.dispose);
+      final machine = app.stateOf('m')!;
+      machine.agents = const [
+        Agent(id: 'busy', name: 'Busy', engine: 'codex'),
+        Agent(id: 'asks', name: 'Asks', engine: 'codex'),
+        Agent(
+          id: 'broke',
+          name: 'Broke',
+          engine: 'codex',
+          launchState: 'failed',
+        ),
+      ];
+      machine.processingAgentIds.add('busy');
+      machine.blockedAgents['asks'] = activityQuestion('asks');
+      for (final (id, activity) in [
+        ('busy', HarnessActivity.working),
+        ('asks', HarnessActivity.needsInput),
+        ('broke', HarnessActivity.failed),
+      ]) {
+        expect(harnessActivity(app, 'm', id), activity, reason: id);
+      }
+      await show(
+        tester,
+        withApp: app,
+        agents: [
+          buddy,
+          for (final id in ['busy', 'asks', 'broke'])
+            {..._agent(id, id), 'machineId': 'm', 'harnessId': id},
+        ],
+        setup: agents,
+      );
+      for (final id in ['busy', 'asks', 'broke']) {
+        expect(key('super-agent-$id'), findsOneWidget, reason: id);
+      }
+      expect(find.byType(ActivityMark), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
     });
 
     testWidgets('every right-side detail ends at one edge: a Lead\'s project '
