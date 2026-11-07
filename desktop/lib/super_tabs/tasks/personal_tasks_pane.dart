@@ -3,10 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../shared/theme/app_theme.dart';
+import '../../widgets/desktop_chrome.dart';
 import '../../widgets/laid_out_list.dart';
 import '../controller.dart';
 import '../identity.dart';
 import '../model.dart';
+import 'approval_mode_choice.dart';
 import 'personal_task_card.dart';
 import 'personal_tasks.dart';
 
@@ -210,41 +212,26 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                   ),
                   child: Row(
                     children: [
-                      const Expanded(
+                      Expanded(
                         child: Text(
                           'Tasks',
-                          style: TextStyle(fontWeight: FontWeight.w600),
+                          style: DesktopChrome.control(
+                            color: DesktopChrome.foreground,
+                          ).copyWith(fontWeight: AppFont.semibold),
                         ),
                       ),
                       if (supported)
-                        DropdownButtonHideUnderline(
-                          child: DropdownButton<String>(
-                            key: const ValueKey('tasks-approval-mode'),
-                            value: tasks!.mode,
-                            style: Theme.of(context).textTheme.bodySmall,
-                            items: const [
-                              DropdownMenuItem(
-                                value: 'autoApprove',
-                                child: Text('Auto approve'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'review',
-                                child: Text('Review'),
-                              ),
-                            ],
-                            onChanged: enabled
-                                ? (value) {
-                                    if (value != null) {
-                                      unawaited(
-                                        _send({
-                                          'type': 'member.approvalMode',
-                                          'mode': value,
-                                        }),
-                                      );
-                                    }
-                                  }
-                                : null,
-                          ),
+                        SuperTabApprovalModeChoice(
+                          key: const ValueKey('tasks-approval-mode'),
+                          mode: tasks!.mode,
+                          onChanged: enabled
+                              ? (mode) => unawaited(
+                                  _send({
+                                    'type': 'member.approvalMode',
+                                    'mode': mode,
+                                  }),
+                                )
+                              : null,
                         ),
                     ],
                   ),
