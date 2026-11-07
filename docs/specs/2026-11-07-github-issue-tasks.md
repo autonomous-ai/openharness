@@ -69,7 +69,7 @@ gets. So the server decides before it creates an issue, and these tasks never ge
 - **Tasks not marked for publishing.** `conversation.create` takes an optional `publish`, and its default depends on
   the repository:
   - **Private repository: `publish` defaults to true.** The PM sends `publish: false` for an incident's details and
-    for any brief that quotes a person's private chat; the PM's skill text says so. P0 and security work is withheld
+    for any brief that quotes a person's private chat; the PM's job page says so. P0 and security work is withheld
     by code (below).
   - **Public repository: `publish` defaults to false.** A task stays in Harness until the PM or its requester marks it
     publishable (`task.publish`, allowed only for those two). The server can't tell security work reliably on a public
@@ -79,8 +79,9 @@ gets. So the server decides before it creates an issue, and these tasks never ge
     a security review step, refuse `publish` for their whole life (`PUBLISH_REFUSED_SECURITY`). The server enforces
     this in code, public or private, so it never rests on the PM remembering. A private repository's readers can be
     wider than the project (see Design 7), so an unfixed hole stays in Harness there too. A task that becomes P0, or
-    gains a security review step, after its issue exists can't unpublish it. From then on Harness writes nothing more
-    to that issue (no title, body or label change), and the PM is told at once to ask a repository admin.
+    gains a security review step, after its issue exists can't unpublish it. From then on Harness writes no more text
+    or labels to that issue, and the PM is told at once to ask a repository admin. Its PR merging green still closes
+    it, with a note that holds only the PR link: a closed issue reveals nothing an open one didn't.
   - Turning `publish` off once the issue exists is refused with `ISSUE_ALREADY_PUBLISHED`, and the PM is told that only
     a repository admin can delete the issue.
 - **On a public repository, a brief that names someone.** Before publishing, the server runs the title and brief through
@@ -205,8 +206,8 @@ The renderer knows which kind of text it draws: the copy carries its source, so 
 - Agents ask, answer and hand over in the task's chat, addressed to whoever must act, as today. Harness creates no
   "Queue" issue and no issue for talk. It reads no issue comments, so no agent waits on one, nothing polls, and the
   comment cap doesn't apply.
-- The agent skill text (`cli/src/lib/swarmSkills.ts`) says it plainly: never post to or poll a GitHub issue to talk; the
-  task's chat is where people and agents hear you.
+- The agents' job page says it plainly: never post to or poll a GitHub issue to talk; the task's chat is where people
+  and agents hear you. That is the page #4537 moves the skill texts to (`cli/src/lib/swarmSkills.ts` until then).
 - On a GitHub project, agent tokens no longer ask for `issues`. Only the server writes issues, so an agent can't set its
   own status label or close its own issue. Agents still write pull requests, reviews and PR comments with
   `pull_requests: write`.
@@ -215,8 +216,8 @@ The renderer knows which kind of text it draws: the copy carries its source, so 
 
 ## Design (docs/feature-design-rules.md)
 
-Reviewed revision: the head PR #3549 merges at. Reviewers: Ownrev6 and Ownrev1 (review), Ownrev5 (security: GitHub
-App tokens), Ownrev2 (security: private repositories).
+Reviewed revision: the head PR #3549 merges at. Reviewers: Ownrev6, Ownrev1, Ownrev4 and Secrev7 (review); Mactest3
+(security 1: GitHub App tokens); Ownrev2 and Secrev7 (security 2: private repositories).
 
 ### 1. Growth
 
@@ -248,6 +249,17 @@ issue.
   writing, and drops any field whose GitHub value is no longer the base. Labels and assignees change through GitHub's
   add and remove endpoints, never by replacing the whole list, so a label a person added at the same moment survives.
   Title and body change through `PATCH` with only that field.
+- Invariant: **one status label.** When Harness sets a status, it adds its label and removes every other `harness:`
+  status label on the issue, the one it set before and any added by hand. Other labels are never touched. If a person
+  leaves more than one, the copy reads the furthest along (done, then in review, accepted, assigned), and the PM is
+  told, until Harness's next status write leaves one again.
+- Invariant: **edits made during a rollback aren't lost.** The link keeps a hash of the last value synced for each field
+  (title, body, owner, status). An older release ignores it and may write the task's fields directly. On roll forward
+  the sync pass compares each field with its hash:
+  - If a field differs from its hash, it was edited in Harness during the rollback.
+  - If GitHub's value still matches the hash, that edit is written to GitHub, through every check above.
+  - If GitHub moved too, GitHub wins. The copy takes GitHub's value, and the Harness edit is posted in the task's chat
+    for whoever made it ("Your edit during the rollback wasn't applied: the issue changed on GitHub").
 - Invariant: **one issue per task.** Creation runs after the command commits, never inside the transaction. The task's
   wanted state marks `creating`, and the issue is created with the marker line, the task's id in it. A retry after a
   crash lists the bot's issues since the mark (`GET /issues?creator=<bot>&since=`, page by page, at most 10 pages of
@@ -348,8 +360,9 @@ Order:
 - The previous release ignores `issue` and reads the copy in the existing fields, so every task still shows its last
   synced title, brief and status.
 - The issues stay on GitHub, untouched. Their labels freeze until the next deploy.
-- Rolling forward again reads each linked issue (conditional GET, within budget) and applies anything edited meanwhile,
-  so GitHub still wins.
+- Rolling forward again reads each linked issue (conditional GET, within budget). It reconciles each field against
+  its last-synced hash (Design 2): an edit made only in Harness during the rollback is written to GitHub, and an edit
+  made on both sides goes to GitHub's side, with the Harness edit kept in the task's chat. Nothing is dropped silently.
 - A rollback never deletes an issue or label. To stop one project's sync, revoke the app's Issues grant: the project
   stops being a GitHub project, and its tasks go on from the copy.
 
@@ -467,8 +480,9 @@ spec.
 
 **Before the launch**
 
-1. **Agents talk in the task's chat** (S, docs and skill text). `swarmSkills.ts` and the PM tool sheet: never post to or
-   poll a GitHub issue to talk; ask in the task's chat with `--to`. A test asserts the skill text. Ships Saturday.
+1. **Agents talk in the task's chat** (S, docs and the agents' job page). The job page #4537 moves skill texts to
+   (`swarmSkills.ts` and the PM tool sheet until it lands): never post to or poll a GitHub issue to talk; ask in the
+   task's chat with `--to`. A test asserts the text. Ships Saturday.
 2. **Webhook receiver, recording only** (M, backend).
    - `POST /api/github/webhook` with signature check, size cap, event allow-list and delivery-id receipts.
    - Metrics, a log line per delivery, and the redelivery pass.
@@ -488,7 +502,7 @@ spec.
    - Creating the issue for a new task (marker, adopt on retry).
    - What stays in Harness: `publish` with its per-repository default, `task.publish`, the never-published rule for
      P0 and security work on every repository, steps, and the name check. The checks run on every title and body write,
-     not only at creation. The PM's skill text names `publish`.
+     not only at creation. The PM's job page names `publish`.
    - Agent tokens drop `issues` on GitHub projects. This ships in this task, before the first issue is created.
    - Bot edits are trusted only when they match a recorded server write.
    - Applying `issues` webhooks to the copy, with the newer-`updated_at` rule.
