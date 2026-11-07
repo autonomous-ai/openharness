@@ -401,7 +401,7 @@ quarter of its box, and nothing else outside the words more than 38 pixels.
   diameter, gap 7%, drawn outside the avatar's box so no row moves. Its
   accessible label says Lead. The crown is only number one's on the
   leaderboard.
-- **Task status marks.** Proposal is Lucide `lightbulb`, Rejected
+- **Task status marks.** Proposal is Lucide `lightbulb`, Declined
   `thumbs-down`, Failed (Stuck) `triangle-alert` in the semantic error ink.
   The check, question mark and spinner stay, from the shared activity
   vocabulary. No status in Flutter draws an X: an X means close. Terminal text
@@ -410,7 +410,7 @@ quarter of its box, and nothing else outside the words more than 38 pixels.
   above at its shipped size; its size and layout do not change when an
   element does.
 - **Tasks pane header** (`SuperTabTasksPaneHeader`). "Tasks" in 13 semibold
-  on the left. The Auto approve or Review choice on the right is plain 12
+  on the left. The Accept all or Ask me choice on the right is plain 12
   secondary text; its chevron and a faint fill show only on hover, focus or
   while its menu is open, and the chevron's room is held at rest so the text
   never moves. The menu is the app's one dropdown, with a check on the stored
@@ -421,7 +421,7 @@ quarter of its box, and nothing else outside the words more than 38 pixels.
   capsule (`AppSurface.wellFill`, secondary text), never a project colour, and
   the status mark at the right. Then the title in 13 medium, up to three
   lines, and two 18 faces: who asked, then who is doing it. Only while the
-  task waits for the reader: Reject as plain text and Approve as the blue
+  task waits for the reader: Decline as plain text and Accept as the blue
   capsule, on the right.
 - **Adding or changing one.** A new or changed element updates this section
   and the gallery, with its images, in the same pull request.
