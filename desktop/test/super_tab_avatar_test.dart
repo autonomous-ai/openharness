@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/avatar_art.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -78,6 +79,41 @@ void main() {
     final ken = superTabAgentPattern("ken's Buddy");
     expect((halfBits(ken.cells), ken.hue), (30735, 327.0));
     expect(darkTone(ken.hue), const Color(0xffd69abb));
+  });
+
+  // Task #4466 (anh Dee 11-07): grey everywhere, colour only on agent faces.
+  testWidgets('a person without a photo is an initial on a neutral grey disc', (
+    tester,
+  ) async {
+    (Color, Color) drawn(String identity, String name) {
+      final face = find.byWidgetPredicate(
+        (w) => w is SuperTabAvatarFace && w.identity == identity,
+      );
+      final disc = tester.widget<Container>(
+        find.descendant(of: face, matching: find.byType(Container)).first,
+      );
+      final ink = tester
+          .widget<Text>(find.descendant(of: face, matching: find.byType(Text)))
+          .style!
+          .color!;
+      return ((disc.decoration! as BoxDecoration).color!, ink);
+    }
+
+    await tester.pumpWidget(
+      host(
+        const Column(
+          children: [
+            SuperTabAvatarFace(identity: 'person:mai', name: 'mai', size: 20),
+            SuperTabAvatarFace(identity: 'person:ken', name: 'ken', size: 20),
+            SuperTabAvatarFace(identity: 'agent:kai', name: 'kai', size: 20),
+          ],
+        ),
+      ),
+    );
+    final mai = drawn('person:mai', 'mai'), ken = drawn('person:ken', 'ken');
+    expect(mai, ken);
+    expect(mai.$2, grid.AppPalette.textSecondary);
+    expect(drawn('agent:kai', 'kai').$2, isNot(grid.AppPalette.textSecondary));
   });
 
   testWidgets('an agent without a picture shows its pattern and engine badge', (
