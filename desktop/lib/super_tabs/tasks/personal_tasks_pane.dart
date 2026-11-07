@@ -97,14 +97,14 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
           : null;
       setState(() {
         if (lost) {
-          _error = 'The change is not confirmed. Retry to check it.';
+          _error = 'Not confirmed. Retry to check.';
         } else {
           _action = null;
           _operationId = null;
           if (answer == null) {
             _error = updateRequired
                 ? 'Update Harness to change Tasks.'
-                : refusal ?? 'The change was refused.';
+                : refusal ?? 'Change refused.';
           }
         }
       });
@@ -112,9 +112,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
       if (answer == null && !lost) unawaited(owner.refresh());
     } catch (_) {
       if (mounted && identical(owner, c)) {
-        setState(
-          () => _error = 'The change is not confirmed. Retry to check it.',
-        );
+        setState(() => _error = 'Not confirmed. Retry to check.');
       }
     } finally {
       if (mounted && identical(owner, c)) setState(() => _sending = false);
@@ -153,7 +151,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
               onPressed: reason.text.trim().isEmpty
                   ? null
                   : () => Navigator.pop(context, reason.text.trim()),
-              child: const Text('Decline task'),
+              child: const Text('Decline'),
             ),
           ],
         ),
