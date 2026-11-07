@@ -88,8 +88,8 @@ class SuperTabTaskHeader extends StatelessWidget {
                       ),
                     ),
                   words(
-                    person?.shownName ??
-                        task.requester['name'] as String? ??
+                    task.requester['name'] as String? ??
+                        person?.shownName ??
                         'Person',
                   ),
                 ]),

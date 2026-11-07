@@ -9,14 +9,23 @@ import '../task_card.dart';
 import 'personal_tasks.dart';
 
 /// A project's tag colour: one of the roster's hues, which carry white at 5:1 or more in both appearances, picked by
-/// its id so a project keeps its colour everywhere and needs no stored field.
+/// its id so a project keeps its colour everywhere and needs no stored field. Red and amber are left to P0 and P1, as
+/// a Board lane's are.
 Color superTabProjectColor(String projectId) {
   const palette = grid.AppPalette.avatarPalette;
+  final hues = [
+    palette[0],
+    palette[1],
+    palette[2],
+    palette[5],
+    palette[6],
+    palette[7],
+  ];
   var hash = 0;
   for (final unit in projectId.codeUnits) {
     hash = (hash * 31 + unit) & 0x7fffffff;
   }
-  return palette[hash % palette.length];
+  return hues[hash % hues.length];
 }
 
 /// One task in the Tasks pane, as a Board tile, cleaner (anh Dee, 11-07): the project's tag and the status mark on
