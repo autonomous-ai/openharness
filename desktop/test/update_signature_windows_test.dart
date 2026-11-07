@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/bootstrap/environment_provisioner.dart'
     show windowsPowerShellPath;
@@ -28,6 +29,19 @@ const _candidates = [
 
 const _loadSecurity =
     r"Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1')";
+
+/// What [body] printed through debugPrint, where the refusal names its rule.
+Future<List<String>> _logged(Future<void> Function() body) async {
+  final lines = <String>[];
+  final previous = debugPrint;
+  debugPrint = (message, {wrapWidth}) => lines.add(message ?? '');
+  try {
+    await body();
+  } finally {
+    debugPrint = previous;
+  }
+  return lines;
+}
 
 Future<String> _powershell(String script) async {
   final result = await runHidden(windowsPowerShellPath(Platform.environment), [
@@ -184,34 +198,48 @@ void main() {
     expect(found.catalog!.status, 'ValidationFailed');
   }, skip: _windowsOnly);
 
+  // Run 42354774882 refused both of these for the wrong reason ("the update
+  // has no harness-desktop.exe"): the log says which rule refused.
   test('an unsigned catalog is refused, in plain words', () async {
     await writeCatalog();
-    await expectLater(
-      verifyWindowsUpdate(
-        stagedFolder: staged,
-        stagedLauncher: launcher,
-        runningExe: signed,
-      ),
-      throwsA(
-        isA<UpdateRefused>().having(
-          (e) => e.message,
-          'message',
-          contains('not signed by Microsoft'),
+    final logged = await _logged(
+      () => expectLater(
+        verifyWindowsUpdate(
+          stagedFolder: staged,
+          stagedLauncher: launcher,
+          runningExe: signed,
+        ),
+        throwsA(
+          isA<UpdateRefused>().having(
+            (e) => e.message,
+            'message',
+            contains('not signed by Microsoft'),
+          ),
         ),
       ),
+    );
+    expect(
+      logged,
+      contains(contains('refused: the file catalog is signed by')),
     );
   }, skip: _windowsOnly);
 
   test('an unsigned program is refused', () async {
     await writeCatalog();
     _stripSignature(signed, launcher);
-    await expectLater(
-      verifyWindowsUpdate(
-        stagedFolder: staged,
-        stagedLauncher: launcher,
-        runningExe: signed,
+    final logged = await _logged(
+      () => expectLater(
+        verifyWindowsUpdate(
+          stagedFolder: staged,
+          stagedLauncher: launcher,
+          runningExe: signed,
+        ),
+        throwsA(isA<UpdateRefused>()),
       ),
-      throwsA(isA<UpdateRefused>()),
+    );
+    expect(
+      logged,
+      contains(contains('refused: Harness.exe signature is NotSigned')),
     );
   }, skip: _windowsOnly);
 

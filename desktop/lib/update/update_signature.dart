@@ -302,12 +302,17 @@ function Read-Signer($path) {
   try { Signer (Get-AuthenticodeSignature -LiteralPath $path) }
   catch { [ordered]@{ status = 'Unreadable'; subject = ''; identity = '' } }
 }
+# Files are listed from the very path their names are cut from: another form
+# of the same folder (an 8.3 name, say) would cut the wrong number of letters.
 function Programs($folder) {
-  $root = (Resolve-Path -LiteralPath $folder).Path.TrimEnd('\') + '\'
-  @(Get-ChildItem -LiteralPath $folder -Recurse -File -Force |
+  $base = (Get-Item -LiteralPath $folder).FullName.TrimEnd('\')
+  @(Get-ChildItem -LiteralPath $base -Recurse -File -Force |
     Where-Object { $_.Extension -in '.exe', '.dll' } | ForEach-Object {
+      if (-not $_.FullName.StartsWith($base + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw "$($_.FullName) is outside $base"
+      }
       $row = Read-Signer $_.FullName
-      $row.path = $_.FullName.Substring($root.Length).Replace('\', '/')
+      $row.path = $_.FullName.Substring($base.Length + 1).Replace('\', '/')
       $row
     })
 }
