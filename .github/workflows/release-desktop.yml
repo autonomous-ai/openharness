@@ -259,6 +259,45 @@ jobs:
           name: desktop-candidate-reuse
           path: desktop-candidate-reuse.json
 
+  # The release gate (task #4651): every Swarm flow clicked through in the real Desktop screens, headless, against the
+  # real backend and daemon on a throwaway database with a fake sign-in (scripts/swarm-flows.sh). A failing flow stops
+  # the candidate and the publish, and the run summary names it. A reused candidate passed it in its own run: its
+  # candidate job needs this one.
+  swarm-flows:
+    needs: [version, preflight]
+    if: needs.preflight.outputs.reused != 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    # Read only: it runs the checkout's code and installs npm packages, so it gets none of the workflow's identity token.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install tmux and Redis for the daemon and backend under test
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tmux redis-server
+      - uses: ./.github/actions/desktop-flutter
+        with:
+          version: ${{ env.FLUTTER_VERSION }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            cli/package-lock.json
+      - run: npm ci --prefix backend --no-audit --no-fund
+      - run: npm ci --prefix cli --no-audit --no-fund
+      - name: Click through every Swarm flow
+        env:
+          HARNESS_E2E_REDIS_SERVER: /usr/bin/redis-server
+        run: |
+          set -o pipefail
+          bash scripts/swarm-flows.sh | tee "$RUNNER_TEMP/swarm-flows.txt"
+      - name: Name the failing flows
+        if: ${{ !cancelled() }}
+        run: |
+          { echo '### Swarm flows'; grep -E '^(FAILED FLOW|Swarm flows):' "$RUNNER_TEMP/swarm-flows.txt" || echo 'No result: the flows did not run.'; } >> "$GITHUB_STEP_SUMMARY"
+
   # Compile the universal app once, then derive the two renderer bundles. Both
   # retain arm64+x86_64; their packaging/notarization/uploads run in parallel.
   build-macos:
@@ -653,8 +692,8 @@ jobs:
   # The only job that touches the REAL manifest, and the only one that can, because it is the only
   # one that runs after every build has finished.
   publish:
-    needs: [version, preflight, build-macos, build-linux, build-windows, upload-windows]
-    if: ${{ always() && !inputs.prepare_only && needs.version.result == 'success' && needs.preflight.result == 'success' && (needs.preflight.outputs.reused == 'true' || (needs.build-macos.result == 'success' && needs.build-linux.result == 'success' && needs.upload-windows.result == 'success')) }}
+    needs: [version, preflight, swarm-flows, build-macos, build-linux, build-windows, upload-windows]
+    if: ${{ always() && !inputs.prepare_only && needs.version.result == 'success' && needs.preflight.result == 'success' && (needs.preflight.outputs.reused == 'true' || (needs.swarm-flows.result == 'success' && needs.build-macos.result == 'success' && needs.build-linux.result == 'success' && needs.upload-windows.result == 'success')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     concurrency:
@@ -812,7 +851,7 @@ jobs:
   # precisely when scratch manifests are left behind — the builds that DID succeed have already
   # written theirs. `if: always()` here means the prefix is cleared whatever happened upstream.
   cleanup:
-    needs: [version, preflight, build-macos, build-linux, build-windows, upload-windows, candidate, publish]
+    needs: [version, preflight, swarm-flows, build-macos, build-linux, build-windows, upload-windows, candidate, publish]
     if: ${{ always() && needs.version.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
@@ -859,10 +898,10 @@ jobs:
   # destination differs. A successful receipt binds nine verified generations to
   # its full producer source tree, Desktop build inputs, version, run and attempt.
   candidate:
-    needs: [version, build-macos, build-linux, upload-windows]
+    needs: [version, swarm-flows, build-macos, build-linux, upload-windows]
     # Explicit results: an implicit success() also inspects skipped ancestors, and sign-windows is skipped while
     # WINDOWS_SIGNING is off.
-    if: ${{ !cancelled() && inputs.prepare_only && needs.version.result == 'success' && needs.build-macos.result == 'success' && needs.build-linux.result == 'success' && needs.upload-windows.result == 'success' }}
+    if: ${{ !cancelled() && inputs.prepare_only && needs.version.result == 'success' && needs.swarm-flows.result == 'success' && needs.build-macos.result == 'success' && needs.build-linux.result == 'success' && needs.upload-windows.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
