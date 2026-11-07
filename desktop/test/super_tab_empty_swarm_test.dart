@@ -23,12 +23,16 @@ Finder _button(String label) => find.ancestor(
   matching: find.byWidgetPredicate((w) => w is ButtonStyleButton),
 );
 
-Future<SuperTabController> _show(
+Future<SuperTabController> showEmptySwarm(
   WidgetTester tester, {
   Map<String, dynamic>? pending,
+  Brightness brightness = Brightness.light,
 }) async {
   await tester.binding.setSurfaceSize(const Size(1500, 800));
   addTearDown(() => tester.binding.setSurfaceSize(null));
+  final previous = grid.AppTheme.brightness.value;
+  grid.AppTheme.brightness.value = brightness;
+  addTearDown(() => grid.AppTheme.brightness.value = previous);
   final server = swarm();
   server.state['projects'] = <dynamic>[];
   server.state['conversations'] = <dynamic>[];
@@ -49,7 +53,7 @@ Future<SuperTabController> _show(
   await tester.pumpWidget(
     MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: grid.buildAppTheme(brightness: Brightness.light),
+      theme: grid.buildAppTheme(brightness: brightness),
       home: Scaffold(
         body: SuperTabView(
           controller: c,
@@ -76,7 +80,7 @@ Future<SuperTabController> _show(
   return c;
 }
 
-Future<void> _end(WidgetTester tester, SuperTabController c) async {
+Future<void> endEmptySwarm(WidgetTester tester, SuperTabController c) async {
   await tester.pumpWidget(const SizedBox());
   await tester.runAsync(c.flush);
   c.dispose();
@@ -86,7 +90,7 @@ Future<void> _end(WidgetTester tester, SuperTabController c) async {
 void main() {
   testWidgets('one sentence for both ways to start, over two matching + '
       'buttons', (tester) async {
-    final c = await _show(tester);
+    final c = await showEmptySwarm(tester);
     expect(
       find.text('Start a project, or bring an agent to work with you.'),
       findsOneWidget,
@@ -106,11 +110,11 @@ void main() {
         findsOneWidget,
       );
     }
-    await _end(tester, c);
+    await endEmptySwarm(tester, c);
   });
 
   testWidgets('a pending action reads Check again', (tester) async {
-    final c = await _show(
+    final c = await showEmptySwarm(
       tester,
       pending: {
         'operationId': 'op-1',
@@ -120,6 +124,6 @@ void main() {
     expect(c.hasPendingAction, isTrue);
     expect(_button('Check again'), findsOneWidget);
     expect(find.text('Check pending action'), findsNothing);
-    await _end(tester, c);
+    await endEmptySwarm(tester, c);
   });
 }
