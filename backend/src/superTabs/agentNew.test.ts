@@ -167,4 +167,16 @@ describe('a Regular agent\'s start on its computer', () => {
     expect(code(() => f.add({ kind: 'regular', name: 'Ada' }))).toBe('HOST_OUTDATED')
     expect(f.state.starts ?? []).toEqual([])
   })
+
+  // Task #4252 (audit 11): Desktop lists a computer and creates its first agent at once, before the host has reported.
+  it('on a computer just listed, with no reading yet, says it is connecting rather than to update it', () => {
+    const f = swarm()
+    delete f.state.machines!.find(m => m.machineId === 'mate-mac')!.observation
+    for (const kind of [{ kind: 'regular', name: 'Ada' }, { kind: 'pm', projectName: 'Docs site' }]) {
+      let refusal: unknown
+      try { f.add(kind) } catch (error) { refusal = error }
+      expect(refusal).toMatchObject({ code: 'HOST_CONNECTING', message: expect.stringContaining('connecting') })
+    }
+    expect(f.state.starts ?? []).toEqual([])
+  })
 })
