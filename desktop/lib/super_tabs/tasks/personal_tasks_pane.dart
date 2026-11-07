@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../shared/theme/app_theme.dart';
-import '../../shared/widgets/app_select_field.dart';
 import '../../shared/widgets/skeleton.dart';
 import '../../widgets/desktop_chrome.dart';
 import '../../widgets/laid_out_list.dart';
@@ -13,6 +12,7 @@ import '../model.dart';
 import '../task_card.dart';
 import 'personal_task_card.dart';
 import 'personal_tasks.dart';
+import 'tasks_pane_header.dart';
 
 /// The person's active work, from the same authenticated cursor as the chat.
 class SuperTabPersonalTasksPane extends StatefulWidget {
@@ -31,10 +31,10 @@ class SuperTabPersonalTasksPane extends StatefulWidget {
   State<SuperTabPersonalTasksPane> createState() => _TasksPaneState();
 }
 
-/// Who asked, a step smaller than the agent beside it, as on a Board tile.
-const _requesterSize = 18.0;
+/// Who asked and who is doing it, both at 18 (anh Dee, 11-07).
+const _faceSize = 18.0;
 
-/// Why Approve, Reject and the approval mode are disabled while a change is unconfirmed.
+/// Why Accept, Decline and the approval mode are disabled while a change is unconfirmed.
 const _waitingWhy = 'Waiting for the last change to be confirmed';
 
 class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
@@ -103,14 +103,14 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
           : null;
       setState(() {
         if (lost) {
-          _error = 'The change is not confirmed. Retry to check it.';
+          _error = 'Not confirmed. Retry to check.';
         } else {
           _action = null;
           _operationId = null;
           if (answer == null) {
             _error = updateRequired
                 ? 'Update Harness to change Tasks.'
-                : refusal ?? 'The change was refused.';
+                : refusal ?? 'Change refused.';
           }
         }
       });
@@ -118,9 +118,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
       if (answer == null && !lost) unawaited(owner.refresh());
     } catch (_) {
       if (mounted && identical(owner, c)) {
-        setState(
-          () => _error = 'The change is not confirmed. Retry to check it.',
-        );
+        setState(() => _error = 'Not confirmed. Retry to check.');
       }
     } finally {
       if (mounted && identical(owner, c)) setState(() => _sending = false);
@@ -136,7 +134,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
         builder: (context, update) => AlertDialog(
           // Names the task, so the person knows which one they turn down.
           title: Text(
-            'Reject “${task.title}”?',
+            'Decline “${task.title}”?',
             maxLines: 3,
             overflow: TextOverflow.ellipsis,
           ),
@@ -159,7 +157,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
               onPressed: reason.text.trim().isEmpty
                   ? null
                   : () => Navigator.pop(context, reason.text.trim()),
-              child: const Text('Reject task'),
+              child: const Text('Decline'),
             ),
           ],
         ),
@@ -210,76 +208,38 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
       };
       // One filled box as large as the slot, under a see-through Material that
       // only carries the rows' ink: a Material's own surface was drawn only as
-      // far as the rows, and the window's backing showed below them.
+      // far as the rows, and the window's backing showed below them. It is the
+      // Swarm's one surface, shared with the left and middle panes (#4465).
       return ColoredBox(
-        color: Theme.of(context).colorScheme.surface,
+        color: AppPalette.swarmField,
         child: SizedBox.expand(
           child: Material(
             type: MaterialType.transparency,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: AppDesktop.groupGap,
-                    vertical: AppDesktop.controlGap,
-                  ),
-                  child: Row(
-                    children: [
-                      const Expanded(
-                        child: Text(
-                          'Tasks',
-                          style: TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                      if (supported)
-                        // Disabled as the decisions are; the shared select has no disabled state of its own.
-                        ExcludeFocus(
-                          excluding: !enabled,
-                          child: IgnorePointer(
-                            ignoring: !enabled,
-                            child: AppSelectField<String>(
-                              key: const ValueKey('tasks-approval-mode'),
-                              value: tasks!.mode,
-                              semanticLabel: 'Approval',
-                              textStyle: DesktopChrome.metadata(
-                                color: DesktopChrome.foreground,
-                              ),
-                              width: AppSelectField.fitWidth(
-                                context,
-                                labels: const ['Auto approve', 'Review'],
-                                textStyle: DesktopChrome.metadata(),
-                              ),
-                              menuWidth: 300,
-                              menuAlignedToEnd: true,
-                              options: const [
-                                SelectOption(
-                                  value: 'autoApprove',
-                                  label: 'Auto approve',
-                                  detail: 'Tasks you ask for start right away.',
-                                ),
-                                SelectOption(
-                                  value: 'review',
-                                  label: 'Review',
-                                  detail: 'Tasks you ask for wait until you approve them.',
-                                ),
-                              ],
-                              onChanged: (value) {
-                                if (value != tasks.mode) {
-                                  unawaited(
-                                    _send({
-                                      'type': 'member.approvalMode',
-                                      'mode': value,
-                                    }),
-                                  );
-                                }
-                              },
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
+                SuperTabTasksPaneHeader(
+                  mode: supported ? tasks!.mode : null,
+                  onChanged: enabled
+                      ? (mode) => unawaited(
+                          _send({'type': 'member.approvalMode', 'mode': mode}),
+                        )
+                      : null,
                 ),
+                // Offline, the rows are what was last read: said once, quietly, until the Swarm answers again.
+                if (supported && c.backendUnreachable && snapshot != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppDesktop.groupGap,
+                    ),
+                    child: Text(
+                      'May be out of date',
+                      key: const ValueKey('tasks-stale'),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
                 if (_error != null)
                   Padding(
                     padding: const EdgeInsets.symmetric(
@@ -316,18 +276,11 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                           : 'Update Harness to use Tasks.',
                     ),
                   )
-                else
+                else if (supported)
                   Expanded(
+                    // Empty means empty (anh Dee's rule 7, task #4465).
                     child: tasks!.rows.isEmpty
-                        ? const Center(
-                            child: Padding(
-                              padding: EdgeInsets.all(AppDesktop.groupGap),
-                              child: Text(
-                                'No tasks yet. Tasks your agents start or propose show here.',
-                                textAlign: TextAlign.center,
-                              ),
-                            ),
-                          )
+                        ? const SizedBox.shrink()
                         : NotificationListener<ScrollNotification>(
                             onNotification: _onScroll,
                             child: LaidOutListView.builder(
@@ -359,7 +312,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                                         : person != null
                                         ? SuperTabAvatar.person(
                                             person,
-                                            size: _requesterSize,
+                                            size: _faceSize,
                                           )
                                         : SuperTabAvatar(
                                             identity:
@@ -368,7 +321,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                                                 task.requester['name']
                                                     as String? ??
                                                 'Person',
-                                            size: _requesterSize,
+                                            size: _faceSize,
                                             picture:
                                                 SuperTabAvatarPicture.fromJson(
                                                   task.requester['avatar'],
@@ -383,7 +336,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                                                 agent?.name ??
                                                 task.agent['name'] as String? ??
                                                 'Agent',
-                                            size: SuperTabAvatar.rowSize,
+                                            size: _faceSize,
                                             picture:
                                                 agent?.avatar ??
                                                 SuperTabAvatarPicture.fromJson(
@@ -466,8 +419,8 @@ class _SkeletonCards extends StatelessWidget {
         child: DecoratedBox(
           decoration: BoxDecoration(
             color: AppCard.base,
-            borderRadius: BorderRadius.circular(AppCard.insetRadius),
-            border: Border.all(color: AppCard.insetHair),
+            borderRadius: BorderRadius.circular(AppDesktop.rowRadius),
+            border: Border.all(color: DesktopChrome.rim),
           ),
           child: Padding(
             padding: const EdgeInsets.all(SuperTabTaskCard.tilePadding),
@@ -477,7 +430,8 @@ class _SkeletonCards extends StatelessWidget {
                 Skeleton(
                   width: 64 + 16.0 * (i % 3),
                   height: 16,
-                  radius: AppDesktop.paneCloseInset,
+                  // The project's capsule.
+                  radius: 8,
                 ),
                 const SizedBox(height: AppDesktop.controlGap),
                 SkeletonText(style: title, widthFactor: .9 - .1 * (i % 2)),
@@ -485,9 +439,9 @@ class _SkeletonCards extends StatelessWidget {
                 const SizedBox(height: AppDesktop.controlGap),
                 const Row(
                   children: [
-                    Skeleton.circle(size: _requesterSize),
+                    Skeleton.circle(size: _faceSize),
                     SizedBox(width: AppDesktop.listRowGap * 2),
-                    Skeleton.circle(size: SuperTabAvatar.rowSize),
+                    Skeleton.circle(size: _faceSize),
                   ],
                 ),
               ],
