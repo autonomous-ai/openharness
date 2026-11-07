@@ -4079,7 +4079,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           : state.projects ? { projectId: groupProject(state, group).id } : {}),
         ...(start.request.buddyScope ? { buddyScope: start.request.buddyScope } : {}),
         ...(start.request.regular ? { regular: true as const } : {}),
-        ...(start.request.helperOf ? { helperOf: start.request.helperOf.agentId } : {}),
+        ...(start.request.member ? { member: start.request.member } : {}),
+        ...(start.request.helperOf ? { helperOf: start.request.helperOf } : {}),
         ...(start.request.mainProjectId ? { mainProjectId: start.request.mainProjectId } : {}),
         ...(start.request.buddyNarrow ? { buddyNarrow: true as const } : {}),
         machineOwnerId: start.machineOwnerId, contributorId: start.contributorId, membershipGeneration: start.membershipGeneration,
@@ -5122,7 +5123,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const member = memberOf(state, requester.id, project.id)?.agent ?? fail('NO_MEMBER', 'Its person has no Member in this project yet.', 409)
       // One helper per task: a second ask while it starts, or once it runs here, changes nothing.
       if ((state.starts ?? []).some(s => s.request.helperOf && s.request.conversationId === group.id && !s.error && !s.poolSettled)
-        || state.agents.some(a => a.helperOf === member.id && group.agentIds.includes(a.id) && a.workDecision !== 'stop')) {
+        || state.agents.some(a => a.helperOf?.agentId === member.id && group.agentIds.includes(a.id) && a.workDecision !== 'stop')) {
         ignored()
         break
       }

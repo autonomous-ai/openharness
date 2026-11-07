@@ -86,7 +86,7 @@ export const HELPER_REFUSALS: Record<'overlap' | 'room' | 'quota', string> = {
 
 /** The paths owned by the work [member] and its helpers have running, or null when one names none to compare. */
 function runningPaths(state: SuperTabState, member: Agent): string[] | null {
-  const team = new Set(state.agents.filter(a => a.id === member.id || a.helperOf === member.id).map(a => a.id))
+  const team = new Set(state.agents.filter(a => a.id === member.id || a.helperOf?.agentId === member.id).map(a => a.id))
   const paths = state.conversations.filter(c => activeWork(c) && team.has(c.assignment!.agentId)).map(c => (c.task?.owns ?? []).map(ownedPath))
   return paths.some(p => !p.length || p.includes(null)) ? null : paths.flat() as string[]
 }
@@ -127,7 +127,7 @@ export function memberPlan(state: SuperTabState, projectId: string, now: number)
     if (!member) { out.push({ kind: 'start', conversationId: queue[0]!.id }); continue }
     const lead = member.agent
     if (!lead) continue
-    const helpers = state.agents.filter(a => a.helperOf === lead.id && a.workDecision !== 'stop')
+    const helpers = state.agents.filter(a => a.helperOf?.agentId === lead.id && a.workDecision !== 'stop')
     const used = new Set<string>(), planned = { paths: [] as string[], slots: 0 }
     const take = (task: Conversation, agent: Agent) => { out.push({ kind: 'assign', conversationId: task.id, agentId: agent.id }); used.add(agent.id); planned.paths.push(...ownPaths(task)) }
     const memberFree = freeAgent(state, lead, now) && setUpReady(state, lead, projectId)

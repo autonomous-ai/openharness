@@ -163,9 +163,10 @@ export interface Agent {
    *  joined. Readers get it in the derived row, never in this part (read/views.ts), and only when they read that project. A
    *  Lead's is the project it leads, derived (agentKind.ts ledProjects). Cleared when the project is deleted. */
   mainProjectId?: string
-  /** The Member this helper helps (members.ts, task #4697): a helper takes its Member's person's tasks in that project, and
-   *  stops when none waits. */
-  helperOf?: string
+  /** A Member's own mark (members.ts, task #4697), and a helper's: the Member it helps. Set by the server alone, at its start;
+   *  its host reads them in the agent's row to reopen a woken one in its folder (#4698). */
+  member?: { projectId: string }
+  helperOf?: { agentId: string; harnessId: string }
   /** Its project set up on its computer, as its own host reported (agent.setUp, #4698): the commands it ran, or why it failed.
    *  A Member on a host that reports it takes no task until it is set up (members.ts setUpReady). */
   setUp?: { projectId: string; at: number; steps?: string[]; failed?: string }

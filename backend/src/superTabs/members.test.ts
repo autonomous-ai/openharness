@@ -5,6 +5,8 @@ import { createSuperTab, SuperTabError, type Actor, type SuperTabState } from '.
 import { helperCheck, memberPlan, memberQueue } from './members.js'
 import { dispatchPlan, DISPATCH_RULES } from './dispatch.js'
 import { touchesFor } from './parts/touches.js'
+import * as store from './parts/index.js'
+import { readerView } from './read/views.js'
 
 // Task #4697 (anh Dee 11-07 21:20, card #4693 part A): one Member per person and project, made on their first accepted task
 // there; that project's tasks they ask for go to it one at a time; helpers only by three checks; every asked task needs
@@ -195,6 +197,13 @@ describe('the Member', () => {
   })
 
   // The host contract of #4698 (Threadland): a host that says memberSetUp reports the project set up before work comes.
+  // Its mark names its project, which may be private: readers never get it, as its main project's id (read/views.ts).
+  it('keeps its mark out of what readers get, its host alone reads it', () => {
+    const { f, member } = withMember()
+    const parts = readerView(store.split(f.state, { tabId: 'tab', version: 9_000, now: NOW }), owner, NOW, { teamMachines: [] }).parts
+    expect(parts.agents.find(a => a.key === member)?.data).not.toHaveProperty('member')
+  })
+
   it('waits for its set-up on a host that reports one, and is refused another agent\'s report', () => {
     const f = swarm()
     f.state.machines!.find(m => m.machineId === 'kai-mac')!.observation!.capabilities!.push('memberSetUp')
