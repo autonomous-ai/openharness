@@ -126,47 +126,27 @@ the Member's task home, one per project, reused by later starts, and reports wha
   reported leaves `setUp` and `projectsHeld` unless a start for it is pending; at most 5 kept.
 - [ ] FAIL, implement, PASS, commit as above.
 
-### Task 4: The host runs a task session in the Member's task home (CLI)
+### Task 4: The host runs a task session in its Member's own worktree (CLI)
 
-**Files:**
-- Modify: `cli/src/superTabs/agentFolder.ts` (`taskHomeFor(root, memberId)`, `taskWorktreeName(project, platform)`)
-- Modify: `cli/src/superTabs/start.ts` (a `memberOf` start: its cwd is the project's worktree in the task home, reused when
-  there)
-- Test: `cli/src/superTabs/agentFolder.spec.ts`, `cli/src/superTabs/start.spec.ts`
+The task home is the Member's worktrees, one per project, kept in this machine's record `member-worktrees-<machine>.json`
+(memberHome.ts), never in its chat home. The first set-up makes one through the daemon's own worktree path (trusted and
+cleaned like any Harness worktree), on branch `m/<project id, 8>-<start id, 8>`, so its folder is 17 characters on every
+platform; a stopped task session leaves it; a later start for that Member and project works in it.
 
-**Interfaces:**
-- Produces: `taskHomeFor(root: string, memberId: string): string` (`<root>/worktrees/agent-home/<member folder>`);
-  `taskWorktreeName(project: { id: string; name: string }, platform = process.platform): string` (win32: id cut to 8);
-  `prepareTaskWorktree(home, project, source, git): Promise<string>`.
-
-- [ ] Failing tests: the folder name per platform; a first start makes the task home (marked, trusted alone) and a
-  worktree of the project's clone in it; a second start for the same Member and project reuses it; the chat home holds no
-  task worktree; a link in place of the worktree is refused.
-- [ ] Run `cd cli && npx vitest run src/superTabs/agentFolder.spec.ts src/superTabs/start.spec.ts`: FAIL.
-- [ ] Implement; PASS; commit test, then code.
+**Files:** Create `cli/src/superTabs/memberHome.ts`; modify `cli/src/superTabs/start.ts`, `cli/src/superTabs/machines.ts`.
+**Tests:** `memberHome.spec.ts`, `start.spec.ts` (the folder), `machines.spec.ts` (reuse).
 
 ### Task 5: The host says memberProjects and reports its disk and set-ups (CLI)
 
-**Files:**
-- Modify: `cli/src/superTabs/machines.ts` (capability, `projectsOnDisk`, `memberSetUp`, the older-backend fallback)
-- Modify: `cli/src/superTabs/buddyHome.ts` (`buddyHomeProjectIds(home)`: the copies' project ids from its manifest)
-- Modify: `cli/src/superTabs/host.ts` (hands the task homes and clone root to the report)
-- Test: `cli/src/superTabs/machines.spec.ts`, `cli/src/superTabs/buddyHome.spec.ts`
-
-- [ ] Failing tests: the capability list has `memberProjects`; the report lists the clone folders', chat copies' and task
-  worktrees' project ids; `memberSetUp` maps each Member's harness id to its task worktrees' projects; an older backend
-  refusing the fields gets the reading without them.
-- [ ] FAIL, implement, PASS, commit.
+`memberProjects` in its capabilities; to a backend that asks (`memberProjectsWanted`), `memberSetUp` per Member and
+`projectsOnDisk`: its clones, every Buddy home's copies (`buddyHomesProjectIds`) and Members' worktrees; left out while its
+clones are not read yet. **Files:** `machines.ts`, `buddyHome.ts`, backend `read/hostRows.ts`. **Tests:** `machines.spec.ts`,
+`buddyHome.spec.ts`.
 
 ### Task 6: The sixth project's drop (CLI)
 
-**Files:**
-- Modify: `cli/src/superTabs/start.ts` (a start naming `dropProjectId` removes that worktree first)
-- Test: `cli/src/superTabs/start.spec.ts`
-
-- [ ] Failing tests: a clean, pushed worktree is removed before the new one is made; one with uncommitted or unpushed work
-  fails the start with "The oldest project folder still has unpushed work." and makes nothing.
-- [ ] FAIL, implement, PASS, commit.
+A start naming `dropProjectId` removes that worktree first by the stopped worker's rule (`sweepOne`), or fails with "The
+oldest project folder still has unpushed work." and makes nothing. **Files:** `machines.ts`. **Tests:** `machines.spec.ts`.
 
 ### Finally
 

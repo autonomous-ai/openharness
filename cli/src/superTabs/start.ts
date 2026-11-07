@@ -8,11 +8,12 @@ import { admission, quotaOf, type Requirements } from './capacity.js'
 import { groupSkillMode, identifier, object } from './host.js'
 import { isSwarmSkillMode, swarmSkillUse, wireRole, type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { isTeamDaemon, pmEngineHome } from './teamDaemon.js'
+import { memberBranch } from './memberHome.js'
 import { agentFolderFor, prepareAgentFolder, temporaryFolder } from './agentFolder.js'
 import { BUDDY_COPIES_FILE, BUDDY_HOMES, buddyProjectsOf, prepareBuddyHome, trustBuddyHome } from './buddyHome.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
-import { join as joinPath } from 'node:path'
+import { isAbsolute, join as joinPath } from 'node:path'
 import { markBuddyOwner } from '../lib/buddyGuard.js'
 import { engineAccount } from '../lib/engineAccount.js'
 
@@ -443,6 +444,10 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
         try { await prepareAgentFolder(agentFolder, request.engine) }
         catch { return { error: 'START_FAILED', startId, detail: 'This agent\'s folder could not be made safely on this machine.' } }
       }
+      // A Member's task session (backend taskSessions.ts, task #4543): in its Member's own worktree of its one project, never its
+      // chat home. Its first set-up there makes it on a short branch named for the project; its host passes the one it holds since.
+      const memberProject = !buddy && identifier(request.memberOf) && identifier(object(request.memberProject).id) ? String(object(request.memberProject).id) : null
+      const memberFolder = memberProject && typeof input.memberFolder === 'string' && isAbsolute(input.memberFolder) ? input.memberFolder : null
       // A project's Product Manager (backend leadStart.ts): the Lead of its project's conversation once it runs.
       const lead = !buddy && !!request.leadFor && typeof request.leadFor === 'object'
       const handoffNote = lead && typeof request.handoffNote === 'string' && request.handoffNote.length <= 32_000
@@ -479,7 +484,8 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
           : home ? swarmBuddyPrompt(String(input.tabId), String(request.conversationId), home, mode)
           : buddyPrompt(String(input.tabId), String(request.conversationId), mode))
           : `${lead ? leadPrompt(String(input.tabId), String(request.conversationId), roleName) : workerPrompt(String(input.tabId), String(request.conversationId), roleName)}${github ? ` ${githubPromptLine()}` : ''}${handoffPrompt}`,
-        ...(homeFolder ? { cwd: homeFolder } : agentFolder ? { cwd: agentFolder } : request.worktree ? { projectSource: 'worktree', gitSource: request.cwd, branchName: `super-tab/${startId}`,
+        ...(homeFolder ? { cwd: homeFolder } : agentFolder ? { cwd: agentFolder } : memberFolder ? { cwd: memberFolder } : request.worktree ? { projectSource: 'worktree', gitSource: request.cwd,
+          branchName: memberProject ? memberBranch(memberProject, String(startId)) : `super-tab/${startId}`,
           // No branch named: the repository's default branch, fetched, not the host checkout's old HEAD.
           ...(request.branchRef ? { branchRef: request.branchRef } : { branchBase: 'default' }) } : { cwd: request.cwd }),
       }

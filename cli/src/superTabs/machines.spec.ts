@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
@@ -3270,7 +3270,7 @@ describe('a Member\'s task sessions on this machine', () => {
     const data = mkdtempSync(join(tmpdir(), 'member-data-')); roots.push(data)
     Object.assign(f.core, { dataDir: data })
     const clone = join(data, 'clone'); mkdirSync(clone); git(clone, 'init', '-q'); git(clone, 'commit', '-q', '--allow-empty', '-m', 'init')
-    const path = join(projectsRoot(), 'worktrees', 'clone', 'm-p-old-old-star'); roots.push(path)
+    const path = join(projectsRoot(), 'worktrees', basename(data), 'p-old-old-star'); roots.push(dirname(path))
     git(clone, 'worktree', 'add', '-q', '-b', 'm/p-old-old-star', path)
     const file = memberWorktreesFile(data, 'host')
     writeMemberWorktrees(file, [{ tabId: 'tab', memberId: 'member-1', projectId: 'p-old', startId: 'old-start', source: clone, path }])
