@@ -50,7 +50,7 @@ Widget superTabMessageAvatar(
     identity: '${message.author['kind']}:${message.authorId}',
     name: message.fromAgent ? author : superTabPersonName(message.authorName),
     size: size,
-    pattern: message.fromAgent,
+    face: message.fromAgent,
   );
 }
 
@@ -1199,7 +1199,7 @@ class SuperTabThreadLine extends StatelessWidget {
           ? (author['displayName'] ?? author['name'] ?? 'Agent') as String
           : superTabPersonName(author['name'] as String? ?? ''),
       size: size,
-      pattern: kind == 'agent',
+      face: kind == 'agent',
     );
   }
 

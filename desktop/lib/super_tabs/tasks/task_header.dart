@@ -112,7 +112,7 @@ class SuperTabTaskHeader extends StatelessWidget {
                       picture: SuperTabAvatarPicture.fromJson(
                         task.agent['avatar'],
                       ),
-                      pattern: true,
+                      face: true,
                     ),
                   words(
                     agent?.displayName ??
