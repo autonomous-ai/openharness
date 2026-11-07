@@ -383,8 +383,45 @@ describe('runtime pane parsing', () => {
     // while somebody is mid-sentence.
     expect(inspectRuntimePane('pi', piGridIdle.replace('\n\n', '\n/model something\n')))
       .toMatchObject({ idle: false, draft: true })
-    // And a picker over that same footer is still a dialog, not idleness.
-    expect(inspectRuntimePane('pi', `Type to search\n${piGridIdle}`))
+    // A picker over that same footer is scrollback, not a dialog: pi draws an open picker with the
+    // composer box GONE, so text above a box that is on screen belongs to an earlier one. Read as a
+    // dialog it held the pane not-idle for good. See the next test for the captured open picker.
+  })
+
+  it('reads an open Pi picker off the captured pane, and not off scrollback above the composer', () => {
+    // Pi's picker REPLACES the composer box: this is the pane as captured (pi/runtimeProfile.spec.ts,
+    // `other-screens.golden.json`), with neither rule nor footer on screen. That shape is the one the
+    // picker text has to be found in.
+    expect(inspectRuntimePane('pi', [
+      'Thinking Level',
+      'Select reasoning depth for thinking-capable models',
+      '  off         No reasoning',
+      '  low         Light reasoning (~2k tokens)',
+      '→ medium      Moderate reasoning (~8k tokens)',
+      '  high        Deep reasoning (~16k tokens)',
+    ].join('\n'))).toMatchObject({ idle: false, dialog: true, draft: false })
+
+    // The same text left ABOVE a composer that is on screen is scrollback from an earlier picker, and
+    // the generic reader already scopes it away for every other engine (kit/pane.ts `currentPaneUi`).
+    // Read here, it held the pane not-idle for good: no model switch and no team delivery over a
+    // composer nobody was typing in.
+    const rule = '─'.repeat(44)
+    const piIdle = [
+      'Thinking Level',
+      'Select reasoning depth for thinking-capable models',
+      '→ medium      Moderate reasoning (~8k tokens)',
+      rule,
+      '',
+      rule,
+      '~/KloveY/sandbox (main)',
+      '↑5.4k ↓292 1.5%/200k (auto)                                       Auto',
+    ].join('\n')
+    expect(inspectRuntimePane('pi', piIdle)).toMatchObject({ idle: true, dialog: false, draft: false })
+    // A draft in that same composer is still a draft.
+    expect(inspectRuntimePane('pi', piIdle.replace('\n\n', '\n/model something\n')))
+      .toMatchObject({ idle: false, draft: true })
+    // And a picker drawn INSIDE the box is still a dialog.
+    expect(inspectRuntimePane('pi', piIdle.replace('\n\n', '\nType to search\n')))
       .toMatchObject({ idle: false, dialog: true })
   })
 
