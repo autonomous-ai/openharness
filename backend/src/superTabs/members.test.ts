@@ -327,6 +327,9 @@ describe('a helper', () => {
     const helper = f.run({ type: 'agent.started', startId: start.id, harnessId: 'h-helper',
       configuration: { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null } }, kai, own).result.agentId as string
     f.run({ type: 'agent.startSettled', startId: start.id, warning: null }, kai, own)
+    // Its host tells a Member and a helper from other agents by these, set by the server alone (#4698).
+    expect(f.state.agents.find(a => a.id === helper)!.helperOf).toEqual({ agentId: f.state.agents.find(a => a.member)!.id, harnessId: 'h-member' })
+    expect(f.state.agents.find(a => a.member)!.member).toEqual({ projectId: lamp })
     expect(memberPlan(f.state, lamp, NOW)).toEqual([{ kind: 'assign', conversationId: waiting, agentId: helper }])
     f.run({ type: 'work.assign', conversationId: waiting, agentId: helper }, owner)
     const assignmentId = f.group(waiting).assignment!.id
