@@ -114,12 +114,12 @@ describe('a remote client, as the core hears it', () => {
     // A colleague the machine is shared with is a guest (core/guestPolicy.ts): never the owner, whatever it says. Its
     // `dsh_list` is refused before any service hears it; what a guest may ask is asked as that guest.
     await dispatchDown(socket, colleague.seal('dsh_list', { requestId: 'c', owner: true, local: true, accountOwner: true }), 'colleague')
-    await dispatchDown(socket, colleague.seal('usage_read', { requestId: 'u', owner: true, local: true, accountOwner: true }), 'colleague')
+    await dispatchDown(socket, colleague.seal('guest_folders', { requestId: 'u', owner: true, local: true, accountOwner: true }), 'colleague')
     // With the connection and the request id it asked under, which a service keys a connection's own work by.
     expect(asked).toEqual([
       { type: 'dsh_list', asker: { local: false, owner: true, accountOwner: true, connection: 'phone-1', requestId: 'p' } },
       { type: 'dsh_list', asker: { local: false, owner: false, accountOwner: false, connection: 'dial-1', requestId: 'd' } },
-      { type: 'usage_read', asker: expect.objectContaining({ local: false, owner: false, accountOwner: false, connection: 'colleague', requestId: 'u' }) },
+      { type: 'guest_folders', asker: expect.objectContaining({ local: false, owner: false, accountOwner: false, connection: 'colleague', requestId: 'u' }) },
     ])
     await socket.stop()
   })
