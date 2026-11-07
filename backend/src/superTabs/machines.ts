@@ -815,8 +815,9 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   // A person's one Buddy chat has no project (Dee, 10-31): its project session works in the one it names, and its main Buddy
   // and plain sessions in none, in their own folder (buddyHomeFolder).
   const group = forProject ? undefined : conversation(state, request.conversationId)
-  // A Regular agent's own chat has none either (agent.new, task #4116): it starts in its person's home folder.
-  const project = forProject ?? (isAgentChat(group!) ? undefined : !isSwarmBuddyChat(group!) ? groupProject(state, group!)
+  // A Regular agent's own chat has none either (agent.new, task #4116): it starts in its person's home folder. A Member's start
+  // names its project (members.ts, task #4697), and starts in that project's folder as any project agent does (#4698).
+  const project = forProject ?? (request.member ? projectOf(state, request.member.projectId) : isAgentChat(group!) ? undefined : !isSwarmBuddyChat(group!) ? groupProject(state, group!)
     : request.buddySession?.projectId ? projectOf(state, request.buddySession.projectId) : undefined)
   if (project && !pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
   // Kept by its owner for other projects: a Product Manager too. A Buddy is its owner's own (commands.ts buddy.create).

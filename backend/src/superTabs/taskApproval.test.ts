@@ -63,9 +63,9 @@ describe('personal approval enforced before work', () => {
     expect(() => f.runCommand({ type: 'agent.add', conversationId: id, machineId: 'host', harnessId: 'external', name: 'External',
       configuration: { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null }, lead: false }, owner,
       { contribution: { machineOwnerId: owner.userId, contributorId: owner.userId } })).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
-    f.mode('autoApprove')
+    // Accept all stays off without an API account (task #4697; members.test.ts covers one with): the task still waits.
+    expect(() => f.mode('autoApprove')).toThrow(expect.objectContaining({ code: 'ACCEPT_ALL_SUBSCRIPTION' }))
     expect(f.card(id).taskApproval?.state).toBe('proposal')
-    expect(f.card(f.create()).taskApproval).toBeUndefined()
   })
   it('lets the PM suggest, lets the requester change it, and assigns only their approved choice', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
@@ -148,8 +148,9 @@ describe('personal approval enforced before work', () => {
     expect(() => f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm))
       .toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
     f.runCommand({ type: 'task.approve', conversationId: id })
-    f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm)
-    expect(f.card(id).assignment?.agentId).toBe(f.candidate)
+    // Accepted, it is the requester's ask: another person's agent never takes it by hand (security review 2 of #3575).
+    expect(() => f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm))
+      .toThrow(expect.objectContaining({ code: 'ASKED_BY_ANOTHER' }))
   })
   it('refuses attribution to a Review requester after assignment without changing the existing task', () => {
     const f = fixture()

@@ -163,6 +163,13 @@ export interface Agent {
    *  joined. Readers get it in the derived row, never in this part (read/views.ts), and only when they read that project. A
    *  Lead's is the project it leads, derived (agentKind.ts ledProjects). Cleared when the project is deleted. */
   mainProjectId?: string
+  /** A Member's own mark (members.ts, task #4697), and a helper's: the Member it helps. Set by the server alone, at its start;
+   *  its host reads them in the agent's row to reopen a woken one in its folder (#4698). */
+  member?: { projectId: string }
+  helperOf?: { agentId: string; harnessId: string }
+  /** Its project set up on its computer, as its own host reported (agent.setUp, #4698): the commands it ran, or why it failed.
+   *  A Member on a host that reports it takes no task until it is set up (members.ts setUpReady). */
+  setUp?: { projectId: string; at: number; steps?: string[]; failed?: string }
   /** The private project a Regular agent first worked in: its one conversation holds that project's content, so it takes tasks
    *  only there from then on (projects.ts regularMayWorkIn; security review 2 of #4116). Set at its assignment, never cleared. */
   privateProjectId?: string
@@ -222,6 +229,14 @@ export interface AgentStartRequest {
   regular?: true
   /** The main project its person picked (agent.new, buddy.create; task #4540), kept on the agent when it starts. */
   mainProjectId?: string
+  /** A Member's own start (members.ts, task #4697): its host sets the project up once in this folder. Written by the server
+   *  alone, with `regular` and `mainProjectId`. */
+  member?: { projectId: string }
+  /** A helper's start (members.ts): made from its Member's ready setup on the Member's computer, for the task it starts
+   *  in. Written by the server alone. */
+  helperOf?: { agentId: string; harnessId: string }
+  /** The commands its Member recorded setting the project up (agent.setUp), for a helper's host to repeat. */
+  setUpSteps?: string[]
   /** A one-project Buddy's start (Agent.buddyNarrow), written by message.send alone. */
   buddyNarrow?: true
   /** The person's messages in an older project chat its start waits on, delivered when it joins (ids only). */

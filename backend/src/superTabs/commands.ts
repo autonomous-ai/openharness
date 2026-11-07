@@ -11,6 +11,8 @@ import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from 
 import { admitByRoom, admitMachineStart, AGENT_MEMORY_BYTES, noRepositoryStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamAccountPool, teamPoolsOf, teamWorkCheck, TEAM_ACCOUNTS_GONE, NOT_YOUR_COMPUTER, type ContributedMachine } from './machines.js'
 import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
+import { acceptedByRequester, ACCEPT_ALL_REFUSAL, askedByAnother, HELPER_REFUSALS, helperCheck, mayAcceptAll, memberMachine, memberOf, memberQueue } from './members.js'
+import { ownedPath, pathsOverlap } from './ownedPaths.js'
 import { addedAgentName, newAgentName, renameAgentTo } from './agentRename.js'
 import { addCrew, CREW_ROLE_MAX, removeCrew } from './crew.js'
 import { noteIndex } from './processNotes.js'
@@ -424,6 +426,14 @@ export const commandSchema = z.discriminatedUnion('type', [
     // A Member its person's Desktop starts itself through Cmd-N (task #4196): only its chat opens here; agent.add brings in the session.
     local: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
+  // A Member for a waiting task's requester (members.ts, task #4697): sent by the dispatch pass as the project's coordinator.
+  z.object({ type: z.literal('member.start'), conversationId: id }).strict(),
+  // A helper for a waiting task while its Member is busy, only by the three checks (members.ts helperCheck): the dispatch pass's.
+  z.object({ type: z.literal('member.helper'), conversationId: id }).strict(),
+  // A Member's own host reports its project set up, with the commands it ran for a helper to repeat, or why it failed (#4698).
+  // ok true with its steps, ok false with its reason (checked in its handler).
+  z.object({ type: z.literal('agent.setUp'), projectId: id, ok: z.boolean(), steps: z.array(z.string().trim().min(1).max(300)).max(10).optional(),
+    reason: z.string().trim().min(1).max(500).optional() }).strict(),
   z.object({ type: z.literal('agent.started'), startId: id, harnessId: id, configuration,
     startedSession: z.object({ sessionId: id, createdAt: z.iso.datetime() }).strict().optional() }).strict(),
   // `configuration`: what the agent runs as its start last saw it, so work assigned after the settle records its model (CLI
@@ -561,6 +571,7 @@ export const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'member.username': ['username'],
   'agent.add': ['name', 'initialMessage', 'roleName'],
   'agent.new': ['name', 'projectName'],
+  'agent.setUp': ['steps[]', 'reason'],
   'buddy.create': ['name', 'setup.name'],
   'agent.rename': ['name'],
   'crew.add': ['role', 'lane'],
@@ -859,12 +870,6 @@ export function mayResumeStart(state: SuperTabState, actor: Actor, start: AgentS
   return !!group && !isLeads(group) && !isSwarmBuddyChat(group) && ledProject(state, actor.agentId)?.id === groupProject(state, group).id
 }
 
-/** The repo path an owns entry names, or null for anything else (a phrase, a glob), which is never compared. */
-function ownedPath(entry: string): string | null {
-  const path = entry.trim().replace(/^\.\//, '').replace(/\/+$/, '')
-  return /^[\w.@-]+(\/[\w.@-]+)*$/.test(path) ? path : null
-}
-const pathsOverlap = (a: string, b: string) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)
 
 /** A project's Lead (Product Manager) leaves only with its project: every other removal path refuses it. */
 function protectLead(state: SuperTabState, agentId: string, actor: Actor): void {
@@ -1851,6 +1856,56 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       assignment: null, lastMessageSequence: 0, audience: { people: [{ id: me.id, generation: me.generation }] } })
     return chatId
   }
+  /** The first Accept of [personId] in [group]'s project starts their Member there (members.ts, task #4697): on their own
+   *  computer and account, named "<name> · <project>", in a chat of its own with them. With no such computer the task's chat
+   *  says so, and the task waits: nothing is refused, since the Accept stands. */
+  const startMember = (group: Conversation, personId: string) => {
+    const project = groupProject(state, group)
+    if (memberOf(state, personId, project.id)) return
+    const owner = person(state, personId)
+    const pool = memberMachine(state, personId, REGULAR_AGENT_CAPABILITY)
+    const who = owner.name ?? owner.email.split('@')[0]
+    const none = () => message(group.id, `${who} has no computer in this Swarm to run their agent for ${project.name}. This task waits until they open Harness on one.`, [], null, SYSTEM_ROW, undefined, undefined, undefined, stableId(operationId, 'member-line'))
+    if (!pool) return none()
+    const name = `${newAgentName(state, actor, undefined, stableId(operationId, 'member'))} · ${project.name}`
+    if ((state.starts ?? []).filter(s => !s.harnessId && !s.error).length >= 32) {
+      return message(group.id, `Too many agents are starting in this Swarm to start ${who}'s agent for ${project.name} now. This task waits, and the next pass tries again.`,
+        [], null, SYSTEM_ROW, undefined, undefined, undefined, stableId(operationId, 'member-line'))
+    }
+    const chatId = openAgentChat(owner, name)
+    const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: pool.engines[0]!, name,
+      // Its project's folder with a worktree, as any project agent's (machines.ts admitMachineStart reads `member`): its host
+      // copies a helper from it, and reopens it in place after a sleep (#4698).
+      cwd: projectFolder(pool, project), worktree: true, requirements: { ...BUDDY_REQUIREMENTS, memoryBytes: AGENT_MEMORY_BYTES },
+      regular: true, mainProjectId: project.id, member: { projectId: project.id } }
+    let admitted: ReturnType<typeof admitMachineStart>
+    try { admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines) } catch (error) {
+      if (!(error instanceof SuperTabError)) throw error
+      // Refused: its chat goes with it, so nothing is left behind for a start that never was.
+      state.conversations = state.conversations.filter(c => c.id !== chatId)
+      return message(group.id, `Could not start ${who}'s agent for ${project.name}: ${error.message}`, [], null, SYSTEM_ROW, undefined, undefined, undefined,
+        stableId(operationId, 'member-line'))
+    }
+    state.starts ??= []
+    const id = stableId(operationId, 'member')
+    state.starts.push({ poolGeneration: admitted!.generation, id, creationId: `super-${id}`, actorKey: actorKey(actor), contributorId: owner.id,
+      membershipGeneration: owner.generation, machineOwnerId: owner.id, hostGrant: null, request, harnessId: null, dispatched: false, error: null,
+      requestedAt: context.now })
+  }
+  /** [personId]'s Member's helpers that hold no task stop once that person's queue in [projectId] is empty (members.ts; review of
+   *  #3575): whoever took the last task, a helper that finished earlier never sits idle on their computer. Its host closes it and
+   *  drops its worktree (#4698). */
+  const stopIdleHelpers = (personId: string, projectId: string) => {
+    if (memberQueue(state, projectId, personId, context.now).length) return
+    const member = memberOf(state, personId, projectId)?.agent
+    if (!member) return
+    for (const helper of state.agents) {
+      if (helper.helperOf?.agentId !== member.id || helper.workDecision === 'stop') continue
+      if (state.conversations.some(c => c.assignment?.agentId === helper.id && occupiesAgent(c))) continue
+      helper.workDecision = 'stop'
+      helper.releaseId = stableId(operationId, helper.id)
+    }
+  }
   const addBuddyMachine = (machineId: string, setup: NonNullable<Extract<Command, { type: 'buddy.create' }>['setup']>, me: { id: string; generation: string }) => {
     // Its last Buddy's folders are still being deleted there: a new one would lose its own (machine.contribute does the same).
     if (state.machineCleanups?.some(c => c.machineId === machineId)) {
@@ -1970,6 +2025,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
     pausedTask(group)
     if (activeWork(group)) fail('WORK_ACTIVE', 'The current assignment must finish or be reconciled before reassignment.')
+    // A person's accepted ask runs under their own login alone, by every path, a Lead's pick by hand included (members.ts
+    // askedByAnother; security review 2 of #3575), unless they approved that very agent when it was suggested to them
+    // (task.suggest, #4217): their own choice. Its review steps are anyone's to review, as before.
+    // A suggestion goes back to its person to approve, so only an assignment is refused.
+    if (!suggestion && !group.reviewOf && group.taskApproval?.suggestedAgentId !== worker.id && askedByAnother(state, group, worker)) {
+      fail('ASKED_BY_ANOTHER', 'This task is another person\'s accepted ask: only their own agents take it.', 403)
+    }
     // A review step is never its task's builder's, and a security review never the other one's reviewer, by any path (task
     // #4534: #3542 and #3545 each waited 20-30 minutes on a refused step). The refusal says who may take it now.
     const task = isReview(group) ? state.conversations.find(c => c.id === group.reviewOf) : undefined
@@ -4113,6 +4175,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           : state.projects ? { projectId: groupProject(state, group).id } : {}),
         ...(start.request.buddyScope ? { buddyScope: start.request.buddyScope } : {}),
         ...(start.request.regular ? { regular: true as const } : {}),
+        ...(start.request.member ? { member: start.request.member } : {}),
+        // A private main project ties it there from its start, not its first task (security review 2 of #3575): it carries the
+        // project's name, so no other project's Lead sees it or gives it work once its person stops reading the project.
+        ...(start.request.mainProjectId && projectsOf(state).find(p => p.id === start.request.mainProjectId)?.visibility === 'private'
+          ? { privateProjectId: start.request.mainProjectId } : {}),
+        ...(start.request.helperOf ? { helperOf: start.request.helperOf } : {}),
         ...(start.request.mainProjectId ? { mainProjectId: start.request.mainProjectId } : {}),
         ...(start.request.buddyNarrow ? { buddyNarrow: true as const } : {}),
         machineOwnerId: start.machineOwnerId, contributorId: start.contributorId, membershipGeneration: start.membershipGeneration,
@@ -4907,6 +4975,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     case 'member.approvalMode': {
       if (actor.kind !== 'person') fail('TASK_APPROVAL_FORBIDDEN', 'Choose your mode as a person.', 403)
+      if (command.mode === 'autoApprove' && !mayAcceptAll(state, actor.userId)) fail('ACCEPT_ALL_SUBSCRIPTION', ACCEPT_ALL_REFUSAL, 409)
       person(state, actor.userId).approvalMode = command.mode
       break
     }
@@ -4933,6 +5002,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         else {
           approval.state = 'approved'
           approval.decidedAt = context.now
+          // Their first Accept in this project starts their Member there; it is assigned as any agent is (work.assign).
+          startMember(group, approval.personId)
         }
         // This decision releases the gate; the ordinary work.assign path alone launches work, with all of the
         // store's global session, repository, machine and account checks. Never introduce a second assignment path here.
@@ -4992,6 +5063,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       if (routeNote) effects.messages.push({ id: routeNote.id, conversationId: group.id, author: sender,
         text: routeNote.text, replyTo: null, recipients: [], source: bookkeeping(group.id, routeNote.source) })
+      // This assignment may take its person's last waiting task: their idle helpers stop (review of #3575).
+      if (group.requesterId && !group.reviewOf) stopIdleHelpers(group.requesterId, groupProject(state, group).id)
       break
     }
     case 'work.status': {
@@ -5120,6 +5193,75 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (waited && activeWork(group) && !waitingForReview(assignment)) restartQuietTime(assignment, context.now)
       // A Ready ends its Reviewer's wait for this revision: the review counts its quiet time from now (liveness.ts revisionReady).
       if (activeWork(group) && waitingForReview(assignment)) revisionReady(state, group, context.now)
+      // A Member sleeps between its person's tasks (members.ts, task #4697): its next assignment wakes it.
+      if (!activeWork(group)) {
+        const worker = state.agents.find(a => a.id === assignment.agentId)
+        if (worker?.regular && worker.mainProjectId && !memberQueue(state, worker.mainProjectId, worker.contributorId, context.now).length) {
+          if (!worker.helperOf) worker.asleep = { since: context.now }
+          // Helpers end once nothing waits, this one among them (stopIdleHelpers).
+          stopIdleHelpers(worker.contributorId, worker.mainProjectId)
+        }
+      }
+      break
+    }
+    case 'member.start': {
+      // The dispatch pass, as the task's project's coordinator, or the task's own requester: a Member for that requester alone.
+      const group = open(state, command.conversationId)
+      const project = groupProject(state, group)
+      const requester = state.people.find(p => p.id === group.requesterId) ?? fail('NO_REQUESTER', 'This task has no person to start a Member for.', 409)
+      const lead = actor.kind === 'agent' && ledProject(state, actor.agentId)?.id === project.id
+      if (!lead && !(actor.kind === 'person' && actor.userId === requester.id)) fail('FORBIDDEN', 'Only the project\'s coordinator or the task\'s requester starts its Member.', 403)
+      if (!acceptedByRequester(state, group)) fail('TASK_NOT_ACCEPTED', 'Its person accepts this task first.', 409)
+      startMember(group, requester.id)
+      break
+    }
+    case 'member.helper': {
+      const group = open(state, command.conversationId)
+      const project = groupProject(state, group)
+      const requester = state.people.find(p => p.id === group.requesterId) ?? fail('NO_REQUESTER', 'This task has no person to help.', 409)
+      const lead = actor.kind === 'agent' && ledProject(state, actor.agentId)?.id === project.id
+      if (!lead && !(actor.kind === 'person' && actor.userId === requester.id)) fail('FORBIDDEN', 'Only the project\'s coordinator or the task\'s requester asks for a helper.', 403)
+      if (!acceptedByRequester(state, group)) fail('TASK_NOT_ACCEPTED', 'Its person accepts this task first.', 409)
+      if (activeWork(group)) fail('WORK_ACTIVE', 'This task already has its agent.', 409)
+      const member = memberOf(state, requester.id, project.id)?.agent ?? fail('NO_MEMBER', 'Its person has no Member in this project yet.', 409)
+      // One helper per task: a second ask while it starts, or once it runs here, changes nothing.
+      if ((state.starts ?? []).some(s => s.request.helperOf && s.request.conversationId === group.id && !s.error && !s.poolSettled)
+        || state.agents.some(a => a.helperOf?.agentId === member.id && group.agentIds.includes(a.id) && a.workDecision !== 'stop')) {
+        ignored()
+        break
+      }
+      const check = helperCheck(state, member, group, context.now)
+      if (!check.ok) fail(`HELPER_${check.reason.toUpperCase()}`, HELPER_REFUSALS[check.reason], 409)
+      // On the Member's own computer and account, as the Member itself (v3: an agent starts only on its own person's computer).
+      const pool = memberMachine(state, requester.id, REGULAR_AGENT_CAPABILITY)
+      if (!pool || pool.machineId !== member.machineId) fail('HELPER_ROOM', HELPER_REFUSALS.room, 409)
+      const name = `${newAgentName(state, actor, undefined, stableId(operationId, 'helper'))} · ${project.name}`
+      const request: AgentStartRequest = { conversationId: group.id, machineId: pool.machineId, engine: member.configuration.engine, name,
+        cwd: projectFolder(pool, project), worktree: true, requirements: { ...BUDDY_REQUIREMENTS, memoryBytes: AGENT_MEMORY_BYTES },
+        regular: true, mainProjectId: project.id, helperOf: { agentId: member.id, harnessId: member.harnessId },
+        ...(member.setUp?.steps ? { setUpSteps: member.setUp.steps } : {}) }
+      const admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)!
+      state.starts ??= []
+      if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')
+      const id = stableId(operationId, 'helper')
+      state.starts.push({ poolGeneration: admitted.generation, id, creationId: `super-${id}`, actorKey: actorKey(actor), contributorId: requester.id,
+        membershipGeneration: requester.generation, machineOwnerId: requester.id, hostGrant: null, request, harnessId: null, dispatched: false, error: null,
+        requestedAt: context.now })
+      result.startId = id
+      break
+    }
+    case 'agent.setUp': {
+      // Only the Member itself, of that project, from its own host.
+      if (actor.kind !== 'agent') fail('FORBIDDEN', 'A Member reports its own set-up.', 403)
+      const self = agent(state, actor.agentId)
+      if (!self.regular || self.mainProjectId !== command.projectId) fail('NOT_MEMBER', 'Only this project\'s Member reports its set-up.', 403)
+      if (command.ok ? !command.steps || command.reason !== undefined : !command.reason || command.steps !== undefined) {
+        fail('INVALID_SET_UP', 'Report the steps that set it up, or why it failed.', 400)
+      }
+      self.setUp = { projectId: command.projectId, at: context.now, ...(command.ok ? { steps: command.steps! } : { failed: command.reason! }) }
+      // A failed set-up is seen by its person, in their agent's chat (AGENTS.md: nothing fails silently).
+      const chat = state.conversations.find(c => c.kind === 'agent-chat' && c.agentIds.includes(self.id))
+      if (!command.ok && chat) message(chat.id, `Could not set up ${projectOf(state, command.projectId).name}: ${command.reason}`, [], null, SYSTEM_ROW)
       break
     }
     case 'work.cancel': {
