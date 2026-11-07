@@ -488,6 +488,8 @@ GLib and glibc and a 24.04 build will not start on 22.04 — so one `make releas
 `desktop-*` keys only stay on one version when the release goes through CI. Run by hand
 (`make upload-desktop-linux ARCH=arm64`) it moves one key and leaves the others behind. `amd64` and
 `x86_64` are accepted aliases for `x64`; `aarch64` is accepted as an alias for `arm64`.
+In CI the build runners package only (`--no-upload`, no cloud identity) and `upload-linux`, in the
+`release` environment, publishes both AppImages (`--upload-only`).
 
 With no `ARCH`, the command detects the host architecture. A build must run on a matching
 Ubuntu/Linux host because Flutter Linux desktop builds use the host architecture. `--no-build` can

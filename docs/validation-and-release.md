@@ -253,6 +253,31 @@ branch, tags, open PRs and existing branches are preserved. For a read-only prev
 run `python3 scripts/prune-finished-caches.py --repo OWNER/REPO --pull-request N`
 or use `--deleted-branch NAME`; `--apply` performs the selected cleanup.
 
+### Who can sign and publish Desktop
+
+`release-desktop.yml` builds on any ref with no secret and no cloud identity (`build-macos`,
+`build-linux`, `build-windows`) and hands its packages on as workflow artifacts. Every job that
+signs or writes the bucket (`preflight`, `sign-macos`, `sign-windows`, `upload-linux`,
+`upload-windows`, `publish`, `candidate`, `cleanup`, `expire-candidates`, `publication-test`) runs
+in the `release` environment. The workflow's own conditions are a branch's text, so these settings
+are what enforce it (#4434):
+
+1. **GitHub, environment `release`:** deployment branches and tags limited to branch `main` and tags
+   `v*_desktop` and `v*_cli`, with no required reviewers.
+2. **GitHub, secrets:** the Apple secrets (`APPLE_CERTIFICATE_BASE64`, `APPLE_CERTIFICATE_PASSWORD`,
+   `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `KEYCHAIN_PASSWORD`)
+   are `release` environment secrets, not repository secrets.
+3. **GitHub, tag ruleset:** creating, moving or deleting `v*_desktop` and `v*_cli` tags is limited to
+   the Repository admin and Maintain roles.
+4. **Google Cloud:** only the `release` environment can write `harness/desktop/` (the live
+   `metadata.json`, the versioned `X.Y.Z/` paths and the `.ci/`, `.ci-preflight/` and
+   `.candidate-check/` scratch paths) and `harness/desktop-candidates/`. The pool provider maps
+   `attribute.environment=assertion.environment`; a Desktop publish service account holds write on
+   those two prefixes, and only `principalSet://…/attribute.environment/release` of this repository may
+   impersonate it; its email is the `release` environment's `GCP_SERVICE_ACCOUNT` secret, which
+   overrides the repository secret of that name for those jobs. The repository-level service account
+   keeps no write on either prefix; internal builds still write `harness/desktop-internal/` with it.
+
 ### Package Desktop while final checks run
 
 When the final implementation is pushed, `make release-desktop ARGS="--prepare"`
