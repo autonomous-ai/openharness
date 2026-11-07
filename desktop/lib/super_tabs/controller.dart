@@ -3745,10 +3745,12 @@ class SuperTabController extends ChangeNotifier {
 
   /// Opens the reader's private chat with their own Lead [agentId] on the
   /// server (backend agent.chat, task #4664): an agent is a direct message, a
-  /// project a group chat. One request per reader and agent, so a second click
-  /// or another window gets the same chat back. Null when it was refused.
+  /// project a group chat. One request per reader, membership and agent, so a
+  /// second click or another window gets the same chat back, and a reader who
+  /// rejoined asks again. Null when it was refused.
   Future<String?> openLeadChat(String agentId) async {
-    final op = 'agent-chat-$agentId-$accountId';
+    final me = snapshot?.people.where((p) => p.id == accountId).firstOrNull;
+    final op = 'agent-chat-$agentId-$accountId-${me?.generation ?? ''}';
     final result = await command({
       'type': 'agent.chat',
       'agentId': agentId,
