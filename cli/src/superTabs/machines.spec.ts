@@ -2739,6 +2739,51 @@ describe('removed machine cleanup', () => {
     expect(backend.mock.calls.some(c => JSON.stringify(c[3] ?? '').includes('agent.startSettled'))).toBe(true)
   })
 
+  // Task #4698: a helper starts from its Member's ready setup on this computer, found by the Swarm's own worktree record.
+  it('readies a helper from its Member\'s setup here, and says when that setup is not on this computer', async () => {
+    for (const memberHere of [true, false]) {
+      const root = mkdtempSync(join(tmpdir(), 'swarm-helper-')); roots.push(root)
+      if (memberHere) {
+        mkdirSync(join(root, 'super-tabs'), { recursive: true })
+        writeFileSync(swarmWorktreesFile(root, 'host'), JSON.stringify({ version: 1, worktrees: [
+          { tabId: 'tab', startId: 'member-start', harnessId: 'member-harness', source: '/clone', path: '/worktrees/project/member' }] }))
+      }
+      const core = fakeCore({ dataDir: root, agents: { byAgent: vi.fn(id => id === 'h-new' ? session('h-new', '/worktrees/project/new', 'agent') : undefined) } })
+      const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['claude'], paused: false },
+        harnessIds: [], starts: [{ id: 'new', dispatched: true, request: { worktree: true, cwd: '/clone', helperOf: { agentId: 'member', harnessId: 'member-harness' } } }], paused: false }
+      const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
+      const open = vi.fn(async () => ({ machineId: 'host', request: vi.fn(async () => ({})), close: vi.fn() }))
+      const start = vi.fn(async (input: Record<string, unknown>) => {
+        await (input.beforeJoin as (harnessId: string) => Promise<void>)('h-new')
+        return { ok: true, harnessId: 'h-new' }
+      })
+      const readySetup = vi.fn(async () => ({ copied: ['node_modules', 'build'] }))
+      const log = vi.fn()
+      await new ContributedMachines(core, 'host', { backend, open, start, now: () => 0, log, readySetup,
+        capabilities: vi.fn(async () => ({ ok: true, resources: {}, tools: {} })) } as never).tick()
+      if (memberHere) {
+        expect(readySetup).toHaveBeenCalledWith('/worktrees/project/member', '/worktrees/project/new')
+        expect(log).toHaveBeenCalledWith('Readied a helper from its Member\'s setup: 2 folders copied')
+      } else {
+        expect(readySetup).not.toHaveBeenCalled()
+        expect(log).toHaveBeenCalledWith('Started a helper without its Member\'s setup: HELPER_SETUP_NOT_HERE')
+      }
+    }
+  })
+
+  it('gives no readying step to a start that is not a helper\'s', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'swarm-helper-')); roots.push(root)
+    const core = fakeCore({ dataDir: root, agents: { byAgent: vi.fn(() => undefined) } })
+    const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['claude'], paused: false },
+      harnessIds: [], starts: [{ id: 'new', dispatched: true, request: { worktree: true, cwd: '/clone', member: { projectId: 'project-1' } } }], paused: false }
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
+    const open = vi.fn(async () => ({ machineId: 'host', request: vi.fn(async () => ({})), close: vi.fn() }))
+    const start = vi.fn(async (_input: Record<string, unknown>) => ({ ok: true, harnessId: 'h-new' }))
+    await new ContributedMachines(core, 'host', { backend, open, start, now: () => 0,
+      capabilities: vi.fn(async () => ({ ok: true, resources: {}, tools: {} })) } as never).tick()
+    expect(start.mock.calls[0]![0]).not.toHaveProperty('beforeJoin')
+  })
+
   // Task #4353: its removal clears the trust a Team-written start saved, so the record says which start it was.
   it('marks the worktree of a Team-written start', async () => {
     const root = mkdtempSync(join(tmpdir(), 'swarm-record-')); roots.push(root)
