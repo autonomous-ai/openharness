@@ -30,7 +30,7 @@ describe('the status card the server writes (#3593)', () => {
   it('has one line per active task with its state, what it waits on and its owner', () => {
     const f = cardFixture()
     expect(f.lines()).toHaveLength(1)
-    expect(f.line()!.text).toBe('#1 "Fix login": working. Waits on: nothing. Owner: Jules.')
+    expect(f.line()!.text).toBe('#1 "Fix login": working. Waits on: nothing. Owner: Andie.')
     const second = f.run({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits.', checks: [{ description: 'Saves', independent: true }],
       priority: 'P2', requesterId: 'owner' }, f.as(f.lead)).result.conversationId as string
     expect(f.lines().map(l => l.id).sort()).toEqual([f.task, second].sort())
@@ -41,7 +41,7 @@ describe('the status card the server writes (#3593)', () => {
     const f = cardFixture()
     f.step('Review')
     f.work('review', `Ready for review: ${PR} at abc1234`)
-    expect(f.line()!.text).toBe(`#1 "Fix login": in review (PR #7). Waits on: step Review. Owner: Jules.`)
+    expect(f.line()!.text).toBe(`#1 "Fix login": in review (PR #7). Waits on: step Review. Owner: Andie.`)
     f.work('blocked', 'Needs the CI key.')
     expect(f.line()!.text).toContain('blocked. Waits on: the PM.')
     f.work('needs_human', 'Which API?')
@@ -60,9 +60,9 @@ describe('the status card the server writes (#3593)', () => {
     f.run({ type: 'task.reject', conversationId: proposed, reason: 'Not now.' })
     expect(f.line(proposed)).toBeUndefined()
     f.run({ type: 'work.pause', conversationId: f.task, paused: true, reason: 'release freeze' })
-    expect(f.line()!.text).toBe('#1 "Fix login": paused. Waits on: a person to resume it (release freeze). Owner: Jules.')
+    expect(f.line()!.text).toBe('#1 "Fix login": paused. Waits on: a person to resume it (release freeze). Owner: Andie.')
     f.run({ type: 'work.pause', conversationId: f.task, paused: false })
-    expect(f.line()!.text).toBe('#1 "Fix login": working. Waits on: nothing. Owner: Jules.')
+    expect(f.line()!.text).toBe('#1 "Fix login": working. Waits on: nothing. Owner: Andie.')
   })
 
   it('drops a task whose work ended, and shows a merged one until its release carries it', () => {
@@ -70,7 +70,7 @@ describe('the status card the server writes (#3593)', () => {
     f.work('review', `Ready for review: ${PR} at abc1234`)
     f.run({ type: 'conversation.merged', conversationId: f.task, pullRequestUrl: PR }, f.as(f.lead))
     f.work('done', `Merged ${PR}`)
-    expect(f.line()!.text).toBe('#1 "Fix login": merged (PR #7). Waits on: the next release. Owner: Jules.')
+    expect(f.line()!.text).toBe('#1 "Fix login": merged (PR #7). Waits on: the next release. Owner: Andie.')
     const ledger = projectOf(f.state, 'lead').releases!
     ledger.pending[0]!.components = ['backend']
     ledger.pending[0]!.shippedIn = { backend: 'v1.4.18' }
@@ -92,9 +92,9 @@ describe('the status card the server writes (#3593)', () => {
 
   it('shows readers the lines and the PM\'s extra text, in the card\'s own text', () => {
     const f = cardFixture()
-    expect(f.text()).toBe('#1 "Fix login": working. Waits on: nothing. Owner: Jules. Since 00:00 UTC.')
+    expect(f.text()).toBe('#1 "Fix login": working. Waits on: nothing. Owner: Andie. Since 00:00 UTC.')
     f.run({ type: 'project.report', projectId: 'lead', through: {}, text: 'Freeze starts Friday.' }, f.as(f.lead))
-    expect(f.text()).toBe('#1 "Fix login": working. Waits on: nothing. Owner: Jules. Since 00:00 UTC.\nFreeze starts Friday.')
+    expect(f.text()).toBe('#1 "Fix login": working. Waits on: nothing. Owner: Andie. Since 00:00 UTC.\nFreeze starts Friday.')
     // A change of the lines does not lose it.
     f.work('review', `Ready for review: ${PR} at abc1234`)
     expect(f.text()).toContain('Freeze starts Friday.')
@@ -109,7 +109,7 @@ describe('the status card the server writes (#3593)', () => {
     // The coordinator's whole card of an earlier release: stored with no mark that it is its own lines.
     projectOf(f.state, 'lead').status = { text: 'Old whole card: #1 Fix login working.', at: new Date(0).toISOString(), by: f.lead }
     f.run({ type: 'message.send', conversationId: 'lead', text: 'tick', replyTo: null, recipientIds: [] })
-    expect(f.text()).toBe('#1 "Fix login": working. Waits on: nothing. Owner: Jules. Since 00:00 UTC.')
+    expect(f.text()).toBe('#1 "Fix login": working. Waits on: nothing. Owner: Andie. Since 00:00 UTC.')
     // Its next report is its own lines.
     f.run({ type: 'project.report', projectId: 'lead', through: {}, text: 'Freeze starts Friday.' }, f.as(f.lead))
     expect(f.text()!.endsWith('\nFreeze starts Friday.')).toBe(true)
@@ -131,7 +131,7 @@ describe('the status card the server writes (#3593)', () => {
     const f = cardFixture()
     const second = f.run({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits.', checks: [{ description: 'Saves', independent: true }],
       priority: 'P2', requesterId: 'owner' }, f.as(f.lead)).result.conversationId as string
-    expect(f.group(f.task).statusLine).toEqual({ text: '#1 "Fix login": working. Waits on: nothing. Owner: Jules.', since: expect.any(Number) })
+    expect(f.group(f.task).statusLine).toEqual({ text: '#1 "Fix login": working. Waits on: nothing. Owner: Andie.', since: expect.any(Number) })
     const kept = f.group(second).statusLine
     f.work('review', `Ready for review: ${PR} at abc1234`)
     expect(f.group(f.task).statusLine!.text).toContain('in review (PR #7)')
@@ -146,10 +146,10 @@ describe('the status card the server writes (#3593)', () => {
     delete f.group(f.task).statusLine
     f.run({ type: 'message.send', conversationId: 'lead', text: 'tick', replyTo: null, recipientIds: [] })
     expect(f.group(f.task).statusLine).toBeUndefined()
-    expect(f.text()).toBe('#1 "Fix login": working. Waits on: nothing. Owner: Jules.')
+    expect(f.text()).toBe('#1 "Fix login": working. Waits on: nothing. Owner: Andie.')
     // The command that moves it writes it.
     f.work('review', `Ready for review: ${PR} at abc1234`)
-    expect(f.group(f.task).statusLine).toEqual({ text: '#1 "Fix login": in review (PR #7). Waits on: a review. Owner: Jules.', since: expect.any(Number) })
+    expect(f.group(f.task).statusLine).toEqual({ text: '#1 "Fix login": in review (PR #7). Waits on: a review. Owner: Andie.', since: expect.any(Number) })
   })
 
   it('leaves an ended task\'s line empty, dated, so a reader learns the card dropped it', () => {
@@ -161,7 +161,7 @@ describe('the status card the server writes (#3593)', () => {
   })
 
   it('keeps the card within its limit, naming how many tasks the last line leaves out', () => {
-    const lines = Array.from({ length: 200 }, (_, i) => ({ id: `t${i}`, text: `#${i} "A task with a title that takes room": working. Waits on: nothing. Owner: Jules.`, since: 0 }))
+    const lines = Array.from({ length: 200 }, (_, i) => ({ id: `t${i}`, text: `#${i} "A task with a title that takes room": working. Waits on: nothing. Owner: Andie.`, since: 0 }))
     const text = cardText(lines, 'Extra line.')
     expect(text.length).toBeLessThanOrEqual(PROJECT_STATUS_MAX)
     expect(text).toContain('Extra line.')
