@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:isolate';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 
 import 'package:harness_mobile/logging/app_log.dart';
 
 import 'model.dart';
 import 'parts.dart';
+import 'swarm_board.dart' show SwarmProposal;
 import 'swarm_buddy.dart';
 import 'swarm_chat_notify.dart';
 import 'swarm_kept.dart';
@@ -478,6 +480,11 @@ class SwarmReader extends ChangeNotifier {
   final _dormantPages = <String, String?>{};
   final _dormantReads = <String, Future<void>>{};
 
+  /// When the last conversation of each project's newest-read closed page last
+  /// changed: the Board stops reading earlier pages once it is before its
+  /// window ([loadShipped]).
+  final _dormantLastChange = <String, DateTime>{};
+
   /// Whether [projectId]'s closed conversations have been read.
   bool dormantLoaded(String projectId) => _dormantPages.containsKey(projectId);
 
@@ -519,15 +526,167 @@ class SwarmReader extends ChangeNotifier {
     );
     // Read again from nothing meanwhile: this page is of the parts before.
     if (_disposed || accessRevoked || !identical(parts, _parts)) return;
-    final change = parts.addDormant(answer['groups'] as List);
+    final groups = answer['groups'] as List;
+    final change = parts.addDormant(groups);
     _dormantPages[projectId] = answer['next'] as String?;
+    if (groups.lastOrNull case final Map last when last['changedAt'] is num) {
+      _dormantLastChange[projectId] = DateTime.fromMillisecondsSinceEpoch(
+        (last['changedAt'] as num).toInt(),
+      );
+    }
     if (change.changed) _show(_viewOf(parts, accountId));
+  }
+
+  /// Closed conversations read for the Board's Merged and Shipped, as many
+  /// pages as Desktop reads (`readClosedShipped`).
+  static const _shippedPages = 40;
+  final _shippedFailed = <String>{}, _shippedRead = <String>{};
+  final _shippedReads = <String, Future<void>>{};
+
+  /// Whether the last read of [projectId]'s closed work for the Board failed;
+  /// [loadShipped] tries it again.
+  bool shippedFailed(String projectId) => _shippedFailed.contains(projectId);
+
+  /// Reads [projectId]'s closed conversations back to [since], newest first and
+  /// a page at a time, for the Board's Merged and Shipped: the first page once,
+  /// then earlier ones until a page ends before [since] or [_shippedPages] are
+  /// read. Once, whatever follows: a task that closes later is one the read
+  /// holds already. A failed page is logged by its name and flagged, not
+  /// thrown: the Board shows the rest, and only a person's [retry] reads again,
+  /// so a failing backend is not asked on every change.
+  Future<void> loadShipped(
+    String projectId,
+    DateTime since, {
+    bool retry = false,
+  }) {
+    if (_disposed ||
+        _shippedRead.contains(projectId) ||
+        (!retry && _shippedFailed.contains(projectId))) {
+      return Future.value();
+    }
+    // A block, not an arrow: `remove` returns the very future being completed.
+    return _shippedReads[projectId] ??= _loadShipped(projectId, since)
+        .whenComplete(() {
+          _shippedReads.remove(projectId);
+        });
+  }
+
+  Future<void> _loadShipped(String projectId, DateTime since) async {
+    try {
+      await loadDormant(projectId);
+      for (var page = 1; page < _shippedPages; page++) {
+        final last = _dormantLastChange[projectId];
+        if (!hasEarlierDormant(projectId) ||
+            (last != null && last.isBefore(since))) {
+          break;
+        }
+        await loadDormant(projectId, earlier: true);
+      }
+      _shippedRead.add(projectId);
+      if (_shippedFailed.remove(projectId)) notifyListeners();
+    } catch (failure) {
+      if (_disposed) return;
+      if (_shippedFailed.add(projectId)) {
+        appLog.warn(
+          'swarm',
+          'closed work not read: '
+              '${failure is SuperTabFailure ? '${failure.code} (status ${failure.statusCode})' : failure.runtimeType}',
+        );
+        notifyListeners();
+      }
+    }
+  }
+
+  /// Each project's Buddy proposals the PM has not answered, oldest first, as
+  /// last read (backend proposals read), and the project chat's last sequence
+  /// that read saw: the next read waits for the chat to move, as only a
+  /// message there can answer or add one, and for a minute since the last
+  /// (the PM, 2026-11-04: the read looks through the whole chat, and repeated
+  /// reads are the backend's biggest cost).
+  static const _proposalsEvery = Duration(minutes: 1);
+  final _proposals = <String, List<SwarmProposal>>{};
+  final _proposalsAt = <String, int>{};
+  final _proposalsReadAt = <String, DateTime>{};
+  final _proposalReads = <String, Future<void>>{};
+  final _proposalsLater = <String, Timer>{};
+  final _proposalsBroken = <String>{};
+
+  List<SwarmProposal> proposalsOf(String projectId) =>
+      _proposals[projectId] ?? const [];
+
+  /// Whether the last read of [projectId]'s proposals failed.
+  bool proposalsFailed(String projectId) =>
+      _proposalsBroken.contains(projectId);
+
+  /// Reads [projectId]'s open proposals once its chat has moved since the last
+  /// read; joins a read under way. A failed read keeps what was shown and is
+  /// tried again when the chat next moves, or at once for a person's [retry].
+  Future<void> readProposals(String projectId, {bool retry = false}) {
+    final project = snapshot?.projectById(projectId);
+    if (_disposed || accessRevoked || project == null) return Future.value();
+    final at =
+        snapshot!
+            .conversation(project.leadConversationId)
+            ?.lastMessageSequence ??
+        0;
+    if (!retry && _proposalsAt[projectId] == at) return Future.value();
+    if (_proposalReads[projectId] case final reading?) return reading;
+    final last = _proposalsReadAt[projectId];
+    final wait = retry || last == null
+        ? Duration.zero
+        : _proposalsEvery - clock.now().difference(last);
+    if (wait > Duration.zero) {
+      // One read for every move in the minute, once it is up.
+      _proposalsLater[projectId] ??= Timer(wait, () {
+        _proposalsLater.remove(projectId);
+        unawaited(readProposals(projectId));
+      });
+      return Future.value();
+    }
+    _proposalsReadAt[projectId] = clock.now();
+    late final Future<void> reading;
+    reading = _readProposals(projectId, at).whenComplete(() {
+      if (identical(_proposalReads[projectId], reading)) {
+        _proposalReads.remove(projectId);
+      }
+    });
+    return _proposalReads[projectId] = reading;
+  }
+
+  Future<void> _readProposals(String projectId, int at) async {
+    _proposalsAt[projectId] = at;
+    try {
+      final answer = await _get(
+        '$_path/proposals?projectId=${Uri.encodeQueryComponent(projectId)}',
+      );
+      if (_disposed || accessRevoked) return;
+      _proposals[projectId] = List.unmodifiable([
+        for (final raw in answer['proposals'] as List? ?? const [])
+          if (raw is Map && raw['messageId'] is String)
+            SwarmProposal.fromJson(superTabMap(raw)),
+      ]);
+      _proposalsBroken.remove(projectId);
+    } catch (failure) {
+      if (_disposed) return;
+      // A backend from before the read has none to give (404): said once.
+      if (_proposalsBroken.add(projectId)) {
+        appLog.warn(
+          'swarm',
+          'proposals not read: '
+              '${failure is SuperTabFailure ? '${failure.code} (status ${failure.statusCode})' : failure.runtimeType}',
+        );
+      }
+    }
+    notifyListeners();
   }
 
   @override
   void dispose() {
     _disposed = true;
     _poll?.cancel();
+    for (final timer in _proposalsLater.values) {
+      timer.cancel();
+    }
     _reads.dispose();
     _firstLoads.dispose();
     super.dispose();

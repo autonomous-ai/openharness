@@ -227,6 +227,11 @@ void main() {
         } else {
           await tester.tap(row('openharness'));
           await tester.pumpAndSettle();
+          // A project opens on its Board; the chat is read from its Chat tab.
+          await tester.tap(
+            find.byKey(const ValueKey('swarm-project-tab-chat')),
+          );
+          await tester.pumpAndSettle();
           expect(
             find.text('Please check the phone project rows.'),
             findsOneWidget,
