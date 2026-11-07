@@ -864,11 +864,11 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   const local = localModelAllowed(state, request, now)
   const settings = (['codexHome', 'gridModel', 'gridName'] as const).filter(key => request[key] && !(local && key !== 'codexHome'))
   if (settings.length) refused.push(`${settings.join(', ')} (it runs with its own default account settings, so leave ${settings.length > 1 ? 'them' : 'it'} out)`)
-  if (request.permissionMode !== undefined && request.permissionMode !== 'full') {
-    refused.push('permissionMode (only full is accepted; leave it out to use the machine’s default)')
-  }
+  // Swarm v3 (task #4215): an agent starts with its owner's own permission settings, so a start names no mode. Last, in the
+  // words a CLI from before full mode answers by sending the start again without it (cli superTabs/start.ts before #4215).
+  if (request.permissionMode !== undefined) refused.push('permissionMode (it runs with its own default account settings, so leave it out)')
   if (refused.length) {
-    fail('OUTSIDE_CONTRIBUTION', `${pool.name} accepts only its contributed project folder, engines and default account settings, with full permissions for Swarm agents. Refused: ${refused.join('; ')}.`, 403)
+    fail('OUTSIDE_CONTRIBUTION', `${pool.name} accepts only its contributed project folder, engines and default account settings. Refused: ${refused.join('; ')}.`, 403)
   }
   // A Buddy-only machine is recorded with its Buddy's start, before its host ever read the Swarm: the start waits for it.
   if (machineOffline(pool, now) && !(pool.buddyOnly && !pool.observation)) fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')

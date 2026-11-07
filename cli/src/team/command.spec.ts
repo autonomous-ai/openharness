@@ -4,13 +4,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import { signInOf, type AuthSession } from '../lib/authSession.js'
 import { SIGN_OUT_BUTTON_FLAG, signOutAsked } from '../lib/signOut.js'
-import { NO_PROMPT_MESSAGE, type AdminScript, type RunAdmin } from './admin.js'
-import { REPAIR_PROMPT, SETUP_PROMPT, teamCommand, type TeamCommandDeps } from './command.js'
+import type { AdminScript, RunAdmin } from './admin.js'
+import { teamCommand, type TeamCommandDeps } from './command.js'
 import type { TeamConfig } from './config.js'
 import type { PrivacyResult, TeamStatus } from './privacy.js'
 import type { TeamEngines } from './engines.js'
 import { parseLaunchctlPrint, parseSystemctlShow } from './deps.js'
-import { LINUX_NO_SYSTEMD, LINUX_NO_TMUX } from './script.js'
 
 const OWNER_HOME = '/Users/owner-placeholder'
 const CODE = `hnh_${'b'.repeat(43)}`
@@ -91,165 +90,27 @@ describe('harness team', () => {
   it('prints its help, and refuses an unknown verb', async () => {
     const f = fake()
     expect(await teamCommand([], f.deps)).toBe(0)
-    expect(f.out[0]).toContain('Usage: harness team <setup | status | model | logs | sign-in | remove | on | off>')
+    expect(f.out[0]).toContain('Usage: harness team <status | logs | remove | on | off>')
+    // Swarm v3 has no Team accounts (#4221): nothing signs a Team account's engines in or gives it a model.
+    expect(f.out[0]).not.toMatch(/sign-in|model/)
     expect(await teamCommand(['frobnicate'], f.deps)).toBe(2)
   })
 })
 
 describe('harness team setup', () => {
-  it('copies the engines this Mac already has into the team account, instead of downloading them (#3169)', async () => {
-    const codex = { packageName: '@openai/codex', dir: `${OWNER_HOME}/.local/lib/node_modules/@openai/codex`, bin: 'codex', binPath: 'bin/codex.js' }
+  it('refuses before any prompt, in words and in JSON: Swarm v3 has no Team accounts (#4221)', async () => {
     const f = fake({ statusAfter: reported })
-    const installed = f.deps.installed()
-    f.deps.installed = () => ({ ...installed, engineCopies: [codex] })
-    expect(await teamCommand(['setup'], f.deps)).toBe(0)
-    const { script } = f.built[0]!
-    expect(script).toContain(`copy_engine '@openai/codex' '${OWNER_HOME}/.local/lib/node_modules/@openai/codex' 'codex' 'bin/codex.js'`)
-    expect(script).toContain("[ -n \"$copied_claude\" ] || set -- \"$@\" '@anthropic-ai/claude-code'")
-  })
-
-  it('says what it will make, runs one privileged script, and waits for the team daemon to sign in and pass its check', async () => {
-    const f = fake({ statusAfter: reported, env: { BACKEND_WS_URL: 'wss://backend.example.test', HARNESS_AUTH_DIR: '/tmp/auth' } })
-    expect(await teamCommand(['setup'], f.deps)).toBe(0)
-    expect(f.admin).toHaveBeenCalledTimes(1)
-    expect(f.prompts[0]).toContain('Harness Team')
-    const { script, files } = f.built[0]!
-    expect(script).toContain("OWNER='owner-placeholder'")
-    expect(script).toContain("STAGE='/private/var/folders/aa/T/harness-team-stage'")
-    expect(script).toContain("'HARNESS_AUTH_DIR=/tmp/auth'")
-    const written = JSON.parse(files!['team.json']!) as TeamConfig
-    expect(written).toMatchObject({ user: 'harnessteam', ownerHome: OWNER_HOME, port: 18493, node: '/Users/harnessteam/.harness/runtime/node-v1/bin/node',
-      env: { BACKEND_WS_URL: 'wss://backend.example.test' } })
-    expect(files!['team.plist']).toContain('<string>wss://backend.example.test</string>')
-    expect(files!['team.plist']).not.toContain('HARNESS_AUTH_DIR')
-    const text = f.out.join('\n')
-    expect(text).toContain('Harness Team (harnessteam)')
-    expect(text).toContain('/Library/LaunchDaemons/ai.autonomous.harness.team.plist')
-    expect(text).toContain('✓ The Harness Team account is signed in.')
-    expect(text).toContain('✓ Private')
-    // The engines setup installed in the team account, and how to sign them in (none were reported in this run).
-    expect(text).toContain('engines     ? not reported yet')
+    expect(await teamCommand(['setup'], f.deps)).toBe(1)
+    expect(f.err.join('\n')).toContain('Swarm v3 has no Team accounts')
+    const json = fake({ statusAfter: reported })
+    expect(await teamCommand(['setup', '--json'], json.deps)).toBe(1)
+    expect(JSON.parse(json.out[0]!)).toMatchObject({ ok: false, code: 'TEAM_ACCOUNTS_REMOVED' })
+    expect(f.admin).not.toHaveBeenCalled()
+    expect(json.admin).not.toHaveBeenCalled()
   })
 
   // Scholes, 2026-11-04: a new member waited about 7 minutes after the password with no sign of progress. Setup says
   // which step it is on: the password first, then each step the script reports, then the team daemon's report.
-  it('says each step as it goes: the password, the script\'s own steps, then the team daemon\'s report', async () => {
-    const steps: string[] = []
-    const f = fake({ statusAfter: reported, progress: (step) => steps.push(step) })
-    f.admin.mockImplementationOnce(async (build, _prompt, _via, progress) => {
-      build('/private/var/folders/aa/T/harness-team-stage')
-      expect(steps).toEqual(['password'])
-      progress?.('account'); progress?.('engines')
-      return { ok: true, stdout: 'harness: handed a sign-in to the team account\n' }
-    })
-    expect(await teamCommand(['setup', '--json'], f.deps)).toBe(0)
-    expect(steps).toEqual(['password', 'account', 'engines', 'report'])
-  })
-
-  it('asks to create the account on a Mac without one, and to repair it on a Mac that has it', async () => {
-    const first = fake({ statusAfter: reported })
-    await teamCommand(['setup'], first.deps)
-    expect(first.prompts[0]).toBe(SETUP_PROMPT)
-    expect(first.out[0]).toContain('Harness will set up a separate account')
-    for (const over of [{ readConfig: () => config }, { accountExists: vi.fn(async () => true) }]) {
-      const again = fake({ statusAfter: reported, ...over })
-      await teamCommand(['setup'], again.deps)
-      expect(again.prompts[0]).toBe(REPAIR_PROMPT)
-      expect(again.prompts[0]).toContain('repair the Harness Team account')
-      expect(again.out[0]).toContain('Harness will repair the Harness Team account')
-    }
-    // What setup says it made is what it makes now: a password nobody knows, and listed.
-    expect(first.out.join('\n')).toContain('a standard user with a random password nobody knows, listed in Users & Groups')
-  })
-
-  it('shows the team account\'s engines as its daemon reported them in this run, and how to sign them in', async () => {
-    const f = fake({ statusAfter: (t) => ({ ...reported(t), engines: { checkedAt: t + 3_000, claude: { installed: true, signedIn: false }, codex: { installed: true, signedIn: false } } }) })
-    expect(await teamCommand(['setup'], f.deps)).toBe(0)
-    const text = f.out.join('\n')
-    expect(text).toContain('Claude Code ✓ installed · ✗ not signed in')
-    expect(text).toContain('    codex login --device-auth   Codex')
-    const json = fake({ statusAfter: (t) => ({ ...reported(t), engines: { checkedAt: t - 1, claude: { installed: true, signedIn: true }, codex: { installed: true, signedIn: true } } }) })
-    await teamCommand(['setup', '--json'], json.deps)
-    expect(JSON.parse(json.out.at(-1)!)).toMatchObject({ ok: true, engines: null })
-  })
-
-  it('forgets a prompt Desktop saw cancelled once it makes the account, and a removal is remembered as declined', async () => {
-    const decision = { clear: vi.fn(), decline: vi.fn() }
-    const made = fake({ statusAfter: reported, setupDecision: decision })
-    expect(await teamCommand(['setup'], made.deps)).toBe(0)
-    expect(decision.clear).toHaveBeenCalledTimes(1)
-    const cancelled = fake({ adminResult: { ok: false, code: 'CANCELLED', message: 'x' }, setupDecision: decision })
-    await teamCommand(['setup'], cancelled.deps)
-    expect(decision.clear).toHaveBeenCalledTimes(1)
-    const removed = fake({ readConfig: () => config, setupDecision: decision })
-    expect(await teamCommand(['remove'], removed.deps)).toBe(0)
-    expect(decision.decline).toHaveBeenCalledTimes(1)
-    expect(removed.out.join('\n')).toContain('will not make it again on its own')
-    const failing = fake({ statusAfter: reported, setupDecision: { clear: () => { throw new Error('read-only') }, decline: vi.fn() } })
-    expect(await teamCommand(['setup'], failing.deps)).toBe(0)
-  })
-
-  it('reports a failed privacy check or sign-in, and returns failure', async () => {
-    const f = fake({ statusAfter: (t) => ({ version: 1, signIn: { state: 'failed', at: t + 1, detail: 'code refused' },
-      privacy: { passed: false, item: 'gitconfig', detail: 'The team account could read ~/.gitconfig.', checkedAt: t + 1 } }) })
-    expect(await teamCommand(['setup'], f.deps)).toBe(1)
-    expect(f.err.join('\n')).toContain('did not sign in: code refused')
-    expect(f.err.join('\n')).toContain('Not private (gitconfig)')
-  })
-
-  it('says when the daemon has not reported in time, ignoring an older report', async () => {
-    const f = fake({ statusAfter: (t) => ({ version: 1, privacy: { passed: true, checkedAt: t - 10 } }) })
-    expect(await teamCommand(['setup'], f.deps)).toBe(0)
-    expect(f.out.join('\n')).toContain('has not reported its privacy check yet')
-    expect(f.out.join('\n')).toContain('has not signed in yet')
-  })
-
-  it('does not wait for a sign-in the script did not hand over, and asks again with --sign-in-again', async () => {
-    const f = fake({ adminResult: { ok: true, stdout: '' }, statusAfter: (t) => ({ version: 1, privacy: { passed: true, checkedAt: t + 1 } }) })
-    expect(await teamCommand(['setup', '--json'], f.deps)).toBe(0)
-    expect(JSON.parse(f.out.at(-1)!)).toMatchObject({ ok: true, user: 'harnessteam', label: 'ai.autonomous.harness.team', privacy: { passed: true } })
-    expect(f.built[0]!.script).toContain("SIGN_IN='missing'")
-    const again = fake({ statusAfter: reported })
-    await teamCommand(['setup', '--sign-in-again'], again.deps)
-    expect(again.built[0]!.script).toContain("SIGN_IN='always'")
-  })
-
-  it('changes nothing when the prompt is cancelled, and says how to finish a script that stopped', async () => {
-    const cancelled = fake({ adminResult: { ok: false, code: 'CANCELLED', message: 'x' } })
-    expect(await teamCommand(['setup'], cancelled.deps)).toBe(1)
-    expect(cancelled.err[0]).toContain('Nothing was changed')
-    const stopped = fake({ adminResult: { ok: false, code: 'FAILED', message: 'launchd would not start the team daemon' } })
-    expect(await teamCommand(['setup', '--json'], stopped.deps)).toBe(1)
-    expect(JSON.parse(stopped.out.at(-1)!)).toMatchObject({ ok: false, code: 'SETUP_FAILED' })
-    // The script's reason has no full stop of its own; the sentence after it must not run on.
-    const unsigned = fake({ adminResult: { ok: false, code: 'FAILED', message: 'could not get a sign-in code from your Harness sign-in; the team daemon runs without a new sign-in' } })
-    expect(await teamCommand(['setup'], unsigned.deps)).toBe(1)
-    expect(unsigned.err[0]).toBe('✗ The Harness Team account was not finished: could not get a sign-in code from your Harness sign-in; '
-      + 'the team daemon runs without a new sign-in. Run `harness team setup` again; it repairs what is there.')
-    const failedRemove = fake({ readConfig: () => config, adminResult: { ok: false, code: 'FAILED', message: 'The script stopped (exit 2).' } })
-    expect(await teamCommand(['remove'], failedRemove.deps)).toBe(1)
-    expect(failedRemove.err[0]).toBe('✗ The Harness Team account was not fully removed: The script stopped (exit 2). Run `harness team remove` again.')
-  })
-
-  it('refuses where it cannot help, before any prompt', async () => {
-    const cases: Array<[Partial<TeamCommandDeps>, string]> = [
-      // Windows has the account too now (the 'on Windows' tests below): a system with none is refused.
-      [{ platform: 'freebsd' }, 'harness team on'],
-      [{ uid: () => 0 }, 'not with sudo'],
-      [{ session: () => null }, 'Sign this computer in first'],
-      [{ session: () => ({ ...computer, kind: 'team' }) }, 'already runs team work only'],
-      [{ user: () => 'harnessteam' }, 'not the Harness Team account'],
-      [{ exists: () => false }, 'not installed'],
-      [{ env: { BACKEND_WS_URL: 'wss://x/$(id)' } }, 'BACKEND_WS_URL'],
-      [{ home: () => "/Users/o'brien" }, 'plain absolute path'],
-    ]
-    for (const [over, says] of cases) {
-      const f = fake(over)
-      expect(await teamCommand(['setup'], f.deps), says).toBe(1)
-      expect(f.err.join('\n'), says).toContain(says)
-      expect(f.admin).not.toHaveBeenCalled()
-    }
-  })
 })
 
 describe('harness team status', () => {
@@ -288,16 +149,15 @@ describe('harness team status', () => {
     expect(JSON.parse(json.out[0]!).purges).toEqual({ pending: 2, unreadable: false, at: 5 })
   })
 
-  it('says whether the team account\'s engines are installed and signed in, and exactly how to sign them in', async () => {
+  it('says first that its daemon stops once no agent runs in it and how to delete it, not how to sign its engines in (#4221)', async () => {
     const f = fake({ readConfig: () => config, accountExists: vi.fn(async () => true) })
     f.status.set(STATUS, { version: 1, engines: { checkedAt: 1_000_000 - 60_000, claude: { installed: true, signedIn: false }, codex: { installed: false, signedIn: null } } })
     await teamCommand(['status'], f.deps)
     const text = f.out.join('\n')
-    expect(text).toContain('engines     Claude Code ✓ installed · ✗ not signed in')
-    expect(text).toContain('Codex       ✗ not installed · harness team setup installs it')
-    expect(text).toContain('(checked 60s ago)')
-    expect(text).toContain('in Harness, open a terminal on this Mac\'s Harness Team machine')
-    expect(text).toContain('    claude                      Claude Code')
+    const said = 'Swarm v3 has no Team accounts: its daemon stops once no agent runs in it. harness team remove deletes the account, its home and its daemon.'
+    expect(f.out.findIndex(line => line.includes(said))).toBeGreaterThan(-1)
+    expect(f.out.findIndex(line => line.includes(said))).toBeLessThan(f.out.findIndex(line => line.includes('  daemon  ')))
+    expect(text).not.toMatch(/sign(ed)? (them )?in|harness team sign-in|engines {5}/)
     const json = fake({ readConfig: () => config, accountExists: vi.fn(async () => true) })
     json.status.set(STATUS, { version: 1, engines: { checkedAt: 5, claude: { installed: true, signedIn: true }, codex: { installed: true, signedIn: true } } })
     await teamCommand(['status', '--json'], json.deps)
@@ -353,7 +213,7 @@ describe('harness team status', () => {
     expect(JSON.parse(f.out[0]!)).toMatchObject({ account: true, user: 'harnessteam', label: 'ai.autonomous.harness.team', job: { pid: 4242 }, ownerHomeMode: '700', privacy: null })
     const none = fake()
     await teamCommand(['status'], none.deps)
-    expect(none.out[0]).toContain('No Harness Team account on this computer. harness team setup makes one.')
+    expect(none.out[0]).toContain('No Harness Team account on this computer.')
     const linux = fake({ platform: 'linux', session: () => ({ ...computer, kind: 'team' }) })
     await teamCommand(['status'], linux.deps)
     expect(linux.out[0]).toContain('runs team work only')
@@ -834,54 +694,6 @@ describe('on Linux', () => {
     ...over,
   })
 
-  it('setup runs the Linux script through the administrator prompt and waits for the team daemon\'s status file', async () => {
-    const seen: string[] = []
-    const f = onLinux({ statusAfter: reported, readStatus: (path) => { seen.push(path); return reported(1_000_000) } })
-    expect(await teamCommand(['setup'], f.deps)).toBe(0)
-    expect(f.vias[0]).toBe('prompt')
-    expect(seen).toContain(LINUX_STATUS)
-    const { script, files } = f.built[0]!
-    expect(script).toContain('useradd -m -d "$TEAM_HOME"')
-    expect(script).toContain("TEAM_HOME='/home/harnessteam'")
-    expect(script).toContain(`OWNER_HOME='${LINUX_HOME}'`)
-    expect(Object.keys(files!).sort()).toEqual(['team.json', 'team.service'])
-    expect(files!['team.service']).toContain('\nUser=harnessteam\n')
-    expect(JSON.parse(files!['team.json']!)).toMatchObject({ home: '/home/harnessteam', ownerHome: LINUX_HOME, label: 'harness-team.service',
-      plist: '/etc/systemd/system/harness-team.service', statusFile: LINUX_STATUS, node: '/home/harnessteam/.harness/runtime/node-v1/bin/node' })
-    const text = f.out.join('\n')
-    expect(text).toContain('on this computer')
-    expect(text).not.toMatch(/Mac|macOS|LaunchDaemon|Users & Groups/)
-    expect(text).toContain('harness-team.service, a systemd unit at /etc/systemd/system/harness-team.service, running as harnessteam on port 18493')
-    expect(text).toContain('✓ Private')
-  })
-
-  it('setup asks with sudo in a terminal, which works without a desktop session', async () => {
-    const f = onLinux({ statusAfter: reported, interactive: true })
-    expect(await teamCommand(['setup'], f.deps)).toBe(0)
-    expect(f.vias[0]).toBe('sudo')
-    expect(f.prompts[0]).toBe('Harness wants to create a separate account, Harness Team, for Swarm work on this computer, so teammates\' agents cannot read your files.')
-    expect(f.out[0]).toContain('sudo asks for your password here')
-  })
-
-  it('setup passes on why Linux refused: no systemd, no tmux, no prompt', async () => {
-    const cases: Array<[Awaited<ReturnType<RunAdmin>>, string, string]> = [
-      [{ ok: false, code: 'FAILED', status: 3, message: LINUX_NO_SYSTEMD }, 'NO_SYSTEMD', 'systemd'],
-      [{ ok: false, code: 'FAILED', status: 3, message: LINUX_NO_TMUX }, 'NO_TMUX', 'apt install tmux'],
-      [{ ok: false, code: 'NO_PROMPT', message: NO_PROMPT_MESSAGE }, 'NO_PROMPT', 'run harness team setup in a terminal'],
-    ]
-    for (const [adminResult, code, says] of cases) {
-      const f = onLinux({ adminResult })
-      expect(await teamCommand(['setup', '--json'], f.deps), code).toBe(1)
-      const answer = JSON.parse(f.out.at(-1)!) as { code: string; message: string }
-      expect(answer.code).toBe(code)
-      expect(answer.message).toContain(says)
-    }
-    // Another stop with exit 3 is a failed setup, as on a Mac.
-    const other = onLinux({ adminResult: { ok: false, code: 'FAILED', status: 3, message: 'setfacl is missing on this computer: the Harness Team account needs it' } })
-    await teamCommand(['setup', '--json'], other.deps)
-    expect(JSON.parse(other.out.at(-1)!)).toMatchObject({ code: 'SETUP_FAILED' })
-  })
-
   it('status reads systemd and prints what Linux setup made, and how to remove it by hand', async () => {
     const f = onLinux({ readConfig: () => linuxConfig, accountExists: vi.fn(async () => true) })
     f.status.set(LINUX_STATUS, { version: 1, signIn: { state: 'signed-in', at: 1_000_000 - 30_000 }, privacy: { passed: true, checkedAt: 1_000_000 - 60_000 } })
@@ -962,84 +774,7 @@ describe('on Windows', () => {
     })
   }
 
-  it('setup runs the Windows script through User Account Control, then hands the sign-in over as the owner and starts the task', async () => {
-    const handed: string[] = []
-    const seen: string[] = []
-    // Nothing reported before the hand-over: the account has no sign-in yet.
-    const f = onWindows({ handedOver: handed, readStatus: (path) => { seen.push(path); return handed.length ? reported(1_000_000) : null } })
-    expect(await teamCommand(['setup'], f.deps)).toBe(0)
-    expect(f.vias[0]).toBe('prompt')
-    const { script, files } = f.built[0]!
-    expect(script).toContain("$OWNER = 'DELL'")
-    expect(script).toContain(`$OWNER_SID = '${WIN_SID}'`)
-    expect(script).toContain(`$OWNER_HOME = '${WIN_HOME}'`)
-    expect(script).toContain(`$PTY_SRC = '${WIN_HOME}\\.harness\\runtime\\pty\\0.2.4'`)
-    // The elevated script never mints the code: UAC may run it as another administrator.
-    expect(script).not.toContain('__handoff')
-    expect(Object.keys(files!).sort()).toEqual(['team.json', 'team.xml'])
-    expect(files!['team.xml']).toContain('<UserId>harnessteam</UserId>')
-    expect(files!['team.xml']).toContain(`(A;;FRFX;;;${WIN_SID})`)
-    // The task runs the version `cli\current` names, as the owner's launcher does; setup lays the owner's version down.
-    expect(files!['team.xml']).toContain('set /p V=&lt;&quot;C:\\Users\\harnessteam\\.harness\\cli\\current&quot;')
-    expect(script).toContain("$CliVersion = '0.4.97'")
-    expect(JSON.parse(files!['team.json']!)).toMatchObject({ owner: 'DELL', ownerSid: WIN_SID, ownerHome: WIN_HOME, home: 'C:\\Users\\harnessteam',
-      sentinel: `${WIN_HOME}\\.harness-team-privacy`, statusFile: WIN_STATUS, label: '\\Harness\\Harness Team',
-      node: `C:\\Users\\harnessteam\\.harness\\runtime\\${NODE}\\node.exe`, cli: 'C:\\Users\\harnessteam\\.harness\\cli\\0.4.97\\cli.js' })
-    // After the prompt, as the owner: a fresh code, written to the handover folder, then the task.
-    expect(f.post).toHaveBeenCalledWith('/api/auth/handoff', { kind: 'team', hostMachineId: 'm1' }, { authorization: 'Bearer x' })
-    expect(handed).toEqual([CODE])
-    expect(f.deps.startTeamTask).toHaveBeenCalledTimes(1)
-    expect(f.admin.mock.invocationCallOrder[0]).toBeLessThan(f.post.mock.invocationCallOrder[0]!)
-    expect(seen).toContain(WIN_STATUS)
-    const text = f.out.join('\n')
-    expect(text).toContain('Windows asks for permission once (User Account Control).')
-    expect(text).toContain('\\Harness\\Harness Team, a scheduled task at startup, running as harnessteam on port 18493')
-    expect(text).not.toMatch(/Mac|macOS|LaunchDaemon|systemd|sudo|mode 700/)
-    expect(text).toContain('✓ The Harness Team account is signed in.')
-    expect(text).toContain('✓ Private')
-  })
-
   // Task #2686: on Windows the sign-in and the daemon's start come after the elevated script, from the owner.
-  it('setup says the sign-in and the daemon steps around the handover, then waits for the report', async () => {
-    const handed: string[] = []
-    const steps: string[] = []
-    const f = onWindows({ handedOver: handed, progress: (step) => steps.push(step), readStatus: () => handed.length ? reported(1_000_000) : null })
-    f.admin.mockImplementationOnce(async (build, _prompt, _via, progress) => {
-      build(`${WIN_HOME}\\AppData\\Local\\Temp\\harness-team-stage`)
-      progress?.('account'); progress?.('engines')
-      return { ok: true, stdout: '' }
-    })
-    expect(await teamCommand(['setup', '--json'], f.deps)).toBe(0)
-    expect(steps).toEqual(['password', 'account', 'engines', 'sign-in', 'daemon', 'report'])
-  })
-
-  it('setup starts the task again up to five times, and keeps a sign-in already there unless asked again', async () => {
-    let tries = 0
-    const f = onWindows({ statusAfter: reported, startTeamTask: vi.fn(async () => ++tries >= 3) })
-    expect(await teamCommand(['setup'], f.deps)).toBe(0)
-    expect(f.deps.startTeamTask).toHaveBeenCalledTimes(3)
-    const handed: string[] = []
-    const signedIn = onWindows({ handedOver: handed, readConfig: () => winConfig,
-      readStatus: () => ({ version: 1, signIn: { state: 'signed-in', at: 1 }, privacy: { passed: true, checkedAt: 2_000_000 } }) })
-    expect(await teamCommand(['setup'], signedIn.deps)).toBe(0)
-    expect(handed).toEqual([])
-    expect(await teamCommand(['setup', '--sign-in-again'], signedIn.deps)).toBe(0)
-    expect(handed).toEqual([CODE])
-  })
-
-  it('setup says why when the task will not start, or Windows makes no local account', async () => {
-    const f = onWindows({ startTeamTask: vi.fn(async () => false) })
-    expect(await teamCommand(['setup', '--json'], f.deps)).toBe(1)
-    expect(f.deps.startTeamTask).toHaveBeenCalledTimes(5)
-    expect(JSON.parse(f.out.at(-1)!)).toMatchObject({ code: 'SETUP_FAILED' })
-    const local = onWindows({ adminResult: { ok: false, code: 'FAILED', status: 5, message: 'Windows would not make a local account here (policy); nothing was changed' } })
-    expect(await teamCommand(['setup', '--json'], local.deps)).toBe(1)
-    expect(JSON.parse(local.out.at(-1)!)).toMatchObject({ code: 'NO_LOCAL_ACCOUNTS' })
-    const noSid = onWindows({ ownerSid: vi.fn(async () => null) })
-    expect(await teamCommand(['setup', '--json'], noSid.deps)).toBe(1)
-    expect(noSid.admin).not.toHaveBeenCalled()
-  })
-
   it('status reads Task Scheduler and prints what Windows setup made, and how to remove it by hand', async () => {
     const f = onWindows({ readConfig: () => winConfig, accountExists: vi.fn(async () => true),
       jobState: vi.fn(async () => ({ loaded: true, pid: 4242, state: 'Running' })) })
@@ -1126,16 +861,14 @@ describe('harness team logs and sign-in', () => {
     expect(f.out.join('\n')).toContain('create pane open')
   })
 
-  it('refuses the sign-in where it cannot run, naming what to do instead', async () => {
-    const windows = fake({ platform: 'win32', readConfig: () => config as never })
-    expect(await teamCommand(['sign-in', 'claude'], windows.deps)).toBe(1)
-    expect(windows.err.join('\n')).toContain('On Windows, sign in from Harness')
-    const noTerminal = fake({ readConfig: () => config as never, interactive: false })
-    expect(await teamCommand(['sign-in', 'codex'], noTerminal.deps)).toBe(1)
-    expect(noTerminal.err.join('\n')).toContain('Run it in a terminal')
-    const wrong = fake({ readConfig: () => config as never, interactive: true })
-    expect(await teamCommand(['sign-in', 'vim'], wrong.deps)).toBe(1)
-    expect(wrong.err.join('\n')).toContain('Name claude or codex')
+  it('signs no engine in and sets no model: Swarm v3 has no Team accounts (#4221)', async () => {
+    for (const argv of [['sign-in', 'claude'], ['model', 'set', 'openai', '--model', 'gpt-x']]) {
+      const f = fake({ readConfig: () => config as never, interactive: true })
+      expect(await teamCommand(argv, f.deps), argv[0]).toBe(1)
+      expect(f.err.join('\n'), argv[0]).toContain('Swarm v3 has no Team accounts')
+      expect(f.admin, argv[0]).not.toHaveBeenCalled()
+    }
   })
+
 })
 
