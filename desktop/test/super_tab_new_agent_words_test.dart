@@ -116,8 +116,8 @@ void _expectNewAgentForm(WidgetTester tester) {
 }
 
 void main() {
-  // Audit 1.3.89 finding 11 (task #4445): the role reads as the crown does,
-  // Product Manager, and the other role is a plain Agent, never Lead or Member.
+  // Audit 1.3.89 finding 11 (task #4445): the role reads as the
+  // left pane names it, Product Manager, and the other role is a plain Agent, never Lead or Member.
   testWidgets('the role chip and menu say Agent or Product Manager, whole', (
     tester,
   ) async {

@@ -2671,7 +2671,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         label: kind == 'lead' ? 'Product Manager' : 'Agent',
         semanticLabel:
             'Starts as, ${kind == 'lead' ? 'Product Manager' : 'Agent'}',
-        icon: kind == 'lead' ? AppIcons.crown : AppIcons.user,
+        icon: kind == 'lead' ? AppIcons.circleUser : AppIcons.user,
         menu: true,
         capsule: true,
         tooltip: 'Start as an agent or a Product Manager',
@@ -3885,7 +3885,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
           'lead',
           'Product Manager',
           'Leads a project and its crew',
-          AppIcons.crown,
+          AppIcons.circleUser,
         ),
       ])
         AppMenuItem(

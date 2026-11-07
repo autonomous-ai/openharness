@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 
 import 'support/super_tab_fixture.dart';
@@ -56,17 +55,6 @@ void main() {
       tester.widget<Text>(note).style?.color,
       grid.SidebarInk.muted(tester.element(key('super-agent-orion'))),
     );
-  });
-
-  testWidgets('the crown is at least 12 px on a 20 px avatar', (tester) async {
-    await showLeftPane(tester, setup: agents());
-    final badge = find
-        .ancestor(
-          of: inRow('orion', find.byIcon(AppIcons.crown)),
-          matching: find.byType(Container),
-        )
-        .first;
-    expect(tester.getSize(badge).width, greaterThanOrEqualTo(12));
   });
 
   testWidgets('open Projects with none says so', (tester) async {

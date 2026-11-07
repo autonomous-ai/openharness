@@ -1,7 +1,7 @@
 // The left pane's fixes of the Desktop 1.3.89 audit (task #4445, group C), for the PR's pictures, light and dark, at
 // an 880 window (the left pane at its least) and at 1500: a folded Projects with a tag waiting (finding 19), a row
 // reached by Tab beside the selected one (finding 21), and the polish (a long Swarm name, a PM's project after a
-// separator, the crown, an agent with no chat yet, "No projects yet."). Writes nothing unless HARNESS_SUPER_TAB_CAPTURE
+// separator, an agent with no chat yet, "No projects yet."). Writes nothing unless HARNESS_SUPER_TAB_CAPTURE
 // names a folder.
 import 'dart:io';
 

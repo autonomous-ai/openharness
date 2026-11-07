@@ -241,8 +241,8 @@ class _Tag extends StatelessWidget {
   );
 }
 
-/// A task's status as the Tasks pane marks it: a proposal and a rejection by their own icons, work by its activity,
-/// each named in the task's own words, never the terminal's.
+/// A task's status as the Tasks pane marks it: a proposal, a rejection and a failure by their own icons, other work by
+/// its activity, each named in the task's own words, never the terminal's. No mark is an X: an X means close (task #4461).
 class SuperTabTaskStatusMark extends StatelessWidget {
   const SuperTabTaskStatusMark(this.status, {super.key, this.reason});
   final String status;
@@ -253,13 +253,24 @@ class SuperTabTaskStatusMark extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final label = superTabTaskStatusLabel(status);
-    if (status == 'proposal' || status == 'rejected') {
+    final activity = superTabTaskActivity(status);
+    final (icon, color) = switch (status) {
+      'proposal' => (AppIcons.lightbulb, null),
+      'rejected' => (AppIcons.thumbsDown, null),
+      _ when activity == HarnessActivity.failed => (
+        AppIcons.triangleAlert,
+        Theme.of(context).colorScheme.error,
+      ),
+      _ => (null, null),
+    };
+    if (icon != null) {
       final why = status == 'rejected' ? superTabTaskRejection(reason) : null;
       return Tooltip(
         message: why == null ? label : '$label: $why',
         child: Icon(
-          status == 'proposal' ? AppIcons.circleDashed : AppIcons.circleX,
+          icon,
           size: AppIcons.metadataSize,
+          color: color,
           semanticLabel: label,
         ),
       );
@@ -267,7 +278,7 @@ class SuperTabTaskStatusMark extends StatelessWidget {
     return Tooltip(
       message: label,
       child: ActivityMark(
-        activity: superTabTaskActivity(status),
+        activity: activity,
         color: Theme.of(context).colorScheme.onSurface,
         tooltip: false,
       ),
