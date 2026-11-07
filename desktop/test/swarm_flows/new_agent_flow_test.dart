@@ -30,7 +30,7 @@ void main() {
       flow.refuse('no longer available');
       return flow.swarm(tabId)?.selected?.kind == 'agent-chat';
     }, timeout: const Duration(seconds: 60));
-    expect(find.text('Say hello.'), findsWidgets, reason: 'its first task');
+    await flow.see(find.text('Say hello.'), what: 'its first task in its chat');
     await flow.close();
   });
 

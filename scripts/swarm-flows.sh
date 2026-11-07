@@ -32,7 +32,7 @@ status=0
 (cd "$ROOT/desktop" && "$FLUTTER" test --no-pub --concurrency=2 --reporter=json "${files[@]}") >"$work/report.jsonl" || status=$?
 python3 - "$work/report.jsonl" <<'PY'
 import json, sys
-names, failed, passed = {}, [], 0
+names, errors, failed, passed = {}, {}, [], 0
 for line in open(sys.argv[1], encoding='utf-8', errors='replace'):
     try:
         event = json.loads(line)
@@ -40,17 +40,24 @@ for line in open(sys.argv[1], encoding='utf-8', errors='replace'):
         continue
     if not isinstance(event, dict):
         continue
-    if event.get('type') == 'testStart':
-        names[event['test']['id']] = event['test']['name']
-    elif event.get('type') == 'testDone' and not event.get('hidden'):
+    kind = event.get('type')
+    if kind == 'testStart':
+        names[event['test']['id']] = event['test']['name'].split(' (variant:')[0]
+    elif kind in ('error', 'print'):
+        # A widget test's exception arrives as printed lines; its error event only says "see above".
+        text = (event.get('error') if kind == 'error' else event.get('message')) or ''
+        if 'See exception logs above' not in text:
+            errors.setdefault(event.get('testID'), []).append(text.strip())
+    elif kind == 'testDone' and not event.get('hidden'):
         if event.get('result') == 'success' and not event.get('skipped'):
             passed += 1
         elif event.get('result') != 'success':
-            failed.append(names.get(event['testID'], '?').split(' (variant:')[0])
-    elif event.get('type') == 'error':
-        print(event.get('error', '').strip()[:4000], file=sys.stderr)
-for name in failed:
-    print(f'FAILED FLOW: {name}')
+            failed.append(event['testID'])
+# Each failing flow by name, then what it said: what it waited for, or what the app showed.
+for test in failed:
+    print(f'FAILED FLOW: {names.get(test, "?")}')
+    for error in errors.get(test, []):
+        print('    ' + error[:3000].replace('\n', '\n    '))
 print(f'Swarm flows: {passed} passed, {len(failed)} failed')
 PY
 exit "$status"

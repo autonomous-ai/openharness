@@ -184,13 +184,19 @@ class SwarmStack {
 
 /// One flow, as a person on a Mac does it. The name is what a failing release
 /// gate reports (scripts/swarm-flows.sh).
-void flowTest(String name, Future<void> Function(WidgetTester tester) body) =>
-    testWidgets(
-      name,
-      body,
-      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
-      timeout: const Timeout(Duration(minutes: 3)),
-    );
+/// [skip] names the bug a flow found, until its fix lands; the flow keeps
+/// asserting what is right.
+void flowTest(
+  String name,
+  Future<void> Function(WidgetTester tester) body, {
+  String? skip,
+}) => testWidgets(
+  name,
+  body,
+  skip: skip != null,
+  variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+  timeout: const Timeout(Duration(minutes: 3)),
+);
 
 /// A person's sign-in that is always signed in and never runs the real CLI.
 class FakeSignIn extends CliLogin {
@@ -343,6 +349,8 @@ class FlowApp {
     await _tester.pumpWidget(const SizedBox());
     await _tester.runAsync(connection.close);
     app.dispose();
-    await _tester.pump(const Duration(seconds: 1));
+    // A request a closing view still sent can never be answered now: its
+    // timeout (a fake-clock timer, at most a minute) ends it here.
+    await _tester.pump(const Duration(minutes: 1, seconds: 1));
   }
 }
