@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_icons.dart';
@@ -154,62 +156,77 @@ class SuperTabBuddyRow extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Row(
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    name,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    // Unread is the name in bold, no dot (Dee, 2026-10-29).
-                                    style:
-                                        DesktopChrome.control(
-                                          medium: selected,
-                                          color: color,
-                                        ).copyWith(
-                                          fontWeight: unread
-                                              ? grid.AppFont.semibold
-                                              : null,
+                            // The name keeps its whole width first; the
+                            // project and note after it take what is left
+                            // (at the left pane's 180 a Buddy read "Bu… no…").
+                            LayoutBuilder(
+                              builder: (context, box) => Row(
+                                children: [
+                                  ConstrainedBox(
+                                    constraints: BoxConstraints(
+                                      maxWidth: math.max(
+                                        0,
+                                        box.maxWidth -
+                                            (crownKey == null
+                                                ? 0
+                                                : 4 + AppIcons.metadataSize) -
+                                            8 * [project, note].nonNulls.length,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      // Unread is the name in bold, no dot (Dee, 2026-10-29).
+                                      style:
+                                          DesktopChrome.control(
+                                            medium: selected,
+                                            color: color,
+                                          ).copyWith(
+                                            fontWeight: unread
+                                                ? grid.AppFont.semibold
+                                                : null,
+                                          ),
+                                    ),
+                                  ),
+                                  if (crownKey case final crownKey?) ...[
+                                    const SizedBox(width: 4),
+                                    Icon(
+                                      AppIcons.crown,
+                                      key: crownKey,
+                                      size: AppIcons.metadataSize,
+                                      color: color,
+                                    ),
+                                  ],
+                                  if (project case final project?) ...[
+                                    const SizedBox(width: 8),
+                                    Flexible(
+                                      child: Text(
+                                        '($project)',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: DesktopChrome.metadata(
+                                          color: grid.SidebarInk.muted(context),
                                         ),
-                                  ),
-                                ),
-                                if (crownKey case final crownKey?) ...[
-                                  const SizedBox(width: 4),
-                                  Icon(
-                                    AppIcons.crown,
-                                    key: crownKey,
-                                    size: AppIcons.metadataSize,
-                                    color: color,
-                                  ),
-                                ],
-                                if (project case final project?) ...[
-                                  const SizedBox(width: 8),
-                                  Flexible(
-                                    child: Text(
-                                      '($project)',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: DesktopChrome.metadata(
-                                        color: grid.SidebarInk.muted(context),
                                       ),
                                     ),
-                                  ),
-                                ],
-                                // A quiet note yields first at large text sizes.
-                                if (note case final note?) ...[
-                                  const SizedBox(width: 8),
-                                  Flexible(
-                                    child: Text(
-                                      note,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: DesktopChrome.metadata(
-                                        color: grid.SidebarInk.muted(context),
+                                  ],
+                                  // A quiet note yields first at large text sizes.
+                                  if (note case final note?) ...[
+                                    const SizedBox(width: 8),
+                                    Flexible(
+                                      child: Text(
+                                        note,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: DesktopChrome.metadata(
+                                          color: grid.SidebarInk.muted(context),
+                                        ),
                                       ),
                                     ),
-                                  ),
+                                  ],
                                 ],
-                              ],
+                              ),
                             ),
                             if (detail case final detail?)
                               Row(
