@@ -71,7 +71,8 @@ Added to [the Naming System](../naming-system.md) by the first build task:
     test verdicts at that head, the merge commit, the release's `--wait` receipt and the version it shipped in;
   - starts `make release-desktop ARGS="--prepare"` on its branch when it marks the pull request ready, so the release can
     reuse that build;
-  - takes the release step for its ask (section 2) and runs it from a checkout of main;
+  - takes the release step the server opened for its ask (section 2) and runs it from a checkout of main, at a commit
+    that holds its merge with `ci/required` green; it has no right to release outside that step (Design 8);
   - sets the task done only when the release carrying it is verified, with the version and the receipts as evidence.
 - **After it ships** the owner is free for new work, but stays named on the ask until the person has it. If the person
   says on the card that it does not work, the ask returns to that owner if it is still running; otherwise to a new one.
@@ -249,11 +250,18 @@ Reviewed revision: initial spec. Reviewer: pending. Each line: answered.
    isolated integration store; no production restore is needed for added optional fields.
 7. **Audience.** Ask fields are task fields and go only where the task goes, through the same read predicate. The late
    line to a person goes only to the requester's own Buddy, through the existing private line path. A person's Desktop
-   version is read only by the server to decide "with you"; no one else sees it. Logs and measures carry no titles or
+   version is read only by the server to decide "with you"; no one else sees it. The version comes from the app itself,
+   so the server trusts it for nothing else: it accepts only a well-formed version of bounded length (`desktop/` and a
+   dotted number, at most 32 characters; anything else is dropped and counted), keeps it only when higher, and uses it
+   only to show "with you", never for access, routing or a release decision. Logs and measures carry no titles or
    identifiers.
 8. **Identity.** The owner runs under its own person's login and settings (Swarm v3). Merges go through the Swarm's
    GitHub App for its task, as today. The release runs from a checkout of main and dispatches the existing release
-   workflow through the same App; signing secrets stay in that workflow. An owner without GitHub access for its task is
+   workflow through the same App; signing secrets stay in that workflow. Releasing moves from one Integrator to every
+   ask's owner, so the right is bound to the step: an owner may start a release workflow only through a release step the
+   server opened for it, from main at a commit that holds its ask's merge with `ci/required` green. The App's right to
+   start release workflows is granted for that step only, while it is open, and never to an Engineer's task access in
+   general; the server refuses any other start and says so on the card. An owner without GitHub access for its task is
    refused and the ask goes late, never run under a machine owner's login.
 9. **Failure.** Owner lost: the ask goes to a free lane agent at once, counted as a handover, and late if none is free
    for 10 minutes. Release fails: the owner sees the failed run, fixes it as a code failure and cuts the next version;
@@ -270,7 +278,8 @@ Reviewed revision: initial spec. Reviewer: pending. Each line: answered.
 1. **Words.** Add Ask, Owner, Due, Late and With you to docs/naming-system.md. Docs only.
 2. **Desktop says its version.** Desktop sends `x-harness-client: desktop/<version>` on its requests, as the CLI does.
    Desktop, all three OSes.
-3. **The server records it.** The newest Desktop version per member, written only when higher. Backend.
+3. **The server records it.** The newest Desktop version per member: only a well-formed, bounded version, written only
+   when higher, used only for "with you" (Design 7). Backend.
 4. **Ask times on the task.** Asked at, due (the PM's at Accept, else the default), stage and since, owner; sent in the
    task part and the Tasks feed. Backend.
 5. **The card's line.** Asked, now at, due and the late warning in the card caption; "update to …" in Shipped. Desktop,
@@ -284,7 +293,9 @@ Reviewed revision: initial spec. Reviewer: pending. Each line: answered.
 9. **An ask merges alone.** The train merges an eligible ask's pull request in a batch of one, on the pass it turns
    eligible, asks before crew work (anh Dee's first). Backend.
 10. **A release per ask.** The release list opens the Desktop step for the owner of the oldest ask it carries, one
-    building at a time; an ask's backend release skips the 2-hour pace. Backend.
+    building at a time; an ask's backend release skips the 2-hour pace. The right to start a release workflow is granted
+    for that open step only, from main at a commit holding the ask's merge with `ci/required` green (Design 8). Backend,
+    with a security review.
 11. **The owner stays.** "Handed" does not free an ask's owner; the server wakes it on each event; a lost owner's ask goes
     to a free lane agent with its receipts; the owner sets done at the verified release. Backend, with the CLI host's
     wake.
