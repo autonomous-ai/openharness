@@ -12,11 +12,11 @@ import { agentForBuddy, agentWithoutMachine, groupForBuddy, machineHiddenFrom, s
 import { availableSlots, slotCounter, machineTeamWork, type ContributedMachine } from '../machines.js'
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
-import { canReadGroup } from '../projects.js'
+import { canReadGroup, canReadProject, projectsOf } from '../projects.js'
 import { promptWaits } from '../promptWaits.js'
 import { storedPulse, type Pulse } from '../pulse.js'
 import { coordinatorNameOf, roleNameOf } from '../instructions.js'
-import { agentChatId, agentKind, inMyAgents } from '../agentKind.js'
+import { agentChatId, agentKind, agentRole, inMyAgents, mainProjectOf } from '../agentKind.js'
 import { withAvatarView } from '../profile.js'
 import { swarmUsernames } from '../usernames.js'
 import type { AgentView, Derived, GroupView, HeadView, LivePart, MachineView, MemberView, ProgressView, StartView } from './contract.js'
@@ -93,7 +93,8 @@ export const seenIn = (parts: ReaderView['parts']): Set<string> =>
   new Set([...parts.machines.map(m => m.key), ...parts.agents.map(a => a.data.machineId)])
 
 export function agentView(agent: Agent): AgentView {
-  const { downNamed: _named, downSince: _since, limitedUntil: _limit, roleId: _role, ...rest } = agent
+  // A main project goes in the derived row, to its project's readers only: a private one's id says the project exists.
+  const { downNamed: _named, downSince: _since, limitedUntil: _limit, roleId: _role, mainProjectId: _main, ...rest } = agent
   return withAvatarView(rest) as AgentView
 }
 
@@ -196,6 +197,17 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
   const pulse = pulses(state, visible, actor, isBuddyReader(state, actor))
   // Each visible agent's stored row, looked up once rather than once per derived field.
   const storedAgents = new Map(state.agents.map(a => [a.id, a]))
+  // Whether the reader reads each project, worked out once for every agent naming it as its main project.
+  const projectReads = new Map<string, boolean>()
+  const readsProject = (id: string) => {
+    let reads = projectReads.get(id)
+    if (reads === undefined) {
+      const project = projectsOf(state).find(p => p.id === id)
+      projectReads.set(id, reads = !!project && canReadProject(state, actor, project))
+    }
+    return reads
+  }
+  const shownMain = (agent: Agent) => { const main = mainProjectOf(state, agent); return main && readsProject(main) ? main : null }
   // The next release times the settle recorded (releases.ts), for the projects this reader sees: the release list itself stays
   // the server's (task #3827).
   const releaseTimes = Object.fromEntries(visible.projects?.flatMap(seen => {
@@ -215,7 +227,9 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
         // What it is and where its person talks to it, for the left pane's "My agents" (agentKind.ts, task #4116).
         kind: agentKind(state, stored), chatId: agentChatId(state, stored),
         // Whether it is in this reader's My agents, decided here so every client lists the same (task #4192).
-        myAgent: inMyAgents(state, actor, stored) }]
+        myAgent: inMyAgents(state, actor, stored),
+        // Lead or Member, and its main project (agentKind.ts, task #4540).
+        role: agentRole(state, stored), mainProjectId: shownMain(stored) }]
     })),
     machines: Object.fromEntries((visible.machines ?? []).map(machine)),
     ...(visible.otherProjectsWork ? { otherProjectsWork: visible.otherProjectsWork } : {}),

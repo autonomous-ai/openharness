@@ -8,6 +8,15 @@ import type { Actor, Agent, SuperTabState } from './model.js'
 import { isAgentChat, ledProject, onTeamAccount } from './projects.js'
 
 export type AgentKind = 'buddy' | 'pm' | 'regular'
+/** Members and Leads (task #4540; spec 2026-11-07-members-and-leads): a Lead leads a project, every other agent is a Member.
+ *  Derived, never stored; `kind` stays beside it for clients until 2026-12-07. */
+export type AgentRole = 'lead' | 'member'
+
+export const agentRole = (state: SuperTabState, target: Agent): AgentRole => ledProject(state, target.id) ? 'lead' : 'member'
+
+/** [target]'s main project: the one it leads, else the one its person picked, else none. */
+export const mainProjectOf = (state: SuperTabState, target: Agent): string | null =>
+  ledProject(state, target.id)?.id ?? target.mainProjectId ?? null
 
 export function agentKind(state: SuperTabState, target: Agent): AgentKind {
   if (isBuddy(target)) return 'buddy'
