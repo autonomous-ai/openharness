@@ -4800,12 +4800,13 @@ describe('credentials in Swarm chat', () => {
     }
   })
 
-  it('treats an agent\'s post the same, and a native terminal transcript too', async () => {
+  // Task #3595: an agent's post is refused, by kind, rather than redacted; a native terminal transcript is still redacted.
+  it('refuses an agent\'s post with a credential, and redacts a native terminal transcript', async () => {
     const { tab, lead } = await fixture()
-    const posted = await run(tab, message(`gh auth status printed ${github}`), host, lead)
-    expect(posted.result.credentialNotice).toBe('Removed a credential (GitHub token) before saving. Revoke or rotate it.')
-    expect((await store.messages(owner, tab, 'lead', { messageId: posted.result.messageId as string })).messages[0]!.text)
-      .toBe('gh auth status printed [credential removed]')
+    const refused = await run(tab, message(`gh auth status printed ${github}`), host, lead).catch(error => error)
+    expect(refused).toMatchObject({ code: 'SECRET_LIKE', status: 400 })
+    expect(String(refused.message)).toContain('GitHub token')
+    expect(String(refused.message)).not.toContain(github)
     const group = (await run(tab, { type: 'conversation.create', title: 'Release', brief: 'Ship it',
       checks: [{ description: 'Shipped', independent: false }] })).result.conversationId as string
     const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),

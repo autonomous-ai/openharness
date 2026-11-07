@@ -64,7 +64,7 @@ async function swarm(now: () => number = Date.now) {
   const tab = (await store.create(owner, randomUUID(), 'Pictures', 'public')).id
   const execute = (command: Parameters<SuperTabStore['execute']>[2]['command'], user = owner) => store.execute(user, tab, { operationId: randomUUID(), command })
   await execute({ type: 'machine.contribute', machineId: 'mac', name: 'Mac', cwd: '/repo', engines: ['codex'], maxAgents: 8 })
-  await execute({ type: 'agent.add', conversationId: 'lead', machineId: 'mac', harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true })
+  const lead = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId: 'mac', harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true })).result.agentId)
   const invitation = await execute({ type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' })
   await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, peer)
   const upload = async (bytes: Buffer, name = 'photo.jpg', mime = 'image/jpeg') =>
@@ -72,7 +72,7 @@ async function swarm(now: () => number = Date.now) {
   const send = async (attachment: Attachment) =>
     String((await execute({ type: 'message.send', conversationId: 'lead', text: '', replyTo: null, recipientIds: [], attachmentIds: [attachment.id] })).result.messageId)
   const read = async (messageId: string, user = owner) => (await store.messages(user, tab, 'lead', { messageId })).messages[0]!.attachments as unknown as Attachment[]
-  return { files, attachments, store, tab, execute, upload, send, read }
+  return { files, attachments, store, tab, execute, upload, send, read, lead }
 }
 
 describe('a picture uploaded through the form', () => {
@@ -262,5 +262,59 @@ describe('removing a stored picture removes its thumbnail', () => {
     await purgeDeletedSwarms(db, purgeFiles(f.attachments), now + SWARM_DELETE_GRACE_MS + PURGE_MARGIN_MS)
     expect(f.files.objects.has(keyOf(file.url))).toBe(false)
     expect(f.files.objects.has(keyOf(file.thumb!.url))).toBe(false)
+  })
+})
+
+// Task #3595: a file's name is shown in the chat as its message is, so an agent's file named with a credential is refused, by its
+// kind and never its value, before a byte is stored; a person's is still kept with the credential removed.
+describe('a file whose name holds a credential', () => {
+  const token = () => ['ghp', 'Ab3Cd5Ef7Gh9Ij1Kl3Mn5Op7Qr9St1Uv3Wx5Yz'].join('_')
+  it('is refused for an agent through the form and the direct link, and stores nothing', async () => {
+    const f = await swarm()
+    const name = `deploy-${token()}.txt`
+    const refused = await f.store.upload(owner, f.tab, 'lead', { name, mime: 'text/plain', body: Readable.from([Buffer.from('x')]) }, f.lead).catch(e => e)
+    expect(refused).toMatchObject({ code: 'SECRET_LIKE', status: 400 })
+    expect(String(refused.message)).not.toContain(token())
+    const linked = await f.store.uploadLink(owner, f.tab, 'lead', { name, mime: 'text/plain', size: 1 }, f.lead).catch(e => e)
+    expect(linked).toMatchObject({ code: 'SECRET_LIKE', status: 400 })
+    expect(f.files.objects.size).toBe(0)
+    expect(await db.superTabAttachment.count({ where: { tabId: f.tab } })).toBe(0)
+  })
+
+  it('is kept for a person, with the credential removed from its name', async () => {
+    const f = await swarm()
+    const file = await f.upload(Buffer.from('x'), `deploy-${token()}.txt`, 'text/plain')
+    expect(file.name).not.toContain(token())
+  })
+})
+
+// Both security reviews of #3310 (ReviewLinnea's Important 1): agents attach logs, so an agent's text file is scanned too, its
+// first megabyte, and refused by kind before it can be sent; a person's file is kept as today.
+describe('a text file whose contents hold a credential', () => {
+  const token = () => ['ghp', 'Ab3Cd5Ef7Gh9Ij1Kl3Mn5Op7Qr9St1Uv3Wx5Yz'].join('_')
+  const log = () => Buffer.from(`npm publish\nauth: ${token()}\nfailed\n`)
+  it('is refused for an agent through the form, and stores nothing', async () => {
+    const f = await swarm()
+    const refused = await f.store.upload(owner, f.tab, 'lead', { name: 'publish.log', mime: 'text/plain', body: Readable.from([log()]) }, f.lead).catch(e => e)
+    expect(refused).toMatchObject({ code: 'SECRET_LIKE', status: 400 })
+    expect(String(refused.message)).not.toContain(token())
+    expect(f.files.objects.size).toBe(0)
+  })
+
+  it('is refused for an agent through the direct link, and its object is deleted', async () => {
+    const f = await swarm()
+    const bytes = log()
+    const { upload } = await f.store.uploadLink(owner, f.tab, 'lead', { name: 'publish.log', mime: 'text/plain', size: bytes.byteLength }, f.lead)
+    expect(await f.files.receive(upload.url, upload.headers, bytes)).toBe(200)
+    const refused = await f.store.completeUpload(owner, f.tab, upload.id, f.lead).catch(e => e)
+    expect(refused).toMatchObject({ code: 'SECRET_LIKE', status: 400 })
+    expect(f.files.objects.size).toBe(0)
+  })
+
+  it('passes an agent\'s ordinary log, and a person\'s file as before', async () => {
+    const f = await swarm()
+    const clean = Buffer.from('Ready for review at c474d81d7ccad7edeaba906169aa577d77e537ea\n')
+    expect((await f.store.upload(owner, f.tab, 'lead', { name: 'ci.log', mime: 'text/plain', body: Readable.from([clean]) }, f.lead)).attachment).toBeTruthy()
+    expect(await f.upload(log(), 'publish.log', 'text/plain')).toBeTruthy()
   })
 })

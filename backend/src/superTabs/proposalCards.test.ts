@@ -298,16 +298,15 @@ describe('credentials in proposal words', () => {
     const id = f.create(peer, { title: `Rotate ${token}`, text: `Calls fail with ${token}`, goal: `Drop ${token}`, why: `Leaked ${token}`,
       doneWhen: `No ${token} left`, evidence: [`Log shows ${token}`] }).result.conversationId
     f.card(id).proposal!.senders[0]!.buddyId = f.buddy
-    const sent = [f.run(ask(id, { question: `Is ${token} yours?`, defaultAnswer: `Rotate ${token}` }), f.pm)]
-    sent.push(f.run({ type: 'proposal.answer', conversationId: id, questionId: sent[0]!.result.questionId, text: `Yes, ${token}` }, buddy))
-    sent.push(f.run({ type: 'proposal.merge', conversationId: f.create(owner).result.conversationId, intoConversationId: id, reason: `Same as ${token}` }, f.pm))
-    const ruled = f.run(decide(id, 'accept', { reason: `Rotate ${token} first`, task: { ...acceptedTask, changes: `Remove ${token}` },
-      checks: [{ description: `No ${token} in logs`, independent: false }] }), f.pm)
+    // The PM's and the Buddy's own words with a token in them are refused, not redacted ('an agent's credential in proposal
+    // text', #3310): here they carry none, and the person's words they quote stay cleaned through the ruling.
+    const sent = [f.run(ask(id, { question: 'Is it yours?', defaultAnswer: 'Rotate it' }), f.pm)]
+    sent.push(f.run({ type: 'proposal.answer', conversationId: id, questionId: sent[0]!.result.questionId, text: 'Yes' }, buddy))
+    sent.push(f.run({ type: 'proposal.merge', conversationId: f.create(owner).result.conversationId, intoConversationId: id, reason: 'Same request' }, f.pm))
+    const ruled = f.run(decide(id, 'accept', { reason: 'Rotate it first' }), f.pm)
     // Both proposers hear the ruling in their Buddy chats, in its cleaned words.
     const notices = ruled.messages.filter(m => m.source?.kind === 'proposal-notice')
-    expect(notices.map(m => m.text)).toEqual([0, 1].map(() => `Rotate ${CREDENTIAL_MARKER}: accept. Rotate ${CREDENTIAL_MARKER} first`))
-    expect(f.card(id).proposal!.decision!.reason).toBe(`Rotate ${CREDENTIAL_MARKER} first`)
-    expect(f.card(id).proposal!.questions[0]!.answer!.text).toBe(`Yes, ${CREDENTIAL_MARKER}`)
+    expect(notices.map(m => m.text)).toEqual([0, 1].map(() => `Rotate ${CREDENTIAL_MARKER}: accept. Rotate it first`))
     expect(JSON.stringify([...sent, ruled].map(e => e.messages))).not.toContain(token)
     expect(JSON.stringify(f.state)).not.toContain(token)
   })
@@ -390,6 +389,52 @@ describe('proposal time and delivery boundaries', () => {
     expect(posted.messages[0]!.recipients).toEqual([])
     delete f.state.projects![0]!.boardMode
     expect(pmAcceptsMessage(f.state, f.lead, undefined)).toBe(true)
+  })
+})
+
+// Review of #3310 at c91dc2489 (task #3595): a PM's or Buddy's credential reached a proposal ruling, a card question, a merge
+// reason and a Buddy's answer as written. An agent's text there is refused as its posts are. (Redacting a person's: #4340.)
+describe('an agent\'s credential in proposal text', () => {
+  // Assembled at run time, as agentSecrets.test.ts does, so the repository holds nothing a scanner takes for a secret.
+  const token = ['ghp', 'Q7mZ2xK9pL4vR8nT1wB6yC3dF5hJ0aE2sG7u'].join('_')
+  const leaked = `Here it is: ${token} (for the deploy)`
+  const refused = (f: ReturnType<typeof fixture>, input: Record<string, unknown>, actor: Actor) => {
+    const before = JSON.stringify(f.state)
+    let error: unknown
+    try { f.run(input, actor) } catch (e) { error = e }
+    expect(error, JSON.stringify(input)).toMatchObject({ code: 'SECRET_LIKE', status: 400 })
+    expect(String((error as Error).message)).not.toContain(token)
+    expect(JSON.stringify(f.state), 'something was stored').toBe(before)
+  }
+  const buddyCard = (f: ReturnType<typeof fixture>) => {
+    const id = f.create().result.conversationId
+    f.card(id).proposal!.senders[0]!.buddyId = f.buddy
+    return id
+  }
+
+  it('is refused in a PM\'s ruling: its reason, the task and the checks', () => {
+    const f = fixture(), id = buddyCard(f)
+    refused(f, decide(id, 'no', { reason: leaked }), f.pm)
+    refused(f, decide(id, 'accept', { task: { ...acceptedTask, goal: leaked } }), f.pm)
+    refused(f, decide(id, 'accept', { checks: [{ description: leaked, independent: false }] }), f.pm)
+  })
+
+  it('is refused in a PM\'s question on a card and its default answer', () => {
+    const f = fixture(), id = buddyCard(f)
+    refused(f, ask(id, { question: leaked }), f.pm)
+    refused(f, ask(id, { defaultAnswer: leaked }), f.pm)
+  })
+
+  it('is refused in a PM\'s merge reason', () => {
+    const f = fixture(), id = f.create().result.conversationId, other = f.create(owner).result.conversationId
+    refused(f, { type: 'proposal.merge', conversationId: other, intoConversationId: id, reason: leaked }, f.pm)
+  })
+
+  it('is refused in a Buddy\'s answer', () => {
+    const f = fixture(), id = buddyCard(f)
+    const qid = f.run(ask(id), f.pm).result.questionId
+    const buddy: Actor = { kind: 'agent', agentId: f.buddy, machineOwnerId: `${owner.userId}-machine` }
+    refused(f, { type: 'proposal.answer', conversationId: id, questionId: qid, text: leaked }, buddy)
   })
 })
 

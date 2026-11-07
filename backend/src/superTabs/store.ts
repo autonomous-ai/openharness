@@ -32,7 +32,7 @@ import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, isPersonalSwarm, notThere } from './deletion.js'
 import type { ApprovalRow, DroppedLine } from './ruleGuard.js'
-import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, SWARM_INVITATION_MS, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
+import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, SWARM_INVITATION_MS, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, refuseSecretTexts, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
@@ -42,7 +42,7 @@ import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
 import { closeProposal, databaseProposalReads, openProposalRows, openProposals, proposalChat, type OpenProposal } from './proposals.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, peekType, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
-  type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
+  peekBytes, scannedAsText, SCANNED_TEXT_BYTES, type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
 import { makeThumbnail, MAX_READ_BACK_BYTES, pictureFields, THUMBNAILED_TYPES, thumbKeyOf, thumbnailsReserve, type StoredImage } from './thumbnails.js'
 import { FileLinks } from './fileLinks.js'
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -2858,6 +2858,14 @@ export class SuperTabStore {
    * checked before a byte is stored; the row that makes it sendable is written only once the whole file is. */
   async upload(user: AuthUser, tabId: string, conversationId: string, file: { name: string; mime: string; body: Readable }, asAgentId?: string) {
     const attachments = this.attachments ?? fail('ATTACHMENTS_UNAVAILABLE', 'File attachments are not available on this server.', 503)
+    // An agent's file named with a credential is refused, by kind, before a byte is stored; a person's is kept redacted (#3595).
+    // So is an agent's text file whose first SCANNED_TEXT_BYTES hold one: agents attach logs (security reviews of #3310).
+    if (asAgentId) refuseSecretTexts([file.name])
+    if (asAgentId && scannedAsText(file.mime, file.name)) {
+      const peeked = await peekBytes(file.body, SCANNED_TEXT_BYTES)
+      refuseSecretTexts([peeked.head.toString('utf8')])
+      file = { ...file, body: peeked.body }
+    }
     // A file's name is shown in the chat like its message, so it never keeps a credential either.
     const name = attachmentName.transform(value => redactCredentials(value).text).safeParse(file.name), mime = attachmentMime.safeParse(file.mime)
     if (!name.success || !mime.success) fail('INVALID_ATTACHMENT', 'Attach a file with a printable name and a content type.', 400)
@@ -2873,6 +2881,7 @@ export class SuperTabStore {
    *  signed. The row is written pending: no message can name it until completeUpload() has seen the stored bytes. An upload
    *  never completed, like an unsent file, is an unused row the unsent-file sweep removes with its object (#2268). */
   async uploadLink(user: AuthUser, tabId: string, conversationId: string, file: { name: string; mime: string; size: number }, asAgentId?: string) {
+    if (asAgentId) refuseSecretTexts([file.name])
     const attachments = this.attachments ?? fail('ATTACHMENTS_UNAVAILABLE', 'File attachments are not available on this server.', 503)
     const direct = directUploads(attachments.store) ?? fail('ATTACHMENTS_UNAVAILABLE', 'Files this big cannot be sent to this server.', 503)
     const name = attachmentName.transform(value => redactCredentials(value).text).safeParse(file.name), mime = attachmentMime.safeParse(file.mime)
@@ -2952,6 +2961,15 @@ export class SuperTabStore {
       // Storage enforces the size the link signed, so this is never expected; the object goes and the row stays for the sweep.
       await direct.delete(row.objectKey).catch(() => {})
       unavailable()
+    }
+    // An agent's text file sent straight to the bucket is scanned as a form upload is, before it can be sent: one holding a
+    // credential is deleted and refused by kind; its row stays unsendable for the sweep (task #3595).
+    if (asAgentId && scannedAsText(row.mime, row.name)) {
+      const text = (await direct.head(row.objectKey, SCANNED_TEXT_BYTES)).toString('utf8')
+      try { refuseSecretTexts([text]) } catch (error) {
+        await direct.delete(row.objectKey).catch(() => {})
+        throw error
+      }
     }
     const mime = typeFromHead(row.mime, head!)
     // A picture sent straight to the bucket is read back once for its thumbnail, up to a size; any failure only means none.

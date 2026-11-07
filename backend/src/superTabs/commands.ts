@@ -52,7 +52,7 @@ import { noteStartFailed, noteStartSucceeded, resumeEngine } from './engineHealt
 import { reviewCapacityNotice } from './reviewCapacity.js'
 import { processOf, taskProcess, type ProjectProcess } from './process.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
-import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
+import { CREDENTIAL_LABELS, credentialResult, findCredentials, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
 import { cloneData } from './cloneData.js'
 import { WORKSPACE_LABEL, workspaceCan, type WorkspaceRole } from './workspaces.js'
@@ -564,6 +564,7 @@ export const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'work.define': ['brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'task.requires.access[]', 'task.review.focus',
     'checks[].description'],
   'work.assign': ['overrideReason'],
+  // A needs_human question's options and what it unblocks reach a person's decision (security review 1 of #3310).
   'work.status': ['result', 'ask.options[]', 'ask.unblocks'],
   'work.cancel': ['reason'],
   'conversation.unlink': ['reason'],
@@ -591,6 +592,53 @@ export const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   // Compared with the Swarm's name, which its rename cleaned the same way.
   'swarm.delete': ['name'],
   'localModels.status': ['error'],
+}
+
+/** What an agent writes that people or other agents read (task #3595, Inventory Table A #4: a join-link token was logged in
+ *  #2480): refused when it holds a credential, rather than redacted as a person's post is. */
+const AGENT_TEXT: Partial<Record<Command['type'], readonly string[]>> = {
+  'message.send': ['text'],
+  'message.edit': ['text'],
+  'work.status': WORDS['work.status']!,
+  'work.check': ['evidence'],
+  'conversation.create': WORDS['conversation.create']!,
+  'work.define': WORDS['work.define']!,
+  'person.tell': ['text'],
+  'decision.ask': WORDS['decision.ask']!,
+  'proposal.decide': WORDS['proposal.decide']!,
+  'proposal.ask': WORDS['proposal.ask']!,
+  'proposal.answer': WORDS['proposal.answer']!,
+  'proposal.merge': WORDS['proposal.merge']!,
+}
+
+/** The strings at [paths] in [command] (WORDS' path shape: dotted keys, `[]` for each item of a list). */
+function textsAt(command: Command, paths: readonly string[]): string[] {
+  const found: string[] = []
+  const visit = (holder: unknown, [head, ...rest]: string[]) => {
+    if (!holder || typeof holder !== 'object') return
+    const many = head!.endsWith('[]'), value = (holder as Record<string, unknown>)[many ? head!.slice(0, -2) : head!]
+    for (const item of many ? (Array.isArray(value) ? value : []) : [value]) {
+      if (rest.length) visit(item, rest)
+      else if (typeof item === 'string') found.push(item)
+    }
+  }
+  for (const path of paths) visit(command, path.split('.'))
+  return found
+}
+
+/** Refuses an agent's text that holds a credential (credentials.ts findCredentials, which passes commit ids, message ids and
+ *  UUIDs), naming its kinds and never its value: nothing is stored. A person's post is redacted instead (withoutCredentials). */
+export function refuseAgentSecrets(actor: Actor, command: Command): void {
+  const paths = actor.kind === 'agent' ? AGENT_TEXT[command.type] : undefined
+  if (paths) refuseSecretTexts(textsAt(command, paths))
+}
+
+/** Refuses [texts] when any holds a credential, naming the kinds found and never the value (SECRET_LIKE, task #3595). */
+export function refuseSecretTexts(texts: readonly string[]): void {
+  const kinds = [...new Set(texts.flatMap(text => findCredentials(text).map(found => found.kind)))]
+  if (!kinds.length) return
+  fail('SECRET_LIKE', `That holds a ${kinds.map(kind => CREDENTIAL_LABELS[kind]).join(', ')}, so nothing was sent. Write where it lives `
+    + '(a file or a profile name), never the value, and send it again.', 400)
 }
 
 /** The command with every credential in its words replaced (credentials.ts), adding what went to `removed`. */
@@ -1111,7 +1159,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   // A credential someone pasted, or an agent echoed from its terminal, is gone before anything is stored or delivered
   // (Oct 2026: a Harness access token in a shared Lead chat). The sender's result says what went.
   const removed: CredentialKind[] = []
-  const command = placeAnswer(withoutCredentials(commandSchema.parse(input), removed), context)
+  const parsed = commandSchema.parse(input)
+  // An agent's text with a credential in it is refused, by kind, before anything is stored (task #3595).
+  refuseAgentSecrets(actor, parsed)
+  const command = placeAnswer(withoutCredentials(parsed, removed), context)
   const state = cloneData(original)
   numberConversations(state)
   placeRules(state)

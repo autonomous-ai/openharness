@@ -4400,13 +4400,15 @@ describe('credentials in Swarm chat', () => {
     expect(input).toEqual(send(pasted))
   })
 
-  it('treats an agent\'s post the same: agents echo credentials from their terminals', () => {
+  // Task #3595: an agent's post is refused rather than redacted, naming the kind and never the value (agentSecrets.test.ts).
+  it('refuses an agent\'s post that echoes a credential from its terminal, by kind', () => {
     const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group(), worker = f.add('worker', 'owner', group)
     f.run({ type: 'conversation.agent', conversationId: group, agentId: lead, present: true, lead: true })
     f.run({ type: 'work.assign', conversationId: group, agentId: worker })
-    const posted = f.run(send(`npm publish failed: //registry.npmjs.org/:_authToken=${github}`, group), { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' })
-    expect(posted.messages).toEqual([expect.objectContaining({ text: `npm publish failed: //registry.npmjs.org/:_authToken=${CREDENTIAL_MARKER}`, recipients: [] })])
-    expect(posted.result.credentialNotice).toBe('Removed a credential (GitHub token) before saving. Revoke or rotate it.')
+    const before = JSON.stringify(f.state)
+    expect(() => f.run(send(`npm publish failed: //registry.npmjs.org/:_authToken=${github}`, group), { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }))
+      .toThrow(expect.objectContaining({ code: 'SECRET_LIKE', message: expect.stringContaining('GitHub token') }))
+    expect(JSON.stringify(f.state)).toBe(before)
   })
 
   it('leaves a message without credentials, and its result, exactly as before', () => {
@@ -4429,12 +4431,13 @@ describe('credentials in Swarm chat', () => {
     const worker = f.add('worker', 'owner', group.id)
     const assignmentId = f.run({ type: 'work.assign', conversationId: group.id, agentId: worker }).result.assignmentId as string
     const as: Actor = { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }
-    const blocked = f.run({ type: 'work.status', conversationId: group.id, assignmentId, status: 'blocked', hold: HOLD, result: `Rejected ${github}` }, as)
-    expect(blocked.messages[0]!.text).toBe(`Stuck\n\nRejected ${CREDENTIAL_MARKER}`)
-    f.run({ type: 'work.check', conversationId: group.id, assignmentId, checkId: group.checks[0]!.id, passed: true, evidence: `Signed in as ${jwt}` },
-      { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' })
+    // An agent's result and evidence with a credential are refused, by kind, and nothing of them is stored (task #3595).
+    expect(() => f.run({ type: 'work.status', conversationId: group.id, assignmentId, status: 'blocked', hold: HOLD, result: `Rejected ${github}` }, as))
+      .toThrow(expect.objectContaining({ code: 'SECRET_LIKE' }))
+    expect(() => f.run({ type: 'work.check', conversationId: group.id, assignmentId, checkId: group.checks[0]!.id, passed: true, evidence: `Signed in as ${jwt}` },
+      { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' })).toThrow(expect.objectContaining({ code: 'SECRET_LIKE', message: expect.stringContaining('JWT') }))
     const stored = f.state.conversations.find(c => c.id === group.id)!
-    expect([stored.assignment!.result, stored.checks[0]!.evidence]).toEqual([`Rejected ${CREDENTIAL_MARKER}`, `Signed in as ${CREDENTIAL_MARKER}`])
+    expect([stored.assignment!.result, stored.checks[0]!.evidence]).toEqual([null, null])
     expect(JSON.stringify(f.state)).not.toMatch(new RegExp(`${github}|${jwt.replaceAll('.', '\\.')}`))
   })
 

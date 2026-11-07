@@ -16,6 +16,7 @@ import { TrainReadError, type TrainGitHub, type TrainPull } from '../../github/t
 import { NOT_MERGEABLE_BY_TOKEN, TRAIN_BRANCH_PREFIX, TRAIN_CI_TIMEOUT_MS, TRAIN_MAX_BATCH } from './config.js'
 import { eligible, headReads, laneOf, splitRed, type Ineligible, type TrainTask } from './plan.js'
 import { requiredReads, type ProjectRules } from '../policy.js'
+import { redactCredentials } from '../credentials.js'
 
 /** A task's linked pull request, as the Swarm holds it: what headReads reads. */
 export interface TrainTaskPull { taskId: string; url: string; task: TrainTask }
@@ -91,7 +92,9 @@ export async function trainPass(input: { projectId: string; github: TrainGitHub;
     const lane = laneOf(files), mergeable = building && lane === 'code' && pull.mergeable === null ? true : pull.mergeable
     const verdict = eligible({ url: linked.url, number, head: pull.head, state: pull.state, draft: pull.draft, base: pull.base, mergeable,
       labels: pull.labels, files, ciRequired }, reads, required)
-    return { member: { number, url: linked.url, head: pull.head, title: pull.title, files, taskId: linked.taskId }, verdict, reads, required, lane }
+    // Its title goes into what the train writes to GitHub (squash titles and messages, a batch's body): never a credential an
+    // agent put there, redacted rather than refused, so the train never stalls on it (task #3595).
+    return { member: { number, url: linked.url, head: pull.head, title: redactCredentials(pull.title).text, files, taskId: linked.taskId }, verdict, reads, required, lane }
   }
 
   const closeBatch = async (number: number, branch: string, why: string) => {

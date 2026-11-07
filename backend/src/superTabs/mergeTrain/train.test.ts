@@ -4,6 +4,7 @@ import { fakeTrainGitHub, type FakePull } from './fakeTrainGitHub.js'
 import type { TrainTask } from './plan.js'
 import { newTrainMemory, trainPass, type TrainRules, type TrainSwarm, type TrainTaskPull } from './train.js'
 import { SEED_RULES } from '../policy.js'
+import { CREDENTIAL_MARKER } from '../credentials.js'
 
 const MINUTE = 60_000
 const ON: TrainRules = { enabled: true, rules: SEED_RULES }
@@ -134,6 +135,19 @@ describe('the merge train builds batches', () => {
     expect(repo.batches()).toEqual([])
     expect(repo.state.squashes.map(s => s.number)).toEqual([7])
     expect(swarm.merged.map(m => [m.taskId, m.url])).toEqual([['task-7', a.url]])
+  })
+
+  // Task #3595: what the Swarm writes to GitHub (squash titles and messages, a batch's body) never carries a credential an
+  // agent put in a pull request's title. Redacted, not refused, so the train never stalls on it.
+  it('writes no credential from a pull request\'s title into GitHub', async () => {
+    const { repo, swarm, pass } = setup()
+    const token = ['ghp', 'Ab3Cd5Ef7Gh9Ij1Kl3Mn5Op7Qr9St1Uv3Wx5Yz'].join('_')
+    const code = repo.addPull(7, ['backend/src/a.ts'], { title: `Fix login ${token}` }), docs = repo.addPull(8, ['docs/a.md'], { title: `Docs ${token}` })
+    swarm.approve(code); swarm.approve(docs)
+    await pass()
+    const written = JSON.stringify([repo.batches().map(b => [b.title, b.body]), repo.state.squashes])
+    expect(written).not.toContain(token)
+    expect(written).toContain(CREDENTIAL_MARKER)
   })
 
   it('holds a fast-lane pull request while a code batch is in CI, so main does not move under it', async () => {

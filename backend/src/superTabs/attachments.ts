@@ -195,6 +195,37 @@ export async function peekType(body: Readable): Promise<{ type: string | null; b
   return { type: imageTypeOf(head), body: Readable.from(rest()) }
 }
 
+/** How much of an agent's text file is scanned for credentials before it can be sent (task #3595, both security reviews of
+ *  #3310): agents attach logs, the likeliest way a token travels. */
+export const SCANNED_TEXT_BYTES = 1024 * 1024
+/** Whether a file is text an agent's credential could be in: any text type, JSON, XML, YAML or a script, or one named as a log,
+ *  notes, config or source. Pictures and other binaries are not scanned. */
+export const scannedAsText = (mime: string, name: string): boolean =>
+  /^text\//i.test(mime) || /^application\/(?:json|ld\+json|x-ndjson|xml|yaml|x-yaml|toml|javascript|x-sh|x-shellscript)$/i.test(mime)
+  || /\.(?:log|txt|md|json|ya?ml|toml|env|ini|cfg|conf|csv|tsv|xml|sh|ts|js|py|rb|go)$/i.test(name)
+
+/** The first [limit] bytes of [body], and the whole body again to store: one iterator, as peekType reads it. */
+export async function peekBytes(body: Readable, limit: number): Promise<{ head: Buffer; body: Readable }> {
+  const source = body[Symbol.asyncIterator]()
+  const parts: Buffer[] = []
+  let length = 0, done = false
+  while (length < limit) {
+    const next = await source.next()
+    if (next.done) { done = true; break }
+    parts.push(Buffer.from(next.value)); length += next.value.length
+  }
+  const head = Buffer.concat(parts)
+  const rest = async function* () {
+    if (head.length) yield head
+    while (!done) {
+      const next = await source.next()
+      if (next.done) return
+      yield Buffer.from(next.value)
+    }
+  }
+  return { head: head.subarray(0, limit), body: Readable.from(rest()) }
+}
+
 /** A file that claims to be an image is served as one only when its first bytes agree, and then as what they say: a
  * renamed page or script never opens inline, and a .png that is really a JPEG still shows. */
 export async function checkedType(mime: string, body: Readable): Promise<{ mime: string; body: Readable }> {

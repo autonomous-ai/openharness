@@ -13,7 +13,7 @@ import {
  * secret without holding one, and ordinary prose in any language pass unchanged.
  */
 export type CredentialKind = 'private-key' | 'jwt' | 'harness' | 'github' | 'anthropic' | 'openai' | 'aws-key-id' | 'aws-secret'
-  | 'slack' | 'google' | 'stripe' | 'gitlab' | 'npm' | 'password'
+  | 'slack' | 'google' | 'stripe' | 'gitlab' | 'npm' | 'password' | 'link-token'
 
 /** What the sender is told was removed. */
 export const CREDENTIAL_LABELS: Record<CredentialKind, string> = {
@@ -31,6 +31,7 @@ export const CREDENTIAL_LABELS: Record<CredentialKind, string> = {
   gitlab: 'GitLab token',
   npm: 'npm token',
   password: 'password or secret',
+  'link-token': 'Harness join or link token',
 }
 
 export const CREDENTIAL_MARKER = '[credential removed]'
@@ -130,6 +131,12 @@ const RULES: Rule[] = [
     pattern: /(?<![A-Za-z0-9+.-])[a-z][a-z0-9+.-]{1,20}:\/\/[^\s/:@]{1,256}:([^\s/@]{8,256})@/dgi },
   { kind: 'password', group: 1, accept: value => secretValue(value.replace(/[.!?:]+$/, '')) && value.replace(/[.!?:]+$/, '').length,
     pattern: new RegExp(String.raw`(?<![A-Za-z0-9_.-])${KEY}${ASSIGN}([^\s"'\x60<>()[\]{}$%&,;\\]{12,})`, 'dgi') },
+  // A bare Harness join or link token (sharing.ts: 32 random bytes as base64url, 43 characters), with no label to find it by
+  // (task #3595: one was logged in #2480). Last, so a token a rule above knows keeps its own kind. Upper case, lower case and
+  // digits all in it, and random: a commit id is hex, a message id 24 hex, a UUID has dashes in fixed places. Never inside a
+  // dotted token or base64 data.
+  { kind: 'link-token', pattern: /(?<![A-Za-z0-9_\-+/.])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_\-+/=.])/dg,
+    accept: token => /[A-Z]/.test(token) && /[a-z]/.test(token) && /\d/.test(token) && random(token) },
 ]
 
 /** Private keys first, by hand: a block may be cut off before its END line, and then its base64 lines still go. */
