@@ -81,3 +81,44 @@ describe('Accept', () => {
     expect(f.group(f.ask(lamp, 'Fix the boot logo')).taskApproval).toMatchObject({ state: 'proposal' })
   })
 })
+
+describe('the first Accept', () => {
+  /** Kai, asking to accept each task, with a task asked in lamp and accepted. */
+  function accepted(f = swarm()) {
+    f.run({ type: 'member.approvalMode', mode: 'review' }, kai)
+    const lamp = f.project('lamp')
+    const first = f.ask(lamp, 'Fix the boot logo')
+    const approved = f.run({ type: 'task.approve', conversationId: first }, kai)
+    return { f, lamp, first, approved }
+  }
+  const memberStarts = (f: ReturnType<typeof swarm>) => (f.state.starts ?? []).filter(s => s.request.member)
+
+  it('starts the person\'s Member for that project on their own computer and account, named for it', () => {
+    const { f, lamp } = accepted()
+    const [start] = memberStarts(f)
+    expect(memberStarts(f)).toHaveLength(1)
+    expect(start).toMatchObject({ contributorId: 'kai', machineOwnerId: 'kai', hostGrant: null })
+    expect(start!.request).toMatchObject({ machineId: 'kai-mac', regular: true, mainProjectId: lamp, member: { projectId: lamp }, worktree: true })
+    expect(start!.request.name).toMatch(/^[A-Z][a-z]+ · lamp$/)
+    expect(f.group(start!.request.conversationId)).toMatchObject({ kind: 'agent-chat', title: start!.request.name })
+  })
+
+  it('starts none for a later Accept in the same project', () => {
+    const { f, lamp } = accepted()
+    const second = f.ask(lamp, 'Fix the fan')
+    f.run({ type: 'task.approve', conversationId: second }, kai)
+    expect(memberStarts(f)).toHaveLength(1)
+  })
+
+  it('never uses another person\'s computer, a Team account or a Buddy-only one, and says why when it has none', () => {
+    const f = swarm()
+    f.state.machines = [f.machine('owner-mac', 'owner'), f.machine('kai-team', 'kai', { observation: { ...f.machine('x', 'kai').observation!, sessionKind: 'team' } }),
+      f.machine('kai-buddy', 'kai', { buddyOnly: true })]
+    const { first } = accepted(f)
+    expect(memberStarts(f)).toHaveLength(0)
+    expect(f.group(first).taskApproval?.state).toBe('approved')
+    expect(f.state.conversations.find(c => c.id === first)).toBeTruthy()
+    const said = f.run({ type: 'task.approve', conversationId: f.ask(f.state.projects!.find(p => p.name === 'lamp')!.id, 'Again') }, kai).messages
+    expect(said.map(m => m.text)).toContainEqual(expect.stringContaining('no computer in this Swarm'))
+  })
+})
