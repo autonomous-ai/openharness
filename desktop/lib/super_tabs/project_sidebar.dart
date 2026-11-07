@@ -700,7 +700,11 @@ class ProjectSidebar extends StatelessWidget {
           ? '$name · opens its terminal'
           : '$name · no chat yet',
       crown: pm,
-      note: pm ? snapshot.leadProjectForAgent(agent.id)?.name : null,
+      // After a separator, so it never reads as part of the name.
+      note: switch (pm ? snapshot.leadProjectForAgent(agent.id) : null) {
+        final project? => '· ${project.name}',
+        null => null,
+      },
       status: _buddyMark(agent),
       selected: _chatLit(chat),
       unread: chat != null && controller.unreadShown(chat),
@@ -711,6 +715,24 @@ class ProjectSidebar extends StatelessWidget {
       },
     );
   }
+
+  /// Open Projects over a Swarm with none, in the names' column.
+  Widget _noProjects() => Padding(
+    key: const ValueKey('super-projects-empty'),
+    padding: EdgeInsets.fromLTRB(
+      SuperTabSectionHeading.indentFor(0) + _iconColumn,
+      SwarmType.sidebarRowPadding(compact: compact),
+      12,
+      SwarmType.sidebarRowPadding(compact: compact),
+    ),
+    child: Text(
+      'No projects yet.',
+      style: SwarmType.sidebar(
+        compact: compact,
+        color: grid.SidebarInk.inkMuted,
+      ),
+    ),
+  );
 
   /// The Buddy's activity mark, drawn as the Agents list draws an agent's.
   Widget? _buddyMark(SuperTabAgent agent) {
@@ -848,12 +870,19 @@ class ProjectSidebar extends StatelessWidget {
               required icon,
               required onTap,
               required trailing,
-            }) => _navigationRow(
-              key: 'super-swarm-switcher',
-              label: label,
-              icon: icon,
-              onTap: onTap,
-              trailing: trailing,
+            }) => Tooltip(
+              // A long Swarm name is cut in the row; hovering reads all of it.
+              message: label,
+              excludeFromSemantics: true,
+              positionDelegate: _besideTheRow,
+              constraints: const BoxConstraints(maxWidth: 260),
+              child: _navigationRow(
+                key: 'super-swarm-switcher',
+                label: label,
+                icon: icon,
+                onTap: onTap,
+                trailing: trailing,
+              ),
             ),
       ),
       _ => null,
@@ -956,12 +985,17 @@ class ProjectSidebar extends StatelessWidget {
                 // Dee, 11-05).
                 if (controller.oneBuddy && !board) ?_swarmBuddyRow(),
                 // Folded, it keeps the projects whose chat tags the reader: the Desktop has no Mentions row (task #4220).
-                for (final (_, channel) in _channels(
-                  snapshot,
-                  reading,
-                  taggedOnly: board && !controller.projectsOpen,
-                ))
-                  channel,
+                if (snapshot != null &&
+                    projects.isEmpty &&
+                    (!board || controller.projectsOpen))
+                  _noProjects()
+                else
+                  for (final (_, channel) in _channels(
+                    snapshot,
+                    reading,
+                    taggedOnly: board && !controller.projectsOpen,
+                  ))
+                    channel,
                 const SizedBox(height: 16),
                 // Buddies replaced Chat with PM in every Swarm (Ken, 10-29); where the
                 // server gives one Buddy for the whole Swarm, it is # buddy above.

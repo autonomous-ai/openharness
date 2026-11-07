@@ -114,15 +114,17 @@ class SuperTabAvatar extends StatelessWidget {
           clipBehavior: Clip.none,
           children: [
             face,
+            // 12 px on the left pane's 20 px avatar: at .46 it was a 9 px
+            // speck on a 1x screen.
             if (crown)
               Positioned(
-                right: -badge * .2,
-                top: -badge * .2,
+                right: -size * .12,
+                top: -size * .12,
                 child: _Badge(
-                  size: badge,
+                  size: size * .6,
                   child: Icon(
                     AppIcons.crown,
-                    size: badge * .72,
+                    size: size * .6 * .72,
                     color: DesktopChrome.foreground,
                   ),
                 ),

@@ -341,15 +341,15 @@ void main() {
       expect(badge.left, lessThan(avatar.right));
       final name = tester.getRect(text('orion', 'Orion'));
       expect(badge.right, lessThan(name.left));
-      final project = tester.getRect(text('orion', 'web-project'));
+      final project = tester.getRect(text('orion', '· web-project'));
       expect(project.left, greaterThan(name.right));
       expect((project.center.dy - name.center.dy).abs(), lessThan(4));
       expect(
-        tester.widget<Text>(text('orion', 'web-project')).style?.color,
+        tester.widget<Text>(text('orion', '· web-project')).style?.color,
         grid.SidebarInk.muted(tester.element(key('super-agent-orion'))),
       );
       expect(crown('kestrel'), findsNothing);
-      expect(text('kestrel', 'web-project'), findsNothing);
+      expect(text('kestrel', '· web-project'), findsNothing);
     });
 
     testWidgets('in a narrow pane the project name is cut before the agent\'s '
@@ -366,7 +366,7 @@ void main() {
       bool cut(String shown) => tester
           .renderObject<RenderParagraph>(text('orion', shown))
           .didExceedMaxLines;
-      expect(cut('web-project'), isTrue);
+      expect(cut('· web-project'), isTrue);
       expect(cut('Orion Lead'), isFalse);
     });
 
