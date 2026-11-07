@@ -17,7 +17,7 @@ An agent gets its instructions from seven places, each with its own way of being
 | Launch prompt | `cli/src/superTabs/start.ts` (`leadPrompt`, `workerPrompt`), plus `githubPromptLine`; Desktop's own launch in `desktop/lib/super_tabs/launch_prompt.dart` | 112 (Desktop 255) | 86 + 39 (Desktop 150) |
 | Appended system prompt | `cli/src/lib/swarmSkills.ts` `prepareSwarmSkill(...).instructions`, replacing the generic delegation text in `lib/agentAttribution.ts` | 56 | 56 |
 | swarm-tools skill, one sheet per role | `cli/src/lib/swarmToolSheets.ts` from the 3,663-word manual in `swarmTools.ts` | 444 | 848 |
-| swarm-instructions skill: role line, project document, the PM's built-in text | `cli/src/superTabs/swarmInstructionsSkill.ts`; the built-in text in `backend/src/superTabs/pmSchedule.ts` ("Swarm process v2" and `BUILT_IN_SECTION`) | 3,426 + 1,612 notes + about 1,210 built-in | 3,460 |
+| swarm-instructions skill: role line, project document, the PM's built-in text | `cli/src/lib/swarmInstructionsSkill.ts`; the built-in text in `backend/src/superTabs/pmSchedule.ts` ("Swarm process v2" and `BUILT_IN_SECTION`) | 3,426 + 1,612 notes + about 1,210 built-in | 3,460 |
 | Role skills (swarm-lead, swarm-dev, swarm-review, Buddy), the fallback when a project has no instructions | `cli/src/lib/swarmSkills.ts` | 2,547 to 4,720 if used | 1,338 to 2,961 if used |
 | The project's AGENTS.md, loaded by the engine itself from the worktree (Claude Code through CLAUDE.md, Codex natively) | the repository | 1,733 | 1,733 |
 | A wrapper on every delivered message | `cli/src/superTabs/host.ts` `prompt()`, with `SUPER_TAB_REPLY_STYLE` (139 words), the other-account warnings and `BUDDY_NEWS` ("News for your owner", 85 words) | about 260 each | about 230 each |
@@ -151,7 +151,8 @@ AGENTS.md and role files must not lose that, since the merge train merges on age
 could otherwise drop anh Dee's or Ken's rule, or add a rule every agent trusts, with no person approving.
 
 - **The rule files are every `AGENTS.md` and `CLAUDE.md` at any path** (the root file and the component files, such
-  as `desktop/AGENTS.md`, which agents also follow) **and everything in `docs/roles/`.**
+  as `desktop/AGENTS.md`, which agents also follow), **everything in `docs/roles/`, and, in the Harness repository, the
+  job pages in `cli/src/superTabs/jobPages/`.**
 - A pull request that changes any of them names the person who asked for the change, and waits until that person
   approves it (a GitHub approval from them, or a message of theirs the pull request names, as `ruleGuard.ts` accepts
   today).
@@ -188,7 +189,9 @@ could otherwise drop anh Dee's or Ken's rule, or add a rule every agent trusts, 
   approval above.
 - It ships (build task 8) before any rule leaves the instructions document (task 9).
 
-The job pages are Harness's own code: they change only by a pull request with its review and two security reviews.
+The job pages instruct every agent in every Swarm, so in the Harness repository they are rule files too:
+`cli/src/superTabs/jobPages/` is under the same guard, and a change there also has its review and two security
+reviews.
 
 ### 4. Each message
 
@@ -264,7 +267,7 @@ can check runs as code, and its prompt line goes); the **job page**, when it hol
 | Shared-machine rules from today's tool sheet: temporary files only in your own folder, never remove a worktree a live process uses, never ask for a token in chat or a file | Job page, Never (both) |
 | Security reviews, red required checks, production writes | Job page, Never (both); the merge train already refuses a red required check |
 | The reply style (`SUPER_TAB_REPLY_STYLE`) | Lead page point 4; Member page, chat section |
-| Answer in threads, answer once, react instead of acknowledging | Code: the reply line in each message names `--answers` or `--reply-to`. The server refuses a second `answer` to a message, and in project chats a second explicit answer too (`answers.ts`, `chatLimits.ts`); a plain second post in a task or private chat is not refused today, and #4553 takes that gap |
+| Answer in threads, answer once, react instead of acknowledging | Code: the reply line in each message names `--answers` (chats are flat, with no threads: instructions revision 89). The server refuses a second `answer` to a message, and in project chats a second explicit answer too (`answers.ts`, `chatLimits.ts`); a plain second post in a task or private chat is not refused today, and #4553 takes that gap |
 | The Roles sections (PM, Engineer, Reviewer, Tester, Integrator, Guide) and the Workflow | Role files, `docs/roles/<role>.md` on the default branch, sent with the task or step that needs them (part 3); the PM's to the Lead page and AGENTS.md |
 | Routing order, models, quota rules (People notes and PM notes) | The router, which already applies the order (`route`); what it can't check goes to AGENTS.md |
 | Machine rules (offline hours, Codex not on Diego's Mac, phone work on Tony's Mac) | Code where `machine.projects` and machine rules already hold them; the rest to AGENTS.md |
@@ -378,7 +381,7 @@ the default branch's copy, never a checkout's. The menu's version list is shown 
      then writes "Couldn't send instructions: <part>" in the agent's chat and marks the part red in the menu.
    - *The compaction hook doesn't fire* (an engine update): the next resume sends the parts; the re-send measure drops
      to zero for that engine, which shows it.
-   - *AGENTS.md can't be read* (no checkout yet): the agent is told "AGENTS.md not found" once; the menu says why.
+   - *AGENTS.md can't be read* (the default branch not fetched yet): the agent is told "AGENTS.md not found" once; the menu says why.
    - *A job page template is missing from a release:* the CLI's tests refuse the build.
 10. **Platforms.** CLI daemon on macOS, Linux and Windows: the hooks exist on all three. Desktop's menu on macOS,
     Windows and Linux. Phone and web show nothing new (anh Dee: phone after Desktop).
@@ -416,7 +419,7 @@ the default branch's copy, never a checkout's. The menu's version list is shown 
    path, or anything in `docs/roles/`, until a person approves that head, by today's rule guard (`ruleGuard.ts`, #3151) applied to the diff
    (section "Who may change the rule files"). Owner area: `backend/src/superTabs/mergeTrain/`,
    `backend/src/superTabs/ruleGuard.ts`, `instructionsDiff.ts`. Its tests try a root file, a nested component file
-   (`desktop/AGENTS.md`), a nested `CLAUDE.md` and a role file, each with and without a person's approval; a member's
+   (`desktop/AGENTS.md`), a nested `CLAUDE.md`, a role file and a job page, each with and without a person's approval; a member's
    own ask passes and the asker gets the private line, while a guest's ask, an outside issue author's and a relayed one
    are refused; an ask whose brief doesn't name the rule file is refused, and so is any ask for a drop; an approval at
    one head stops counting after a push that changes a rule file; a hand merge waits on the check; a status set by anything but the App, such as a workflow, doesn't count; a token
