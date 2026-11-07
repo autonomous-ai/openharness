@@ -88,7 +88,8 @@ void main() {
     signed = p.join(scratch.path, 'running', 'harness-desktop.exe');
     Directory(p.dirname(signed)).createSync();
     File(await _embeddedSignedProgram()).copySync(signed);
-    unsigned = p.join(scratch.path, 'unsigned.exe');
+    unsigned = p.join(scratch.path, 'unsigned', 'harness-desktop.exe');
+    Directory(p.dirname(unsigned)).createSync();
     _stripSignature(signed, unsigned);
     staged = p.join(scratch.path, 'app', '9.9.9.staging');
     Directory(p.join(staged, 'data')).createSync(recursive: true);
@@ -138,6 +139,15 @@ void main() {
     },
     skip: _windowsOnly,
   );
+
+  test('one program in a folder still reads as a list', () async {
+    final found = await report(running: unsigned);
+    expect(found.runningFolder.keys, ['harness-desktop.exe']);
+    expect(
+      found.files.keys,
+      unorderedEquals(['harness-desktop.exe', 'Harness.exe']),
+    );
+  }, skip: _windowsOnly);
 
   test('a changed program reads as changed, not as signed', () async {
     final copy = File(p.join(staged, 'harness-desktop.exe'));
