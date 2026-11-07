@@ -23,6 +23,8 @@ class SuperTabPersonalTaskCard extends StatelessWidget {
     this.waiting = false,
     this.onApprove,
     this.onReject,
+    this.pending,
+    this.disabledReason,
   });
 
   final SuperTabPersonalTask task;
@@ -33,9 +35,15 @@ class SuperTabPersonalTaskCard extends StatelessWidget {
   final VoidCallback onOpen;
   final Widget? requester, agent;
 
-  /// The task waits for the reader: Approve and Reject show, disabled while [onApprove] and [onReject] are null.
+  /// The task waits for the reader: Accept and Decline show, disabled while [onApprove] and [onReject] are null.
   final bool waiting;
   final VoidCallback? onApprove, onReject;
+
+  /// The decision sent for this task and not yet confirmed, `approve` or `reject`: its button spins.
+  final String? pending;
+
+  /// Why Accept and Decline are disabled, as their tooltip; null when they are not, or nothing to say.
+  final String? disabledReason;
 
   @override
   Widget build(BuildContext context) {
@@ -116,7 +124,11 @@ class SuperTabPersonalTaskCard extends StatelessWidget {
                               padding: _buttonPadding,
                               minimumSize: Size.zero,
                             ),
-                            child: const Text('Decline'),
+                            child: _label(
+                              'Decline',
+                              pending == 'reject',
+                              onReject,
+                            ),
                           ),
                           const SizedBox(width: grid.AppDesktop.listRowGap * 2),
                           FilledButton(
@@ -127,7 +139,11 @@ class SuperTabPersonalTaskCard extends StatelessWidget {
                               padding: _buttonPadding,
                               minimumSize: Size.zero,
                             ),
-                            child: const Text('Accept'),
+                            child: _label(
+                              'Accept',
+                              pending == 'approve',
+                              onApprove,
+                            ),
                           ),
                         ],
                       ],
@@ -140,6 +156,27 @@ class SuperTabPersonalTaskCard extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// The button's word; while its decision is sent, the app's small spinner in its place (the word kept invisible so
+  /// the button keeps its width); while disabled, a tooltip that says what it waits on.
+  Widget _label(String text, bool sending, VoidCallback? onPressed) {
+    final label = sending
+        ? Stack(
+            alignment: Alignment.center,
+            children: [
+              Opacity(opacity: 0, child: Text(text)),
+              const SizedBox.square(
+                dimension: AppIcons.inlineSize,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ],
+          )
+        : Text(text);
+    final why = disabledReason;
+    return onPressed == null && why != null
+        ? Tooltip(message: why, child: label)
+        : label;
   }
 }
 

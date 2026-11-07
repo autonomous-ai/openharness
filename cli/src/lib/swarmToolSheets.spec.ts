@@ -17,10 +17,11 @@ describe('the role tools sheets', () => {
   })
 
   // The Mac test of #3506: the sheets told agents to use a bare `mktemp -d`, which on a Mac writes outside the agent's own
-  // allowed folder and which the shell guard now refuses there. What a crew sheet teaches must pass the guard on a Mac.
-  it('teaches the crew a mktemp the shell guard lets through on a Mac', () => {
+  // allowed folder and which the shell guard now refuses there. What any sheet teaches, the PM's too (#4459), must pass the
+  // guard on a Mac.
+  it('teaches every role a mktemp the shell guard lets through on a Mac', () => {
     const facts = { cwd: '/work', platform: 'darwin' as const, privateFolder: () => false, linkedWorktree: () => false, liveCwds: () => [] }
-    for (const role of TOOLS_ROLES.filter(r => r !== 'pm')) {
+    for (const role of TOOLS_ROLES) {
       for (const [, command] of sheet(role).matchAll(/`(mktemp[^`]*)`/g)) expect(shellRefusal(command, facts), `${role}: ${command}`).toBeNull()
     }
   })

@@ -67,6 +67,12 @@ class _ApprovalModeChoice extends StatefulWidget {
 /// As a meeting invite (anh Dee, 11-07): Accept all, or Ask me before a task starts. The stored values stay.
 const _modes = {'autoApprove': 'Accept all', 'review': 'Ask me'};
 
+/// What each choice does, under it in the menu (#3532), in a few words.
+const _details = {
+  'autoApprove': 'Your tasks start right away.',
+  'review': 'Your tasks wait for you to accept them.',
+};
+
 class _ChoiceState extends State<_ApprovalModeChoice> {
   bool _hovered = false, _focused = false;
 
@@ -75,7 +81,8 @@ class _ChoiceState extends State<_ApprovalModeChoice> {
     grid.AppTheme.watch(context);
     final onChanged = widget.onChanged;
     return AppDropdown(
-      width: AppDropdown.minFitWidth,
+      // Wide enough that each choice's line reads whole in the pane's 340 (#3532).
+      width: 300,
       alignment: AlignmentDirectional.bottomEnd,
       onClose: () {
         if (mounted) setState(() {});
@@ -84,6 +91,7 @@ class _ChoiceState extends State<_ApprovalModeChoice> {
         for (final MapEntry(key: mode, value: label) in _modes.entries)
           AppMenuItem(
             label: label,
+            detail: _details[mode],
             selected: mode == widget.mode,
             // The stored choice closes the menu and sends nothing.
             onPressed: () {

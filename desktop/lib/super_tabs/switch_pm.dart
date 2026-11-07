@@ -394,7 +394,7 @@ Future<void> showSwitchPm(
                                     Navigator.pop(context);
                                   }
                                 },
-                          child: const Text('Check pending action'),
+                          child: const Text('Check again'),
                         ),
                     ],
                   ),

@@ -3,10 +3,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../shared/theme/app_theme.dart';
+import '../../shared/widgets/skeleton.dart';
+import '../../widgets/desktop_chrome.dart';
 import '../../widgets/laid_out_list.dart';
 import '../controller.dart';
 import '../identity.dart';
 import '../model.dart';
+import '../task_card.dart';
 import 'personal_task_card.dart';
 import 'personal_tasks.dart';
 import 'tasks_pane_header.dart';
@@ -30,6 +33,9 @@ class SuperTabPersonalTasksPane extends StatefulWidget {
 
 /// Who asked and who is doing it, both at 18 (anh Dee, 11-07).
 const _faceSize = 18.0;
+
+/// Why Accept, Decline and the approval mode are disabled while a change is unconfirmed.
+const _waitingWhy = 'Waiting for the last change to be confirmed';
 
 class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
   String? _error, _operationId;
@@ -181,6 +187,15 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
           !c.saving &&
           !c.hasPendingAction &&
           _action == null;
+      final waitingOnChange =
+          _sending || c.saving || c.hasPendingAction || _action != null;
+      // The decision being sent, by its task: its button spins.
+      final sendingOn = _sending ? _action!['conversationId'] as String? : null;
+      final sendingKind = switch (_action?['type']) {
+        'task.approve' => 'approve',
+        'task.reject' => 'reject',
+        _ => null,
+      };
       final snapshot = c.snapshot;
       final agents = {
         for (final a in snapshot?.agents ?? <SuperTabAgent>[]) a.id: a,
@@ -235,9 +250,9 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                       ],
                     ),
                   ),
-                // Empty means empty (anh Dee, 11-07): words only say why Tasks can't be used, never that it is
-                // loading or has nothing yet.
-                if (!supported && (c.accessRevoked || c.snapshot != null))
+                if (!supported && !c.accessRevoked && c.snapshot == null)
+                  const Expanded(child: _SkeletonCards())
+                else if (!supported)
                   Padding(
                     padding: const EdgeInsets.all(AppDesktop.groupGap),
                     child: Text(
@@ -326,6 +341,12 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                                     onReject: waiting && enabled
                                         ? () => _reject(task)
                                         : null,
+                                    pending: sendingOn == task.id
+                                        ? sendingKind
+                                        : null,
+                                    disabledReason: waitingOnChange
+                                        ? _waitingWhy
+                                        : null,
                                   ),
                                 );
                               },
@@ -358,4 +379,60 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
       );
     },
   );
+}
+
+/// Cards on their way: the shape of a task card (its tag, two lines of title, then who asked and its agent), on the
+/// card's own surface so nothing jumps when the rows land.
+class _SkeletonCards extends StatelessWidget {
+  const _SkeletonCards();
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final title = DesktopChrome.control().copyWith(height: 1.35);
+    return SkeletonList(
+      rows: 5,
+      semanticsLabel: 'Loading Tasks',
+      itemBuilder: (context, i) => Padding(
+        padding: const EdgeInsets.fromLTRB(
+          AppDesktop.groupGap,
+          0,
+          AppDesktop.groupGap,
+          AppDesktop.controlGap,
+        ),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: AppCard.base,
+            borderRadius: BorderRadius.circular(AppDesktop.rowRadius),
+            border: Border.all(color: DesktopChrome.rim),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(SuperTabTaskCard.tilePadding),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Skeleton(
+                  width: 64 + 16.0 * (i % 3),
+                  height: 16,
+                  // The project's capsule.
+                  radius: 8,
+                ),
+                const SizedBox(height: AppDesktop.controlGap),
+                SkeletonText(style: title, widthFactor: .9 - .1 * (i % 2)),
+                SkeletonText(style: title, widthFactor: .55 + .1 * (i % 3)),
+                const SizedBox(height: AppDesktop.controlGap),
+                const Row(
+                  children: [
+                    Skeleton.circle(size: _faceSize),
+                    SizedBox(width: AppDesktop.listRowGap * 2),
+                    Skeleton.circle(size: _faceSize),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
