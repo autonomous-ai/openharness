@@ -94,21 +94,28 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
           ? await owner.retry()
           : await owner.command(_action!, operationId: _operationId);
       if (!mounted || !identical(owner, c)) return;
+      // The controller keeps an action whose answer was lost and drops one the server refused. The pane follows it:
+      // a copy kept after a refusal locked every card, and its Retry sent the refused change again (audit #4436, 3).
+      final lost = answer == null && owner.hasPendingAction;
+      final updateRequired = owner.operationErrorCode == 'UPDATE_REQUIRED';
+      final refusal = answer == null && !lost
+          ? owner.takeOperationError()
+          : null;
       setState(() {
-        // Done, or refused: the controller holds it no more, so neither does Tasks (task #4220).
-        final settled = answer != null || !owner.hasPendingAction;
-        if (settled) {
+        if (lost) {
+          _error = 'The change is not confirmed. Retry to check it.';
+        } else {
           _action = null;
           _operationId = null;
-        }
-        if (answer == null) {
-          _error = owner.operationErrorCode == 'UPDATE_REQUIRED'
-              ? 'Update Harness to change Tasks.'
-              : settled
-              ? owner.operationError ?? 'The change was refused.'
-              : 'The change is not confirmed. Retry to check it.';
+          if (answer == null) {
+            _error = updateRequired
+                ? 'Update Harness to change Tasks.'
+                : refusal ?? 'The change was refused.';
+          }
         }
       });
+      // A refusal means the task changed under the person: what it is now is in the next read.
+      if (answer == null && !lost) unawaited(owner.refresh());
     } catch (_) {
       if (mounted && identical(owner, c)) {
         setState(

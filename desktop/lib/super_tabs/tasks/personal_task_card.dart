@@ -121,7 +121,10 @@ class _CardState extends State<SuperTabPersonalTaskCard> {
                         ),
                       ),
                       const SizedBox(width: grid.AppDesktop.controlGap),
-                      SuperTabTaskStatusMark(w.task.status),
+                      SuperTabTaskStatusMark(
+                        w.task.status,
+                        reason: w.task.reason,
+                      ),
                     ],
                   ),
                   const SizedBox(height: grid.AppDesktop.controlGap),
@@ -238,17 +241,22 @@ class _Tag extends StatelessWidget {
   );
 }
 
-/// A task's status as the Tasks pane marks it: a proposal and a rejection by their own icons, work by its activity.
+/// A task's status as the Tasks pane marks it: a proposal and a rejection by their own icons, work by its activity,
+/// each named in the task's own words, never the terminal's.
 class SuperTabTaskStatusMark extends StatelessWidget {
-  const SuperTabTaskStatusMark(this.status, {super.key});
+  const SuperTabTaskStatusMark(this.status, {super.key, this.reason});
   final String status;
+
+  /// Why it was rejected: said on hover, as the person who rejected it typed it.
+  final String? reason;
 
   @override
   Widget build(BuildContext context) {
+    final label = superTabTaskStatusLabel(status);
     if (status == 'proposal' || status == 'rejected') {
-      final label = superTabTaskStatusLabel(status);
+      final why = status == 'rejected' ? superTabTaskRejection(reason) : null;
       return Tooltip(
-        message: label,
+        message: why == null ? label : '$label: $why',
         child: Icon(
           status == 'proposal' ? AppIcons.circleDashed : AppIcons.circleX,
           size: AppIcons.metadataSize,
@@ -256,25 +264,50 @@ class SuperTabTaskStatusMark extends StatelessWidget {
         ),
       );
     }
-    return ActivityMark(
-      activity: superTabTaskActivity(status),
-      color: Theme.of(context).colorScheme.onSurface,
+    return Tooltip(
+      message: label,
+      child: ActivityMark(
+        activity: superTabTaskActivity(status),
+        color: Theme.of(context).colorScheme.onSurface,
+        tooltip: false,
+      ),
     );
   }
 }
 
+/// The mark of each backend status (`WorkStatus`, backend superTabs/model.ts). One added later reads as unknown,
+/// never as starting.
 HarnessActivity superTabTaskActivity(String status) => switch (status) {
-  'done' || 'shipped' => HarnessActivity.done,
+  'planned' => HarnessActivity.starting,
   'working' => HarnessActivity.working,
-  'needs_human' || 'needs_human_approval' => HarnessActivity.needsInput,
-  'blocked' || 'stuck' => HarnessActivity.failed,
-  'stopped' => HarnessActivity.paused,
-  _ => HarnessActivity.starting,
+  'needs_human' || 'review' => HarnessActivity.needsInput,
+  'blocked' => HarnessActivity.failed,
+  'done' => HarnessActivity.done,
+  'stopped' || 'cancelled' => HarnessActivity.paused,
+  'lost' => HarnessActivity.offline,
+  _ => HarnessActivity.unknown,
 };
 
-/// The status in words, for the task's header and for readers of the mark.
+/// The status in words, for the task's header and for readers of the mark: the backend's labels (`STATUS_LABELS`),
+/// as the Board says them.
 String superTabTaskStatusLabel(String status) => switch (status) {
   'proposal' => 'Proposal',
   'rejected' => 'Rejected',
-  _ => superTabTaskActivity(status).label,
+  'planned' => 'Planned',
+  'working' => 'Working',
+  'needs_human' => 'Needs a human',
+  'blocked' => 'Stuck',
+  'review' => 'Ready for review',
+  'done' => 'Done',
+  'stopped' => 'Stopped',
+  'cancelled' => 'Cancelled',
+  'reconciling' => 'Checking its agent',
+  'lost' => 'Agent lost',
+  _ => HarnessActivity.unknown.label,
 };
+
+/// The reason a rejected task was turned down, or null when none was given.
+String? superTabTaskRejection(String? reason) {
+  final text = reason?.trim();
+  return text == null || text.isEmpty ? null : text;
+}

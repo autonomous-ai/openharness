@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/open_in_browser.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/tasks/personal_task_card.dart';
+import 'package:harness/super_tabs/tasks/personal_tasks.dart';
+import 'package:harness/super_tabs/tasks/task_header.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/super_tabs/zone_time.dart';
 
@@ -117,5 +119,55 @@ void main() {
           .selected,
       isTrue,
     );
+  });
+
+  group('the header of a rejected task shows why (finding 17)', () {
+    Future<TasksFixture> header(
+      WidgetTester t,
+      Map<String, dynamic> row,
+    ) async {
+      final f = TasksFixture();
+      addTearDown(f.controller.dispose);
+      await f.controller.refresh();
+      await t.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 600,
+              child: SuperTabTaskHeader(
+                controller: f.controller,
+                task: SuperTabPersonalTask(row),
+              ),
+            ),
+          ),
+        ),
+      );
+      return f;
+    }
+
+    testWidgets('its reason under the status, and on the mark', (t) async {
+      await header(t, {
+        ...task('aeef', 1, 20),
+        'status': 'rejected',
+        'reason': 'Too much scope',
+      });
+      expect(find.text('Rejected'), findsOneWidget);
+      expect(find.text('Reason: Too much scope'), findsOneWidget);
+      expect(find.byTooltip('Rejected: Too much scope'), findsOneWidget);
+    });
+    testWidgets('a long reason wraps instead of overflowing', (t) async {
+      await header(t, {
+        ...task('aeef', 1, 20),
+        'status': 'rejected',
+        'reason': List.filled(100, 'scope').join(' '),
+      });
+      expect(t.takeException(), isNull);
+      expect(find.textContaining('Reason: scope scope'), findsOneWidget);
+    });
+    testWidgets('a task in review says so, and no reason line', (t) async {
+      await header(t, {...task('aeef', 1, 20), 'status': 'review'});
+      expect(find.text('Ready for review'), findsOneWidget);
+      expect(find.textContaining('Reason:'), findsNothing);
+    });
   });
 }
