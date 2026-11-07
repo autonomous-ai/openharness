@@ -1,6 +1,8 @@
 name: Desktop internal build
 
-# A signed, notarized macOS build of any branch for testers — not a release. Nothing a running app
+# A macOS build of any branch for testers — not a release. It is signed ad hoc and not notarized:
+# a branch's build never holds the Developer ID certificate, which lives in the `release` environment
+# (main and v*_desktop tags only, see release-desktop.yml's sign-macos). Nothing a running app
 # polls is touched, and nothing is tagged. The Flutter project lives under desktop/, so every job
 # that touches the tree runs with working-directory: desktop.
 #
@@ -17,8 +19,8 @@ name: Desktop internal build
 #
 # Built by the release's own code, so it IS what a release would ship, flags aside:
 # scripts/build-macos-variants.py compiles once and pins each renderer (Intel on Skia, Apple Silicon
-# on Impeller). The same release uploader signs, notarizes, staples, checks Gatekeeper and uploads
-# to separate internal paths. Both variants' downloads are verified before links are handed out.
+# on Impeller). The same release uploader packages both and uploads them to separate internal paths,
+# without notarizing. Both variants' downloads are verified before links are handed out.
 # test_build=true exercises this complete path, then deletes only the run's disposable objects.
 #
 # Self-update is pinned OFF: DESKTOP_UPDATE_METADATA_URL names a manifest nothing ever writes, so the
@@ -51,7 +53,7 @@ permissions:
   id-token: write
 
 concurrency:
-  # A newer push to the same internal branch supersedes the build still notarizing — nobody is
+  # A newer push to the same internal branch supersedes the build still running — nobody is
   # waiting on the old one. Never the release's group: an internal build must not queue behind a
   # release, and must never cancel one.
   group: desktop-internal-${{ github.ref }}
@@ -121,7 +123,7 @@ jobs:
   build-macos:
     needs: prepare
     runs-on: macos-15
-    timeout-minutes: 60   # two notarization submissions per build (zip, then dmg)
+    timeout-minutes: 40
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
       PREFIX: ${{ needs.prepare.outputs.prefix }}
@@ -146,14 +148,6 @@ jobs:
         with:
           version: ${{ needs.prepare.outputs.flutter_version }}
 
-      - uses: ./.github/actions/macos-signing
-        with:
-          certificate-base64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
-          certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          keychain-password: ${{ secrets.KEYCHAIN_PASSWORD }}
-          apple-id: ${{ secrets.APPLE_ID }}
-          apple-team-id: ${{ secrets.APPLE_TEAM_ID }}
-          apple-app-password: ${{ secrets.APPLE_APP_PASSWORD }}
 
       # GCP auth, WITHOUT a long-lived key wherever possible. The credential is used for exactly one
       # thing in this workflow: writing this build's .zip/.dmg to the release bucket under its
@@ -176,15 +170,13 @@ jobs:
       - name: Build once, publish both renderers and verify all four downloads
         id: build
         env:
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          SIGN_IDENTITY: '-'
         run: |
           set -euo pipefail
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           export CDN_ASSET_BASE_URL="https://storage.googleapis.com/${GCS_BUCKET}"
           python3 scripts/build-macos-variants.py "$VERSION" \
             --metadata-prefix "$PREFIX" --artifact-prefix "$PREFIX" \
-            --artifact-suffix="-$VERSION-$SHORT_SHA" --verify-downloads \
+            --artifact-suffix="-$VERSION-$SHORT_SHA" --verify-downloads --no-notarize \
             --dart-define=HARNESS_DEBUG_SURFACE="$DEBUG_SURFACE" \
             --dart-define=DESKTOP_UPDATE_METADATA_URL="https://storage.googleapis.com/${GCS_BUCKET}/harness/desktop-internal/no-updates.json"
 
@@ -215,6 +207,7 @@ jobs:
               echo "**[${artifact}.dmg](${url})**"
               echo "${VERSION} · \`${SHORT_SHA}\` on \`${GITHUB_REF_NAME}\` · Debug ${DEBUG_SURFACE} · self-update off"
               echo "dmg sha256 \`${sha}\`"
+              echo "Not notarized: after copying it to Applications, run \`xattr -dr com.apple.quarantine /Applications/Harness.app\` once, or open it from System Settings → Privacy & Security → Open Anyway."
               echo "Unlisted, not private. Remove both builds with \`gcloud storage rm -r gs://${GCS_BUCKET}/${PREFIX}\`."
             } >> "$GITHUB_STEP_SUMMARY"
           done
@@ -240,7 +233,3 @@ jobs:
             # restricted to the new random prefix owned by this run.
             gcloud storage rm --recursive "gs://${GCS_BUCKET}/${PREFIX}/" || true
           fi
-
-      - name: Remove the signing keychain
-        if: always()
-        run: security delete-keychain "$KEYCHAIN_PATH" || true
