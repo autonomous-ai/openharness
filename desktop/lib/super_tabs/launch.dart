@@ -54,8 +54,20 @@ class SuperTabLaunch {
     if (account == null) {
       throw const SuperTabFailure('SIGNED_OUT', 'Sign in to create a Swarm.');
     }
-    final key = 'super_tab.launch.$account.${tab.id}.$conversationId';
-    final raw = await app.superTabs.storage.read(key);
+    // + New agent keeps one request per Swarm, whichever tab opened it (hotfix #4647: one per tab piled up, and each
+    // had to be discarded). A request an older Desktop kept under its tab moves to it.
+    final perTab = 'super_tab.launch.$account.${tab.id}.$conversationId';
+    final key = newAgent && tab.superTabId != null
+        ? 'super_tab.launch.$account.swarm:${tab.superTabId}.$conversationId'
+        : perTab;
+    var raw = await app.superTabs.storage.read(key);
+    if (raw == null && key != perTab) {
+      raw = await app.superTabs.storage.read(perTab);
+      if (raw != null) {
+        await app.superTabs.storage.write(key, raw);
+        await app.superTabs.storage.delete(perTab);
+      }
+    }
     if (app.currentUser?.id != account) {
       throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
     }
@@ -1057,6 +1069,8 @@ class SuperTabLaunch {
 
   Future<void> persist() async {
     checkAccount();
+    // A discarded request stays gone: a write still on its way must not bring it back (hotfix #4647).
+    if (_dropped) return;
     await app.superTabs.storage.write(key, jsonEncode(saved));
     checkAccount();
   }
@@ -1644,10 +1658,14 @@ class SuperTabLaunch {
       await _deleteEmptyProject();
       await _archiveEmptyChat();
     }
+    _dropped = true;
     await app.superTabs.storage.delete(key);
     checkAccount();
     return null;
   }
+
+  /// Set once [discard] dropped the request: [persist] then writes nothing.
+  bool _dropped = false;
 
   /// A Member's chat nothing joined is archived. Best effort, as below: the
   /// person can still archive it from the chat.
