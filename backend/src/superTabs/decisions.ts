@@ -3,7 +3,7 @@
  *  with one tap, and the answer reaches the asking agent and the Lead in the conversation it came from. Decisions live in
  *  SuperTabDecision, never in the tab state, as mentions do. A decision is not a private channel: the PM's private lines go
  *  to the person's Buddy chat (buddies.ts). Called inside SuperTabStore's transactions. */
-import { defaultBuddy, defaultBuddyChat, isBuddy, isBuddyChat, isSwarmBuddy, openBuddyChat, sessionProjectId } from './buddies.js'
+import { defaultBuddy, defaultBuddyChat, isBuddy, isBuddyChat, isSwarmBuddy, openBuddyChat, PROPOSAL_ASK_MS, sessionProjectId } from './buddies.js'
 import { switched } from './boardRights.js'
 import { usernameOf } from './usernames.js'
 import { agentWrittenNameOf } from './personNames.js'
@@ -80,6 +80,8 @@ export interface DecisionTarget {
   /** Closed unanswered once its work was over (withdrawIn). */
   withdrawn?: boolean
   mustAgree?: boolean
+  /** A Buddy's send line: the words its Send posts (BUDDY_SEND). */
+  send?: SendPayload | null
 }
 /** `delegated`: the person asked left it to the PM, who took the recommended option. */
 /** `choice` null with a `note`: the person typed their own answer instead of choosing an option (task #2996). */
@@ -178,6 +180,18 @@ export function answerable(state: SuperTabState, actor: Actor, decision: Decisio
   return group
 }
 
+/** The conversation of a decision [actor] may answer: the person asked (answerable), or for a Buddy's own question to its owner,
+ *  that Buddy while still theirs and in its chat (task #4525). Checked on every answer and every retry of one. */
+export function answerableBy(state: SuperTabState, actor: Actor, decision: DecisionTarget | undefined): Conversation {
+  if (actor.kind === 'person') return answerable(state, actor, decision)
+  const buddy = state.agents.find(a => a.id === actor.agentId && isBuddy(a))
+  const owner = buddy && state.people.find(p => p.id === buddy.buddyOf!.personId && p.generation === buddy.buddyOf!.generation)
+  const chat = decision && state.conversations.find(c => c.id === decision.conversationId)
+  if (!buddy || !owner || !decision || !chat || !isBuddyDecision(decision.kind) || decision.askerAgentId !== buddy.id || decision.personId !== owner.id
+    || !chat.agentIds.includes(buddy.id)) fail('NOT_FOUND', 'This decision is unavailable.', 404)
+  return chat
+}
+
 /** What tells the asking agent and the Lead, whichever of them is still in the conversation. A notice only they read, with
  *  none of the answer in it: the decisions read, which checks who reads it, has the answer (review of #1753). */
 export const ANSWERED_NOTICE = 'A decision asked in this conversation was answered. Read the answer with: harness super-tab decisions --answered'
@@ -232,6 +246,47 @@ export function answerDecision(state: SuperTabState, actor: Actor, decision: Dec
   // A routing reflection's never reaches the Buddy chat: the person's Buddy reads it (review of #2276).
   const line = given.delegate && lead && asked.kind !== REFLECTION_DECISION ? delegatedLine(state, project.id, lead, asked, asked.recommended, given.defaulted) : null
   return { answer, noticeIn: noticeIn.id, notice, recipients, source: { ...AGENT_ONLY, decisionId: asked.id }, line }
+}
+
+/** The owner's message in their Buddy's chat that the Buddy names as their answer to its question, as the store reads it:
+ *  `newest` says it is their newest message there. */
+export interface OwnerAnswer { id: string; conversationId: string; author: Author; source: boolean; createdAt: number; newest: boolean }
+/** The line in a Buddy chat that settles its decision there: its owner answered in Decisions, or a Send went. */
+export const DECISION_ANSWERED_KIND = 'decision-answered'
+
+/** An answer to a person's own Buddy's question (task #4525): theirs, in Decisions or its card in the chat; or the Buddy's, settling it
+ *  from their answer in its chat, which it names (`ownerMessageId`): their own message there, after the question. Never the PM's:
+ *  only its own default time applies, by the sweep. A Send posts its stored words (`send`), and from the Buddy only while the owner's
+ *  ok is their newest message or under an hour old, as buddy.propose. The line tells the Buddy of its owner's answer in Decisions,
+ *  and the owner of every Send, in the chat. */
+export function settleBuddyDecision(state: SuperTabState, actor: Actor, decision: DecisionTarget | undefined,
+  given: { choice?: number; note: string | null; delegate: boolean; defaulted?: boolean; now: number; ownerMessageId?: string; ownerAnswer?: OwnerAnswer }) {
+  if (given.choice !== undefined ? given.delegate : !given.delegate && given.note === null) fail('INVALID_DECISION', 'Choose one of its options, or type an answer.', 400)
+  const group = answerableBy(state, actor, decision)
+  const asked = decision!
+  if (actor.kind === 'agent') {
+    const said = given.ownerAnswer, owner = person(state, asked.personId)
+    if (!said || said.id !== given.ownerMessageId || said.conversationId !== group.id || said.source || said.author.kind !== 'person'
+      || said.author.id !== owner.id || said.author.membershipGeneration !== owner.generation || said.createdAt < asked.createdAt) {
+      fail('BUDDY_DECISION_UNASKED', 'Settle a decision only with your owner\'s answer: name their message in your chat that answered it.', 403)
+    }
+  }
+  if (asked.answeredAt !== null || asked.withdrawn) fail('DECISION_ANSWERED', 'This decision is already answered.')
+  const due = given.defaulted === true && actor.kind === 'person' && asked.kind !== BUDDY_SEND && asked.defaultAt != null && asked.defaultAt <= given.now
+  if (given.delegate && !due) fail('INVALID_DECISION', 'Choose one of its options, or type an answer.', 400)
+  const choice = given.delegate ? asked.recommended : given.choice ?? null
+  if (choice !== null && (choice < 0 || choice >= asked.options.length)) fail('INVALID_DECISION', 'Choose one of its options.', 400)
+  const sends = asked.kind === BUDDY_SEND && choice === 0
+  const said = given.ownerAnswer
+  if (sends && actor.kind === 'agent' && !said!.newest && given.now - said!.createdAt > PROPOSAL_ASK_MS) {
+    fail('PROPOSAL_STALE', 'Send for your owner\'s newest message in your chat, or one from the last hour. Ask them again.', 403)
+  }
+  const answer: DecisionAnswer = { id: asked.id, choice, note: given.note, ...given.delegate ? { delegated: true as const, defaulted: true as const } : {} }
+  const words = sends ? 'Sent' : given.delegate ? `Default applied: ${asked.options[choice!]!}` : choice !== null ? asked.options[choice]! : given.note!
+  const tell = actor.kind === 'person' && group.agentIds.includes(asked.askerAgentId) ? [asked.askerAgentId] : []
+  const line = actor.kind === 'person' || sends ? { conversationId: group.id, text: `${words} — ${asked.question.replace(/\s+/g, ' ')}`, recipients: tell,
+    source: { kind: DECISION_ANSWERED_KIND, decisionId: asked.id } } : null
+  return { answer, line, send: sends ? asked.send ?? fail('INVALID_DECISION', 'This decision has nothing to send.', 400) : null, buddyId: asked.askerAgentId }
 }
 
 export const MUST_AGREE_KIND = 'decision-must-agree'
@@ -370,9 +425,9 @@ export async function expireReflections(tx: Tx, tabId: string, projectId: string
 export async function readAskedDecision(tx: Tx, tabId: string, id: string): Promise<DecisionTarget | undefined> {
   const row = await tx.superTabDecision.findFirst({ where: { id, tabId },
     select: { id: true, personId: true, conversationId: true, projectId: true, askerAgentId: true, question: true, options: true, recommended: true,
-      answeredAt: true, defaultAt: true, createdAt: true, assignmentId: true, kind: true, withdrawn: true, mustAgree: true } })
+      answeredAt: true, defaultAt: true, createdAt: true, assignmentId: true, kind: true, withdrawn: true, mustAgree: true, send: true } })
   return row ? { ...row, answeredAt: row.answeredAt?.getTime() ?? null, defaultAt: row.defaultAt?.getTime() ?? null, createdAt: row.createdAt.getTime(), assignmentId: row.assignmentId ?? null,
-    withdrawn: row.withdrawn === true, mustAgree: row.mustAgree === true } : undefined
+    withdrawn: row.withdrawn === true, mustAgree: row.mustAgree === true, send: (row.send ?? null) as SendPayload | null } : undefined
 }
 
 /** A must-agree decision past its time keeps waiting for its person: its time is cleared, so the due range never reads it again
