@@ -1,7 +1,7 @@
 import { authorizeTaskApproval, pendingTaskApproval, personalApprovalCommand, rejectTaskApproval, reopenTaskApproval, REQUESTER_LEFT, requireTaskApproval, stageTaskApproval, undecidedProposal } from './taskApproval.js'
 import type { PullRequestFilesRead } from './pullRequestFiles.js'
 import { legacyProposalId, migrateLegacyProposals, type LegacyProposalAsk, pmAcceptsMessage, applyProposalAction, authorizeProposalAction, authorizePersonProposal, cardPriority, createPersonProposal, createProposalCard, proposalCreateSchema, proposalFields, proposalNotices, proposalRoot, type ProposalRecord } from './proposalCards.js'
-import { pulseProjectOf, recordPulse, owe, settleDeleted, settleReaction, settleReply, settleRequest } from './pulse.js'
+import { handoffAsk, pulseProjectOf, recordPulse, owe, settleDeleted, settleReaction, settleReply, settleRequest } from './pulse.js'
 import { linesOf } from './statusCard.js'
 import { applyPushOrigin, barredFromTeamWritten, failPushUnknown, failTeamWritten, mainAccountMembers, markTeamWritten, mayName, ownersOwnAgent, ownersOwnMachine, requireTeamWrittenAccount, requireTeamWrittenMachine, stepMark, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import { crewMoveFailed, takeOverCrewMember, wakeCrewMember } from './crewKeep.js'
@@ -464,6 +464,8 @@ export const commandSchema = z.discriminatedUnion('type', [
     // The message this post answers right below it, in the main flow (anh Dee, 2026-11-04: "every message is a thread"). It
     // settles and routes as a reply to that message does, and opens no thread. Never with replyTo.
     answers: id.optional(),
+    // The PM entrusts this owed project-chat ask to the one project agent explicitly addressed by this post in its task.
+    handoff: id.optional(),
     // The answer to the message in `answers` (answers.ts, task #3403): placed in that message's thread when it is a reply in
     // one, else right below it, and refused when it was answered already. Only with `answers`.
     answer: z.literal(true).optional(),
@@ -4586,8 +4588,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Apply the Board's PM boundary before reporting delivery or recording work that depends on who heard the post.
       const excludedPm = command.agentOnly ? [] : recipients.filter(id => !pmAcceptsMessage(state, id, undefined))
       recipients = recipients.filter(id => !excludedPm.includes(id))
+      if (command.handoff) {
+        if (command.agentOnly || group.audience || group.kind || isBuddyChat(group)) fail('ASK_HANDOFF_PUBLIC', 'Hand off an ask in a public post to its project agent.', 400)
+        handoffAsk(state, group, poster?.id ?? null, command.handoff, addressed)
+      }
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
-      message(group.id, text, recipients, command.replyTo, command.agentOnly ? { ...AGENT_ONLY, ...command.notice ? { notice: command.notice } : {} } : undefined, attachments, tagged,
+      const postText = command.handoff ? `${text}\n\nAnswer message ${command.handoff} in ${groupProject(state, group).leadConversationId} in its thread.` : text
+      message(group.id, postText, recipients, command.replyTo, command.agentOnly ? { ...AGENT_ONLY, ...command.notice ? { notice: command.notice } : {} } : undefined, attachments, tagged,
         tagged.length ? command.mentionsIfNoWorker : undefined)
       if (!command.agentOnly) effects.messages.at(-1)!.post = true
       if (command.answers) effects.messages.at(-1)!.answers = command.answers
