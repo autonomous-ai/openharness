@@ -244,7 +244,7 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
           identity: 'buddy:${widget.projectId}',
           name: widget.label,
           size: size,
-          pattern: true,
+          face: true,
         )
       : SuperTabAvatar.agent(
           buddy,

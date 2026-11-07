@@ -68,7 +68,7 @@ class SuperTabBuddyRow extends StatelessWidget {
   final String? agentId;
   final String name;
 
-  /// An agent in My agents: the row wears its face, picture or pattern, as
+  /// An agent in My agents: the row wears its picture or face, as
   /// its chat, cards and Tasks pane draw it (audit finding 6 of task #4211).
   final SuperTabAgent? agent;
 

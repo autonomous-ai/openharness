@@ -21,7 +21,7 @@ class SuperTabAvatar extends StatelessWidget {
     this.picture,
     this.engine,
     this.status,
-    this.pattern = false,
+    this.face = false,
     this.now,
     this.radius,
   }) : crown = false;
@@ -37,7 +37,7 @@ class SuperTabAvatar extends StatelessWidget {
        picture = person.avatar,
        engine = null,
        status = person.status,
-       pattern = false,
+       face = false,
        crown = false;
 
   /// [engineBadge] off where the row already shows the engine beside the
@@ -56,7 +56,7 @@ class SuperTabAvatar extends StatelessWidget {
        picture = agent.avatar,
        engine = engineBadge ? agent.engine : null,
        status = null,
-       pattern = true,
+       face = true,
        now = null;
 
   /// The avatar of a roster row, agent or person, so their names start at one inset.
@@ -76,8 +76,8 @@ class SuperTabAvatar extends StatelessWidget {
   /// A fixed time to judge [status] by; the clock's when null.
   final DateTime? now;
 
-  /// Draw the agent pattern rather than an initial when there is no picture.
-  final bool pattern;
+  /// Draw the agent face rather than an initial when there is no picture.
+  final bool face;
 
   /// The corner of a rounded-square face, as a message's; round when null.
   final double? radius;
@@ -88,17 +88,17 @@ class SuperTabAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final badge = size * .46;
-    final face = SuperTabAvatarFace(
+    final drawn = SuperTabAvatarFace(
       identity: identity,
       name: name,
       size: size,
       picture: picture,
-      pattern: pattern,
+      face: face,
       radius: radius,
     );
     return SuperTabUntil(
       until: now == null ? status?.until : null,
-      builder: (context) => _drawn(face, badge),
+      builder: (context) => _drawn(drawn, badge),
     );
   }
 

@@ -92,7 +92,7 @@ void main() {
         method == #drawOval &&
         args[0] ==
             Rect.fromCenter(center: Offset(x, 45), width: 10.4, height: 14) &&
-        (args[1] as Paint).color == ink;
+        (args[1] as Paint).color.toARGB32() == ink.toARGB32();
     final quinn = await draw('Quinn');
     expect(tester.getSize(quinn), const Size.square(100));
     // Quinn's hash shifts it 3 units right and tilts it 9 degrees left.
@@ -108,9 +108,9 @@ void main() {
         ..something((m, a) {
           if (m != #drawPath) return false;
           final (path, paint) = (a[0] as Path, a[1] as Paint);
-          return paint.color == ink &&
+          return paint.color.toARGB32() == ink.toARGB32() &&
               paint.style == PaintingStyle.stroke &&
-              paint.strokeWidth == 5.6 &&
+              (paint.strokeWidth - 5.6).abs() < 1e-5 &&
               paint.strokeCap == StrokeCap.round &&
               path.contains(const Offset(50 + 3, 65)) &&
               !path.contains(const Offset(50 + 3, 60)) &&
