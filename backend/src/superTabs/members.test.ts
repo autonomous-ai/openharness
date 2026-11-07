@@ -207,6 +207,21 @@ describe('the Member', () => {
     expect(memberPlan(f.state, lamp, NOW)).toEqual([{ kind: 'assign', conversationId: tasks[0], agentId: member }])
   })
 
+  // Until the migration (#4693 part D) makes them Members, a person's own crew agents in the project take their asks as today.
+  it('is not started for a person whose own crew agent works in that project', () => {
+    const f = swarm([api])
+    f.run({ type: 'member.approvalMode', mode: 'review' }, kai)
+    f.run({ type: 'member.approvalMode', mode: 'autoApprove' }, kai)
+    const lamp = f.project('lamp')
+    const chat = f.state.projects!.find(p => p.id === lamp)!.leadConversationId
+    const config = { engine: 'claude' as const, model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
+    const crew = f.run({ type: 'agent.add', conversationId: chat, machineId: 'kai-mac', harnessId: 'kai-crew', name: 'Kai crew', configuration: config, lead: false },
+      kai, { contribution: { machineOwnerId: 'kai', contributorId: 'kai' } }).result.agentId as string
+    f.state.agents.find(a => a.id === crew)!.crew = { role: 'engineer', at: NOW, by: 'owner' }
+    f.ask(lamp, 'Their own crew takes it')
+    expect(memberPlan(f.state, lamp, NOW)).toEqual([])
+  })
+
   it('sleeps once its task ends with nothing waiting, and wakes for its next one', () => {
     const { f, tasks, member } = withMember(swarm(), 0)
     const assigned = f.run({ type: 'work.assign', conversationId: tasks[0]!, agentId: member }, owner)
