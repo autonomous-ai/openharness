@@ -28,7 +28,7 @@ import { jobKindOf } from './evidence/jobKind.js'
 import { endSteps, listStep, stepEndedRows, isStep, stepName, stepsOf, taskOwner } from './steps.js'
 import { closeMerged } from './mergedTasks.js'
 import { noteWriter } from './stuck.js'
-import { reviewPlan, refreshStepBrief, stepOsRefusal, type PlannedStep, type StepKind } from './reviewTable.js'
+import { reviewPlan, refreshStepBrief, stepOs, stepOsRefusal, type PlannedStep, type StepKind } from './reviewTable.js'
 import { openReviewStep, type StepPull } from './stepOpen.js'
 import { stopWaiting, testsOn, WAIT_LINE, waitFor, waits } from './osSteps.js'
 import { builtBy, reviewerCandidates, STRENGTH_RULE } from './reviewerPick.js'
@@ -2065,7 +2065,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     const pulls = read.heads ?? read.urls.map((url, i) => ({ url, head: i === 0 ? read.head : null }))
     for (const planned of reviewPlan(read.files, context.projectRules?.rules)) {
       const free = (step: Conversation) => !taken.has(step.id)
-      let step = existing.find(s => free(s) && stepName(s) === planned.name) ?? existing.find(s => free(s) && stepKind(s) === planned.kind)
+      let step = existing.find(s => free(s) && stepName(s) === planned.name) ?? existing.find(s => {
+        if (!free(s) || stepKind(s) !== planned.kind) return false
+        // A named OS step keeps its identity: adding a Mac test must not consume Windows through the kind fallback (#3778).
+        const os = planned.kind === 'test' ? stepOs(s) : undefined
+        return !os || os === planned.os
+      })
       if (step) {
         taken.add(step.id)
         step.brief = refreshStepBrief(step.brief ?? '', planned, { number: task.number!, title: task.title, pulls })
