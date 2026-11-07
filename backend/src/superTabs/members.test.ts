@@ -5,6 +5,7 @@ import { createSuperTab, SuperTabError, type Actor, type SuperTabState } from '.
 import { helperCheck, memberPlan, memberQueue } from './members.js'
 import { dispatchPlan, DISPATCH_RULES } from './dispatch.js'
 import { touchesFor } from './parts/touches.js'
+import { canReadAgent } from './projects.js'
 import * as store from './parts/index.js'
 import { readerView } from './read/views.js'
 
@@ -408,5 +409,33 @@ describe('an accepted ask assigned by hand', () => {
     expect(code(() => f.run({ type: 'work.assign', conversationId: tasks[0]!, agentId: other }, owner))).toBe('ASKED_BY_ANOTHER')
     f.run({ type: 'work.assign', conversationId: tasks[0]!, agentId: member }, owner)
     expect(f.group(tasks[0]!).assignment?.agentId).toBe(member)
+  })
+})
+
+// Security review 2 of #3575 (Secrev8): a private project's Member is tied to it from its start, not from its first task, so
+// once its person stops reading the project no other project's Lead sees it, or the project's name in it, or gives it work.
+describe('a private project\'s Member', () => {
+  it('stays its project\'s alone after its person stops reading it', () => {
+    const f = swarm()
+    f.run({ type: 'member.approvalMode', mode: 'review' }, kai)
+    const secret = f.run({ type: 'project.create', name: 'secret', visibility: 'private', brief: '' }).result.projectId as string
+    f.run({ type: 'project.sharing', projectId: secret, visibility: 'private', memberIds: ['kai'] })
+    const id = f.ask(secret, 'Private work')
+    f.run({ type: 'task.approve', conversationId: id }, kai)
+    const start = f.state.starts!.find(s => s.request.member)!
+    const own = { contribution: { machineOwnerId: 'kai', contributorId: 'kai' } }
+    f.run({ type: 'agent.startDispatch', startId: start.id }, kai, own)
+    const member = f.run({ type: 'agent.started', startId: start.id, harnessId: 'h-secret',
+      configuration: { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null } }, kai, own).result.agentId as string
+    f.run({ type: 'agent.startSettled', startId: start.id, warning: null }, kai, own)
+    expect(f.state.agents.find(a => a.id === member)!.privateProjectId).toBe(secret)
+    // Kai stops reading it; another project's Lead never sees the Member nor gives it work.
+    f.run({ type: 'project.sharing', projectId: secret, visibility: 'private', memberIds: [] })
+    const lamp = f.project('lamp')
+    const chat = f.state.projects!.find(p => p.id === lamp)!.leadConversationId
+    const config = { engine: 'claude' as const, model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
+    const lead = f.run({ type: 'agent.add', conversationId: chat, machineId: 'owner-mac', harnessId: 'lamp-lead', name: 'Lamp lead', configuration: config, lead: true },
+      owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).result.agentId as string
+    expect(canReadAgent(f.state, { kind: 'agent', agentId: lead, machineOwnerId: 'owner' }, f.state.agents.find(a => a.id === member)!)).toBe(false)
   })
 })
