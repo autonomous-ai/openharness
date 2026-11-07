@@ -6722,7 +6722,8 @@ class _SuperTabViewState extends State<SuperTabView>
                             child: Material(
                               color: grid.AppPalette.swarmSidebar,
                               elevation: 8,
-                              child: _sidebar(),
+                              // The same lit row as the left pane it stands in for.
+                              child: _sidebar(boardProjectId: boardProject),
                             ),
                           ),
                         ),
