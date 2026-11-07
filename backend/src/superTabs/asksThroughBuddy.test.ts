@@ -62,7 +62,9 @@ describe('in a switched project, an agent’s ask reaches the person through the
     const line = sent.messages.filter(m => m.conversationId === f.buddyChat)
     expect(line).toEqual([expect.objectContaining({ recipients: ['peer-buddy'], buddyProject: f.app.projectId,
       source: { kind: 'decision-asked', decisionId: sent.decisions![0]!.id, projectId: f.app.projectId } })])
-    expect(line[0]!.author).toMatchObject({ kind: 'agent', id: f.worker })
+    // Written by peer's own Buddy, naming the agent that asks: only peer and their own agent post there (task #4558).
+    expect(line[0]!.author).toMatchObject({ kind: 'agent', id: 'peer-buddy' })
+    expect(line[0]!.text).toMatch(/^worker asks peer on task #\d+: /)
     expect(line[0]!.text).toContain('Ship to everyone, or behind a flag?')
     expect(line[0]!.text).toContain('Behind a flag (recommended)')
     expect(line[0]!.text).toContain(defaultAt)

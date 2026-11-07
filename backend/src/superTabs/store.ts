@@ -1098,8 +1098,6 @@ export class SuperTabStore {
       // And their one Buddy chat, which takes it too (spec: Guard).
       if (asked && command.delegate) swarmChat(asked.personId)
     }
-    // A private line from an agent goes to the person's default Buddy (task #3818): their Buddy chats, quiet or not.
-    if (command.type === 'person.tell') swarmChat(command.personId)
     // A switch's result tells the machine's owner in their one Buddy chat, quiet or not (commands.ts agent.switchResult).
     if (command.type === 'agent.switchResult') swarmChat(state.agents.find(a => a.id === command.agentId)?.machineOwnerId)
     // A project's sharing ends its sessions in the one Buddy chats of whoever loses it (commands.ts endLostProjectSessions).
@@ -1163,12 +1161,6 @@ export class SuperTabStore {
       const projectId = command.projectId ?? (self ? agentProjectId(state, self) : undefined)
       const chat = projectsOf(state).find(p => p.id === projectId)?.leadConversationId
       if (chat) groupIds.push(chat)
-    }
-    // Any agent of a project tells a person in that project's Buddy chat (commands.ts person.tell), loaded even when quiet.
-    if (command.type === 'person.tell' && asAgentId) {
-      const self = state.agents.find(a => a.id === asAgentId)
-      if (self) buddyChat(agentProjectId(state, self), command.personId)
-      swarmChat(command.personId)
     }
     if (command.type === 'delivery.resolve') {
       const delivery = await tx.superTabDelivery.findFirst({ where: { id: command.deliveryId, tabId }, select: { conversationId: true } })
@@ -4737,21 +4729,12 @@ export class SuperTabStore {
     if (!group || !sender) return false
     const actor: Actor = delivery.authorKind === 'person' ? { kind: 'person', userId: delivery.authorId, email: '' }
       : { kind: 'agent', agentId: delivery.authorId, machineOwnerId: (sender as Agent).machineOwnerId }
-    const outsideChat = !canReadGroup(state, actor, group)
-    if (ledProject(state, delivery.agentId)?.boardMode || outsideChat) {
+    // A sender outside the conversation delivers nothing there: no other agent writes in a person's private chat (task #4558).
+    if (!canReadGroup(state, actor, group)) return false
+    if (ledProject(state, delivery.agentId)?.boardMode) {
       const source = knownSource === undefined
         ? (await tx.superTabMessage.findUnique({ where: { id: delivery.messageId }, select: { source: true } }))?.source : knownSource
       if (!pmAcceptsMessage(state, delivery.agentId, source)) return false
-      if (outsideChat) {
-        // A server-written proposal notice may enter its person's private Buddy chat without giving its author read access.
-        const notice = source as { kind?: string; projectId?: string } | null
-        const project = projectsOf(state).find(p => p.id === notice?.projectId)
-        const target = state.agents.find(a => a.id === delivery.agentId)
-        if (!isBuddyChat(group) || !target || !isBuddy(target) || !project
-          || !['proposal-notice', 'proposal-overdue'].includes(notice?.kind ?? '')
-          || !canReadProject(state, actor, project)
-          || !canReadProject(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, project)) return false
-      }
     }
     if (delivery.nativeContextId && !await this.native.allowsDelivery(tx, state, delivery.nativeContextId)) return false
     if (delivery.authorKind !== 'agent') return true
