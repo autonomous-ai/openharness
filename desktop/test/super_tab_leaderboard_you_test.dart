@@ -16,7 +16,9 @@ ConversationServer secondPlace() {
   final people = (server.leaderboard!['people'] as List)
       .cast<Map<String, dynamic>>();
   final dee = people.removeAt(0)..['rank'] = 2;
-  people.first['rank'] = 1;
+  people.first
+    ..['rank'] = 1
+    ..['points'] = 34;
   people.insert(1, dee);
   people.firstWhere((p) => p['personId'] == 'scholes')['displayName'] = 'Dee';
   return server;
