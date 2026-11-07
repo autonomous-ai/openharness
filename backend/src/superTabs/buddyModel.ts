@@ -196,7 +196,7 @@ export function buddyModelResult(state: SuperTabState, actor: Actor,
     if (!member) continue
     // No machine named: their own Buddy reads this chat, and a Buddy reads no machines.
     theirs.push({ conversationId: defaultBuddyChat(state, member).id, machines: [],
-      text: `${personName(state, owner.personId)}'s Buddy now runs on ${name}, ${s.api ? 'on your saved API' : 'which your machine serves'}.` })
+      text: `${personName(state, owner.personId)}'s agent now runs on ${name}, ${s.api ? 'on your saved API' : 'which your machine serves'}.` })
   }
   // The Buddy moved; a thread session that could not is named, so its owner knows where that thread's answers come from.
   const stayed = clean(command.error ?? '')

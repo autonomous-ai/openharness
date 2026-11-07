@@ -513,6 +513,14 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   there is something to send. No @ button: an @ typed tags.
 - **Blue.** Blue is for the main action and for your own bubbles, nothing
   else.
+- **Decision card.** One question (`SuperTabDecisionCard`, in the Buddy chat
+  and Notifications; the Decisions page row uses the same buttons): the
+  question, `Unblocks:` line, one button per option with the recommended one
+  filled and marked `· Recommended`, then quiet `Let <coordinator> decide` and
+  Not now. A person's own Buddy's question has no Let decide: only they
+  answer it. A line their Buddy waits to post as them shows its exact words,
+  whole, with Send and Not now, neither marked; its Not now answers it, so the
+  quiet Not now that only folds a card is not shown (task #4525).
 - **Adding or changing one.** A new or changed element updates this section
   and the gallery, with its images, in the same pull request.
 

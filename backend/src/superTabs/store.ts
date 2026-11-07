@@ -133,7 +133,7 @@ import { closeAssignment, closeUnassignedStart, LIST_SIZE, newestConversations, 
 import { answeredAgents, dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByAnswer, resolveByReply, resolveTags, resolveWhenWorked, writeMentions } from './mentions.js'
 import { stuckAlerts } from './stuck.js'
 import { OVERDUE_PER_PASS, overdueDecisions, dueDefaultDecisions } from './overdueDecisions.js'
-import { answerable, askDecisions, DECISION_ASKED_KIND, keepWaiting, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingConversations, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
+import { answerableBy, askDecisions, BUDDY_SEND, DECISION_ASKED_KIND, keepWaiting, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingConversations, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
 import { recordMessageReach } from './messageReachStats.js'
@@ -1109,6 +1109,11 @@ export class SuperTabStore {
       if (asked && command.delegate) projectIds.push(asked.projectId)
       // And their one Buddy chat, which takes it too (spec: Guard).
       if (asked && command.delegate) swarmChat(asked.personId)
+      // A Buddy's Send posts in its project's chat, quiet or not (task #4525).
+      if (asked?.kind === BUDDY_SEND && asked.send) {
+        const chat = projectsOf(state).find(p => p.id === asked.send!.projectId)?.leadConversationId
+        if (chat) groupIds.push(chat)
+      }
     }
     // A switch's result tells the machine's owner in their one Buddy chat, quiet or not (commands.ts agent.switchResult).
     if (command.type === 'agent.switchResult') swarmChat(state.agents.find(a => a.id === command.agentId)?.machineOwnerId)
@@ -1963,7 +1968,7 @@ export class SuperTabStore {
             readConversation(original, actor, delivery.conversationId)
           }
           // A retried answer is checked again: the person must still read the decision's conversation (review of #1753).
-          if (command.type === 'decision.answer') answerable(original, actor, await readAskedDecision(tx, tabId, command.decisionId))
+          if (command.type === 'decision.answer') answerableBy(original, actor, await readAskedDecision(tx, tabId, command.decisionId))
           else if ('decisionId' in command) {
             const decision = await readDecision(tx, tabId, command.decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
             readConversation(original, actor, decision.conversationId)
@@ -2154,6 +2159,20 @@ export class SuperTabStore {
       }
       if (command.type === 'mention.done') context.mention = await readMention(tx, tabId, command.mentionId)
       if (command.type === 'decision.answer') context.decision = await readAskedDecision(tx, tabId, command.decisionId)
+      // A Buddy settling its own question names its owner's answer in its chat (task #4525): that message, and whether it is
+      // their newest there, by the chat's newest rows as buddy.propose reads them.
+      if (command.type === 'decision.answer' && command.ownerMessageId && context.decision) {
+        const said = await tx.superTabMessage.findFirst({ where: { id: command.ownerMessageId, tabId, conversationId: context.decision.conversationId },
+          select: { id: true, conversationId: true, author: true, source: true, createdAt: true } })
+        if (said) {
+          const author = said.author as unknown as Author
+          const recent = await tx.superTabMessage.findMany({ where: { tabId, conversationId: said.conversationId }, orderBy: { sequence: 'desc' }, take: 50,
+            select: { id: true, author: true, source: true } })
+          const newest = recent.find(m => !m.source && (m.author as unknown as Author).kind === 'person' && (m.author as unknown as Author).id === author.id)
+          context.ownerAnswer = { id: said.id, conversationId: said.conversationId, author, source: !!said.source, createdAt: said.createdAt.getTime(),
+            newest: newest?.id === said.id }
+        }
+      }
       if (command.type === 'work.status' && command.ask && command.result && actor.kind === 'agent') {
         const ask = { ...command.ask, askerAgentId: actor.agentId, assignmentId: command.assignmentId, conversationId: command.conversationId,
           question: command.result }

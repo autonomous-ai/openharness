@@ -3051,13 +3051,22 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The name of the reader's Buddy that [group] is the chat with: the name
   /// they chose while it has none (removed, or starting), else "your Buddy".
   /// Null when [group] is no Buddy chat of the reader's.
+  /// The reader's Buddy in [group] by the name it goes by (task #4568): its
+  /// agent's, else the name kept on its chat, else "your agent".
   String? _buddyName(SuperTabConversation? group) {
     if (group == null || !_isBuddyChat(group)) return null;
-    final agent = c.buddy(group.projectId);
+    final agent = superTabChatBuddy(c, group);
     return agent == null
-        ? group.buddyName ?? 'your Buddy'
+        ? group.buddyName ?? 'your agent'
         : c.snapshot!.agentName(agent.id, fallback: agent.name);
   }
+
+  /// [_buddyName] as a label: capitalized when it is no agent's own name.
+  String _shownBuddyName(SuperTabConversation? group) =>
+      switch (_buddyName(group)) {
+        null || 'your agent' => 'Your agent',
+        final name => name,
+      };
 
   /// The open conversation's name, or what the pane shows instead of one,
   /// named as the sidebar names it: "# openharness", or a workgroup's
@@ -3226,13 +3235,10 @@ class _SuperTabViewState extends State<SuperTabView>
       // it does; the one Buddy chat is the sidebar's # buddy.
       : c.isEarlierBuddyChat(group)
       ? 'Earlier Buddy chat · ${c.snapshot!.projects.where((p) => p.id == group.projectId).firstOrNull?.name ?? 'a project'}'
+      // A Buddy chat is named for its agent (task #4568).
       : _buddyName(group) == null
       ? null
-      : group.isSwarmBuddyChat
-      ? 'Buddy'
-      : c.buddy(group.projectId) == null && group.buddyName == null
-      ? 'Your Buddy'
-      : '${_buddyName(group)} · Your Buddy';
+      : _shownBuddyName(group);
 
   /// The pictures [messages] show in place, oldest first, each with its
   /// sender as its row shows them and where it was posted, for the viewer.
@@ -3323,10 +3329,7 @@ class _SuperTabViewState extends State<SuperTabView>
       final project = snapshot.projectFor(group.id)!;
       return 'Message ${project.isPrivate ? project.name : '#${project.name}'}';
     }
-    if (_buddyName(group) case final buddy?) {
-      // A Buddy's name is its person's and long: a phone's one line says Buddy.
-      return _phone ? 'Message Buddy' : 'Message $buddy';
-    }
+    if (_buddyName(group) case final buddy?) return 'Message $buddy';
     // An agent's own chat keeps the title it was opened with; a rename changes the agent (audit finding 8 of #4436).
     if (_ownAgent(group) case final agent?) {
       return 'Message ${snapshot.agentName(agent.id, fallback: agent.name)}';
@@ -3936,7 +3939,13 @@ class _SuperTabViewState extends State<SuperTabView>
                   key: const ValueKey('super-board-chat-buddy'),
                   onPressed: () => _showBuddy(project),
                   icon: const Icon(AppIcons.arrowLeft, size: 16),
-                  label: const Text('Your Buddy'),
+                  label: Text(switch (c.buddy(project.id)) {
+                    final agent? => c.snapshot!.agentName(
+                      agent.id,
+                      fallback: agent.name,
+                    ),
+                    null => 'Your agent',
+                  }),
                 ),
               if (ownBuddy) ...[
                 Flexible(
@@ -3945,14 +3954,14 @@ class _SuperTabViewState extends State<SuperTabView>
                     controller: c,
                     projectId: group.projectId,
                     app: widget.app,
-                    label: 'Your Buddy',
+                    label: _shownBuddyName(group),
                   ),
                 ),
                 const Spacer(),
               ] else
                 Expanded(
                   child: Text(
-                    onBuddy ? 'Your Buddy' : (group?.label ?? ''),
+                    onBuddy ? _shownBuddyName(group) : (group?.label ?? ''),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: DesktopChrome.control().copyWith(

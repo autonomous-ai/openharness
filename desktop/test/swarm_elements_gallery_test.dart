@@ -23,6 +23,8 @@ import 'package:harness/super_tabs/buddy_card.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/chat/agent_chat_header.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/decisions.dart';
+import 'package:harness/super_tabs/decisions_view.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
@@ -148,7 +150,7 @@ Future<List<SuperTabController>> _show(
   await buddy.select('swarm-buddy-peer');
   await member.select('aeef');
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 1770);
+  tester.view.physicalSize = const Size(760, 1950);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -162,6 +164,8 @@ Future<List<SuperTabController>> _show(
           faces: faces,
           bars: [buddy, member],
           empty: empty,
+          // The decision cards read their answers' state from a reader's Decisions.
+          decisions: SuperTabDecisions.of(member),
         ),
       ),
     ),
@@ -370,6 +374,26 @@ final _person = SuperTabPerson.fromJson({
   'role': 'owner',
 });
 
+/// A person's own Buddy's question, and a line it waits to post as them
+/// (task #4525), as the backend lists them.
+SuperTabDecision _decision(
+  String id,
+  String question,
+  List<String> options,
+  String unblocks, {
+  bool send = false,
+}) => SuperTabDecision.fromJson({
+  'id': id,
+  'conversationId': 'buddy',
+  'askerName': 'Buddy',
+  'question': question,
+  'options': options,
+  'recommended': send ? 0 : 1,
+  'unblocks': unblocks,
+  'fromBuddy': true,
+  'send': send,
+});
+
 /// A Tasks pane card as the pane draws it: the project's capsule, the mark, the title and two 18 faces.
 Widget _card(
   String title,
@@ -402,6 +426,7 @@ class _Gallery extends StatelessWidget {
     required this.faces,
     required this.bars,
     required this.empty,
+    required this.decisions,
   });
   final Brightness brightness;
   final List<String> faces;
@@ -411,6 +436,9 @@ class _Gallery extends StatelessWidget {
 
   /// A Swarm with no tasks: the Tasks pane empty.
   final SuperTabController empty;
+
+  /// Whose answers the decision cards read.
+  final SuperTabDecisions decisions;
   static const boundary = ValueKey('swarm-elements-gallery');
 
   @override
@@ -741,6 +769,37 @@ class _Gallery extends StatelessWidget {
                   controller: empty,
                   onOpenTask: (_) {},
                 ),
+              ),
+              title('Decision card: a Buddy question and a send line'),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 340,
+                    child: SuperTabDecisionCard(
+                      decisions: decisions,
+                      decision: _decision('d1', 'Keep the old flag a week?', [
+                        'Keep it',
+                        'Drop it',
+                      ], 'The cleanup'),
+                      onNotNow: () {},
+                    ),
+                  ),
+                  SizedBox(
+                    width: 340,
+                    child: SuperTabDecisionCard(
+                      decisions: decisions,
+                      decision: _decision(
+                        'd2',
+                        'Drop the old --legacy-sync flag from the CLI.',
+                        ['Send', 'Not now'],
+                        'Posts this in the harness chat as you.',
+                        send: true,
+                      ),
+                      onNotNow: () {},
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

@@ -35,11 +35,11 @@ ConversationServer _buddyChat() {
       (server.state['conversations'] as List)[1] as Map<String, dynamic>
         ..['kind'] = 'buddy'
         ..['buddyOwnerId'] = 'owner'
-        ..['title'] = "phamngochuy.1989's Buddy";
+        ..['title'] = 'Rowan';
   (server.state['agents'] as List).add({
     'id': 'buddy-main',
-    'name': "phamngochuy.1989's Buddy",
-    'displayName': "phamngochuy.1989's Buddy",
+    'name': 'Rowan',
+    'displayName': 'Rowan',
     'machineId': 'mac',
     'harnessId': 'h-main',
     'contributorId': 'owner',
@@ -158,7 +158,8 @@ void main() {
         server: _buddyChat(),
         initial: 'offline',
       );
-      expect(find.text('Message Buddy'), findsOneWidget);
+      // A Buddy goes by a real, short name now (task #4568), so the phone names it too.
+      expect(find.text('Message Rowan'), findsOneWidget);
       expect(tester.widget<TextField>(_field).decoration!.hintMaxLines, 1);
       expect(
         tester.getRect(_session).top,
