@@ -16,10 +16,10 @@ import 'swarm_type.dart';
 
 /// A thread's reply box, one everywhere a reply is written (the thread pane,
 /// the Threads view): files dropped, pasted or attached, Enter sends and
-/// ⇧Enter breaks the line. Under the text, one row as on the phone (Huy and
-/// Scholes, 11-04): the paperclip and @ Tag, then [options] such as the pane's
-/// New session, and the mic (with [onMic]) and the round send at its right
-/// end, drawn as Cmd-N's field (anh Dee, 11-07, #4467).
+/// ⇧Enter breaks the line. Under the text, one row (Huy and Scholes, 11-04):
+/// the paperclip, then [options] such as the pane's New session, and the mic
+/// (with [onMic]) and the round send at its right end, drawn as Cmd-N's field
+/// (anh Dee, 11-07, #4467). An @ typed tags; there is no @ button (River, 11-07).
 class SuperTabReplyBox extends StatelessWidget {
   const SuperTabReplyBox({
     super.key,
@@ -34,7 +34,6 @@ class SuperTabReplyBox extends StatelessWidget {
     required this.onEdited,
     required this.onSend,
     this.options,
-    this.onTag,
     this.onMic,
     this.voiceRow,
     this.voiceNotice,
@@ -43,7 +42,6 @@ class SuperTabReplyBox extends StatelessWidget {
     this.surfaceKey = const ValueKey('super-thread-composer-surface'),
     this.fieldKey = const ValueKey('super-thread-composer'),
     this.sendKey = const ValueKey('super-thread-send'),
-    this.tagKey = const ValueKey('super-thread-tag'),
     this.micKey = const ValueKey('super-thread-mic'),
     this.hint = 'Reply',
   });
@@ -63,8 +61,8 @@ class SuperTabReplyBox extends StatelessWidget {
   final VoidCallback onSend;
   final Widget? options;
 
-  /// @ Tag's press, and the mic's: no mic without one; @ Tag greyed.
-  final VoidCallback? onTag, onMic;
+  /// The mic's press: no mic without one.
+  final VoidCallback? onMic;
 
   /// A voice message under way in this thread: drawn in the row's place.
   final Widget? voiceRow;
@@ -77,13 +75,13 @@ class SuperTabReplyBox extends StatelessWidget {
   /// Enter; a non-null answer is the key's.
   final KeyEventResult? Function(KeyEvent event)? onKey;
   final List<TextInputFormatter> inputFormatters;
-  final Key surfaceKey, fieldKey, sendKey, tagKey, micKey;
+  final Key surfaceKey, fieldKey, sendKey, micKey;
 
   /// The field's hint: what an empty box says it is for.
   final String hint;
 
   /// The Tab order inside an [OrderedTraversalPolicy] group around the box,
-  /// the row's own: the field (and its files) first, then + and @ Tag, the
+  /// the row's own: the field (and its files) first, then the paperclip, the
   /// options ([optionsOrder], such as the pane's New session), the mic and
   /// send, and last what the owner puts under the box ([underOrder], such as
   /// the pane's Also send). Outside such a group it has no effect, and the
@@ -200,13 +198,6 @@ class SuperTabReplyBox extends StatelessWidget {
                         child: NewHarnessAttachButton(
                           attachments: files,
                           enabled: writable && !busy,
-                        ),
-                      ),
-                      FocusTraversalOrder(
-                        order: toolsOrder,
-                        child: SuperTabComposerTagButton(
-                          key: tagKey,
-                          onPressed: writable ? onTag : null,
                         ),
                       ),
                       Expanded(child: options ?? const SizedBox.shrink()),

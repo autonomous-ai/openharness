@@ -110,11 +110,6 @@ void main() {
           find.descendant(of: surfaceKey, matching: key('new-harness-attach')),
           AppIcons.paperclip,
         );
-        final tag = glyph(
-          tester,
-          key(thread ? 'super-thread-tag' : 'super-composer-tag'),
-          AppIcons.atSign,
-        );
         final mic = glyph(
           tester,
           key(thread ? 'super-thread-mic' : 'super-composer-mic'),
@@ -130,14 +125,17 @@ void main() {
         expect(field.left - surface.left, closeTo(side, .5), reason: 'left');
         expect(surface.right - field.right, closeTo(side, .5), reason: 'right');
         // The paperclip under the text's first letter, the arrow at the text's right
-        // edge, and the mic as far from the arrow as @ is from +.
+        // edge.
         expect(plus.left, closeTo(field.left, .5), reason: '+ edge');
         expect(surface.right - send.right, closeTo(side, .5), reason: 'send');
+        // The mic right beside the round send: two touching targets apart
+        // (River, 11-07, #4467).
         expect(
           send.left - mic.right,
-          closeTo(tag.left - plus.right, .5),
-          reason: 'mic and send spacing',
+          closeTo(grid.AppControl.height - AppIcons.inlineSize, .5),
+          reason: 'mic beside send',
         );
+
         // The row's air over Desktop's 32pt targets, the same over a phone's
         // 44pt ones, which would otherwise push a short phone's box past the
         // keyboard.

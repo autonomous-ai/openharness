@@ -736,15 +736,9 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     crossAxisAlignment:
                                         WrapCrossAlignment.center,
                                     children: [
+                                      // The name and the time only: colour
+                                      // is the face's (River, 11-07, #4467).
                                       _name(authorStyle, finger),
-                                      if (message.fromAgent)
-                                        Tooltip(
-                                          message: _identityDetails,
-                                          child: EngineMark(
-                                            engine: widget.agent?.engine,
-                                            size: 14,
-                                          ),
-                                        ),
                                       if (widget.headerStatus
                                           case final status?)
                                         status

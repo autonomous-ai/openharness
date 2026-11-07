@@ -3378,7 +3378,6 @@ class _SuperTabViewState extends State<SuperTabView>
     required double room,
     required Widget field,
     required Widget attach,
-    required Widget tag,
     required List<Widget> options,
     required List<Widget> trailing,
     required Widget send,
@@ -3386,8 +3385,7 @@ class _SuperTabViewState extends State<SuperTabView>
   }) {
     // Too little height for a second row (a phone on its side with its keyboard
     // up): the actions take the row's end. A narrow phone with so little
-    // height gets the squeezed row, which beats a composer that overflows; it
-    // has no room for @ Tag there, and an @ typed still opens the list.
+    // height gets the squeezed row, which beats a composer that overflows.
     final target = _phone ? kFingerTarget : grid.AppControl.height;
     final row = composerRowInsets(target: target);
     if (_phone && room < _phoneComposerTwoRowsFrom && voice == null) {
@@ -3429,8 +3427,9 @@ class _SuperTabViewState extends State<SuperTabView>
               Row(
                 key: const ValueKey('super-message-composer-actions'),
                 children: [
+                  // Only the paperclip on the left: an @ typed tags
+                  // (River, 11-07, #4467).
                   attach,
-                  tag,
                   Expanded(
                     child: Wrap(
                       crossAxisAlignment: WrapCrossAlignment.center,
@@ -3444,13 +3443,6 @@ class _SuperTabViewState extends State<SuperTabView>
         ),
       ],
     );
-  }
-
-  /// @ Tag: `@` at the caret, reported as an edit so the tag list opens.
-  void _promptTag() {
-    _composer.value = superTabTagPrompt(_composer.value);
-    _composerEdited(_composer.text);
-    _focus.requestFocus();
   }
 
   /// Whether ⋮ carries the views a wider header draws as icons.
@@ -6138,13 +6130,6 @@ class _SuperTabViewState extends State<SuperTabView>
                               NewHarnessAttachButton(
                                 attachments: _files,
                                 enabled: writable && !busy,
-                              ),
-                            ),
-                            tag: fingerTarget(
-                              enabled: _phone,
-                              SuperTabComposerTagButton(
-                                key: const ValueKey('super-composer-tag'),
-                                onPressed: writable ? _promptTag : null,
                               ),
                             ),
                             options: [
