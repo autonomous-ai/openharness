@@ -314,7 +314,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     const bin = join(runtime, 'node-v1', 'bin')
     mkdirSync(bin, { recursive: true })
     const node = join(bin, 'node')
-    placeNode(node)
+    placeNode(node, [join(runtime, 'node-v1', 'libexec', 'harnessd')])
     const ran = join(dir, 'ran')
     const core = join(dir, 'core.cjs')
     writeFileSync(core, `
