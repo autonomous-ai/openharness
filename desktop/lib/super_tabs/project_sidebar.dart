@@ -578,7 +578,7 @@ class ProjectSidebar extends StatelessWidget {
       name: name,
       tooltip: 'Your Buddy · ${project.name}',
       detail:
-          _down(agent) ??
+          _detail(agent) ??
           switch ((agent, controller.buddyStart(project.id))) {
             (null, {'harnessId': null, 'error': null}) => 'starting',
             (null, _) => 'not started',
@@ -610,10 +610,21 @@ class ProjectSidebar extends StatelessWidget {
           crown: lead,
         );
 
-  /// "offline" for an agent that is down: the one state a quiet row says, since it is the one that changes what you
-  /// can ask of it.
-  String? _down(SuperTabAgent? agent) =>
-      agent?.downSince != null ? 'offline' : null;
+  /// An agent's one quiet detail in My agents ([superTabAgentDetail]).
+  String? _detail(SuperTabAgent? agent, {String? leads}) {
+    if (agent == null) return null;
+    final activity = agent.downSince != null
+        ? HarnessActivity.offline
+        : switch (app) {
+            final app? => harnessActivity(
+              app,
+              agent.machineId,
+              agent.harnessId,
+            ),
+            null => null,
+          };
+    return superTabAgentDetail(activity, leads: leads);
+  }
 
   Widget _iconRow({
     required String key,
@@ -722,6 +733,7 @@ class ProjectSidebar extends StatelessWidget {
       key: ValueKey('super-buddy-${project.id}'),
       agentId: agent?.id,
       name: name,
+      compact: compact,
       project: named ? project.name : null,
       tooltip: 'Your Buddy · ${project.name}',
       // Where it runs, as the Agents list once showed every Buddy: only its
@@ -770,12 +782,16 @@ class ProjectSidebar extends StatelessWidget {
     if (board) {
       final muted =
           chat != null && controller.notifyOf(chat.id) == SuperTabNotify.muted;
+      // Its own name and face, as the header draws it (audit finding 8 of #4436).
+      final name = agent == null
+          ? chat?.buddyName ?? 'Buddy'
+          : controller.snapshot!.agentName(agent.id, fallback: agent.name);
       return SuperTabQuietRow(
         key: const ValueKey('super-swarm-buddy'),
-        leading: _face(agent, 'Buddy'),
-        name: 'Buddy',
+        leading: _face(agent, name),
+        name: name,
         tooltip: 'Your Buddy',
-        detail: _down(agent),
+        detail: _detail(agent),
         selected: _chatLit(chat),
         unread: chat != null && !muted && controller.unreadShown(chat),
         onTap: switch (chat) {
@@ -847,9 +863,10 @@ class ProjectSidebar extends StatelessWidget {
           : onOpenAgentTerminal != null
           ? '$name · opens its terminal'
           : '$name · no chat yet',
-      detail:
-          _down(agent) ??
-          (pm ? snapshot.leadProjectForAgent(agent.id)?.name : null),
+      detail: _detail(
+        agent,
+        leads: pm ? snapshot.leadProjectForAgent(agent.id)?.name : null,
+      ),
       selected: _chatLit(chat),
       unread: chat != null && controller.unreadShown(chat),
       onTap: switch ((chat, onOpenAgentTerminal)) {
@@ -1294,3 +1311,21 @@ Set<String> superTabHiddenProjects(
   SuperTabController controller, {
   AppNotifier? app,
 }) => app == null ? const {} : PersonalProjects.of(app).hiddenIn(controller);
+
+/// An agent's one quiet detail in the Desktop's My agents (task #4466): a state that changes what you can ask of it
+/// first, then the project a Lead [leads], then whether it is at work. In words, grey, so states read apart without
+/// colour (audit finding 9 of #4436).
+String? superTabAgentDetail(HarnessActivity? activity, {String? leads}) =>
+    switch (activity) {
+      HarnessActivity.offline => 'offline',
+      HarnessActivity.needsInput => 'needs you',
+      HarnessActivity.failed => 'failed',
+      HarnessActivity.starting => 'starting',
+      _ => null,
+    } ??
+    leads ??
+    switch (activity) {
+      HarnessActivity.working => 'working',
+      HarnessActivity.paused => 'stopped',
+      _ => null,
+    };

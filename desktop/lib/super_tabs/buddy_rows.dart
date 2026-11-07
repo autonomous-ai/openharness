@@ -8,6 +8,7 @@ import '../widgets/desktop_chrome.dart';
 import 'buddy_chat.dart';
 import 'identity.dart';
 import 'section_heading.dart';
+import 'swarm_type.dart';
 
 /// A sidebar count of what is for the reader, such as the tags waiting in
 /// Notifications or in a conversation: Slack's red number, white on the
@@ -288,6 +289,7 @@ class SuperTabBuddyRow extends StatelessWidget {
     this.note,
     this.detail,
     this.status,
+    this.compact = false,
   });
 
   /// The Buddy, for its avatar; null while none runs.
@@ -313,6 +315,9 @@ class SuperTabBuddyRow extends StatelessWidget {
   /// activity mark, before it; [status] shows only with it.
   final String? detail;
   final Widget? status;
+
+  /// A phone's sidebar, whose rows keep the app's sizes ([SwarmType.sidebar]).
+  final bool compact;
 
   static const _column = SuperTabSectionHeading.actionWidth;
 
@@ -384,9 +389,11 @@ class SuperTabBuddyRow extends StatelessWidget {
                                       name,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      // Unread is the name in bold, no dot (Dee, 2026-10-29).
+                                      // Unread is the name in bold, no dot (Dee, 2026-10-29). The pane's one
+                                      // row size, as + New agent and the projects (#4444).
                                       style:
-                                          DesktopChrome.control(
+                                          SwarmType.sidebar(
+                                            compact: compact,
                                             medium: selected,
                                             color: color,
                                           ).copyWith(
@@ -461,12 +468,9 @@ class SuperTabBuddyRow extends StatelessWidget {
                         child: SuperTabCountBadge(badge, tooltip: badgeTooltip),
                       ),
                     ),
-                  SizedBox(
-                    width: _column,
-                    // Unread is drawn as a bold name and heard in words.
-                    child: Semantics(label: unread ? 'Unread messages' : null),
-                  ),
-                  const SizedBox(width: _column),
+                  // Unread is drawn as a bold name and heard in words.
+                  Semantics(label: unread ? 'Unread messages' : null),
+                  const SizedBox(width: 12),
                 ],
               ),
             ),
