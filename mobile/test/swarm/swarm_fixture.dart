@@ -411,8 +411,8 @@ Future<void> removeHome(SwarmHomeCache cache) async {
 }
 
 /// Swarm Home C's project screen is up for the project named [name]: its
-/// #name and ☰, and no tab bar: none of direction B's tabs (Buddy, Tasks,
-/// Leaderboard), nor B's team button.
+/// #name and ☰, and a tab bar of its Board and its Chat only (task #3821):
+/// none of direction B's tabs (Buddy, Tasks, Leaderboard), nor B's team button.
 void expectHomeCProject(String name) {
   Finder tab(String t) => find.byKey(ValueKey('swarm-project-tab-$t'));
   expect(find.text('#$name'), findsOneWidget, reason: 'its #name');
@@ -421,7 +421,10 @@ void expectHomeCProject(String name) {
     findsOneWidget,
     reason: '☰',
   );
-  for (final b in ['chat', 'buddy', 'tasks', 'leaderboard']) {
+  for (final t in ['board', 'chat']) {
+    expect(tab(t), findsOneWidget, reason: 'its $t tab');
+  }
+  for (final b in ['buddy', 'tasks', 'leaderboard']) {
     expect(tab(b), findsNothing, reason: "B's $b tab");
   }
   expect(
