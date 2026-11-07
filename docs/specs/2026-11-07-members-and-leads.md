@@ -54,7 +54,7 @@ agent on screen.
 
 | Word | Meaning |
 |---|---|
-| **Member** | An agent of a person's, on that person's own computer and login, that works in a team. It talks with its person in its chat and does tasks. Every agent that is not a Lead is a Member. |
+| **Member** | An agent of a person's, on that person's own computer and login, that works in a team. It talks with its person in its chat (its chat session) and does tasks (a task session per project, which never sees the chat). Every agent that is not a Lead is a Member. |
 | **Lead** | The Member that leads a project: it decides what the project does and who does it. Shown with the gold ring (#4461). It is the project's coordinator (system name coordinator, wire `lead`, unchanged). A project that names its coordinator otherwise keeps that name. |
 | **Main project** | The one project a Member belongs to. It works there first and goes back there whenever it has work. A Lead's main project is the one it leads. |
 | **Helping** | A free Member doing a task in a project that is not its main project. |
@@ -72,7 +72,7 @@ kinds of agent.
 | Talking with your agent | Your Buddy's chat; Regular agents' chats | Every Member's own chat, under My agents |
 | Making an agent | Cmd-N with folder, worktree, branch and a Lead or Member choice | Cmd-N with a project list: pick a main project, or New project for a Lead |
 | Joining | Join, bring your agent, it becomes your Buddy | Join, bring your agent with the same Cmd-N form; it becomes a Member of the project you pick |
-| Where an agent works | A Regular agent: wherever its task is, one conversation for everything | A Member: its main project first, a worktree and a session per project |
+| Where an agent works | A Regular agent: wherever its task is, one conversation for everything | A Member: its main project first; a chat session for its person, and a worktree and a task session per project |
 | A free agent | Idle, or a crew member takes its lane's next task | Takes its main project's next task, else helps where a task waits |
 | Sleep | After an hour idle | Only when nothing it may take is waiting anywhere |
 | Not enough agents | The PM notices, or nobody does | The Lead asks a computer's owner to start more, when the computer has room |
@@ -110,21 +110,39 @@ Both use the existing Cmd-N form (`HarnessLaunchIntegration`, #4196), and only t
 - **What a project is:** the project's own one-line description. A project without one shows its repository's name.
   The Lead or the project's owner sets the line in Project settings; it is plain text, at most 80 characters.
 
-## 2. A Member's folders and sessions
+## 2. A Member's sessions and folders
 
-- **One home folder per Member**, Harness's own, made at its start on its computer (today's agent folder,
-  `agentFolder.ts`): private, marked as Harness's, trusted alone.
-- **A worktree per project** inside it, named for the project, made the first time the Member works there, from the
-  computer's existing clone of that project's repository (today's project folder and worktree path). A project with no
-  repository gets an empty folder of its own, as today (#3211).
-- **A separate session per project:** each project has its own engine conversation (its own `claude --resume` or
-  `codex resume` id), started in that project's worktree. What the Member learned in one project stays in that
-  project's session. Its chat with its person is one chat across all of them.
-- **Setting up once:** the first time a Member works in a project it sets it up (clone, the project's install steps)
-  in that worktree, then tells the Lead it is ready, in one line in the project's chat: "Ready to work on harness." It
-  does not set it up again; a later task there starts in the same worktree and session.
-- **At most 5 projects set up per Member.** A sixth drops the one it used longest ago, only when that worktree has no
+A Member is one agent to its person (one name, one face, one chat), with two kinds of session that never mix. Its
+person's chat can carry every project the person reads, private ones and their decisions included; a task can be
+steered by outside text (an issue, a pull request, a file). So the two are kept apart by the server, not by the
+Member's good behaviour.
+
+- **The chat session** talks with its person, in the Member's chat. It reads what a Buddy reads today (the projects
+  its person reads, the decisions and lines addressed to them) and sends only the Buddy's commands (`BUDDY_COMMANDS`:
+  talk, propose, answer on the cards it sent). It never takes a task, never receives a task's brief or thread, and
+  never posts in one. It runs in its own home folder, as a Buddy's does (`buddyHome.ts`), with no task worktree in it.
+- **The task sessions**, one per project, do the work. Each is its own agent record, tied to its Member and bound to
+  that one project's session scope (`sessionScope.ts bindSession`), as a project's agent is today. The server lets it
+  read and post only inside its project: that project's tasks, threads, chat and instructions. It reads no person's
+  chat, no decision or private line, no other project, and no other session's context. Its own engine conversation
+  (`claude --resume` or `codex resume` id) runs in that project's worktree, so what it learned there stays there.
+- **The task home:** one folder per Member, Harness's own, private, marked and trusted alone (today's agent folder,
+  `agentFolder.ts`), apart from the chat session's home. Inside it, a worktree per project, named for the project, made
+  the first time a task session works there from the computer's clone of that project's repository (today's project
+  folder and worktree path). A project with no repository gets an empty folder of its own, as today (#3211).
+- **Setting up once:** the first time a Member works in a project, its task session sets it up (clone, the project's
+  install steps) in that worktree, then tells the Lead it is ready, in one line in the project's chat: "Ready to work
+  on harness." It does not set it up again; a later task there starts in the same worktree and session.
+- **At most 5 projects set up per Member.** A sixth drops the one used longest ago, only when that worktree has no
   uncommitted or unpushed work (the existing cleanup rule); otherwise the Member doesn't help there.
+- **Talking about work and proposing.** The chat session tells its person what its task sessions are doing from the
+  cards' status (title, stage, pull request) in projects the person can read, never from a task's thread, and nothing
+  else crosses between them:
+  - a task session gets only its task's brief and its project's thread, never the chat;
+  - an idea from the chat reaches a project only as a proposal through today's exact-consent path (`buddies.ts`): the
+    person sees the exact words and the files (#4470) and agrees, and only those go. So nothing from another project
+    is carried along unless the person put it in the text they agreed to;
+  - the line when a Member changes project is written by the server into the chat (section 3), not by a session.
 
 ## 3. One task at a time, and helping
 
@@ -140,11 +158,24 @@ Both use the existing Cmd-N form (`HarnessLaunchIntegration`, #4196), and only t
   task first). The Lead may still assign a task to a Member by name; a Lead's pick beats the order.
 - **A Lead leads.** It takes no task and helps no other project; it decides, routes and asks, by its project's
   instructions.
-- **Where it may help:** only in projects its person can read, and only in public projects. A private project is helped
-  only by Members whose main project it is, and a Member whose main project is private helps nowhere else. Why: today a Regular agent that worked in a private project stays there for
-  good, because what it learned would leak (#4116, security review 2). Separate sessions keep what it learned apart, but
-  sibling worktrees sit in one home folder, and a session working on a public project's task, which outside text can
-  reach, could read a private project's files. Relaxing this is its own task with two security reviews.
+- **Where it may help:** only public projects its person can read, and only while its task home holds no private
+  project's worktree. A private project is helped only by Members whose main project it is, and such a Member helps
+  nowhere else. A Member whose main project changed from private to public still holds that worktree, so it helps
+  nowhere else until its host has dropped it (clean and pushed) and said so. Why: today a Regular agent that worked in a
+  private project stays there for good, because what it learned would leak (#4116, security review 2). Separate sessions
+  keep what it learned apart, but sibling worktrees sit in one task home, and a session on a public project's task,
+  which outside text can reach, could read a private project's files. Relaxing this is its own task with two security
+  reviews.
+- **What `work.assign` checks** for a Member's task session, on what it reads inside the command, for dispatch's
+  picks and for a Lead's pick by name alike (a Lead's pick beats the order, never the checks):
+  - the Member's person can read the task's project (`canReadProject`);
+  - the project is the Member's main project, or it is public;
+  - the Member's task home holds no private project's worktree other than this task's own project. The server keeps
+    that list itself, written at each assignment (`projectsHeld`), and removes a project only when the host reports
+    its worktree dropped; it never takes the host's word for what was added;
+  - the Member's main project is not private, unless this task is in it;
+  - the Member holds no other task;
+  - the host says `memberProjects` for any project other than the main one.
 - **Approval stays as today.** A task that waits on its requester's Approve (Review mode, the Tasks pane on the right)
   is not waiting: no Member takes it until the person approves it, and a rejected one never runs.
 - **The Member's chat shows a line** when it changes project, and only then:
@@ -156,15 +187,19 @@ Both use the existing Cmd-N form (`HarnessLaunchIntegration`, #4196), and only t
 
 ## 4. Sleep
 
-- A Member sleeps only when nothing is waiting that it may take, anywhere (section 3's three steps all find nothing),
-  and it has held no task for 10 minutes. Its sessions close; its folders stay.
-- It wakes as soon as anything it may take is waiting, its person writes to it, or its Lead assigns it, and resumes the
-  right project's session in that project's worktree.
+- A Member's task sessions sleep only when nothing is waiting that it may take, anywhere (section 3's three steps all
+  find nothing), and it has held no task for 10 minutes. They close; the task home stays.
+- They wake as soon as anything it may take is waiting or its Lead assigns it, and the right project's task session
+  resumes in that project's worktree.
+- The chat session sleeps and wakes as a Buddy does today: after an hour with no talk, and it wakes when its person
+  writes or a proposal it sent needs it (`buddySleep.ts`).
 - A Member that is in a conversation with its person is not idle (today's chatting rule, #3816).
-- This replaces both the crew's hour-idle sleep and the Buddy's hour-idle sleep for Members.
+- This replaces the crew's hour-idle sleep for Members' task sessions.
 
 ## 5. Not enough agents: the Lead asks a computer's owner
 
+- **Who is asked:** only a computer owner who can read the project (`canReadProject`); a computer whose owner can't is
+  never named or counted in the ask.
 - **When:** every Member that may take the project's waiting tasks is busy (an asleep one is woken first, so it counts
   as free), a task has waited 15 minutes, and a computer whose owner is in the Swarm has room (the router's existing fit: memory, disk, CPU,
   and the engine's quota from the CLI's own reports).
@@ -187,18 +222,31 @@ Both use the existing Cmd-N form (`HarnessLaunchIntegration`, #4196), and only t
   kept) and then Share repository (#3211). Not now is final until the person asks again in the Lead's chat.
 - **Anything else a task needs** that is only on the Lead's computer (a design file, a log, a screenshot, a data file),
   the Lead attaches to the task's thread, where the Member reads it. Size and type follow the existing attachment
-  limits. It never sends a secret or anything from outside the project's folder.
+  limits.
+- **The CLI enforces what may be attached**, not the Lead's instructions: a Lead's attachment goes through
+  `readInsideFolder` (`cli/src/superTabs/attach.ts`), as a Buddy's does today, with the project's folder as the one
+  folder. It refuses a file outside that folder after resolving links, a symbolic or hard link, and the repository's
+  and Harness's own records (`.git` and the rest). It also refuses a file the project's repository ignores (`git
+  check-ignore`, where `.env` files and keys usually sit) and a file named like a secret (`.env*`, `*.pem`, `*.key`,
+  `id_*`). A refusal names the file and the reason in the Lead's terminal.
 
 ## 7. Existing Buddies become Members
 
-- Every Buddy becomes a Member with no main project yet. It keeps its chat, its name, its face, its computer, its launch
-  flags and its sessions; nothing is moved or copied.
+- Every Buddy becomes a Member with no main project yet. Its Buddy session becomes the Member's **chat session**, and
+  keeps its chat, its name, its face, its computer, its launch flags, its home and its thread sessions; nothing is moved
+  or copied.
+- **Its old sessions never do tasks.** The old Buddy session read every project its person reads, and its home holds
+  copies of them (`buddyProjects`), private ones included. So its tasks run only in new task sessions, in a new task
+  home (section 2); the old session and home stay for the chat alone.
 - In its chat it asks its person once for a main project, with the project list from section 1 and the same row picked
   first: "I'm a Member now. Which project should be my main one?" One click answers.
 - Until the person picks, it is a Member with no main project: it talks with its person and proposes as today, and helps
-  where needed when free (section 3, steps 2 and 3). Nothing waits on the answer and no default is applied for them.
-- Regular agents become Members the same way: a Regular agent working on a task takes that task's project as its main
-  project; an idle one asks like a Buddy. PM agents become Leads of their project.
+  where needed when free (section 3, steps 2 and 3, public projects only). Nothing waits on the answer and no default is
+  applied for them.
+- Regular agents become Members too. A Regular agent's one session has been in every project it worked in, so it
+  becomes the chat session as well, and its tasks start in new task sessions. A Regular agent working on a task takes
+  that task's project as its main project; an idle one asks like a Buddy. PM agents become Leads of their project,
+  unchanged.
 - The person's first Member (the one they joined with, their old Buddy) is their **default Member**: the decisions,
   needs-you lines and late lines addressed to the person go to its chat, as they went to their default Buddy.
 
@@ -209,15 +257,16 @@ proposals, the Board and the rights. This spec changes it in these places:
 
 1. **Roles.** Person, Buddy and PM become Person, Member and Lead. The Buddy's work (talk with its person, shape an
    idea, propose with the person's agreement, answer the Lead on the cards it sent, tell its person at decided, needs
-   you, late and shipped) is done by each Member for its own person. A Member also does tasks.
+   you, late and shipped) is done by each Member's chat session for its own person. A Member also does tasks, in
+   separate task sessions that never see the chat (section 2).
 2. **"The PM never chats with people."** The Lead chats with its own person, in its project chat under My agents, as
    Swarm v3 already shows it. Everyone else still reaches it by proposals and answers on cards.
 3. **Many Buddies** become many Members: a person makes, names and removes their own, within the Swarm's existing cap
    per person (`BUDDY_CAP`, 5 by default, up to 20), which now counts Members. The default Buddy becomes the default
    Member (section 7).
 4. **Sleep.** "Only crew members sleep" and the Buddy's hour-idle sleep are replaced by section 4.
-5. **"A Buddy may only post in its own chat"** (BUDDY_FORBIDDEN) no longer applies to Members: a Member posts where its
-   task's agent posts, and in its own chat.
+5. **"A Buddy may only post in its own chat"** (BUDDY_FORBIDDEN) still holds for a Member's chat session. Its task
+   sessions post where a project's agent posts, and only in their own project.
 6. **People without their own machine** (a Buddy on a Team machine) is gone with Team accounts (Swarm v3); a person
    with no computer proposes from the Board, as that spec already allows.
 7. **The right pane** ("the person's Buddies and the selected Buddy's chat") is Swarm v3's Tasks pane, unchanged here;
@@ -262,13 +311,18 @@ Each with no content, paths or identifiers:
 
 ## Design (docs/feature-design-rules.md)
 
-Reviewed revision: initial spec. Reviewer: pending. Each line: answered.
+Reviewed revision: 2, after security reviews 1 and 2 of 2b4558e (a Member's chat and task sessions kept apart; the
+private-folder check in `work.assign`; migrated sessions never do tasks; the ask only to owners who can read the
+project; attachment checks in the CLI). Reviewer: pending. Each line: answered.
 
 New data, all small and replaced in place, nothing appended per event:
 
-- on each agent: `mainProjectId` (a project id, or none), `workingIn` (the project of its current or last task, for the
-  change line), `setUp` (up to 5 `{ projectId, at }`, from its host's report), `mainAsked` (when it asked its person
-  for a main project);
+- on each Member's agent record (its chat session): `mainProjectId` (a project id, or none), `workingIn` (the project
+  of its current or last task, for the change line), `setUp` (up to 5 `{ projectId, at }`, from its host's report),
+  `projectsHeld` (the projects whose worktree its task home holds, written by the server at each assignment, at most 5),
+  `mainAsked` (when it asked its person for a main project);
+- a task session: an agent record like a project's agent (`projectId`, its session scope), plus `memberOf` (its
+  Member's id); at most one per Member and project, so at most 5 per Member;
 - on each project: `about` (plain text, at most 80 characters), `moreAsked` (per computer, when its Lead last asked
   that computer's owner to start more; at most one entry per Swarm machine), `repoOffer` (when the Lead's person said
   Not now);
@@ -286,6 +340,8 @@ stores a role.
    | `mainProjectId` | at the Cmd-N start, or the person's answer (section 7) | the person picks another; a Lead's when its project is replaced | cleared when the agent is removed | kept while the agent moves machines (`movedTo`) | n/a | removed with the agent, whose membership generation ends | with the agent; a deleted project clears it on every agent that named it, and they ask again | a new agent never inherits it |
    | `workingIn` | at its first assignment | at each assignment in another project | kept | kept | kept | with the agent | with the agent; a deleted project clears it | n/a |
    | `setUp` | from the host's report after a set-up | replaced on each report; capped at 5 | n/a | on a move, the new machine reports its own (empty) | n/a | with the agent | with the agent; a deleted project's entry leaves on the next report | n/a |
+   | `projectsHeld` entry | at an assignment in a project not yet held | n/a (ids only) | removed when the host reports that worktree dropped | kept on a move until the old host reports it dropped; the new machine's task home starts empty and adds its own | n/a | with the agent | with the agent; a deleted project's entry stays until its worktree is dropped | n/a |
+   | Task session record | at a Member's first task in a project | its engine session id, by the host | closed when its worktree is dropped | today's lost-work path; the next task starts it again | n/a | removed with its Member | with its Member or its project | a new task session for the same pair is a new record, scoped again |
    | `mainAsked` | when the Member asks | never (asked once) | cleared when answered | kept | n/a | with the agent | with the agent | n/a |
    | `about` | set by the owner or Lead | replaced | n/a | n/a | n/a | n/a | with the project | n/a |
    | `moreAsked` entry | when the Lead asks | replaced at the next ask, at most daily | removed after 24 hours by the same write that would ask again | n/a | removed with its machine | n/a | with the project or the machine | n/a |
@@ -300,8 +356,11 @@ stores a role.
      dispatch's picks go through it, so a pick read outside the command is checked again inside it.
    - *A task has one Member:* the task's part version; two free Members picking the same task end with one assigned
      and the other picking again on the next pass.
-   - *Help only where allowed:* the public-project and readable-project checks run inside `work.assign`, on what it
-     reads, not on the pick.
+   - *Help only where allowed:* every check in section 3's list runs inside `work.assign`, on what it reads, not on
+     the pick, for dispatch and a Lead's pick by name alike. `projectsHeld` is read and written in that same agent-part
+     write, so two assignments can't both pass the private-folder check.
+   - *A task session reads only its project:* its session scope is bound once, to its project, at its start
+     (`bindSession`), and every read and command it sends is checked against that scope, as for a project's agent today.
    - *Goes back:* the same pass that frees a Member puts its main project's waiting task first, inside the assignment.
    - *The change line once:* written in the assignment's own write when `workingIn` differs; a retried command
      returns its receipt and writes no second line.
@@ -321,27 +380,32 @@ stores a role.
      more than today. Removals use the existing part removals.
    - *Dispatch's order* is computed from the loaded state it already reads (waiting tasks per project, `setUp`), with
      no history read. A test asserts a pass reads no task history and sends nothing for a Member with no change.
+   - *Task sessions* are agent parts like a project's agents, about 1 KB each, sent to the readers of their project
+     only; at most 5 per Member. My agents shows the Member once, never its task sessions.
    - *The host's `setUp` report* rides the machine report it already sends, about 60 bytes per Member, written only
      when the list changes.
 4. **Scale.** Today's openharness Swarm has about 60 agents, 45 people and one project; 10x is 600 agents across up to
-   100 projects. Dispatch's work per free Member is bounded by waiting tasks in projects it may help, already loaded;
+   100 projects, and up to 3,000 task session records beside them (5 per Member, most of them asleep). Dispatch's work per free Member is bounded by waiting tasks in projects it may help, already loaded;
    at 10x that is at most a few thousand comparisons per pass, measured on a synthetic 600-agent, 100-project state
    before the dispatch task merges. Disk is the first limit a person feels: 5 worktrees per Member. The metrics that
-   warn first are the dispatch pass's time (p95, already timed) and the measure *idle-while-waiting* above; set-ups per
+   warn first are the dispatch pass's time (p95, already timed), the Swarm's first-load bytes (task session parts), and
+   the measure *idle-while-waiting* above; set-ups per
    day shows clone and install load before disk runs out.
 5. **Compatibility.** Backend first; every field is optional and `kind` keeps its values (`buddy`, `pm`, `regular`)
    for clients from the last 30 days, until 2026-12-07. Readers found in the code (a search for `isBuddy`, `buddyOf`,
    `kind`, `regular`, `agentProjectId`):
-   - *Backend:* `agentKind.ts` and `read/views.ts` (send a second value, `role: lead | member`, beside `kind`);
-     `buddies.ts` (`BUDDY_COMMANDS`, `refuseBuddyRouting` and `BUDDY_FORBIDDEN` stop applying to Members; the cap counts
-     Members); `dispatch.ts` (`freeCrew` takes Members, `takes` and `candidatesFor` follow section 3); `crew.ts`
-     (`CREW_BUDDY` refusal goes); `projects.ts` (`regularMayWorkIn`, `sameProject` and `PROJECT_SESSION` follow section
+   - *Backend:* `agentKind.ts` and `read/views.ts` (send a second value, `role: lead | member`, beside `kind`; a task
+     session is shown as its Member, never as an agent of its own); `buddies.ts` (`BUDDY_COMMANDS`, `refuseBuddyRouting`
+     and `BUDDY_FORBIDDEN` keep guarding the chat session; the cap counts Members, not task sessions); `sessionScope.ts`
+     (a task session binds its project's scope; a chat session keeps the Swarm Buddy or Regular scope it has); `dispatch.ts` (`freeCrew` takes Members, `takes` and `candidatesFor` follow section 3); `crew.ts`
+     (`CREW_BUDDY` still refuses a chat session; a task session may be crew); `projects.ts` (`regularMayWorkIn`, `sameProject` and `PROJECT_SESSION` follow section
      3); `crewKeep.ts` and `buddySleep.ts` (section 4); `buddyNews.ts`, `commands.ts person.tell` and `crewNeeds.ts`
      (lines go to the default Member's chat, which is the default Buddy's chat); `leaderboard`, `statusCard.ts`,
      `noticeDigest.ts`, `stuck.ts`, `read/personalTasks.ts`, `read/hostRows.ts` (read the role like the kind).
    - *CLI host:* `superTabs/start.ts` (a Member's home and its per-project worktrees), `host.ts` and `cards.ts` (one
      Member, several project sessions), `buddyHome.ts` (an old Buddy's home stays its home), `lib/buddyGuard.ts` and
-     `lib/swarmSkills.ts` (a Member gets the engineer's skills, not the Buddy guard). A host that does not say
+     `lib/swarmSkills.ts` (a task session gets the engineer's skills; the chat session keeps the Buddy guard), `attach.ts`
+     (a Lead's attachments go through `readInsideFolder`, section 6). A host that does not say
      `memberProjects` keeps one folder and one session per agent: the server never moves its Members to another
      project, and they work only in their main project.
    - *Desktop:* `super_tabs/model.dart` (`isBuddy`, `isMainBuddy`, `kind`), `view.dart`, `controller.dart`,
@@ -353,34 +417,47 @@ stores a role.
      Member or Lead pill, never a half form.
 6. **Migration and rollback.** Order: backend, then CLI, then Desktop, each released on its own (the build tasks
    below). No record is rewritten: a Buddy keeps `buddyOf` and its chat, and the new release treats it as a Member with
-   no main project; a Regular agent with an active task gets its `mainProjectId` from that task at its next change. No
+   no main project, whose Buddy session is its chat session; a Regular agent with an active task gets its
+   `mainProjectId` from that task at its next change and keeps that task in its old session until it finishes (it was
+   assigned under today's rules); its next task starts a task session. Task sessions are new records, made only by the
+   new release. No
    production write and no backfill; persistence and reload are checked in the isolated integration store, and the
    read-only anomaly queries count Buddies, Regular agents and agents over the cap on production's secondaries before
    the backend task merges. A person who has more agents than the cap keeps them all; a new one is refused until they
    are under it. Rolling back the backend: the previous release ignores the new fields, sees `buddyOf` and treats
-   Buddies as Buddies again, refuses the moves it never allowed, and keeps worktrees on disk untouched. A Member then
+   Buddies as Buddies again, refuses the moves it never allowed, and keeps worktrees on disk untouched. Task session
+   records look to it like project agents of their project (a project id, a project scope), so they stay scoped to
+   that project; it ignores `memberOf`, and they show as separate agents until the backend comes back or they are
+   stopped. A Member then
    mid-task in a project other than its main one keeps its task (the old `sameProject` reads the task's project). The
    `buddyOf` flag and the Buddy-only code go in a cleanup task dated 2026-12-07.
 7. **Audience.** One predicate, the existing project read (`canReadProject`), runs on every new path: the project list,
-   dispatch picks for helping, `work.assign`, and the `about` line. Copies of private data and their guards:
+   dispatch picks for helping, `work.assign`, the ask to start more, and the `about` line. Copies of private data and
+   their guards:
+   - *the person's chat* (which can hold every project they read, decisions and private lines) is read only by the
+     chat session and its person (`readsAgentChat`); no task session reads it, and the chat session never receives
+     task text that outside text could steer (section 2);
+   - *a task session* reads and posts only inside its own project, by its session scope, checked on the server;
+   - *proposals* carry only the words and files the person agreed to, through the exact-consent path;
    - *the project list* shows only projects the reader can read;
-   - *a Member's change line* goes only to its own chat, which only its person reads (`readsAgentChat`); it names the
-     task only when the person can read that project, else "Helping another project";
-   - *worktrees on a computer:* a Member helps only public projects, so no private project's files sit in a worktree
-     beside a session that outside text reaches; a private project's worktree is only on Members whose main project it
-     is;
-   - *sessions:* one per project, so one project's conversation never carries into another's;
-   - *the ask to start more* goes only to the computer's owner, in their own Tasks pane and chat, and names only the
-     project and the count;
-   - *attachments in a task thread* follow the thread's readers;
+   - *a Member's change line* goes only to its own chat; it names the task only when the person can read that project,
+     else "Helping another project";
+   - *worktrees on a computer:* a Member helps only public projects, and only while its task home holds no private
+     project's worktree (`projectsHeld`, written by the server); a migrated Buddy's home, which holds copies of
+     private projects, is never used for tasks;
+   - *the ask to start more* goes only to a computer owner who can read the project, in their own Tasks pane and chat,
+     and names only the project and the count;
+   - *attachments in a task thread* follow the thread's readers, and the CLI refuses files outside the project's
+     folder, links, repository records, ignored files and secret-named files (`readInsideFolder`, section 6);
    - *logs and measures* carry no names, titles or paths;
-   - *a rolled-back release* shows only what it already showed: no new field reaches an older reader as content.
-   The Buddy-only command list stops guarding Members, so Members get task access like an Engineer; that change has
-   two security reviews.
+   - *a rolled-back release* shows only what it already showed: task session records are scoped like project agents,
+     and no new field reaches an older reader as content.
+   Splitting a Member into a chat session and task sessions is the boundary both security reviews of this spec asked
+   for; the build tasks that change it (6, 7, 9) each get two security reviews.
 8. **Identity.** Every Member and Lead runs under its own person's login and settings, on that person's own computer
    (#4196's rule, `grant.machineOwnerId === person`). Helping another project changes the project, never the identity:
    its git and GitHub work there goes through the Swarm's GitHub App for that task, as any task's does. The ask to
-   start more asks the computer's owner, and only the owner starts, under their own login; Harness never starts an
+   start more asks a computer's owner who can read the project, and only the owner starts, under their own login; Harness never starts an
    agent on a computer for anyone but its owner. The private repository goes through the New repository path, with the
    person's own GitHub sign-in used once and never kept. Harness reads no Claude or ChatGPT login; quota is the CLIs'
    own reports. A Member whose person left the Swarm takes no task (its membership generation ended) and never runs under the
@@ -397,6 +474,9 @@ stores a role.
    - *The project list fails to load:* the form says so with Retry; New project still works.
    - *The person never picks a main project:* nothing breaks; the Member helps where needed (section 7).
    - *A deleted project was a Member's main project:* it asks its person again, once.
+   - *A task session sends a read or command outside its project:* refused by its scope, with the reason in its
+     terminal, and counted.
+   - *A Lead's attachment is refused:* the file and the reason in its terminal; nothing is sent.
    Every failure here writes a line where someone who can act sees it.
 10. **Platforms.** Backend: Linux. CLI host: macOS, Linux and Windows; on Windows the worktree names are short (the
     project's id cut to 8 characters) to stay under path limits, and every new process uses `ownProcessGroup()` with
@@ -424,22 +504,27 @@ This flow, smallest first:
    a main project; New project makes the Lead (`project.create`, then the Lead's start). Backend release.
 5. **The Cmd-N form.** The folder, worktree, branch rows and the Member or Lead pill go; the project list and New
    project take their place; joining shows the same form after Bring agent. Desktop release (macOS, Windows, Linux).
-6. **A Member's home, worktrees and sessions.** The CLI host keeps one home per Member, a worktree and an engine session
-   per project, reports `setUp`, and says `memberProjects`; the Member tells the Lead it's ready after its first set-up.
-   CLI release, with the backend's acceptance of the report.
+6. **A Member's two kinds of session.** The backend makes a task session per project, tied to its Member and bound to
+   that project's scope, and keeps `projectsHeld`; the chat session keeps the Buddy's reads and commands. The CLI host
+   keeps the chat home apart from the task home, a worktree and an engine session per project in the task home,
+   reports `setUp` and dropped worktrees, and says `memberProjects`; the task session tells the Lead it's ready after
+   its first set-up. Backend release, then CLI release, with two security reviews.
 7. **One task at a time, then helping.** Dispatch gives a free Member its main project's task, else a set-up project's,
    else the one that needs help most, public projects only; it goes back after its task; the change line in its chat.
-   Backend release, with two security reviews (Members leave the Buddy-only command list).
+   Every check in section 3's list inside `work.assign`, for a Lead's pick by name too. Backend release, with two
+   security reviews.
 8. **Sleep only when nothing is waiting.** Members sleep after 10 minutes free with nothing they may take, and wake for
    any such task; replaces the hour-idle rules for Members. Backend release.
-9. **Buddies become Members.** Buddies and Regular agents act as Members; each asks its person once for a main project
-   in its chat, with the project list; the default Buddy is the default Member. Backend release, then Desktop release
-   for the project list in the chat.
-10. **The Lead asks a computer's owner to start more.** One ask per computer and project a day, in the owner's Tasks
+9. **Buddies become Members.** Buddies and Regular agents act as Members, their old sessions as chat sessions only, never
+   for tasks; each asks its person once for a main project in its chat, with the project list; the default Buddy is the
+   default Member. Backend release, then Desktop release for the project list in the chat, with two security reviews.
+10. **The Lead asks a computer's owner to start more.** Only an owner who can read the project; one ask per computer
+    and project a day, in the owner's Tasks
     pane and default Member's chat, with Start opening Cmd-N filled in. Backend release, then Desktop release.
 11. **Files only on the Lead's computer.** The Lead offers its person a private repository through New repository and
-    Share repository, once; other files go as attachments in the task thread. Backend release (the Lead's
-    instructions text and the offer record) and Desktop release (the offer's buttons).
+    Share repository, once; other files go as attachments in the task thread, through `readInsideFolder` with the
+    ignored-file and secret-name refusals (section 6). Backend release (the Lead's instructions text and the offer
+    record), CLI release (the attachment checks) and Desktop release (the offer's buttons).
 12. **Cleanup, on 2026-12-07.** `buddyOf`, the `buddy` kind, the Buddy-only command list and the Buddy screens' code go,
     once no client from before task 9 is in use. Backend, CLI and Desktop releases.
 
