@@ -77,10 +77,12 @@ class UpdateInfo {
 
 /// Refuses a staged update with [UpdateRefused] unless its signer is the
 /// running app's: [staged] is the macOS bundle or the Windows version folder,
-/// [launcher] the staged Windows `Harness.exe`.
+/// [launcher] the staged Windows `Harness.exe`, [version] the manifest's,
+/// which a staged Windows app must also say it is.
 typedef UpdateSignatureCheck = Future<void> Function(
   String staged, {
   String? launcher,
+  required String version,
 });
 
 enum DesktopUpdateCheckStatus { upToDate, available, disabled, failed }
@@ -315,16 +317,28 @@ class DesktopUpdater {
        // ignore: prefer_initializing_formals
        _verifySignature = verifySignature;
 
-  Future<void> _checkSignature(String staged, {String? launcher}) =>
-      (_verifySignature ?? _signedLikeThisApp)(staged, launcher: launcher);
+  Future<void> _checkSignature(
+    String staged, {
+    String? launcher,
+    required String version,
+  }) => (_verifySignature ?? _signedLikeThisApp)(
+    staged,
+    launcher: launcher,
+    version: version,
+  );
 
   /// Linux AppImages carry no signature, so Linux keeps the sha256 check.
-  Future<void> _signedLikeThisApp(String staged, {String? launcher}) async {
+  Future<void> _signedLikeThisApp(
+    String staged, {
+    String? launcher,
+    required String version,
+  }) async {
     if (_isWindows) {
       return verifyWindowsUpdate(
         stagedFolder: staged,
         stagedLauncher: launcher!,
         runningExe: RuntimePlatform.resolvedExecutable,
+        version: version,
       );
     }
     if (_isLinux) return;
@@ -525,6 +539,7 @@ class DesktopUpdater {
           await _checkSignature(
             swap.stagedFolder!,
             launcher: swap.stagedLauncher,
+            version: info.version,
           );
         } on UpdateRefused {
           await swap.discardStaged();
@@ -590,7 +605,8 @@ class DesktopUpdater {
         await stagingDir.delete(recursive: true);
         return null;
       }
-      await _checkSignature(bundlePath);
+      // The bundle's own version was compared with the manifest's above.
+      await _checkSignature(bundlePath, version: info.version);
 
       return StagedUpdate(
         version: info.version,

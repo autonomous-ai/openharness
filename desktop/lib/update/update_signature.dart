@@ -160,6 +160,7 @@ class WindowsSignatureReport {
     required this.runningFolder,
     required this.files,
     required this.catalog,
+    required this.stagedVersion,
   });
 
   factory WindowsSignatureReport.fromJson(Map<String, dynamic> json) {
@@ -182,6 +183,7 @@ class WindowsSignatureReport {
                 (catalog['signer'] as Map? ?? const {}).cast(),
               ),
             ),
+      stagedVersion: json['stagedVersion'] as String?,
     );
   }
 
@@ -194,18 +196,27 @@ class WindowsSignatureReport {
   /// Every staged `.exe` and `.dll`, and the staged launcher.
   final Map<String, WindowsSigner> files;
   final WindowsCatalog? catalog;
+
+  /// The staged `harness-desktop.exe`'s ProductVersion, e.g. `1.3.91+42`
+  /// (`--build-name` and `--build-number`); null when it has none.
+  final String? stagedVersion;
 }
 
 /// The files only we may sign: the app and its launcher.
 const _ourFiles = {'harness-desktop.exe', 'harness.exe'};
 
-/// Null when the staged Windows update may install; otherwise what is wrong,
-/// for the log. Every staged program file must be validly signed; the app,
+/// Null when the staged Windows update may install as [version] (the
+/// manifest's); otherwise what is wrong, for the log. Every staged program file must be validly signed; the app,
 /// the launcher and the catalog by the running app's signer; any other file
 /// by a signer the running version folder already trusts (Microsoft for
 /// WebView2Loader.dll). The catalog covers the files Authenticode cannot sign,
-/// the Dart code in `data/app.so` above all.
-String? windowsUpdateRefusal(WindowsSignatureReport report) {
+/// the Dart code in `data/app.so` above all. The staged app must also say it
+/// is [version], as a macOS bundle must: a genuine older build, served as a
+/// newer one, is refused.
+String? windowsUpdateRefusal(
+  WindowsSignatureReport report, {
+  required String version,
+}) {
   final running = report.running;
   if (running.status == 'NotSigned') return null;
   if (!running.valid) {
@@ -238,6 +249,11 @@ String? windowsUpdateRefusal(WindowsSignatureReport report) {
   if (!catalog.signer.valid || !catalog.signer.sameAs(running)) {
     return 'the file catalog is signed by "${catalog.signer.subject}" '
         '(${catalog.signer.status})';
+  }
+  final staged = report.stagedVersion?.split('+').first.trim();
+  if (staged != version) {
+    return 'the update is Harness ${staged == null || staged.isEmpty ? '(no version)' : staged}, '
+        'not $version';
   }
   return null;
 }
@@ -317,6 +333,7 @@ function Programs($folder) {
     })
 }
 $files = @(Programs $env:HARNESS_UPDATE_STAGED)
+$stagedVersion = (Get-Item -LiteralPath (Join-Path $env:HARNESS_UPDATE_STAGED 'harness-desktop.exe')).VersionInfo.ProductVersion
 $launcher = Read-Signer $env:HARNESS_UPDATE_LAUNCHER
 $launcher.path = 'Harness.exe'
 $files += $launcher
@@ -335,6 +352,7 @@ if (Test-Path -LiteralPath $catalogPath -PathType Leaf) {
   runningFolder = @(Programs (Split-Path -Parent $env:HARNESS_UPDATE_RUNNING))
   files = $files
   catalog = $catalog
+  stagedVersion = $stagedVersion
 } | ConvertTo-Json -Depth 5 -Compress
 """;
 
@@ -387,6 +405,7 @@ Future<void> verifyWindowsUpdate({
   required String stagedFolder,
   required String stagedLauncher,
   required String runningExe,
+  required String version,
   Duration timeout = signatureCheckTimeout,
 }) async {
   final report = await readWindowsSignatureReport(
@@ -401,7 +420,7 @@ Future<void> verifyWindowsUpdate({
     );
     return;
   }
-  final refusal = windowsUpdateRefusal(report);
+  final refusal = windowsUpdateRefusal(report, version: version);
   if (refusal != null) {
     debugPrint('UpdateSignature: refused: $refusal');
     throw notFromPublisher(report.running.name);
