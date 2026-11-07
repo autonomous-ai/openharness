@@ -26,6 +26,11 @@ import { SWARM_LAUNCH } from '../../superTabs/inCore/launch.js'
  * they are tested with their own modules, and a test must never write the person's own engine config.
  */
 const root = vi.hoisted(() => ({ projects: '' }))
+const host = vi.hoisted(() => ({ win32: false }))
+vi.mock('../../engines/kit/windowsFiles.js', async (real) => {
+  const actual = await real<typeof import('../../engines/kit/windowsFiles.js')>()
+  return { ...actual, hostPlatform: () => host.win32 ? 'win32' : actual.hostPlatform() }
+})
 // The engines' folder trust (engines/launchPrep.ts), one spy per engine.
 const trust = vi.hoisted(() => ({
   claudeTrusts: vi.fn((_path: string) => false), codexTrusts: vi.fn((_path: string, _profile?: string | null) => false),
@@ -271,6 +276,24 @@ describe('agent_create, refused before any pane exists', () => {
     expect(create).not.toHaveBeenCalled()
     await ask({ engine: 'claude', cwd: '/w', claudeHome: '/homes/offered' })
     expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ claudeHome: '/homes/offered' })
+  })
+
+  // #4183: on Windows a profile folder is `C:\\…`; the check that wanted a leading '/' dropped every one, so the agent ran on
+  // the default account and reported its quota.
+  it('on Windows a drive-letter codexHome or claudeHome reaches the create input, and a POSIX one is dropped', async () => {
+    host.win32 = true
+    try {
+      const { ask, create } = setup()
+      await ask({ engine: 'codex', cwd: '/w', codexHome: 'C:\\Users\\u\\.codex-work' })
+      await ask({ engine: 'claude', cwd: '/w', claudeHome: 'C:\\Users\\u\\.claude-work' })
+      await ask({ engine: 'claude', cwd: '/w', claudeHome: '/Users/u/.claude-work' })
+      const inputs = vi.mocked(create!).mock.calls.map(([input]) => input)
+      expect(inputs[0]).toMatchObject({ codexHome: 'C:\\Users\\u\\.codex-work' })
+      expect(inputs[1]).toMatchObject({ claudeHome: 'C:\\Users\\u\\.claude-work' })
+      expect('claudeHome' in inputs[2]).toBe(false)
+    } finally {
+      host.win32 = false
+    }
   })
 
   it('claudeHome reaches the create input', async () => {

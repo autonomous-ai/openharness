@@ -8,7 +8,7 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/desktop_prompt_surface.dart';
 import 'controller.dart';
 import 'join_link.dart';
-import 'join/new_agent_dialog.dart';
+import 'join/bring_agent.dart';
 import 'join_machine.dart' show swarmNewMemberRole;
 
 /// The native URL channel queues links before authentication. This host only
@@ -58,11 +58,10 @@ class _SwarmJoinHostState extends State<SwarmJoinHost> {
       try {
         final c = await app.superTabs.open(accountRequest.tabId);
         if (!mounted || app.currentUser?.id != accountId) return;
-        final started = await showSwarmNewAgentDialog(
+        final started = await showBringAgentForm(
           context,
           controller: c,
           app: app,
-          bringing: true,
           isCurrent: () =>
               app.currentUser?.id == accountId && !accountRequest.answered,
         );

@@ -300,6 +300,20 @@ describe('settleReleases', () => {
     expect(state.conversations.find(c => c.id === 'g13')).not.toHaveProperty('releasing')
   })
 
+  // Task #4410, River's ruling 11-07: a task merged while its Windows test step waited for a Windows machine owes a person's
+  // Windows check, which the Windows rules ask for on the signed build: the release that ships it lists every such task.
+  it('lists each task it ships whose Windows check is owed, for whoever checks Windows on the signed build', () => {
+    const waiting = { step: { name: 'Test on a Windows machine', kind: 'test' as const, areas: [], where: ['The CLI on a Windows machine'], os: 'windows' as const }, pulls: [] }
+    const state = swarm([entry({ groupId: 'g12', mergedAt: T - MINUTE, components: ['desktop'] }),
+      entry({ groupId: 'g13', url: 'https://github.com/o/r/pull/13', mergedAt: T - MINUTE, components: ['desktop'] })])
+    state.conversations.find(c => c.id === 'g12')!.waitingWindowsStep = waiting
+    const opened = settleReleases(state, 'p1', noFacts, T).opened
+    const step = state.conversations.find(c => c.id === opened)!
+    expect(step.brief).toContain('#12 Task 12; #13 Task 13')
+    expect(step.brief).toContain('Windows check owed on the signed build: #12 Task 12. No Windows machine took its test step: record it here.')
+    expect(step.brief).not.toContain('owed on the signed build: #12 Task 12; #13')
+  })
+
   it('opens one release step for the Integrator inside the window, and no second one while it is open', () => {
     const state = swarm([entry({ groupId: 'g12', mergedAt: T - MINUTE, components: ['desktop', 'web'] })])
     const outcome = settleReleases(state, 'p1', noFacts, T)

@@ -93,7 +93,12 @@ export interface Agent {
    *  window, the smallest any serving machine reported. One at a time; the result or the liveness sweep's lease drops it. */
   modelRequest?: { id: string; gridModel: string | null; gridName?: string; name?: string; servedBy?: string[]; machines?: string[]; contextWindow?: number; requestedBy: string; at: string
     /** Set when the Swarm sent the Buddy home by itself: the model hit a limit, kept failing, or nobody served it. */
-    reason?: 'limit' | 'failing' | 'gone' }
+    reason?: 'limit' | 'failing' | 'gone'
+    /** Only its thread sessions move: a move home left one on a shared model (buddyModel.ts, task #3810). */
+    sessionsOnly?: true }
+  /** A Buddy thread session that stayed on a shared model when its Buddy went home (task #3810): why it was sent home, and how
+   *  many times it stayed. The liveness sweep asks its machine to move it home again, three times at most (buddyModel.ts). */
+  homeOwed?: { reason?: 'limit' | 'failing' | 'gone'; tries: number }
   /** When the liveness sweep first found nobody serving the Buddy's `gridModel` (ms): two minutes on, it is sent home. */
   gridModelUnservedSince?: number
   /** The name its owner was shown for the Buddy's `gridModel`, for the lines after nobody serves it any more. */
@@ -480,9 +485,11 @@ export interface Conversation {
    *  pull request head re-derives the checks of, dormant ones included (#3394). Empty from a task's start; absent on a task
    *  from before, whose PR watch looks them up once (pullRequestEvents.ts listedSteps). */
   stepIds?: string[]
-  /** Its Linux test step, waiting for a Linux machine the project can test on (linuxSteps.ts, task #4278): set by a Ready that
+  /** Its Linux test step, waiting for a Linux machine the project can test on (osSteps.ts, task #4278): set by a Ready that
    *  found none, gone once the step opens. */
-  waitingLinuxStep?: import('./linuxSteps.js').WaitingStep
+  waitingLinuxStep?: import('./osSteps.js').WaitingStep
+  /** Its Windows test step, waiting likewise for a Windows machine (osSteps.ts, task #4410). */
+  waitingWindowsStep?: import('./osSteps.js').WaitingStep
   /** Its messages drawn as live cards: its task and each linked pull request (cards.ts). Absent until its first card. */
   cards?: import('./cards.js').GroupCards
   /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */
@@ -1173,6 +1180,9 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   }
   // Rows by day and project that only the leaderboard read uses, and it takes them from the Swarm itself.
   for (const pool of visible.machines ?? []) delete pool.lentDays
+  // Where teammates' work ran was a Team-account choice; Swarm v3 runs every agent as its own person (#4120, #4289). It stays
+  // stored for teamWorkRefusal until the Team entries go (#4290), and no reader gets it.
+  for (const pool of visible.machines ?? []) delete pool.ownAccountChoice
   // A Mac's Harness Team account is stored under its Mac's name (machines.ts followAccountName), and read so it named two
   // entries alike: a lamp start picked the Team account's thinking it was the Mac (task #3060). Every read tells them apart;
   // the stored name, which renames and the server's own sentences read, stays the Mac's.
