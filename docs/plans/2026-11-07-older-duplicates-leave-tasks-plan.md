@@ -50,7 +50,8 @@ hand-off.
 
 - A cancel naming a task of another project, a private chat or a step links nothing, by command or by the start pass.
 - The start pass never re-links, never touches a task already linked, and a second start does nothing.
-- A task nobody was assigned keeps its reason only in its cancel line: a later message must not hide it.
+- A task nobody was assigned keeps its reason only in its cancel line: the pass reads its newest cancel line by
+  `source.status`, so a later message never hides it.
 - A loose mention ("will look into #4421", "Part of the cause is #4421") never links.
 - The Archived tap on a duplicate whose real task the reader holds no row for still opens it (`select` reads it).
 
@@ -58,12 +59,12 @@ hand-off.
 
 **Files:** Modify `backend/src/superTabs/commands.ts` (`tasksNamedIn`); Test `backend/src/superTabs/commands.test.ts`.
 
-- [ ] Test: `tasksNamedIn` returns `[]` for each of 'will look into #4421 later', 'Part of the cause is #4421',
+- [x] Test: `tasksNamedIn` returns `[]` for each of 'will look into #4421 later', 'Part of the cause is #4421',
   'Inside #4421', 'Same as #4421', 'Covered by #4421', 'Replaced by #4421', 'Superseded by #4421', 'Dup #4421',
   'Duplicates #4421'; and `[4465, 4466, 4468]` for 'Accepted and split into #4465, #4466 to #4468'.
-- [ ] Run `npx vitest run src/superTabs/commands.test.ts -t "naming where"`: fails.
-- [ ] Code: the phrase is one of `duplicate of`, `being done inside`, `split into`, `folded into`.
-- [ ] Run again: passes. Commit.
+- [x] Run `npx vitest run src/superTabs/commands.test.ts -t "naming where"`: fails.
+- [x] Code: the phrase is one of `duplicate of`, `being done inside`, `split into`, `folded into`.
+- [x] Run again: passes. Commit.
 
 ## Task 2: a cancel links a real task however old
 
@@ -75,12 +76,12 @@ Test `backend/integration/superTabPersonalTasksFeed.test.ts`, `backend/integrati
 **Interfaces:** Produces `loadGroupKeysByNumber(tx, tabId, numbers: number[]): Promise<string[]>` (live groups' keys, read
 through `number`); `goesOnIn` exported from commands.ts.
 
-- [ ] Test (feed): a real task done and quiet for two days, a duplicate cancelled "Duplicate of #<real>": the duplicate leaves
+- [x] Test (feed): a real task done and quiet for two days, a duplicate cancelled "Duplicate of #<real>": the duplicate leaves
   the owner's feed and its view names the real task; one cancelled "Duplicate of #<other project's task>" is refused with
   FOLD_TARGET and stays.
-- [ ] Test (plans): a cancel naming a quiet task reads it through the `number` index and reads only what it returns.
-- [ ] Run `npx vitest run --config vitest.super-tabs.config.ts integration/superTabPersonalTasksFeed.test.ts`: fails.
-- [ ] Code it. Run both files: pass. Commit.
+- [x] Test (plans): a cancel naming a quiet task reads it through the `number` index and reads only what it returns.
+- [x] Run `npx vitest run --config vitest.super-tabs.config.ts integration/superTabPersonalTasksFeed.test.ts`: fails.
+- [x] Code it. Run both files: pass. Commit.
 
 ## Task 3: older duplicates leave at worker start
 
@@ -91,18 +92,17 @@ through `number`); `goesOnIn` exported from commands.ts.
 **Interfaces:** `linkOlderDuplicates(db: PrismaClient, store: Pick<SuperTabStore, 'linkFolded'>): Promise<number>` (links
 made); `store.linkFolded(tabId: string, groupId: string, reason: string): Promise<boolean>`.
 
-- [ ] Test: with rows stored as before (no `number` column, no `foldedInto`): an assigned task cancelled "Duplicate of
-  #<old real>", an unassigned one whose cancel line says "Being done inside #<old real>" followed by a later message, one
+- [x] Test: with rows stored as before (no `number` column, no `foldedInto`): an assigned task cancelled "Duplicate of
+  #<old real>", an unassigned one whose cancel line says "Being done inside #<old real>", one
   naming another project's task, and one "Waiting on #<real>". After the pass the first two leave the feed, each with one
   line naming the real task; the others stay; every row has `number`; a second pass links nothing.
-- [ ] Run: fails. Code it; worker runs it after `markFeedIds`, logging the count or the error. Run: passes. Commit.
+- [x] Run: fails. Code it; worker runs it after `markFeedIds`, logging the count or the error. Run: passes. Commit.
 
 ## Task 4: the Archived row opens the real task
 
 **Files:** Modify `desktop/lib/super_tabs/model.dart` (`SuperTabConversation.foldedInto`), `desktop/lib/super_tabs/view.dart`
-(`_archived`); Test `desktop/test/super_tabs/archived_duplicate_test.dart`.
+(`_archived`); Test `desktop/test/super_tab_view_test.dart` (beside the test that a plain archived row opens itself).
 
-- [ ] Test: a memory store with a project, an archived duplicate whose `foldedInto` names a dormant real task and a plain
-  archived task, and a fake sign-in; open Archived conversations, tap the duplicate: the real task is selected; tap the plain
-  one: it is selected.
-- [ ] Run `flutter test test/super_tabs/archived_duplicate_test.dart`: fails. Code it. Run: passes. Commit.
+- [x] Test: the memory server with an archived duplicate whose `foldedInto` names a dormant real task; open Archived
+  conversations, tap the duplicate: the real task is selected.
+- [x] Run `flutter test test/super_tab_view_test.dart --plain-name "archived duplicate"`: fails. Code it. Run: passes. Commit.
