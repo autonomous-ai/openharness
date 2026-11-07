@@ -152,6 +152,44 @@ void main() {
       expect(styleOf(tester, 'Open').fontWeight, FontWeight.w400);
     });
 
+    testWidgets('marks sit in one column at the right edge, after the detail, '
+        'and a row without one keeps the column', (tester) async {
+      const mark = SizedBox.square(key: ValueKey('mark'), dimension: 12);
+      await pump(tester, [
+        SuperTabQuietRow(
+          key: const ValueKey('working'),
+          leading: face,
+          name: 'River',
+          detail: 'harness',
+          mark: mark,
+          onTap: () {},
+        ),
+        SuperTabQuietRow(
+          key: const ValueKey('idle'),
+          leading: face,
+          name: 'Kestrel',
+          detail: 'web',
+          markColumn: true,
+          onTap: () {},
+        ),
+      ]);
+      final markRect = tester.getRect(find.byKey(const ValueKey('mark')));
+      expect(
+        markRect.left,
+        greaterThan(tester.getRect(find.text('harness')).right),
+      );
+      expect(
+        tester.getRect(find.byKey(const ValueKey('working'))).right -
+            markRect.right,
+        lessThan(SuperTabQuietRow.markWidth),
+      );
+      // Details end on one line whether the row has a mark or not.
+      expect(
+        tester.getTopRight(find.text('harness')).dx,
+        tester.getTopRight(find.text('web')).dx,
+      );
+    });
+
     testWidgets('a long name is cut before the detail, which keeps its whole '
         'word', (tester) async {
       await pump(tester, [
@@ -162,9 +200,7 @@ void main() {
           onTap: () {},
         ),
       ]);
-      final detail = tester.renderObject<RenderParagraph>(
-        find.text('harness'),
-      );
+      final detail = tester.renderObject<RenderParagraph>(find.text('harness'));
       expect(detail.didExceedMaxLines, isFalse);
       expect(tester.takeException(), isNull);
     });

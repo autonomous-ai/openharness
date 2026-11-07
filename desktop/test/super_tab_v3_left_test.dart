@@ -451,7 +451,7 @@ void main() {
       expect(offline, findsOneWidget);
       expect(
         tester.getRect(offline).right,
-        greaterThan(tester.getRect(key('super-agent-kestrel')).right - 16),
+        greaterThan(tester.getRect(key('super-agent-kestrel')).right - 40),
       );
     });
 
@@ -480,7 +480,7 @@ void main() {
       // The one quiet detail, right-aligned at the row's end.
       expect(
         project.right,
-        greaterThan(tester.getRect(key('super-agent-orion')).right - 16),
+        greaterThan(tester.getRect(key('super-agent-orion')).right - 40),
       );
       expect(
         tester.widget<Text>(text('orion', 'web-project')).style?.color,
@@ -503,8 +503,8 @@ void main() {
           (server.state['projects'] as List).first['name'] =
               'a-project-with-a-long-name';
         },
-        // The test font draws every letter as a square: 300 here is about 200 in the app's.
-        width: 300,
+        // The test font draws every letter as a square: 320 here is about 200 in the app's.
+        width: 320,
       );
       bool cut(String shown) => tester
           .renderObject<RenderParagraph>(text('orion', shown))
@@ -554,25 +554,28 @@ void main() {
       expect(avatar.pattern, isTrue);
     });
 
-    test('a state that changes what you can ask comes before the project a '
-        'Lead leads, and being at work after it', () {
+    test('the detail is "offline", else the project a Lead leads', () {
       for (final (activity, lead, word) in [
         (HarnessActivity.offline, 'web', 'offline'),
-        (HarnessActivity.needsInput, 'web', 'needs you'),
-        (HarnessActivity.failed, 'web', 'failed'),
-        (HarnessActivity.starting, 'web', 'starting'),
         (HarnessActivity.working, 'web', 'web'),
-        (HarnessActivity.working, null, 'working'),
-        (HarnessActivity.paused, null, 'stopped'),
-        (HarnessActivity.idle, null, null),
+        (HarnessActivity.needsInput, null, null),
         (null, 'web', 'web'),
       ]) {
-        expect(
-          superTabAgentDetail(activity, leads: lead),
-          word,
-          reason: '$activity $lead',
-        );
+        expect(superTabAgentDetail(activity, leads: lead), word);
       }
+    });
+
+    // anh Dee 11-07 (1.3.90): idle showed a hollow circle and finished a check on every row.
+    test('a mark only while an agent works, needs you or failed', () {
+      for (final activity in HarnessActivity.values) {
+        expect(superTabAgentMark(activity), switch (activity) {
+          HarnessActivity.working ||
+          HarnessActivity.needsInput ||
+          HarnessActivity.failed => activity,
+          _ => null,
+        }, reason: '$activity');
+      }
+      expect(superTabAgentMark(null), isNull);
     });
 
     // Audit finding 9 of task #4436 (task #4444): working, waiting, offline and starting all looked the same. Since
@@ -600,7 +603,7 @@ void main() {
         expect(word, findsOne, reason: row);
         expect(
           tester.getRect(word).right,
-          greaterThan(tester.getRect(key(row)).right - 16),
+          greaterThan(tester.getRect(key(row)).right - 40),
           reason: row,
         );
       }
@@ -858,12 +861,7 @@ void main() {
       final server = swarm()..state['agents'] = [_agent('kestrel', 'Kestrel')];
       final c = server.controller(
         account: 'owner',
-        initial: {
-          'tabId': 'tab',
-          'accountId': 'owner',
-          'selectedId': 'lead',
-          'projectsGroupOpen': true,
-        },
+        initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
       );
       await tester.runAsync(c.refresh);
       final AppNotifier? app = withApp ? createApp() : null;
@@ -937,12 +935,7 @@ void main() {
       setup?.call(server);
       final c = server.controller(
         account: 'owner',
-        initial: {
-          'tabId': 'tab',
-          'accountId': 'owner',
-          'selectedId': 'lead',
-          'projectsGroupOpen': true,
-        },
+        initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
       );
       await tester.runAsync(c.refresh);
       await tester.binding.setSurfaceSize(const Size(1600, 900));
@@ -1051,6 +1044,9 @@ void main() {
       final c = await view(tester);
       await tester.tap(key('super-agent-kestrel'));
       await settle(tester);
+      // A project's Board opens from the Projects grid (task #4466).
+      await tester.tap(find.byKey(const ValueKey('super-projects')));
+      await tester.pump();
       await tester.tap(key('super-group-lead'));
       await settle(tester);
       expect(key('super-tasks-lead'), findsOneWidget);
@@ -1089,6 +1085,9 @@ void main() {
       tester,
     ) async {
       final c = await view(tester, rightPane: (_) => const SizedBox.expand());
+      // A project's Board opens from the Projects grid (task #4466).
+      await tester.tap(find.byKey(const ValueKey('super-projects')));
+      await tester.pump();
       await tester.tap(key('super-group-lead'));
       await settle(tester);
       double w(String k) => tester.getSize(key(k)).width;
@@ -1105,6 +1104,9 @@ void main() {
     testWidgets('Board and Chat are the one view switch: Board is not '
         'repeated, and the selected tab reads as selected', (tester) async {
       final c = await view(tester, rightPane: (_) => const SizedBox.expand());
+      // A project's Board opens from the Projects grid (task #4466).
+      await tester.tap(find.byKey(const ValueKey('super-projects')));
+      await tester.pump();
       await tester.tap(key('super-group-lead'));
       await settle(tester);
       expect(key('super-tasks-layout-board'), findsNothing);
@@ -1124,6 +1126,9 @@ void main() {
       tester,
     ) async {
       final c = await view(tester, rightPane: (_) => const SizedBox.expand());
+      // A project's Board opens from the Projects grid (task #4466).
+      await tester.tap(find.byKey(const ValueKey('super-projects')));
+      await tester.pump();
       await tester.tap(key('super-group-lead'));
       await settle(tester);
       for (final layout in ['list', 'members']) {
@@ -1179,6 +1184,9 @@ void main() {
         rightPane: (_) => const Text('Tasks pane', key: ValueKey('tasks-pane')),
       );
       // Even on a project's Board the right pane is the slot, not a chat.
+      // A project's Board opens from the Projects grid (task #4466).
+      await tester.tap(find.byKey(const ValueKey('super-projects')));
+      await tester.pump();
       await tester.tap(key('super-group-lead'));
       await settle(tester);
       expect(
