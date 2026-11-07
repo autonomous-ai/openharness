@@ -659,7 +659,7 @@ describe('remove script', () => {
   it('says so when the team daemon does not start again after a refusal', () => {
     const s = sandbox({ refuse: true, bootstrapFails: true })
     expect(s.result.status).toBe(REMOVE_REFUSED)
-    expect(s.result.stderr).toContain('Nothing was removed, but the team daemon did not start again: harness team setup starts it')
+    expect(s.result.stderr).toContain('Nothing was removed, and the team daemon stays stopped')
     expect(s.gone(s.paths.PLIST)).toBe(false)
   })
 

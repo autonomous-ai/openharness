@@ -898,42 +898,43 @@ describe('agent_create with a receipt', () => {
 
   // WIN-DELL and the Mac Studio, 2026-10-26: Swarm Leads in a reused or fresh checkout of the project's repository sat at
   // Claude Code's trust question, and so did the next Lead in a worktree of it, its source never answered.
-  it('trusts a Swarm agent\'s checkout of its remote project in the Swarm\'s full mode, and no other existing folder', async () => {
+  it('trusts a Swarm agent\'s checkout of its remote project in its owner\'s own mode, and no other existing folder', async () => {
     const { ask, replies } = setup()
     const launch = async (payload: Record<string, unknown>, n: number) => { await ask({ creationId: `${CREATION}-${n}`, ...payload }); await vi.waitFor(() => expect(replies).toHaveLength(n)) }
     const remote = { projectSource: 'remote', repositoryUrl: 'https://github.com/acme/app.git' }
-    await launch({ engine: 'claude', ...remote, swarmRole: 'lead', permissionMode: 'full' }, 1)
+    await launch({ engine: 'claude', ...remote, swarmRole: 'lead' }, 1)
     expect(preTrustClaudeProject).toHaveBeenCalledWith('/projects/prepared')
-    // The guard: the same checkout outside a Swarm or outside full mode, and a Swarm agent in a folder it was handed.
+    // The guard: the same checkout outside a Swarm, and a Swarm agent in a folder it was handed.
     await launch({ engine: 'claude', ...remote, permissionMode: 'full' }, 2)
-    await launch({ engine: 'claude', ...remote, swarmRole: 'lead', permissionMode: 'auto' }, 3)
+    await launch({ engine: 'claude', cwd: dir, swarmRole: 'lead' }, 3)
     await launch({ engine: 'claude', cwd: dir, swarmRole: 'lead', permissionMode: 'full' }, 4)
-    await ask({ creationId: `${CREATION}-5`, engine: 'claude', projectSource: 'worktree', gitSource: '/elsewhere', branchName: 'feature', swarmRole: 'lead', permissionMode: 'full' }, false)
+    await ask({ creationId: `${CREATION}-5`, engine: 'claude', projectSource: 'worktree', gitSource: '/elsewhere', branchName: 'feature', swarmRole: 'lead' }, false)
     await vi.waitFor(() => expect(replies).toHaveLength(5))
     expect(preTrustClaudeProject).toHaveBeenCalledOnce()
     // Claude Code only: a Codex Lead's checkout is not trusted for it.
-    await launch({ engine: 'codex', ...remote, swarmRole: 'lead', permissionMode: 'full' }, 6)
+    await launch({ engine: 'codex', ...remote, swarmRole: 'lead' }, 6)
     expect(preTrustCodexProject).not.toHaveBeenCalled()
     // A worktree made from that checkout then inherits its answer.
     vi.mocked(claudeTrusts).mockImplementation(path => path === '/projects/prepared')
-    await launch({ engine: 'claude', projectSource: 'worktree', gitSource: '/projects/prepared', branchName: 'feature', swarmRole: 'lead', permissionMode: 'full' }, 7)
+    await launch({ engine: 'claude', projectSource: 'worktree', gitSource: '/projects/prepared', branchName: 'feature', swarmRole: 'lead' }, 7)
     expect(preTrustClaudeProject).toHaveBeenCalledTimes(2)
   })
 
   // 2026-10-30: a new Swarm made with Cmd+S on a local openharness checkout started its PM in a worktree of that
   // checkout, which Claude Code had never been told to trust; the PM sat at the question, shown as Idle in the Swarm.
-  it('trusts the worktree of a repository the person picked in this machine\'s window for a Swarm agent in full mode', async () => {
+  it('trusts the worktree of a repository the person picked in this machine\'s window for a Swarm agent in any mode', async () => {
     const { ask, replies } = setup()
     const launch = async (payload: Record<string, unknown>, local: boolean, n: number) => { await ask({ creationId: `${CREATION}-${n}`, ...payload }, local); await vi.waitFor(() => expect(replies).toHaveLength(n)) }
     const worktree = { projectSource: 'worktree', gitSource: '/Users/me/openharness', branchName: 'lively-meteor' }
-    await launch({ engine: 'claude', ...worktree, swarmRole: 'lead', permissionMode: 'full' }, true, 1)
+    await launch({ engine: 'claude', ...worktree, swarmRole: 'lead' }, true, 1)
     expect(preTrustClaudeProject).toHaveBeenCalledWith('/projects/prepared')
-    // Not relayed, not outside a Swarm or full mode, not for Codex: those stay the person's question.
-    await launch({ engine: 'claude', ...worktree, swarmRole: 'lead', permissionMode: 'full' }, false, 2)
-    await launch({ engine: 'claude', ...worktree, permissionMode: 'full' }, true, 3)
-    await launch({ engine: 'claude', ...worktree, swarmRole: 'lead', permissionMode: 'auto' }, true, 4)
-    await launch({ engine: 'codex', ...worktree, swarmRole: 'lead', permissionMode: 'full' }, true, 5)
-    expect(preTrustClaudeProject).toHaveBeenCalledOnce()
+    await launch({ engine: 'claude', ...worktree, swarmRole: 'lead', permissionMode: 'full' }, true, 2)
+    expect(preTrustClaudeProject).toHaveBeenCalledTimes(2)
+    // Not relayed, not outside a Swarm, not for Codex: those stay the person's question.
+    await launch({ engine: 'claude', ...worktree, swarmRole: 'lead' }, false, 3)
+    await launch({ engine: 'claude', ...worktree, permissionMode: 'full' }, true, 4)
+    await launch({ engine: 'codex', ...worktree, swarmRole: 'lead' }, true, 5)
+    expect(preTrustClaudeProject).toHaveBeenCalledTimes(2)
     expect(preTrustCodexProject).not.toHaveBeenCalled()
   })
 

@@ -309,7 +309,9 @@ export interface Assignment {
   agentId: string
   status: WorkStatus
   configuration: AgentConfiguration
-  execution: { machineId: string; harnessId: string; machineOwnerId: string }
+  /** `contributorId`: whose login its agent runs under (Agent.contributorId), so the person's Tasks feed keeps it after the agent
+   *  is closed (read/feedIds.ts). Absent on assignments made before 2026-11-07. */
+  execution: { machineId: string; harnessId: string; machineOwnerId: string; contributorId?: string }
   result: string | null
   /** Explicit progress fences delayed recording gaps; absent on older backends. */
   recordingProgress?: { at: number; revision: number }
@@ -478,6 +480,9 @@ export interface Conversation {
    *  pull request head re-derives the checks of, dormant ones included (#3394). Empty from a task's start; absent on a task
    *  from before, whose PR watch looks them up once (pullRequestEvents.ts listedSteps). */
   stepIds?: string[]
+  /** Its Linux test step, waiting for a Linux machine the project can test on (linuxSteps.ts, task #4278): set by a Ready that
+   *  found none, gone once the step opens. */
+  waitingLinuxStep?: import('./linuxSteps.js').WaitingStep
   /** Its messages drawn as live cards: its task and each linked pull request (cards.ts). Absent until its first card. */
   cards?: import('./cards.js').GroupCards
   /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */
@@ -919,7 +924,8 @@ export const groupForBuddy = <T extends Pick<Conversation, 'assignment' | 'lostA
 }
 export const groupWithoutMachines = <T extends Pick<Conversation, 'assignment' | 'lostAttempt'>>(group: T): T => {
   const assignment = group.assignment && { ...group.assignment,
-    ...(group.assignment.execution ? { execution: { ...group.assignment.execution, machineId: '', harnessId: '', machineOwnerId: '' } } : {}),
+    ...(group.assignment.execution ? { execution: { ...group.assignment.execution, machineId: '', harnessId: '', machineOwnerId: '',
+      ...group.assignment.execution.contributorId !== undefined ? { contributorId: '' } : {} } } : {}),
     ...(group.assignment.lost ? { lost: { ...group.assignment.lost, reason: lostReasonWithoutMachine(group.assignment.lost.reason) } } : {}) }
   return { ...group, ...(assignment ? { assignment } : {}),
     ...(group.lostAttempt ? { lostAttempt: { id: group.lostAttempt.id, agentId: group.lostAttempt.agentId } } : {}) }

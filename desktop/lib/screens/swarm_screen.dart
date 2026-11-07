@@ -87,7 +87,6 @@ import '../super_tabs/launch.dart';
 import '../super_tabs/message_link.dart' show swarmMessageLinkInbox;
 import '../super_tabs/buddy_chat.dart' show countText;
 import '../super_tabs/buddy_chat_shortcut.dart';
-import '../super_tabs/team_account_setup.dart';
 import '../super_tabs/workspace.dart';
 import '../super_tabs/quick_switcher.dart';
 import '../super_tabs/actions.dart';
@@ -328,7 +327,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   bool _deviceRevealInFlight = false;
   StreamSubscription<void>? _modelsRequests;
   StreamSubscription<String>? _superTabClosures;
-  StreamSubscription<String>? _teamSetupAsks;
   // The one Swarm notice: whether it exists (queued or shown), whether it
   // is on screen, and the closed tab its Reopen restores.
   int _superTabNoticeSerial = 0;
@@ -511,9 +509,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// clears first ([_onNative]). A titlebar dropdown is an overlay, not a
   /// cover: the titlebar stays as it is, and a click there closes it.
   _TitlebarCover get _titlebarCover {
-    // The Harness Team account's setup holds the whole window
-    // (TeamAccountSetupLock): menus, shortcuts and the row wait with it.
-    if (app.teamSetupLocked) return _TitlebarCover.modal;
     if (_spokenPaletteOpen) return _TitlebarCover.modal;
     if (settingsPageOnTop.value != null) return _TitlebarCover.settingsPage;
     if (!_routeIsCurrent || _dialogOpen) return _TitlebarCover.modal;
@@ -906,10 +901,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
       }
     });
     _superTabClosures = app.superTabClosures.listen(_offerSuperTabReopen);
-    // The Harness Team account, explained before macOS asks for the password (super_tabs/team_account_setup.dart).
-    _teamSetupAsks = app.teamSetupAsks.listen((_) {
-      if (mounted) unawaited(showTeamAccountSetup(context, app, asked: true));
-    });
     if (!kUnderTest) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
@@ -1066,7 +1057,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.modelManager.setPanelVisible(false);
     _modelsRequests?.cancel();
     _superTabClosures?.cancel();
-    _teamSetupAsks?.cancel();
     _keymap.removeListener(_keymapChanged);
     _defaultKeymap.dispose();
     grid.AppTheme.palette.removeListener(_paletteChanged);
@@ -2501,9 +2491,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// closes every open dropdown first ([dismissTransientMenus]); a row click
   /// pops the Settings page first; a modal still drops it ([_actOnNative]).
   Future<void> _onNative(MethodCall call) async {
-    // Held with the window ([_titlebarCover]): a row or key equivalent that
-    // AppKit sent before it greyed out does nothing either.
-    if (app.teamSetupLocked) return;
     var action = call;
     final args = call.arguments is Map ? call.arguments as Map : const {};
     // AppKit wraps the row's clicks while its menus are off, which, with the
@@ -5040,11 +5027,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     // Paint hints only; the keymap still owns every shortcut and input event.
     _tabShortcutHints.value = showsTabShortcutHints(HardwareKeyboard.instance);
     // Off, this is not here at all: every key goes where it went before.
-    // Nor while the Harness Team account's setup holds the window
-    // (TeamAccountSetupLock): this handler hears keys whatever has focus.
-    if (event is! KeyDownEvent ||
-        _zoo.daemons == DaemonsSwitch.off ||
-        app.teamSetupLocked) {
+    if (event is! KeyDownEvent || _zoo.daemons == DaemonsSwitch.off) {
       return false;
     }
     _noteWindowInput();
