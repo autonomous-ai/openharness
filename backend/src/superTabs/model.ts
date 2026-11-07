@@ -159,6 +159,10 @@ export interface Agent {
   buddyScope?: 'swarm'
   /** A Regular agent (agent.new, task #4116): in no project but its active task's (projects.ts agentProjectId). */
   regular?: true
+  /** The one project this Member belongs to (task #4540; spec 2026-11-07-members-and-leads): picked in Cmd-N or when its person
+   *  joined. Readers get it in the derived row, never in this part (read/views.ts), and only when they read that project. A
+   *  Lead's is the project it leads, derived (agentKind.ts ledProjects). Cleared when the project is deleted. */
+  mainProjectId?: string
   /** The private project a Regular agent first worked in: its one conversation holds that project's content, so it takes tasks
    *  only there from then on (projects.ts regularMayWorkIn; security review 2 of #4116). Set at its assignment, never cleared. */
   privateProjectId?: string
@@ -216,6 +220,8 @@ export interface AgentStartRequest {
   buddyScope?: 'swarm'
   /** A Regular agent's start (agent.new, task #4116): in its person's own chat, in no project's folder. Written by the server alone. */
   regular?: true
+  /** The main project its person picked (agent.new, buddy.create; task #4540), kept on the agent when it starts. */
+  mainProjectId?: string
   /** A one-project Buddy's start (Agent.buddyNarrow), written by message.send alone. */
   buddyNarrow?: true
   /** The person's messages in an older project chat its start waits on, delivered when it joins (ids only). */

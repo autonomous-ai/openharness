@@ -392,7 +392,16 @@ which doesn't reliably pick up the quarantine flag in the first place).
    republishing an old build cannot downgrade anyone.
 3. After the user chooses **Update now**, downloads the zip and verifies its sha256 **before** anything is unpacked. A mismatch is discarded.
 4. Unpacks into a staging directory and re-reads `CFBundleShortVersionString` from the staged bundle as
-   a sanity check that the download really is the version it claims to be.
+   a sanity check that the download really is the version it claims to be. It installs it only if whoever signed the running app signed it too (`lib/update/update_signature.dart`): on macOS
+   `codesign --verify --deep --strict` against a Developer ID requirement with the running app's team and identifier,
+   notarized; on Windows every `.exe`/`.dll` and the launcher Authenticode-valid, the app, the launcher and
+   `app/<version>/harness-desktop.cat` signed like the running `harness-desktop.exe` (subject and Artifact Signing
+   identity), and that catalog matching every file in the folder, `data/app.so` included. Otherwise the banner says
+   it is not signed by the running app's publisher and the current version stays. The manifest can only pick among
+   builds we signed. A running app that is itself unsigned (a local or staging build) keeps the sha256 check alone;
+   Linux AppImages are unsigned, so Linux does too. Rotating keys: a new Developer ID certificate or a renewed
+   Artifact Signing certificate changes neither the team nor the identity, so nothing is needed. A new team or a new
+   identity validation needs one bridge release, signed the old way, whose rule also accepts the new signer.
 5. Checks on launch (including the sign-in screen) and every minute. When a newer build exists,
    it shows a non-blocking notification. The user chooses **Update now** to download and install it,
    or **Skip version** to silence that exact version. A later version is shown normally; the account
@@ -429,7 +438,8 @@ flutter run -d macos \
 
 A local origin is enough for that manifest: serve a zip of any `Harness.app` (its
 `CFBundleShortVersionString` must match the version the manifest advertises, which the staging step
-verifies) with its real `size` and `sha256`, and write the body slowly if you want to read the
+verifies) with its real `size` and `sha256` — a local build is ad hoc signed, so it skips the signature check (step 4 above),
+while a released build only takes a zip signed by its own team — and write the body slowly if you want to read the
 percentage rather than watch it jump to 100. `applyStaged` replaces the bundle it is running from,
 so run a COPY of the build rather than the one `flutter run` owns.
 
@@ -603,7 +613,8 @@ its own runner and `upload-windows` publishes from ubuntu. Three files go to `ha
   `Harness.exe --install` (`installer/`, docs/superpowers/specs/2026-10-19-windows-installer-design.md).
 
 `sign-windows` Authenticode-signs every `.exe` and `.dll` in both zips and `harness-install.exe` through Azure Artifact
-Signing, as **AUTONOMOUS INC.**, once the repository variable `WINDOWS_SIGNING` is `required`
+Signing, then writes and signs `app/<version>/harness-desktop.cat`, a catalog of every file in the version folder
+that the updater checks ("How a running app self-updates", step 4), as **AUTONOMOUS INC.**, once the repository variable `WINDOWS_SIGNING` is `required`
 ([docs/windows-code-signing.md](../docs/windows-code-signing.md)). Until then it is skipped and the files ship
 unsigned: Windows shows SmartScreen once, on the installer a browser downloaded, and Smart App Control blocks the build
 where it is on. Once signing is required, a failed signature stops the release and a candidate prepared unsigned is
