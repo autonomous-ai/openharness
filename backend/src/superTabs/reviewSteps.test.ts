@@ -114,7 +114,7 @@ describe('a handed task opens its review steps', () => {
         tools: {}, runningHarnessIds: [], stoppedHarnessIds: [], readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] },
         quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }] } }] as never
     f.ready(['desktop/lib/super_tabs/view.dart'])
-    expect(f.steps().map(s => s.name)).toEqual(['Review', 'Test', 'Test on Windows'])
+    expect(f.steps().map(s => s.name)).toEqual(['Review', 'Test'])
     expect(f.steps()[1]!.agent).toBe(tester)
     expect(stepsOf(f.state, f.task)[1]!.brief).toContain('Desktop on a Mac')
   })
@@ -175,13 +175,13 @@ describe('a handed task opens its review steps', () => {
     const f = fixture()
     f.add('rev-a', f.task, 'Reviewer'); f.add('rev-b', f.task, 'Reviewer'); f.add('tst', f.task, 'Tester')
     f.ready(['backend/src/routes/auth.ts', 'desktop/lib/a.dart'])
-    expect(f.steps().map(s => s.name)).toEqual(['Security review 1', 'Security review 2', 'Test', 'Test on Windows'])
+    expect(f.steps().map(s => s.name)).toEqual(['Security review 1', 'Security review 2', 'Test'])
     const open = (step: string) => () => f.run({ type: 'conversation.create', title: step, reviewOf: f.task, step, brief: 'Read it.', checks: [] } as Command, f.as(f.dev))
     for (const step of ['Security review', 'Test']) {
       expect(open(step), step).toThrow(expect.objectContaining({ code: 'STEP_OPEN' }))
     }
     expect(open('Test')).toThrow(/Test/)
-    expect(f.steps()).toHaveLength(4)
+    expect(f.steps()).toHaveLength(3)
   })
 
   it('refuses an agent\'s step of a name it already has open, and opens its own second step of a kind under another name', () => {
@@ -227,7 +227,7 @@ describe('a handed task opens its review steps', () => {
     tester('unlisted-tst', 'unlisted')
     f.ready(['cli/src/superTabs/host.ts'])
     expect(f.steps()).toEqual([{ name: 'Review', agent: expect.any(String), status: 'working' },
-      { name: 'Test on a Mac', agent: mac, status: 'working' }, { name: 'Test on a Linux machine', agent: linux, status: 'working' }, { name: 'Test on Windows', agent: null, status: null }])
+      { name: 'Test on a Mac', agent: mac, status: 'working' }, { name: 'Test on a Linux machine', agent: linux, status: 'working' }])
     expect(stepsOf(f.state, f.task).find(s => s.step === 'Test on a Linux machine')!.brief).toContain('a Linux machine')
   })
 

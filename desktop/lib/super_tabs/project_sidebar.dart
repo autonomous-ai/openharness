@@ -626,7 +626,7 @@ class ProjectSidebar extends StatelessWidget {
   }
 
   /// My agents (Swarm v3, task #4118): the person's Buddy first, then the agents they brought, each with its face and name,
-  /// a crown after a PM's, the name bold while its chat has unread, and + New agent in the heading.
+  /// a PM's crowned and followed by the project it leads (task #4421), the name bold while its chat has unread, and + New agent in the heading.
   List<Widget> _myAgents(
     BuildContext context,
     SuperTabSnapshot? snapshot,
@@ -669,15 +669,15 @@ class ProjectSidebar extends StatelessWidget {
   Widget _agentRow(SuperTabSnapshot snapshot, SuperTabAgent agent) {
     final chat = superTabAgentChat(snapshot, agent);
     final name = snapshot.agentName(agent.id, fallback: agent.name);
+    final pm = superTabAgentIsPm(snapshot, agent);
     return SuperTabBuddyRow(
       key: ValueKey('super-agent-${agent.id}'),
       agentId: agent.id,
       agent: agent,
       name: name,
       tooltip: chat == null ? '$name · no chat yet' : name,
-      crownKey: superTabAgentIsPm(snapshot, agent)
-          ? ValueKey('super-agent-crown-${agent.id}')
-          : null,
+      crown: pm,
+      note: pm ? snapshot.leadProjectForAgent(agent.id)?.name : null,
       status: _buddyMark(agent),
       selected:
           chat != null && !_paneCovered && controller.selectedId == chat.id,

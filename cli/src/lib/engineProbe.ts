@@ -30,7 +30,7 @@
  * reported as not installed, which is the state a plain `command -v` gets wrong.
  */
 
-import { ENGINES, type AgentEngine } from '../engines/types.js'
+import { ENGINES, isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { engineBin, enginePathOverride } from './engineBin.js'
 import { commandAvailableInInteractiveShell } from './engineLaunch.js'
 import { engineInstallRecipe } from './engineInstall.js'
@@ -45,9 +45,9 @@ export interface EngineAvailability {
   readonly command: string | null
   /** Whether Harness can apply the official recipe without overriding a custom launch path. */
   readonly installable: boolean
-  /** Claude Code and Codex, when installed: is a credential there (engineAccount.ts). */
+  /** Installed process engines: credential presence, or null when the reader cannot say. */
   readonly signedIn?: boolean | null
-  /** Claude Code and Codex, when installed: the engine's latest session activity, ms. */
+  /** Installed process engines: latest known session activity, ms; null when unavailable. */
   readonly lastUsedAt?: number | null
 }
 
@@ -112,18 +112,20 @@ export async function probeEngines(
           installed = false
         }
       }
-      // Lets the New Harness box open on the agent this person already uses (engineAccount.ts).
-      // Only for the caller that shows it (the New Harness box): a login shell's environment, the
-      // Keychain and the project folders are not what an installed-or-not question needs.
-      const account = options.accounts && installed && (engine === 'claude' || engine === 'codex')
-        ? await engineAccount(engine).catch(() => null)
-        : null
+      // Account knowledge belongs to the engine reader, not this shared probe (#3839). An
+      // unsupported reader answers unknown; neither a failure nor an install proves sign-in.
+      const readAccount = options.accounts && installed && !isTerminalEngine(engine)
+      const account = readAccount ? await engineAccount(engine).catch(() => null) : null
       results[index] = {
         engine,
         installed,
         command,
         installable: !installed && command !== null && recipe !== undefined,
-        ...(account ? { signedIn: account.signedIn, lastUsedAt: account.lastUsedAt } : {}),
+        // Project only safe scalars: future readers must not leak credentials or error details.
+        ...(readAccount ? {
+          signedIn: typeof account?.signedIn === 'boolean' ? account.signedIn : null,
+          lastUsedAt: typeof account?.lastUsedAt === 'number' && Number.isFinite(account.lastUsedAt) ? account.lastUsedAt : null,
+        } : {}),
       }
     }
   }

@@ -383,16 +383,15 @@ describe('a Buddy through the store', () => {
     expect((await f.store.decisions(peer, f.tab, 'settled')).decisions.map(d => d.question)).toContain(routing[0]!.question)
   })
 
-  it('still reads a task archived before the PM reported on it, until it leaves the active set (security review 1 of #2115)', async () => {
+  it('reads a task archived by hand in the dormant view at once, with no report to wait for (security review 1 of #2115, #3593)', async () => {
     const f = await swarm()
     const { agentId } = await buddy(f)
     const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Old task', brief: '', checks: [] })).result.conversationId)
-    // A work change the PM has not reported yet (a plain message no longer is one: Dee, 2026-10-31).
     await f.execute({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/7' })
     await f.execute({ type: 'conversation.archive', conversationId: group, archived: true } as Command)
-    const read = await new SwarmReads(f.store).firstLoad(peer, f.tab, agentId)
-    expect(read.groups.find(g => g.key === group)?.data).toMatchObject({ archived: true })
-    expect(read.groups.find(g => g.key === group)?.data.dormant).toBeUndefined()
+    const reads = new SwarmReads(f.store)
+    expect((await reads.firstLoad(peer, f.tab, agentId)).groups.some(g => g.key === group)).toBe(false)
+    expect((await reads.dormant(peer, f.tab, { projectId: 'lead' }, agentId)).groups.find(g => g.key === group)?.data).toMatchObject({ archived: true })
   })
   it('reads a lost task without the machine it ran on, in its messages, its task and its agent (security re-check 2 of #2115)', async () => {
     const f = await swarm()

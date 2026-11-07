@@ -29,12 +29,16 @@ class SuperTabWorkspace extends StatefulWidget {
     required this.canvas,
     required this.onAddAgent,
     this.onNewProject,
+    this.onNewAgent,
     this.onNewSwarm,
   });
   final AppNotifier app;
   final Widget canvas;
   final ValueChanged<SuperTabConversation> onAddAgent;
   final VoidCallback? onNewProject;
+
+  /// + New agent: the workspace's Cmd-N form, with Member or Lead (#4196).
+  final VoidCallback? onNewAgent;
   final VoidCallback? onNewSwarm;
 
   @override
@@ -665,6 +669,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                       unawaited(showSuperTabPeople(context, controller)),
                   onAddAgent: widget.onAddAgent,
                   onNewProject: widget.onNewProject,
+                  onNewAgent: widget.onNewAgent,
                   onNewSwarm: widget.onNewSwarm,
                   onOpenTerminal: (agent) => _focusAgent(
                     controller,
