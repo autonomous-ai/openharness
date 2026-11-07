@@ -37,8 +37,8 @@ import 'support/super_tab_fixture.dart';
 /// element drawn in light and dark against its checked-in image. A new or
 /// changed element updates the doc and this gallery in the same pull request.
 ///
-/// Update the images with
-/// `flutter test --no-pub --update-goldens test/swarm_elements_gallery_test.dart`
+/// Each section is its own image per brightness, `test/goldens/swarm-elements/<section>-<light|dark>.png`. Update
+/// them with `flutter test --no-pub --update-goldens test/swarm_elements_gallery_test.dart`
 /// and look at them before committing.
 void main() {
   late GoldenFileComparator previous;
@@ -84,44 +84,77 @@ void main() {
   tearDownAll(() => goldenFileComparator = previous);
 
   for (final brightness in Brightness.values) {
-    testWidgets('every Swarm element matches its image in ${brightness.name}', (
-      tester,
-    ) async {
-      final bars = await _show(tester, brightness);
-      (goldenFileComparator as _NearlyComparator).parts = _parts(tester);
-      await expectLater(
-        find.byKey(_Gallery.boundary),
-        matchesGoldenFile('goldens/swarm-elements-${brightness.name}.png'),
-      );
-      await _close(tester, bars);
-    });
+    testWidgets(
+      'every Swarm element matches its own image in ${brightness.name}',
+      (tester) async {
+        final bars = await _show(tester, brightness);
+        for (final id in _Gallery.sections.keys) {
+          final section = find.byKey(_Gallery.section(id));
+          (goldenFileComparator as _NearlyComparator).parts = _parts(
+            tester,
+            tester.getRect(section),
+          );
+          await expectLater(section, matchesGoldenFile(_image(id, brightness)));
+        }
+        await _close(tester, bars);
+      },
+    );
   }
 
   // Review of task #4461: a whole-image tolerance let a changed element pass. Ellis has Kai's colour with another
   // tilt: only its eyes and smile move.
-  testWidgets('one changed face fails the gallery', (tester) async {
+  testWidgets('one changed face fails its section', (tester) async {
     final bars = await _show(
       tester,
       Brightness.light,
       faces: ['Ellis', ..._faces.skip(1)],
     );
-    final boundary = tester.renderObject<RenderRepaintBoundary>(
-      find.byKey(_Gallery.boundary),
-    );
+    final section = find.byKey(_Gallery.section('faces'));
+    final boundary = tester.renderObject<RenderRepaintBoundary>(section);
     final problem = await tester.runAsync(() async {
       final image = await boundary.toImage();
       final png = await image.toByteData(format: ui.ImageByteFormat.png);
       image.dispose();
       return galleryDifference(
         png!.buffer.asUint8List(),
-        File('test/goldens/swarm-elements-light.png').readAsBytesSync(),
-        _parts(tester),
+        File('test/${_image('faces', Brightness.light)}').readAsBytesSync(),
+        _parts(tester, tester.getRect(section)),
       );
     });
     expect(problem, contains('agent face Ellis'));
     await _close(tester, bars);
   });
+
+  // The doc and the gallery change together (desktop-design-system.md, Swarm elements), as code: every element the
+  // doc lists is drawn by a section, every section draws elements the doc lists, and the images are exactly each
+  // section's two, so a stale or missing one fails here rather than in review.
+  test('the doc\'s Swarm elements, the gallery\'s sections and their images are the same set', () {
+    final doc = File('design/desktop-design-system.md').readAsStringSync();
+    final from = doc.indexOf('\n## Swarm elements\n');
+    final to = doc.indexOf('\n## ', from + 1);
+    final listed = {
+      for (final m in RegExp(
+        r'^- \*\*([^*]+?)\.?\*\*',
+        multiLine: true,
+      ).allMatches(doc.substring(from, to)))
+        m.group(1)!,
+    }..remove('Adding or changing one');
+    expect(_Gallery.sections.values.expand((e) => e).toSet(), listed);
+    final images = Directory('test/goldens/swarm-elements')
+        .listSync()
+        .map((f) => f.uri.pathSegments.last)
+        .toSet();
+    expect(images, {
+      for (final id in _Gallery.sections.keys)
+        for (final brightness in Brightness.values)
+          _image(id, brightness).split('/').last,
+    });
+  });
 }
+
+/// A section's image in [brightness], relative to the test folder.
+String _image(String id, Brightness brightness) =>
+    'goldens/swarm-elements/$id-${brightness.name}.png';
 
 Future<List<SuperTabController>> _show(
   WidgetTester tester,
@@ -143,7 +176,7 @@ Future<List<SuperTabController>> _show(
   await buddy.select('swarm-buddy-peer');
   await member.select('aeef');
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 1740);
+  tester.view.physicalSize = const Size(760, 1820);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -188,24 +221,33 @@ const _art = .01;
 const _glyph = .25;
 
 /// Everything else but words (fills, pills, borders, where each element sits)
-/// is drawn alike on every host: at most 0.01% of the image (38 pixels) may
-/// differ, under the smallest Lead ring's 80, so a lost element fails too. Words
-/// are left out: macOS and Linux smooth their edges too differently to compare
-/// by pixel (14,638 pixels on one image), and their copy is tested where they
-/// are written.
-const _rest = .0001;
+/// is drawn alike on every host: at most 38 pixels of a section's image may
+/// differ, as the whole gallery's image allowed before it was split (task
+/// #4717), under the smallest Lead ring's 80, so a lost element fails too.
+/// Words are left out: macOS and Linux smooth their edges too differently to
+/// compare by pixel (14,638 pixels on one image), and their copy is tested
+/// where they are written.
+const _rest = 38;
 
-/// Every element the gallery draws, each held to its own area, and its words,
-/// held to none.
-({List<GalleryRegion> regions, List<Rect> words}) _parts(WidgetTester tester) =>
-    (
-      regions: _regions(tester),
-      // A glyph's smoothed edge reaches a little past its box.
-      words: [
-        for (final text in find.byType(RichText).evaluate())
-          tester.getRect(find.byElementPredicate((e) => e == text)).inflate(2),
-      ],
-    );
+/// Every element the gallery draws inside [section], each held to its own area,
+/// and its words, held to none, in the section image's coordinates.
+({List<GalleryRegion> regions, List<Rect> words}) _parts(
+  WidgetTester tester,
+  Rect section,
+) => (
+  regions: [
+    for (final r in _regions(tester))
+      if (section.overlaps(r.rect))
+        (name: r.name, rect: r.rect.shift(-section.topLeft), limit: r.limit),
+  ],
+  // A glyph's smoothed edge reaches a little past its box.
+  words: [
+    for (final text in find.byType(RichText).evaluate())
+      if (tester.getRect(find.byElementPredicate((e) => e == text))
+          case final rect when section.overlaps(rect))
+        rect.inflate(2).shift(-section.topLeft),
+  ],
+);
 
 List<GalleryRegion> _regions(WidgetTester tester) {
   final faces = find.byType(SuperTabAvatarFace);
@@ -302,7 +344,7 @@ Future<String?> galleryDifference(
     Rect.fromLTWH(0, 0, a.width.toDouble(), a.height.toDouble()),
     skip: parts.words,
   );
-  final limit = a.width * a.height * _rest;
+  const limit = _rest;
   return n > limit
       ? 'the image outside its words: $n pixels differ (limit ${limit.floor()})'
       : null;
@@ -430,7 +472,21 @@ class _Gallery extends StatelessWidget {
 
   /// Whose answers the decision cards read.
   final SuperTabDecisions decisions;
-  static const boundary = ValueKey('swarm-elements-gallery');
+
+  /// The gallery's sections, in order, each its own image per brightness, and the doc's elements each draws
+  /// (desktop-design-system.md, Swarm elements).
+  static const sections = {
+    'faces': ['Agent face'],
+    'avatars': ['Agent face', 'Lead ring', 'Person avatar'],
+    'status-marks': ['Task status marks'],
+    'left-pane-rows': ['Left pane row'],
+    'tasks-pane': ['Tasks pane header', 'Tasks pane card'],
+    'chat': ['Chat message', 'Chat composer'],
+    'top-bar': ['Top bar'],
+    'empty': ['One surface', 'Left pane row', 'Tasks pane card'],
+    'decision-card': ['Decision card'],
+  };
+  static ValueKey<String> section(String id) => ValueKey('swarm-elements-$id');
 
   @override
   Widget build(BuildContext context) {
@@ -440,19 +496,34 @@ class _Gallery extends StatelessWidget {
       child: Text(text, style: Theme.of(context).textTheme.labelLarge),
     );
     Widget gap() => const SizedBox(width: 16);
-    return RepaintBoundary(
-      key: boundary,
-      child: Material(
+    // Each section is its own image, light and dark (task #4717): a pull request that changes one element changes only
+    // its two images, so two that change different elements never touch the same file.
+    Widget section(String id, List<Widget> children) => RepaintBoundary(
+      key: _Gallery.section(id),
+      child: Container(
+        width: 720,
+        // Room below for what an element draws outside its box (a Lead ring, 12% of its face), so it stays in this
+        // section's image.
+        padding: const EdgeInsets.only(bottom: 8),
         color: Theme.of(context).colorScheme.surface,
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Swarm elements / ${brightness.name}',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: children,
+        ),
+      ),
+    );
+    return Material(
+      color: Theme.of(context).colorScheme.surface,
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Swarm elements / ${brightness.name}',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            section('faces', [
               title('Agent face: eight colours'),
               Row(
                 children: [
@@ -466,6 +537,8 @@ class _Gallery extends StatelessWidget {
                   ],
                 ],
               ),
+            ]),
+            section('avatars', [
               title('Agent face, Lead ring and person at 20, 24, 30'),
               Row(
                 children: [
@@ -489,6 +562,8 @@ class _Gallery extends StatelessWidget {
                   ],
                 ],
               ),
+            ]),
+            section('status-marks', [
               title('Task status marks'),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -511,6 +586,8 @@ class _Gallery extends StatelessWidget {
                     ),
                 ],
               ),
+            ]),
+            section('left-pane-rows', [
               title('Left pane rows'),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -578,6 +655,8 @@ class _Gallery extends StatelessWidget {
                   ),
                 ],
               ),
+            ]),
+            section('tasks-pane', [
               title(
                 'Tasks pane: header, a waiting, a working and a selected card',
               ),
@@ -619,6 +698,8 @@ class _Gallery extends StatelessWidget {
                   ),
                 ],
               ),
+            ]),
+            section('chat', [
               title('Chat: message rows, and the composer empty and typed'),
               SizedBox(
                 width: 440,
@@ -642,6 +723,8 @@ class _Gallery extends StatelessWidget {
                   SizedBox(width: 340, child: _Composer('typed', 'Ship it')),
                 ],
               ),
+            ]),
+            section('top-bar', [
               title('Top bar: your Buddy, a member agent'),
               for (final c in bars)
                 SizedBox(
@@ -665,6 +748,8 @@ class _Gallery extends StatelessWidget {
                 ),
               // Empty means empty (anh Dee's rule 7): each element with nothing optional, and no words for what
               // is not there.
+            ]),
+            section('empty', [
               title('Empty: a row, a task card and the Tasks pane'),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -710,6 +795,8 @@ class _Gallery extends StatelessWidget {
                   onOpenTask: (_) {},
                 ),
               ),
+            ]),
+            section('decision-card', [
               title('Decision card: a Buddy question and a send line'),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -741,8 +828,8 @@ class _Gallery extends StatelessWidget {
                   ),
                 ],
               ),
-            ],
-          ),
+            ]),
+          ],
         ),
       ),
     );
