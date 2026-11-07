@@ -685,7 +685,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             // Only a 404 that is not the backend's own error is a backend without the route (Fastify's default); the backend's
             // NOT_FOUND and its transient 503 pass through with their own words.
             if (error instanceof SuperTabHostError && error.status === 404 && error.code !== 'NOT_FOUND') {
-              return { error: 'INSTRUCTIONS_UNAVAILABLE', detail: 'This Swarm has no project instructions yet: work by the swarm skill Harness gave you at start.' }
+              return { error: 'INSTRUCTIONS_UNAVAILABLE', detail: 'This Swarm has no project instructions yet: ask its coordinator in your task chat what to work by.' }
             }
             throw error
           }

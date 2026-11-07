@@ -26,6 +26,14 @@ Measured on main `0dd01c979`, and the openharness project instructions at revisi
 A rule that mixes a code-able part and a judgment part is two rows. Each `code` row names the file and function that
 enforces it, found in the code, not assumed.
 
+**Since this audit (#4673, 2026-11-07):** agents no longer get the built-in PM text (`v2Section`, `BUILT_IN_SECTION`), the
+role skills, the per-role tool sheets or the swarm-instructions skill. They read the project instructions and the full
+manual (`swarmTools.ts`) alone, and their launch line has them read both. The `code` rows from those texts still hold, as
+code. Their safety lines (secrets, temp folders, own processes, other accounts, live worktrees, tokens) are in the manual.
+`JOB_LINES`, `TIDY_LINES` and `scheduleText` stay in `pmSchedule.ts` as the scheduled wake messages. `processNotes.ts` and
+`instructionsTemplate.ts` are unchanged. The Buddy skill stays: its limits are in no code yet. Appendices B to D keep
+those texts as they were read, marked where removed.
+
 ## Classes
 
 | Class | Means | Rows |
@@ -413,7 +421,7 @@ out "Product direction" because it holds facts and targets, not rules.
 Sources at main 0dd01c979. Classes: `code` (enforced today, file and function named), `building` (an open task makes it
 code), `new` (code-able, nothing does it yet), `judgment`, `remove` (v1/v2 leftover, Team-account rule, or duplicate).
 
-### backend/src/superTabs/pmSchedule.ts (v2Section, BUILT_IN_SECTION, JOB_LINES, TIDY_LINES, scheduleText)
+### backend/src/superTabs/pmSchedule.ts (v2Section, BUILT_IN_SECTION, JOB_LINES, TIDY_LINES, scheduleText; the first two removed by #4673)
 
 | Rule (plain words, at most 15) | Source (file:line) | Class | Enforced by / proposed check / why judgment |
 |---|---|---|---|
@@ -575,7 +583,7 @@ code), `new` (code-able, nothing does it yet), `judgment`, `remove` (v1/v2 lefto
 | Make temp folders with mktemp -d "${TMPDIR:-/tmp}/name.XXXXXX" | processNotes.ts:41-42 | code | cli superTabs/shellGuard.ts `shellRefusal` (GUARD_REASONS.macMktemp, fixedTmp) |
 | Confirm each note with process.confirm | processNotes.ts:74 | building | #4537 removes process notes; versioned parts replace confirm (today: processNotes.ts `noteLines`, pulse.ts) |
 
-### cli/src/lib/swarmInstructionsSkill.ts (instructionsSkillText, noticeOf)
+### cli/src/lib/swarmInstructionsSkill.ts (instructionsSkillText, noticeOf; removed by #4673)
 
 | Rule (plain words, at most 15) | Source (file:line) | Class | Enforced by / proposed check / why judgment |
 |---|---|---|---|
@@ -596,7 +604,7 @@ code), `new` (code-able, nothing does it yet), `judgment`, `remove` (v1/v2 lefto
 | **Total** | **151** |
 
 
-## Appendix C. Role skills (default set)
+## Appendix C. Role skills (default set; removed by #4673)
 
 
 Source: `swarm-lead` (lines 428-533), `swarm-dev` (535-605), `swarm-review` (607-657). All paths are relative to the repo
@@ -900,7 +908,7 @@ Abbreviations: `cmd` = backend/src/superTabs/commands.ts; `guard` = cli/src/supe
 | Install nothing system-wide; tools in your session folder | swarmTools.ts:144 | code | guard `systemWide` |
 | Print little to save quota | swarmTools.ts:145 | judgment | how much output a task needs is judgment |
 
-### cli/src/lib/swarmToolSheets.ts (per-role sheets)
+### cli/src/lib/swarmToolSheets.ts (per-role sheets; removed by #4673)
 
 Each sheet row (`T(...)`, lines 57-143) is a shorter form of one manual block; swarmToolSheets.spec.ts fails if a block has
 no row. Those briefs are duplicates of the manual rows above and take the same class. Only what a sheet adds or changes is

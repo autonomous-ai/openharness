@@ -1,5 +1,7 @@
 import 'dart:typed_data';
 
+import 'package:path/path.dart' as p;
+
 /// One row of a folder listing in a Finder tile.
 class FinderEntry {
   const FinderEntry({
@@ -135,6 +137,11 @@ class GitChanges {
   final String? branch;
   final int ahead, behind;
   final List<GitChange> changes;
+
+  /// Where [change] is on disk, spelled as this computer spells paths: Git
+  /// writes `/` on Windows too, and the tree lists `\`.
+  String pathOf(GitChange change) =>
+      p.joinAll([root, ...p.posix.split(change.path)]);
 }
 
 enum DiffLineKind { meta, hunk, context, added, removed }

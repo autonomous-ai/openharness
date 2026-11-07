@@ -15,6 +15,20 @@ String folderName(String path) {
   return name.isEmpty ? 'folder' : name;
 }
 
+/// [path] as it goes into a message: as it is, or in double quotes when it
+/// holds a space or anything else a shell reads specially, with `"`, `\`,
+/// `$` and `` ` `` escaped, so it reads back as the same path. On Windows,
+/// as a Windows terminal takes a dropped folder: `\` is the separator and a
+/// name cannot hold `"`, so nothing inside the quotes is escaped.
+String folderPathText(String path, {bool? isWindows}) {
+  if (isWindows ?? Platform.isWindows) {
+    return path.contains(RegExp(r'''[\s'$`!\[\]{}()&;]''')) ? '"$path"' : path;
+  }
+  return path.contains(RegExp(r'''[\s"'$`\\!*?\[\]{}()<>|&;]'''))
+      ? '"${path.replaceAllMapped(RegExp(r'["\\$`]'), (m) => '\\${m[0]}')}"'
+      : path;
+}
+
 /// [folder] as a zip whose entries sit under the folder's own name, worked on
 /// a background isolate. Null when its files weigh more than [limitBytes]
 /// together: they are counted before any is read, so a large folder is never
