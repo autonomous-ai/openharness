@@ -141,7 +141,7 @@ async function handOverOnWindows(deps: TeamCommandDeps, statusFile: string, hand
 export async function teamModelSet(deps: TeamCommandDeps, words: readonly string[], flags: readonly string[], json = false): Promise<number> {
   const where = deps.platform === 'darwin' ? 'this Mac' : 'this computer'
   const config = deps.readConfig()
-  if (!config) { deps.err(`✗ No Harness Team account on ${where}. Run harness team setup first.`); return 1 }
+  if (!config) { deps.err(`✗ No Harness Team account on ${where}.`); return 1 }
   const clear = flags.includes('--clear')
   let chosen: Chosen | null = null, model: string | null = null
   if (!clear) {

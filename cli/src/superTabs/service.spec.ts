@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -14,7 +14,7 @@ import { HostFeed } from './hostFeed.js'
 import { CHEAP_FIRST_HELP, GRID_KINDS, MAX_OWNED, ROUTE_KIND_HELP } from './routeCheapFirst.js'
 
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
-import { hostJournalFile, SuperTabHostError, type SuperTabHost, type SuperTabHostOptions } from './host.js'
+import { SuperTabHostError, type SuperTabHost, type SuperTabHostOptions } from './host.js'
 
 const owner = { local: true, owner: true }, visitor = { local: false, owner: false }
 /** The backend's Lead rule: an agent leads a project when it leads that project's Lead conversation ('lead' before projects). */

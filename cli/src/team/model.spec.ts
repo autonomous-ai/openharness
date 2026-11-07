@@ -43,7 +43,7 @@ describe('harness team model set', () => {
     expect(await teamModelSet(anthropic.deps, ['model', 'set', 'anthropic'], ['--model', 'claude'])).toBe(1)
     const bare = setup({ readConfig: () => null })
     expect(await teamModelSet(bare.deps, ['model', 'set', 'openrouter'], ['--model', 'x'])).toBe(1)
-    expect(bare.errors.join('\n')).toContain('Run harness team setup first')
+    expect(bare.errors.join('\n')).toContain('No Harness Team account on')
   })
 
   describe('on Windows', () => {

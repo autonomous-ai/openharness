@@ -236,7 +236,7 @@ export function engineLines(engines: TeamEngines | undefined, ago: (at: number) 
   }
   const lines = TEAM_ENGINES.map(({ engine, name }, index) => {
     const e = engines[engine]
-    const state = !e.installed ? '✗ not installed · harness team setup installs it'
+    const state = !e.installed ? '✗ not installed'
       : e.signedIn === true ? '✓ installed · ✓ signed in'
           : e.signedIn === false ? '✓ installed · ✗ not signed in' : '✓ installed · ? sign-in unknown'
     return `  ${index === 0 ? 'engines' : '       '}     ${name.padEnd(12)}${state}`
