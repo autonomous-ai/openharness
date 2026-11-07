@@ -1,4 +1,5 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -331,5 +332,55 @@ describe('a Buddy\'s private temporary folder', () => {
     resetAgentTmpSweep()
     agentTmpLaunch('claude', undefined, null, deps(data, { config: () => null, now: () => Date.now() + 8 * DAY }))
     await vi.waitFor(() => expect(existsSync(join(folder, 'stale'))).toBe(false))
+  })
+})
+
+describe('a script written to the folder runs as it would in the system\'s', () => {
+  // The data folder is under ~/.harness/cli, whose package.json says "type": "module". An extensionless script a spec wrote
+  // to TMPDIR (the fake grid) loaded as an ES module and died on require, so specs failed for agents and passed in CI (#4356).
+  const DAY = 24 * 60 * 60_000
+  const inModulePackage = () => { const root = scratch(); writeFileSync(join(root, 'package.json'), '{"type":"module"}'); return join(root, 'data') }
+  const runs = (folder: string) => {
+    const script = join(folder, 'fake-grid')
+    writeFileSync(script, "#!/usr/bin/env node\nconst { join } = require('node:path')\nprocess.stdout.write(join('a', 'b'))\n")
+    return execFileSync(process.execPath, [script], { encoding: 'utf8' })
+  }
+
+  it('an extensionless require() script in an agent\'s folder runs', () => {
+    expect(runs(agentTmpLaunch('claude', undefined, null, deps(inModulePackage())).env.TMPDIR!)).toBe(join('a', 'b'))
+  })
+
+  // Task #4395: each Swarm agent's own folder is in the shared parent, whose marker covers it.
+  it('in a Swarm agent\'s own folder too, by the marker in their parent', () => {
+    const data = inModulePackage()
+    const folder = agentTmpLaunch('claude', 'agent', scratch(), deps(data, { config: () => null })).env.TMPDIR!
+    expect(runs(folder)).toBe(join('a', 'b'))
+    expect(existsSync(join(folder, 'package.json'))).toBe(false)
+    expect(existsSync(join(agentTmpFolder(data), 'package.json'))).toBe(true)
+  })
+
+  it('in a Buddy\'s folder too', () => {
+    expect(runs(buddyTmpOf('/work/one', deps(inModulePackage()))!)).toBe(join('a', 'b'))
+  })
+
+  it('keeps a package.json already there', () => {
+    const data = inModulePackage(), folder = agentTmpFolder(data)
+    mkdirSync(folder, { recursive: true, mode: 0o700 })
+    writeFileSync(join(folder, 'package.json'), '{"type":"commonjs","name":"kept"}')
+    agentTmpLaunch('claude', undefined, null, deps(data))
+    expect(readFileSync(join(folder, 'package.json'), 'utf8')).toContain('kept')
+  })
+
+  it('no sweep deletes the folders\' own package.json however old; a tool\'s goes like any file', async () => {
+    const data = inModulePackage(), folder = agentTmpFolder(data), parent = buddyTmpParent(data)
+    agentTmpLaunch('claude', undefined, null, deps(data))
+    const buddy = buddyTmpOf('/work/one', deps(data))!
+    writeFileSync(join(buddy, 'package.json'), '{"type":"module"}')
+    const later = Date.now() + 8 * DAY
+    expect(await sweepTmpFolders(folder, later)).toBe(0)
+    expect(await sweepTmpFolders(parent, later)).toBe(1)
+    expect(existsSync(join(folder, 'package.json'))).toBe(true)
+    expect(existsSync(join(parent, 'package.json'))).toBe(true)
+    expect(existsSync(join(buddy, 'package.json'))).toBe(false)
   })
 })

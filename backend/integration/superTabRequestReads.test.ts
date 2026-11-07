@@ -62,7 +62,7 @@ async function scene() {
     const done = { id: 'done', agentId: worker, status: 'done' as const, result: PR, configuration: state.agents[0]!.configuration,
       execution: { machineId: 'host', harnessId: 'h', machineOwnerId: owner.sub } }
     const ship = (id: string, shippedAt: number) => Object.assign(state.conversations.find(c => c.id === id)!,
-      { requesterId: peer.sub, assignment: done, pullRequestUrls: [PR], ledger: { askedAt: shippedAt - 2 * HOUR, shippedAt } })
+      { requesterId: peer.sub, assignment: done, pullRequestUrls: [PR], ledger: { askedAt: shippedAt - 2 * HOUR, shippedAt, mergedAt: shippedAt } })
     ship(fresh, NOW - HOUR)
     ship(old, WEEK - WEEK_MS - DAY)
     ship(lastWeek, WEEK - 2 * DAY)

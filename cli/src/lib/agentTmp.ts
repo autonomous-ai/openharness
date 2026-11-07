@@ -14,7 +14,7 @@
  * person's private work and must not reach another person's Buddy (buddyTmpOf; docs/plans/2026-11-02-buddy-private-temp-plan.md).
  */
 import { createHash } from 'node:crypto'
-import { chmodSync, lstatSync, mkdirSync, realpathSync } from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { lstat, readdir, rm, rmdir } from 'node:fs/promises'
 import { userInfo } from 'node:os'
 import { basename, dirname, join } from 'node:path'
@@ -27,6 +27,10 @@ const KEEP_MS = 7 * 24 * 60 * 60_000
 const SWEEP_EVERY_MS = 24 * 60 * 60_000
 /** A Buddy's empty folder is kept this long: it is a live Buddy's TMPDIR while the Buddy runs, however quiet. */
 const KEEP_EMPTY_BUDDY_MS = 30 * 24 * 60 * 60_000
+/** These folders are under ~/.harness/cli, whose package.json says "type": "module": without one of their own, an extensionless
+ *  script written here (a spec's fake grid) loaded as an ES module and died on require, as it never does in the system's (#4356). */
+const PACKAGE = 'package.json'
+const COMMONJS = '{"type":"commonjs"}\n'
 
 export interface AgentTmpDeps {
   platform: NodeJS.Platform
@@ -85,6 +89,21 @@ export function prepareAgentTmp(folder: string, uid: number | undefined = proces
   } catch { return false }
 }
 
+/** Gives [folder] its own CommonJS package.json, keeping one already there. Exclusive create: a link in its place is not followed. */
+function markCommonJs(folder: string, deps: AgentTmpDeps): void {
+  try { writeFileSync(join(folder, PACKAGE), COMMONJS, { flag: 'wx', mode: 0o600 }) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      deps.log(`could not write ${join(folder, PACKAGE)} (${(error as NodeJS.ErrnoException).code}); scripts there load as ES modules`)
+    }
+  }
+}
+
+/** The package.json markCommonJs wrote, which no sweep deletes however old. Another, a tool's, is swept like any file. */
+function isMarker(folder: string, name: string): boolean {
+  if (name !== PACKAGE) return false
+  try { return readFileSync(join(folder, name), 'utf8') === COMMONJS } catch { return false }
+}
+
 /** Whether anything at [path] changed since [cutoff]. Stops at the first that did. What cannot be read counts as changed. The
  *  newer of the two times: `tar`, `cp -p` and `rsync -t` keep an old mtime, so a tool unpacked a minute ago looked 7 days idle
  *  by mtime alone (review of #2546). */
@@ -111,7 +130,7 @@ export async function sweepAgentTmp(folder: string, now: number): Promise<number
   let removed = 0
   for (const name of names) {
     const path = join(folder, name)
-    if (await changedSince(path, now - KEEP_MS)) continue
+    if (isMarker(folder, name) || await changedSince(path, now - KEEP_MS)) continue
     try { await rm(path, { recursive: true, force: true }); removed++ } catch { /* the next sweep tries again */ }
   }
   return removed
@@ -132,7 +151,7 @@ export async function sweepTmpFolders(parent: string, now: number): Promise<numb
     const path = join(parent, name)
     try {
       if (!(await lstat(path)).isDirectory()) {
-        if (!(await changedSince(path, now - KEEP_MS))) { await rm(path, { force: true }); removed++ }
+        if (!isMarker(parent, name) && !(await changedSince(path, now - KEEP_MS))) { await rm(path, { force: true }); removed++ }
         continue
       }
       removed += await sweepAgentTmp(path, now)
@@ -169,7 +188,13 @@ export function agentTmpOf(cwd: string, deps: AgentTmpDeps = realDeps): string |
   const parent = agentTmpFolder(deps.dataDir)
   const folder = join(parent, createHash('sha256').update(realOfFolder(cwd)).digest('hex').slice(0, 16))
   // The parent first: making the folder through a link in the parent's place would make it where that link points.
-  try { if (prepareAgentTmp(parent) && prepareAgentTmp(folder)) return realpathSync(folder) } catch { /* said below */ }
+  // The marker in the parent covers every agent's folder, which stays free to empty out and go (#4356).
+  try {
+    if (prepareAgentTmp(parent) && prepareAgentTmp(folder)) {
+      markCommonJs(parent, deps)
+      return realpathSync(folder)
+    }
+  } catch { /* said below */ }
   deps.log(`the private temporary folder ${folder} could not be made private; this agent uses the system's`)
   return null
 }
@@ -197,6 +222,7 @@ export function agentTmpLaunch(engine: AgentEngine, role: string | undefined, cw
     deps.log(`the private temporary folder ${shared} could not be made private; this agent uses the system's`)
     return none
   }
+  markCommonJs(shared, deps)
   return { env: { TMPDIR: shared }, args: [] }
 }
 
@@ -212,7 +238,13 @@ export function buddyTmpOf(root: string, deps: AgentTmpDeps = realDeps): string 
   const folder = buddyTmpFolder(root, deps.dataDir)
   // The parent first: making the folder through a link in the parent's place would make it where that link points.
   // By its real path, as the guard compares real paths: a data folder reached through a link would refuse its own reads.
-  try { if (prepareAgentTmp(buddyTmpParent(deps.dataDir)) && prepareAgentTmp(folder)) return realpathSync(folder) } catch { /* said below */ }
+  // The marker in the parent covers every Buddy's folder, which stays free to empty out and go.
+  try {
+    if (prepareAgentTmp(buddyTmpParent(deps.dataDir)) && prepareAgentTmp(folder)) {
+      markCommonJs(buddyTmpParent(deps.dataDir), deps)
+      return realpathSync(folder)
+    }
+  } catch { /* said below */ }
   deps.log(`the private temporary folder ${folder} could not be made private; this Buddy uses the system's`)
   return null
 }

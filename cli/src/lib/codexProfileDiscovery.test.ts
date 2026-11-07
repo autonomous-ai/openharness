@@ -1,8 +1,14 @@
-import { describe, expect, it, afterEach } from 'vitest'
+import { describe, expect, it, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, statSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { discoverCodexProfiles } from './codexProfileDiscovery.js'
+
+const host = vi.hoisted(() => ({ win32: false }))
+vi.mock('../engines/kit/windowsFiles.js', async original => {
+  const actual = await original<typeof import('../engines/kit/windowsFiles.js')>()
+  return { ...actual, hostPlatform: () => host.win32 ? 'win32' : actual.hostPlatform() }
+})
 
 const dirs: string[] = []
 
@@ -73,6 +79,17 @@ describe('discoverCodexProfiles — CODEX_HOME', () => {
     const home = tempHome()
     const found = discoverCodexProfiles({ home, environment: { CODEX_HOME: '/opt/codex-ci' } })
     expect(found).toContain('/opt/codex-ci')
+  })
+
+  // #4183: on Windows CODEX_HOME is `C:\\…`; the check that wanted a leading '/' dropped it.
+  it('honors a drive-letter CODEX_HOME on Windows', () => {
+    const home = tempHome()
+    host.win32 = true
+    try {
+      expect(discoverCodexProfiles({ home, environment: { CODEX_HOME: 'C:\\Users\\u\\.codex-work' } })).toContain('C:\\Users\\u\\.codex-work')
+    } finally {
+      host.win32 = false
+    }
   })
 
   it('ignores a relative CODEX_HOME', () => {

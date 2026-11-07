@@ -58,16 +58,18 @@ export const NAMED_INDEX = {
     autoJoin: { autonomousEnv: 1, autoJoinDomain: 1 },
   },
   /** Each part kind's changes since a cursor; machines also by when they were last read. `id`: rows by id, a delta's whole
-   *  rows of the versions it has not read (parts/load.ts loadDelta). */
+   *  rows of the versions it has not read (parts/load.ts loadDelta). `held`: a command's live parts by the columns a held part
+   *  is compared by (parts/held.ts), so the listing reads no document (task #4368). */
   SwarmHead: { changes: { tabId: 1, changedAt: 1 }, id: { _id: 1 } },
   /** `purge`: tombstones past their purge time (the hourly sweep). */
-  SwarmMember: { changes: { tabId: 1, changedAt: 1 }, purge: { purgeAt: 1 }, id: { _id: 1 } },
-  SwarmAgent: { changes: { tabId: 1, changedAt: 1 }, purge: { purgeAt: 1 }, id: { _id: 1 } },
-  SwarmMachine: { changes: { tabId: 1, changedAt: 1 }, read: { tabId: 1, readAt: 1 }, purge: { purgeAt: 1 }, id: { _id: 1 } },
+  SwarmMember: { changes: { tabId: 1, changedAt: 1 }, purge: { purgeAt: 1 }, id: { _id: 1 }, held: { tabId: 1, deleted: 1, key: 1, version: 1, changedAt: 1 } },
+  SwarmAgent: { changes: { tabId: 1, changedAt: 1 }, purge: { purgeAt: 1 }, id: { _id: 1 }, held: { tabId: 1, deleted: 1, key: 1, version: 1, changedAt: 1 } },
+  SwarmMachine: { changes: { tabId: 1, changedAt: 1 }, read: { tabId: 1, readAt: 1 }, purge: { purgeAt: 1 }, id: { _id: 1 },
+    held: { tabId: 1, deleted: 1, key: 1, version: 1, changedAt: 1, readAt: 1 } },
   /** `expiry`: live starts by finish time (the hourly sweep). `agents`: a Swarm's starts of some agents (agentTombstones.ts):
    *  unnamed, Mongo planned that read on `expiry` and read every live start of every Swarm. */
   SwarmStart: { changes: { tabId: 1, changedAt: 1 }, expiry: { deleted: 1, finishedAt: 1 }, agents: { tabId: 1, agentId: 1 }, id: { _id: 1 } },
-  SwarmProgress: { changes: { tabId: 1, changedAt: 1 }, id: { _id: 1 } },
+  SwarmProgress: { changes: { tabId: 1, changedAt: 1 }, id: { _id: 1 }, held: { tabId: 1, deleted: 1, key: 1, version: 1, changedAt: 1 } },
   SuperTabMessage: {
     /** A conversation's page in (sequence, id) order. */
     sequence: { tabId: 1, conversationId: 1, sequence: 1, _id: 1 },

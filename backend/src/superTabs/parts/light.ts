@@ -96,6 +96,7 @@ export const GROUP_FIELDS = {
     'paused',
     'pin',
     'priority',
+    'process',
     'proposals',
     'pullRequestChecks',
     'pullRequestEvents',
