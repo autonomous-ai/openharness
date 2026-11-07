@@ -155,7 +155,13 @@ could otherwise drop anh Dee's or Ken's rule, or add a rule every agent trusts, 
 - A pull request that changes any of them names the person who asked for the change, and the merge train refuses it
   until that person approves it (a GitHub approval from them, or a message of theirs the pull request names, as
   `ruleGuard.ts` accepts today). For a task a person asked for, the ask the task records is that message, so nobody is
-  asked anything extra; only a change with no person behind it (crew work nobody asked for) waits for a person.
+  asked anything extra, with two limits that today's guard already keeps:
+  - **only a member's own ask counts:** a member of this Swarm, in this project, in their own words. An ask from a
+    guest, from an outside author of a GitHub issue (#4533: on a public repository anyone can open one), or relayed by
+    a Buddy, the Lead or an agent does not count, and the change waits for a person;
+  - **the asker is told:** the merge train sends the asker one private line naming the rule lines their task changed,
+    as today's guard tells an approver, so an unrelated ask ("fix this test") can't add a rule without them knowing.
+  A change with no person behind it (crew work nobody asked for) waits for a person.
 - A change that drops a rule, or who gave it (the "(Name, date)" after a rule), needs that person's approval, or the
   project's top decider's, as today.
 - The Lead writes these changes; a Member may propose one. Nobody else's pull request touching them merges without the
@@ -288,7 +294,8 @@ member-accepted text; three shared-machine rules on the pages; an unforgeable fe
 requests to weigh) and security review 1 of 76d361b (the other-account limit kept on both pages and in the frame).
 Security review 1 of d7a9b23 (Ownrev1): the rule guard moves to pull
 requests that change AGENTS.md, CLAUDE.md or role files, before any rule leaves the instructions document; security
-review 2 of 728b78b (Ownrev4): at any path, nested component files included. Review of
+review 2 of 728b78b and 2c9546f (Ownrev4): at any path, nested component files included; only a member's own ask
+counts, and the asker is told which rule lines changed. Review of
 a7ca78c (Ownrev6): role procedures go to role files sent with their task or step;
 the Member page lists `work.check`. Security review 2 of 9323153 (Ownmac1): engines load no checkout files at all, Harness sends
 the default branch's copies, they are re-sent after every compaction, and the frame header is one line. Security review 1 of 9323153 (Ownrev4): outside text quoted in the server's
@@ -385,7 +392,9 @@ the default branch's copy, never a checkout's. The menu's version list is shown 
    path, or anything in `docs/roles/`, until a person approves it, by today's rule guard (`ruleGuard.ts`, #3151) applied to the diff
    (section "Who may change the rule files"). Owner area: `backend/src/superTabs/mergeTrain/`,
    `backend/src/superTabs/ruleGuard.ts`, `instructionsDiff.ts`. Its tests try a root file, a nested component file
-   (`desktop/AGENTS.md`), a nested `CLAUDE.md` and a role file, each with and without a person's approval. Backend
+   (`desktop/AGENTS.md`), a nested `CLAUDE.md` and a role file, each with and without a person's approval; a member's
+   own ask passes and the asker gets the private line, while a guest's ask, an outside issue author's and a relayed one
+   are refused. Backend
    release, with two security reviews. It ships
    before task 9 moves any rule out of the instructions document.
 9. **openharness AGENTS.md and role files.** Its Lead moves the project's Roles sections into `docs/roles/` (engineer,
