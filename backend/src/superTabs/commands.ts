@@ -2286,6 +2286,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (profileId !== defaultProfileId(destination.machineId, command.engine) && !destination.observation!.profiles?.some(p => p.engine === command.engine && p.id === profileId)) {
         fail('PROFILE_UNKNOWN', `That account isn’t on ${destination.name} any more.`, 409)
       }
+      // Another person's move onto the machine owner's other account is told to the owner by their own Buddy (agent.switchResult):
+      // with none to tell them, their quota is never used without their knowing (security review of #4558).
+      const machineOwner = state.people.find(p => p.id === pm.machineOwnerId)
+      if (machineOwner && machineOwner.id !== actor.userId && profileId !== defaultProfileId(destination.machineId, command.engine)
+        && !ownAgentAuthor(state, machineOwner)) {
+        fail('OWNER_NOT_TOLD', `${usernameOf(state, machineOwner.id) ?? 'The machine\'s owner'} has no Buddy to tell them the ${name} runs on their account. Ask them to move it, or to add a Buddy first.`, 409)
+      }
       if (destination.machineId !== pool.machineId) {
         const start = state.starts!.find(candidate => candidate.request.leadFor?.switchId === operationId)!
         start.request.profileId = profileId
