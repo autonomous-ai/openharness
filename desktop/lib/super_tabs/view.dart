@@ -5137,7 +5137,8 @@ class _SuperTabViewState extends State<SuperTabView>
     if ((!widget.board || c.selected == null) &&
         c.snapshot?.projects.isEmpty == true &&
         !c.accessRevoked) {
-      final newAgent = widget.board && widget.app != null ? _newAgent : null;
+      // The same + New agent as the left pane's: the Cmd-N form (task #4196).
+      final newAgent = widget.board ? widget.onNewAgent : null;
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
