@@ -1928,7 +1928,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     // Whoever it was pinned to (dispatch.ts), it is in someone's hands now.
     delete group.pin
     group.assignment = { id: assignmentId, agentId: worker.id, status: 'working', configuration: structuredClone(worker.configuration),
-      execution: { machineId: worker.machineId, harnessId: worker.harnessId, machineOwnerId: worker.machineOwnerId }, result: null }
+      execution: { machineId: worker.machineId, harnessId: worker.harnessId, machineOwnerId: worker.machineOwnerId, contributorId: worker.contributorId }, result: null }
     renewLease(group.assignment, context.now)
     leadActed(group.id, 'assign')
     recordRun(state, group, group.assignment, worker, context.now)

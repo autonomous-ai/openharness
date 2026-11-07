@@ -327,17 +327,22 @@ export async function loadDormant(tx: Transaction, tabId: string,
 }
 
 export const FEED_PAGE = 50
+/** Most reads one feed page makes: rows its reads return that the feed then refuses are rare (the reads leave out other
+ *  memberships and lost projects), so a page that would need more ends there, and says so (read/personalTasks.ts). */
+export const FEED_READS = 3
 /** Most ids one feed read names: the person and their newest own agents. The index serves an `$in` of up to 200 as points. */
 export const FEED_IDS = 200
 
-/** The conversations naming any of `ids` in their feed column (read/feedIds.ts), newest activity first, then by key, at most
- *  FEED_PAGE, each with its stored activity time for the next cursor. A later page reads as loadDormant's do: the rest of its
- *  cursor's moment by key, then what is older, each bounded by the `feed` index. */
-export async function loadFeed(tx: Transaction, tabId: string, ids: string[], before?: { lastActivityAt: number; key: string }):
-  Promise<Array<{ part: Part<GroupData>; activityAt: number }>> {
-  if (!ids.length) return []
+/** The conversations naming any of `ids` in their feed column (read/feedIds.ts) in `projectIds` (null: stored with no project),
+ *  newest activity first, then by key, at most FEED_PAGE, each with its stored activity time for the next cursor. The projects
+ *  are the reader's readable ones: a task in a project they lost is left behind in the database, never read out to be skipped.
+ *  A later page reads as loadDormant's do: the rest of its cursor's moment by key, then what is older, each bounded by the
+ *  `feed` index. */
+export async function loadFeed(tx: Transaction, tabId: string, ids: string[], projectIds: Array<string | null>,
+  before?: { lastActivityAt: number; key: string }): Promise<Array<{ part: Part<GroupData>; activityAt: number }>> {
+  if (!ids.length || !projectIds.length) return []
   const read = async (match: Where, limit: number) => limit <= 0 ? [] : groupsBy(tx, 'feed', [
-    { $match: { tabId, deleted: false, feedIds: { $in: ids.slice(0, FEED_IDS) }, ...match } as Prisma.InputJsonValue },
+    { $match: { tabId, deleted: false, feedIds: { $in: ids.slice(0, FEED_IDS) }, projectId: { $in: projectIds }, ...match } as Prisma.InputJsonValue },
     { $sort: { lastActivityAt: -1, key: -1 } }, { $limit: limit }])
   const at = before && { $date: new Date(before.lastActivityAt).toISOString() }
   const same = before ? await read({ lastActivityAt: at, key: { $lt: before.key } }, FEED_PAGE) : []

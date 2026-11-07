@@ -1,7 +1,9 @@
 import type { Actor, Conversation, Person } from '../model.js'
 import type { GroupData, Part } from '../parts/types.js'
-import { FEED_IDS, FEED_PAGE } from '../parts/load.js'
-import { canReadGroup, groupProject } from '../projects.js'
+import { FEED_IDS, FEED_PAGE, FEED_READS } from '../parts/load.js'
+import { canReadGroup, canReadProject, groupProject } from '../projects.js'
+import { logger } from '../../utils/logger.js'
+import { askedKey } from './feedIds.js'
 import type { ApprovalMode } from '../taskApproval.js'
 import type { AgentView } from './contract.js'
 import { decodeDormantPage } from './dormantPage.js'
@@ -47,8 +49,14 @@ function readerOf(view: ReaderView, actor: Actor): Reader | undefined {
   return { actor, member, view, agents: new Set(own.slice(-(FEED_IDS - 1)).map(a => a.id)) }
 }
 
-/** The ids a page of the reader's feed reads by (parts/load.ts loadFeed). */
-export const feedReadIds = (reader: Reader): string[] => [reader.member.id, ...reader.agents]
+/** The keys a page of the reader's feed reads by (read/feedIds.ts): theirs at this membership, their id and their own agents. */
+const feedReadIds = (reader: Reader): string[] => [askedKey(reader.member.id, reader.member.generation), reader.member.id, ...reader.agents]
+
+/** The projects whose tasks the reader may read; null too for conversations stored with no project, which are the default one's. */
+function readableProjects(reader: Reader): Array<string | null> {
+  const ids = (reader.view.state.projects ?? []).filter(p => canReadProject(reader.view.state, reader.actor, p)).map(p => p.id)
+  return ids.includes('lead') ? [...ids, null] : ids
+}
 
 const activityAt = (part: Part<GroupData>): number => Date.parse(part.data?.lastActivityAt ?? '') || part.changedAt
 
@@ -65,9 +73,10 @@ function summary(part: Part, reader: Reader): PersonalTask | 'gone' | null {
   const asked = approval ? approval.personId === member.id && approval.generation === member.generation
     : group.proposal ? group.proposal.senders.some(s => s.personId === member.id && s.generation === member.generation)
     : group.requesterId === member.id
-  // Did, doing or about to do: its assignee, or the agent suggested before anyone is assigned.
+  // Did, doing or about to do: its assignee, or the agent suggested before anyone is assigned; or an agent that ran under the
+  // reader's login, closed since (read/feedIds.ts).
   const worker = group.assignment?.agentId ?? approval?.suggestedAgentId
-  const own = asked || (!!worker && reader.agents.has(worker))
+  const own = asked || (!!worker && reader.agents.has(worker)) || group.assignment?.execution?.contributorId === member.id
   if (part.deleted || group.proposal?.mergedInto || !own) return 'gone'
   const agent = view.parts.agents.find(a => a.key === worker)?.data
   const asker = group.requesterId ? view.state.people.find(p => p.id === group.requesterId) : undefined
@@ -99,7 +108,8 @@ export function personalTasksFor(changed: readonly Part[], view: ReaderView, act
   return out
 }
 
-type FeedRead = (ids: string[], before?: { lastActivityAt: number; key: string }) => Promise<Array<{ part: Part<GroupData>; activityAt: number }>>
+type FeedRead = (ids: string[], projectIds: Array<string | null>, before?: { lastActivityAt: number; key: string }) =>
+  Promise<Array<{ part: Part<GroupData>; activityAt: number }>>
 
 /** A page of the reader's feed, newest first: the first (a first load's, `reset`) or the one older than `cursor`. Rows the
  *  reader may not read never shorten a page, and the cursor names the last row it returns, never a hidden one (as the
@@ -108,10 +118,10 @@ export async function personalTasksPage(read: FeedRead, view: ReaderView, actor:
   let before = cursor ? decodeDormantPage(cursor) : undefined
   const reader = readerOf(view, actor)
   if (!reader) return undefined
-  const ids = feedReadIds(reader), upserts: PersonalTask[] = []
+  const ids = feedReadIds(reader), projects = readableProjects(reader), upserts: PersonalTask[] = []
   let last: { lastActivityAt: number; key: string } | undefined, more = false
-  for (;;) {
-    const rows = await read(ids, before)
+  for (let reads = 1; ; reads++) {
+    const rows = await read(ids, projects, before)
     for (const { part, activityAt } of rows) {
       const row = summary(part, reader)
       if (!row || row === 'gone') continue
@@ -120,6 +130,11 @@ export async function personalTasksPage(read: FeedRead, view: ReaderView, actor:
       last = { lastActivityAt: activityAt, key: part.key }
     }
     if (more || rows.length < FEED_PAGE) break
+    if (reads === FEED_READS) {
+      // Ends the feed here rather than hand out a cursor at a row it never sent: the next page would read the same rows again.
+      logger.warn('[swarm-reads] a Tasks feed page ended early: its reads returned rows the feed refused', { reads, kept: upserts.length })
+      break
+    }
     const end = rows.at(-1)!
     before = { lastActivityAt: end.activityAt, key: end.part.key }
   }

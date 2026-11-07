@@ -308,7 +308,9 @@ export interface Assignment {
   agentId: string
   status: WorkStatus
   configuration: AgentConfiguration
-  execution: { machineId: string; harnessId: string; machineOwnerId: string }
+  /** `contributorId`: whose login its agent runs under (Agent.contributorId), so the person's Tasks feed keeps it after the agent
+   *  is closed (read/feedIds.ts). Absent on assignments made before 2026-11-07. */
+  execution: { machineId: string; harnessId: string; machineOwnerId: string; contributorId?: string }
   result: string | null
   /** Explicit progress fences delayed recording gaps; absent on older backends. */
   recordingProgress?: { at: number; revision: number }

@@ -83,7 +83,7 @@ describe('the feed ids a conversation write stores (read/feedIds.ts, task #4203)
   const work = { id: 'w', agentId: 'worker', status: 'done' as const, configuration: { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null },
     execution: { machineId: 'm', harnessId: 'h', machineOwnerId: 'machine-owner', contributorId: 'runner' }, result: null }
   const proposal = { version: 1, text: 'Keep drafts', goal: 'Drafts', why: 'Loss', doneWhen: 'Returns', evidence: ['Repro'], priority: 'P2', createdAt: 1, questions: [],
-    senders: [{ personId: 'proposer', generation: 'g1' }, { personId: 'asker', generation: 'g2' }] }
+    senders: [{ personId: 'proposer', generation: 'g1' }, { personId: 'asker', generation: 'g2' }] } as NonNullable<GroupData['proposal']>
   const task = (change: Partial<GroupData> = {}): GroupData => ({ id: 'g', projectId: 'p', title: 'Work', leadId: 'lead', agentIds: ['lead', 'worker'],
     archived: true, dormant: true, brief: '', checks: [], lastMessageSequence: 0, requesterId: 'asker', assignment: work, ...change })
   const ids = (data: GroupData) => (extracted('group', data, 1).feedIds as string[]).sort()
