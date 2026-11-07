@@ -861,6 +861,10 @@ export const NOTICE_READERS = {
   // Proposal history and private Buddy notices are visible to the people who can read their card/chat.
   'proposal-card': 'people', 'proposal-answer': 'people', 'proposal-notice': 'people', 'proposal-merged': 'people', 'proposal-overdue': 'people',
   'decision-delegated': 'people', 'machine-removed': 'people', ship: 'people',
+  // An agent's question to a person in a switched project, in their default Buddy chat (decisions.ts askedThroughBuddy, #3826).
+  'decision-asked': 'people',
+  // A decision its person must agree to reached its time unanswered, told to the PM alone (decisions.ts mustAgreePassed).
+  'decision-must-agree': 'recipients',
   // A computer signed in as another account now, told to its old owner in their Buddy chat (commands.ts machine.moved, #3122).
   'computer-moved': 'people',
   // "<machine> left the Swarm: ..." in every project chat, no longer written (anh Dee, 11-04, #2742): the rows stored before are
@@ -962,6 +966,8 @@ export interface CommandEffects {
   /** Decisions asked, and a decision answered, written outside the tab state by the store (decisions.ts). */
   decisions?: import('./decisions.js').DecisionDraft[]
   decisionAnswer?: import('./decisions.js').DecisionAnswer
+  /** A must-agree decision past its time, kept waiting for its person (decisions.ts keepWaiting). */
+  decisionKeptWaiting?: string
   /** Deliveries of messages already stored: a Buddy thread session's first messages, sent while it started (buddySessions.ts). */
   /** `lead`: a project's Lead hearing its person's messages sent while the chat had none (leadStart.ts leadArrived). */
   lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string }; lead?: true }>
