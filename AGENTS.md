@@ -32,6 +32,17 @@ worse; a wall our own Swarms hit; what the outside company needs; contribution o
 - Fixes to what ships, security fixes and anything that makes the crew faster or more reliable are a yes at once. New
   features and scope are a no unless they strengthen the positioning.
 
+# anh Dee's product rules
+
+- Copy is short and sharp. An empty list shows nothing. Buttons are 1-2 words.
+- Every UI element follows the [design doc](desktop/design/desktop-design-system.md); the doc and its gallery change in
+  the same pull request.
+- Tasks are Accept and Decline.
+- Voice messages play only.
+- Every Desktop feature gets a Flutter test that clicks through it as a person does.
+- Anything that can be code is code (standard 13).
+- Accept all stays off for subscriptions until Anthropic and OpenAI confirm in writing.
+
 # Code standards
 
 Every change, by a person or an agent, meets these. Component rules are in each component's AGENTS.md and add to them.
