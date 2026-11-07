@@ -384,11 +384,12 @@ class SuperTabConversation {
     : id = _text(row, 'id'),
       // A group from before projects belongs to the first; a person's one
       // Buddy chat for the Swarm belongs to none (spec
-      // 2026-10-31-one-buddy-per-swarm), nor does a Regular agent's own chat
-      // (backend agent.new, task #4116).
+      // 2026-10-31-one-buddy-per-swarm), and so does a person's chat with
+      // one of their own agents (v3, #4116): it is not a task of the first
+      // project (audit #4211, finding 3).
       projectId =
           row['projectId'] as String? ??
-          (const {'swarm-buddy', 'agent-chat'}.contains(row['kind'])
+          (row['kind'] == 'swarm-buddy' || row['kind'] == 'agent-chat'
               ? ''
               : 'lead'),
       kind = row['kind'] as String?,

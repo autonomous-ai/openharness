@@ -297,7 +297,9 @@ describe('spawnDshCommand and killProcessGroup', () => {
   const exited = (child: ChildProcess): Promise<[number | null, NodeJS.Signals | null]> =>
     new Promise((resolve) => child.once('exit', (code, signal) => resolve([code, signal])))
 
-  it('SIGTERMs the whole group, and SIGKILLs what ignores it once the grace is over', async () => {
+  // Process groups are POSIX: on Windows the command is spawned without `detached` (ownProcessGroup, docs/windows-rules.md), and
+  // its tree is ended at once with no SIGTERM and no grace, which 'on Windows, ends the whole tree…' above covers (#4184).
+  it.skipIf(process.platform === 'win32')('SIGTERMs the whole group, and SIGKILLs what ignores it once the grace is over', async () => {
     const polite = spawnDshCommand('sleep 30', { cwd: dir })
     await new Promise((resolve) => setTimeout(resolve, 100))
     const politeExit = exited(polite)

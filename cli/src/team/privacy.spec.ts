@@ -250,7 +250,7 @@ describe('privacy observer', () => {
     signedIn = false
     o.observe()
     expect(writeStatus).toHaveBeenCalledWith(teamConfig.statusFile, {
-      signIn: { state: 'signed-out', at: 7, detail: 'The Team sign-in is no longer available. Run harness team setup --sign-in-again.' },
+      signIn: { state: 'signed-out', at: 7, detail: 'The Team sign-in is no longer available.' },
     })
     const calls = writeStatus.mock.calls.length
     o.observe()
@@ -296,7 +296,7 @@ describe('privacy observer', () => {
       check: () => ({ passed: true, checkedAt: 7 }), writeStatus: writeTeamStatus, now: () => 7 })
     o.observe()
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ version: 1, privacy: { passed: true, checkedAt: 7 },
-      signIn: { state: 'signed-out', at: 7, detail: 'The Team sign-in is no longer available. Run harness team setup --sign-in-again.' } })
+      signIn: { state: 'signed-out', at: 7, detail: 'The Team sign-in is no longer available.' } })
   })
 })
 

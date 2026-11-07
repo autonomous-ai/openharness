@@ -91,4 +91,28 @@ void main() {
       isNull,
     );
   });
+
+  // #4183: an agent on a Windows machine has a `C:\…` profile folder; a check that wanted a leading '/' dropped it, so
+  // the agent showed on the default account. The Desktop may run on another platform, so both spellings are kept.
+  test('keeps a Windows profile path and drops one that is not absolute', () {
+    const codex = r'C:\Users\me\.codex-work';
+    const claude = r'C:\Users\me\.claude-work';
+    expect(
+      Agent.fromJson({'id': 'w', 'engine': 'codex', 'codexHome': codex})
+          .codexHome,
+      codex,
+    );
+    expect(
+      Agent.fromJson({'id': 'w', 'engine': 'claude', 'claudeHome': claude})
+          .claudeHome,
+      claude,
+    );
+    for (final home in [r'relative\.codex', r'\\server\share\.codex', 'C:']) {
+      expect(
+        Agent.fromJson({'id': 'w', 'engine': 'codex', 'codexHome': home})
+            .codexHome,
+        isNull,
+      );
+    }
+  });
 }
