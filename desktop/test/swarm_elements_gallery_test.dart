@@ -19,6 +19,7 @@ import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/tasks/personal_task_card.dart';
 import 'package:harness/super_tabs/tasks/personal_tasks.dart';
+import 'package:harness/super_tabs/tasks/personal_tasks_pane.dart';
 import 'package:harness/terminal/terminal_typography.dart';
 
 import 'super_tab_personal_tasks_pane_test.dart' show TasksFixture;
@@ -125,14 +126,16 @@ Future<List<SuperTabController>> _show(
   // The top bars' chats: the reader's own Buddy, and a member agent of a project (task #4465).
   final buddy = buddyEngineSwarm().controller(account: 'peer');
   final member = TasksFixture().controller;
-  for (final c in [buddy, member]) {
+  // A Swarm with no tasks, for the empty Tasks pane (rule 7).
+  final empty = (TasksFixture()..rows.clear()).controller;
+  for (final c in [buddy, member, empty]) {
     addTearDown(c.dispose);
     await c.refresh();
   }
   await buddy.select('swarm-buddy-peer');
   await member.select('aeef');
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 640);
+  tester.view.physicalSize = const Size(760, 860);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -141,13 +144,18 @@ Future<List<SuperTabController>> _show(
       // A still spinner, so the image holds one frame.
       home: MediaQuery(
         data: const MediaQueryData(disableAnimations: true),
-        child: _Gallery(brightness, faces: faces, bars: [buddy, member]),
+        child: _Gallery(
+          brightness,
+          faces: faces,
+          bars: [buddy, member],
+          empty: empty,
+        ),
       ),
     ),
   );
   await tester.pump();
   expect(tester.takeException(), isNull);
-  return [buddy, member];
+  return [buddy, member, empty];
 }
 
 /// Takes the gallery down and lets the bars' chats save, so no timer outlives the test.
@@ -340,12 +348,20 @@ final _person = SuperTabPerson.fromJson({
 });
 
 class _Gallery extends StatelessWidget {
-  const _Gallery(this.brightness, {required this.faces, required this.bars});
+  const _Gallery(
+    this.brightness, {
+    required this.faces,
+    required this.bars,
+    required this.empty,
+  });
   final Brightness brightness;
   final List<String> faces;
 
   /// Chats whose top bars the gallery draws: the reader's Buddy, then a member agent.
   final List<SuperTabController> bars;
+
+  /// A Swarm with no tasks: the Tasks pane empty.
+  final SuperTabController empty;
   static const boundary = ValueKey('swarm-elements-gallery');
 
   @override
@@ -503,6 +519,51 @@ class _Gallery extends StatelessWidget {
                         : null,
                   ),
                 ),
+              // Empty means empty (anh Dee's rule 7): each element with nothing optional, and no words for what
+              // is not there.
+              title('Empty: a row, a task card and the Tasks pane'),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 280,
+                    child: SuperTabBuddyRow(
+                      agentId: 'id-Ivy',
+                      agent: _agent('Ivy'),
+                      name: 'Ivy',
+                      tooltip: 'Ivy',
+                      onTap: () {},
+                    ),
+                  ),
+                  gap(),
+                  SizedBox(
+                    width: 340,
+                    child: SuperTabPersonalTaskCard(
+                      task: SuperTabPersonalTask({
+                        'id': 't2',
+                        'version': 1,
+                        'at': 0,
+                        'projectId': 'harness',
+                        'projectName': 'harness',
+                        'title': 'A task nobody has taken',
+                        'status': 'planned',
+                      }),
+                      project: 'harness',
+                      selected: false,
+                      onOpen: () {},
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: 340,
+                height: 120,
+                child: SuperTabPersonalTasksPane(
+                  controller: empty,
+                  onOpenTask: (_) {},
+                ),
+              ),
             ],
           ),
         ),
