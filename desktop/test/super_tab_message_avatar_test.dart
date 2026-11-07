@@ -5,8 +5,8 @@ import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
 
-/// Huy (11-03): the chat and the thread draw avatars as Slack does, 36 px
-/// rounded squares, with more room above each new sender.
+/// The chat and the thread draw round faces at 28 (anh Dee, 11-07, #4467; Huy's 11-03 36 px rounded squares
+/// before), with more room above each new sender.
 SuperTabMessage _message(String id) => SuperTabMessage.fromJson({
   'id': id,
   'conversationId': 'lead',
@@ -36,30 +36,24 @@ Future<void> _show(WidgetTester tester, List<Widget> rows) => tester.pumpWidget(
   ),
 );
 
-/// The face's rounded-square fill: no circle, an 8-point corner.
-bool _roundedSquare(Widget w) =>
+/// The face's round fill.
+bool _round(Widget w) =>
     w is Container &&
     w.decoration is BoxDecoration &&
-    (w.decoration! as BoxDecoration).shape == BoxShape.rectangle &&
-    (w.decoration! as BoxDecoration).borderRadius == BorderRadius.circular(8);
+    (w.decoration! as BoxDecoration).shape == BoxShape.circle;
 
 void main() {
-  testWidgets('a message avatar is a 36-point rounded square', (tester) async {
+  testWidgets('a message avatar is a 28-point circle', (tester) async {
     await _show(tester, [_row(_message('m1'))]);
     final avatar = find.byType(SuperTabAvatar);
-    expect(tester.getSize(avatar), const Size.square(36));
+    expect(tester.getSize(avatar), const Size.square(28));
     expect(
-      find.descendant(
-        of: avatar,
-        matching: find.byWidgetPredicate(_roundedSquare),
-      ),
+      find.descendant(of: avatar, matching: find.byWidgetPredicate(_round)),
       findsOneWidget,
     );
   });
 
-  testWidgets('a message photo is clipped to the same rounded square', (
-    tester,
-  ) async {
+  testWidgets('a message photo is clipped to the same circle', (tester) async {
     await _show(tester, [
       SuperTabMessageRow(
         message: _message('m1'),
@@ -81,12 +75,12 @@ void main() {
     final avatar = find.byType(SuperTabAvatar);
     expect(
       find.descendant(of: avatar, matching: find.byType(ClipOval)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: avatar, matching: find.byType(ClipRRect)),
       findsNothing,
     );
-    final clip = tester.widget<ClipRRect>(
-      find.descendant(of: avatar, matching: find.byType(ClipRRect)),
-    );
-    expect(clip.borderRadius, BorderRadius.circular(8));
   });
 
   testWidgets('avatars outside messages stay round', (tester) async {

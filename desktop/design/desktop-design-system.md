@@ -463,7 +463,8 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
 - **Task status marks.** Proposal is Lucide `lightbulb`, Declined
   `thumbs-down`, Failed (Stuck) `triangle-alert` in the semantic error ink.
   The check, question mark and spinner stay, from the shared activity
-  vocabulary. No status in Flutter draws an X: an X means close. Terminal text
+  vocabulary. Shipped (a verified release holds the task, task #4547) wears
+  Done's check and says Shipped. No status in Flutter draws an X: an X means close. Terminal text
   and native tab marks may keep `✗`.
 - **Left pane row.** The left pane's row (`SuperTabQuietRow`,
   [Swarm left pane](#swarm-left-pane)) carries the elements above at its
@@ -482,6 +483,27 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   lines, and two 18 faces: who asked, then who is doing it. Only while the
   task waits for the reader: Decline as plain text and Accept as the blue
   capsule, on the right.
+- **Chat message.** A message row (`SuperTabMessageRow`) leads with a round
+  28 face, then one header line: the name at 13 semibold and the time at 12
+  in tertiary ink (`textFaint`), nothing else; no engine mark, since colour
+  is only the face's. The text reads at 14 on 20 px lines (`SwarmType`).
+  An empty chat shows no line; only a chat that can't be read or is still
+  loading says so (task #4467).
+- **Chat composer.** Both composers (the chat's and a thread's) are Cmd-N's
+  field: radius 12, a hairline (`rim`) and the faint fill (`field`). Under
+  the text, the paperclip on the left and, on the right, the mic beside the
+  round send (`SwarmSendButton`, `super_tabs/chat/send_button.dart`): a 28
+  circle in a 32 target, `rim` with a `textFaint` arrow while there is
+  nothing to send, `AppPalette.accent` with a white (`onSelection`) arrow
+  once there is text or a file. No @ button: an @ typed tags.
+- **Decision card.** One question (`SuperTabDecisionCard`, in the Buddy chat
+  and Notifications; the Decisions page row uses the same buttons): the
+  question, `Unblocks:` line, one button per option with the recommended one
+  filled and marked `· Recommended`, then quiet `Let <coordinator> decide` and
+  Not now. A person's own Buddy's question has no Let decide: only they
+  answer it. A line their Buddy waits to post as them shows its exact words,
+  whole, with Send and Not now, neither marked; its Not now answers it, so the
+  quiet Not now that only folds a card is not shown (task #4525).
 - **Adding or changing one.** A new or changed element updates this section
   and the gallery, with its images, in the same pull request.
 
