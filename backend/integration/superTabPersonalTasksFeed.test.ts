@@ -190,6 +190,9 @@ async function waitOn(f: Fixture, key: string, user: AuthUser) {
   await db.swarmGroup.update({ where: { id: row.id }, data: { data: data as never, feedIds: feedIdsOf(data) } })
 }
 
+/** Asks for Activity's feed, as Desktop does. */
+const ACTIVITY = { allTasks: true }
+
 describe('all tasks: Desktop\'s Activity (task #4689)', () => {
   it('lists every task of every project I read, from every person and agent, and a private project\'s only to its members', async () => {
     const f = await fixture()
@@ -197,10 +200,10 @@ describe('all tasks: Desktop\'s Activity (task #4689)', () => {
     const reads = new SwarmReads(f.store)
     const everyone = [f.ownersOwn, f.proposal, f.asked, f.theirs]
     // The bystander asked for nothing and runs no agent: every public task is still theirs to see.
-    expect((await reads.firstLoad(bystander, f.tab)).allTasks).toMatchObject({ reset: true, removed: [], olderCursor: null })
-    expect(ids((await reads.firstLoad(bystander, f.tab)).allTasks!.upserts)).toEqual(everyone)
-    expect(ids((await reads.firstLoad(peer, f.tab)).allTasks!.upserts)).toEqual(everyone)
-    expect(ids((await reads.firstLoad(owner, f.tab)).allTasks!.upserts)).toEqual([...secret, ...everyone])
+    expect((await reads.firstLoad(bystander, f.tab, undefined, ACTIVITY)).allTasks).toMatchObject({ reset: true, removed: [], olderCursor: null })
+    expect(ids((await reads.firstLoad(bystander, f.tab, undefined, ACTIVITY)).allTasks!.upserts)).toEqual(everyone)
+    expect(ids((await reads.firstLoad(peer, f.tab, undefined, ACTIVITY)).allTasks!.upserts)).toEqual(everyone)
+    expect(ids((await reads.firstLoad(owner, f.tab, undefined, ACTIVITY)).allTasks!.upserts)).toEqual([...secret, ...everyone])
     // Mine is unchanged.
     expect(ids((await reads.firstLoad(peer, f.tab)).personalTasks!.upserts)).toEqual([f.proposal, f.asked, f.theirs])
     expect(ids((await reads.allTasks(bystander, f.tab)).upserts)).toEqual(everyone)
@@ -212,7 +215,7 @@ describe('all tasks: Desktop\'s Activity (task #4689)', () => {
     const hidden = await copies(f, f.asked, 55, f.now() + 100 * MINUTE, f.secret)
     const older = await copies(f, f.asked, 60, f.now() - 10 * MINUTE, undefined, 5)
     const reads = new SwarmReads(f.store)
-    const first = (await reads.firstLoad(bystander, f.tab)).allTasks!
+    const first = (await reads.firstLoad(bystander, f.tab, undefined, ACTIVITY)).allTasks!
     expect(first.upserts).toHaveLength(50)
     expect(ids(first.upserts).some(id => hidden.includes(id))).toBe(false)
     const cursor = JSON.parse(Buffer.from(first.olderCursor!, 'base64url').toString()) as { k: string }
@@ -235,17 +238,17 @@ describe('all tasks: Desktop\'s Activity (task #4689)', () => {
     const [hidden] = await copies(f, f.asked, 1, f.now() - 500 * MINUTE, f.secret)
     await waitOn(f, hidden!, peer)
     const reads = new SwarmReads(f.store)
-    const mine = (await reads.firstLoad(peer, f.tab)).allTasks!
+    const mine = (await reads.firstLoad(peer, f.tab, undefined, ACTIVITY)).allTasks!
     expect(mine.upserts).toHaveLength(51)
     expect(mine.upserts.find(r => r.id === oldest)).toMatchObject({ status: 'proposal', canApprove: true })
     expect(ids(mine.upserts)).not.toContain(hidden)
     // Its cursor is the newest page's: the next page still lists the waiting task in its place, once.
     const next = await reads.allTasks(peer, f.tab, mine.olderCursor!)
     expect(ids(next.upserts)).toContain(oldest)
-    const theirs = (await reads.firstLoad(bystander, f.tab)).allTasks!
+    const theirs = (await reads.firstLoad(bystander, f.tab, undefined, ACTIVITY)).allTasks!
     expect(ids(theirs.upserts)).not.toContain(oldest)
     // The owner reads the private project, but it waits on someone else: in its place, not pinned on their first page.
-    expect(ids((await reads.firstLoad(owner, f.tab)).allTasks!.upserts)).not.toContain(hidden)
+    expect(ids((await reads.firstLoad(owner, f.tab, undefined, ACTIVITY)).allTasks!.upserts)).not.toContain(hidden)
   })
 
   it('reads a page through the feed index, examining about what it returns', async () => {
@@ -254,7 +257,7 @@ describe('all tasks: Desktop\'s Activity (task #4689)', () => {
     // Quiet tasks of a project the reader may not read are never examined.
     await copies(f, f.asked, 300, f.now() + 100 * MINUTE, f.secret)
     const reads = new SwarmReads(f.store)
-    const first = (await reads.firstLoad(bystander, f.tab)).allTasks!
+    const first = (await reads.firstLoad(bystander, f.tab, undefined, ACTIVITY)).allTasks!
     const entries = await profiled(db, () => reads.allTasks(bystander, f.tab, first.olderCursor!))
     const feed = plan(readsOf(entries))
     expect(feed.length).toBeGreaterThan(0)
@@ -262,6 +265,18 @@ describe('all tasks: Desktop\'s Activity (task #4689)', () => {
       expect(read.plan).toContain('IXSCAN { tabId: 1, feedIds: 1, lastActivityAt: 1, key: 1 }')
       expect(read.docsExamined).toBeLessThanOrEqual(read.returned + 1)
     }
+  })
+
+  it('goes only to a client that asks for it: a phone\'s or an older Desktop\'s reads carry no Activity (review of #3576)', async () => {
+    const f = await fixture()
+    const reads = new SwarmReads(f.store)
+    const plain = await reads.firstLoad(peer, f.tab)
+    expect(plain).not.toHaveProperty('allTasks')
+    expect(plain.personalTasks).toBeDefined()
+    expect((await reads.firstLoad(peer, f.tab, undefined, ACTIVITY)).allTasks).toBeDefined()
+    await f.execute({ type: 'conversation.rename', conversationId: f.ownersOwn, title: 'Owner work, renamed' })
+    expect(await reads.changes(peer, f.tab, plain.cursor)).not.toHaveProperty('allTasks')
+    expect((await reads.changes(peer, f.tab, plain.cursor, undefined, ACTIVITY)).allTasks!.upserts.map(r => r.title)).toEqual(['Owner work, renamed'])
   })
 
   it('keys at startup every task written before its project key, and leaves the rest', async () => {
@@ -274,6 +289,16 @@ describe('all tasks: Desktop\'s Activity (task #4689)', () => {
     const rows = await db.swarmGroup.findMany({ where: { tabId: f.tab } })
     for (const row of rows) expect([...row.feedIds].sort(), row.key).toEqual(feedIdsOf(row.data as unknown as Conversation).sort())
     expect(rows.find(r => r.key === f.asked)!.feedIds).toEqual(expect.arrayContaining([projectKey('lead'), expect.stringMatching(/^w:/)]))
+    expect(await markFeedIds(db)).toBe(0)
+  })
+
+  it('gives a row with no data no keys at startup (review of #3576)', async () => {
+    const f = await fixture()
+    await db.$runCommandRaw({ insert: 'SwarmGroup', documents: [{ _id: `${f.tab}:empty`, tabId: f.tab, key: 'empty', version: 1, deleted: false,
+      ordinal: 0, changedAt: { $date: new Date().toISOString() }, lastActivityAt: { $date: new Date().toISOString() } }] })
+    await markFeedIds(db)
+    const [row] = await db.swarmGroup.aggregateRaw({ pipeline: [{ $match: { _id: `${f.tab}:empty` } }, { $project: { feedIds: 1 } }] }) as unknown as Array<{ feedIds: string[] }>
+    expect(row!.feedIds).toEqual([])
     expect(await markFeedIds(db)).toBe(0)
   })
 })
