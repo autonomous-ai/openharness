@@ -1,5 +1,5 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { agentTmpEnv, buddyTmpEnv } from './agentTmp.js'
+import { agentTmpLaunch, buddyTmpEnv } from './agentTmp.js'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -608,29 +608,33 @@ describe('buildLaunchOverrides — a Swarm session on the Harness GitHub App', (
 })
 
 describe('buildLaunchOverrides — the owner\'s private temporary folder (audit M1)', () => {
-  const told = (tmp: Record<string, string>) => vi.mocked(agentTmpEnv).mockReturnValueOnce(tmp)
+  const told = (env: Record<string, string>, args: string[] = []) => vi.mocked(agentTmpLaunch).mockReturnValueOnce({ env, args })
 
   it('reaches a relaunch, resume, fork and swap, which all pass here', async () => {
     told({ TMPDIR: '/data/agent-tmp' })
     expect(await buildLaunchOverrides(deps().d, 'claude', {}, 'a')).toMatchObject({ ok: true, overrides: { env: { TMPDIR: '/data/agent-tmp' } } })
-    expect(agentTmpEnv).toHaveBeenLastCalledWith('claude', undefined)
+    expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', undefined, undefined)
   })
 
-  it('names the saved role of an agent', async () => {
+  // Task #4395: a relaunch rebuilds the engine's arguments, so the agent's own folder is added again, with its TMPDIR.
+  it('names the saved role and workspace of an agent, and adds its own folder again', async () => {
     const swarm = { args: () => [], prepare: () => ({ instructions: 'x' }) }
-    await buildLaunchOverrides(deps({ swarm } as never).d, 'claude', { cwd: '/w', swarmSkill: { role: 'agent', key: 'k' } as never }, 'a')
-    expect(agentTmpEnv).toHaveBeenLastCalledWith('claude', 'agent')
+    told({ TMPDIR: '/data/agent-tmp/one' }, ['--add-dir=/data/agent-tmp/one'])
+    const result = await buildLaunchOverrides(deps({ swarm } as never).d, 'claude', { cwd: '/w', swarmSkill: { role: 'agent', key: 'k' } as never }, 'a')
+    expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', 'agent', '/w')
+    expect(result).toMatchObject({ ok: true, overrides: { env: { TMPDIR: '/data/agent-tmp/one' } } })
+    expect((result as { overrides: { extraArgs: string[] } }).overrides.extraArgs).toContain('--add-dir=/data/agent-tmp/one')
   })
 
   // A restart, update, resume or fork of a Buddy keeps its own folder: its guard still names it (review of #2563).
   it('keeps a relaunched Buddy in its own folder, and the launch\'s own variables win', async () => {
     const swarm = { args: () => [], prepare: () => ({ instructions: 'x' }) }
-    const agents = vi.mocked(agentTmpEnv).mock.calls.length
+    const agents = vi.mocked(agentTmpLaunch).mock.calls.length
     vi.mocked(buddyTmpEnv).mockReturnValueOnce({ TMPDIR: '/data-buddy-tmp/one', CLAUDE_CODE_TMPDIR: '/data-buddy-tmp/one' })
     expect(await buildLaunchOverrides(deps({ swarm } as never).d, 'claude', { cwd: '/w', swarmSkill: { role: 'buddy', key: 'k' } as never }, 'a'))
       .toMatchObject({ ok: true, overrides: { env: { TMPDIR: '/data-buddy-tmp/one', CLAUDE_CODE_TMPDIR: '/data-buddy-tmp/one' } } })
     expect(buddyTmpEnv).toHaveBeenLastCalledWith('claude', '/w')
-    expect(vi.mocked(agentTmpEnv).mock.calls.length).toBe(agents)
+    expect(vi.mocked(agentTmpLaunch).mock.calls.length).toBe(agents)
   })
 
   it('gives way to the launch\'s own variables', async () => {

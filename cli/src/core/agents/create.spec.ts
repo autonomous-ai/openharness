@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installedDsh } from '../../dsh/installed.js'
-import { agentTmpEnv, buddyTmpEnv } from '../../lib/agentTmp.js'
+import { agentTmpLaunch, buddyTmpEnv } from '../../lib/agentTmp.js'
 import { dshPinnedPermissionMode } from '../../dsh/manifest.js'
 import { incompatibleHarnessEngine } from '../../dsh/compatibility.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
@@ -252,28 +252,38 @@ describe('creating an agent', () => {
     } finally { rmSync(home, { recursive: true, force: true }) }
   })
 
-  // Audit M1: beside a Team account, the owner's agents get a private temporary folder, and the launch's own variables win.
-  it('asks for the private temporary folder with the agent\'s role, and lets the launch\'s own variables win', async () => {
-    vi.mocked(agentTmpEnv).mockReturnValueOnce({ TMPDIR: '/data/agent-tmp' })
+  // Audit M1, and task #4395: an agent's private temporary folder is its TMPDIR and is added to the engine's working
+  // directories, so its owner's own settings ask nothing for its mktemp files; the launch's own variables win.
+  it('gives the agent its private temporary folder as TMPDIR and as its one added folder, and lets the launch\'s own variables win', async () => {
+    const tmp = { env: { TMPDIR: '/data/agent-tmp/one' }, args: ['--add-dir=/data/agent-tmp/one'] }
+    const extraArgs = () => (vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1] as { extraArgs?: string[] }).extraArgs ?? []
+    vi.mocked(agentTmpLaunch).mockReturnValueOnce({ env: { TMPDIR: '/data/agent-tmp' }, args: [] })
     expect(await setup().create(request({}))).toMatchObject({ ok: true })
-    expect(agentTmpEnv).toHaveBeenLastCalledWith('claude', undefined)
+    expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', undefined, expect.any(String))
     expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ TMPDIR: '/data/agent-tmp' })
-    vi.mocked(agentTmpEnv).mockReturnValueOnce({ HARNESS_DSH: 'mine', TMPDIR: '/data/agent-tmp' })
+    expect(extraArgs().some(arg => arg.startsWith('--add-dir'))).toBe(false)
+    vi.mocked(agentTmpLaunch).mockReturnValueOnce({ ...tmp, env: { HARNESS_DSH: 'mine', ...tmp.env } })
     vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
     expect(await setup().create(request({ dsh: 'blender', swarmRole: 'agent' }))).toMatchObject({ ok: true })
-    expect(agentTmpEnv).toHaveBeenLastCalledWith('claude', 'agent')
-    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ HARNESS_DSH: 'blender', TMPDIR: '/data/agent-tmp' })
+    expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', 'agent', expect.any(String))
+    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ HARNESS_DSH: 'blender', TMPDIR: '/data/agent-tmp/one' })
+    expect(extraArgs().filter(arg => arg.startsWith('--add-dir'))).toEqual(['--add-dir=/data/agent-tmp/one'])
+    // Team-written work gets its folder too, and keeps its project settings off: the mode still carries its own flags.
+    vi.mocked(agentTmpLaunch).mockReturnValueOnce(tmp)
+    expect(await setup().create(request({ swarmRole: 'agent', permissionMode: 'teamWritten', bypassPermission: false }))).toMatchObject({ ok: true })
+    expect(extraArgs().filter(arg => arg.startsWith('--add-dir'))).toEqual(['--add-dir=/data/agent-tmp/one'])
+    expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]).toMatchObject({ permissionMode: 'teamWritten' })
   })
 
   // A Buddy's folder of its own, named for the folder it runs in, and never the owner's agents' shared one.
   it('gives a Buddy its own private temporary folder, and the launch\'s own variables win', async () => {
     vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
     vi.mocked(buddyTmpEnv).mockReturnValueOnce({ TMPDIR: '/data-buddy-tmp/one', CLAUDE_CODE_TMPDIR: '/data-buddy-tmp/one', HARNESS_DSH: 'mine' })
-    const calls = vi.mocked(agentTmpEnv).mock.calls.length
+    const calls = vi.mocked(agentTmpLaunch).mock.calls.length
     expect(await setup().create(request({ dsh: 'blender', swarmRole: 'buddy' }))).toMatchObject({ ok: true })
     expect(buddyTmpEnv).toHaveBeenLastCalledWith('claude', expect.any(String))
     expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ TMPDIR: '/data-buddy-tmp/one', CLAUDE_CODE_TMPDIR: '/data-buddy-tmp/one', HARNESS_DSH: 'blender' })
-    expect(vi.mocked(agentTmpEnv).mock.calls.length).toBe(calls)
+    expect(vi.mocked(agentTmpLaunch).mock.calls.length).toBe(calls)
   })
 
   // A Buddy launches like its owner's own session (Ken, 11-04, task #2832): on a shared model it keeps the grid's web tools,
