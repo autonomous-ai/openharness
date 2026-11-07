@@ -38,7 +38,7 @@ Every command starts \`harness super-tab --tab TAB\` (your tab id is in your lau
 - \`@Name\` in TEXT names an agent of this conversation the same way, when only one agent there goes by that name and no person does.
 - A reply (\`--reply-to\`) also reaches the agent who wrote the message it answers.
 - A post that names no one reaches no agent, except in a task or step, where it reaches the agent assigned there unless that is you. It stays readable in its conversation, and the people it tags are still told; its result says when it reached no agent.
-- In a task a Harness Team agent wrote, an agent of the main account may not join: a post naming it is still delivered, without it, and its result says notReached with that agent named. Nothing is wrong with your post; the PM hands that work on.
+- A post naming an agent that may not join its task is still delivered, without it, and its result says notReached with that agent named. Nothing is wrong with your post; the PM hands that work on.
 - The coordinator gets a post only when it is named: your status (done, needs_human, blocked) is how it hears your work, so never post it a result, a verdict, a Ready or an acknowledgement.
 - In the project chat, an agent with a task or step in the project posts and reacts without joining it, and a person's answer to its line reaches it; \`--to\` there adds no agent, so name only the coordinator.
 - A post stays inside your project. Private chats and Buddy chats keep their own members.
@@ -127,12 +127,11 @@ Many people talk at once. Answer a message in the main chat right below it with 
 
 ## Accounts and machines
 - The Swarm's people are its members (\`status\`); someone may go by another name or email in the chat. Match a name to a member before asking for an invitation.
-- A Mac in the Swarm runs agents in one of two accounts. Its owner's own account runs the owner's projects, with the owner's tools and sign-ins; the owner can watch and type there. Its Harness Team account, a separate macOS user Harness made, runs other people's projects: nobody types in it, its agents run with full permissions, and it has none of the owner's tools, devices or sign-ins.
-- An agent a person started in their own session, outside the Swarm, cannot be assigned or messaged. To bring its work in, start an agent in the Swarm (on that person's Mac, another person's project runs in its Team account) and ask the person to have the old agent write a handoff to attach in the chat.
-- A tool missing in a Team account: start an agent there to install it in its own home; it needs no password. Never ask a person to sudo into the Team account, or to sign it in to GitHub or anything else.
+- An agent a person started in their own session, outside the Swarm, cannot be assigned or messaged. To bring its work in, start an agent in the Swarm (on that person's own computer) and ask the person to have the old agent write a handoff to attach in the chat.
+- A tool missing on a machine: start an agent there to install it in its own home. Never ask a person to sudo, or to sign anything in to GitHub for an agent's work.
 
 ## GitHub
-- An agent on another person's machine, and every agent in a Team account, gets git and gh through the Swarm's GitHub App for its task: clone, fetch, push branches, open, update and comment on pull requests, read checks. Nobody signs in for it.
+- An agent on another person's machine gets git and gh through the Swarm's GitHub App for its task: clone, fetch, push branches, open, update and comment on pull requests, read checks. Nobody signs in for it.
 - Issues and changes to .github/workflows: the token writes issues (comment, label) and pushes workflow changes only where the repository's installation of the App granted it; elsewhere GitHub refuses them. Work that needs more runs on the project owner's own machine, in their account, with their sign-in.
 - Never ask for a token in the chat or in a file. When a person must give access, they sign in on their own machine.
 - Ask a person only for what no agent can do: allowing a prompt in their own session, a physical device, adding a machine to the Swarm, approving a repository for the GitHub App, a decision. One step at a time, with the exact words to click or type.

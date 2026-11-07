@@ -244,6 +244,17 @@ describe('pause and resume', () => {
     expect(lines(f, id).join('\n')).toMatch(/paused[\s\S]*Wait for the release[\s\S]*resumed/i)
   })
 
+  // Review of #3310 at c91dc2489 (task #3595): a pause reason was stored and posted as written. A person's text is redacted.
+  it('redacts a credential in a pause reason, in the task and its line', () => {
+    const f = boardFixture()
+    const id = task(f)
+    const token = ['ghp', 'Q7mZ2xK9pL4vR8nT1wB6yC3dF5hJ0aE2sG7u'].join('_')
+    f.run({ type: 'work.pause', conversationId: id, paused: true, reason: `Rotate ${token} first` })
+    expect(group(f, id).paused!.reason).toContain('[credential removed]')
+    expect(JSON.stringify(f.state)).not.toContain(token)
+    expect(lines(f, id).join('\n')).not.toContain(token)
+  })
+
   it('refuses a member, the PM and any other agent, in every project', () => {
     const f = boardFixture()
     const id = task(f)

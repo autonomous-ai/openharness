@@ -212,6 +212,8 @@ export class GridModelsService {
   private readonly listeners = new Set<() => void>()
   private readonly presence = new ComputerPresence()
   private readonly debounce = new PrewarmDebounce()
+  /** Prewarm reads still running: nothing waits on them but settled(). */
+  private readonly prewarms = new Set<Promise<void>>()
   private rows: GridRow[] | null = null
   private changeTimer: NodeJS.Timeout | null = null
   /** Called off by the next machine list: fires only when none came in time, and the labels lapse. */
@@ -230,7 +232,10 @@ export class GridModelsService {
   /** Resolves once every read already started has landed — for a test, and for a caller that must see
    *  the answer a read it triggered produced. */
   async settled(): Promise<void> {
-    await Promise.all([...this.tracked.values()].flatMap((tracked) => [tracked.pending?.catch(() => {}), tracked.waking]))
+    await Promise.all([
+      ...[...this.tracked.values()].flatMap((tracked) => [tracked.pending?.catch(() => {}), tracked.waking]),
+      ...[...this.prewarms].map((read) => read.catch(() => {})),
+    ])
   }
 
   /**
@@ -574,7 +579,8 @@ export class GridModelsService {
   private sendPrewarm(tracked: Tracked, purpose: WakePurpose, now: number, access?: RelayAccess): PrewarmOutcome {
     if (!this.debounce.allows(tracked.id, now)) return 'debounced'
     this.debounce.mark(tracked.id, now)
-    void this.credentialedRead(tracked, purpose, access)
+    const read = this.credentialedRead(tracked, purpose, access).finally(() => { this.prewarms.delete(read) })
+    this.prewarms.add(read)
     return 'fired'
   }
 

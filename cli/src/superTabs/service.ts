@@ -20,7 +20,6 @@ import { messageIdOf } from './attach.js'
 import { cardId, SwarmCards, type CardChat } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
 import { teamEngineReporter, type TeamEngineReporter } from '../team/engines.js'
-import { AUTO_SETUP_REASONS, realTeamAutoSetup, type AutoSetupReason, type TeamAutoSetup } from '../team/autoSetup.js'
 import { readTeamConfig } from '../team/config.js'
 import { ensureTeamTmux, TMUX_MANIFEST_URL, tmuxRunsAt, untarGz, type TeamTmuxDeps, type TeamTmuxOutcome } from '../team/tmux.js'
 import { downloadVerified } from '../lib/selfUpdate.js'
@@ -158,9 +157,6 @@ const OFF_ROSTER = 'This agent is not on this machine\'s Swarm roster right now.
  *  quotes (BUDDY_COMMAND_HELP): no stdin anywhere. */
 const BUDDY_HELP = { ...HELP, post: `post GROUP TEXT OPERATION_ID ${POST_FLAGS}: ${BUDDY_POST_HELP}${MENTION_HELP}`, command: BUDDY_COMMAND_HELP }
 const OTHER_WORK_FIELDS = ['conversationId', 'projectName', 'title', 'owns', 'status', 'agentName', 'pr'] as const
-/** How old a host form a one-off question about this machine's Swarms may take: the host reads one every second. */
-const POOLS_FRESH_MS = 5_000
-
 
 /** Leads see each other's work (spec 2026-10-23): a Lead reads other projects' active work in the backend's fields alone;
  *  any other agent reads none of it. Nobody reads the Leads conversation, removed on 10-31, even from an older server
@@ -269,26 +265,6 @@ function markAnswered(page: unknown, later: unknown[], agentId: string): unknown
   }) }
 }
 
-/** Whether this machine is in a Swarm with other people in it: a contribution of its own to a tab whose people are more
- *  than its owner. False when that cannot be read. */
-export async function sharedSwarm(sources: SwarmSources): Promise<boolean> {
-  if (!identifier(sources.feed.machineId)) return false
-  const pools = await sources.feed.current(POOLS_FRESH_MS).then(read => read.pools, () => [])
-  for (const row of pools) {
-    if (!identifier(row.tabId)) continue
-    // A Swarm Harness Team accounts are not tried in yet (backend machines.ts teamAccountSwarm) asks for none.
-    const read = await sources.reads.read(row.tabId).catch(() => null)
-    if (read?.teamAccounts && Array.isArray(read.state.people) && read.state.people.length > 1) return true
-  }
-  return false
-}
-
-/** Whether the Swarm a person just joined or added this Mac to uses Harness Team accounts: false only when its server
- *  says it does not, so a read that fails still offers, as before. */
-export async function teamAccountsIn(sources: SwarmSources, tabId: string): Promise<boolean> {
-  return sources.reads.read(tabId).then(read => read.teamAccounts, () => true)
-}
-
 export interface SuperTabServiceOptions {
   prepareContribution?: typeof prepareContribution
   setMachineAgents?: typeof setMachineAgents
@@ -301,8 +277,6 @@ export interface SuperTabServiceOptions {
   githubTokens?: (core: CoreApi) => Pick<GitHubTokenRefresher, 'start' | 'stop'> & Partial<Pick<GitHubTokenRefresher, 'assigned'>>
   /** What reports the Harness Team account's own engines to its owner (team/engines.ts), for a spec. */
   teamEngines?: () => Pick<TeamEngineReporter, 'start' | 'stop'>
-  /** What sets up the Harness Team account when Desktop asks (team/autoSetup.ts), for a spec. */
-  teamSetup?: () => Promise<Pick<TeamAutoSetup, 'offer' | 'decline'> & Partial<Pick<TeamAutoSetup, 'status'>>>
   /** Whether this daemon runs team work only (a Harness Team account, `harness team on`), for a spec. */
   team?: () => boolean
   /** The Harness Team account's own tmux (team/tmux.ts), for a spec. */
@@ -365,7 +339,6 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   const tokens = (options.githubTokens ?? (api => new GitHubTokenRefresher(api, sources)))(core)
   // In the Harness Team account only: whether its Claude Code and Codex are installed and signed in, for its owner to read.
   const engines = (options.teamEngines ?? teamEngineReporter)()
-  let autoSetup: Promise<Pick<TeamAutoSetup, 'offer' | 'decline'> & Partial<Pick<TeamAutoSetup, 'status'>>> | null = null
   // In the Harness Team account: a tmux and a gh of its own when it has none it can run (team/tmux.ts, team/gh.ts). Looked
   // at as it connects, and a failed install again half an hour later.
   const settled = (outcome: string) => outcome === 'present' || outcome === 'installed' || outcome === 'not-team'
@@ -438,46 +411,14 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
           return await githubToken(core, String(payload.harnessId ?? ''), sources())
         }
-        // Desktop on this Mac, as the person joins a Swarm, adds this Mac to one, or opens the app (team/autoSetup.ts): the
-        // Harness Team account, behind macOS's own administrator prompt. Never through the relay, with nobody at this Mac.
-        // `teamSetupCheck` only says whether it is wanted, so Desktop explains it before macOS asks; `teamSetupDecline` is
-        // that explanation's "Not now". Both are new names, so an older daemon refuses them rather than asking unexplained.
-        // `teamSetupStatus`: why there is no account yet, for this Mac's own machine row (cancelled, failed and why, running).
         // Why this Mac's Harness Team account has not joined a Swarm, while adding it fails (host.ts joinTeams), and Retry on the
-        // row (Amon, #3215: "joining" for good, the reason only in the log). Only a client on this computer asks, as for teamSetup.
+        // row (Amon, #3215: "joining" for good, the reason only in the log). Only a client on this computer asks.
         // The status starts nothing; Retry starts the host if it never ran, which then reads its roster as any start does.
         if (payload.action === 'teamJoinStatus' || payload.action === 'teamJoinRetry') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
           // Retry starts a host that never ran (Amon, #3215): it then reads its Swarms in full, the Team account's join among them.
           if (payload.action === 'teamJoinRetry') { wake().retryTeamJoins(); return { ok: true } }
           return { ok: true, failure: host?.teamJoinFailure() ?? null, hostRunning: !!host }
-        }
-        if (payload.action === 'teamSetup' || payload.action === 'teamSetupCheck' || payload.action === 'teamSetupDecline'
-          || payload.action === 'teamSetupStatus') {
-          if (!asker.local) return { error: 'OWNER_REQUIRED' }
-          const setup = () => autoSetup ??= (options.teamSetup ?? (() => realTeamAutoSetup(core.dataDir, line => console.log(`[team] ${line}`))))()
-            .catch(error => { autoSetup = null; throw error })
-          if (payload.action === 'teamSetupDecline') { (await setup()).decline(); return { ok: true } }
-          if (payload.action === 'teamSetupStatus') {
-            const made = await setup()
-            return made.status ? { ok: true, ...await made.status() } : { error: 'INVALID_REQUEST' }
-          }
-          if (!AUTO_SETUP_REASONS.includes(payload.reason as AutoSetupReason)) return { error: 'INVALID_REQUEST' }
-          // Desktop asks at every launch. A Mac that hosts no Swarm work, as no regular user's does, answers at once:
-          // nothing read, run or asked of the backend.
-          if (payload.reason === 'startup' && !(identifier(core.daemon.machineId()) && existsSync(hostJournalFile(core.dataDir, core.daemon.machineId())))) {
-            return { ok: true, state: 'not-shared' }
-          }
-          // Joined or added to a Swarm Harness Team accounts are not tried in yet: nothing asked (2026-10-28). An older
-          // Desktop names no Swarm and is offered as before.
-          if ((payload.reason === 'join' || payload.reason === 'contribute') && identifier(payload.tabId)
-            && !await teamAccountsIn(sources(), payload.tabId)) return { ok: true, state: 'not-used' }
-          // `signInAgain`: Set up on a row the Swarm says has no Team account while this Mac has one, so it serves another account
-          // (#3122). Only the person's own Set up: a check or an automatic moment signs nothing in again.
-          const signInAgain = payload.action === 'teamSetup' && payload.reason === 'manual' && payload.signInAgain === true
-          const restart = payload.action === 'teamSetup' && payload.reason === 'manual' && payload.restart === true
-          return { ok: true, ...await (await setup()).offer(payload.reason as AutoSetupReason, () => sharedSwarm(sources()),
-            payload.action === 'teamSetupCheck', { signInAgain, ...restart ? { restart: true } : {} }) }
         }
         if (payload.action === 'swarmRole') {
           const grant = await port.swarmRole(String(payload.harnessId ?? ''))

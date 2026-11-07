@@ -149,6 +149,7 @@ import { readerEngine, READER_SERVICES } from '../engines/worker/protocol.js'
 import { createRecaps } from './turns/recaps.js'
 import { summaryReader } from './turns/summaries.js'
 import { stopDeadline } from './stopDeadline.js'
+import { stopsForGood } from './stopReasons.js'
 import { createUpdateHandoff, handOverOnceReleased, probeStagedMaster, type TeardownStep } from './updateHandoff.js'
 import { needsUpdaterBeside, startUpdaterBeside } from './updaterBeside.js'
 import { createHeartbeats } from './turns/heartbeats.js'
@@ -1964,6 +1965,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const slowProbeMs = Number(harnessd.HARNESSD_TEST_SLOW_PROBE_MS) || 0
   const gridAssignments = createGridAssignments({ models: () => ports.models ?? MODELS_OFF, registry,
     revision: (id) => restartJobs.revision(id), announce: announceSession })
+  // Set once the stop below exists: a Harness Team account's daemon stops for good once no agent runs in it.
+  let afterAgentsPass = (): void => {}
   const agentReconciler = new TerminalAgentReconciler({
     // The hook server starts before restore. Its early SessionStart hints must not run a full
     // discovery scan over rows whose panes have not been recreated yet (and archive those rows).
@@ -1982,6 +1985,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ...discovery,
     onReconciled: (agents) => {
       gridAssignments.observe(agents)
+      afterAgentsPass()
       if (ptyDrain) {
         void ptyDrain.step().catch((error) => {
           console.error('[terminal] ptyhost: drain failed:', error instanceof Error ? error.message : error)
@@ -3156,7 +3160,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   /** Stopping for good — removed from the account, or connected from elsewhere: tell harnessd's master,
    *  which restarts any other exit (harnessd/protocol.ts). */
-  const forGood = (reason: string): boolean => reason === 'revoked' || reason === 'busy'
   const shutdown = async (signal: string): Promise<void> => {
     heldLaunches.close()
     installedHooks?.close()
@@ -3167,7 +3170,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     registry.flush({ exiting: true })
     const leave = (): never => {
       try { if (readPid() === process.pid) rmSync(PID_FILE, { force: true }) } catch { /* ignore */ }
-      process.exit(coreLink.supervised && forGood(signal) ? CORE_EXIT_STOP : 0)
+      process.exit(coreLink.supervised && stopsForGood(signal) ? CORE_EXIT_STOP : 0)
     }
     // A core with no master keeps the master's grace on itself (core/stopDeadline.ts).
     const deadline = stopDeadline({ supervised: coreLink.supervised, exit: leave, log: (line) => console.log(line) })
@@ -3221,6 +3224,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   daemonBoot.stopHere = (why) => void shutdown(why)
   process.on('SIGINT', () => void shutdown('SIGINT'))
   process.on('SIGTERM', () => void shutdown('SIGTERM'))
+  // Swarm v3 has no Team accounts: a Team account's daemon stops for good after a pass finds no agent running in it, an
+  // engine or a pane (superTabs/inCore/teamRetire.ts).
+  if (swarm) {
+    afterAgentsPass = swarm.teamRetirement({ teamAccount: swarm.isTeamAccount(), log: (line) => console.log(line),
+      live: () => registry.list().filter((session) => session.active || registry.terminalAvailable(session.agentId)).length,
+      stop: (reason) => void shutdown(reason) })
+  }
   // A core whose master is gone stops, so nothing is left holding the port for a master that is not
   // there to restart it.
   coreLink.onMasterGone(() => void shutdown('the harnessd master is gone'))

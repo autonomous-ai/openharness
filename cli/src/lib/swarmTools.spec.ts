@@ -15,12 +15,12 @@ describe('SWARM_TOOLS_SKILL', () => {
   // Project instructions, phase 4: the server refuses only facts and access, routing rules live in the instructions, and
   // agents change the instructions instead of rules or skill sets.
   // Ken, 2026-11-03: a new project's coordinator sent people to sudo into a Mac's Team account, sign it in to GitHub and save
-  // tokens in files, not knowing how the Swarm runs work on another person's Mac.
+  // tokens in files, not knowing how the Swarm runs work on another person's Mac. Swarm v3 has no Team accounts (#4221).
   it('says how accounts, machines and the GitHub App work, and what never to ask a person', () => {
     const at = SWARM_TOOLS_SKILL.indexOf('## Accounts and machines')
     expect(at).toBeGreaterThan(0)
     const section = SWARM_TOOLS_SKILL.slice(at, SWARM_TOOLS_SKILL.indexOf('## Shared machines and secrets'))
-    for (const part of ['Team account', 'nobody types in it', 'none of the owner\'s tools', 'in their own session', 'handoff',
+    for (const part of ['in their own session', 'handoff',
       '## GitHub', 'GitHub App', 'pull requests', 'where the repository\'s installation of the App granted it', 'Never ask a person to sudo', 'Never ask for a token']) expect(section).toContain(part)
   })
   // Task #2924 (Dee, 2026-11-04): the agent doing the work posts in its project chat itself, joining nobody there (#2207).
