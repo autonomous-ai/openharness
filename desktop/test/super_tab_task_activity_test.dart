@@ -5,6 +5,7 @@ import 'package:harness/shared/theme/appearance_prefs_store.dart';
 import 'package:harness/state/harness_activity.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/task_card.dart';
+import 'package:harness/super_tabs/task_groups.dart';
 import 'package:harness/super_tabs/tasks_view.dart';
 import 'package:harness/terminal/terminal_theme.dart';
 import 'package:harness/terminal/terminal_theme_store.dart';
@@ -175,10 +176,15 @@ void main() {
         HarnessActivity.needsInput,
       );
       final card = tester.widget<SuperTabTaskCard>(_card('task'));
-      expect(card.caption, contains('Needs you'));
+      // A List row says it in its caption; a Board tile wears it as a chip (task #3869).
+      if (list) {
+        expect(card.caption, contains('Needs you'));
+      } else {
+        expect(card.chips, contains(SuperTabStateChip.needsYou));
+      }
       expect(
         find.descendant(of: _card('task'), matching: find.text('Needs you')),
-        findsNothing,
+        list ? findsNothing : findsOneWidget,
       );
       await tester.pumpWidget(const SizedBox());
     });
@@ -262,10 +268,14 @@ void main() {
         ),
         list: list,
       );
-      expect(
-        tester.widget<SuperTabTaskCard>(_card('task')).caption,
-        'ken15 · Finch2 · Needs you',
-      );
+      final card = tester.widget<SuperTabTaskCard>(_card('task'));
+      if (list) {
+        expect(card.caption, 'ken15 · Finch2 · Needs you');
+      } else {
+        // A tile names no one and does not repeat who waits: the chip says it.
+        expect(card.caption, '');
+        expect(card.chips, [SuperTabStateChip.needsYou]);
+      }
       await tester.pumpWidget(const SizedBox());
     });
 
@@ -297,10 +307,14 @@ void main() {
       );
       await _show(tester, server, list: list);
       expect(find.textContaining('Agent unavailable'), findsNothing);
-      expect(
-        tester.widget<SuperTabTaskCard>(_card('known')).caption,
-        contains('Finch2'),
-      );
+      final known = tester.widget<SuperTabTaskCard>(_card('known'));
+      if (list) {
+        expect(known.caption, contains('Finch2'));
+      } else {
+        // The tile shows the agent as an avatar, and none for one that is gone.
+        expect(known.agent?.displayName, 'Finch2');
+        expect(tester.widget<SuperTabTaskCard>(_card('missing')).agent, isNull);
+      }
       await tester.pumpWidget(const SizedBox());
     });
   }

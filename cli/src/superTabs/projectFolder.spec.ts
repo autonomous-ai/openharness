@@ -207,6 +207,16 @@ describe('preparing another person\'s start with the Harness GitHub App', () => 
     expect(app.prepare).not.toHaveBeenCalled()
   })
 
+  // Task #4116 (Swarm v3): a Regular agent is in no project when it starts; its task decides where it works.
+  it('prepares nothing for a Regular agent, which starts in no project: no token, no clone, no fetch', async () => {
+    const app = hosted(new SuperTabHostError('NOT_FOUND', 'This start has no project folder to prepare.', 404))
+    Object.assign(app.start.request, { regular: true })
+    expect(await app.ready()).toBeNull()
+    expect(app.backend).not.toHaveBeenCalled()
+    expect(app.prepare).not.toHaveBeenCalled()
+    expect(app.fetch).not.toHaveBeenCalled()
+  })
+
   it('in a team account, always asks for a token, and fails without one rather than using any other login', async () => {
     const team = hosted()
     expect(await team.ready(true)).toEqual({ requester: 'olive@example.com' })

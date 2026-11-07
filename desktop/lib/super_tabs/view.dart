@@ -20,6 +20,7 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/finger_target.dart';
 import '../widgets/new_harness_attachments.dart';
 import '../widgets/new_harness_paste.dart';
+import '../core/local_key_value_store.dart';
 import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
@@ -28,6 +29,7 @@ import '../shortcuts/keymap.dart' show KeymapContext;
 import 'chat_find.dart';
 import 'chat_scroll.dart';
 import 'leaderboard/reader.dart';
+import 'leaderboard/weekly_page.dart';
 import 'jump_to_latest.dart';
 import 'unread_line.dart';
 import 'roster.dart';
@@ -61,11 +63,15 @@ import 'crew_panel.dart';
 import 'instructions_panel.dart';
 import 'project_rules.dart';
 import 'model.dart';
+import 'join/new_agent_dialog.dart';
 import 'agent_details.dart';
 import 'identity.dart' show superTabMachineName;
 import 'identity_card.dart';
 import 'prompt_alerts.dart';
 import 'workgroup_name.dart';
+import 'buddy_list.dart';
+import 'project_people.dart';
+import 'proposal_form.dart';
 import 'backlog.dart'
     show
         SuperTabTaskPriority,
@@ -80,6 +86,7 @@ import 'message_row.dart';
 import 'message_receipt.dart';
 import 'notifications.dart';
 import 'buddies.dart';
+import 'buddy_restart.dart';
 import 'decisions.dart';
 import 'day_pill.dart';
 import 'decisions_view.dart';
@@ -107,6 +114,7 @@ import 'visible_tick.dart';
 import 'buddy_rows.dart';
 import 'task_groups.dart';
 import 'tasks_view.dart';
+import 'tasks/personal_tasks_pane.dart';
 import 'voice_length.dart';
 import '../widgets/dial_list_scroll.dart';
 import '../widgets/laid_out_list.dart';
@@ -130,12 +138,23 @@ class SuperTabView extends StatefulWidget {
     this.terminalsVisible = false,
     this.app,
     this.onNewProject,
+    this.rightPane,
     this.onNewSwarm,
     this.onChooseAgentTerminal,
     this.linkSwarms,
     this.voiceRecorder,
+    this.paneStore,
+    this.board = false,
   });
   final SuperTabController controller;
+
+  /// Where pane widths are remembered; the app's local store when null.
+  final LocalKeyValueStore? paneStore;
+
+  /// Desktop's layout of task #3787 (anh Dee): a project opens its Board with the person's Buddy beside it, the left
+  /// rail has no Buddy entry and no Threads, and a chat is one flat list (old thread replies inline in time order, a
+  /// reply quoting its message). The web keeps today's layout for now.
+  final bool board;
   final VoidCallback onInvite;
   final ValueChanged<SuperTabConversation> onAddAgent;
   final ValueChanged<SuperTabAgent> onOpenTerminal;
@@ -149,6 +168,11 @@ class SuperTabView extends StatefulWidget {
   final bool terminalsVisible;
   final AppNotifier? app;
   final VoidCallback? onNewProject;
+
+  /// The Desktop's right pane (Swarm v3's Tasks, task #4119): always shown, never collapsing, in the pane layout's right
+  /// slot. Given, the chat of the selected agent or project is in the middle; without it the right pane keeps the Board's
+  /// chat as before.
+  final Widget Function(BuildContext context)? rightPane;
 
   /// The existing New Swarm, for the Swarm dropdown atop the left bar; none
   /// without it.
@@ -199,6 +223,76 @@ class _SuperTabViewState extends State<SuperTabView>
   /// requests does for a task.
   bool _showTasks = false;
 
+  /// The project whose Board holds the middle pane, with the selected chat (the person's Buddy, or a card's task) on
+  /// the right (anh Dee, task #3787): opening a project shows its Board, not its chat.
+  String? _boardProjectId;
+
+  /// Opens [project]'s Board in the middle, with the person's Buddy on the right.
+  void _openBoard(SuperTabProject project) {
+    c.leaveDevices();
+    widget.onCloseTerminal?.call();
+    setState(() {
+      _page = null;
+      _showManage = _showTasks = _showPullRequests = false;
+      _boardProjectId = project.id;
+      _agentChatId = null;
+    });
+    _showBuddy(project);
+    _closeSidebar();
+  }
+
+  /// A project's own chat is open and no Board is: its Chat view, with the
+  /// header's Members, Terminals and Tasks icons, as before the fixed
+  /// layout. Its Tasks icon opens the Board with projects and the Buddy.
+  /// The chat the reader chose in My agents (Swarm v3, task #4118), shown in the middle while it stays the selected one.
+  String? _agentChatId;
+
+  /// Opens the chat of an agent chosen in My agents in the middle: the Board closes and the chat takes its place.
+  void _openAgentChat(String id) {
+    c.leaveDevices();
+    widget.onCloseTerminal?.call();
+    setState(() {
+      _page = null;
+      _showManage = _showTasks = _showPullRequests = false;
+      _boardProjectId = null;
+      _agentChatId = id;
+    });
+    c.select(id);
+    _closeSidebar();
+  }
+
+  bool get _projectChatOnly {
+    final group = c.selected;
+    return _boardProjectId == null &&
+        group != null &&
+        !group.isBuddyChat &&
+        c.snapshot?.projectById(group.projectId) != null;
+  }
+
+  /// Keeps the Board of the project [group] belongs to in the middle, for a
+  /// task or project chat opened by a card, a link or a notice; the Buddy's
+  /// own chat names no project of its own.
+  void _showBoardOf(SuperTabConversation group) {
+    if (!widget.board || group.isBuddyChat) return;
+    final project = c.snapshot?.projectById(group.projectId);
+    if (project == null) return;
+    setState(() {
+      _boardProjectId = project.id;
+      if (group.id != project.leadConversationId) _tasksSelectedId = group.id;
+    });
+  }
+
+  /// The person's Buddy chat on the right: the Swarm's one Buddy, or this project's.
+  void _showBuddy(SuperTabProject project) {
+    final key = c.oneBuddy ? SuperTabController.kSwarmBuddyKey : project.id;
+    final chat = c.buddyChat(key);
+    if (chat != null) {
+      unawaited(c.select(chat.id));
+    } else {
+      unawaited(c.openBuddyChat(key));
+    }
+  }
+
   /// The card the board shows selected (task #2948): the task or proposal
   /// last opened from it, or the task whose chat the board was opened from.
   String? _tasksSelectedId;
@@ -206,6 +300,13 @@ class _SuperTabViewState extends State<SuperTabView>
   /// Why the last priority change was refused, and for which task: said
   /// beside that task's title (task #3117).
   ({String taskId, String error})? _priorityRefusal;
+
+  /// The server's refusal of the last pause or resume, said under the card chat's header (#3820).
+  ({String taskId, String error})? _pauseRefusal;
+
+  /// The answer being written to a card's question, and the server's refusal of the last one sent (#3820).
+  final _answer = TextEditingController();
+  ({String taskId, String error})? _answerRefusal;
 
   /// The Swarm's page holding the main pane, if one does: Decisions,
   /// Mentions or Threads (anh Dee, 11-05, task #2996).
@@ -1097,6 +1198,7 @@ class _SuperTabViewState extends State<SuperTabView>
     // The controller outlives its view, reading another Swarm's replies.
     c.threadPaneHidden();
     WidgetsBinding.instance.removeObserver(this);
+    _answer.dispose();
     _board.dispose();
     _facts.dispose();
     c.removeListener(_changed);
@@ -1799,6 +1901,11 @@ class _SuperTabViewState extends State<SuperTabView>
       }
       return;
     }
+    if (action == 'people') {
+      final project = c.snapshot?.projectFor(group.id);
+      if (project != null) await showProjectPeople(context, c, project);
+      return;
+    }
     if (action == 'rules') {
       final project = c.snapshot?.projectFor(group.id);
       if (project != null) {
@@ -1989,10 +2096,13 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   Widget _sidebar() => ProjectSidebar(
+    board: widget.board,
     controller: c,
     compact: _phone,
     app: widget.app,
     onNewProject: widget.onNewProject,
+    onNewAgent: widget.app == null ? null : _newAgent,
+    onOpenAgentChat: _openAgentChat,
     onNewSwarm: widget.onNewSwarm,
     page: _pageShown,
     places: SuperTabPlaces.of(c),
@@ -2004,6 +2114,11 @@ class _SuperTabViewState extends State<SuperTabView>
     // and the sidebar lists it as Slack does (task #2996).
     onPage: _openPage,
     onSelect: (id) {
+      // A project's row opens its Board (task #3787), never its chat.
+      final project = c.snapshot?.projects
+          .where((p) => p.leadConversationId == id)
+          .firstOrNull;
+      if (project != null && widget.board) return _openBoard(project);
       setState(() {
         _page = null;
         _showManage = _showTasks = false;
@@ -2017,6 +2132,15 @@ class _SuperTabViewState extends State<SuperTabView>
     },
     onOpenBuddyChat: (projectId) => unawaited(_openBuddyChat(projectId)),
   );
+
+  /// + New agent (Swarm v3, task #4118): the creation dialog, where Regular or PM is chosen and the agent starts on this
+  /// computer. It needs the app: a view without one has no +.
+  void _newAgent() {
+    final app = widget.app;
+    if (app != null) {
+      unawaited(showSwarmNewAgentDialog(context, controller: c, app: app));
+    }
+  }
 
   /// Opens the reader's Buddy chat in [projectId] in front of Notifications,
   /// pull requests and a terminal, opening it on the server when they have
@@ -2179,9 +2303,8 @@ class _SuperTabViewState extends State<SuperTabView>
   /// Opens chat [conversationId] from a row of a page; false when it is
   /// gone or the reader's access is.
   bool _openConversation(String conversationId) {
-    if (c.accessRevoked || c.snapshot?.conversation(conversationId) == null) {
-      return false;
-    }
+    final group = c.snapshot?.conversation(conversationId);
+    if (c.accessRevoked || group == null) return false;
     widget.onCloseTerminal?.call();
     _closeSidebar();
     setState(() {
@@ -2189,6 +2312,7 @@ class _SuperTabViewState extends State<SuperTabView>
       _showManage = false;
       _showPullRequests = _showTasks = false;
     });
+    _showBoardOf(group);
     c.select(conversationId);
     return true;
   }
@@ -2256,6 +2380,7 @@ class _SuperTabViewState extends State<SuperTabView>
     widget.onCloseTerminal?.call();
     _closeSidebar();
     c.select(id);
+    _showBoardOf(c.snapshot!.conversation(id)!);
     // A thread reply opens its thread; one shown only there has no row in the
     // chat to scroll to.
     if (message.threadReply) {
@@ -2488,6 +2613,10 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// The messages [id]'s list shows, in order.
   /// A thread reply shows in its thread, and here only when also sent.
+  /// No Threads ([SuperTabView.threads]): a chat is one flat list, old thread replies inline in time order, and a
+  /// reply quotes its message rather than opening a thread.
+  bool get _flatChat => widget.board;
+
   List<SuperTabMessage> _shownMessages(String id, {bool replies = false}) {
     final messages = c.taskMessages(id);
     final answered = answeredPromptAlerts(
@@ -2498,7 +2627,7 @@ class _SuperTabViewState extends State<SuperTabView>
         .where(
           (m) =>
               _shown(m) &&
-              (replies || m.inMainStream) &&
+              (replies || _flatChat || m.inMainStream) &&
               !answered.contains(m.id),
         )
         .toList();
@@ -2918,6 +3047,7 @@ class _SuperTabViewState extends State<SuperTabView>
         : _pageShown != null
         ? switch (_pageShown!) {
             SwarmPage.decisions => 'Decisions',
+            SwarmPage.leaderboard => 'Leaderboard',
             SwarmPage.mentions => 'Mentions',
             SwarmPage.threads => 'Threads',
           }
@@ -3027,7 +3157,8 @@ class _SuperTabViewState extends State<SuperTabView>
               // would be cut ([AppMenuItem.detail]).
               detail: priority.meaning,
               selected: priority == current,
-              onPressed: editable
+              // On the Board, by role (#3820); the server enforces it.
+              onPressed: editable && c.mayPrioritize(task, priority)
                   ? () => unawaited(_setPriority(task, priority))
                   : null,
             ),
@@ -3392,6 +3523,18 @@ class _SuperTabViewState extends State<SuperTabView>
   void _openTasks(SuperTabConversation group) {
     final project = c.snapshot?.projectById(group.projectId);
     if (project == null) return;
+    if (widget.board) {
+      // The fixed layout has one Board: projects, the Board and the chat on
+      // the right, the Buddy unless a task's chat is the one open.
+      if (group.id == project.leadConversationId || group.isBuddyChat) {
+        _openBoard(project);
+      } else {
+        _showBoardOf(group);
+      }
+      c.closeThread();
+      if (_rosterOpen) _closeRoster();
+      return;
+    }
     widget.onCloseTerminal?.call();
     if (c.selectedId != project.leadConversationId) {
       unawaited(c.select(project.leadConversationId));
@@ -3420,9 +3563,329 @@ class _SuperTabViewState extends State<SuperTabView>
     ),
   );
 
+  /// Above the Board: the project's name and its Board / Chat navigation.
+  Widget _boardHeader(SuperTabProject project) => SizedBox(
+    height: 44,
+    child: Row(
+      children: [
+        const SizedBox(width: 8),
+        // The name and its tabs take the room left, so what follows sits at the right edge: a Flexible name beside a
+        // Spacer split the free space, and the name's unused half left the controls mid-bar (#3846).
+        Expanded(
+          child: Row(
+            children: [
+              Flexible(
+                child: Text(
+                  project.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: DesktopChrome.heading(),
+                ),
+              ),
+              const SizedBox(width: 12),
+              _projectTabs(project, board: true),
+            ],
+          ),
+        ),
+        // Propose straight from the Board (#3820), on a project that works from proposals.
+        if (project.boardMode && c.canWrite)
+          TextButton.icon(
+            key: const ValueKey('super-board-new-proposal'),
+            onPressed: () => unawaited(showNewProposal(context, c, project)),
+            icon: const Icon(AppIcons.plus, size: 16),
+            label: const Text('New proposal'),
+          ),
+        const SizedBox(width: 8),
+      ],
+    ),
+  );
+
+  /// Board and Chat (Ken's review of the spec): the project's Board first, its chat a tab away while projects still
+  /// talk to their PM there.
+  Widget _projectTabs(SuperTabProject project, {required bool board}) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      for (final (key, label, selected, open) in [
+        ('super-board-tab-board', 'Board', board, () => _openBoard(project)),
+        (
+          'super-board-tab-chat',
+          'Chat',
+          !board,
+          () => _openProjectChat(project),
+        ),
+      ])
+        Padding(
+          padding: const EdgeInsetsDirectional.only(
+            end: grid.AppDesktop.listRowGap,
+          ),
+          child: TextButton(
+            key: ValueKey(key),
+            onPressed: selected ? null : open,
+            style: TextButton.styleFrom(
+              backgroundColor: selected ? grid.AppSurface.selectedFill : null,
+              foregroundColor: selected
+                  ? DesktopChrome.foreground
+                  : DesktopChrome.muted,
+              // The tab shown has no action, so a disabled button would grey it: it reads as selected instead.
+              disabledForegroundColor: DesktopChrome.foreground,
+            ),
+            child: Text(label),
+          ),
+        ),
+    ],
+  );
+
+  /// The project's chat in the middle, as before the Board: the Chat tab. Its
+  /// Tasks icon brings the Board back with projects and the Buddy.
+  void _openProjectChat(SuperTabProject project) {
+    setState(() {
+      _boardProjectId = null;
+      // Its chat is the one chosen, so the Board is not implied by the selection.
+      _agentChatId = project.leadConversationId;
+    });
+    unawaited(c.select(project.leadConversationId));
+  }
+
+  /// The chat of the selected agent in the middle (Swarm v3, task #4118), under its name.
+  Widget _middleChat(Widget chat) {
+    final group = c.selected;
+    return Column(
+      key: const ValueKey('super-middle-chat'),
+      children: [
+        SizedBox(
+          height: 44,
+          child: Row(
+            children: [
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  group?.isBuddyChat == true
+                      ? 'Your Buddy'
+                      : group?.label ?? '',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: DesktopChrome.control().copyWith(
+                    fontWeight: grid.AppFont.semibold,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+            ],
+          ),
+        ),
+        Expanded(child: chat),
+      ],
+    );
+  }
+
+  /// The right pane beside the Board: the selected chat, flat, under a small header that goes back to the Buddy.
+  Widget _boardChat(Widget chat) {
+    final group = c.selected;
+    final project = c.snapshot?.projectById(_boardProjectId ?? '');
+    final onBuddy = group?.isBuddyChat == true;
+    // A card's task in a project on the Board: its priority and pause, by role (#3820).
+    final steered =
+        group != null &&
+            !onBuddy &&
+            project != null &&
+            project.boardMode &&
+            superTabCarriesPriority(group) &&
+            group.id != project.leadConversationId
+        ? group
+        : null;
+    // A proposal's question asked of the reader, answered here (#3817).
+    final question = project != null && project.boardMode && !onBuddy
+        ? switch (group?.proposal?.openQuestion) {
+            final q? when q.personId == c.accountId => q,
+            _ => null,
+          }
+        : null;
+    final refusal = [
+      if (steered != null) ...[_priorityRefusal, _pauseRefusal],
+      _answerRefusal,
+    ].where((r) => r != null && r.taskId == group?.id).firstOrNull;
+    return Column(
+      key: const ValueKey('super-board-chat'),
+      children: [
+        SizedBox(
+          height: 44,
+          child: Row(
+            children: [
+              const SizedBox(width: 12),
+              if (!onBuddy && project != null)
+                TextButton.icon(
+                  key: const ValueKey('super-board-chat-buddy'),
+                  onPressed: () => _showBuddy(project),
+                  icon: const Icon(AppIcons.arrowLeft, size: 16),
+                  label: const Text('Your Buddy'),
+                ),
+              Expanded(
+                child: Text(
+                  onBuddy ? 'Your Buddy' : (group?.label ?? ''),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: DesktopChrome.control().copyWith(
+                    fontWeight: grid.AppFont.semibold,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+            ],
+          ),
+        ),
+        // Under the header, which the narrow pane has no room left in.
+        if (steered != null)
+          Padding(
+            key: const ValueKey('super-board-chat-steer'),
+            padding: const EdgeInsetsDirectional.only(
+              start: grid.AppDesktop.controlGap,
+              end: grid.AppDesktop.controlGap,
+              bottom: grid.AppDesktop.listRowGap,
+            ),
+            child: Row(
+              children: [
+                _priorityMenu(steered),
+                if (c.maySteer(project!)) _pauseButton(steered),
+              ],
+            ),
+          ),
+        if (question != null) _questionBox(group!, question),
+        if (refusal != null)
+          Padding(
+            padding: const EdgeInsetsDirectional.only(
+              start: grid.AppDesktop.controlGap,
+              end: grid.AppDesktop.controlGap,
+              bottom: grid.AppDesktop.listRowGap,
+            ),
+            child: Text(
+              refusal.error,
+              key: const ValueKey('super-board-chat-refusal'),
+              style: DesktopChrome.metadata(),
+            ),
+          ),
+        // Several Buddies (#3818): one tab each over the chat, + New Buddy, and the open one's menu.
+        if (onBuddy && c.snapshot?.buddyCap != null)
+          SuperTabBuddyList(controller: c, app: widget.app),
+        Expanded(child: chat),
+      ],
+    );
+  }
+
+  /// The PM's question to the reader on a card, with its default and time, and a box to answer it (#3820).
+  Widget _questionBox(
+    SuperTabConversation card,
+    SuperTabProposalQuestion question,
+  ) {
+    final enabled = !c.saving && !c.hasPendingAction;
+    void send() {
+      final text = _answer.text.trim();
+      if (text.isEmpty || !enabled) return;
+      unawaited(_sendAnswer(card, question, text));
+    }
+
+    final deadline = question.deadline;
+    final time =
+        '${deadline.hour.toString().padLeft(2, '0')}:'
+        '${deadline.minute.toString().padLeft(2, '0')}';
+    return Padding(
+      key: const ValueKey('super-board-question'),
+      padding: const EdgeInsetsDirectional.only(
+        start: grid.AppDesktop.controlGap,
+        end: grid.AppDesktop.controlGap,
+        bottom: grid.AppDesktop.controlGap,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            question.question,
+            style: DesktopChrome.control(color: DesktopChrome.foreground)
+                .copyWith(fontWeight: grid.AppFont.semibold),
+          ),
+          Text(
+            question.defaultAnswer.isEmpty
+                ? 'Answer by $time.'
+                : 'If no answer by $time: ${question.defaultAnswer}',
+            style: DesktopChrome.metadata(),
+          ),
+          const SizedBox(height: grid.AppDesktop.listRowGap),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  key: const ValueKey('super-board-answer'),
+                  controller: _answer,
+                  enabled: enabled,
+                  onSubmitted: (_) => send(),
+                  decoration: const InputDecoration(
+                    hintText: 'Your answer',
+                    isDense: true,
+                  ),
+                ),
+              ),
+              const SizedBox(width: grid.AppDesktop.listRowGap),
+              FilledButton(
+                key: const ValueKey('super-board-answer-send'),
+                onPressed: enabled ? send : null,
+                child: const Text('Answer'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _sendAnswer(
+    SuperTabConversation card,
+    SuperTabProposalQuestion question,
+    String text,
+  ) async {
+    setState(() => _answerRefusal = null);
+    final refused = await c.answerQuestion(card.id, question.id, text);
+    if (!mounted) return;
+    setState(() {
+      if (refused == null) {
+        _answer.clear();
+      } else {
+        _answerRefusal = (taskId: card.id, error: refused);
+      }
+    });
+  }
+
+  /// Pause, or Resume while paused, for a card's task (#3820); a refusal is said under the header.
+  Widget _pauseButton(SuperTabConversation task) {
+    final paused = task.paused != null;
+    final enabled = !c.saving && !c.hasPendingAction;
+    return Padding(
+      padding: const EdgeInsetsDirectional.only(
+        start: grid.AppDesktop.listRowGap,
+      ),
+      child: TextButton.icon(
+        key: ValueKey(paused ? 'super-task-resume' : 'super-task-pause'),
+        onPressed: enabled ? () => unawaited(_setPaused(task, !paused)) : null,
+        icon: Icon(paused ? AppIcons.play : AppIcons.pause, size: 16),
+        label: Text(paused ? 'Resume' : 'Pause'),
+      ),
+    );
+  }
+
+  Future<void> _setPaused(SuperTabConversation task, bool paused) async {
+    setState(() => _pauseRefusal = null);
+    final refused = await c.setTaskPaused(task.id, paused: paused);
+    if (!mounted) return;
+    setState(
+      () => _pauseRefusal = refused == null
+          ? null
+          : (taskId: task.id, error: refused),
+    );
+  }
+
   /// The open project's Tasks view, while it holds the pane.
-  Widget _tasksPage() {
-    final project = _showTasks
+  Widget _tasksPage({String? boardProject}) {
+    final project = boardProject != null
+        ? c.snapshot?.projectById(boardProject)
+        : _showTasks
         ? c.snapshot?.projectById(c.selected?.projectId ?? '')
         : null;
     if (project == null) return const SizedBox.shrink();
@@ -3910,6 +4373,17 @@ class _SuperTabViewState extends State<SuperTabView>
       ),
       // The project's numbers, read only (task #3393): every member reads them; the PM changes them when asked.
       row('Project rules', 'rules'),
+      // Who may write in its chat, once it works from the Board (#3820).
+      if (project.boardMode)
+        row(
+          'People',
+          'people',
+          value: switch (project.canChatIds.length) {
+            0 => 'Only the owners can chat',
+            1 => '1 more can chat',
+            final n => '$n more can chat',
+          },
+        ),
       // While the PM has a switch under way, there is nothing to ask for.
       if (editable &&
           c.snapshot?.maySwitchLead(project.id, c.accountId) == true &&
@@ -3961,6 +4435,15 @@ class _SuperTabViewState extends State<SuperTabView>
             item(
               'Rename Buddy…',
               () => unawaited(showRenameBuddy(context, c, group.projectId)),
+            ),
+          if (editable &&
+              (c.buddy(group.projectId)?.harnessId.isNotEmpty ?? false) &&
+              c.buddy(group.projectId)!.machineId.isNotEmpty)
+            item(
+              'Restart Buddy…',
+              () => unawaited(
+                showRestartBuddy(context, c, group.projectId, app: widget.app),
+              ),
             ),
           if (editable && c.buddy(group.projectId) != null)
             item(
@@ -4235,14 +4718,17 @@ class _SuperTabViewState extends State<SuperTabView>
     final agent = message.fromAgent
         ? c.snapshot?.agent(message.authorId)
         : null;
+    // In a flat chat a thread reply answers the message it names, else its thread's root (task #3787).
+    final flatReply =
+        _flatChat && message.threadReply && message.thread != message.id;
+    final answers = message.replyTo ?? (flatReply ? message.thread : null);
     // An original outside the pages read is read by itself for its quote.
-    final quoted = message.replyTo == null || byId.containsKey(message.replyTo)
+    final quoted = answers == null || byId.containsKey(answers)
         ? null
-        : c.quoted(message.conversationId, message.replyTo!);
+        : c.quoted(message.conversationId, answers);
     final fetched = quoted?.message;
     final reply =
-        byId[message.replyTo] ??
-        (fetched != null && _shown(fetched) ? fetched : null);
+        byId[answers] ?? (fetched != null && _shown(fetched) ? fetched : null);
     final writable =
         c.canWrite &&
         c.selected?.archived == false &&
@@ -4291,7 +4777,12 @@ class _SuperTabViewState extends State<SuperTabView>
       },
       references: _references,
       onOpenGroup: (id) {
-        setState(() => _showPullRequests = _showTasks = false);
+        setState(() {
+          _showPullRequests = _showTasks = false;
+          // From a page's card (Threads), the chat comes forward: changing
+          // only the chat behind the page left the link looking dead (#3751).
+          _page = null;
+        });
         c.select(id);
         c.selectTerminal(id, null);
       },
@@ -4305,6 +4796,7 @@ class _SuperTabViewState extends State<SuperTabView>
       reply: reply,
       replyAuthor: reply == null ? null : _shownAuthor(c, reply),
       replyGone: quoted != null && reply == null,
+      quoteThreadReply: flatReply,
       onOpenReply: (row) => unawaited(_openOriginal(message, row)),
       link: SwarmMessageLink(
         tabId: c.tabId,
@@ -4329,14 +4821,14 @@ class _SuperTabViewState extends State<SuperTabView>
       // keeps the inline reply.
       onReply: !writable || inThread
           ? null
-          : root != null
+          : root != null && !_flatChat
           ? () => c.openThread(root)
           : () {
               setState(() => _replies[c.selectedId] = message);
               _focus.requestFocus();
             },
-      thread: thread,
-      threadUnread: thread != null && c.threadUnread(thread),
+      thread: _flatChat ? null : thread,
+      threadUnread: !_flatChat && thread != null && c.threadUnread(thread),
       threadTagged:
           thread != null &&
           SuperTabAttention.of(c).hasUnreadTagInThread(c.selectedId, thread.id),
@@ -4367,7 +4859,10 @@ class _SuperTabViewState extends State<SuperTabView>
               metadata: true,
             ),
       onOpenThread:
-          !inThread && root != null && (thread != null || message.threadReply)
+          !_flatChat &&
+              !inThread &&
+              root != null &&
+              (thread != null || message.threadReply)
           ? () => c.openThread(root)
           : null,
       onReturnToComposer: _focus.requestFocus,
@@ -4642,7 +5137,12 @@ class _SuperTabViewState extends State<SuperTabView>
   );
 
   Widget _conversation(bool narrow) {
-    if (c.snapshot?.projects.isEmpty == true && !c.accessRevoked) {
+    // The Desktop keeps an agent's chat open in a Swarm with no projects; with none open, there is nothing to load and
+    // the way to start shows instead (task #4219).
+    if ((!widget.board || c.selected == null) &&
+        c.snapshot?.projects.isEmpty == true &&
+        !c.accessRevoked) {
+      final newAgent = widget.board && widget.app != null ? _newAgent : null;
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -4653,13 +5153,23 @@ class _SuperTabViewState extends State<SuperTabView>
                 'Create a project to get started.',
                 style: DesktopChrome.text(color: DesktopChrome.muted),
               ),
-              if (WorkspaceChrome.of(context).superTabRecovers &&
+              if ((widget.board ||
+                      WorkspaceChrome.of(context).superTabRecovers) &&
                   widget.onNewProject != null) ...[
                 const SizedBox(height: 12),
                 FilledButton(
                   style: _thumb,
                   onPressed: c.canWrite ? widget.onNewProject : null,
                   child: const Text('New project'),
+                ),
+              ],
+              if (newAgent != null) ...[
+                const SizedBox(height: 8),
+                TextButton.icon(
+                  key: const ValueKey('super-empty-new-agent'),
+                  onPressed: c.canWrite ? newAgent : null,
+                  icon: const Icon(AppIcons.plus, size: 16),
+                  label: const Text('New agent'),
                 ),
               ],
               if (c.operationError != null) ...[
@@ -4683,7 +5193,8 @@ class _SuperTabViewState extends State<SuperTabView>
         c.canWrite &&
         group != null &&
         !group.archived &&
-        !c.isEarlierBuddyChat(group);
+        !c.isEarlierBuddyChat(group) &&
+        c.mayChatIn(group);
     final busy = c.saving || c.uploading;
     final latestOwn = c
         .messages(c.selectedId)
@@ -5257,7 +5768,23 @@ class _SuperTabViewState extends State<SuperTabView>
         // nothing looks typeable: a closed group, or an older Buddy chat in a
         // project, which also leads to the one Buddy (Lead's design review,
         // 10-31).
-        if (group != null && (c.isEarlierBuddyChat(group) || group.archived))
+        if (group != null && c.canWrite && !c.mayChatIn(group))
+          // A project on the Board: its chat is read here by everyone, written by those with Can chat (#3820).
+          Padding(
+            key: const ValueKey('super-chat-no-can-chat'),
+            padding: const EdgeInsetsDirectional.symmetric(
+              horizontal: grid.AppDesktop.groupGap,
+              vertical: grid.AppDesktop.controlGap,
+            ),
+            child: Text(
+              'Only people with Can chat write here. Talk to your Buddy, or '
+              'propose on the Board; the project owner grants Can chat in '
+              'Project settings › People.',
+              style: DesktopChrome.metadata(),
+            ),
+          )
+        else if (group != null &&
+            (c.isEarlierBuddyChat(group) || group.archived))
           Padding(
             key: c.isEarlierBuddyChat(group)
                 ? const ValueKey('super-earlier-buddy-chat')
@@ -5637,16 +6164,39 @@ class _SuperTabViewState extends State<SuperTabView>
     builder: (context, constraints) {
       grid.AppTheme.watch(context);
       final terminal = widget.terminal;
-      final narrow =
-          constraints.maxWidth < MediaQuery.textScalerOf(context).scale(720);
-      // Wide enough for a right column beside the chat; it shows only an
-      // open thread or Members, closed at rest (Quiet Swarm, 2026-11-02).
-      final wide =
-          constraints.maxWidth >= MediaQuery.textScalerOf(context).scale(1080);
       final thread = _threadPanel();
       final viewer = _imageViewer();
       // A thread opened since Members takes its side and closes it.
       if (thread != null) _rosterOpen = false;
+      // Desktop reserves both side panes even before a project is selected.
+      // Other navigation surfaces keep their existing place in the middle.
+      final agentChat =
+          widget.board && _agentChatId != null && c.selectedId == _agentChatId;
+      // The chat is in the middle, by the reader's choice of an agent or once the right pane is the Tasks slot.
+      final hasTasksPane =
+          widget.rightPane != null || c.personalTasks?.supported == true;
+      final chatInMiddle = agentChat || hasTasksPane;
+      final boardLayout =
+          widget.board &&
+          (!_projectChatOnly || chatInMiddle) &&
+          thread == null &&
+          !_rosterOpen &&
+          !_manageVisible &&
+          !_notificationsVisible &&
+          !_devicesVisible &&
+          !_terminalsVisible &&
+          !_showPullRequests &&
+          _pageShown == null;
+      // The fixed layout never drops a side pane; every other surface keeps
+      // its own width rules.
+      final narrow =
+          !boardLayout &&
+          constraints.maxWidth < MediaQuery.textScalerOf(context).scale(720);
+      // Wide enough for a right column beside the chat; it shows only an
+      // open thread or Members, closed at rest (Quiet Swarm, 2026-11-02).
+      final wide =
+          boardLayout ||
+          constraints.maxWidth >= MediaQuery.textScalerOf(context).scale(1080);
       final threadDrawer = thread != null && !wide;
       // A terminal on screen keeps its chat beside it, in the right pane, as
       // a thread sits; a thread or Members takes that side, and a narrow
@@ -5664,6 +6214,17 @@ class _SuperTabViewState extends State<SuperTabView>
         images: () => _images(_shownMessages(c.selectedId)),
         child: _conversation(narrow),
       );
+      // With the Tasks slot, a project that is selected shows its Board first, though its chat is the selected
+      // conversation (Swarm v3, task #4118).
+      final impliedBoard = hasTasksPane && !agentChat
+          ? c.snapshot?.projects
+                .where((p) => p.leadConversationId == c.selectedId)
+                .firstOrNull
+                ?.id
+          : null;
+      final boardProject = boardLayout
+          ? c.snapshot?.projectById(_boardProjectId ?? impliedBoard ?? '')?.id
+          : null;
       final chatCovered =
           (narrow && _sidebarOpen) || (!wide && _rosterOpen) || threadDrawer;
       if (_chatCovered && !chatCovered) {
@@ -5711,113 +6272,172 @@ class _SuperTabViewState extends State<SuperTabView>
             ExcludeFocus(
               excluding: chatCovered,
               child: SuperTabPaneLayout(
-                storage: widget.app?.localStore,
+                storage: widget.paneStore ?? widget.app?.localStore,
                 onLeave: _leaveResize,
                 left: narrow ? null : _sidebar(),
                 // An open thread takes the roster's side, as in Slack.
                 right: !wide
                     ? null
+                    : boardLayout
+                    ? widget.rightPane?.call(context) ??
+                          (c.personalTasks?.supported == true
+                              ? SuperTabPersonalTasksPane(
+                                  controller: c,
+                                  onOpenTask: (id) => unawaited(_openTask(id)),
+                                )
+                              : agentChat
+                              ? const SizedBox.expand()
+                              : _boardChat(chat))
                     : thread ??
                           (_rosterOpen
                               ? roster
                               : chatBeside
                               ? chat
                               : null),
-                rightDefault: thread == null && !chatBeside
+                rightDefault: boardLayout
+                    ? SuperTabPaneLayout.boardRightWidth
+                    : !boardLayout && thread == null && !chatBeside
                     ? SuperTabPaneLayout.rightWidth
                     : SuperTabPaneLayout.threadWidth,
+                // The Desktop's right pane is a fixed 340, the Tasks pane's: the middle takes the rest (River, Swarm v3).
+                rightMinimum: boardLayout
+                    ? SuperTabPaneLayout.boardRightWidth
+                    : SuperTabPaneLayout.rightWidth,
+                rightFixed: boardLayout,
                 // Over the chat, beside an open thread, as in Slack.
                 over: wide ? viewer : null,
-                center: Column(
-                  children: [
-                    _header(c.selected, narrow),
-                    if (_manageOpen)
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: SuperTabManageTabs(
-                          selected: _devicesVisible
-                              ? SuperTabManageTab.devices
-                              : _manageTab,
-                          devices: _hasDevices,
-                          onChoose: _chooseManageTab,
-                        ),
-                      ),
-                    Expanded(
-                      child: SuperTabPages(
-                        index: _devicesVisible
-                            ? 1
-                            : _manageVisible
-                            ? 4
-                            : _notificationsVisible
-                            ? 3
-                            : c.snapshot?.projects.isEmpty == true
-                            ? 0
-                            : _terminalsVisible
-                            ? 1
-                            : _showPullRequests
-                            ? 2
-                            : _showTasks
-                            ? 5
-                            : 0,
+                // A project's own chat keeps its header and tabs (Project options, Tasks): the full chat view.
+                center:
+                    boardLayout &&
+                        boardProject == null &&
+                        c.snapshot?.isProjectLead(c.selectedId) != true
+                    ? (chatInMiddle
+                          ? _middleChat(chat)
+                          : const SizedBox.shrink())
+                    : Column(
                         children: [
-                          chatBeside ? const SizedBox.shrink() : chat,
-                          terminal ?? const SizedBox.shrink(),
-                          _showPullRequests
-                              ? SuperTabPullRequests(
-                                  controller: c,
-                                  app: widget.app,
-                                  visible: !_terminalsVisible,
-                                )
-                              : const SizedBox.shrink(),
-                          switch (_pageShown) {
-                            SwarmPage.decisions => SuperTabDecisionsPage(
-                              activity: SuperTabActivity.of(c),
-                              highlight: _highlight,
-                              highlightTurn: _highlightTurn,
-                              onOpenConversation: _openConversation,
-                              onOpenReminder: (reminder) =>
-                                  unawaited(_openReminder(reminder)),
-                            ),
-                            SwarmPage.mentions => SuperTabMentionsPage(
-                              activity: SuperTabActivity.of(c),
-                              onOpenMention: (mention) =>
-                                  unawaited(_openMention(mention)),
-                            ),
-                            SwarmPage.threads => SuperTabThreadsPage(
-                              activity: SuperTabActivity.of(c),
-                              onOpenThread: _openThreadFromList,
-                              message: (message) => _message(
-                                message,
-                                false,
-                                const {},
-                                inThread: true,
+                          if (boardProject != null)
+                            _boardHeader(c.snapshot!.projectById(boardProject)!)
+                          else ...[
+                            if (widget.board &&
+                                !_manageVisible &&
+                                !_notificationsVisible &&
+                                _pageShown == null)
+                              if (c.snapshot?.projects
+                                      .where(
+                                        (p) =>
+                                            p.leadConversationId ==
+                                            c.selectedId,
+                                      )
+                                      .firstOrNull
+                                  case final project?)
+                                Padding(
+                                  padding: const EdgeInsetsDirectional.only(
+                                    start: grid.AppDesktop.controlGap,
+                                    top: grid.AppDesktop.listRowGap,
+                                  ),
+                                  child: Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: _projectTabs(project, board: false),
+                                  ),
+                                ),
+                            _header(c.selected, narrow),
+                          ],
+                          if (_manageOpen)
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: SuperTabManageTabs(
+                                selected: _devicesVisible
+                                    ? SuperTabManageTab.devices
+                                    : _manageTab,
+                                devices: _hasDevices,
+                                onChoose: _chooseManageTab,
                               ),
                             ),
-                            null => const SizedBox.shrink(),
-                          },
-                          _manageVisible
-                              ? SuperTabManagePage(
-                                  controller: c,
-                                  app: widget.app,
-                                  board: _board,
-                                  tab: _manageTab,
-                                  onAddAgent: widget.onAddAgent,
-                                  onOpenAgent: (agent) {
-                                    setState(() => _showManage = false);
-                                    (widget.onChooseAgentTerminal ??
-                                            widget.onOpenTerminal)
-                                        .call(agent);
-                                  },
-                                  onOpenConversation: _openConversation,
-                                  facts: _facts,
-                                )
-                              : const SizedBox.shrink(),
-                          _tasksPage(),
+                          Expanded(
+                            child: SuperTabPages(
+                              index: boardProject != null
+                                  ? 5
+                                  : _devicesVisible
+                                  ? 1
+                                  : _manageVisible
+                                  ? 4
+                                  : _notificationsVisible
+                                  ? 3
+                                  : c.snapshot?.projects.isEmpty == true
+                                  ? 0
+                                  : _terminalsVisible
+                                  ? 1
+                                  : _showPullRequests
+                                  ? 2
+                                  : _showTasks
+                                  ? 5
+                                  : 0,
+                              children: [
+                                chatBeside || boardProject != null
+                                    ? const SizedBox.shrink()
+                                    : chat,
+                                terminal ?? const SizedBox.shrink(),
+                                _showPullRequests
+                                    ? SuperTabPullRequests(
+                                        controller: c,
+                                        app: widget.app,
+                                        visible: !_terminalsVisible,
+                                      )
+                                    : const SizedBox.shrink(),
+                                switch (_pageShown) {
+                                  SwarmPage.leaderboard =>
+                                    SuperTabWeeklyLeaderboardPage(
+                                      controller: c,
+                                    ),
+                                  SwarmPage.decisions => SuperTabDecisionsPage(
+                                    activity: SuperTabActivity.of(c),
+                                    highlight: _highlight,
+                                    highlightTurn: _highlightTurn,
+                                    onOpenConversation: _openConversation,
+                                    onOpenReminder: (reminder) =>
+                                        unawaited(_openReminder(reminder)),
+                                  ),
+                                  SwarmPage.mentions => SuperTabMentionsPage(
+                                    activity: SuperTabActivity.of(c),
+                                    onOpenMention: (mention) =>
+                                        unawaited(_openMention(mention)),
+                                  ),
+                                  SwarmPage.threads => SuperTabThreadsPage(
+                                    activity: SuperTabActivity.of(c),
+                                    onOpenThread: _openThreadFromList,
+                                    message: (message) => _message(
+                                      message,
+                                      false,
+                                      const {},
+                                      inThread: true,
+                                    ),
+                                  ),
+                                  null => const SizedBox.shrink(),
+                                },
+                                _manageVisible
+                                    ? SuperTabManagePage(
+                                        controller: c,
+                                        app: widget.app,
+                                        board: _board,
+                                        tab: _manageTab,
+                                        onAddAgent: widget.onAddAgent,
+                                        onOpenAgent: (agent) {
+                                          setState(() => _showManage = false);
+                                          (widget.onChooseAgentTerminal ??
+                                                  widget.onOpenTerminal)
+                                              .call(agent);
+                                        },
+                                        onOpenConversation: _openConversation,
+                                        facts: _facts,
+                                      )
+                                    : const SizedBox.shrink(),
+                                _tasksPage(boardProject: boardProject),
+                              ],
+                            ),
+                          ),
                         ],
                       ),
-                    ),
-                  ],
-                ),
               ),
             ),
             if (threadDrawer)

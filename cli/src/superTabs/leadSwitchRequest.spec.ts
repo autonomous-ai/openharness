@@ -1,18 +1,27 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { parse as parseToml } from 'smol-toml'
 import type { Daemon } from '../agentClient/daemon.js'
+import { markBuddyOwner, writeBuddyAccount } from '../lib/buddyGuard.js'
 import { fakeCore } from '../testing/fakeCore.js'
+import { processCoreApi } from '../services/processCoreApi.js'
 import { FIXTURE, readFixture } from './fixtures/read/index.js'
+// Each trust fixture moves the engine homes; do not reuse a login-shell snapshot captured by another fixture.
+vi.mock('../engines/kit/launchExecutable.js', async original => ({ ...await original<object>(),
+  launchEnvironment: async () => Object.fromEntries(['HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])) }))
+import type { EngineStatusRun } from '../lib/engineAccount.js'
 import { LeadSwitchRequests, profileSignedIn, switchChangeId, type SwitchRow } from './leadSwitchRequest.js'
+
+afterEach(() => { vi.unstubAllEnvs() })
 
 const request = { id: 'sw1', engine: 'claude', profileId: 'p1' }
 const row = (over: Record<string, unknown> = {}, top: Record<string, unknown> = {}): SwitchRow => ({ tabId: 'tab', ledConversationId: 'conv1', roleName: 'Product Manager',
   agent: { id: 'a1', harnessId: 'h1', switchRequest: request, ...over }, ...top })
 const NOW = 1_800_000_000_000
-const PM = { agentId: 'h1', engine: 'codex', cwd: '/work', permissionMode: 'ask', bypassPermission: false, defaultName: 'PM', startedBy: 'agent',
+const PM = { agentId: 'h1', sessionId: 'native-old', registeredAt: NOW, engine: 'codex', cwd: '/work', permissionMode: 'ask', bypassPermission: false, defaultName: 'PM', startedBy: 'agent',
   swarmSkill: { role: 'coordinator', key: 'swarm-lead', mode: 'orchestration', github: true } }
 
 function writeRecord(dataDir: string, changeId: string, at: number) {
@@ -62,7 +71,7 @@ function setup(options: { claim?: boolean; home?: string | null; team?: boolean;
   const switches = new LeadSwitchRequests(core, 'm1', { now: () => clock.now, home: () => home, signedIn: async () => options.signedIn !== false,
     open: async () => daemon, profiles: profiles as never, team: () => options.team === true,
     readHandoff: () => 'Earlier project state.' })
-  return { switches, calls, posted, daemon, profiles, operationIds, home, dataDir, clock, reopen: () => { live = true } }
+  return { core, switches, calls, posted, daemon, profiles, operationIds, home, dataDir, clock, reopen: () => { live = true } }
 }
 
 describe('a PM host carrying out a switch the Swarm asked for', () => {
@@ -73,7 +82,7 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     expect(t.calls.map(c => c[0])).toEqual(['agent_handoff_prepare', 'agent_close', 'agent_create', 'agent_handoff_complete'])
     const changeId = String(t.calls[0][1].changeId)
     expect(changeId).toMatch(/^[0-9a-f]{32}$/)
-    expect(t.calls[1][1]).toEqual({ agentId: 'h1', mode: 'now', changeId })
+    expect(t.calls[1][1]).toEqual({ agentId: 'h1', sessionId: 'native-old', createdAt: '2027-01-15T08:00:00.000Z', mode: 'now', changeId })
     expect(t.calls[2][1]).toMatchObject({ engine: 'claude', cwd: '/work', creationId: changeId, claudeHome: '/home/p1', permissionMode: 'ask', name: 'PM' })
     expect(String(t.calls[2][1].prompt)).toContain(`.harness/handoff/h1-${changeId}.md`)
     expect(t.calls[3][1]).toEqual({ agentId: 'h1', replacementId: 'h2', changeId, targetEngine: 'claude' })
@@ -260,14 +269,15 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     expect(String(t.calls.find(c => c[0] === 'agent_create')![1].prompt)).toContain(`conversation is ${FIXTURE.leadGroup}`)
   })
 
-  it('refuses a signed-out default account before closing the PM, outside Team only', async () => {
-    const t = setup({ home: 'default', signedIn: false })
-    await t.switches.serve(row())
-    expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false, error: 'that account is signed out' })
-    expect(t.calls).toEqual([])
-    const team = setup({ home: 'default', signedIn: false, team: true })
-    await team.switches.serve(row())
-    expect(team.calls.map(c => c[0])).toContain('agent_close')
+  // A Team daemon's default account was signed in through its owner's relay, which this could not read, so it went
+  // unchecked. With no relay (#4137) it is the account's own sign-in, which the CLI reports like any other.
+  it('refuses a signed-out default account before closing the PM, in a Team daemon too', async () => {
+    for (const team of [false, true]) {
+      const t = setup({ home: 'default', signedIn: false, team })
+      await t.switches.serve(row())
+      expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false, error: 'that account is signed out' })
+      expect(t.calls).toEqual([])
+    }
   })
 
   it('refuses a signed-out account without closing the PM', async () => {
@@ -316,7 +326,7 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
 
     await t.switches.serve(row({ switchRequest: undefined, switchLanded: { id: 'sw1', candidateAgentId: 'm2-h2' } }))
     expect(t.calls.map(c => c[0])).toEqual(['agent_handoff_prepare', 'agent_close'])
-    expect(t.calls.at(-1)![1]).toEqual({ agentId: 'h1', mode: 'now', changeId })
+    expect(t.calls.at(-1)![1]).toEqual({ agentId: 'h1', sessionId: 'native-old', createdAt: '2027-01-15T08:00:00.000Z', mode: 'now', changeId })
     expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: true })
   })
 
@@ -339,49 +349,206 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
 })
 
 describe('whether a profile folder holds a sign-in', () => {
-  it('reads the default account where its engine keeps it', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'lead-switch-default-'))
-    const keychain = (raw: string | null) => ({ home, platform: 'linux' as const, readKeychain: async () => raw })
-    const good = JSON.stringify({ claudeAiOauth: { accessToken: 't', expiresAt: NOW + 1000 } })
-    expect(await profileSignedIn('claude', 'default', NOW, keychain(null), {})).toBe(false)
-    expect(await profileSignedIn('claude', 'default', NOW, keychain(good), {})).toBe(true)
-    expect(await profileSignedIn('claude', 'default', NOW, keychain(null), { ANTHROPIC_API_KEY: 'k' })).toBe(true)
-    expect(await profileSignedIn('codex', 'default', NOW, { home }, {})).toBe(false)
-    mkdirSync(join(home, '.codex'))
-    writeFileSync(join(home, '.codex', 'auth.json'), JSON.stringify({ OPENAI_API_KEY: 'k' }))
-    expect(await profileSignedIn('codex', 'default', NOW, { home }, {})).toBe(true)
+  /** A fake `claude auth status --json` / `codex login status`, recording what it was asked. */
+  const cli = (signedIn: boolean | null) => {
+    const calls: Array<{ engine: string; args: readonly string[]; env: NodeJS.ProcessEnv }> = []
+    const run: EngineStatusRun = async (engine, args, env) => {
+      calls.push({ engine, args, env })
+      if (signedIn === null) return null
+      return { code: signedIn ? 0 : 1, stdout: engine === 'claude' ? JSON.stringify({ loggedIn: signedIn, authMethod: 'claude.ai', apiProvider: 'firstParty' }) : '' }
+    }
+    return { run, calls }
+  }
+  /** A folder holding the sign-in files the CLIs once kept: their presence must never count. */
+  const folder = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'profile-signed-in-'))
+    writeFileSync(join(dir, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'a', refreshToken: 'r' } }))
+    writeFileSync(join(dir, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'a@b.c' } }))
+    writeFileSync(join(dir, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: 'k', tokens: { access_token: 'a', refresh_token: 'r' } }))
+    return dir
+  }
+
+  it('asks the engine itself for the default account, under the daemon\'s own environment, or takes its key', async () => {
+    const yes = cli(true)
+    expect(await profileSignedIn('claude', 'default', { PATH: '/bin' }, yes.run)).toBe(true)
+    expect(await profileSignedIn('codex', 'default', { PATH: '/bin', CODEX_HOME: '/mine' }, yes.run)).toBe(true)
+    expect(yes.calls).toEqual([
+      { engine: 'claude', args: ['auth', 'status', '--json'], env: { PATH: '/bin' } },
+      { engine: 'codex', args: ['login', 'status'], env: { PATH: '/bin', CODEX_HOME: '/mine' } },
+    ])
+    const no = cli(false)
+    expect(await profileSignedIn('claude', 'default', {}, no.run)).toBe(false)
+    expect(await profileSignedIn('claude', 'default', { ANTHROPIC_API_KEY: 'k' }, no.run)).toBe(true)
+    expect(no.calls).toHaveLength(1)
   })
 
-  const folder = () => mkdtempSync(join(tmpdir(), 'profile-signed-in-'))
-  const claude = (oauth: unknown) => ({ platform: 'linux' as const, readKeychain: async () => JSON.stringify({ claudeAiOauth: oauth }) })
-  const jwt = (claims: Record<string, unknown>) => ['e30', Buffer.from(JSON.stringify(claims)).toString('base64url'), 'sig'].join('.')
-  const codex = (tokens: unknown) => { const dir = folder(); writeFileSync(join(dir, 'auth.json'), JSON.stringify({ tokens })); return dir }
-
-  it('Claude: a token that has not expired, or one its refresh token renews, is signed in; none is not', async () => {
-    expect(await profileSignedIn('claude', folder(), NOW, { platform: 'linux', readKeychain: async () => null })).toBe(false)
-    expect(await profileSignedIn('claude', folder(), NOW, claude({ refreshToken: 'r' }))).toBe(false)
-    expect(await profileSignedIn('claude', folder(), NOW, claude({ accessToken: 'a' }))).toBe(true)
-    expect(await profileSignedIn('claude', folder(), NOW, claude({ accessToken: 'a', expiresAt: NOW + 1 }))).toBe(true)
-    expect(await profileSignedIn('claude', folder(), NOW, claude({ accessToken: 'a', expiresAt: NOW - 1, refreshToken: 'r' }))).toBe(true)
-    expect(await profileSignedIn('claude', folder(), NOW, claude({ accessToken: 'a', expiresAt: NOW - 1 }))).toBe(false)
+  it('asks Claude Code about a profile folder as its CLAUDE_CONFIG_DIR, and reads none of its files', async () => {
+    const dir = folder(), no = cli(false), yes = cli(true)
+    expect(await profileSignedIn('claude', dir, { PATH: '/bin' }, no.run)).toBe(false)
+    expect(no.calls).toEqual([{ engine: 'claude', args: ['auth', 'status', '--json'], env: { PATH: '/bin', CLAUDE_CONFIG_DIR: dir } }])
+    expect(await profileSignedIn('claude', dir, {}, yes.run)).toBe(true)
+    // A key the daemon has is the default account's, not the folder's.
+    expect(await profileSignedIn('claude', dir, { ANTHROPIC_API_KEY: 'k' }, no.run)).toBe(false)
+    expect(await profileSignedIn('claude', dir, {}, cli(null).run)).toBe(false)
   })
 
-  it('Codex: the same rule over auth.json and the token\'s own expiry', async () => {
-    expect(await profileSignedIn('codex', folder(), NOW)).toBe(false)
-    expect(await profileSignedIn('codex', codex({}), NOW)).toBe(false)
-    expect(await profileSignedIn('codex', codex({ access_token: 'opaque' }), NOW)).toBe(true)
-    expect(await profileSignedIn('codex', codex({ access_token: jwt({ exp: NOW / 1000 + 60 }) }), NOW)).toBe(true)
-    expect(await profileSignedIn('codex', codex({ access_token: jwt({ exp: NOW / 1000 - 60 }), refresh_token: 'r' }), NOW)).toBe(true)
-    expect(await profileSignedIn('codex', codex({ access_token: jwt({ exp: NOW / 1000 - 60 }) }), NOW)).toBe(false)
+  it('asks Codex about a profile folder as its CODEX_HOME, by its exit code, and reads none of its files', async () => {
+    const dir = folder(), no = cli(false)
+    expect(await profileSignedIn('codex', dir, { CODEX_HOME: '/other' }, no.run)).toBe(false)
+    expect(no.calls).toEqual([{ engine: 'codex', args: ['login', 'status'], env: { CODEX_HOME: dir } }])
+    expect(await profileSignedIn('codex', dir, {}, cli(true).run)).toBe(true)
+    expect(await profileSignedIn('codex', dir, {}, cli(null).run)).toBe(false)
   })
 
-  it('a switch to a profile asks the real reader by default', async () => {
+  it('a switch to a profile asks the engine by default', async () => {
     const t = setup()
+    const dir = folder(), no = cli(false)
     const switches = new LeadSwitchRequests(fakeCore({ dataDir: t.dataDir, account: { backend: vi.fn(async () => ({ status: 200, body: { success: true, data: { result: {} } } })) },
       agents: { byAgent: vi.fn(() => ({ ...PM }) as never) } }), 'm1',
-      { now: () => NOW, profiles: (() => folder()) as never, credentials: { platform: 'linux', readKeychain: async () => null } })
+      { now: () => NOW, profiles: (() => dir) as never, run: no.run })
     await switches.serve(row())
-    // Nothing signed in under that folder: refused before anything is closed.
+    expect(no.calls.map(call => [call.engine, call.env.CLAUDE_CONFIG_DIR])).toEqual([['claude', dir]])
+    // Signed out under that folder: refused before anything is closed.
     expect(vi.mocked(switches['core'].account.backend).mock.calls.at(-1)![2]).toMatchObject({ command: { type: 'agent.switchResult', ok: false, error: 'that account is signed out' } })
+  })
+})
+
+
+const buddyRow = (over: Record<string, unknown> = {}, top: Record<string, unknown> = {}): SwitchRow => row({
+  buddyOf: { personId: 'owner', generation: 'g' }, buddyScope: 'swarm',
+  switchRequest: { id: 'sw1', engine: 'codex', profileId: 'default', requestedBy: 'owner' }, ...over,
+}, { ledConversationId: undefined, buddyConversationId: 'private-chat', ...top })
+const buddySetup = (options: Parameters<typeof setup>[0] = {}) => {
+  const t = setup({ home: 'default', ...options, old: { engine: 'claude', swarmSkill: { role: 'buddy', key: 'swarm-buddy', mode: 'orchestration' }, ...options.old } })
+  vi.stubEnv('CLAUDE_CONFIG_DIR', t.home)
+  vi.stubEnv('CODEX_HOME', t.home)
+  // A signed-in daemon has already installed Codex's hooks in this fixture's own config.
+  writeFileSync(join(t.home, 'config.toml'), '')
+  markBuddyOwner('work', 'owner', t.dataDir)
+  writeBuddyAccount('owner', t.dataDir)
+  vi.mocked(t.core.account.identity).mockResolvedValue({ accountId: 'owner', email: 'owner@example.com' })
+  return t
+}
+
+describe('a Buddy engine handoff', () => {
+  it('waits for a sleeping Buddy to reopen before claiming its switch', async () => {
+    const t = buddySetup({ live: false })
+    await t.switches.serve(buddyRow())
+    expect(t.posted).toEqual([])
+    expect(t.calls).toEqual([])
+    t.reopen()
+    await t.switches.serve(buddyRow())
+    expect(t.posted.map(command => command.type)).toEqual(['agent.switchClaim'])
+    expect(t.calls.map(call => call[0])).toEqual(['agent_handoff_prepare', 'agent_close', 'agent_create', 'agent_handoff_complete'])
+  })
+
+  it.each(['owner', 'other', null])('checks the core account through the service process API (%s)', async accountId => {
+    const t = buddySetup()
+    const core = processCoreApi(t.dataDir, 'superTabs', {
+      live: () => [t.core.agents.byAgent('h1')!],
+      ask: async (query, payload) => {
+        if (query === 'account') return accountId ? { accountId, email: `${accountId}@example.com` } : {}
+        if (query === 'backend') return t.core.account.backend(String(payload.method), String(payload.path), payload.body)
+        throw new Error(`Unexpected query ${query}`)
+      },
+    })
+    const switches = new LeadSwitchRequests(core, 'm1', {
+      now: () => NOW, open: async () => t.daemon, profiles: (() => 'default') as never, signedIn: async () => true,
+    })
+    await switches.serve(buddyRow())
+    if (accountId === 'owner') {
+      expect(t.calls.map(c => c[0])).toEqual(['agent_handoff_prepare', 'agent_close', 'agent_create', 'agent_handoff_complete'])
+      expect(t.calls[2][1]).toMatchObject({ engine: 'codex', cwd: '/work', swarmRole: 'buddy' })
+    } else {
+      expect(t.calls).toEqual([])
+      expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false })
+    }
+  })
+
+  it.each(['codex', 'claude'])('answers %s folder trust for its existing Swarm Buddy home before stopping the source', async engine => {
+    const t = buddySetup({ old: { engine: engine === 'codex' ? 'claude' : 'codex' } })
+    const config = join(t.home, engine === 'codex' ? 'config.toml' : '.claude.json')
+    const request = vi.mocked(t.daemon.request).getMockImplementation()!
+    vi.mocked(t.daemon.request).mockImplementation(async (type, payload, timeout) => {
+      if (type === 'agent_close') {
+        expect(existsSync(config), 'the target engine must not ask a hidden folder question').toBe(true)
+        const saved = engine === 'codex' ? parseToml(readFileSync(config, 'utf8')) : JSON.parse(readFileSync(config, 'utf8'))
+        expect(saved.projects['/work']).toMatchObject(engine === 'codex' ? { trust_level: 'trusted' } : { hasTrustDialogAccepted: true })
+      }
+      return request(type, payload, timeout)
+    })
+    await t.switches.serve(buddyRow({ switchRequest: { id: 'sw1', engine, profileId: 'default', requestedBy: 'owner' } }))
+    expect(existsSync(config), 'the target engine must have its folder-trust answer').toBe(true)
+    expect(t.calls.map(c => c[0])).toEqual(['agent_handoff_prepare', 'agent_close', 'agent_create', 'agent_handoff_complete'])
+  })
+
+  it('leaves a project Buddy folder to its own trust question', async () => {
+    const t = buddySetup()
+    const config = join(t.home, 'config.toml')
+    await t.switches.serve(buddyRow({}, { agent: { ...buddyRow().agent, buddyScope: undefined } }))
+    expect(readFileSync(config, 'utf8')).toBe('')
+  })
+
+  it('switches Claude Code to Codex in its folder as a Buddy in the same private chat, without PM authority', async () => {
+    const t = buddySetup()
+    await t.switches.serve(buddyRow())
+    expect(t.calls.map(c => c[0])).toEqual(['agent_handoff_prepare', 'agent_close', 'agent_create', 'agent_handoff_complete'])
+    const create = t.calls[2][1]
+    expect(create).toMatchObject({ engine: 'codex', cwd: '/work', swarmRole: 'buddy', swarmSkillMode: 'orchestration', creationId: t.calls[1][1].changeId })
+    expect(create).not.toHaveProperty('swarmGitHub')
+    expect(String(create.prompt)).toContain('Your chat with your owner is conversation private-chat')
+    expect(String(create.prompt)).toContain('Context handoff:')
+    expect(String(create.prompt)).not.toContain('Product Manager of the project')
+  })
+
+  it.each(['different-owner', 'unknown-owner', 'missing-folder-owner', 'signed-out', 'team', 'no-chat', 'model-pending'])(
+    'refuses %s before preparing or closing the Buddy', async reason => {
+      const t = buddySetup({ signedIn: reason !== 'signed-out', team: reason === 'team' })
+      if (reason === 'different-owner') writeBuddyAccount('other', t.dataDir)
+      if (reason === 'unknown-owner') writeBuddyAccount(null, t.dataDir)
+      if (reason === 'missing-folder-owner') markBuddyOwner('work', 'other', t.dataDir)
+      const r = buddyRow(reason === 'model-pending' ? { modelRequest: { id: 'model1' } } : {}, reason === 'no-chat' ? { buddyConversationId: undefined } : {})
+      await t.switches.serve(r)
+      expect(t.calls).toEqual([])
+      expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false })
+    })
+
+  it('rechecks the owner after an awaited handoff before trusting the folder or closing the original Buddy', async () => {
+    const t = buddySetup()
+    const config = join(t.home, 'config.toml')
+    const request = vi.mocked(t.daemon.request).getMockImplementation()!
+    vi.mocked(t.daemon.request).mockImplementation(async (type, payload, timeout) => {
+      const reply = await request(type, payload, timeout)
+      if (type === 'agent_handoff_prepare') writeBuddyAccount('other', t.dataDir)
+      return reply
+    })
+    await t.switches.serve(buddyRow())
+    expect(t.calls.map(c => c[0])).toEqual(['agent_handoff_prepare'])
+    expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false })
+    expect(readFileSync(config, 'utf8')).toBe('')
+  })
+
+  it('does not create twice across duplicate polls or a restarted host, and accepts a late successful rebind', async () => {
+    const t = buddySetup({ createTimesOut: true })
+    await t.switches.serve(buddyRow())
+    await t.switches.serve(buddyRow())
+    const restart = new LeadSwitchRequests(fakeCore({ dataDir: t.dataDir }), 'm1', { now: () => t.clock.now, open: async () => { throw new Error('must not launch twice') } })
+    await restart.serve(buddyRow())
+    expect(t.calls.filter(c => c[0] === 'agent_create')).toHaveLength(1)
+    t.clock.now += 60_000
+    await t.switches.serve(buddyRow({ harnessId: 'h2', switchRequest: undefined }))
+    expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: true })
+  })
+
+  it('reports a failed launch only after the original Buddy is back', async () => {
+    const t = buddySetup({ refuse: 'SPAWN_LIMIT' })
+    await t.switches.serve(buddyRow())
+    expect(t.posted.map(c => c.type)).toEqual(['agent.switchClaim'])
+    t.clock.now += 3 * 60_000 + 1
+    await t.switches.serve(buddyRow())
+    expect(t.posted.map(c => c.type)).toEqual(['agent.switchClaim'])
+    t.reopen()
+    await t.switches.serve(buddyRow())
+    expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false, error: 'the new session could not start' })
   })
 })
