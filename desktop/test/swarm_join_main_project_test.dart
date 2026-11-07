@@ -26,7 +26,11 @@ void main() {
           {'id': 'lamp', 'name': 'lamp', 'lead': null, 'waiting': 5},
         ],
         'pick': 'lamp',
-      };
+      }
+      // This computer is already in the Swarm: the start needs no setup.
+      ..state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'name': 'This Mac'},
+      ];
     final c = server.controller(account: 'owner');
     addTearDown(c.dispose);
     await tester.runAsync(c.refresh);

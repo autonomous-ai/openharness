@@ -14,7 +14,7 @@ class SwarmAgentLaunchFailure implements Exception {
   String toString() => message;
 }
 
-/// The Buddy a person brings as they join, on one of their own computers: the
+/// The agent a person brings as they join, on one of their own computers: the
 /// Swarm starts it there (buddy.create). Preparation is kept across retries,
 /// and the start keeps its operation receipt.
 class SwarmAgentLauncher {
@@ -51,7 +51,7 @@ class SwarmAgentLauncher {
   void _guard() {
     if (_stopped) {
       throw const SwarmAgentLaunchFailure(
-        'You closed the form before your Buddy started.',
+        'You closed the form before your agent started.',
       );
     }
     if (!isCurrent()) {
@@ -63,9 +63,21 @@ class SwarmAgentLauncher {
 
   /// Fails only with a [SwarmAgentLaunchFailure]: a timeout or a raw error
   /// becomes a sentence naming the computer, never its text.
-  Future<Map<String, dynamic>> create(String engine, String operationId) async {
+  /// [mainProjectId]: the project it becomes a Member of; [projectName]: a new project it leads (task #4541). At most
+  /// one; neither from a form without the project list.
+  Future<Map<String, dynamic>> create(
+    String engine,
+    String operationId, {
+    String? mainProjectId,
+    String? projectName,
+  }) async {
     try {
-      return await _create(engine, operationId);
+      return await _create(
+        engine,
+        operationId,
+        mainProjectId: mainProjectId,
+        projectName: projectName,
+      );
     } on SwarmAgentLaunchFailure {
       rethrow;
     } on TimeoutException {
@@ -85,8 +97,10 @@ class SwarmAgentLauncher {
 
   Future<Map<String, dynamic>> _create(
     String engine,
-    String operationId,
-  ) async {
+    String operationId, {
+    String? mainProjectId,
+    String? projectName,
+  }) async {
     _guard();
     // A computer the Swarm does not list yet is recorded Buddy-only with its
     // folder and engines (backend buddy.create setup).
@@ -107,6 +121,8 @@ class SwarmAgentLauncher {
       'machineId': machineId,
       'engine': engine,
       if (!_listed) 'setup': _prepared,
+      'mainProjectId': ?mainProjectId,
+      'projectName': ?projectName,
     }, '$operationId-start').timeout(const Duration(seconds: 25));
     _guard();
     return result;

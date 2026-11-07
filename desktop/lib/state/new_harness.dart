@@ -1966,8 +1966,9 @@ class NewHarnessController extends ChangeNotifier {
   /// A missing or ambiguous saved value stays visible until the person
   /// replaces it. These checks never select a different launch target.
   ({NewHarnessField field, String message})? get requiredChoice {
-    // A Buddy needs only its agent and computer (task #4196).
-    if (checking || bringsBuddy) return null;
+    // A Buddy needs only its agent and computer (task #4196); an agent picked from the project list has no folder of
+    // the form's (task #4541).
+    if (checking || bringsBuddy || choosesProject) return null;
     if (needsProject) {
       return (field: NewHarnessField.projectMenu, message: 'Choose a project.');
     }
