@@ -242,7 +242,8 @@ describe('creating an agent', () => {
     mkdirSync(config); writeFileSync(settings, '{"theme":"dark"}\n')
     const launch = { current: () => true, environment: { HOME: home, CLAUDE_CONFIG_DIR: config }, prepareHooks: async () => true } as unknown as NativeLaunch
     try {
-      for (const over of [{}, { permissionMode: 'full', bypassPermission: true }]) {
+      // Team-written work too: it runs in its owner's own mode and skips nothing (review of #3485).
+      for (const over of [{}, { permissionMode: 'full', bypassPermission: true }, { permissionMode: 'teamWritten', bypassPermission: false }]) {
         for (const swarmRole of ['coordinator', 'agent']) {
           expect(await setup({ native: async () => ({ ok: true, launch }) }).create(request({ swarmRole, ...over }))).toMatchObject({ ok: true })
         }

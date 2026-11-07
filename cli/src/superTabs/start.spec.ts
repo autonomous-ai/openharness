@@ -7,7 +7,7 @@ import { buddyOwnerFile, buddyOwnerOf } from '../lib/buddyGuard.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { env } from '../config/env.js'
 import { homedir, tmpdir } from 'node:os'
-import { BUDDY_CLAUDE_SIGNED_OUT, BUDDY_NOT_OWN_MACHINE, HEAVY_NOT_RECORDED, HEAVY_REFUSED, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent } from './start.js'
+import { BUDDY_CLAUDE_SIGNED_OUT, BUDDY_NOT_OWN_MACHINE, HEAVY_NOT_RECORDED, HEAVY_REFUSED, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent, TEAM_WRITTEN_CLAUDE_ONLY } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 import { readCapacityDisk } from './disk.js'
 import { SuperTabHostError } from './wire.js'
@@ -155,8 +155,8 @@ describe('Swarm permission mode', () => {
       Object.assign(f.start.request, { engine: 'claude', projectSettings: 'off' })
       expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
       const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
-      expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: true })
-      expect(buildEngineCommandArgv('claude', { permissionMode: 'teamWritten' })).toEqual(expect.arrayContaining(['--dangerously-skip-permissions', '--setting-sources', 'user', '--strict-mcp-config']))
+      expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: false })
+      expect(buildEngineCommandArgv('claude', { permissionMode: 'teamWritten' })).toEqual(expect.arrayContaining(['--setting-sources', 'user', '--strict-mcp-config']))
     } finally { teamDaemon.value = false }
   })
 
@@ -168,7 +168,7 @@ describe('Swarm permission mode', () => {
       Object.assign(f.start.request, { engine: 'codex', projectSettings: 'off' })
       expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
       const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
-      expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: true })
+      expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: false })
       expect(String(payload.codexHome)).toContain(`${sep}${PM_HOMES}${sep}`)
       rmSync(dirname(String(payload.codexHome)), { recursive: true, force: true })
     } finally { teamDaemon.value = false }
@@ -208,12 +208,44 @@ describe('Swarm permission mode', () => {
     } finally { teamDaemon.value = false }
   })
 
-  it.each(['claude', 'codex'] as const)('refuses Team-written %s work in the main account, before anything is created', async engine => {
+  // Swarm v3 (task #4307): no Team machine is left, and the server sends Team-written work only to the project owner's own
+  // computer with project settings off (backend superTabs/teamWritten.ts, ruling #4120). It launches there as on a Team daemon.
+  it('starts Team-written Claude Code work on the owner\'s own computer with project settings off', async () => {
     const f = fixture()
-    Object.assign(f.start.request, { engine, projectSettings: 'off' })
-    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ error: 'START_FAILED' })
+    Object.assign(f.start.request, { engine: 'claude', projectSettings: 'off' })
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+    const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
+    expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: false })
+    expect(payload).not.toHaveProperty('codexHome')
+    expect(f.start.error).toBeNull()
+  })
+
+  // Review of #3485: another account's agent wrote this code, and it runs as the owner on their own computer, not in a Team
+  // account's own OS user, so it gets the owner's own permission checks and sandbox: no flag that skips them.
+  it.each(['claude', 'codex'] as const)('launches Team-written %s work with no flag that skips permissions or the sandbox', async engine => {
+    const argv = buildEngineCommandArgv(engine, { permissionMode: 'teamWritten', bypassPermission: false,
+      ...(process.platform === 'win32' ? { native: { startupArgs: [] } as never } : {}) })
+    expect(argv).not.toContain('--dangerously-skip-permissions')
+    expect(argv).not.toContain('--dangerously-bypass-approvals-and-sandbox')
+    expect(argv.join(' ')).not.toMatch(/--permission-mode|--approve-for-me|--sandbox|bypass/)
+  })
+
+  // Codex keeps the branch's settings out only in an engine home of its own, which here has no sign-in, and Harness never reads
+  // or links one (loginReads.spec.ts, security review 2 of #3485).
+  it('refuses Team-written Codex work on the owner\'s own computer before anything is made, naming Claude Code', async () => {
+    const f = fixture()
+    Object.assign(f.start.request, { engine: 'codex', projectSettings: 'off' })
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ error: 'START_FAILED', detail: TEAM_WRITTEN_CLAUDE_ONLY })
     expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
-    expect(f.start.error).toContain('Team account')
+    expect(f.start.error).toContain('Claude Code')
+    expect(existsSync(join(homedir(), PM_HOMES, f.start.creationId))).toBe(false)
+  })
+
+  it('gives a normal Codex start no engine home of its own', async () => {
+    const f = fixture()
+    Object.assign(f.start.request, { engine: 'codex' })
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+    expect(f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!).not.toHaveProperty('codexHome')
   })
 
   it.each(['opencode', 'kilo'])('fails a pending legacy %s Swarm start before native creation', async engine => {
