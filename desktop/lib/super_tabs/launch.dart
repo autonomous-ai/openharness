@@ -347,9 +347,16 @@ class SuperTabLaunch {
                     try {
                       await launch.resume();
                     } on SuperTabFailure catch (failure) {
-                      if (failure.code == 'CREATION_FAILED') {
-                        saved.remove('phase');
-                        saved.remove('creationId');
+                      if (failure.code == 'CREATION_FAILED' ||
+                          failure.code == 'CREATION_STOPPED') {
+                        // Nothing of that start joins: the next one is a new agent, with a join of its own
+                        // (hotfix #4709).
+                        saved
+                          ..remove('phase')
+                          ..remove('creationId')
+                          ..remove('harnessId')
+                          ..remove('command')
+                          ..['joinId'] = superTabOperationId();
                         await launch.persist();
                         integration.pending = false;
                         integration.resume = null;
@@ -395,6 +402,12 @@ class SuperTabLaunch {
 
   String machineNameOf(String machine) =>
       app.stateOf(machine)?.machine.displayName ?? machine;
+
+  /// What a request whose harness stopped before it joined says (hotfix #4709): Start begins it again.
+  SuperTabFailure get stopped => SuperTabFailure(
+    'CREATION_STOPPED',
+    'The $who stopped on $machineName before it joined. Press Start to try again.',
+  );
 
   String get startedNote =>
       'The $who started on $machineName. Check status to add it to the project.';
@@ -1354,6 +1367,9 @@ class SuperTabLaunch {
         'Waiting for the new harness to appear on its machine.',
       );
     }
+    // Its machine still lists it, but it is not running: adding it would give the Swarm an agent that never answers
+    // (hotfix #4709).
+    if (native.isStopped) throw stopped;
     // Whether it leads was read when the box opened. A project that got its
     // Product Manager since keeps it: agent.add would make this one its lead
     // (Hollis, review of #2803). This one was started as a PM, so it does not
@@ -1551,6 +1567,7 @@ class SuperTabLaunch {
       if (const {
         'ACCOUNT_CHANGED',
         'AGENT_UNAVAILABLE',
+        'CREATION_STOPPED',
         'COORDINATOR_TAKEN',
         'FILES_UNCONFIRMED',
       }.contains(failure.code)) {
@@ -1598,6 +1615,7 @@ class SuperTabLaunch {
             (saved['files'] as List? ?? const []).isEmpty,
       );
     } on SuperTabFailure catch (failure) {
+      if (failure.code == 'CREATION_STOPPED') throw stopped;
       if (failure.code != 'CREATION_PENDING') rethrow;
       throw SuperTabFailure(
         'CREATION_PENDING',

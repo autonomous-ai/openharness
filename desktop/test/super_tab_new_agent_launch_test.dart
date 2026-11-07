@@ -319,6 +319,11 @@ void main() {
           hasLength(2),
         );
         expect(f.connection.joins, hasLength(2));
+        // Its own join, never the stopped one's replayed.
+        expect(
+          f.connection.joins.last['operationId'],
+          isNot(f.connection.joins.first['operationId']),
+        );
       });
     }
   });
