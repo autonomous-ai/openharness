@@ -159,7 +159,9 @@ describe('personal approval enforced before work', () => {
   })
   it('refuses invalid suggestions and rechecks a changed agent atomically on approval', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
-    for (const agentId of [f.buddy, f.worker, 'missing']) expect(() => f.runCommand({ type: 'task.suggest', conversationId: id, agentId })).toThrow()
+    for (const agentId of [f.buddy, 'missing']) expect(() => f.runCommand({ type: 'task.suggest', conversationId: id, agentId })).toThrow()
+    // A busy agent may be suggested: the task waits for it, and its assignment checks it is free (task #4252).
+    f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.worker })
     f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate })
     f.state.agents.find(a => a.id === f.candidate)!.workDecision = 'stop'
     expect(() => f.runCommand({ type: 'task.approve', conversationId: id })).toThrow()

@@ -1846,11 +1846,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   }
 
   /** Every check work.assign makes before [worker] takes [group]'s work, throwing its refusal; nothing changes here, so a
-   *  caller trying candidates in turn (openReviewSteps) catches the refusal and tries the next. */
+   *  caller trying candidates in turn (openReviewSteps) catches the refusal and tries the next. A [suggestion] (task.suggest,
+   *  task.approve) checks only that it may ever take it: whether it is free now (launching, moving, busy) is the assignment's to
+   *  check, so a person's consent is not refused for it (task #4252). */
   const assignRefusal = (group: Conversation, worker: Agent, suggestion = false) => {
     if (!suggestion) requireTaskApproval(group, worker.id)
     if (!suggestion && group.proposal && !['accept', 'reshape'].includes(group.proposal.decision?.kind ?? '')) fail('PROPOSAL_UNDECIDED', 'The PM must accept or reshape this proposal before assigning work.', 409)
-    if (state.starts?.some(s => s.poolGeneration && !s.poolSettled && s.request.machineId === worker.machineId && s.harnessId === worker.harnessId)) {
+    if (!suggestion && state.starts?.some(s => s.poolGeneration && !s.poolSettled && s.request.machineId === worker.machineId && s.harnessId === worker.harnessId)) {
       fail('START_PENDING', 'Wait for the host to finish this agent’s launch and model selection.')
     }
     if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
@@ -1860,7 +1862,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     // task is handed on (closedAgents.ts removeClosedAgents). Without a task it leaves on its machine's next report.
     // A crew member on its way to another machine takes work once there; an asleep one wakes for it, in place (crewKeep.ts),
     // so its session is not closed (assignTo wakes it).
-    if (worker.movedTo) fail('CREW_MOVING', `${worker.displayName ?? worker.name} is moving to another machine. Assign it once it has moved.`)
+    if (!suggestion && worker.movedTo) fail('CREW_MOVING', `${worker.displayName ?? worker.name} is moving to another machine. Assign it once it has moved.`)
     // The project's machine rules (machineRules.ts), for an assignment and for the review steps a Ready hands out alike.
     refuseByMachineRules(context, { machineId: worker.machineId, engine: worker.configuration.engine, review: isReview(group) })
     if (!worker.asleep && sessionClosed(state, worker, context.now)) {
@@ -1883,7 +1885,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     // A Team account's agent keeps what it holds and takes nothing new (task #4120); it is stopped after the release.
     if (onTeamAccount(state, worker)) failTeamWork(TEAM_ACCOUNTS_GONE)
     // A handed task does not occupy its Engineer (#3399 handed.ts): it may take this.
-    if (state.conversations.some(c => occupiesAgent(c) && c.assignment?.agentId === worker.id)) fail('AGENT_BUSY', 'This agent already owns an active assignment.')
+    if (!suggestion && state.conversations.some(c => occupiesAgent(c) && c.assignment?.agentId === worker.id)) fail('AGENT_BUSY', 'This agent already owns an active assignment.')
   }
   /** [worker] takes [group]'s work as assignment [assignmentId], after assignRefusal let it: what work.assign writes, and its
    *  brief to the worker. */
@@ -4609,8 +4611,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (command.type === 'task.reject') approval.reason = command.reason
         // This decision releases the gate; the ordinary work.assign path alone launches work, with all of the
         // store's global session, repository, machine and account checks. Never introduce a second assignment path here.
-        if (command.type === 'task.approve' && approval.suggestedAgentId)
+        if (command.type === 'task.approve' && approval.suggestedAgentId) {
+          if (!state.agents.some(a => a.id === approval.suggestedAgentId)) {
+            fail('SUGGESTED_AGENT_GONE', 'The agent suggested for this task is gone. Ask the PM to suggest another.', 409)
+          }
           assignRefusal(group, readAgent(state, actor, approval.suggestedAgentId), true)
+        }
         message(group.id, command.type === 'task.approve' ? 'Approved. Prepare and route this task using its chosen agent, if any.' : `Rejected: ${command.reason}`,
           group.leadId ? [group.leadId] : [], null, { kind: 'task-approval', state: approval.state })
       }
