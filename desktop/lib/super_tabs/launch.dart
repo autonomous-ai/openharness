@@ -1118,8 +1118,10 @@ class SuperTabLaunch {
     // deleted on another computer must not leave an unattached native session.
     final snapshot = await app.superTabs.readSnapshot(saved['tabId'] as String);
     checkAccount();
+    final member = saved['newAgent'] == true && saved['lead'] != true;
+    if (member) await _ensureMemberChat(snapshot, machine, engine);
     final conversationId = saved['conversationId'] as String;
-    if (snapshot.conversation(conversationId) == null) {
+    if (!member && snapshot.conversation(conversationId) == null) {
       if (started) throw projectUnavailable;
       // Nothing can still be starting: reopening New Project should get a
       // fresh destination instead of loading this deleted project forever.
@@ -1202,7 +1204,12 @@ class SuperTabLaunch {
         name = '$label $n';
       }
       saved['chatRequest'] = {
-        'operationId': '${saved['operationId']}-chat',
+        // A chat opened again after the last one went has an operation of its own: the same one would answer with the gone
+        // chat's receipt (hotfix #4647).
+        'operationId': switch (saved['chatAgain']) {
+          final int again => '${saved['operationId']}-chat-$again',
+          _ => '${saved['operationId']}-chat',
+        },
         'command': {
           'type': 'agent.new',
           'kind': 'regular',
@@ -1240,7 +1247,51 @@ class SuperTabLaunch {
     await persist();
   }
 
+  /// A Member's own chat (hotfix #4647): a Swarm's first read can leave a quiet chat out, so only a read of the chat
+  /// says whether it is gone. Gone, a fresh one opens: a Member has no project to lose, and the person is never left with
+  /// nothing to do but discard. [snapshot] is read when not given.
+  Future<void> _ensureMemberChat(
+    SuperTabSnapshot? snapshot,
+    String machine,
+    String? engine,
+  ) async {
+    final chat = saved['conversationId'] as String?;
+    if (chat == null) return;
+    final read =
+        snapshot ?? await app.superTabs.readSnapshot(saved['tabId'] as String);
+    checkAccount();
+    if (read.conversation(chat) != null || await _chatExists(chat)) return;
+    saved
+      ..remove('chatPrepared')
+      ..remove('chatRequest')
+      ..remove('conversationId')
+      ..remove('command')
+      ..['chatAgain'] = (saved['chatAgain'] as int? ?? 0) + 1;
+    await persist();
+    await _openMemberChat(machine, engine);
+  }
+
+  /// Whether the Swarm still has the chat [conversationId], by a read of the chat itself; a 404 or 403 says it is gone.
+  Future<bool> _chatExists(String conversationId) async {
+    try {
+      await app.superTabs.map(
+        'GET',
+        '/api/super-tabs/${saved['tabId']}/conversations/'
+            '${Uri.encodeComponent(conversationId)}/messages',
+      );
+      return true;
+    } on SuperTabFailure catch (failure) {
+      if (failure.statusCode == 404 || failure.statusCode == 403) return false;
+      rethrow;
+    }
+  }
+
   // A started request's journal stays until the person discards it.
+  static const memberChatUnavailable = SuperTabFailure(
+    'PROJECT_UNAVAILABLE',
+    'This agent’s chat is gone. Discard this request, then start the agent again.',
+  );
+
   static const projectUnavailable = SuperTabFailure(
     'PROJECT_UNAVAILABLE',
     'This project is no longer available. Discard this request, then create a new project.',
@@ -1266,6 +1317,13 @@ class SuperTabLaunch {
     Agent? recovered,
   }) async {
     checkAccount();
+    // A resumed start joins the chat this journal holds: make sure it is still there (hotfix #4647). A first start's
+    // prepare has just checked it.
+    if (recovered != null &&
+        saved['newAgent'] == true &&
+        saved['lead'] != true) {
+      await _ensureMemberChat(null, machine, saved['engine'] as String?);
+    }
     saved['machineId'] = machine;
     saved['harnessId'] = harnessId;
     saved['phase'] = 'joining';
@@ -1452,7 +1510,10 @@ class SuperTabLaunch {
     // that warns first if it slows again (task #4196). No names or ids.
     if (saved['newAgentAt'] case final int at) {
       final ms = DateTime.now().millisecondsSinceEpoch - at;
-      appLog.info('super-tabs', 'New agent (${saved['agentKind']}) running in $ms ms');
+      appLog.info(
+        'super-tabs',
+        'New agent (${saved['agentKind']}) running in $ms ms',
+      );
     }
     await app.superTabs.storage.delete(key);
   }
@@ -1467,8 +1528,12 @@ class SuperTabLaunch {
     try {
       await complete(machine, harnessId, recovered: recovered);
     } on SuperTabFailure catch (failure) {
-      // The backend no longer has the project's conversation.
-      if (failure.code == 'NOT_FOUND') throw projectUnavailable;
+      // The backend no longer has the conversation: a Member's own chat has no project to create again (#4647).
+      if (failure.code == 'NOT_FOUND') {
+        throw saved['newAgent'] == true && saved['lead'] != true
+            ? memberChatUnavailable
+            : projectUnavailable;
+      }
       if (const {
         'ACCOUNT_CHANGED',
         'AGENT_UNAVAILABLE',

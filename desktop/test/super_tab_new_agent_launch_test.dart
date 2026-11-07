@@ -177,17 +177,15 @@ void main() {
     test('a saved attempt whose chat is gone opens a fresh chat, never a dead '
         'end', () async {
       final f = SuperTabLaunchFixture()..connection.failCreation = true;
+      f.connection.server.chatsGoneAreNotFound = true;
       final first = await _newAgent(f);
       expect(await first.create(), NewHarnessOutcome.failed);
       final chats = f.connection.server.state['conversations'] as List;
       chats.removeWhere((g) => (g as Map)['kind'] == 'agent-chat');
       f.connection.failCreation = false;
       final again = await _newAgent(f);
-      expect(
-        await again.create(),
-        NewHarnessOutcome.created,
-        reason: again.error,
-      );
+      final outcome = await again.create();
+      expect(outcome, NewHarnessOutcome.created, reason: again.error);
       expect(again.error ?? '', isNot(contains('project')));
       expect(_commands(f).where((c) => c['type'] == 'agent.new'), hasLength(2));
       final chatId =
