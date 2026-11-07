@@ -51,7 +51,14 @@ void main() {
     testWidgets('Leaderboard with the reader second in ${brightness.name}', (
       tester,
     ) async {
-      await showBoard(tester, secondPlace(), brightness: brightness);
+      // The test's namesake (another person called Dee) proves You follows
+      // the account; the picture shows the plain board.
+      final server = secondPlace();
+      (server.leaderboard!['people'] as List)
+              .cast<Map<String, dynamic>>()
+              .firstWhere((p) => p['personId'] == 'scholes')['displayName'] =
+          'Scholes';
+      await showBoard(tester, server, brightness: brightness);
       await tester.pumpAndSettle();
       expect(find.text('You'), findsOneWidget);
       await captureWindow(tester, shots, 'leaderboard-you-${brightness.name}');
