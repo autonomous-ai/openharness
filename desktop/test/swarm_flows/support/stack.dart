@@ -100,6 +100,7 @@ class SwarmStack {
           .post('127.0.0.1', config['controlPort'] as int, path)
           .timeout(const Duration(seconds: 10));
       request.headers.contentType = ContentType.json;
+      request.headers.set(controlTokenHeader, config['controlToken'] as String);
       request.write(jsonEncode(body));
       final response = await request.close().timeout(
         const Duration(seconds: 60),

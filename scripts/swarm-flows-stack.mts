@@ -7,13 +7,16 @@
  * with mongodb-memory-server and redis-memory-server (scripts/swarm-flows.sh prepares it). Prints one JSON line,
  * {localPort, socketPath, machineId, owner, teammate, controlPort, logs}, and stops everything when its stdin closes.
  *
- * The control server (loopback only) lets a test act as someone other than the person at the app:
+ * The control server (loopback only) lets a test act as someone other than the person at the app. Every request carries
+ * the run's random token (`controlToken` in the ready line) in x-swarm-flows-token: another process or a web page on
+ * this computer cannot use it.
  *   POST /api   {as: 'owner'|'teammate', path, method, body} — that account's backend call.
  *   POST /agent {tab, agent, args}  — `harness super-tab --tab TAB --agent AGENT …args` on the daemon, exactly what
  *                                     an agent runs, so its posts and statuses arrive as the agent's own.
- *   POST /engine {name, crashes}     — the fake engine `name` exits at once when started (its version probe still
+ *   POST /engine {name, crashes}     — the fake engine `name` (claude or codex) exits at once when started (its version probe still
  *                                     answers), as a broken install does, or works again. */
 import { createServer } from 'node:http'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { once } from 'node:events'
@@ -51,10 +54,15 @@ async function body(req: import('node:http').IncomingMessage): Promise<Record<st
 }
 
 const wrappers: Record<string, string> = {}
+const token = randomBytes(32).toString('hex')
+const ENGINES = new Set(['claude', 'codex'])
+const authorized = (header: string | string[] | undefined) =>
+  typeof header === 'string' && header.length === token.length && timingSafeEqual(Buffer.from(header), Buffer.from(token))
 const control = createServer((req, res) => {
   void (async () => {
-    const input = await body(req)
     res.setHeader('content-type', 'application/json')
+    if (!authorized(req.headers['x-swarm-flows-token'])) { res.writeHead(403).end('{}'); return }
+    const input = await body(req)
     if (req.url === '/api') {
       const who = accounts[input.as as keyof typeof accounts]
       if (!who) { res.writeHead(400).end(JSON.stringify({ error: 'as: owner or teammate' })); return }
@@ -62,6 +70,7 @@ const control = createServer((req, res) => {
       return
     }
     if (req.url === '/engine') {
+      if (!ENGINES.has(input.name)) { res.writeHead(400).end(JSON.stringify({ error: 'name: claude or codex' })); return }
       const path = join(side.daemon.root, 'bin', String(input.name))
       wrappers[path] ??= readFileSync(path, 'utf8')
       writeFileSync(path, input.crashes ? `#!/bin/sh\ncase "$*" in *--version*) exec ${JSON.stringify(path)}.real "$@";; esac\necho "${input.name} crashed" >&2\nexit 1\n` : wrappers[path]!)
@@ -90,6 +99,7 @@ console.log(JSON.stringify({
   owner: ownerUser,
   teammate: teammateUser,
   controlPort: (control.address() as { port: number }).port,
+  controlToken: token,
   projectsDir: side.daemon.projectsDir,
   logs: backend.logPath,
 }))
