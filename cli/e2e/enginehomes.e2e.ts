@@ -142,8 +142,18 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     expect(created.error, JSON.stringify(created)).toBeUndefined()
     const agent = await until('the model-picker agent to bind', async () => {
       const now = await row(client, created.agent.id); return now?.sessionId ? now : null
-    }, 30_000)
+    }, 30_000, 10)
     if (engine === 'codex') expect(agent.codexHome).toBe(home)
+    // The picker opens as soon as the agent binds, while its attach is still reading its profile in the engine
+    // worker. 2026-10-23, main e2e: the Codex list asked then crossed the attach's commit and was answered INTERNAL.
+    // Asked from the binding until the attach is done, three at a time so that one is always in the engine worker
+    // when the attach commits, each answer is the agent's list.
+    const attached = new RegExp(`\\[agent\\] ${agent.id.slice(0, 8)} attached`)
+    const early: Row[] = []
+    await Promise.all([0, 1, 2].map(async () => {
+      while (!attached.test(d.log())) early.push(await client.request('models_list', { agentId: agent.id }, 30_000))
+    }))
+    expect(early.filter((reply) => reply.error), `${early.length} early requests`).toEqual([])
     const answer = await client.request('models_list', { agentId: agent.id }, 30_000)
     expect(answer.error, JSON.stringify(answer)).toBeUndefined()
     const ids = answer.models.map((model: Row) => model.id)

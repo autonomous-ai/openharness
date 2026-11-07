@@ -131,12 +131,22 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
   }
   const read = (s: RegisteredSession, operation: RuntimeOperation, silent = false, stillCurrent = () => true): Promise<RuntimeAnswer> => {
     const identity = binding(s), view = viewFor(s)
-    return slot(s.engine, async () => {
+    const accepted = operation.kind === 'records' || operation.kind === 'pane' || operation.kind === 'config'
+    const once = async (): Promise<RuntimeAnswer | null> => {
       if (!valid(view) || view.identity !== identity || !stillCurrent()) unavailable()
       const current = deps.resolve(view.agentId)!, version = current.cliVersion, revision = view.revision
       const answer = await deps.transport.read(current.engine, contextFor(current, view), operation)
-      if (!valid(view) || revision !== view.revision || deps.resolve(view.agentId)?.cliVersion !== version) unavailable()
-      if (operation.kind === 'records' || operation.kind === 'pane' || operation.kind === 'config') accept(view, answer, silent)
+      if (!valid(view)) unavailable()
+      return revision === view.revision && deps.resolve(view.agentId)?.cliVersion === version ? answer : null
+    }
+    return slot(s.engine, async () => {
+      // A question (models, catalog, describe, effort) whose profile moved on while the worker answered, under the
+      // same binding, is asked once more of the newer profile. 2026-10-23, main e2e: the Codex picker's models_list
+      // crossed the new agent's attach committing its hydrated profile, and was refused. Evidence is never re-read:
+      // it would be applied over the newer profile.
+      const answer = await once() ?? (accepted ? null : await once())
+      if (!answer) return unavailable()
+      if (accepted) accept(view, answer, silent)
       return answer
     })
   }
