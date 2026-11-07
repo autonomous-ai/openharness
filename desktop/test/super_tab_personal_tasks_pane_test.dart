@@ -101,7 +101,7 @@ class TasksFixture {
         return {'result': <String, dynamic>{}};
       }
       reads++;
-      final result = path.endsWith('/parts')
+      final result = path.contains('/parts')
           ? recorded('first_load')
           : {
               'format': 2,
@@ -112,14 +112,14 @@ class TasksFixture {
       if (supported) {
         result['personalTasks'] = feed(
           rows,
-          reset: path.endsWith('/parts'),
+          reset: path.contains('/parts'),
           mode: mode,
           olderCursor: olderCursor,
         );
         if (everyone case final everyone?) {
           result['allTasks'] = feed(
             everyone,
-            reset: path.endsWith('/parts'),
+            reset: path.contains('/parts'),
             mode: mode,
           );
         }

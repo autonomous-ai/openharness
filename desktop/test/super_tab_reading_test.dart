@@ -19,7 +19,7 @@ const _web = SuperTabReading(
 
 /// A read of the Swarm itself: its first load, or its changes since a cursor.
 bool _isStateRead(String path) =>
-    path == '/api/super-tabs/tab/parts' ||
+    path == '/api/super-tabs/tab/parts?allTasks=1' ||
     path.startsWith('/api/super-tabs/tab/changes?');
 
 /// A poll's read of what changed since the last one.
@@ -196,7 +196,7 @@ void main() {
           },
         )..start();
         async.flushMicrotasks();
-        expect(reads.paths, ['/api/super-tabs/tab/parts']);
+        expect(reads.paths, ['/api/super-tabs/tab/parts?allTasks=1']);
         server.holdReads!.complete();
         server.holdReads = null;
         async.flushMicrotasks();
@@ -709,7 +709,7 @@ void main() {
         async.flushMicrotasks();
         expect(reads.paths, [
           '/api/super-tabs/tab/conversations/offline/messages',
-          '/api/super-tabs/tab/parts',
+          '/api/super-tabs/tab/parts?allTasks=1',
         ]);
         server.holdReads!.complete();
         server.holdReads = null;

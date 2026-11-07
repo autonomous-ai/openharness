@@ -26,7 +26,7 @@ int _connectionReads(SuperTabFixtureConnection connection) => connection.calls
       (c) =>
           c.$1 == 'super_tabs' &&
           c.$2['method'] == 'GET' &&
-          (c.$2['path'] == '/api/super-tabs/$tabId/parts' ||
+          (c.$2['path'] == '/api/super-tabs/$tabId/parts?allTasks=1' ||
               (c.$2['path'] as String).startsWith(
                 '/api/super-tabs/$tabId/changes?',
               )),

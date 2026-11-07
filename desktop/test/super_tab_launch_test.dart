@@ -179,6 +179,7 @@ class SuperTabFixtureConnection extends WsConn {
     if (type == 'super_tabs') {
       if (changeAccountOnProjectRead &&
           payload['method'] == 'GET' &&
+          // The launch's one-off check of its Swarm, which asks for no Activity.
           payload['path'] == '/api/super-tabs/$tabId/parts') {
         app.currentUser = const CurrentUserProfile(
           id: 'different',
@@ -1941,7 +1942,7 @@ void main() {
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
       await (await f.app.superTabs.open(tabId)).refresh();
       int partsReads() => f.connection.calls
-          .where((c) => '${c.$2['path']}'.endsWith('/parts'))
+          .where((c) => '${c.$2['path']}'.contains('/parts'))
           .length;
       final before = partsReads();
       final box = await f.box(newProject: true);

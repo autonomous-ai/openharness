@@ -34,14 +34,14 @@ void main() {
     () async {
       final c = open();
       await c.refresh();
-      expect(reads, ['/api/super-tabs/tab/parts']);
+      expect(reads, ['/api/super-tabs/tab/parts?allTasks=1']);
       expect(c.snapshot!.conversation('offline')!.lastMessageSequence, 0);
 
       // Another client posts.
       server.append('From another client', conversationId: 'offline');
       await c.refresh();
       expect(reads.last, startsWith('/api/super-tabs/tab/changes?cursor='));
-      expect(reads.where((p) => p.endsWith('/parts')), hasLength(1));
+      expect(reads.where((p) => p.contains('/parts')), hasLength(1));
       expect(c.snapshot!.conversation('offline')!.lastMessageSequence, 1);
       expect(c.lastChangedAt, greaterThan(0));
     },
@@ -53,7 +53,7 @@ void main() {
       final c = open();
       await c.refresh();
       final first = server.parts.reads.last;
-      expect(first, '/api/super-tabs/tab/parts');
+      expect(first, '/api/super-tabs/tab/parts?allTasks=1');
       await c.refresh();
       await c.refresh();
       final cursors = [
@@ -75,9 +75,9 @@ void main() {
     );
     await c.refresh();
     expect(reads, [
-      '/api/super-tabs/tab/parts',
+      '/api/super-tabs/tab/parts?allTasks=1',
       startsWith('/api/super-tabs/tab/changes?cursor='),
-      '/api/super-tabs/tab/parts',
+      '/api/super-tabs/tab/parts?allTasks=1',
     ]);
     expect(c.snapshot!.conversation('private'), isNotNull);
     expect(c.error, isNull);
@@ -98,7 +98,7 @@ void main() {
           if (path.contains('/changes') && refuse-- > 0) {
             throw const SuperTabFailure('NOT_FOUND', 'Gone.', statusCode: 404);
           }
-          if (path.endsWith('/parts') && reads.length > 2) {
+          if (path.contains('/parts') && reads.length > 2) {
             throw const SuperTabFailure(
               'FORBIDDEN',
               'No access.',
@@ -114,9 +114,9 @@ void main() {
       await closing.refresh();
       await closing.refresh();
       expect(reads, [
-        '/api/super-tabs/tab/parts',
+        '/api/super-tabs/tab/parts?allTasks=1',
         startsWith('/api/super-tabs/tab/changes?cursor='),
-        '/api/super-tabs/tab/parts',
+        '/api/super-tabs/tab/parts?allTasks=1',
       ]);
       expect(closing.accessRevoked, isTrue);
       expect(c.accessRevoked, isFalse);
@@ -177,7 +177,7 @@ void main() {
     await c.refresh();
     await c.refresh();
     for (final path in reads.skip(1)) {
-      expect(Uri.parse(path).queryParameters.keys, ['cursor']);
+      expect(Uri.parse(path).queryParameters.keys, ['cursor', 'allTasks']);
     }
     expect(c.error, isNull);
   });
@@ -229,6 +229,7 @@ void main() {
       },
     )..bind('owner');
     final snapshot = await client.readSnapshot('tab');
+    // A one-off check shows no Activity, so it asks for no Activity feed.
     expect(paths, ['/api/super-tabs/tab/parts']);
     expect(snapshot.conversation('offline')!.title, 'Offline editing');
     client.dispose();
@@ -262,9 +263,9 @@ void main() {
       expect(reading.error, isNotNull);
       await reading.refresh();
       expect(reads, [
-        '/api/super-tabs/tab/parts',
+        '/api/super-tabs/tab/parts?allTasks=1',
         startsWith('/api/super-tabs/tab/changes?cursor='),
-        '/api/super-tabs/tab/parts',
+        '/api/super-tabs/tab/parts?allTasks=1',
       ]);
       expect(reading.error, isNull);
     },
@@ -278,7 +279,7 @@ void main() {
     expect(c.error, isNotNull);
     server.state['id'] = 'tab';
     await c.refresh();
-    expect(reads.last, '/api/super-tabs/tab/parts');
+    expect(reads.last, '/api/super-tabs/tab/parts?allTasks=1');
     expect(c.snapshot!.id, 'tab');
   });
 

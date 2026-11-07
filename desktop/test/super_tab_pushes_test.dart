@@ -18,7 +18,7 @@ const _web = SuperTabReading(
 );
 
 bool _isStateRead(String path) =>
-    path == '/api/super-tabs/tab/parts' ||
+    path == '/api/super-tabs/tab/parts?allTasks=1' ||
     path.startsWith('/api/super-tabs/tab/changes?');
 
 /// Every read the controller made, in order.

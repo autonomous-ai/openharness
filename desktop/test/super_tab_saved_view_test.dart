@@ -26,7 +26,7 @@ Map<String, dynamic> _view({String tab = 'tab', int pad = 0}) {
     },
   ];
   if (pad > 0) server.state['name'] = 'x' * pad;
-  final load = server.parts.read('/api/super-tabs/$tab/parts', server.state)!;
+  final load = server.parts.read('/api/super-tabs/$tab/parts?allTasks=1', server.state)!;
   return {
     'format': 2,
     'savedAt': DateTime.now().millisecondsSinceEpoch,
@@ -660,7 +660,7 @@ void _controllerTests() {
         async.flushMicrotasks();
         expect(reads.paths.where((p) => !p.contains('/messages')), [
           startsWith('/api/super-tabs/tab/changes?cursor='),
-          '/api/super-tabs/tab/parts',
+          '/api/super-tabs/tab/parts?allTasks=1',
         ]);
         expect(c.showingSaved, isFalse);
         expect(c.snapshot!.name, 'Pilot');
@@ -685,7 +685,7 @@ void _controllerTests() {
       c.start();
       async.flushMicrotasks();
       expect(reads.paths.where((p) => !p.contains('/messages')), [
-        '/api/super-tabs/tab/parts',
+        '/api/super-tabs/tab/parts?allTasks=1',
       ]);
       c.dispose();
     });
@@ -1489,7 +1489,7 @@ void _reviewTests() {
         final client =
             SuperTabClient(
                 transport: (method, path, {body}) {
-                  if (path == '/api/super-tabs/tab/parts' ||
+                  if (path == '/api/super-tabs/tab/parts?allTasks=1' ||
                       path.startsWith('/api/super-tabs/tab/changes?')) {
                     reads.add(path);
                   }

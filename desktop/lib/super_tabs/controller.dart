@@ -4421,7 +4421,9 @@ class SuperTabController extends ChangeNotifier {
       }
       _parts = null;
     }
-    final parts = SuperTabParts.firstLoad(await request('GET', '$_path/parts'));
+    final parts = SuperTabParts.firstLoad(
+      await request('GET', '$_path/parts?$superTabAllTasksQuery'),
+    );
     if (parts.state['id'] != tabId) {
       throw const FormatException('A different Swarm was returned.');
     }

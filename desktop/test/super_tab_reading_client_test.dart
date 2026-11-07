@@ -59,7 +59,7 @@ class _Backend {
   int states(String id) => paths
       .where(
         (p) =>
-            p == '/api/super-tabs/$id/parts' ||
+            p == '/api/super-tabs/$id/parts?allTasks=1' ||
             p.startsWith('/api/super-tabs/$id/changes?'),
       )
       .length;

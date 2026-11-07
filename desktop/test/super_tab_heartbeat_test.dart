@@ -9,7 +9,7 @@ import 'package:harness/super_tabs/reading.dart';
 import 'support/super_tab_fixture.dart';
 
 bool _isStateRead(String path) =>
-    path == '/api/super-tabs/tab/parts' ||
+    path == '/api/super-tabs/tab/parts?allTasks=1' ||
     path.startsWith('/api/super-tabs/tab/changes?');
 
 /// A Swarm of five machines, each reporting every 15 s, as a machine's

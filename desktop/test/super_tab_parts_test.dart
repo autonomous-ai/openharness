@@ -318,6 +318,8 @@ void main() {
         expect(parts.derivedEtag, 'e1');
         expect(Uri.splitQueryString(parts.changesQuery), {
           'cursor': parts.cursor,
+          // Activity's feed (#4689).
+          'allTasks': '1',
           'derivedEtag': 'e1',
         });
       },
@@ -363,6 +365,7 @@ void main() {
         expect(parts.derivedEtag, isNull);
         expect(Uri.splitQueryString(parts.changesQuery), {
           'cursor': parts.cursor,
+          'allTasks': '1',
         });
         final rolledBack = SuperTabParts.firstLoad(load())
           ..apply(recorded('changes'));
