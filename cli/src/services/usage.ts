@@ -74,8 +74,8 @@ export function startUsage(core: CoreApi, deps: UsageDeps = DEPS): ServiceReques
   return {
     // Codex's read starts its app-server (up to 10s, lib/codexRateLimits.ts). Answered when it settles, never in the
     // connection's line: it is asked on connect beside the requests the terminal needs.
-    // With a profile it answers for that one account only, and only to the machine's owner: the default reading is
-    // already open to guests, a second account's is not.
+    // With a profile it answers for that one account only, and only to the machine's owner. A guest never asks: its
+    // policy refuses usage_read (core/guestPolicy.ts).
     usage_read: internalOnThrow('usage_read', (payload, asker) => {
       const wanted = (payload as { profile?: { engine?: unknown; id?: unknown } } | undefined)?.profile
       let only: Wanted = {}
