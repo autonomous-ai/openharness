@@ -311,17 +311,24 @@ describe('a script written to the folder runs as it would in the system\'s', () 
     expect(runs(buddyTmpOf('/work/one', deps(inModulePackage()))!)).toBe(join('a', 'b'))
   })
 
-  it('keeps a package.json already there, and no sweep deletes the folder\'s own however old', async () => {
-    const data = inModulePackage(), folder = agentTmpFolder(data), parent = buddyTmpParent(data)
+  it('keeps a package.json already there', () => {
+    const data = inModulePackage(), folder = agentTmpFolder(data)
     mkdirSync(folder, { recursive: true, mode: 0o700 })
     writeFileSync(join(folder, 'package.json'), '{"type":"commonjs","name":"kept"}')
     agentTmpEnv('claude', undefined, deps(data))
     expect(readFileSync(join(folder, 'package.json'), 'utf8')).toContain('kept')
-    buddyTmpOf('/work/one', deps(data))
+  })
+
+  it('no sweep deletes the folders\' own package.json however old; a tool\'s goes like any file', async () => {
+    const data = inModulePackage(), folder = agentTmpFolder(data), parent = buddyTmpParent(data)
+    agentTmpEnv('claude', undefined, deps(data))
+    const buddy = buddyTmpOf('/work/one', deps(data))!
+    writeFileSync(join(buddy, 'package.json'), '{"type":"module"}')
     const later = Date.now() + 8 * DAY
     expect(await sweepAgentTmp(folder, later)).toBe(0)
-    expect(await sweepBuddyTmp(parent, later)).toBe(0)
+    expect(await sweepBuddyTmp(parent, later)).toBe(1)
     expect(existsSync(join(folder, 'package.json'))).toBe(true)
     expect(existsSync(join(parent, 'package.json'))).toBe(true)
+    expect(existsSync(join(buddy, 'package.json'))).toBe(false)
   })
 })
