@@ -90,7 +90,9 @@ const personOnly = (user: AuthUser) => { if (isTeamSession(user)) fail(TEAM_SESS
 const listQuery = z.object({ after: id.optional(), mentions: z.literal('1').optional() }).strict()
 const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
 // `derivedEtag`: the summary's etag the client holds (read/derivedEtag.ts, task #2906).
-const changesQuery = agentQuery.extend({ cursor, machines: z.literal('light').optional(),
+// `allTasks=1`: a client that shows Activity (Desktop, task #4689) asks for its feed; no other client is sent it.
+const partsQuery = agentQuery.extend({ allTasks: z.literal('1').optional() })
+const changesQuery = partsQuery.extend({ cursor, machines: z.literal('light').optional(),
   derivedEtag: z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/).optional() })
 const costsQuery = z.object({ days: z.coerce.number().int().min(1).max(MAX_DAYS).default(DEFAULT_DAYS), asAgentId: id.optional() }).strict()
 const scorecardQuery = z.object({ projectId: id, scope: z.literal('all').optional() }).strict()
@@ -645,13 +647,14 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get('/api/super-tabs/:tabId', updateRequired)
   // The read API by parts (design section 4, superTabs/read/contract.ts). `githubApp` on a first load (only when the server
   // has the app) lets a Lead's start wire its token into another person's work (cli/src/superTabs/start.ts).
-  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/parts',
-    { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] },
-    (req, reply) => respond(reply, () => reads.firstLoad(req.user!, req.params.tabId, req.query.asAgentId)))
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof partsQuery> }>('/api/super-tabs/:tabId/parts',
+    { preHandler: [validateParams(tabParams), validateQuery(partsQuery)] },
+    (req, reply) => respond(reply, () => reads.firstLoad(req.user!, req.params.tabId, req.query.asAgentId, { allTasks: req.query.allTasks === '1' })))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof changesQuery> }>('/api/super-tabs/:tabId/changes',
     { preHandler: [validateParams(tabParams), validateQuery(changesQuery)] },
     (req, reply) => respond(reply, noting(req, () => reads.changes(req.user!, req.params.tabId, req.query.cursor, req.query.asAgentId,
-      { ...(req.query.machines === 'light' ? { lightMachines: true } : {}), ...(req.query.derivedEtag ? { derivedEtag: req.query.derivedEtag } : {}) }),
+      { ...(req.query.machines === 'light' ? { lightMachines: true } : {}), ...(req.query.derivedEtag ? { derivedEtag: req.query.derivedEtag } : {}),
+        ...(req.query.allTasks === '1' ? { allTasks: true } : {}) }),
       nothingChanged)))
   // The whole readings on demand, for a client that takes lines in its changes (read/changes.ts).
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/machine-readings',

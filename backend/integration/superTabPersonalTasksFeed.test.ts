@@ -276,7 +276,10 @@ describe('all tasks: Desktop\'s Activity (task #4689)', () => {
     expect((await reads.firstLoad(peer, f.tab, undefined, ACTIVITY)).allTasks).toBeDefined()
     await f.execute({ type: 'conversation.rename', conversationId: f.ownersOwn, title: 'Owner work, renamed' })
     expect(await reads.changes(peer, f.tab, plain.cursor)).not.toHaveProperty('allTasks')
-    expect((await reads.changes(peer, f.tab, plain.cursor, undefined, ACTIVITY)).allTasks!.upserts.map(r => r.title)).toEqual(['Owner work, renamed'])
+    // The owner's own task, renamed: not peer's, so only Activity carries it to peer.
+    const asked = await reads.changes(peer, f.tab, plain.cursor, undefined, ACTIVITY)
+    expect(asked.allTasks!.upserts.find(r => r.id === f.ownersOwn)).toMatchObject({ title: 'Owner work, renamed' })
+    expect(asked.personalTasks!.upserts.map(r => r.id)).not.toContain(f.ownersOwn)
   })
 
   it('keys at startup every task written before its project key, and leaves the rest', async () => {

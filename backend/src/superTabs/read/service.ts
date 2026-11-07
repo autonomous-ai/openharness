@@ -131,7 +131,8 @@ export class SwarmReads {
   /** The small format/deletion row for each Swarm, held briefly per process. */
   private readonly swarmRows = new Map<string, SwarmRowRead>()
 
-  async firstLoad(user: AuthUser, tabId: string, asAgentId?: string): Promise<FirstLoad> {
+  /** `allTasks`: the reader's client shows Activity (Desktop, task #4689), so its feed comes too; no other client is sent it. */
+  async firstLoad(user: AuthUser, tabId: string, asAgentId?: string, options: { allTasks?: boolean } = {}): Promise<FirstLoad> {
     const t0 = this.now()
     return this.read(user, tabId, async (tx, cached) => {
       const read = await this.load(tx, cached, user, tabId, asAgentId, t0, { includeRecentStarts: true })
@@ -141,7 +142,7 @@ export class SwarmReads {
         ...(this.options.githubApp ? { githubApp: true as const } : {}), steps: true as const, ...view.parts,
         // The feed's newest page (task #4203): its history is read by its own index, not from the loaded working set.
         ...read.actor.kind === 'person' ? { personalTasks: await personalTasksPage(feedRead(tx, cached, tabId), view, read.actor),
-          allTasks: await allTasksPage(feedRead(tx, cached, tabId), view, read.actor) } : {},
+          ...options.allTasks ? { allTasks: await allTasksPage(feedRead(tx, cached, tabId), view, read.actor) } : {} } : {},
         ...stamped({ ...await this.withAvatars(view, t0), ...readableMarks(read, await this.marksOf(tx, tabId, read.actor),
           await this.threadMarksOf(tx, tabId, read.actor), await this.settingsOf(tx, tabId, read.actor)) }) }
     })
@@ -194,7 +195,7 @@ export class SwarmReads {
   /** `derivedEtag`: the etag of the summary the client holds (derivedEtag.ts); while it still matches, the reply leaves the
    *  summary out and sends only the reader's moved marks. */
   async changes(user: AuthUser, tabId: string, cursor: string, asAgentId?: string,
-    options: { lightMachines?: boolean; derivedEtag?: string } = {}): Promise<Changes> {
+    options: { lightMachines?: boolean; derivedEtag?: string; allTasks?: boolean } = {}): Promise<Changes> {
     const t0 = this.now()
     return this.read(user, tabId, async (tx, cached) => {
       // Light (parts/light.ts): changed parts come whole from the change feed; the rest is read only to check visibility and
@@ -229,7 +230,7 @@ export class SwarmReads {
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
         epoch: read.parts.visibilityEpoch, ...sent,
         ...read.actor.kind === 'person' ? { personalTasks: personalTasksFor(changed, read.view, read.actor),
-          allTasks: personalTasksFor(changed, read.view, read.actor, 'everyone') } : {},
+          ...options.allTasks ? { allTasks: personalTasksFor(changed, read.view, read.actor, 'everyone') } : {} } : {},
         ...stamped({ ...await this.withAvatars(read.view, t0), ...readableMarks(read, marks, threadMarks, settings) }, options.derivedEtag) }
     })
   }

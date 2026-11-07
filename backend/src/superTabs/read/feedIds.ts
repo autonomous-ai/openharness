@@ -33,8 +33,8 @@ const BATCH = 500
 type Stored = { _id: string; tabId: string; version: number; data?: FeedFields }
 
 /** The rows markFeedIds sets: written before the column, or a task written before its project key (task #4689). A task here is
- *  what feedIdsOf counts as one, so every row it sets leaves the match. */
-const UNSET = { $or: [{ feedIds: { $exists: false } }, { 'data.kind': null, 'data.audience': null, 'data.reviewOf': null, 'data.proposal.mergedInto': null,
+ *  what feedIdsOf counts as one, so every row it sets leaves the match; a row with no data is none (review of #3576). */
+const UNSET = { $or: [{ feedIds: { $exists: false } }, { data: { $type: 'object' }, 'data.kind': null, 'data.audience': null, 'data.reviewOf': null, 'data.proposal.mergedInto': null,
   'data.foldedInto': null, feedIds: { $not: { $regex: '^p:' } } }] }
 
 /** Run once by the worker at startup, as markFinishedGroups is: sets `feedIds` on every part written before it, and on every task
@@ -58,7 +58,7 @@ export async function markFeedIds(db: PrismaClient): Promise<number> {
     const reply = await db.$runCommandRaw({ update: 'SwarmGroup', updates: rows.map(row => {
       const data = row.data ?? {} as FeedFields, contributorId = contributors.get(agentOf(row) ?? '')
       const filled = contributorId ? { ...data, assignment: { ...data.assignment!, execution: { ...data.assignment!.execution, contributorId } } } : data
-      return { q: { _id: row._id, version: row.version }, u: { $set: { feedIds: feedIdsOf(filled) } } }
+      return { q: { _id: row._id, version: row.version }, u: { $set: { feedIds: row.data ? feedIdsOf(filled) : [] } } }
     }) }) as { writeErrors?: unknown[]; n?: number }
     // A refused row would come back in the next batch, and that batch again, for ever.
     if (reply.writeErrors?.length) throw new Error(`The database refused ${reply.writeErrors.length} of ${rows.length} Tasks feed id writes`)
