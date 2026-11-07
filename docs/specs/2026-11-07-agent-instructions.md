@@ -158,9 +158,16 @@ could otherwise drop anh Dee's or Ken's rule, or add a rule every agent trusts, 
 - **Every way of merging waits.** The guard is a check on the pull request's head, `harness/rules`, that GitHub requires
   before merging, so the merge train, a hand merge (`make merge-pr`) and GitHub's own button all wait for it. The server
   sets it (pending while an approval is missing, success once it is there) through the Swarm's GitHub App, which needs
-  the narrow commit-statuses permission for it, granted for that one check. The project's owner adds the check to the
-  default branch's required checks once; Harness says so in Project details until it is, and `make merge-pr` refuses a
-  pull request whose `harness/rules` isn't green in the meantime.
+  the narrow commit-statuses permission for it. The project's owner adds the check to the default branch's required
+  checks once, **pinned to the Swarm's GitHub App as its source**: a workflow in the same repository can set any commit
+  status, and agents can change workflows, so an unpinned check could be marked green by a pull request's own workflow.
+  Project details counts the check as missing until it is required and pinned, and `make merge-pr` refuses a pull
+  request whose `harness/rules` isn't green from the App itself.
+- **The status permission is the server's alone.** GitHub's commit-statuses permission covers every status, not one
+  check, and a required status can't tell the server from an agent using the same App. So it goes only into a
+  server-only, short-lived token, minted to set `harness/rules` and nothing else. It is never in an agent's token or a
+  task's token: `TOKEN_PERMISSIONS`, `GRANTED_TOKEN_PERMISSIONS` and the read-only sets stay without it, so no agent can
+  approve its own rule change.
 - **An approval counts for the head it approved:** a GitHub approval on that commit, or a message written after that
   head was pushed, as today's guard counts only a message newer than the version it replaces. A later push that changes
   a rule file needs it again; a push that leaves the rule files alone keeps it.
@@ -308,7 +315,9 @@ requests to weigh) and security review 1 of 76d361b (the other-account limit kep
 Security review 1 of d7a9b23 (Ownrev1): the rule guard moves to pull
 requests that change AGENTS.md, CLAUDE.md or role files, before any rule leaves the instructions document; security
 review 2 of 728b78b and 2c9546f (Ownrev4): at any path, nested component files included; only a member's own ask
-counts, and the asker is told which rule lines changed. Security review 1 of 2c9546f (Secrev7): the guard is a check
+counts, and the asker is told which rule lines changed. Security review 2 of 1ea2c34 (Ownrev4) and the Review of
+1ea2c34 (Ownrev6): the check is pinned to the App, and the status permission is only on a server-only token. Security
+review 1 of 2c9546f (Secrev7): the guard is a check
 GitHub requires, an approval counts for its head, and an ask approves only a change its brief names, never a drop. Review of
 a7ca78c (Ownrev6): role procedures go to role files sent with their task or step;
 the Member page lists `work.check`. Security review 2 of 9323153 (Ownmac1): engines load no checkout files at all, Harness sends
@@ -410,7 +419,8 @@ the default branch's copy, never a checkout's. The menu's version list is shown 
    (`desktop/AGENTS.md`), a nested `CLAUDE.md` and a role file, each with and without a person's approval; a member's
    own ask passes and the asker gets the private line, while a guest's ask, an outside issue author's and a relayed one
    are refused; an ask whose brief doesn't name the rule file is refused, and so is any ask for a drop; an approval at
-   one head stops counting after a push that changes a rule file; a hand merge waits on the check. It adds the App's
+   one head stops counting after a push that changes a rule file; a hand merge waits on the check; a status set by anything but the App, such as a workflow, doesn't count; a token
+   minted for an agent or a task can't set the status (asserted on every token set the App mints). It adds the App's
    commit-statuses permission for that one check (`backend/src/github/app.ts` mints none today). GitHub asks each
    installation's owner to accept a new permission; until a project's installation has, the merge train and
    `make merge-pr` refuse its pull requests that change a rule file, so the gap fails closed. Backend
