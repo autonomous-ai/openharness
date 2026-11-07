@@ -79,7 +79,7 @@ describe('a helper starts from its Member\'s ready setup', () => {
   it('leaves a folder that appeared during the copy, and takes back only its own', async () => {
     const p = project()
     const result = await copySetup(p.member, p.helper, async (from, to) => {
-      if (to.endsWith('node_modules') && !to.includes('cli')) {
+      if (to === join(p.helper, 'node_modules')) {
         mkdirSync(join(to, 'theirs'), { recursive: true })
         throw Object.assign(new Error('exists'), { code: 'ERR_FS_CP_EEXIST' })
       }
