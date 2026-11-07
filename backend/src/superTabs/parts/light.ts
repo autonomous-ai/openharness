@@ -118,6 +118,7 @@ export const GROUP_FIELDS = {
     'teamWrittenBy',
     'unlinkedPullRequests',
     'waitingLinuxStep',
+    'waitingWindowsStep',
     'writers',
   ],
 } as const
