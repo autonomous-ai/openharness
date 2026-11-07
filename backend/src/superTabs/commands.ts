@@ -43,7 +43,7 @@ import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags
 import { CREW_NEED_KIND, crewNeedPlace, crewNeedText, routedLine, routesToPm, type CrewNeed } from './crewNeeds.js'
 import { checkReason, heldReason, missingReason } from './heldReason.js'
 import { answerDecision, askDecisions, checkDecisionDeadline, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
-import { leadOf, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest, workedAgain } from './terminal.js'
+import { leadOf, modelAnswered, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest, workedAgain } from './terminal.js'
 import { BACK_WITH_YOU, pickUp, reopenHanded } from './handed.js'
 import { changesRequested, engineerAnswered, leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, revisionReady, toldEngineer, waitingForReview } from './liveness.js'
 import { DELETED_SWARM_COMMANDS, isPersonalSwarm, notThere, SWARM_DELETE_GRACE_MS } from './deletion.js'
@@ -1482,6 +1482,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     const project = groupProject(state, conversation(state, conversationId))
     const member = candidate.kind === 'member' ? state.agents.find(a => a.id === candidate.agentId) : undefined
     if (candidate.kind === 'member' && !member) return null
+    // A member whose model keeps failing takes no new work until it answers (terminal.ts, task #4076).
+    if (member?.modelFailing) return { code: 'MODEL_FAILING' as const, reason: `${member.displayName ?? member.name} is model failing: it can't get answers from its model${member.modelFailing.reason ? ` (${member.modelFailing.reason})` : ''}, so it takes no new work until it answers again.` }
     // A new agent never starts on a Buddy-only machine; an agent its person added there runs as one on a machine outside the Swarm.
     if (!member && state.machines?.some(m => m.machineId === candidate.machineId && m.buddyOnly)) return { code: 'NOT_SWARM_MACHINE' as const, reason: NOT_SWARM_MACHINE }
     // Where it would run is where it names: no start moves to a Team account any more, and none starts in one (task #4120).
@@ -1918,6 +1920,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if (worker.workDecision === 'stop') fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
     // A Team account's agent keeps what it holds and takes nothing new (task #4120); it is stopped after the release.
     if (onTeamAccount(state, worker)) failTeamWork(TEAM_ACCOUNTS_GONE)
+    // Its model keeps failing: no new work until it answers again (terminal.ts, task #4076).
+    if (worker.modelFailing) fail('MODEL_FAILING', `${worker.displayName ?? worker.name} can't get answers from its model, so it takes no new work until it answers again.`)
     // A handed task does not occupy its Engineer (#3399 handed.ts): it may take this.
     if (state.conversations.some(c => occupiesAgent(c) && c.assignment?.agentId === worker.id)) fail('AGENT_BUSY', 'This agent already owns an active assignment.')
   }
@@ -2057,6 +2061,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   // An agent reporting its work is working: a usage-limit mark on it is stale (terminal.ts workedAgain). Not a post: its host
   // posts as the agent too (a skill refresh, a stop it could not make), which says nothing of the agent's engine (review of #2712).
   if (actor.kind === 'agent' && command.type === 'work.status') workedAgain(state, actor.agentId)
+  // And its model answers: an agent whose model was failing takes work again (terminal.ts modelAnswered, task #4076). Its own
+  // report only, never an agent-only notice its host writes for it.
+  if (actor.kind === 'agent' && (command.type === 'work.status' || command.type === 'work.check' || (command.type === 'message.send' && !command.agentOnly))) {
+    modelAnswered(state, actor.agentId)
+  }
   switch (command.type) {
     case 'agent.screen':
     case 'agent.input': {

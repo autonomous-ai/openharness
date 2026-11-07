@@ -137,6 +137,10 @@ export interface Agent {
   limitedUntil?: string | null
   /** Terminal alert episodes in progress, so each one posts a single row (terminal.ts). */
   alerting?: Array<'prompt' | 'limit' | 'model'>
+  /** Its engine reported that its model keeps failing (terminal.ts, task #4076): since when, and what its machine's reading
+   *  showed then. While set it takes no new task or step, through a quiet screen too; its own next report clears it
+   *  (modelAnswered). Never a stop: it keeps its session. */
+  modelFailing?: { since: number; reason?: string }
   /** Set once its session is a Lead or in a private conversation, and kept until the session leaves: nobody but its
    *  machine's person watches it (projects.ts canWatchAgent). */
   confidential?: true

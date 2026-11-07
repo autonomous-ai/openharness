@@ -115,8 +115,9 @@ export function freeCrew(state: SuperTabState, projectId: string, rules: Dispatc
   const launching = (agent: Agent) => !!state.starts?.some(s => !s.poolSettled && s.poolGeneration && s.request.machineId === agent.machineId && s.harnessId === agent.harnessId)
   return state.agents
     .filter(agent => agentProjectId(state, agent) === projectId && !leads.has(agent.id) && !isBuddy(agent)
-      // Nor a Team account's, which takes no new work (task #4120).
-      && agent.workDecision !== 'stop' && !onTeamAccount(state, agent) && !moving(agent) && (asleep(agent) || !sessionClosed(state, agent, now)) && !launching(agent)
+      // Nor a Team account's, which takes no new work (task #4120), nor one whose model keeps failing, until it answers again
+      // (terminal.ts, task #4076).
+      && agent.workDecision !== 'stop' && !onTeamAccount(state, agent) && !agent.modelFailing && !moving(agent) && (asleep(agent) || !sessionClosed(state, agent, now)) && !launching(agent)
       && !busy.has(agent.id) && (handedBy.get(agent.id) ?? 0) < rules.maxHanded && reachable(agent)
       // A member its machine or engine cannot serve now would lose the task at once (liveness.ts): until that clears.
       && !unavailableReason(state, agent, now, asleep(agent)))
