@@ -294,6 +294,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('note.remove'), projectId: id, noteId: id }).strict(),
   // What the project calls its coordinator, as its instructions say (instructions.ts coordinatorNameOf).
   z.object({ type: z.literal('project.coordinatorName'), projectId: id, name: roleNameSchema }).strict(),
+  // What the project is, in one line, for the Cmd-N and join project list (task #4540): empty clears it.
+  z.object({ type: z.literal('project.about'), projectId: id, about: z.string().trim().max(80).regex(/^[^\r\n]*$/, 'One line.') }).strict(),
   // Whether its agents answer each person's message in that message's thread (projects.ts answersInThread, task #3747).
   z.object({ type: z.literal('project.answers'), projectId: id, inThread: z.boolean() }).strict(),
   z.object({ type: z.literal('lead.start'), projectId: id, machineId: id.nullable(), engine: swarmEngine,
@@ -581,6 +583,7 @@ export const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'instructions.save': ['text', 'summary', 'repeatReason', 'dropped[].text'],
   'note.add': ['text'],
   'project.coordinatorName': ['name'],
+  'project.about': ['about'],
   'rule.set': ['text'],
   'rules.set': ['summary', 'rules.instructionApprovals.people[].name', 'rules.reviews.rows[].area', 'rules.reviews.rows[].paths[]',
     'rules.reviews.test[].where', 'rules.reviews.test[].paths[]', 'rules.reviews.untested[]', 'rules.caps[].name', 'rules.paths[].name',
@@ -2526,6 +2529,17 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       else manageProject(state, actor, project.id)
       mutableProjects(state)
       projectOf(state, project.id).coordinatorName = command.name
+      break
+    }
+    case 'project.about': {
+      // As its coordinator's name: the coordinator sets it, or a person who manages the project.
+      const project = readProject(state, actor, command.projectId)
+      if (actor.kind === 'agent') coordinatorOf(project)
+      else manageProject(state, actor, project.id)
+      mutableProjects(state)
+      const stored = projectOf(state, project.id)
+      if (command.about) stored.about = command.about
+      else delete stored.about
       break
     }
     case 'process.confirm': {
