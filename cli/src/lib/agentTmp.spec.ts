@@ -319,6 +319,18 @@ describe('a script written to the folder runs as it would in the system\'s', () 
     expect(readFileSync(join(folder, 'package.json'), 'utf8')).toContain('kept')
   })
 
+  it('reads a package.json only when it is a small file of its own: a link, even to the marker\'s text, goes like any file', async () => {
+    // The sweep's check is a synchronous read in the daemon: through a link or at a pipe it could block it (security review 1).
+    const data = inModulePackage(), folder = agentTmpFolder(data)
+    agentTmpEnv('claude', undefined, deps(data))
+    const elsewhere = join(scratch(), 'marker-text')
+    writeFileSync(elsewhere, '{"type":"commonjs"}\n')
+    rmSync(join(folder, 'package.json'))
+    symlinkSync(elsewhere, join(folder, 'package.json'))
+    expect(await sweepAgentTmp(folder, Date.now() + 8 * DAY)).toBe(1)
+    expect(existsSync(elsewhere)).toBe(true)
+  })
+
   it('no sweep deletes the folders\' own package.json however old; a tool\'s goes like any file', async () => {
     const data = inModulePackage(), folder = agentTmpFolder(data), parent = buddyTmpParent(data)
     agentTmpEnv('claude', undefined, deps(data))
