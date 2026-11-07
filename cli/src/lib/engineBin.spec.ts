@@ -112,7 +112,10 @@ describe('canonical engine CLI commands', () => {
   linuxIt('keeps the running native image identity after an updater replaces its pathname', async () => {
     const root = mkdtempSync(join(tmpdir(), 'engine-bin-deleted-image-'))
     tempDirs.push(root)
-    const executable = join(root, 'native-agent')
+    // Keep the file name `sleep`: on ubuntu-26.04 /bin/sleep is the uutils multi-call binary, which
+    // picks its utility from its own file name and exits at once unless that name ends in one (#2272).
+    const executable = join(root, 'native-agent', 'sleep')
+    mkdirSync(join(root, 'native-agent'))
     copyFileSync('/bin/sleep', executable)
     const child = spawn(executable, ['30'], { stdio: 'ignore' })
     await new Promise<void>((resolve, reject) => {
