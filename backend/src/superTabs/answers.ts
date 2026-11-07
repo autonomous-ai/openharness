@@ -1,7 +1,7 @@
 /**
  * The PM answers each ask once, in its place (task #3403, anh Dee's Swarm redesign, 11-05). An answer (`message.send` with
- * `answer`, the CLI's `answer` command) goes where the ask was made: in its thread when it is a reply in one, else right below
- * it in the main chat. The PM's answers are recorded on the conversation (`Conversation.answered`), by `answer` or by any post
+ * `answer`, the CLI's `answer` command) shows right below the ask in the chat, quoting it: no answer goes in a thread (task
+ * #4555, commands.ts placeAnswer). The PM's answers are recorded on the conversation (`Conversation.answered`), by `answer` or by any post
  * that settles an owed ask (pulse.ts), and a second `answer` to the same message is refused with where the first one is. A
  * plain post in a task/private chat is never refused by this helper. Project chats extend this to every agent and explicit
  * answer link or person reply mirrored into main (chatLimits.ts, task #3598).
@@ -18,10 +18,6 @@ export const MAX_ANSWERED = 50
 /** One message the PM answered: its id, the answer's id, the thread the answer went in (null: right below it), and when. */
 export interface AnsweredAsk { id: string; answerId: string; thread: string | null; at: number }
 
-type Reply = NonNullable<CommandContext['reply']>
-
-/** Whether [reply] is a reply inside a thread, whose answer then goes in that thread. A thread's root is answered below it. */
-export const inThread = (reply: Reply): boolean => !!reply.thread && reply.thread !== reply.id
 
 /** Whether [agentId] leads [group]'s project. Never throws: a conversation outside every project has no PM. */
 export function leadsGroup(state: SuperTabState, group: Conversation, agentId: string): boolean {

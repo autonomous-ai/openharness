@@ -66,8 +66,10 @@ export function requireChatPost(group: Conversation, command: Send, reply: Reply
   const ledger = group.chatLimits
   const linked = command.replyTo || command.answers ? reply : undefined
   const personAsk = linked?.author.kind === 'person' ? linked : undefined
-  const askId = personAsk ? personAsk.thread ?? personAsk.id
-    : linked ? ledger?.asks.find(ask => ask.main.includes(linked.id))?.id ?? linked.thread : undefined
+  // Each person message is its own ask; one in an older thread that was never one is its root's (task #4555).
+  const askId = personAsk ? (ledger?.asks.some(ask => ask.id === personAsk.id) ? personAsk.id : personAsk.thread ?? personAsk.id)
+    // An agent's line is an ask's when it answered one, or replied in its older thread; any other is no one's.
+    : linked ? ledger?.asks.find(ask => ask.main.includes(linked.id))?.id ?? (linked.thread && linked.thread !== linked.id ? linked.thread : undefined) : undefined
   if (!askId) return null
   let ask = ledger?.asks.find(ask => ask.id === askId)
   if (!ask && personAsk && askId === personAsk.id && (ledger?.closedThrough === undefined || personAsk.createdAt > ledger.closedThrough)) {

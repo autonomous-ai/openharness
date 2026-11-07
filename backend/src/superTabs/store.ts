@@ -2044,7 +2044,7 @@ export class SuperTabStore {
         // In a Buddy chat: whether the thread ever had a session (buddySessions.ts), by the thread index, one row at most: its
         // latest, whose project a session reopened there keeps.
         const buddyChat = original.conversations.find(c => c.id === command.conversationId)
-        const sessionRow = command.replyTo && reply?.thread && buddyChat && isBuddyChat(buddyChat)
+        const sessionRow = reply?.thread && buddyChat && isBuddyChat(buddyChat)
           ? await tx.superTabMessage.findFirst({ where: { tabId, conversationId: command.conversationId, thread: reply.thread, buddySession: true },
             orderBy: [{ sequence: 'desc' }, { id: 'desc' }], select: { buddyProject: true } })
           : null

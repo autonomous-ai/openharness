@@ -49,12 +49,12 @@ describe('project chat content limits', () => {
     expect(() => send('Login now works offline.')).not.toThrow()
   })
 
-  it('preserves people, task posts, thread followups and substantive short answers', () => {
+  it('preserves people, task posts and substantive short answers; an agent\'s status reply shows in the chat, so it is refused', () => {
     const { f, send, ask } = setup()
     const question = ask()
     expect(() => send('Status: tests running.', { person: true })).not.toThrow()
     expect(() => send('Ready for review: PR #12.', { group: f.task, by: f.dev })).not.toThrow()
-    expect(() => send('CI: 3 checks pending.', { extra: { replyTo: question.id }, reply: question })).not.toThrow()
+    expect(() => send('CI: 3 checks pending.', { extra: { replyTo: question.id }, reply: question })).toThrow(expect.objectContaining({ code: 'CHAT_STATUS' }))
     expect(() => send('Is CI green?')).not.toThrow()
     expect(() => send('The release is out; login works offline.')).not.toThrow()
     expect(() => send('Status: tests running.', { extra: { agentOnly: true, recipientIds: [f.lead] } })).not.toThrow()
@@ -98,10 +98,10 @@ describe('two main posts per linked ask', () => {
     expect(() => mainReply('The old fix also handles expired tokens.')).toThrow(expect.objectContaining({ code: 'CHAT_MAIN_LIMIT' }))
   })
 
-  it('allows thread followups but counts replies mirrored into main', () => {
+  it('counts an agent\'s reply against its ask, as it shows in the chat (task #4555)', () => {
     const { send, question, mainReply } = exchange()
     mainReply('Login now works offline.')
-    expect(() => send('Expired tokens work too.', { reply: question, extra: { replyTo: question.id } })).not.toThrow()
+    expect(() => send('Expired tokens work too.', { reply: question, extra: { replyTo: question.id } })).toThrow(expect.objectContaining({ code: 'CHAT_MAIN_LIMIT' }))
     expect(() => mainReply('The mobile build also has the fix.')).toThrow(expect.objectContaining({ code: 'CHAT_MAIN_LIMIT' }))
   })
 
@@ -187,13 +187,13 @@ describe('one answer across main and thread', () => {
 })
 
 
-describe('thread discussion after an answer', () => {
-  it('lets another agent post details in the ask thread after a main answer', () => {
+describe('details after an answer', () => {
+  it('take no second answer to the ask, now that a reply shows in the chat (task #4555); a plain line still goes', () => {
     const { f, send, ask } = setup()
     const question = ask()
     send('Login now works offline.', { reply: question, extra: { answers: question.id } })
-    expect(() => send('The phone flow also passes.', { by: f.dev, reply: question, extra: { replyTo: question.id } })).not.toThrow()
-    expect(() => send('CI: all checks passed.', { by: f.dev, reply: question, extra: { replyTo: question.id } })).not.toThrow()
+    expect(() => send('The phone flow also passes.', { by: f.dev, reply: question, extra: { replyTo: question.id } })).toThrow(expect.objectContaining({ code: 'ALREADY_ANSWERED' }))
+    expect(() => send('The phone flow also passes.', { by: f.dev })).not.toThrow()
   })
 })
 
