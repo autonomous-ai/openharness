@@ -138,9 +138,9 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       // the person's own repo is theirs to answer for (engines/kit/folderTrust.ts); a worktree gets only
       // the answer its source repo already has. `branch` IS the source folder: nothing to record.
       //
-      // One consented exception: a Swarm agent in the Swarm's full mode, in the checkout a remote project resolved
+      // One consented exception: a Swarm agent, in any mode (task #4215), in the checkout a remote project resolved
       // to (cloned now, or one already there that holds that very repository). The person chose this repository
-      // and full mode for the Swarm, and machine trust favors that choice over a prompt. 2026-10-26: on WIN-DELL
+      // for the Swarm, and machine trust favors that choice over a prompt. 2026-10-26: on WIN-DELL
       // a Lead in a reused `harnesses\openharness` sat at Claude Code's trust question; on the Mac Studio a Lead in
       // a fresh clone did, and the next Lead, in a worktree of it, asked again because the source had never been
       // answered. Its Yes then landed under the source's key (Claude Code records a worktree's answer under its
