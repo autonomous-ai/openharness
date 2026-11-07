@@ -86,7 +86,8 @@ describe('what the PM owes', () => {
     react(f.lead, 'lead', ask, emoji)
     expect(owed()).toEqual([])
     const project = projectsOf(f.state)[0]!
-    expect(owedLines(f.state, project, f.now)).toEqual([])
+    // Main's inbox also lists unread process notes (#3298): only the owed-ask lines matter here.
+    expect(owedLines(f.state, project, f.now).join('\n')).not.toMatch(/Owed asks/)
     expect(storedPulse(f.state, project)!.asks.count).toBe(0)
   })
 
