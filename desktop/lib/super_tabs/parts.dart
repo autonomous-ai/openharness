@@ -8,10 +8,6 @@ import 'tasks/personal_tasks.dart';
 /// backend this build cannot read.
 const superTabReadFormat = 2;
 
-/// Asks a first load and each change read for Activity's feed (backend #4689): a client that shows no Activity is
-/// sent none.
-const superTabAllTasksQuery = 'allTasks=1';
-
 /// The part lists a first load and a change read carry, by their names there. The head is a single part.
 const _lists = [
   'members',
@@ -147,11 +143,10 @@ class SuperTabParts {
   /// backend without it, and then none is sent.
   String? derivedEtag;
 
-  /// What a change read asks after `?`: the cursor, Activity's feed (#4689), and the summary's etag when one is held.
+  /// What a change read asks after `?`: the cursor, and the summary's etag when one is held.
   String get changesQuery {
     final etag = derivedEtag;
-    final query =
-        'cursor=${Uri.encodeQueryComponent(cursor)}&$superTabAllTasksQuery';
+    final query = 'cursor=${Uri.encodeQueryComponent(cursor)}';
     return etag == null
         ? query
         : '$query&derivedEtag=${Uri.encodeQueryComponent(etag)}';
@@ -166,7 +161,7 @@ class SuperTabParts {
   final personalTasks = SuperTabPersonalTasks();
 
   /// Every task of every project the reader reads, for Activity's Everyone (backend #4689); unsupported from an
-  /// older backend, where Activity shows [personalTasks]. Sent only to a read that asks ([superTabAllTasksQuery]).
+  /// older backend, where Activity shows [personalTasks]. Sent only to a read that asks (Desktop's controller).
   final allTasks = SuperTabPersonalTasks();
 
   Map<String, dynamic> _head;

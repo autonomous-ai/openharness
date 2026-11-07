@@ -439,6 +439,10 @@ class SuperTabController extends ChangeNotifier {
 
   SuperTabPersonalTasks? get personalTasks => _parts?.personalTasks;
 
+  /// Asks a first load and each change read for Activity's feed (backend #4689). Desktop's alone: the phone shares
+  /// [SuperTabParts] and shows no Activity, so it is sent none.
+  static const _allTasksQuery = 'allTasks=1';
+
   /// Every task the person may read (backend #4689): Activity's Everyone.
   SuperTabPersonalTasks? get allTasks => _parts?.allTasks;
 
@@ -4389,7 +4393,7 @@ class SuperTabController extends ChangeNotifier {
       try {
         final answer = await request(
           'GET',
-          '$_path/changes?${held.changesQuery}',
+          '$_path/changes?${held.changesQuery}&$_allTasksQuery',
         );
         if (answer['reload'] != true) {
           final SuperTabPartsChange change;
@@ -4422,7 +4426,7 @@ class SuperTabController extends ChangeNotifier {
       _parts = null;
     }
     final parts = SuperTabParts.firstLoad(
-      await request('GET', '$_path/parts?$superTabAllTasksQuery'),
+      await request('GET', '$_path/parts?$_allTasksQuery'),
     );
     if (parts.state['id'] != tabId) {
       throw const FormatException('A different Swarm was returned.');

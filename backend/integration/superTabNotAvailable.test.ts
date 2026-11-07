@@ -105,6 +105,7 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/routing-policy', `${t}/routing-policy`),
     json('GET', 'GET /api/super-tabs/:tabId/groups', `${t}/groups?dormant=1&projectId=${project}`),
     json('GET', 'GET /api/super-tabs/:tabId/personal-tasks', `${t}/personal-tasks`),
+    json('GET', 'GET /api/super-tabs/:tabId/all-tasks', `${t}/all-tasks`),
     json('GET', 'GET /api/super-tabs/:tabId/groups/:conversationId', `${t}/groups/${chat}`),
     json('POST', 'POST /api/super-tabs/:tabId/join', `${t}/join`, { operationId: op(), token: 'a'.repeat(43) }),
     json('POST', 'POST /api/super-tabs/:tabId/join/preview', `${t}/join/preview`, { token: 'a'.repeat(43) }),
