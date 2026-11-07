@@ -304,14 +304,16 @@ void main() {
     expect(f.commands.length, 2);
   });
   group('a refused change unlocks the pane and says why (finding 3)', () {
-    FilledButton approve(String id) => find
-        .ancestor(
-          of: inCard(id, find.text('Approve')),
-          matching: find.byType(FilledButton),
-        )
-        .evaluate()
-        .single
-        .widget as FilledButton;
+    FilledButton approve(String id) =>
+        find
+                .ancestor(
+                  of: inCard(id, find.text('Approve')),
+                  matching: find.byType(FilledButton),
+                )
+                .evaluate()
+                .single
+                .widget
+            as FilledButton;
     for (final (status, code, sentence) in [
       (409, 'CONFLICT', 'The suggested agent changed. Read the task again.'),
       (403, 'FORBIDDEN', 'You can no longer approve this task.'),
