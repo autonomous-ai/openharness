@@ -46,7 +46,7 @@ const conversation: Required<Conversation> = {
   checks: [],
   codePullRequestUrls: [],
   dormant: false,
-  foldedInto: [1],
+  foldedInto: ['f'],
   handOutLane: 'Desktop',
   heardAt: 0,
   hold: { kind: 'requester' },
