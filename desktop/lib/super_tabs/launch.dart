@@ -224,10 +224,11 @@ class SuperTabLaunch {
                 ? saved['agentKind'] as String?
                 : null,
             ownMachinesOnly: saved['newAgent'] == true,
+            // + New agent's Product Manager makes a project too (audit
+            // finding 14); the form shows the choice only while it is chosen.
             projectVisibility:
-                saved['newAgent'] != true &&
-                    saved['lead'] == true &&
-                    saved['coordinator'] != true
+                saved['newAgent'] == true ||
+                    saved['lead'] == true && saved['coordinator'] != true
                 ? saved['visibility'] as String? ?? 'public'
                 : null,
             projectVisibilityLocked:

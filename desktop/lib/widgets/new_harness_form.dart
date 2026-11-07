@@ -2646,8 +2646,10 @@ class NewHarnessFormState extends State<NewHarnessForm> {
             box.integration!.roleName = name.isEmpty ? null : name;
           },
         ),
+      // In + New agent, only a Product Manager makes a project.
       if (includeProjectVisibility &&
-          box.integration?.projectVisibility != null)
+          box.integration?.projectVisibility != null &&
+          (box.agentKind ?? 'lead') == 'lead')
         _desktopProjectVisibility(9.95),
       _desktopStartButton(),
     ],
