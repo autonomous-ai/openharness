@@ -452,7 +452,10 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   from (37,62) through (50,74) to (63,62), stroke 5.6, round caps. Eyes and
   mouth shift sideways by `[-3,0,3][(hash>>9)%3]` units and tilt around the
   centre by `[-9,-4,0,5,10][(hash>>5)%5]` degrees. The face is artwork: the
-  same in light and dark, and always a disc. A chosen picture still wins.
+  same in light and dark, and a disc everywhere but one place: a project's
+  Lead on the Projects list wears it as a rounded square
+  (`SuperTabAvatar.agent(faceCorner:)`, task #4662). A chosen picture still
+  wins.
 - **Person avatar.** A person keeps their photo or preset, else an initial on
   a neutral grey disc (task #4466); a person never wears an agent face.
 - **Lead ring.** A Lead (a PM) wears a thin gold ring, hsl(42 92% 58%)
@@ -484,7 +487,7 @@ decide. Top to bottom:
 ```text
  autonomous.ai ⌄              org name, semibold 13 primary; ⌄ only on hover
  ⊡  Decisions              3  inbox icon; the waiting count is the detail
- ▦  Projects               1  grid icon; opens the grid; the detail counts tags of you
+ ▦  Projects               1  grid icon; opens the list; the detail counts tags of you
  My agents ⌄                  quiet heading; ⌄ only on hover; folds, remembered
  ◉  Buddy                  ⠋  the Buddy first, by its own name and face
  ◎  River        harness   ?  a Lead's detail is the project it leads
@@ -502,9 +505,42 @@ decide. Top to bottom:
 | Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) only while hovered or focused. |
 | Org name | `SuperTabQuietHeading.org` | Semibold 13 primary, no icon; its chevron only on hover; opens the Swarm menu. |
 | Person | `SuperTabAvatar.person` at 20 | A photo, or an initial on the neutral grey disc. |
-| Projects grid | `SuperTabProjectsPage` (`super_tabs/projects_page.dart`) | Every project as a card, as repositories under a GitHub org, most recent first (the latest message in its chat or tasks). Cards at least 260 wide with 12 between them, transparent with a hairline (`DesktopChrome.rim`) and the hover fill; the name semibold 13 primary, one line 12 tertiary: its repository's `owner/name`, or Private. New project is the page's one blue button. A card opens its project's Board, which lights Projects in the left pane. |
+| Projects list | `SuperTabProjectsPage` (`super_tabs/projects_page.dart`) | See [Projects list](#projects-list). Projects in the left pane opens it; a row opens its project's Board, which lights Projects. |
 
 The phone and web layouts keep their own rows.
+
+## Projects list
+
+The Desktop's Projects page reads like GitHub's repository list (anh Dee,
+2026-11-07, task #4662). The middle pane, at most 900 wide, top to bottom:
+
+```text
+ Projects 7                                   (+ New project)
+ [⌕ Find a project                         ]  Sort: Recent
+ ┌──────────────────────────────────────────────────────────┐
+ │ harness (Public)                              ╱╲_╱‾╲_╱   │
+ │ The harness for coding agents and beyond. All your       │
+ │ agents, all your machines, one command center.           │
+ │ ▣ River  ◉◉◉◉ +2  12 working · 3 to do  ⌥ openharness  Updated 2 minutes ago │
+ ├──────────────────────────────────────────────────────────┤
+ │ scout (Private)                               ________   │
+ │ ▣ Lark  Updated 5 hours ago                              │
+ └──────────────────────────────────────────────────────────┘
+```
+
+| Element | Rule |
+| --- | --- |
+| Title | `Projects` in the page title (20 semibold primary) and the count in 13 `textFaint`. New project is the one blue action, a filled capsule. An empty Swarm shows only these two. |
+| Find and Sort | `SwarmSearchField`, `Find a project`, matching name and purpose. `Sort: Recent` (Recent, Name, Most work) is plain 13 `textSecondary` text by rule 5: hover or an open menu brings the primary ink and the chevron, whose room is kept. |
+| List | One container, a 1-point `DesktopChrome.rim` border at radius 12, hairlines between rows, newest activity first (the server's last activity, else the latest message). |
+| Row, line 1 | The name in 16 semibold primary, the one place a name is above 13: it heads its row as a repository's does. Then `Public` or `Private` in an outlined capsule `SuperTabChip` (12 muted). |
+| Row, line 2 | The project's purpose (`about`), 13 `textSecondary`, at most 2 lines; left out when there is none. |
+| Row, line 3 | 12 `textFaint`, one line, 16 between items: the Lead's 16 rounded-square face and name; up to 4 member faces, overlapping, ringed in the ground, then `+N`; `N working · N to do` with a zero part left out; the GitHub mark and the repository's short name (its `owner/name` in the tooltip, a click opens it); `Updated` and how long ago. What does not fit is dropped from the end, never squeezed. |
+| Sparkline | 120 × 28, 1.5 stroke in `textFaint`: tasks shipped per UTC day over 28 days, scaled to the busiest day (`SuperTabSparkline`). Only on rows 560 wide or more; a server without the read draws none, nor Updated. |
+| Top bar | None on a wide Projects page: the title says it. Narrow, the bar keeps its menu button. |
+
+Nothing on the list says None, No description or 0: an empty value is not drawn
+(rule 7).
 
 ## Phone
 
