@@ -294,7 +294,8 @@ its metadata, then trend and the emphasized number at the right.
 
 The Desktop left pane's Humans has no rank number and no crown: it is the
 Leaderboard in short, its people most points first with their points at the
-right ([Swarm left pane](#swarm-left-pane)).
+right ([Swarm left pane](#swarm-left-pane)). There, as the one exception to the
+table, points are the row's quiet detail: 12, tertiary, tabular.
 
 A place is its numeral; a celebration mark sits beside it and never replaces
 it, as [Team and celebration](#team-and-celebration) describes. Color never
@@ -425,7 +426,7 @@ decide. Top to bottom:
 ```text
  autonomous.ai ⌄              org name, semibold 13 primary; ⌄ only on hover
  ⊡  Decisions              3  inbox icon; the waiting count is the detail
- ▦  Projects                  grid icon; opens the Projects grid in the middle
+ ▦  Projects               1  grid icon; opens the grid; the detail counts tags of you
  My agents ⌄                  quiet heading; ⌄ only on hover; folds, remembered
  ◉  Buddy                  ⠋  the Buddy first, by its own name and face
  ◎  River        harness   ?  a Lead's detail is the project it leads

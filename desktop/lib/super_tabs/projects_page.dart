@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
+import '../widgets/laid_out_list.dart';
 import 'controller.dart';
 import 'model.dart';
 import 'project_github.dart';
@@ -35,7 +36,7 @@ class SuperTabProjectsPage extends StatelessWidget {
     builder: (context, _) {
       grid.AppTheme.watch(context);
       final projects = superTabProjectsByRecent(controller);
-      return ListView(
+      return LaidOutListView(
         padding: const EdgeInsets.all(grid.AppDesktop.panelPadding),
         children: [
           if (onNewProject case final onNewProject?)
