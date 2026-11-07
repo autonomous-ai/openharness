@@ -364,6 +364,15 @@ describe('the crew dispatch pass', () => {
       task: { goal: 'Web.', changes: 'The change.', constraints: 'None.', owns: ['backend/src/b.ts'] } })
     expect(busy.store.dispatchScheduled(busy.tab)).toBe(false)
 
+    // A project's own lanes decide the pick, as the pass reads them: a task for a member of a lane only its rules name, one pass.
+    const own = await swarm({ Ash: null }, {}, true)
+    await save(own, 0, { lanes: [{ name: 'firmware', owns: ['devices/'] }] })
+    await own.execute({ type: 'crew.add', agentId: own.crew.Ash!, lane: 'firmware', role: 'Engineer' })
+    await vi.waitFor(() => expect(own.store.dispatchScheduled(own.tab)).toBe(false), { timeout: 5_000, interval: 100 })
+    await own.execute({ type: 'conversation.create', title: 'Board', checks: [],
+      task: { goal: 'Board.', changes: 'The change.', constraints: 'None.', owns: ['devices/main.c'] } })
+    expect(own.store.dispatchScheduled(own.tab)).toBe(true)
+
     // With only a PM, no write schedules one.
     const plain = await swarm({}, {}, true)
     await plain.execute({ type: 'conversation.create', title: 'Api', checks: [],
