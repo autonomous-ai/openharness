@@ -59,8 +59,11 @@ function privateHere(state: SuperTabState, machineId: string): string[] {
   const pending = (state.starts ?? []).filter(s => s.request.machineId === machineId && !s.harnessId && !s.error).flatMap(s => startPrivateIds(state, s))
   // A private project's own folder is on this computer (its repository was recorded here), or this machine serves one project
   // only and its folder is that project's (machines.ts projectFolder): files no start of the Swarm's put there.
-  const own = projectsOf(state).filter(p => p.visibility === 'private' && (p.repository?.machineId === machineId || (!!pool && pool.scope !== 'swarm' && p.id === 'lead')))
-  return [...new Set([...pool?.privateOnDisk ?? [], ...pending, ...own.map(p => p.id), ...pool?.observation?.otherSwarms ? [OTHER_SWARM] : []])]
+  const projects = projectsOf(state)
+  const own = projects.filter(p => p.visibility === 'private' && (p.repository?.machineId === machineId || (!!pool && pool.scope !== 'swarm' && p.id === 'lead')))
+  // A project its host lists that this Swarm has no record of is another Swarm's, or one deleted here: counted as private.
+  const unknown = (pool?.observation?.projectsOnDisk ?? []).some(id => !projects.some(p => p.id === id))
+  return [...new Set([...pool?.privateOnDisk ?? [], ...pending, ...own.map(p => p.id), ...pool?.observation?.otherSwarms || unknown ? [OTHER_SWARM] : []])]
 }
 /** Stands for another Swarm's projects on this computer, whose privacy this Swarm cannot read. */
 const OTHER_SWARM = 'another-swarm'
@@ -70,8 +73,8 @@ export const PRIVATE_BESIDE = 'its computer holds another, private project\'s fi
 
 /** Whether [session], a Member's task session, is on a computer with a private project's files other than its own project's,
  *  there or on their way: it takes no work there (security review 2 of #3553). */
-export const besidePrivate = (state: SuperTabState, session: Agent): boolean =>
-  !!session.memberOf && privateHere(state, session.machineId).some(id => id !== session.projectId)
+export const besidePrivate = (state: SuperTabState, session: Agent): boolean => !!session.memberOf
+  && (projectsOf(state).find(p => p.id === session.projectId)?.visibility !== 'public' || privateHere(state, session.machineId).some(id => id !== session.projectId))
 
 /** Refuses [start], which puts a private project's files on its computer, while a Member's task session of another project still
  *  runs there: it waits for them to stop (liveness.ts endBesidePrivate), then its host dispatches it again. */

@@ -585,6 +585,8 @@ export function applyDiskReport(state: SuperTabState, pool: ContributedMachine, 
   const listed = reading.projectsOnDisk
   if (!listed) return
   addPrivate(state, pool, listed)
+  // A machine for one project lists only that folder, whatever else its starts put there: it never shows what it cannot see.
+  if (pool.scope !== 'swarm') return
   if (state.starts?.some(s => s.request.machineId === pool.machineId && !s.harnessId && !s.error)) return
   const kept = (pool.privateOnDisk ?? []).filter(id => listed.includes(id))
   if (kept.length) pool.privateOnDisk = kept

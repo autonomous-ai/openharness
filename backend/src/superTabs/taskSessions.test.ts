@@ -256,5 +256,15 @@ describe('a task session beside a private project\'s files', () => {
     delete f.state.projects!.find(p => p.id === secret.projectId)!.repository
     f.machine().observation!.otherSwarms = true
     expect(code(() => assign(f, app.newTask('other swarm'), app.asPm))).toBe('MEMBER_PRIVATE_ON_DISK')
+    delete f.machine().observation!.otherSwarms
+    f.machine().observation!.projectsOnDisk = ['another-swarms-project']
+    expect(code(() => assign(f, app.newTask('unknown'), app.asPm))).toBe('MEMBER_PRIVATE_ON_DISK')
+  })
+
+  it('stops when its own project is made private', () => {
+    const { f, app, session } = beside()
+    f.state.projects!.find(p => p.id === app.projectId)!.visibility = 'private'
+    endBesidePrivate(f.state, 'mate-mac', NOW)
+    expect(f.agent(session).workDecision).toBe('stop')
   })
 })
