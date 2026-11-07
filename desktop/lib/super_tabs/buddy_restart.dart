@@ -127,7 +127,35 @@ Agent? buddyMachineAgent(
       .firstOrNull;
 }
 
-enum BuddyRestartOutcome { done, ignored, refused, notStarted, failed }
+/// The reader's Buddy's last restart in [projectId] while its answer is lost
+/// or still pending: the machine may have restarted it, so another restart
+/// could restart it twice. Checking this one finds out.
+AgentRestartAttempt? unconfirmedBuddyRestart(
+  SuperTabController c,
+  String projectId,
+  AppNotifier? app,
+) {
+  final buddy = readerBuddy(c, projectId);
+  if (buddy == null) return null;
+  final attempt = app?.pendingAgentRestart(buddy.machineId, buddy.harnessId);
+  final result = attempt?.result;
+  return attempt != null &&
+          attempt.awaitingConfirmation &&
+          result?.error != null &&
+          result!.retryable &&
+          !result.engineNotStarted
+      ? attempt
+      : null;
+}
+
+enum BuddyRestartOutcome {
+  done,
+  ignored,
+  refused,
+  notStarted,
+  unconfirmed,
+  failed,
+}
 
 class BuddyRestartResult {
   const BuddyRestartResult(this.outcome, [this.message]);
@@ -135,16 +163,23 @@ class BuddyRestartResult {
 
   /// The exact line to show; null on [BuddyRestartOutcome.done].
   final String? message;
+
+  static const unconfirmed = BuddyRestartResult(
+    BuddyRestartOutcome.unconfirmed,
+    "The restart isn't confirmed yet.",
+  );
 }
 
 /// Restart (or resume) the reader's Buddy in [projectId] with the flags in
-/// [text]; [saved] is the line the machine holds now.
+/// [text]; [saved] is the line the machine holds now. With [check], asks the
+/// machine about that unconfirmed restart instead of sending another.
 Future<BuddyRestartResult> restartBuddyWithFlags(
   SuperTabController c,
   String projectId,
   AppNotifier app, {
   required String text,
   required String saved,
+  AgentRestartAttempt? check,
 }) async {
   final buddy = readerBuddy(c, projectId);
   if (buddy == null) {
@@ -153,15 +188,19 @@ Future<BuddyRestartResult> restartBuddyWithFlags(
       'Restart is not available here.',
     );
   }
+  // Every press of Restart is a new intent: an earlier attempt that never
+  // confirmed must not turn this one into a status check without the flags.
+  final attempt =
+      check ??
+      app.restartAttempt(buddy.machineId, buddy.harnessId, fresh: true);
   // Nothing to clear and nothing to add is a plain restart, which an older
-  // daemon does as well as a new one.
+  // daemon does as well as a new one. A check sends no flags: they went with
+  // the restart it asks about, and words the card holds now may not be those.
   final result = await app.restartAgent(
     buddy.machineId,
     buddy.harnessId,
-    // Every press is a new intent: an earlier attempt that never confirmed
-    // must not turn this one into a status check without the flags.
-    attempt: app.restartAttempt(buddy.machineId, buddy.harnessId, fresh: true),
-    launchArgs: text.isEmpty && saved.isEmpty ? null : text,
+    attempt: attempt,
+    launchArgs: check != null || text.isEmpty && saved.isEmpty ? null : text,
   );
   if (result.error == null && !result.launchArgsIgnored) {
     return const BuddyRestartResult(BuddyRestartOutcome.done);
@@ -182,6 +221,9 @@ Future<BuddyRestartResult> restartBuddyWithFlags(
       "The Buddy didn't start with these flags. Fix or clear them and "
       'restart.',
     );
+  }
+  if (attempt.awaitingConfirmation && result.retryable) {
+    return BuddyRestartResult.unconfirmed;
   }
   return BuddyRestartResult(BuddyRestartOutcome.failed, result.error);
 }

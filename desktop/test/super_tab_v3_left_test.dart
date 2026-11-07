@@ -5,6 +5,7 @@ import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/widgets/desktop_chrome.dart';
+import 'package:harness/state/harness_activity.dart' show HarnessActivity;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/super_tabs/buddy_rows.dart' show SuperTabCountBadge;
@@ -370,6 +371,124 @@ void main() {
       expect(cut('Orion Lead'), isFalse);
     });
 
+    /// The Buddy's own chat, which is how the controller finds the reader's Buddy.
+    void buddyChat(ConversationServer server) {
+      agents(server);
+      // A Swarm's one Buddy belongs to no project.
+      for (final agent in (server.state['agents'] as List).cast<Map>()) {
+        if (agent['id'] == 'buddy') agent.remove('projectId');
+      }
+      (server.state['conversations'] as List).add({
+        ...conversationFixture('swarm-buddy-owner', 'Buddy'),
+        'kind': 'swarm-buddy',
+        'buddyOwnerId': 'owner',
+        'agentIds': ['buddy'],
+      });
+    }
+
+    // Audit finding 8 of task #4436 (task #4444): the row read "Buddy" with a pink "B" while the header said "Wren".
+    testWidgets('the Buddy row wears the Buddy\'s own name and face', (
+      tester,
+    ) async {
+      await show(
+        tester,
+        agents: [
+          {...buddy, 'name': 'Wren', 'displayName': 'Wren'},
+        ],
+        setup: buddyChat,
+      );
+      final row = key('super-swarm-buddy');
+      expect(find.descendant(of: row, matching: find.text('Wren')), findsOne);
+      expect(
+        find.descendant(of: row, matching: find.text('Buddy')),
+        findsNothing,
+      );
+      final avatar = tester.widget<SuperTabAvatar>(
+        find.descendant(of: row, matching: find.byType(SuperTabAvatar)),
+      );
+      expect(avatar.name, 'Wren');
+      expect(avatar.identity, 'agent:buddy');
+      // The agent's own pattern, as every other row draws it, not a letter.
+      expect(avatar.pattern, isTrue);
+    });
+
+    // Audit finding 9 of task #4436 (task #4444): working, waiting, offline and starting all looked the same.
+    testWidgets('each row shows its activity mark beside its name, and '
+        '"offline" when its agent is down', (tester) async {
+      await show(
+        tester,
+        agents: [
+          {...buddy, 'downSince': '2026-11-07T01:00:00.000Z'},
+          _agent('kestrel', 'Kestrel'),
+          {
+            ..._agent('orion', 'Orion'),
+            'downSince': '2026-11-07T01:00:00.000Z',
+          },
+        ],
+        setup: buddyChat,
+      );
+      ActivityMark mark(String row) => tester.widget<ActivityMark>(
+        find.descendant(of: key(row), matching: find.byType(ActivityMark)),
+      );
+      for (final (row, name) in [
+        ('super-swarm-buddy', 'Buddy'),
+        ('super-agent-kestrel', 'Kestrel'),
+        ('super-agent-orion', 'Orion'),
+      ]) {
+        final shown = tester.getRect(
+          find.descendant(of: key(row), matching: find.text(name)),
+        );
+        final at = tester.getRect(
+          find.descendant(of: key(row), matching: find.byType(ActivityMark)),
+        );
+        expect(
+          (at.center.dy - shown.center.dy).abs(),
+          lessThan(4),
+          reason: row,
+        );
+        expect(at.left, greaterThan(shown.right), reason: row);
+      }
+      expect(mark('super-swarm-buddy').activity, HarnessActivity.offline);
+      expect(mark('super-agent-orion').activity, HarnessActivity.offline);
+      expect(
+        mark('super-agent-kestrel').activity,
+        isNot(HarnessActivity.offline),
+      );
+      expect(text('orion', 'offline'), findsOne);
+      expect(
+        find.descendant(
+          of: key('super-swarm-buddy'),
+          matching: find.text('offline'),
+        ),
+        findsOne,
+      );
+      expect(text('kestrel', 'offline'), findsNothing);
+    });
+
+    testWidgets('names use the whole row in the narrowest left pane, in the '
+        'pane\'s one row size', (tester) async {
+      await show(
+        tester,
+        agents: [buddy, _agent('kestrel', 'Kestrel Windows crew agent')],
+        setup: buddyChat,
+        width: 180,
+      );
+      final row = tester.getRect(key('super-agent-kestrel'));
+      final name = find.descendant(
+        of: key('super-agent-kestrel'),
+        matching: find.text('Kestrel Windows crew agent'),
+      );
+      // No empty columns at the right: the name runs to the row's last 40 px (its mark and inset).
+      expect(tester.getRect(name).right, greaterThan(row.right - 40));
+      double? size(Finder f) => tester.widget<Text>(f).style?.fontSize;
+      final newAgent = find.descendant(
+        of: key('super-new-agent-row'),
+        matching: find.text('New agent'),
+      );
+      expect(size(name), size(newAgent));
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('screenshots of My agents, light and dark', (tester) async {
       await tester.runAsync(() => loadCaptureFonts(shots));
       for (final (brightness, name) in [
@@ -379,6 +498,38 @@ void main() {
         await show(tester, agents: mine, setup: agents, brightness: brightness);
         await captureWindow(tester, shots, 'my-agents-pm-crown-$name');
         await tester.pumpWidget(const SizedBox());
+      }
+    }, skip: shots == null);
+
+    testWidgets('screenshots of My agents rows at the narrowest and a wide '
+        'left pane, light and dark (#4444)', (tester) async {
+      await tester.runAsync(() => loadCaptureFonts(shots));
+      for (final (brightness, name) in [
+        (Brightness.light, 'light'),
+        (Brightness.dark, 'dark'),
+      ]) {
+        for (final width in [180.0, 300.0]) {
+          await show(
+            tester,
+            agents: [
+              {...buddy, 'name': 'Wren', 'displayName': 'Wren'},
+              _agent('kestrel', 'Kestrel Windows crew'),
+              {
+                ..._agent('orion', 'Orion'),
+                'downSince': '2026-11-07T01:00:00.000Z',
+              },
+            ],
+            setup: buddyChat,
+            brightness: brightness,
+            width: width,
+          );
+          await captureWindow(
+            tester,
+            shots,
+            '09-my-agents-${width.round()}-$name',
+          );
+          await tester.pumpWidget(const SizedBox());
+        }
       }
     }, skip: shots == null);
 

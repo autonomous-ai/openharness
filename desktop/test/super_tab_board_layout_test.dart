@@ -181,9 +181,10 @@ void main() {
       find.text('The project chat line nobody should see'),
       findsOneWidget,
     );
-    // The Chat view keeps its header, Project options and Tasks icon.
+    // The Chat view keeps its header and Project options; the Board tab is its one way back (audit finding 18 of #4436).
     expect(_key('super-tasks-lead'), findsNothing);
-    expect(_key('super-tasks'), findsOneWidget);
+    expect(_key('super-project-menu'), findsOneWidget);
+    expect(_key('super-tasks'), findsNothing);
     expect(_key('super-left-pane'), findsOneWidget);
     await tester.tap(_key('super-board-tab-board'));
     await _settle(tester);
@@ -394,14 +395,14 @@ void main() {
   );
 
   // Every way into the Board shows the same three panes (Scholes, task #3863).
-  testWidgets('the Tasks icon of a project chat opens the Board with projects, '
+  testWidgets('the Board tab of a project chat opens the Board with projects, '
       'the wide Buddy chat and the project kept', (tester) async {
     final (c, _) = await show(tester, width: 1500);
     // A person lands in the project's own chat, no Board open: that Chat
-    // view's header has the Tasks icon.
+    // view's header has the Board tab, in place of a Tasks icon (#4444).
     expect(c.selectedId, 'lead');
     expect(_key('super-tasks-lead'), findsNothing);
-    await tester.tap(_key('super-tasks'));
+    await tester.tap(_key('super-board-tab-board'));
     await _settle(tester);
     expect(_key('super-tasks-lead'), findsOneWidget);
     expect(c.selectedId, 'buddy-owner-lead');

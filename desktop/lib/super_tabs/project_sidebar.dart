@@ -576,6 +576,7 @@ class ProjectSidebar extends StatelessWidget {
       key: ValueKey('super-buddy-${project.id}'),
       agentId: agent?.id,
       name: name,
+      compact: compact,
       project: named ? project.name : null,
       tooltip: 'Your Buddy · ${project.name}',
       // Where it runs, as the Agents list once showed every Buddy: only its
@@ -624,11 +625,17 @@ class ProjectSidebar extends StatelessWidget {
     if (board) {
       final muted =
           chat != null && controller.notifyOf(chat.id) == SuperTabNotify.muted;
+      // Its own name and face, as the header draws it (audit finding 8 of #4436).
       return SuperTabBuddyRow(
         key: const ValueKey('super-swarm-buddy'),
         agentId: agent?.id,
-        name: 'Buddy',
+        agent: agent,
+        name: agent == null
+            ? chat?.buddyName ?? 'Buddy'
+            : controller.snapshot!.agentName(agent.id, fallback: agent.name),
         tooltip: 'Your Buddy',
+        compact: compact,
+        note: agent?.downSince != null ? 'offline' : null,
         status: agent == null ? null : _buddyMark(agent),
         selected: _chatLit(chat),
         unread: chat != null && !muted && controller.unreadShown(chat),
@@ -708,11 +715,14 @@ class ProjectSidebar extends StatelessWidget {
           ? '$name · opens its terminal'
           : '$name · no chat yet',
       crown: pm,
-      // After a separator, so it never reads as part of the name.
-      note: switch (pm ? snapshot.leadProjectForAgent(agent.id) : null) {
-        final project? => '· ${project.name}',
-        null => null,
-      },
+      compact: compact,
+      // A PM's project after a separator, so it never reads as part of the name.
+      note: agent.downSince != null
+          ? 'offline'
+          : switch (pm ? snapshot.leadProjectForAgent(agent.id) : null) {
+              final project? => '· ${project.name}',
+              null => null,
+            },
       status: _buddyMark(agent),
       selected: _chatLit(chat),
       unread: chat != null && controller.unreadShown(chat),

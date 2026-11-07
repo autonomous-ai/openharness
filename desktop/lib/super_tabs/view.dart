@@ -20,6 +20,8 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/finger_target.dart';
 import '../widgets/new_harness_attachments.dart';
 import '../widgets/new_harness_paste.dart';
+import '../widgets/terminal_name_prompt.dart';
+import '../widgets/terminal_prompt.dart';
 import '../core/local_key_value_store.dart';
 import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
@@ -3321,8 +3323,32 @@ class _SuperTabViewState extends State<SuperTabView>
       // A Buddy's name is its person's and long: a phone's one line says Buddy.
       return _phone ? 'Message Buddy' : 'Message $buddy';
     }
+    // An agent's own chat keeps the title it was opened with; a rename changes the agent (audit finding 8 of #4436).
+    if (_ownAgent(group) case final agent?) {
+      return 'Message ${snapshot.agentName(agent.id, fallback: agent.name)}';
+    }
     return 'Message ${group.title}';
   }
+
+  /// The agent whose own chat [group] is (#4116), not a project's PM, whose chat is its project's.
+  SuperTabAgent? _ownAgent(SuperTabConversation group) =>
+      c.snapshot?.isProjectLead(group.id) == true
+      ? null
+      : c.snapshot?.agents.where((a) => a.chatId == group.id).firstOrNull;
+
+  /// Renames [agent] for everyone in the Swarm, in the app's one rename prompt.
+  void _renameAgent(SuperTabAgent agent) => unawaited(
+    showTerminalPrompt<void>(
+      context,
+      builder: (_) => TerminalNamePrompt(
+        title: 'Rename agent',
+        name: c.snapshot!.agentName(agent.id, fallback: agent.name),
+        fieldKey: const Key('agent-rename-input'),
+        fieldLabel: 'Agent name',
+        save: (name) => c.renameAgent(agent.id, name),
+      ),
+    ),
+  );
 
   /// On a phone the header's bar holds Chat and ⋮, each a finger's size, and
   /// ⋮ names the rest (terminals, pull requests, people) instead of five bare
@@ -3686,22 +3712,45 @@ class _SuperTabViewState extends State<SuperTabView>
           padding: const EdgeInsetsDirectional.only(
             end: grid.AppDesktop.listRowGap,
           ),
-          child: TextButton(
-            key: ValueKey(key),
-            onPressed: selected ? null : open,
-            style: TextButton.styleFrom(
-              backgroundColor: selected ? grid.AppSurface.selectedFill : null,
-              foregroundColor: selected
-                  ? DesktopChrome.foreground
-                  : DesktopChrome.muted,
-              // The tab shown has no action, so a disabled button would grey it: it reads as selected instead.
-              disabledForegroundColor: DesktopChrome.foreground,
+          child: _withTasksCount(
+            project,
+            open,
+            show: !board && key == 'super-board-tab-board',
+            TextButton(
+              key: ValueKey(key),
+              onPressed: selected ? null : open,
+              style: TextButton.styleFrom(
+                backgroundColor: selected ? grid.AppSurface.selectedFill : null,
+                foregroundColor: selected
+                    ? DesktopChrome.foreground
+                    : DesktopChrome.muted,
+                // The tab shown has no action, so a disabled button would grey it: it reads as selected instead.
+                disabledForegroundColor: DesktopChrome.foreground,
+              ),
+              child: Text(label),
             ),
-            child: Text(label),
           ),
         ),
     ],
   );
+
+  /// The Board tab seen from the chat wears the Tasks icon's count, the icon it replaces there (audit finding 18).
+  Widget _withTasksCount(
+    SuperTabProject project,
+    VoidCallback open,
+    Widget tab, {
+    required bool show,
+  }) {
+    if (!show) return tab;
+    final count = _tasksNeedingYou(project);
+    return _withCountBadge(
+      tab,
+      count,
+      key: const ValueKey('super-tasks-badge'),
+      tooltip: count == 1 ? '1 task needs you' : '$count tasks need you',
+      onTap: open,
+    );
+  }
 
   /// The project's chat in the middle, as before the Board: the Chat tab. Its
   /// Tasks icon brings the Board back with projects and the Buddy.
@@ -4106,6 +4155,16 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget _header(SuperTabConversation? group, bool narrow) {
     final isProject =
         group != null && c.snapshot?.isProjectLead(group.id) == true;
+    // A project's chat on the Board: its Board / Chat tabs follow its name on this one row, at the Board header's height
+    // and inset so they stay put on Board → Chat, and the Board tab is its one way to the Board (audit finding 18).
+    final tabsOf =
+        isProject &&
+            widget.board &&
+            !_manageVisible &&
+            !_notificationsVisible &&
+            _pageShown == null
+        ? c.snapshot!.projectFor(group.id)
+        : null;
     // The one Buddy has one chat, as a project does; it has no pull requests.
     final oneBuddy = group?.isSwarmBuddyChat == true;
     final restsOnChat = isProject || oneBuddy;
@@ -4117,11 +4176,13 @@ class _SuperTabViewState extends State<SuperTabView>
         !group.isBuddyChat &&
         c.snapshot?.projectById(group.projectId) != null;
     return Container(
-      constraints: const BoxConstraints(minHeight: 52),
+      constraints: BoxConstraints(minHeight: tabsOf != null ? 44 : 52),
       // A phone's rows line up (Huy, 2026-11-02): the sidebar icon starts at
       // the top bar's edge, and the people icon sits under its avatar.
       padding: _phone
           ? kPhoneBarRowPadding
+          : tabsOf != null
+          ? const EdgeInsets.symmetric(horizontal: grid.AppDesktop.menuInset)
           : const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
@@ -4168,6 +4229,14 @@ class _SuperTabViewState extends State<SuperTabView>
                             ),
                           ),
                         ),
+                      ],
+                    )
+                  else if (tabsOf case final project?)
+                    Row(
+                      children: [
+                        Flexible(child: _title(group)),
+                        const SizedBox(width: 12),
+                        _projectTabs(project, board: false),
                       ],
                     )
                   else
@@ -4239,7 +4308,7 @@ class _SuperTabViewState extends State<SuperTabView>
                 ),
               ),
             ],
-            if (isProject || isTask) ...[
+            if ((isProject && tabsOf == null) || isTask) ...[
               const SizedBox(width: 4),
               _tasksButton(group, task: isTask),
             ],
@@ -4566,7 +4635,11 @@ class _SuperTabViewState extends State<SuperTabView>
           if (group.audience == null)
             item('Work details', () => _groupAction('work', group)),
           if (editable) ...[
-            item('Rename', () => _groupAction('rename', group)),
+            // An agent's own chat renames the agent, whose name its header shows (audit finding 16 of #4436).
+            item('Rename', switch (_ownAgent(group)) {
+              final agent? => () => _renameAgent(agent),
+              null => () => _groupAction('rename', group),
+            }),
             item(
               group.archived ? 'Reopen conversation' : 'Archive',
               group.assignment == null ||
@@ -4587,7 +4660,14 @@ class _SuperTabViewState extends State<SuperTabView>
       builder: (context, menu, _) => AppIconButton(
         key: const ValueKey('super-group-options'),
         icon: AppIcons.ellipsisVertical,
-        tooltip: _isBuddyChat(group) ? 'Buddy options' : 'Workgroup options',
+        // On the Board the Buddy card holds the Buddy's own options, so this one is the chat's (audit finding 15).
+        tooltip: _isBuddyChat(group)
+            ? widget.board
+                  ? 'Chat options'
+                  : 'Buddy options'
+            : _ownAgent(group) != null
+            ? 'Agent options'
+            : 'Workgroup options',
         onPressed: () => menu.isOpen ? menu.close() : menu.open(),
       ),
     );
@@ -6457,31 +6537,8 @@ class _SuperTabViewState extends State<SuperTabView>
                               c.snapshot!.projectById(boardProject)!,
                               narrow,
                             )
-                          else ...[
-                            if (widget.board &&
-                                !_manageVisible &&
-                                !_notificationsVisible &&
-                                _pageShown == null)
-                              if (c.snapshot?.projects
-                                      .where(
-                                        (p) =>
-                                            p.leadConversationId ==
-                                            c.selectedId,
-                                      )
-                                      .firstOrNull
-                                  case final project?)
-                                Padding(
-                                  padding: const EdgeInsetsDirectional.only(
-                                    start: grid.AppDesktop.controlGap,
-                                    top: grid.AppDesktop.listRowGap,
-                                  ),
-                                  child: Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: _projectTabs(project, board: false),
-                                  ),
-                                ),
+                          else
                             _header(c.selected, narrow),
-                          ],
                           if (_manageOpen)
                             Align(
                               alignment: Alignment.centerLeft,
