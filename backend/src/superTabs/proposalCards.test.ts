@@ -366,3 +366,20 @@ describe('proposal time and delivery boundaries', () => {
     expect(pmAcceptsMessage(f.state, f.lead, undefined)).toBe(true)
   })
 })
+
+// Review of #3310 at c91dc2489 (task #3595): a person's answer on a card was stored as written. Refusing an agent's text there
+// is #3310's (its AGENT_TEXT list); this is the redaction every command's words get (task #4340).
+describe('a credential in proposal text', () => {
+  // Assembled at run time, as agentSecrets.test.ts does, so the repository holds nothing a scanner takes for a secret.
+  const token = ['ghp', 'Q7mZ2xK9pL4vR8nT1wB6yC3dF5hJ0aE2sG7u'].join('_')
+  const leaked = `Here it is: ${token} (for the deploy)`
+
+  it('is redacted in a person\'s answer', () => {
+    const f = fixture(), id = f.create().result.conversationId
+    const qid = f.run(ask(id), f.pm).result.questionId
+    const answered = f.run({ type: 'proposal.answer', conversationId: id, questionId: qid, text: leaked }, peer)
+    expect(f.card(id).proposal!.questions[0]!.answer!.text).toContain('[credential removed]')
+    expect(JSON.stringify(f.state)).not.toContain(token)
+    expect(JSON.stringify(answered.messages)).not.toContain(token)
+  })
+})
