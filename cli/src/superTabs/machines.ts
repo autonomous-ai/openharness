@@ -196,7 +196,9 @@ const startsOf = (row: Record<string, unknown>) => [...list(row.starts), ...list
 // windowsBuddy: this CLI proves a command's pane from its parents on Windows too (callerPane.ts `windowsRunningPane`), so a
 // Buddy there refuses no other agent's Swarm command. The backend starts no Buddy on a Windows machine without it.
 // `regularAgent`: it launches a Regular agent's start, sent apart as `regularStarts` (backend agent.new, task #4116).
-const CAPABILITIES = ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy', 'regularAgent']
+// `memberSetUp`: a Member's start tells it to set its project up once and report agent.setUp, and a helper's start gets its
+// Member's set-up folders (memberSetup.ts, task #4698). The backend waits for that report only from a host that says this.
+const CAPABILITIES = ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy', 'regularAgent', 'memberSetUp']
 /** What this host does for a Product Manager's switch to another engine or account (spec 2026-11-02-pm-switch-engine-account),
  *  said beside the others: the backend refuses a switch to a host that does not. */
 CAPABILITIES.push('leadSwitch')
