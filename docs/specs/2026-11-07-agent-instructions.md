@@ -325,7 +325,8 @@ the default branch's copy, never a checkout's. The menu's version list is shown 
    and opens a version's text. Owner area: `backend/src/superTabs/` (model, read views), `desktop/lib/super_tabs/`,
    `desktop/design/`. Backend release, then Desktop release.
 6. **AGENTS.md as part 2, and no checkout files.** Every Swarm agent starts with the engine's own loading of checkout
-   files off (Claude Code `--setting-sources user --strict-mcp-config`, Codex an engine home of its own); the daemon
+   files off (Claude Code `--setting-sources user --strict-mcp-config`; Codex an engine home of its own and project docs off,
+   both needed); the daemon
    sends the default branch's root AGENTS.md and writes the component files to a read-only folder; the 1,200-word line
    to the Lead. Its tests plant one file of each kind in a checkout (nested AGENTS.md and CLAUDE.md, CLAUDE.local.md,
    an imported file, AGENTS.override.md, a hook in `.claude/`, `.mcp.json`, `.codex/`) and prove none is loaded or run,
