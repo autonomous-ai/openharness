@@ -60,6 +60,10 @@ void main() {
   }) async {
     await tester.binding.setSurfaceSize(const Size(1500, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
+    // The app's own palette, which the Material theme alone does not switch.
+    final before = grid.AppTheme.brightness.value;
+    grid.AppTheme.brightness.value = brightness;
+    addTearDown(() => grid.AppTheme.brightness.value = before);
     final server = swarm();
     server.state['buddies'] = true;
     giveBuddy(server, person: 'owner', machineId: machineId);
@@ -216,6 +220,10 @@ void main() {
     }) async {
       await tester.binding.setSurfaceSize(const Size(1600, 900));
       addTearDown(() => tester.binding.setSurfaceSize(null));
+      // The app's own palette, which the Material theme alone does not switch.
+      final before = grid.AppTheme.brightness.value;
+      grid.AppTheme.brightness.value = brightness;
+      addTearDown(() => grid.AppTheme.brightness.value = before);
       final server = swarm();
       server.state['buddies'] = true;
       server.state['swarmBuddy'] = true;
@@ -335,6 +343,20 @@ void main() {
       await end(tester, c);
     });
 
+    testWidgets('the open card over the middle Buddy chat, light', (
+      tester,
+    ) async {
+      final c = await middle(tester);
+      await open(tester);
+      await captureWindow(
+        tester,
+        Platform.environment['HARNESS_SUPER_TAB_CAPTURE'],
+        'buddy-card-middle-light',
+      );
+      expect(card, findsOneWidget);
+      await end(tester, c);
+    });
+
     testWidgets("another agent's chat in the middle keeps its plain header", (
       tester,
     ) async {
@@ -375,31 +397,36 @@ void main() {
     await end(tester, c);
   });
 
-  testWidgets('a Buddy that never saved flags shows none, and Restart sends none', (
-    tester,
-  ) async {
-    app.stateOf('m')!.agents = [
-      const Agent(
-        id: 'h-wren',
-        name: 'Wren',
-        engine: 'claude',
-        terminalAvailable: true,
-      ),
-    ];
-    final c = await show(tester);
-    await open(tester);
-    expect(key('launch-flag-chip-0'), findsNothing, reason: 'no default flags');
-    await tester.tap(restart);
-    await tester.pump();
-    expect(connection.types.single, 'agent_restart');
-    expect(connection.requests.single.containsKey('launchArgs'), isFalse);
-    connection.restartReplies.single.complete(
-      restartReceipt(creationId(), agentId: 'h-wren'),
-    );
-    await settle(tester);
-    expect(card, findsNothing);
-    await end(tester, c);
-  });
+  testWidgets(
+    'a Buddy that never saved flags shows none, and Restart sends none',
+    (tester) async {
+      app.stateOf('m')!.agents = [
+        const Agent(
+          id: 'h-wren',
+          name: 'Wren',
+          engine: 'claude',
+          terminalAvailable: true,
+        ),
+      ];
+      final c = await show(tester);
+      await open(tester);
+      expect(
+        key('launch-flag-chip-0'),
+        findsNothing,
+        reason: 'no default flags',
+      );
+      await tester.tap(restart);
+      await tester.pump();
+      expect(connection.types.single, 'agent_restart');
+      expect(connection.requests.single.containsKey('launchArgs'), isFalse);
+      connection.restartReplies.single.complete(
+        restartReceipt(creationId(), agentId: 'h-wren'),
+      );
+      await settle(tester);
+      expect(card, findsNothing);
+      await end(tester, c);
+    },
+  );
 
   testWidgets('a restart in flight survives closing and reopening the card', (
     tester,
@@ -660,6 +687,13 @@ void main() {
   // Writes nothing unless HARNESS_SUPER_TAB_CAPTURE names a folder.
   final shots = Platform.environment['HARNESS_SUPER_TAB_CAPTURE'];
   if (shots != null) setUpAll(() => loadCaptureFonts(shots));
+  testWidgets('the open card in the light theme', (tester) async {
+    final c = await show(tester);
+    await open(tester);
+    await captureWindow(tester, shots, 'buddy-card-light');
+    expect(card, findsOneWidget);
+    await end(tester, c);
+  });
   testWidgets('the open card in the dark theme', (tester) async {
     final c = await show(tester, brightness: Brightness.dark);
     await open(tester);
