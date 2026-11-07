@@ -577,6 +577,8 @@ class ProjectSidebar extends StatelessWidget {
       leading: _face(agent, name),
       name: name,
       tooltip: 'Your Buddy · ${project.name}',
+      mark: _quietMark(agent),
+      markColumn: true,
       detail:
           _detail(agent) ??
           switch ((agent, controller.buddyStart(project.id))) {
@@ -610,20 +612,36 @@ class ProjectSidebar extends StatelessWidget {
           crown: lead,
         );
 
+  /// What [agent] is doing, as the Agents list reads it; null with no app to ask, or none running.
+  HarnessActivity? _activity(SuperTabAgent? agent) => agent == null
+      ? null
+      : agent.downSince != null
+      ? HarnessActivity.offline
+      : switch (app) {
+          final app? => harnessActivity(app, agent.machineId, agent.harnessId),
+          null => null,
+        };
+
   /// An agent's one quiet detail in My agents ([superTabAgentDetail]).
-  String? _detail(SuperTabAgent? agent, {String? leads}) {
-    if (agent == null) return null;
-    final activity = agent.downSince != null
-        ? HarnessActivity.offline
-        : switch (app) {
-            final app? => harnessActivity(
-              app,
-              agent.machineId,
-              agent.harnessId,
-            ),
-            null => null,
-          };
-    return superTabAgentDetail(activity, leads: leads);
+  String? _detail(SuperTabAgent? agent, {String? leads}) =>
+      superTabAgentDetail(_activity(agent), leads: leads);
+
+  /// An agent's mark in My agents ([superTabAgentMark]): grey, but red for failed.
+  Widget? _quietMark(SuperTabAgent? agent) {
+    final activity = superTabAgentMark(_activity(agent));
+    if (activity == null) return null;
+    return ActivityMark(
+      activity: activity,
+      color: activity == HarnessActivity.failed
+          ? activityColor(
+              activity,
+              terminalThemeFor(
+                grid.AppTheme.surfacePalette,
+                terminalThemeStore.value,
+              ),
+            )
+          : grid.SidebarInk.inkMuted,
+    );
   }
 
   Widget _iconRow({
@@ -792,6 +810,8 @@ class ProjectSidebar extends StatelessWidget {
         name: name,
         tooltip: 'Your Buddy',
         detail: _detail(agent),
+        mark: _quietMark(agent),
+        markColumn: true,
         selected: _chatLit(chat),
         unread: chat != null && !muted && controller.unreadShown(chat),
         onTap: switch (chat) {
@@ -867,6 +887,8 @@ class ProjectSidebar extends StatelessWidget {
         agent,
         leads: pm ? snapshot.leadProjectForAgent(agent.id)?.name : null,
       ),
+      mark: _quietMark(agent),
+      markColumn: true,
       selected: _chatLit(chat),
       unread: chat != null && controller.unreadShown(chat),
       onTap: switch ((chat, onOpenAgentTerminal)) {
@@ -1312,20 +1334,16 @@ Set<String> superTabHiddenProjects(
   AppNotifier? app,
 }) => app == null ? const {} : PersonalProjects.of(app).hiddenIn(controller);
 
-/// An agent's one quiet detail in the Desktop's My agents (task #4466): a state that changes what you can ask of it
-/// first, then the project a Lead [leads], then whether it is at work. In words, grey, so states read apart without
-/// colour (audit finding 9 of #4436).
+/// An agent's one quiet detail in the Desktop's My agents (task #4466): "offline", else the project a Lead [leads].
 String? superTabAgentDetail(HarnessActivity? activity, {String? leads}) =>
+    activity == HarnessActivity.offline ? 'offline' : leads;
+
+/// The status a My agents row marks (anh Dee 11-07): only while its agent works, needs the person or failed. Idle,
+/// finished and the rest show nothing; a finished agent's unread reply is its name in semibold.
+HarnessActivity? superTabAgentMark(HarnessActivity? activity) =>
     switch (activity) {
-      HarnessActivity.offline => 'offline',
-      HarnessActivity.needsInput => 'needs you',
-      HarnessActivity.failed => 'failed',
-      HarnessActivity.starting => 'starting',
-      _ => null,
-    } ??
-    leads ??
-    switch (activity) {
-      HarnessActivity.working => 'working',
-      HarnessActivity.paused => 'stopped',
+      HarnessActivity.working ||
+      HarnessActivity.needsInput ||
+      HarnessActivity.failed => activity,
       _ => null,
     };

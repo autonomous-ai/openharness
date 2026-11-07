@@ -54,6 +54,8 @@ class SuperTabQuietRow extends StatelessWidget {
     this.selected = false,
     this.unread = false,
     this.tooltip,
+    this.mark,
+    this.markColumn = false,
   });
 
   static const double height = 30;
@@ -89,10 +91,20 @@ class SuperTabQuietRow extends StatelessWidget {
   final String? tooltip;
   final VoidCallback? onTap;
 
+  /// An agent's status mark, after the detail (anh Dee 11-07): only while it works, needs you or failed.
+  final Widget? mark;
+
+  /// Whether the row keeps the marks' column at its right edge, so a list's marks and details line up.
+  final bool markColumn;
+
+  /// The marks' column.
+  static const double markWidth = AppIcons.controlSize;
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final strong = unread || selected;
+    final markColumn = this.markColumn || mark != null;
     final nameStyle = DesktopChrome.control(
       color: strong
           ? grid.SidebarInk.foreground(context)
@@ -118,7 +130,8 @@ class SuperTabQuietRow extends StatelessWidget {
               _leadingStart -
               SuperTabSectionHeading.actionWidth -
               gap -
-              (detail == null ? 0 : gap),
+              (detail == null ? 0 : gap) -
+              (markColumn ? markWidth : 0),
         );
         return ConstrainedBox(
           constraints: const BoxConstraints(minHeight: height),
@@ -153,6 +166,11 @@ class SuperTabQuietRow extends StatelessWidget {
                   ),
                 ),
               ],
+              if (markColumn)
+                SizedBox(
+                  width: markWidth,
+                  child: Center(child: mark),
+                ),
               const SizedBox(width: gap),
             ],
           ),
