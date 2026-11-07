@@ -1481,7 +1481,7 @@ describe('naming a Buddy (Diego, 10-29)', () => {
 
   it('takes a name like a username: 2 to 32 letters, digits, spaces and . _ - \', never a role or someone else\'s name', () => {
     const { f, agentId, rename } = named()
-    for (const name of ['Sparky', 'R2-D2', 'Nguyễn\'s pal', 'peer\'s Buddy', 'x'.repeat(32), 'Bé Na']) {
+    for (const name of ['Sparky', 'R2-D2', 'Nguyễn\'s pal', 'x'.repeat(32), 'Bé Na']) {
       rename(name)
       expect(shown(f, peer, agentId)).toBe(name)
     }
@@ -1526,6 +1526,12 @@ describe('naming a Buddy (Diego, 10-29)', () => {
     rename('Sparky')
     f.run({ type: 'buddy.rename', conversationId: chat, name: 'Sparky' }, peer, { buddyNames: [{ conversationId: chat, name: 'Sparky' }] })
     expect(chat).toBe(peerSwarmChat)
+  })
+
+  // Mac test of #3560: the old default shape reads as no name and is shown a member name, so nobody chooses it.
+  it('refuses "<someone>\'s Buddy", the old default\'s shape', () => {
+    const { rename } = named()
+    for (const name of ["peer's Buddy", "Sam's buddy", 'ken.tran\u2019s Buddy']) expect(() => rename(name)).toThrow(/role/)
   })
 
   it('reserves Buddy-only names such as Reviewer, without making them roles for other agents', () => {

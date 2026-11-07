@@ -133,4 +133,12 @@ describe('a free agent name', () => {
     expect(new Set(agents.map(a => a.displayName)).size).toBe(4)
     expect(agentDisplayName([{ id: 'd', name: 'Codex', displayName: 'Codex' }], 'd')).not.toBe('Codex')
   })
+
+  // Mac test of #3560: a Buddy started before real names still goes by "<person>'s Buddy" until it restarts.
+  it('gives an agent still named "<person>\'s Buddy" a member name at once', () => {
+    const agents: NamedAgent[] = [{ id: 'b', name: "owner's Buddy", displayName: "owner's Buddy" }, { id: 'c', name: "ken.tran's Buddy" }]
+    assignAgentDisplayNames(agents)
+    for (const agent of agents) expect(AGENT_NAMES).toContain(agent.displayName)
+    expect(agentDisplayName([{ id: 'b', name: "dee's Buddy", displayName: "dee's Buddy" }], 'b')).not.toBe("dee's Buddy")
+  })
 })
