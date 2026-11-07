@@ -460,6 +460,8 @@ void main() {
   group("the contributor's models", () {
     testWidgets('name the Buddies that run on each model', (tester) async {
       final server = swarm(gridModel: 'kimi-k3');
+      // A Buddy goes by its own name (task #4568), never "<person>'s Buddy".
+      (server.state['agents'] as List).cast<Map>().firstWhere((a) => a['id'] == 'wren')['displayName'] = 'Wren';
       final c = server.controller(account: 'owner');
       await c.refresh();
       await tester.pumpWidget(
@@ -475,10 +477,10 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('Kimi K3'), findsOneWidget);
-      expect(find.text("Used by ken.tran's Buddy"), findsOneWidget);
+      expect(find.text('Used by Wren'), findsOneWidget);
       // One line, under the model the Buddy runs on alone.
       expect(
-        tester.getTopLeft(find.text("Used by ken.tran's Buddy")).dy,
+        tester.getTopLeft(find.text('Used by Wren')).dy,
         greaterThan(tester.getTopLeft(find.text('Kimi K3')).dy),
       );
       expect(find.textContaining('Used by'), findsOneWidget);

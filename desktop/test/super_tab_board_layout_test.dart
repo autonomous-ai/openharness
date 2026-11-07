@@ -407,7 +407,9 @@ void main() {
     expect(_key('super-tasks-lead'), findsOneWidget);
     expect(c.selectedId, 'buddy-owner-lead');
     expect(_key('super-board-chat'), findsOneWidget);
-    expect(find.text('Your Buddy'), findsOneWidget);
+    // The chat's header names the agent (task #4568): no Buddy runs here yet, so it reads as the person's agent.
+    expect(find.text('Your Buddy'), findsNothing);
+    expect(find.text('Your agent'), findsOneWidget);
     expectFixedPanes(tester);
     expect(tester.getSize(_key('super-right-pane')).width, 340);
     expect(tester.takeException(), isNull);

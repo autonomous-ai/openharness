@@ -681,12 +681,15 @@ void main() {
     await end(tester, c);
   });
 
+  // Task #4568: it names the agent, and an empty name gets a fresh real one, never "<person>'s Buddy".
   testWidgets('Rename opens the rename dialog', (tester) async {
     final c = await show(tester);
     await open(tester);
     await tester.tap(key('super-buddy-card-rename'));
     await settle(tester);
-    expect(find.text('Rename your Buddy'), findsOneWidget);
+    expect(find.text('Rename Wren'), findsOneWidget);
+    expect(find.text('Leave it empty for a new name.'), findsOneWidget);
+    expect(find.textContaining("'s Buddy"), findsNothing);
     await end(tester, c);
   });
 
