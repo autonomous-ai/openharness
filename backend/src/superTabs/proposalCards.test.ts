@@ -366,3 +366,53 @@ describe('proposal time and delivery boundaries', () => {
     expect(pmAcceptsMessage(f.state, f.lead, undefined)).toBe(true)
   })
 })
+
+// Review of #3310 at c91dc2489 (task #3595): a PM's or Buddy's credential reached a proposal ruling, a card question, a merge
+// reason and a Buddy's answer as written. An agent's text there is refused as its posts are; a person's answer is redacted.
+describe('a credential in proposal text', () => {
+  // Assembled at run time, as agentSecrets.test.ts does, so the repository holds nothing a scanner takes for a secret.
+  const token = ['ghp', 'Q7mZ2xK9pL4vR8nT1wB6yC3dF5hJ0aE2sG7u'].join('_')
+  const leaked = `Here it is: ${token} (for the deploy)`
+  const refused = (f: ReturnType<typeof fixture>, input: Record<string, unknown>, actor: Actor) => {
+    const before = JSON.stringify(f.state)
+    let error: unknown
+    try { f.run(input, actor) } catch (e) { error = e }
+    expect(error, JSON.stringify(input)).toMatchObject({ code: 'SECRET_LIKE', status: 400 })
+    expect(String((error as Error).message)).not.toContain(token)
+    expect(JSON.stringify(f.state), 'something was stored').toBe(before)
+  }
+  const buddyCard = (f: ReturnType<typeof fixture>) => {
+    const id = f.create().result.conversationId
+    f.card(id).proposal!.senders[0]!.buddyId = f.buddy
+    return id
+  }
+
+  it('is refused in a PM\'s ruling: its reason, the task and the checks', () => {
+    const f = fixture(), id = buddyCard(f)
+    refused(f, decide(id, 'no', { reason: leaked }), f.pm)
+    refused(f, decide(id, 'accept', { task: { ...acceptedTask, goal: leaked } }), f.pm)
+    refused(f, decide(id, 'accept', { checks: [{ description: leaked, independent: false }] }), f.pm)
+  })
+
+  it('is refused in a PM\'s question on a card and its default answer', () => {
+    const f = fixture(), id = buddyCard(f)
+    refused(f, ask(id, { question: leaked }), f.pm)
+    refused(f, ask(id, { defaultAnswer: leaked }), f.pm)
+  })
+
+  it('is refused in a PM\'s merge reason', () => {
+    const f = fixture(), id = f.create().result.conversationId, other = f.create(owner).result.conversationId
+    refused(f, { type: 'proposal.merge', conversationId: other, intoConversationId: id, reason: leaked }, f.pm)
+  })
+
+  it('is refused in a Buddy\'s answer, and redacted in a person\'s', () => {
+    const f = fixture(), id = buddyCard(f)
+    const qid = f.run(ask(id), f.pm).result.questionId
+    const buddy: Actor = { kind: 'agent', agentId: f.buddy, machineOwnerId: `${owner.userId}-machine` }
+    refused(f, { type: 'proposal.answer', conversationId: id, questionId: qid, text: leaked }, buddy)
+    const answered = f.run({ type: 'proposal.answer', conversationId: id, questionId: qid, text: leaked }, peer)
+    expect(f.card(id).proposal!.questions[0]!.answer!.text).toContain('[credential removed]')
+    expect(JSON.stringify(f.state)).not.toContain(token)
+    expect(JSON.stringify(answered.messages)).not.toContain(token)
+  })
+})
