@@ -201,15 +201,16 @@ class _Tag extends StatelessWidget {
   );
 }
 
-/// A task's status as the Tasks pane marks it: a proposal and a rejection by their own icons, work by its activity.
+/// A task's status as the Tasks pane marks it: a proposal and a rejection by their own icons, work by its activity,
+/// each named in the task's own words, never the terminal's.
 class SuperTabTaskStatusMark extends StatelessWidget {
   const SuperTabTaskStatusMark(this.status, {super.key});
   final String status;
 
   @override
   Widget build(BuildContext context) {
+    final label = superTabTaskStatusLabel(status);
     if (status == 'proposal' || status == 'rejected') {
-      final label = superTabTaskStatusLabel(status);
       return Tooltip(
         message: label,
         child: Icon(
@@ -219,25 +220,44 @@ class SuperTabTaskStatusMark extends StatelessWidget {
         ),
       );
     }
-    return ActivityMark(
-      activity: superTabTaskActivity(status),
-      color: Theme.of(context).colorScheme.onSurface,
+    return Tooltip(
+      message: label,
+      child: ActivityMark(
+        activity: superTabTaskActivity(status),
+        color: Theme.of(context).colorScheme.onSurface,
+        tooltip: false,
+      ),
     );
   }
 }
 
+/// The mark of each backend status (`WorkStatus`, backend superTabs/model.ts). One added later reads as unknown,
+/// never as starting.
 HarnessActivity superTabTaskActivity(String status) => switch (status) {
-  'done' || 'shipped' => HarnessActivity.done,
+  'planned' => HarnessActivity.starting,
   'working' => HarnessActivity.working,
-  'needs_human' || 'needs_human_approval' => HarnessActivity.needsInput,
-  'blocked' || 'stuck' => HarnessActivity.failed,
-  'stopped' => HarnessActivity.paused,
-  _ => HarnessActivity.starting,
+  'needs_human' || 'review' => HarnessActivity.needsInput,
+  'blocked' => HarnessActivity.failed,
+  'done' => HarnessActivity.done,
+  'stopped' || 'cancelled' => HarnessActivity.paused,
+  'lost' => HarnessActivity.offline,
+  _ => HarnessActivity.unknown,
 };
 
-/// The status in words, for the task's header and for readers of the mark.
+/// The status in words, for the task's header and for readers of the mark: the backend's labels (`STATUS_LABELS`),
+/// as the Board says them.
 String superTabTaskStatusLabel(String status) => switch (status) {
   'proposal' => 'Proposal',
   'rejected' => 'Rejected',
-  _ => superTabTaskActivity(status).label,
+  'planned' => 'Planned',
+  'working' => 'Working',
+  'needs_human' => 'Needs a human',
+  'blocked' => 'Stuck',
+  'review' => 'Ready for review',
+  'done' => 'Done',
+  'stopped' => 'Stopped',
+  'cancelled' => 'Cancelled',
+  'reconciling' => 'Checking its agent',
+  'lost' => 'Agent lost',
+  _ => HarnessActivity.unknown.label,
 };
