@@ -5891,6 +5891,25 @@ describe('lead.switch', () => {
     expect(result.messages.at(-1)!.text).toContain('PM moved to Codex')
   })
 
+  // Security review of #4558: the account a moved PM lands on would be the destination machine's owner's. No person moves a PM
+  // onto another member's computer at all (Swarm v3, #4120), Buddy or not, so no member's account runs it without their knowing.
+  it('refuses moving the PM onto another member\'s computer, whether or not they have a Buddy', () => {
+    for (const buddy of [false, true]) {
+      const s = setup()
+      const destination = structuredClone(s.f.state.machines![0]!)
+      Object.assign(destination, { machineId: 'destination', name: 'Peer Mac', generation: 'g2', contributorId: 'peer',
+        membershipGeneration: s.f.state.people.find(p => p.id === 'peer')!.generation })
+      destination.observation!.generation = 'g2'
+      destination.observation!.capabilities = ['leadSwitch', 'leadStart']
+      s.f.state.machines!.push(destination)
+      if (buddy) giveOwnBuddy(s.f.state, 'peer')
+      for (const profileId of [WORK, 'default']) {
+        expect(code(() => s.f.run({ ...s.request, profileId, machineId: 'destination', model: 'gpt-5.1' }))).toBe('NOT_YOUR_COMPUTER')
+      }
+      expect(s.agent().switchRequest).toBeUndefined()
+    }
+  })
+
   it('keeps the source lead and posts one safe line when the destination candidate fails', () => {
     const s = setup()
     const destination = structuredClone(s.f.state.machines![0]!)

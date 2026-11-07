@@ -217,6 +217,12 @@ describe('PM decisions and card questions', () => {
     const asked = f.run(ask(id), f.pm), q = f.card(id).proposal!.questions[0]!
     expect(q).toMatchObject({ personId: peer.userId, question: 'Keep drafts for seven days?', defaultAnswer: 'Keep seven days', deadline, requiresConsent: false })
     expect(inPrivate(f, asked.messages)).toEqual([])
+    // An ordinary question tags nobody: it has a default. One that needs the person's own agreement has none, so it tags them on
+    // the card, which reaches their inbox and phone with or without a Buddy (security review of #4558).
+    expect(asked.messages.find(m => m.source?.kind === 'proposal-question')!.mentions).toBeUndefined()
+    const consent = f.run(ask(id, { requiresConsent: true, question: 'Share your drafts?' }), f.pm)
+    expect(consent.messages.find(m => m.source?.kind === 'proposal-question')).toMatchObject({ conversationId: id, mentions: [peer.userId] })
+    expect(inPrivate(f, consent.messages)).toEqual([])
     const answer = { type: 'proposal.answer', conversationId: id, questionId: q.id, text: 'Keep fourteen days' }
     expect(() => f.run(answer, outsider)).toThrow(expect.objectContaining({ code: 'PROPOSAL_ANSWER_FORBIDDEN' }))
     f.state.people.find(p => p.id === peer.userId)!.role = 'viewer'
