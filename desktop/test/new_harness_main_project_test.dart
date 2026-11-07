@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
@@ -12,6 +14,8 @@ import 'package:harness/state/harness_launch_integration.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/super_tabs/project_choices.dart';
 import 'package:harness/widgets/new_harness_form.dart';
+
+import 'support/capture.dart';
 
 /// The Cmd-N form picks a main project (task #4541, spec 2026-11-07-members-and-leads section 1): a project list in
 /// place of the folder, worktree and branch rows and the Member or Lead pill.
@@ -141,6 +145,7 @@ Future<NewHarnessController> _mount(
   addTearDown(() => grid.AppTheme.brightness.value = previous);
   await tester.pumpWidget(
     MaterialApp(
+      debugShowCheckedModeBanner: false,
       theme: grid
           .buildAppTheme(brightness: brightness)
           .copyWith(platform: TargetPlatform.macOS),
@@ -166,7 +171,11 @@ Future<void> _openMenu(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
+final _shots = Platform.environment['CMDN_MAIN_PROJECT_SHOTS'];
+
 void main() {
+  setUpAll(() => loadCaptureFonts(_shots));
+
   testWidgets('a Main project pill replaces the folder, worktree and branch '
       'rows and the Member or Lead pill', (tester) async {
     final choices = await _list();
@@ -344,6 +353,11 @@ void main() {
         );
         await _openMenu(tester);
         expect(tester.takeException(), isNull);
+        await captureWindow(
+          tester,
+          _shots,
+          'cmd-n-main-project-${width.toInt()}-${brightness.name}',
+        );
         final count = tester.renderObject<RenderParagraph>(
           find.descendant(
             of: _key('new-harness-main-project-lead'),
