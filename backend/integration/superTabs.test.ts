@@ -26,7 +26,7 @@ import { SEED_RULES } from '../src/superTabs/policy.js'
 import { stableId, type Agent, type SuperTabState } from '../src/superTabs/model.js'
 import { agentDisplayName } from '../src/superTabs/agentNames.js'
 import { roleVersion } from '../src/superTabs/projects.js'
-import { ensureTerminalExpiry, TERMINAL_EXPIRY_MS } from '../src/superTabs/terminal.js'
+import { ensureTerminalExpiry, TERMINAL_EXPIRY_MS, TERMINAL_RECHECK_MS } from '../src/superTabs/terminal.js'
 import { ensureMentionExpiry, MENTION_EXPIRY_MS, swarmsWithTags } from '../src/superTabs/mentions.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { swarmTransaction } from '../src/superTabs/cache.js'
@@ -3996,6 +3996,35 @@ describe('the Lead reads and types in an agent terminal', () => {
     return { at, loads: () => load.mock.calls.length, listeners: (requestId: string) => notices.listenerCount(requestId) }
   }
 
+  /** The wait's re-checks (store.ts terminalResult, every TERMINAL_RECHECK_MS), held while a test sets up its answer, then run
+   *  for their whole period: an answer that comes while none has fired was woken by its notice, however slow the runner (task
+   *  #4308: a 100 ms wall-clock bound failed at 154 ms on a busy CI runner). `asleep` settles once the wait sleeps on one. */
+  function heldRechecks() {
+    const realSet = globalThis.setTimeout, realClear = globalThis.clearTimeout
+    const held = new Map<object, { run: () => void; timer?: ReturnType<typeof realSet> }>()
+    let released = false, fired = 0, sleeping = () => {}
+    const asleep = new Promise<void>(resolve => { sleeping = resolve })
+    const start = (handle: object, entry: { run: () => void; timer?: ReturnType<typeof realSet> }) => {
+      entry.timer = realSet(() => { held.delete(handle); fired++; entry.run() }, TERMINAL_RECHECK_MS)
+    }
+    const set = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((run: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
+      if (ms !== TERMINAL_RECHECK_MS) return realSet(run, ms, ...args)
+      const handle = {}, entry = { run: () => run(...args) }
+      held.set(handle, entry)
+      if (released) start(handle, entry)
+      sleeping()
+      return handle
+    }) as typeof setTimeout)
+    const clear = vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((handle?: object) => {
+      const entry = handle && held.get(handle)
+      if (!entry) return realClear(handle as ReturnType<typeof realSet>)
+      held.delete(handle)
+      if (entry.timer) realClear(entry.timer)
+    }) as typeof clearTimeout)
+    onTestFinished(() => { set.mockRestore(); clear.mockRestore() })
+    return { asleep, release: () => { released = true; for (const [handle, entry] of held) start(handle, entry) }, fired: () => fired }
+  }
+
   it('waits for an answer without loading the Swarm again and again', async () => {
     const { tab, lead, worker, claim } = await terminalFixture()
     const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
@@ -4011,13 +4040,14 @@ describe('the Lead reads and types in an agent terminal', () => {
     const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
     expect(await claim()).toHaveLength(1)
     const { at, loads } = watched()
-    const waiting = at.terminalResult(host, tab, requestId, lead, 20_000).then(answer => ({ answer, at: Date.now() }))
-    await new Promise(resolve => setTimeout(resolve, 300))
+    const rechecks = heldRechecks()
+    const waiting = at.terminalResult(host, tab, requestId, lead, 20_000)
+    await rechecks.asleep
     await at.execute(host, tab, { operationId: randomUUID(), command: { type: 'agent.screenResult', requestId, ok: true, text: 'screen' } }, worker)
-    const answeredAt = Date.now()
-    const { answer, at: returnedAt } = await waiting
-    expect(answer).toEqual({ requestId, ok: true, text: 'screen' })
-    expect(returnedAt - answeredAt).toBeLessThan(100)
+    rechecks.release()
+    expect(await waiting).toEqual({ requestId, ok: true, text: 'screen' })
+    // Woken by the commit's notice: no re-check ran, so the answer did not wait for one.
+    expect(rechecks.fired()).toBe(0)
     expect(loads()).toBeLessThanOrEqual(4)
   })
 
@@ -4059,12 +4089,14 @@ describe('the Lead reads and types in an agent terminal', () => {
     const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
     expect(await claim()).toHaveLength(1)
     const { at, loads } = watched({ heard: false })
+    const rechecks = heldRechecks()
     const waiting = at.terminalResult(host, tab, requestId, lead, 20_000)
-    await new Promise(resolve => setTimeout(resolve, 300))
+    await rechecks.asleep
     await run(tab, { type: 'agent.screenResult', requestId, ok: true, text: 'screen' }, host, worker)
-    const answeredAt = Date.now()
+    rechecks.release()
     expect(await waiting).toEqual({ requestId, ok: true, text: 'screen' })
-    expect(Date.now() - answeredAt).toBeLessThan(6_000)
+    // The one re-check after the answer found it.
+    expect(rechecks.fired()).toBe(1)
     expect(loads()).toBeLessThanOrEqual(3)
   })
 
