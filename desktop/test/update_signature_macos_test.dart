@@ -76,7 +76,8 @@ Matcher _refusedWith(String text) => throwsA(
 void main() {
   late Directory scratch;
   final signed = _signedRelease();
-  final noSigned = _macOnly ??
+  final noSigned =
+      _macOnly ??
       (signed == null
           ? 'no notarized Developer ID Harness here: set HARNESS_SIGNED_APP_FIXTURE'
           : null);
@@ -84,13 +85,17 @@ void main() {
   setUp(() => scratch = Directory.systemTemp.createTempSync('update-sig-'));
   tearDown(() => scratch.deleteSync(recursive: true));
 
-  test('a running build with no signer of its own keeps the sha256 check alone', () async {
-    final running = _adHocBundle(scratch.path, 'Running.app');
-    await verifyMacUpdate(
-      stagedBundle: _unsignedBundle(scratch.path, 'Harness.app'),
-      runningBundle: running,
-    );
-  }, skip: _macOnly);
+  test(
+    'a running build with no signer of its own keeps the sha256 check alone',
+    () async {
+      final running = _adHocBundle(scratch.path, 'Running.app');
+      await verifyMacUpdate(
+        stagedBundle: _unsignedBundle(scratch.path, 'Harness.app'),
+        runningBundle: running,
+      );
+    },
+    skip: _macOnly,
+  );
 
   test('a running app whose signer cannot be read refuses', () async {
     await expectLater(

@@ -10,8 +10,20 @@
 /// installed release only ever moves to another signed one.
 library;
 
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+
+import '../core/hidden_process.dart';
+
+/// Long enough for a cold `codesign --deep` over a 300 MB bundle or a
+/// PowerShell start on a busy PC; a check that takes longer refuses.
+const signatureCheckTimeout = Duration(seconds: 60);
+
 /// Why an update was not installed, in words for the person: the banner shows
-/// "Could not install Harness X: <message>".
+/// "Could not install Harness X: " followed by [message].
 class UpdateRefused implements Exception {
   const UpdateRefused(this.message);
   final String message;
@@ -224,4 +236,67 @@ String? windowsUpdateRefusal(WindowsSignatureReport report) {
         '(${catalog.signer.status})';
   }
   return null;
+}
+
+/// Refuses [stagedBundle] unless it meets [macUpdateRequirement] for the
+/// signer of [runningBundle]; a running bundle with no signer passes it.
+Future<void> verifyMacUpdate({
+  required String stagedBundle,
+  required String runningBundle,
+  Duration timeout = signatureCheckTimeout,
+}) async {
+  final display = await _run('/usr/bin/codesign', [
+    '-dv',
+    '--verbose=2',
+    runningBundle,
+  ], timeout);
+  final signer = parseMacSigner('${display.stdout}${display.stderr}');
+  if (signer == null) {
+    debugPrint(
+      'UpdateSignature: the running app is not signed; the update is checked by sha256 only',
+    );
+    return;
+  }
+  final check = await _run('/usr/bin/codesign', [
+    '--verify',
+    '--deep',
+    '--strict',
+    '-R=${macUpdateRequirement(signer)}',
+    stagedBundle,
+  ], timeout);
+  if (check.exitCode != 0) {
+    debugPrint('UpdateSignature: refused: ${'${check.stderr}'.trim()}');
+    throw notFromPublisher(signer.name);
+  }
+}
+
+/// Runs a check through [startHidden] (no console window on Windows) and
+/// refuses the update when it cannot finish within [timeout].
+Future<ProcessResult> _run(
+  String executable,
+  List<String> arguments,
+  Duration timeout, {
+  Map<String, String>? environment,
+}) async {
+  final Process process;
+  try {
+    process = await startHidden(
+      executable,
+      arguments,
+      environment: environment,
+    );
+  } on ProcessException catch (error) {
+    debugPrint('UpdateSignature: could not start $executable: $error');
+    throw cannotCheckSignature;
+  }
+  final stdout = process.stdout.transform(utf8.decoder).join();
+  final stderr = process.stderr.transform(utf8.decoder).join();
+  try {
+    final code = await process.exitCode.timeout(timeout);
+    return ProcessResult(process.pid, code, await stdout, await stderr);
+  } on TimeoutException {
+    process.kill();
+    debugPrint('UpdateSignature: $executable took over ${timeout.inSeconds} s');
+    throw cannotCheckSignature;
+  }
 }
