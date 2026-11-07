@@ -85,6 +85,7 @@ import 'message_row.dart';
 import 'message_receipt.dart';
 import 'notifications.dart';
 import 'buddies.dart';
+import 'buddy_card.dart';
 import 'buddy_restart.dart';
 import 'decisions.dart';
 import 'day_pill.dart';
@@ -3673,6 +3674,17 @@ class _SuperTabViewState extends State<SuperTabView>
             group: group,
             menu: _options(group),
             app: widget.app,
+            // The reader's own Buddy chat: its name opens the Buddy card (Restart with launch flags, Rename, Remove),
+            // which nothing else here reaches.
+            title: _isBuddyChat(group)
+                ? (name) => BuddyCardButton(
+                    key: ValueKey(group.id),
+                    controller: c,
+                    projectId: group.projectId,
+                    app: widget.app,
+                    label: name,
+                  )
+                : null,
           )
         else
           const SizedBox(height: 44),
@@ -3686,6 +3698,8 @@ class _SuperTabViewState extends State<SuperTabView>
     final group = c.selected;
     final project = c.snapshot?.projectById(_boardProjectId ?? '');
     final onBuddy = group?.isBuddyChat == true;
+    // The Buddy card opens only on the reader's own Buddy chat.
+    final ownBuddy = group != null && _isBuddyChat(group);
     // A card's task in a project on the Board: its priority and pause, by role (#3820).
     final steered =
         group != null &&
@@ -3722,16 +3736,28 @@ class _SuperTabViewState extends State<SuperTabView>
                   icon: const Icon(AppIcons.arrowLeft, size: 16),
                   label: const Text('Your Buddy'),
                 ),
-              Expanded(
-                child: Text(
-                  onBuddy ? 'Your Buddy' : (group?.label ?? ''),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: DesktopChrome.control().copyWith(
-                    fontWeight: grid.AppFont.semibold,
+              if (ownBuddy) ...[
+                Flexible(
+                  child: BuddyCardButton(
+                    key: ValueKey(group.id),
+                    controller: c,
+                    projectId: group.projectId,
+                    app: widget.app,
+                    label: 'Your Buddy',
                   ),
                 ),
-              ),
+                const Spacer(),
+              ] else
+                Expanded(
+                  child: Text(
+                    onBuddy ? 'Your Buddy' : (group?.label ?? ''),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.control().copyWith(
+                      fontWeight: grid.AppFont.semibold,
+                    ),
+                  ),
+                ),
               const SizedBox(width: 8),
             ],
           ),
@@ -4433,26 +4459,35 @@ class _SuperTabViewState extends State<SuperTabView>
         if (_isBuddyChat(group)) ...[
           // A Buddy chat is the reader's own: the Buddy itself to name, any
           // time, and to remove. Nothing to archive, and no way to a Chat with
-          // PM (Ken, 10-28).
-          if (editable)
-            item(
-              'Rename Buddy…',
-              () => unawaited(showRenameBuddy(context, c, group.projectId)),
-            ),
-          if (editable &&
-              (c.buddy(group.projectId)?.harnessId.isNotEmpty ?? false) &&
-              c.buddy(group.projectId)!.machineId.isNotEmpty)
-            item(
-              'Restart Buddy…',
-              () => unawaited(
-                showRestartBuddy(context, c, group.projectId, app: widget.app),
+          // PM (Ken, 10-28). The Board gives the Buddy chat its card, which
+          // holds these three, so its menu does not repeat them (#4328).
+          if (!widget.board) ...[
+            if (editable)
+              item(
+                'Rename Buddy…',
+                () => unawaited(showRenameBuddy(context, c, group.projectId)),
               ),
-            ),
-          if (editable && c.buddy(group.projectId) != null)
-            item(
-              'Remove Buddy',
-              () => unawaited(confirmRemoveBuddy(context, c, group.projectId)),
-            ),
+            if (editable &&
+                (c.buddy(group.projectId)?.harnessId.isNotEmpty ?? false) &&
+                c.buddy(group.projectId)!.machineId.isNotEmpty)
+              item(
+                'Restart Buddy…',
+                () => unawaited(
+                  showRestartBuddy(
+                    context,
+                    c,
+                    group.projectId,
+                    app: widget.app,
+                  ),
+                ),
+              ),
+            if (editable && c.buddy(group.projectId) != null)
+              item(
+                'Remove Buddy',
+                () =>
+                    unawaited(confirmRemoveBuddy(context, c, group.projectId)),
+              ),
+          ],
           // The one Buddy's chat lists the person's older chats in projects
           // they still read, each read only (spec: history).
           if (group.isSwarmBuddyChat)

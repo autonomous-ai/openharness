@@ -21,6 +21,7 @@ class SuperTabAgentChatHeader extends StatelessWidget {
     required this.group,
     this.menu,
     this.app,
+    this.title,
   });
 
   final SuperTabController controller;
@@ -31,6 +32,9 @@ class SuperTabAgentChatHeader extends StatelessWidget {
 
   /// For the model picker's line that asks to add the Buddy's machine to the Swarm.
   final AppNotifier? app;
+
+  /// In place of the avatar and the name, given the name: the reader's own Buddy chat's Buddy card button (view.dart).
+  final Widget Function(String name)? title;
 
   @override
   Widget build(BuildContext context) {
@@ -63,7 +67,11 @@ class SuperTabAgentChatHeader extends StatelessWidget {
       child: Row(
         children: [
           const SizedBox(width: grid.AppDesktop.controlGap),
-          if (agent != null) ...[
+          if (title case final title?)
+            Expanded(
+              child: Align(alignment: Alignment.centerLeft, child: title(name)),
+            )
+          else if (agent != null) ...[
             SuperTabAvatar.agent(
               agent,
               size: SuperTabAvatar.rowSize,
@@ -71,16 +79,17 @@ class SuperTabAgentChatHeader extends StatelessWidget {
             ),
             const SizedBox(width: grid.AppDesktop.menuInset),
           ],
-          Expanded(
-            child: Text(
-              name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: DesktopChrome.control().copyWith(
-                fontWeight: grid.AppFont.semibold,
+          if (title == null)
+            Expanded(
+              child: Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: DesktopChrome.control().copyWith(
+                  fontWeight: grid.AppFont.semibold,
+                ),
               ),
             ),
-          ),
           if (buddy != null && group.isSwarmBuddyChat)
             BuddyModelLine(
               controller: c,
