@@ -134,7 +134,8 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
   it('says each agent\'s kind and the chat its person talks to it in', () => {
     const { parts, s } = scene()
     const view = readerView(parts, owner, NOW, { teamMachines: [] })
-    expect(view.derived.agents[s.lead]).toMatchObject({ kind: 'pm', chatId: 'lead' })
+    // A Lead's is its private chat with its person once opened, never its project chat (task #4664).
+    expect(view.derived.agents[s.lead]).toMatchObject({ kind: 'pm', chatId: null })
     expect(view.derived.agents[s.worker]).toMatchObject({ kind: 'regular', chatId: null })
   })
 

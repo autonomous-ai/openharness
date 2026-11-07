@@ -29,12 +29,11 @@ export function agentKind(state: SuperTabState, target: Agent): AgentKind {
   return ledProject(state, target.id) ? 'pm' : 'regular'
 }
 
-/** The chat [target]'s person talks to it in: a Buddy's own chat, a PM's project chat, a Regular agent's own chat (agent.new);
- *  none for an agent started before chats of their own. */
+/** The chat [target]'s person talks to it in: a Buddy's own chat, else its own private chat with its person (agent.new, and a
+ *  Lead's from agent.chat): an agent is a direct message, a project a group chat (task #4664, anh Dee 11-07). None for an agent
+ *  with no chat of its own yet; a client then opens a Lead's with agent.chat, and an older one its project chat. */
 export function agentChatId(state: SuperTabState, target: Agent): string | null {
   if (isBuddy(target)) return state.conversations.find(c => isBuddyChat(c) && c.agentIds.includes(target.id))?.id ?? null
-  const led = ledProject(state, target.id)
-  if (led) return led.leadConversationId
   return state.conversations.find(c => isAgentChat(c) && c.agentIds.includes(target.id))?.id ?? null
 }
 
