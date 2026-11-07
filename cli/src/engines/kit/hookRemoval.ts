@@ -9,7 +9,7 @@ import { parse as parseToml } from 'smol-toml'
 import { basename, join } from 'node:path'
 import type { HookReviewRecord } from '../facets/hooks.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
-import { reviewRecords, withoutReviewRecords } from './hookReview.js'
+import { reviewRecords, sessionReviewRecords, withoutReviewRecords } from './hookReview.js'
 import { IdentityReadUnavailable } from './identityScan.js'
 import { isMessagesBlock } from './messagesHook.js'
 import { foreignHookBlocks, isManagedHookCommand, isOurs, type HookBlock, type Settings } from './notifyHooks.js'
@@ -170,8 +170,12 @@ export async function removeReviewedHooks(record: HookReviewRecord, home: string
       let current: Settings
       try { current = held.now() } catch { current = { hooks: {} } }
       const now = new Set(reviewRecords(record, keyed, current, platform).values())
-      if (before.size === 0 && now.size === 0) return { file: config, removed: 0 }
-      const owned = (key: string, hash: string) => before.get(key) === hash || (key.startsWith(`${keyed}:`) && now.has(hash))
+      // The session flags' hooks (the Swarm's shell guard) are recorded with Harness's own (prepareReviewed), so they go
+      // with them: by their exact key and the hash this release gives them.
+      const session = sessionReviewRecords(record, platform)
+      if (before.size === 0 && now.size === 0 && session.size === 0) return { file: config, removed: 0 }
+      const owned = (key: string, hash: string) => before.get(key) === hash || session.get(key) === hash
+        || (key.startsWith(`${keyed}:`) && now.has(hash))
       try { parseToml(observed.content, { integersAsBigInt: true, maxDepth: 64 }) }
       catch { throw new HookPreparationHeld('the hook review configuration is not complete TOML') }
       const { text, removed } = withoutReviewRecords(observed.content, record, owned)

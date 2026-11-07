@@ -170,6 +170,8 @@ class SuperTabPersonScore {
       points = _int(json['points']),
       rank = _int(json['rank']),
       medal = SuperTabMedal.values.asNameMap()[json['medal']],
+      accepted = _optional(json['accepted']),
+      agentsBrought = _optional(json['agentsBrought']),
       shipped = _int(_map(json['shipped'])['count']),
       medianAskToShipMs = _optional(_map(json['shipped'])['medianAskToShipMs']),
       unblocked = _int(_map(json['unblocked'])['count']),
@@ -190,6 +192,9 @@ class SuperTabPersonScore {
 
   final String personId;
   final int points, rank;
+
+  /// Weekly org scores; null from a backend before this board.
+  final int? accepted, agentsBrought;
   final SuperTabMedal? medal;
   final int shipped, unblocked, lentMachines, streakDays;
 

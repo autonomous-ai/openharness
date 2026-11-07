@@ -62,8 +62,9 @@ async function swarm() {
   const generations = new Map<string, string>()
   for (const machineId of ['ev-lead-host', 'ev-test-host']) generations.set(machineId, (await poolRows(store, host, machineId)).find(p => p.tabId === tab)!.machine.generation)
   const leadHarness = randomUUID(), workers = new Map<string, { agentId: string; harness: string }>()
+  // Added by the host, whose machines they run on: an agent is its own person's, on their own computer (task #4120).
   const add = async (conversationId: string, machineId: string, harnessId: string, name: string, lead = false) => String((await execute({ type: 'agent.add',
-    conversationId, machineId, harnessId, name, configuration: config, lead })).result.agentId)
+    conversationId, machineId, harnessId, name, configuration: config, lead }, host)).result.agentId)
   const lead = await add('lead', 'ev-lead-host', leadHarness, 'Lead', true)
   const observe = (machineId: string, running: string[], extra: Partial<MachineObservation> = {}) => store.observeMachine(host, tab, machineId, {
     generation: generations.get(machineId)!, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9,

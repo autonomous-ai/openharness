@@ -64,12 +64,14 @@ function fakeReader() {
 let pullNumbers = 100
 
 /** A Swarm with a Lead and a task, "Ship the parser", assigned to a worker that linked [PR] in its status. */
-async function swarm() {
+/** [reads]: the store reads GitHub through the same fake when a verdict or a Ready needs the head now (#3628). */
+async function swarm({ reads = false } = {}) {
   const number = ++pullNumbers, PR = `https://github.com/acme/app/pull/${number}`
   const pull = (patch: Partial<PullRequestWatch> = {}): PullRequestWatch => ({ url: PR, number, state: 'open', draft: false, head: HEAD, base: 'main',
     mergeable: true, checkRuns: [], checkSuites: [], reviews: [], comments: [], ...patch })
   let now = Date.parse('2026-11-03T08:00:00.000Z')
-  const store = new SuperTabStore(db, () => now)
+  const { pulls, asked, patches, patchReads, merges, reader } = fakeReader()
+  const store = new SuperTabStore(db, () => now, undefined, reads ? { pullRequestReader: () => reader } : {})
   const tab = (await store.create(owner, randomUUID(), 'Events', 'public')).id
   const execute = (command: Command, user = owner, asAgentId?: string) => store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
   const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
@@ -77,15 +79,15 @@ async function swarm() {
   for (const [machineId, name] of [['lead-host', 'Lead Mac'], ['test-host', 'Worker Mac']]) {
     await execute({ type: 'machine.contribute', machineId: machineId!, name: name!, cwd: '/repo', engines: ['codex'], maxAgents: 4 }, host)
   }
+  // Added by the host, whose machines they run on: an agent is its own person's, on their own computer (task #4120).
   const add = async (conversationId: string, machineId: string, name: string, lead = false) => String((await execute({ type: 'agent.add',
-    conversationId, machineId, harnessId: randomUUID(), name, configuration: config, lead })).result.agentId)
+    conversationId, machineId, harnessId: randomUUID(), name, configuration: config, lead }, host)).result.agentId)
   const lead = await add('lead', 'lead-host', 'Lead', true)
   const task = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief: 'Implement it',
     checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
   const worker = await add(task, 'test-host', 'Worker')
   const assignment = String((await execute({ type: 'work.assign', conversationId: task, agentId: worker })).result.assignmentId)
   await execute({ type: 'work.status', conversationId: task, assignmentId: assignment, status: 'working', result: `Draft ${PR}` }, host, worker)
-  const { pulls, asked, patches, patchReads, merges, reader } = fakeReader()
   const pass = async () => { now += MINUTE; return watchPullRequests(db, store, reader, now) }
   /** The rows this feature wrote in [conversationId], oldest first. */
   const told = async (conversationId = task) => (await db.superTabMessage.findMany({ where: { tabId: tab, conversationId }, orderBy: { sequence: 'asc' } }))
@@ -193,7 +195,7 @@ describe('pull request events', () => {
     expect(cancelled.asked).not.toContain(cancelled.PR)
   })
 
-  // ENGINEERING.md 4: no loop grows without a bound. A pass reads a capped number of tasks, the most recently active first.
+  // AGENTS.md standard 4: no loop grows without a bound. A pass reads a capped number of tasks, the most recently active first.
   it('reads at most its cap of tasks a pass, the most recently active first', async () => {
     const f = await swarm()
     f.pulls.set(f.PR, f.pull())
@@ -204,7 +206,7 @@ describe('pull request events', () => {
     expect(f.asked).toEqual([f.PR])
   })
 
-  // ENGINEERING.md 6 and 8: a pull request GitHub cannot read is not skipped in silence, and each pass that did something
+  // AGENTS.md standards 6 and 8: a pull request GitHub cannot read is not skipped in silence, and each pass that did something
   // says how much.
   it('says how many pull requests it could not read', async () => {
     const f = await swarm()
@@ -240,6 +242,21 @@ describe('pull request events', () => {
       const read = async () => [(await group(f.task)).checks[0]!, (await group(step)).checks[0]!]
       return { f, HEAD2, HEAD3, step, read }
     }
+
+    // Task #3953 (Hugo's review of #3435): closing a reviewed pull request and opening its replacement leaves no Yes behind.
+    it('stops counting at a pull request closed unmerged once another is linked and open, on the task and its steps, and counts again when it reopens', async () => {
+      const { f, read } = await reviewed()
+      const next = `https://github.com/acme/app/pull/${9700 + f.number}`, HEAD4 = 'dddddd4444444dddddd4444444dddddd4444444d'
+      f.pulls.set(next, { ...f.pull({ head: HEAD4 }), url: next, number: 9700 + f.number })
+      await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'working', result: `${f.PR} then ${next}` }, host, f.worker)
+      await f.pass()
+      f.pulls.set(f.PR, f.pull({ state: 'closed' }))
+      await f.pass()
+      for (const check of await read()) expect(check.passedBy).toBeNull()
+      f.pulls.set(f.PR, f.pull())
+      await f.pass()
+      for (const check of await read()) expect(check.passedBy).not.toBeNull()
+    })
 
     it('counts at its head, and its patch is read once a head', async () => {
       const { f, read } = await reviewed()
@@ -452,5 +469,161 @@ describe('pull request events', () => {
       await f.pass()
       for (const check of await read()) expect(check.passedBy).toBeNull()
     })
+  })
+
+  // Task #3628: on #3561 a Yes at the pull request's real head did not count, twice, as the watch had not read the push yet. A
+  // verdict naming a head the record does not have reads GitHub first; a Ready reads it too.
+  describe('a head the record does not have yet', () => {
+    const HEAD2 = 'bbbbbbb2222222bbbbbbb2222222bbbbbbb22222', HEAD3 = 'ccccccc3333333ccccccc3333333ccccccc33333'
+    /** The watch read HEAD; GitHub is at HEAD3 now, unread. A Reviewer on the task and a Tester on its step. */
+    const pushed = async () => {
+      const f = await swarm({ reads: true })
+      f.patches.set(HEAD, 'p1').set(HEAD2, 'p2').set(HEAD3, 'p3')
+      f.pulls.set(f.PR, f.pull())
+      await f.pass()
+      const reviewer = await f.add(f.task, 'test-host', 'Reviewer'), tester = await f.add(f.task, 'test-host', 'Tester')
+      const step = String((await f.execute({ type: 'conversation.create', title: 'Test', reviewOf: f.task, step: 'Test', brief: 'Test it',
+        checks: [{ description: 'Signs in', independent: true }] } as Command, host, f.worker)).result.conversationId)
+      await f.execute({ type: 'conversation.agent', conversationId: step, agentId: tester, present: true, lead: false })
+      const stepWork = String((await f.execute({ type: 'work.assign', conversationId: step, agentId: tester }, host, f.worker)).result.assignmentId)
+      const data = async (key: string) => (await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key } })).data as unknown as
+        { checks: Array<{ id: string; passedBy: string | null; verdicts?: Array<{ head?: string; stale?: string }> }>; pullRequestHeads?: Record<string, { head: string; patch: string | null }> }
+      const taskCheck = (await data(f.task)).checks[0]!.id, stepCheck = (await data(step)).checks[0]!.id
+      f.pulls.set(f.PR, f.pull({ head: HEAD3 }))
+      const review = async (head: string) => (await f.execute({ type: 'work.check', conversationId: f.task, assignmentId: f.assignment, checkId: taskCheck,
+        passed: true, evidence: 'Reads right', head, base: 'main' } as Command, host, reviewer)).result
+      const test = async (head: string) => (await f.execute({ type: 'work.check', conversationId: step, assignmentId: stepWork, checkId: stepCheck,
+        passed: true, evidence: 'Signs in', head, base: 'main' } as Command, host, tester)).result
+      const recorded = async () => (await data(f.task)).pullRequestHeads?.[f.PR]
+      const checks = async () => [(await data(f.task)).checks[0]!, (await data(step)).checks[0]!]
+      return { f, review, test, recorded, checks }
+    }
+
+    it('a Yes at the real head counts on the task and its step, and the record is that head', async () => {
+      const { review, test, recorded, checks } = await pushed()
+      expect(await review(HEAD3)).toMatchObject({ counts: true })
+      expect(await test(HEAD3)).toMatchObject({ counts: true })
+      expect(await recorded()).toMatchObject({ head: HEAD3, patch: 'p3' })
+      for (const check of await checks()) {
+        expect(check.passedBy).not.toBeNull()
+        expect(check.verdicts!.at(-1)).toMatchObject({ head: HEAD3 })
+        expect(check.verdicts!.at(-1)!.stale).toBeUndefined()
+      }
+    })
+
+    it('a Yes at an older head does not count, and the record moves to GitHub\'s head', async () => {
+      const { review, test, recorded, checks } = await pushed()
+      expect(await review(HEAD2)).toMatchObject({ counts: false })
+      expect(await test(HEAD2)).toMatchObject({ counts: false })
+      expect(await recorded()).toMatchObject({ head: HEAD3 })
+      for (const check of await checks()) {
+        expect(check.passedBy).toBeNull()
+        expect(check.verdicts!.at(-1)).toMatchObject({ head: HEAD2, stale: HEAD3 })
+      }
+    })
+
+    it('a Yes at the recorded head stops counting once GitHub\'s newer head is read', async () => {
+      const { f, review, recorded, checks } = await pushed()
+      // The record still says HEAD, so a Yes there reads nothing and counts, as before; the read for HEAD3 then stales it.
+      expect(await review(HEAD)).toMatchObject({ counts: true })
+      expect(await review(HEAD3)).toMatchObject({ counts: true })
+      f.pulls.set(f.PR, f.pull({ head: HEAD2 }))
+      expect(await review(HEAD)).toMatchObject({ counts: false })
+      expect(await recorded()).toMatchObject({ head: HEAD2 })
+      expect((await checks())[0]!.passedBy).toBeNull()
+    })
+
+    it('GitHub unreadable: the verdict is judged on the record, as before', async () => {
+      const { f, review, recorded } = await pushed()
+      f.pulls.delete(f.PR)
+      expect(await review(HEAD3)).toMatchObject({ counts: false })
+      expect(await recorded()).toMatchObject({ head: HEAD })
+    })
+
+    it('a Ready reads the head of the pull request it names', async () => {
+      const { f, recorded } = await pushed()
+      await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'review', result: `Ready for review: ${f.PR}` }, host, f.worker)
+      expect(await recorded()).toMatchObject({ head: HEAD3, patch: 'p3' })
+    })
+  })
+})
+
+// Task #3827: the board's Done cards say whether the pull request's checks are green. The watch already reads them each pass; it
+// records one state per linked pull request on the task, and only when it changes.
+describe('a pull request\'s check state', () => {
+  const checksOf = async (f: Awaited<ReturnType<typeof swarm>>) => (await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === f.task)!.pullRequestChecks
+  const ran = (conclusion: string | null, at: number) => ({ checkRuns: [{ name: 'ci/required', status: conclusion ? 'completed' : 'in_progress', conclusion, completedAt: conclusion ? at : null }],
+    checkSuites: [{ status: conclusion ? 'completed' : 'in_progress', runs: 1 }] })
+
+  it('follows the checks of an open task: running, red, then green', async () => {
+    const f = await swarm()
+    f.pulls.set(f.PR, f.pull(ran(null, 0)))
+    await f.pass()
+    expect(await checksOf(f)).toEqual({ [f.PR]: 'running' })
+    f.pulls.set(f.PR, f.pull(ran('failure', f.clock.now + 10_000)))
+    await f.pass()
+    expect(await checksOf(f)).toEqual({ [f.PR]: 'red' })
+    f.pulls.set(f.PR, f.pull(ran('success', f.clock.now + 10_000)))
+    await f.pass()
+    expect(await checksOf(f)).toEqual({ [f.PR]: 'green' })
+  })
+
+  it('is recorded for a done task too, which posts nothing', async () => {
+    const f = await swarm()
+    await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'done', result: `Done ${f.PR}` }, host, f.worker)
+    const before = (await f.told()).length
+    f.pulls.set(f.PR, f.pull(ran('success', f.clock.now + 10_000)))
+    await f.pass()
+    expect(await checksOf(f)).toEqual({ [f.PR]: 'green' })
+    // A push turns it back: same head or not, the state moves with the checks.
+    f.pulls.set(f.PR, f.pull(ran('failure', f.clock.now + 10_000)))
+    await f.pass()
+    expect(await checksOf(f)).toEqual({ [f.PR]: 'red' })
+    expect(await f.told()).toHaveLength(before)
+  })
+
+  it('writes nothing when the checks did not change, and keeps the state a pass reads', async () => {
+    const f = await swarm()
+    await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'done', result: `Done ${f.PR}` }, host, f.worker)
+    f.pulls.set(f.PR, f.pull(ran('success', f.clock.now + 10_000)))
+    await f.pass()
+    const version = async () => (await f.store.read(owner, f.tab)).version
+    const at = await version()
+    await f.pass()
+    await f.pass()
+    expect(await version()).toBe(at)
+    expect(await checksOf(f)).toEqual({ [f.PR]: 'green' })
+  })
+})
+
+
+// Task #3953: a pull request GitHub shows closed no longer captures the task's checks while another link is open.
+describe('a closed pull request is marked on the task', () => {
+  it('marks a linked pull request the watch read open and GitHub now shows closed, and clears the mark when it opens again', async () => {
+    const f = await swarm()
+    const duplicate = `https://github.com/acme/app/pull/${9500 + f.number}`, other = 'd'.repeat(40)
+    f.pulls.set(f.PR, f.pull())
+    f.pulls.set(duplicate, { ...f.pull({ head: other }), url: duplicate, number: 9500 + f.number })
+    await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'working', result: `${f.PR} and ${duplicate}` }, host, f.worker)
+    const heads = async () => ((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.task } })).data as { pullRequestHeads: Record<string, { closed?: boolean }> }).pullRequestHeads
+    await f.pass()
+    expect(Object.keys(await heads()).sort()).toEqual([f.PR, duplicate].sort())
+    f.pulls.set(duplicate, { ...f.pulls.get(duplicate)!, state: 'closed' })
+    await f.pass()
+    expect((await heads())[duplicate]).toMatchObject({ closed: true })
+    expect((await heads())[f.PR]!.closed).toBeUndefined()
+    f.pulls.set(duplicate, { ...f.pulls.get(duplicate)!, state: 'open' })
+    await f.pass()
+    expect((await heads())[duplicate]!.closed).toBeUndefined()
+  })
+
+  it('never marks a pull request GitHub shows merged', async () => {
+    const f = await swarm()
+    f.pulls.set(f.PR, f.pull())
+    await f.pass()
+    f.pulls.set(f.PR, f.pull({ state: 'closed', merged: true }))
+    await f.pass()
+    const heads = ((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.task } })).data as { pullRequestHeads: Record<string, { closed?: boolean }> }).pullRequestHeads
+    expect(heads[f.PR]!.closed).toBeUndefined()
   })
 })

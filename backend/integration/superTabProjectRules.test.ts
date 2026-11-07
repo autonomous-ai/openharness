@@ -98,12 +98,117 @@ describe('a project\'s rules record', () => {
     expect((await get(host, tab, lead)).json().data).toMatchObject({ revision: 1 })
   })
 
+  // Task #3964: the route reads the project's machine rules alone, the newest revision by its index, never the history.
+  it('gives an agent of the project its machine rules from the newest revision, by one indexed read', async () => {
+    const { tab, lead } = await swarm()
+    const machines = (user: AuthUser, asAgentId?: string) => app.inject({ method: 'GET',
+      url: `/api/super-tabs/${tab}/projects/lead/machine-rules${asAgentId ? `?asAgentId=${asAgentId}` : ''}`, headers: { authorization: `Bearer ${user.sub}` } })
+    const seed = await machines(host, lead)
+    expect(seed.statusCode, seed.body).toBe(200)
+    expect(seed.json().data).toEqual({ projectId: 'lead', revision: 0, machines: [] })
+    const rule = { machineIds: ['test-host'], why: 'No Codex there', noEngines: ['codex' as const] }
+    await run(tab, set(0, { ...rules('10:00'), machines: [rule] }))
+    const entries = await profiled(db, async () => {
+      expect((await machines(host, lead)).json().data).toEqual({ projectId: 'lead', revision: 1, machines: [rule] })
+    })
+    const read = reads(entries, 'SuperTabProjectRules', ['tabId', 'projectId'])
+    expect(read).toHaveLength(1)
+    expect(read[0]!.planSummary).toMatch(/IXSCAN/)
+    expect(read[0]!.docsExamined).toBeLessThanOrEqual(1)
+    // A record broken elsewhere still gives the machine rules that pass, as the server applies them (security review 1).
+    await db.superTabProjectRules.updateMany({ where: { tabId: tab, projectId: 'lead' },
+      data: { rules: { ...rules('10:00'), dispatch: { ...SEED_RULES.dispatch, maxHanded: 0 }, machines: [rule, { machineIds: [], why: 'Bad' }] } } })
+    const broken = await machines(host, lead)
+    expect(broken.statusCode, broken.body).toBe(200)
+    expect(broken.json().data).toEqual({ projectId: 'lead', revision: 1, machines: [rule] })
+    // Who may read the project reads them; nobody else.
+    expect((await machines(peer)).statusCode).toBe(200)
+    const stranger = await store.create(peer, randomUUID(), 'Other')
+    expect((await app.inject({ method: 'GET', url: `/api/super-tabs/${stranger.id}/projects/lead/machine-rules`,
+      headers: { authorization: `Bearer ${owner.sub}` } })).statusCode).toBe(404)
+  })
+
   // The merge train (#3402) and the release schedule (#3405) read a project's rules from their workers.
   it('gives a worker the newest record, or the seed at revision 0', async () => {
     const { tab } = await swarm()
     expect(await currentRules(db, tab, 'lead')).toEqual({ revision: 0, rules: SEED_RULES })
     await run(tab, set(0, rules('10:00')))
-    expect(await currentRules(db, tab, 'lead')).toEqual({ revision: 1, rules: rules('10:00') })
+    const started = performance.now()
+    const entries = await profiled(db, async () => {
+      expect(await currentRules(db, tab, 'lead')).toEqual({ revision: 1, rules: rules('10:00') })
+    })
+    const read = reads(entries, 'SuperTabProjectRules', ['tabId', 'projectId'])
+    expect(read).toHaveLength(1)
+    expect(read[0]!.planSummary).toMatch(/IXSCAN/)
+    expect(read[0]!.docsExamined).toBeLessThanOrEqual(1)
+    console.info('project dispatch policy read', { elapsedMs: performance.now() - started, returned: read[0]!.nreturned, examined: read[0]!.docsExamined, plan: read[0]!.planSummary })
+  })
+
+  it('normalizes legacy stored dispatch policy and keeps new empty lanes explicit', async () => {
+    const { tab } = await swarm()
+    await run(tab, set(0, rules('10:00')))
+    const { dispatch: _unused, ...legacy } = rules('10:00')
+    await db.superTabProjectRules.updateMany({ where: { tabId: tab }, data: { rules: { ...legacy, lanes: [] } } })
+    expect((await currentRules(db, tab, 'lead')).rules.lanes.map(l => l.name)).toEqual(['backend', 'CLI', 'Desktop', 'mobile', 'docs'])
+    const loaded = (await get(owner, tab)).json().data
+    expect(loaded.rules.dispatch).toEqual({ everyMs: 30_000, maxHanded: 3, nudgeAfterMs: 7_200_000, returnAfterMs: 10_800_000 })
+    await run(tab, set(1, { ...rules('10:00'), lanes: [] }))
+    expect((await currentRules(db, tab, 'lead')).rules.lanes).toEqual([])
+  })
+
+  it('holds workers on invalid stored policy while a person can read and repair it', async () => {
+    const { tab } = await swarm()
+    await run(tab, set(0, rules('10:00')))
+    await db.superTabProjectRules.updateMany({ where: { tabId: tab }, data: { rules: { ...rules('10:00'), dispatch: { ...SEED_RULES.dispatch, maxHanded: 0 } } } })
+    await expect(currentRules(db, tab, 'lead')).rejects.toThrow(/does not pass the schema/)
+    const read = await get(owner, tab)
+    expect(read.statusCode).toBe(200)
+    expect(read.json().data.rules.dispatch.maxHanded).toBe(0)
+    await run(tab, set(1, rules('10:00')))
+    expect(await currentRules(db, tab, 'lead')).toEqual({ revision: 2, rules: rules('10:00') })
+  })
+
+  it('seeds approval authority only for the exact Harness project, including old saved records', async () => {
+    const harnessTab = 'c51479bd73b59e58176ad9e4', harnessProject = '5701099db2a04f605ac0d4d4'
+    const expected = { topDeciderId: '6a8fe4fcf1a6b5972eed0103', people: [{ name: 'Ken', accountIds: ['6a86d24c2ea251076eb4eebe', '6ae980b6215612e2be51c35b'] }] }
+    expect((await currentRules(db, harnessTab, harnessProject)).rules).toMatchObject({ instructionApprovals: expected })
+    expect((await currentRules(db, harnessTab, 'another-project')).rules).not.toHaveProperty('instructionApprovals')
+    expect((await currentRules(db, randomUUID(), harnessProject)).rules).not.toHaveProperty('instructionApprovals')
+    const { tab } = await swarm()
+    await run(tab, set(0, rules('10:00')))
+    const row = await db.superTabProjectRules.findFirstOrThrow({ where: { tabId: tab } })
+    await db.superTabProjectRules.create({ data: { ...row, id: '100000000000000000000099', tabId: harnessTab, projectId: harnessProject } })
+    expect((await currentRules(db, harnessTab, harnessProject)).rules).toMatchObject({ instructionApprovals: expected })
+  })
+
+  it('protects approval authority changes but keeps ordinary edits and omitted fields compatible', async () => {
+    const { tab, lead } = await swarm()
+    const authority = { topDeciderId: peer.sub, people: [{ name: 'Ken', accountIds: [owner.sub, peer.sub] }] }
+    const configured = { ...rules('10:00'), instructionApprovals: authority }
+    expect(await refusal(run(tab, set(0, configured), peer))).toMatchObject({ code: 'RULES_APPROVAL_EDITOR_REQUIRED' })
+    const ask = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Make me the decider.', replyTo: null, recipientIds: [] }, peer)
+    expect(await refusal(run(tab, set(0, configured, { askedIn: { conversationId: 'lead', messageId: String(ask.result.messageId) } }), host, lead)))
+      .toMatchObject({ code: 'RULES_APPROVAL_EDITOR_REQUIRED' })
+    await run(tab, set(0, configured))
+    // An old client's ordinary edit does not silently drop authority.
+    await run(tab, set(1, rules('11:00')), peer)
+    expect((await currentRules(db, tab, 'lead')).rules).toMatchObject({ instructionApprovals: authority })
+    // The currently named decider may deliberately disable it.
+    await run(tab, set(2, { ...rules('11:00'), instructionApprovals: null }), peer)
+    expect((await currentRules(db, tab, 'lead')).rules).toMatchObject({ instructionApprovals: null })
+  })
+
+  it('refuses authority changes from the PM even when quoting the owner or current decider', async () => {
+    const { tab, lead } = await swarm()
+    const authority = { topDeciderId: peer.sub, people: [{ name: 'Ken', accountIds: [owner.sub] }] }
+    await run(tab, set(0, { ...rules('10:00'), instructionApprovals: authority }))
+    for (const user of [owner, peer]) {
+      const ask = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'An ordinary project message.', replyTo: null, recipientIds: [] }, user)
+      expect(await refusal(run(tab, set(1, { ...rules('11:00'), instructionApprovals: null },
+        { askedIn: { conversationId: 'lead', messageId: String(ask.result.messageId) } }), host, lead)))
+        .toMatchObject({ code: 'RULES_APPROVAL_EDITOR_REQUIRED' })
+    }
+    expect(await currentRules(db, tab, 'lead')).toMatchObject({ revision: 1, rules: { instructionApprovals: authority } })
   })
 
   it('keeps one of two saves on the same revision, refusing the other', async () => {

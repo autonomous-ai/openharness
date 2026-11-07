@@ -72,6 +72,9 @@ Future<Opened> show(
             now: () => _now,
           ),
           SwarmPage.threads => throw UnimplementedError('threads page test'),
+          SwarmPage.leaderboard => throw UnimplementedError(
+            'leaderboard has its own tests',
+          ),
         },
       ),
     ),

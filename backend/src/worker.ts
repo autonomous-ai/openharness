@@ -22,6 +22,7 @@ import { startDecisionSweep } from './superTabs/decisionSweep.js'
 import { requeueCompactedAgents } from './superTabs/agentTombstones.js'
 import { startLegacyDrop } from './superTabs/migration/dropLegacyJob.js'
 import { startInstructionsRebase } from './superTabs/migration/rebase.js'
+import { startInstructionsRestore } from './superTabs/migration/restoreRebase.js'
 import { startDeliverySettle } from './superTabs/deliverySettle.js'
 import { startDeliveryRepush } from './superTabs/deliveryRepush.js'
 import { startDeliveryCompaction } from './superTabs/deliveryCompaction.js'
@@ -85,6 +86,7 @@ async function start(): Promise<void> {
   let stopDecisionSweep = (): void => {}
   let stopLegacyDrop = (): void => {}
   let stopInstructionsRebase = (): void => {}
+  let stopInstructionsRestore = (): void => {}
   let stopArchive = (): void => {}
   let stopPullRequestWatch = (): void => {}
   let stopTimeChecks = (): void => {}
@@ -111,6 +113,7 @@ async function start(): Promise<void> {
     stopDecisionSweep()
     stopLegacyDrop()
     stopInstructionsRebase()
+    stopInstructionsRestore()
     stopArchive()
     stopPullRequestWatch()
     stopTimeChecks()
@@ -170,6 +173,8 @@ async function start(): Promise<void> {
   stopLegacyDrop = startLegacyDrop(prisma)
   // Every project's instructions move onto the new base once, by themselves (superTabs/migration/rebase.ts, task #3600).
   stopInstructionsRebase = startInstructionsRebase(prisma)
+  // And the lines that first move lost come back, once, after it (superTabs/migration/restoreRebase.ts, task #3679).
+  stopInstructionsRestore = startInstructionsRestore(prisma)
   // Finished groups archive once GitHub says their pull requests are merged or closed; without the app, only groups that
   // link none do (superTabs/archive.ts).
   const githubConfig = githubAppConfig(env), githubApp = githubConfig ? new GitHubApp(githubConfig) : null

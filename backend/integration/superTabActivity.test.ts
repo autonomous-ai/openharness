@@ -31,6 +31,7 @@ import { fcmSender } from '../src/push/fcm.js'
 import { registerPushDevice } from '../src/push/devices.js'
 import { quietRepeats } from '../src/push/repeats.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { quotaReset } from './holds.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -377,12 +378,12 @@ describe('Phone push: who each push type reaches, and what it carries (task #324
     expect((await items(s.tabId, peer)).some(i => i.text === 'Owner again')).toBe(true)
   })
 
-  it('an agent\'s reply in a person\'s thread is worded with the agent\'s name', async () => {
+  it('an agent\'s reply in a person\'s thread rings nobody: it stays in Activity and the badge (task #3607)', async () => {
     const s = await scene()
     const root = await send(s.tabId, s.web, 'Owner root')
-    const [notice, ...more] = await pushed(() => send(s.tabId, s.web, 'Worker answers', owner, root, s.worker))
-    expect(more).toEqual([])
-    expect(notice).toMatchObject({ personId: owner.sub, title: 'worker-harness replied in a thread' })
+    expect(await pushed(() => send(s.tabId, s.web, 'Worker answers', owner, root, s.worker))).toEqual([])
+    // The Activity row is still written: only the ring is gone.
+    expect((await db.superTabActivity.findMany({ where: { tabId: s.tabId, personId: owner.sub, kind: 'reply' } })).length).toBe(1)
   })
 
   it('a reply that tags a person tells them by the tag alone, once', async () => {
@@ -430,10 +431,9 @@ describe('Phone push: who each push type reaches, and what it carries (task #324
     expect(both!.link).toBe(`swarm:${s.tabId}/${s.web}/message/${alsoInChat}`)
   })
 
-  it('an agent\'s tag is worded with the agent\'s name; one\'s own tag tells nobody; a tag held for a quiet chat is not pushed', async () => {
+  it('an agent\'s tag rings nobody (task #3607); one\'s own tag tells nobody; a tag held for a quiet chat is not pushed', async () => {
     const s = await scene()
-    expect(await pushed(() => tagging(s.tabId, s.web, 'Peer, the build is red', owner, null, [peer.sub], {}, s.worker)))
-      .toEqual([expect.objectContaining({ personId: peer.sub, title: 'worker-harness tagged you' })])
+    expect(await pushed(() => tagging(s.tabId, s.web, 'Peer, the build is red', owner, null, [peer.sub], {}, s.worker))).toEqual([])
     expect(await whom(() => tagging(s.tabId, s.web, 'Note to self', owner, null, [owner.sub]))).toEqual([])
     expect(await whom(() => tagging(s.tabId, s.web, 'Peer, if nobody takes this', owner, null, [peer.sub], { mentionsIfNoWorker: true }))).toEqual([])
   })
@@ -444,7 +444,7 @@ describe('Phone push: who each push type reaches, and what it carries (task #324
       questions: [{ question, options: ['Yes', 'No'], recommended: 0, unblocks: 'The release' }] } as Command, owner, s.worker)
     let ids: string[] = []
     const notices = await pushed(async () => { ids = (await ask('Ship it today?')).result.decisionIds as string[] })
-    expect(notices).toEqual([{ personId: peer.sub, key: `decision:${ids[0]}`, slot: `decision:${ids[0]}`, title: 'worker-harness asks you',
+    expect(notices).toEqual([{ personId: peer.sub, key: `decision:${ids[0]}`, slot: `task:${s.tabId}:${s.web}`, title: 'worker-harness asks you',
       subtitle: await swarmName(s.tabId), body: 'Open Harness to answer.', link: `swarm:${s.tabId}/${s.web}/decision/${ids[0]}` }])
     // The same open question asked again is the same decision: no second push.
     expect(await pushed(() => ask('Ship it today?'))).toEqual([])
@@ -454,7 +454,7 @@ describe('Phone push: who each push type reaches, and what it carries (task #324
     const s = await scene()
     const state = (await store.read(owner, s.tabId)).state as unknown as SuperTabState
     const assignmentId = state.conversations.find(c => c.id === s.web)!.assignment!.id
-    const notices = await pushed(() => run(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' },
+    const notices = await pushed(() => run(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: quotaReset(),
       result: 'Ship it behind a flag?', ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } } as Command,
     owner, s.worker))
     expect(notices.map(n => [n.personId, n.key.split(':')[0], n.title, n.link.includes('/decision/'), n.quiet === true]))

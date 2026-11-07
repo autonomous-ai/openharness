@@ -238,6 +238,70 @@ describe('what a free crew member gets', () => {
   })
 })
 
+// River, 2026-11-06 (task #3576): the lane dispatch gave a big, risky task to a Sonnet member, while Routing puts big or risky work on
+// Opus or Astra. A task the PM marks strong (or one that wants two reviews) goes only to a member on a strong model.
+describe('dispatch keeps big or risky work for a strong model', () => {
+  function crew() {
+    const s = crewSwarm(['Sonny', 'Opal'])
+    for (const [name, model, effort] of [['Sonny', 'claude-sonnet-4-6', 'high'], ['Opal', 'claude-opus-4-7', 'high']] as const) {
+      const member = s.state.agents.find(a => a.id === s.ids[name])!
+      member.crew = { role: 'Engineer', at: 1000, by: 'owner' }
+      Object.assign(member.configuration, { model, effort })
+    }
+    const strongTask = (title: string, task: Record<string, unknown>) => s.run({ type: 'conversation.create', title,
+      task: { goal: `${title}.`, changes: 'The change.', constraints: 'None.', owns: ['backend/src/x.ts'], ...task }, checks: [] } as Command).result.conversationId as string
+    const plan = () => dispatchPlan(s.state, 'lead', DISPATCH_RULES, NOW).map(p => [s.state.agents.find(a => a.id === p.agentId)!.name, s.group(p.conversationId).title])
+    return { ...s, strongTask, plan }
+  }
+
+  it('does not hand a strong task to a Sonnet member, and hands it to an Opus member', () => {
+    const s = crew()
+    s.strongTask('Rebuild sync', { strength: 'strong' })
+    expect(s.plan()).toEqual([['Opal', 'Rebuild sync']])
+  })
+
+  it('counts a task that wants two reviews as strong, unless the PM marks it standard', () => {
+    const s = crew()
+    s.strongTask('Payments', { review: { reviews: 2 } })
+    expect(s.plan()).toEqual([['Opal', 'Payments']])
+    const t = crew()
+    t.strongTask('Typo', { review: { reviews: 2 }, strength: 'standard' })
+    expect(t.plan()).toEqual([['Sonny', 'Typo']])
+  })
+
+  it('hands an ordinary task to either member, and Sonnet keeps its turn when a strong task is first', () => {
+    const s = crew()
+    s.strongTask('Rebuild sync', { strength: 'strong' })
+    s.strongTask('Fix typo', {})
+    expect(s.plan()).toEqual([['Sonny', 'Fix typo'], ['Opal', 'Rebuild sync']])
+  })
+
+  it('takes Astra as strong too, and a pinned strong task stays with its member', () => {
+    const s = crew()
+    Object.assign(s.state.agents.find(a => a.id === s.ids.Opal)!.configuration, { engine: 'codex', model: 'gpt-6-astra', effort: 'xhigh' })
+    const id = s.strongTask('Rebuild sync', { strength: 'strong' })
+    expect(s.plan()).toEqual([['Opal', 'Rebuild sync']])
+    s.group(id).pin = { agentId: s.ids.Sonny!, why: 'ci', at: 2000 }
+    expect(s.plan()).toEqual([['Sonny', 'Rebuild sync']])
+  })
+
+  it('counts Astra only at xhigh, and a member with no effort set as not strong', () => {
+    const s = crew()
+    Object.assign(s.state.agents.find(a => a.id === s.ids.Opal)!.configuration, { engine: 'codex', model: 'gpt-6-astra', effort: 'high' })
+    s.strongTask('Rebuild sync', { strength: 'strong' })
+    expect(s.plan()).toEqual([])
+    Object.assign(s.state.agents.find(a => a.id === s.ids.Opal)!.configuration, { engine: 'claude', model: 'claude-opus-4-7', effort: null })
+    expect(s.plan()).toEqual([])
+  })
+
+  it('does not count Opus at a low effort as strong', () => {
+    const s = crew()
+    Object.assign(s.state.agents.find(a => a.id === s.ids.Opal)!.configuration, { effort: 'low' })
+    s.strongTask('Rebuild sync', { strength: 'strong' })
+    expect(s.plan()).toEqual([])
+  })
+})
+
 describe('the crew\'s clocks: 2 hours without progress tells the member, 3 hours puts the task back in its lane', () => {
   const HOUR = 3_600_000, AT = 1000
   /** Ash (crew, backend) working on Api since AT; Birch (crew, backend) free. */
@@ -247,14 +311,25 @@ describe('the crew\'s clocks: 2 hours without progress tells the member, 3 hours
     const api = s.task('Api', ['backend/src/a.ts'])
     s.run({ type: 'work.assign', conversationId: api, agentId: s.ids.Ash! }, s.as(s.pm))
     /** The liveness sweep at [now], with the machine reporting every session running and busy on screen till then. */
-    const sweep = (now: number) => {
+    const sweep = (now: number, rules = DISPATCH_RULES) => {
       s.state.machines = [{ machineId: 'host', name: 'Mac', observation: { runningHarnessIds: s.state.agents.map(a => a.harnessId),
         stoppedHarnessIds: [], receivedAt: now, harnessProgress: Object.fromEntries(s.state.agents.map(a => [a.harnessId, now])) } }] as never
-      return sweepLiveness(s.state, now)
+      return sweepLiveness(s.state, now, () => rules)
     }
     const lines = (rows: MessageDraft[]) => rows.filter(r => r.conversationId === api && r.recipients.includes(s.ids.Ash!)).map(r => r.text)
     return { ...s, api, sweep, lines, get state() { return s.state } }
   }
+
+  it('uses a project’s own progress thresholds and names them in notices', () => {
+    const s = working()
+    const rules = { ...DISPATCH_RULES, nudgeAfterMs: 60_000, returnAfterMs: 120_000 }
+    expect(s.lines(s.sweep(AT + 59_999, rules))).toEqual([])
+    expect(s.lines(s.sweep(AT + 60_000, rules))).toEqual([
+      'No progress on this task for 1 minute. Post where it stands, or set it blocked with why; at 2 minutes it goes back to the backend lane.',
+    ])
+    s.sweep(AT + 120_000, rules)
+    expect(s.group(s.api).assignment).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 2 minutes: back in the backend lane' } })
+  })
 
   it.each([true, false])('tells the worker once at 2 hours, reset only after progress (crew: %s)', crew => {
     const s = working(crew)
