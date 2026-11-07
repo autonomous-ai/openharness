@@ -833,9 +833,15 @@ export class SuperTabStore {
    */
   private teamCommand(state: SuperTabState, team: string, user: AuthUser, command: Command, actorId?: string): void {
     // A PM from before Swarm v3 still in a Team account (#4248, finding 7 of #4212): what it may not do is refused in words that
-    // say who moves it and how, since nothing else tells it; it keeps coordinating meanwhile.
-    const led = actorId && ['work.assign', 'conversation.agent', 'agent.start'].includes(command.type) ? ledProject(state, actorId) : undefined
-    if (led) fail(PM_IN_TEAM_ACCOUNT, pmInTeamAccount(state, led), 403)
+    // say who moves it and how, since nothing else tells it; it keeps coordinating meanwhile. Only a PM on this Team computer: the
+    // agent a request names is not checked yet here, and another project's PM would read that project's names (review of #3476).
+    const pm = actorId && ['work.assign', 'conversation.agent', 'agent.start'].includes(command.type)
+      ? state.agents.find(a => a.id === actorId && a.machineId === team) : undefined
+    const led = pm && ledProject(state, pm.id)
+    if (led) {
+      logger.warn('[super-tab] team command refused', { tabId: state.id, command: command.type, teamMachineId: team, code: PM_IN_TEAM_ACCOUNT })
+      fail(PM_IN_TEAM_ACCOUNT, pmInTeamAccount(state, led), 403)
+    }
     const refuse = (target?: Agent) => {
       // Refusals were counted only from agents saying so in chat (15 lines in 10 days): the log says which command, and
       // whether its target was in a Team account, so a workflow the check blocks shows up before people work around it.
