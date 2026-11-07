@@ -542,12 +542,13 @@ describe('a machine added as its person joined', () => {
     expect(f.state.starts).toHaveLength(2)
   })
 
-  it('says why in its reading, so routing leaves it out of a teammate\'s project', () => {
+  // Swarm v3 has no Team accounts (#4248, finding 8 of #4212): its reading no longer keeps routing off it for a teammate's
+  // project, so the route keeps its person's own agents; the pick itself is held to what its person reads (teamWorkCheck).
+  it('reads as taking teammates\' projects, as a machine contributed by hand does', () => {
     const f = swarm()
     f.run(joined, mate, contribution)
     f.machine('joined-mac').observation = reading('computer')
-    expect(machineTeamWork(f.state, f.machine('joined-mac'), NOW, [])?.code).toBe('TEAM_ACCOUNT_REQUIRED')
-    // An ordinary machine contributed by hand takes it as before while the rule is not required.
+    expect(machineTeamWork(f.state, f.machine('joined-mac'), NOW, [])).toBeNull()
     expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, [])).toBeNull()
   })
 

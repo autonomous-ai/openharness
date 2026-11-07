@@ -41,9 +41,9 @@ export interface ContributedMachine {
    *  the host says it cleaned up (machine.cleaned) or REMOVAL_FALLBACK_MS passes. An offline one leaves the list at once and
    *  its cleanup waits for its host (expireRemovals). No chat hears how it ended (#2742). */
   removal?: { id: string; state: 'cleaning'; requestedAt: string }
-  /** Added by Desktop as its person joined the Swarm, not lent to teammates by choice: their work runs here only through
-   *  its Harness Team account whose privacy check passed, whether or not the Swarm requires that everywhere
-   *  (teamWorkRefusal). Kept when the contribution is saved again; gone with the machine. */
+  /** Added by Desktop as its person joined the Swarm. Swarm v3 has no Team accounts, so it no longer keeps teammates' projects
+   *  off it: its person's own agents take any project they read (teamWorkCheck; #4248, finding 8 of #4212). Kept, and kept
+   *  when the contribution is saved again, only because Desktop's launch.dart still reads it; gone with the machine. */
   teamAccountOnly?: true
   /** Its owner's choice whether teammates' work may also run in their own account here (commands.ts machine.ownAccountWork,
    *  Scholes 11-04): who chose (the owner, whose word it is) and when. `allowed` lets a teammate's start run on this entry,
@@ -357,7 +357,7 @@ export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow =
   // Its owner let teammates' work run in their own account here: their explicit choice wins over the Swarm-wide rule, for
   // this machine only (River, 11-04).
   if (ownAccountWork(pool)) return null
-  if (!teamRow && reading?.sessionKind !== 'team' && !required && !pool.teamAccountOnly) return null
+  if (!teamRow && reading?.sessionKind !== 'team' && !required) return null
   if (otherWorkspace) return { code: 'MACHINE_IN_OTHER_WORKSPACE', reason: `The Harness Team account on ${name} also serves another ${WORKSPACE_LABEL}'s Swarms, ${ONLY_OWN} here.` }
   if (!reading || now - reading.receivedAt > MACHINE_FRESH_MS) {
     // A Mac's team account goes by its Mac's name ("One machine"), and the Mac itself may well be online.
