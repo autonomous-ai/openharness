@@ -279,16 +279,25 @@ void main() {
     testWidgets('each row shows its status, quietly, at its end', (
       tester,
     ) async {
-      await show(tester, agents: mine, setup: agents);
+      // The person's one running Buddy, of no project.
+      await show(
+        tester,
+        agents: [
+          {...buddy}..remove('projectId'),
+          ...mine.skip(1),
+        ],
+        setup: agents,
+      );
       for (final row in ['super-swarm-buddy', 'super-agent-kestrel']) {
         final mark = find.descendant(
           of: key(row),
           matching: find.byType(ActivityMark),
         );
         expect(mark, findsOneWidget, reason: row);
+        // At the row's end, in the column the unread state is heard in.
         expect(
-          tester.getRect(mark).right,
-          greaterThan(tester.getRect(key(row)).right - 40),
+          tester.getRect(mark).left,
+          greaterThan(tester.getRect(key(row)).right - 64),
           reason: row,
         );
       }
