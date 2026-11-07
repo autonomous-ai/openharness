@@ -943,6 +943,119 @@ void main() {
     });
   });
 
+  // Task #4645 (anh Dee 19:50 and 22:25): the left pane is calm and exactly aligned. A + on the My agents heading adds
+  // an agent, rows carry no status marks, and every row's right-side detail ends at one edge in every section.
+  group('a calm left pane', () {
+    final buddy = {
+      ..._agent('buddy', 'Buddy'),
+      'buddyScope': 'swarm',
+      'buddyOf': {'personId': 'owner'},
+    };
+    void agents(ConversationServer server) {
+      server.state['swarmBuddy'] = true;
+      (server.state['conversations'] as List)
+              .cast<Map<String, dynamic>>()
+              .firstWhere((g) => g['id'] == 'lead')['leadId'] =
+          'orion';
+      (server.state['people'] as List).add({
+        'id': 'dee',
+        'email': 'dee@example.com',
+        'role': 'collaborator',
+      });
+    }
+
+    SuperTabLeaderboardReader board() {
+      final reader = SuperTabLeaderboardReader(
+        tabId: 'tab',
+        request: (method, path, {body}) async => {
+          'projectId': 'lead',
+          'week': 0,
+          'people': [
+            {'personId': 'dee', 'points': 120, 'rank': 1},
+          ],
+        },
+      );
+      addTearDown(reader.dispose);
+      return reader;
+    }
+
+    final heading = find.byKey(const ValueKey('project-sidebar-agents-add'));
+
+    testWidgets('a + on the My agents heading opens New agent, and the New '
+        'agent row is gone while the person has agents', (tester) async {
+      final created = <String>[];
+      await show(
+        tester,
+        agents: [buddy, _agent('kestrel', 'Kestrel')],
+        setup: agents,
+        created: created,
+      );
+      expect(
+        find.descendant(
+          of: key('project-sidebar-agents'),
+          matching: find.byIcon(AppIcons.plus),
+        ),
+        findsOneWidget,
+      );
+      expect(find.byTooltip('New agent'), findsOneWidget);
+      // On the heading's line, at the pane's right.
+      expect(
+        tester.getCenter(heading).dy,
+        moreOrLessEquals(tester.getCenter(key('project-sidebar-agents')).dy),
+      );
+      expect(
+        tester.getRect(heading).right,
+        greaterThan(tester.getRect(key('project-sidebar-agents')).right - 8),
+      );
+      expect(key('super-new-agent-row'), findsNothing);
+      await tester.tap(heading);
+      await tester.pump();
+      expect(created, ['new']);
+    });
+
+    testWidgets('with no agents of their own, the New agent row shows too', (
+      tester,
+    ) async {
+      await show(tester, agents: [buddy], setup: agents);
+      expect(heading, findsOneWidget);
+      expect(key('super-new-agent-row'), findsOneWidget);
+    });
+
+    testWidgets('every right-side detail ends at one edge: a Lead\'s project '
+        'in My agents, a person\'s points in Humans', (tester) async {
+      final reader = board();
+      await tester.runAsync(() => reader.show('lead'));
+      await show(
+        tester,
+        agents: [buddy, _agent('orion', 'Orion')],
+        setup: agents,
+        leaderboard: reader,
+      );
+      final project = find.descendant(
+        of: key('super-agent-orion'),
+        matching: find.byWidgetPredicate(
+          (w) => w is Text && w.textAlign == TextAlign.right,
+        ),
+      );
+      final points = find.descendant(
+        of: key('super-human-dee'),
+        matching: find.text('120'),
+      );
+      expect(project, findsOneWidget);
+      expect(points, findsOneWidget);
+      // The texts are right-aligned in their boxes: their boxes' right edges are where the words end.
+      expect(
+        tester.getRect(project).right,
+        moreOrLessEquals(tester.getRect(points).right),
+      );
+      expect(
+        tester.getRect(key('super-agent-orion')).right -
+            tester.getRect(project).right,
+        moreOrLessEquals(grid.AppDesktop.controlGap),
+      );
+    });
+  });
+
   // Task #4196: + New agent opens the workspace's Cmd-N form, so the view
   // offers it only when its workspace can open one.
   group('the view offers + New agent only with Cmd-N to open', () {
