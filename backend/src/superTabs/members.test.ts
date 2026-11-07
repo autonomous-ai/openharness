@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
 import { createSuperTab, SuperTabError, type Actor, type SuperTabState } from './model.js'
-import { memberPlan, memberQueue } from './members.js'
+import { helperCheck, memberPlan, memberQueue } from './members.js'
 import { dispatchPlan, DISPATCH_RULES } from './dispatch.js'
 import { touchesFor } from './parts/touches.js'
 
@@ -247,5 +247,89 @@ describe('a crew agent', () => {
     task('Asked', { requesterId: 'kai' })
     const free = task('Free', {})
     expect(dispatchPlan(f.state, 'lead', DISPATCH_RULES, NOW).map(p => p.conversationId)).toEqual([free])
+  })
+})
+
+describe('a helper', () => {
+  const owns = (paths: string[]) => ({ task: { goal: 'Do it.', changes: 'Change it.', constraints: 'None.', owns: paths } })
+  /** Kai's Member busy on a task owning src/a/, and a second task owning [second] waiting. */
+  function busy(paths: string[], f = swarm()) {
+    f.run({ type: 'member.approvalMode', mode: 'review' }, kai)
+    const lamp = f.project('lamp')
+    const running = f.ask(lamp, 'Running', owns(['src/a/']))
+    const waiting = f.ask(lamp, 'Waiting', owns(paths))
+    for (const id of [running, waiting]) f.run({ type: 'task.approve', conversationId: id }, kai)
+    const start = f.state.starts!.find(s => s.request.member)!
+    const own = { contribution: { machineOwnerId: 'kai', contributorId: 'kai' } }
+    f.run({ type: 'agent.startDispatch', startId: start.id }, kai, own)
+    const member = f.run({ type: 'agent.started', startId: start.id, harnessId: 'h-member',
+      configuration: { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null } }, kai, own).result.agentId as string
+    f.run({ type: 'agent.startSettled', startId: start.id, warning: null }, kai, own)
+    f.run({ type: 'work.assign', conversationId: running, agentId: member }, owner)
+    const agent = () => f.state.agents.find(a => a.id === member)!
+    return { f, lamp, running, waiting, member, agent }
+  }
+
+  it('starts when the task touches other code, the computer has room and the quota is above the floor', () => {
+    const { f, lamp, waiting, agent } = busy(['src/b/'])
+    expect(helperCheck(f.state, agent(), f.group(waiting), NOW)).toEqual({ ok: true })
+    expect(memberPlan(f.state, lamp, NOW)).toEqual([{ kind: 'helper', conversationId: waiting }])
+  })
+
+  it('waits when the task touches the running work\'s code, or names no code to tell them apart', () => {
+    for (const paths of [['src/a/b.ts'], ['src'], []]) {
+      const { f, lamp, waiting, agent } = busy(paths)
+      expect(helperCheck(f.state, agent(), f.group(waiting), NOW)).toEqual({ ok: false, reason: 'overlap' })
+      expect(memberPlan(f.state, lamp, NOW)).toEqual([])
+    }
+  })
+
+  it('waits when the computer has no room under its limit', () => {
+    const f = swarm()
+    const { waiting, agent } = busy(['src/b/'], f)
+    f.state.machines!.find(m => m.machineId === 'kai-mac')!.maxAgents = 1
+    expect(helperCheck(f.state, agent(), f.group(waiting), NOW)).toEqual({ ok: false, reason: 'room' })
+  })
+
+  it('waits when the quota is at the floor, or not known', () => {
+    for (const quota of [subscription(96), unknown]) {
+      const { f, waiting, agent } = busy(['src/b/'])
+      f.state.machines!.find(m => m.machineId === 'kai-mac')!.observation!.quotas = [quota]
+      expect(helperCheck(f.state, agent(), f.group(waiting), NOW)).toEqual({ ok: false, reason: 'quota' })
+    }
+  })
+
+  it('starts once, on the Member\'s computer and account, in its task\'s conversation', () => {
+    const { f, lamp, waiting, member } = busy(['src/b/'])
+    f.run({ type: 'member.helper', conversationId: waiting }, owner)
+    f.run({ type: 'member.helper', conversationId: waiting }, owner)
+    const helpers = f.state.starts!.filter(s => s.request.helperOf)
+    expect(helpers).toHaveLength(1)
+    expect(helpers[0]).toMatchObject({ contributorId: 'kai', machineOwnerId: 'kai', hostGrant: null })
+    expect(helpers[0]!.request).toMatchObject({ conversationId: waiting, machineId: 'kai-mac', mainProjectId: lamp, regular: true,
+      helperOf: { agentId: member, harnessId: 'h-member' } })
+    expect(memberPlan(f.state, lamp, NOW)).toEqual([])
+  })
+
+  it('refuses a helper the checks refuse, whoever asks', () => {
+    const { f, waiting } = busy(['src/a/'])
+    expect(code(() => f.run({ type: 'member.helper', conversationId: waiting }, owner))).toBe('HELPER_OVERLAP')
+  })
+
+  it('takes its task, and stops once it ends with nothing waiting', () => {
+    const { f, lamp, waiting } = busy(['src/b/'])
+    f.run({ type: 'member.helper', conversationId: waiting }, owner)
+    const start = f.state.starts!.find(s => s.request.helperOf)!
+    const own = { contribution: { machineOwnerId: 'kai', contributorId: 'kai' } }
+    f.run({ type: 'agent.startDispatch', startId: start.id }, kai, own)
+    const helper = f.run({ type: 'agent.started', startId: start.id, harnessId: 'h-helper',
+      configuration: { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null } }, kai, own).result.agentId as string
+    f.run({ type: 'agent.startSettled', startId: start.id, warning: null }, kai, own)
+    expect(memberPlan(f.state, lamp, NOW)).toEqual([{ kind: 'assign', conversationId: waiting, agentId: helper }])
+    f.run({ type: 'work.assign', conversationId: waiting, agentId: helper }, owner)
+    const assignmentId = f.group(waiting).assignment!.id
+    f.run({ type: 'work.status', conversationId: waiting, assignmentId, status: 'done', result: 'Done at abc: https://github.com/o/r/pull/2' },
+      { kind: 'agent', agentId: helper, machineOwnerId: 'kai' })
+    expect(f.state.agents.find(a => a.id === helper)!.workDecision).toBe('stop')
   })
 })
