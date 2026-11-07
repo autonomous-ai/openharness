@@ -10,7 +10,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ENGINES } from './engines/types.js'
 import { HARNESS_OWNER_OPTION, HARNESS_SESSION_PREFIX, harnessPaneOwner, ownerCommand, paneOwnerFormat } from './lib/harnessSessionLabel.js'
 import { hookRouteFile, publishHookRoute } from './lib/hookRoutes.js'
-import { isTrustedLocal, listenLocalSocket } from './lib/localSocket.js'
+import { hookTokenPath } from './lib/hookAuth.js'
+import { isTrustedLocal, listenLocalSocket, localSocketName, socketPathIn } from './lib/localSocket.js'
 
 // Every case here spawns the real hook as a child process, and several spawn shell shims for tmux, ps
 // and sqlite3 on top of that. On a loaded machine — this file runs alongside 88 others — that chain
@@ -48,10 +49,26 @@ afterEach(async () => {
  * The daemon's socket, as the hook now reaches it (audit H1), in front of a test's fake daemon on [port]. A connection
  * to a port nobody holds is cut, as a daemon that is down. A folder that does not exist yet stays without one.
  */
-async function daemonSocketFor(port: number, dataDir: string | undefined): Promise<void> {
+/** A home short enough to hold the hook's socket folder (lib/localSocket.ts shortSocketFolder) on any machine, even under
+ *  an agent's long TMPDIR, so a case about the socket route takes it. */
+function shortHome(): string {
+  const home = mkdtempSync('/tmp/hh-')
+  tmpDirs.push(home)
+  return home
+}
+
+/** The daemon's way in, where the hook looks for it (lib/localSocket.ts socketPathIn, mirrored in hook/notify.mjs): its
+ *  socket beside the data, or in a short folder under `home` when that path is too long for a socket. With no path short
+ *  enough the hook posts to the port with the hook-only token, which the daemon keeps beside its data. */
+async function daemonSocketFor(port: number, dataDir: string | undefined, home?: string): Promise<void> {
   if (!dataDir || !existsSync(dataDir)) return
-  const path = join(dataDir, `daemon-${port}.sock`)
+  const path = socketPathIn(dataDir, localSocketName(port), home)
+  if (!path) {
+    try { writeFileSync(hookTokenPath(dataDir), `${'b'.repeat(43)}\n`, { mode: 0o600, flag: 'wx' }) } catch { /* already exists */ }
+    return
+  }
   if (existsSync(path)) return
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   const proxy = createNetServer((client) => {
     const upstream = netConnect(port, '127.0.0.1')
     client.on('error', () => upstream.destroy())
@@ -213,7 +230,7 @@ fs.readFileSync = (path, ...args) => {
       mkdirSync(hookDataDir, { recursive: true, mode: 0o700 })
       try { writeFileSync(join(hookDataDir, 'hook-credential'), `${'a'.repeat(43)}\n`, { mode: 0o600, flag: 'wx' }) } catch { /* already exists */ }
     }
-    daemonSocketFor(opts.port, hookDataDir).then(() => {
+    daemonSocketFor(opts.port, hookDataDir, env.HOME).then(() => {
     const child = spawn(process.execPath, args, {
       env,
       stdio: ['pipe', 'pipe', 'inherit'],
@@ -331,7 +348,8 @@ describe('hook notify terminal scope', () => {
     symlinkSync(target, join(dataDir, 'hook-credential'))
     const { port, requests } = await collect()
 
-    await runHook({ port, tmuxPane: '%42', dataDir })
+    // The credential goes only over the socket: a home that holds one, whatever this machine's TMPDIR.
+    await runHook({ port, tmuxPane: '%42', dataDir, env: { HOME: shortHome() } })
 
     expect(requests).toEqual([])
   })
@@ -561,11 +579,11 @@ describe('hook notify terminal scope', () => {
   it.each([['a short folder under home', 'short'], ['the port with the hook token', 'tcp']] as const)(
     'reaches the daemon through %s when its data folder is too long for a socket', async (_route, route) => {
       const { port, requests } = await collect()
-      const dir = mkdtempSync(join(route === 'short' ? '/tmp' : tmpdir(), 'hl-'))
+      const dir = mkdtempSync(join(tmpdir(), 'hl-'))
       tmpDirs.push(dir)
       const dataDir = join(dir, 'd'.repeat(100))
-      const home = join(dir, route === 'short' ? 'h' : 'h'.repeat(100))
-      mkdirSync(home)
+      const home = route === 'short' ? shortHome() : join(dir, 'h'.repeat(100))
+      mkdirSync(home, { recursive: true })
 
       await runHook({ port, tmuxPane: '%42', dataDir, env: { HOME: home } })
 
