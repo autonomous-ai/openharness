@@ -68,7 +68,6 @@ Future<SuperTabController> _open(
       'tabId': 'tab',
       'accountId': 'owner',
       'selectedId': 'swarm-buddy-owner',
-      'projectsGroupOpen': true,
     },
   );
   await tester.runAsync(c.refresh);
@@ -133,23 +132,16 @@ Future<void> _settle(WidgetTester tester) async {
   }
 }
 
-/// Whether the left pane's row [key] is lit: an agent's row says so itself; a project's row by its selected fill.
-bool _lit(WidgetTester tester, String key) {
-  final row = find.byKey(ValueKey(key));
-  final widget = tester.widget(row);
-  if (widget is SuperTabBuddyRow) return widget.selected;
-  final ground = tester.widget<Material>(
-    find.ancestor(of: row, matching: find.byType(Material)).first,
-  );
-  return ground.color == grid.SidebarInk.selected;
-}
+/// Whether the left pane's row [key] is lit: every Desktop row says so itself (task #4466).
+bool _lit(WidgetTester tester, String key) =>
+    tester.widget<SuperTabQuietRow>(find.byKey(ValueKey(key))).selected;
 
-/// The rows the left pane lights, of Buddy, the PM Orion and the project `# web-project`.
+/// The rows the left pane lights, of Buddy, the PM Orion and Projects, whose grid the Board is from.
 List<String> _litRows(WidgetTester tester) => [
   for (final key in [
     'super-swarm-buddy',
     'super-agent-orion',
-    'super-group-lead',
+    'super-projects',
   ])
     if (_lit(tester, key)) key,
 ];
@@ -161,6 +153,9 @@ void main() {
     tester,
     c,
   ) async {
+    // A project's Board opens from the Projects grid (task #4466).
+    await tester.tap(find.byKey(const ValueKey('super-projects')));
+    await tester.pump();
     await tester.tap(find.byKey(const ValueKey('super-group-lead')));
     await _settle(tester);
     await tester.tap(find.byKey(const ValueKey('super-task-card-offline')));
@@ -177,22 +172,28 @@ void main() {
     );
   });
 
-  _scene('a Board lights its project row, not Buddy', 'board-lights-project', (
+  _scene('a Board lights Projects, not Buddy', 'board-lights-project', (
     tester,
     c,
   ) async {
+    // A project's Board opens from the Projects grid (task #4466).
+    await tester.tap(find.byKey(const ValueKey('super-projects')));
+    await tester.pump();
     await tester.tap(find.byKey(const ValueKey('super-group-lead')));
     await _settle(tester);
 
     expect(find.byKey(const ValueKey('super-board-tab-board')), findsOneWidget);
-    expect(_litRows(tester), ['super-group-lead']);
+    expect(_litRows(tester), ['super-projects']);
   });
 
   // Below 1000 the Board folds the left pane into its drawer (#4445): the drawer lights the same row (Test of #4445).
   _scene(
-    'a narrow Board\'s drawer lights its project row, not Buddy',
+    'a narrow Board\'s drawer lights Projects, not Buddy',
     'board-drawer-lights-project',
     (tester, c) async {
+      // A project's Board opens from the Projects grid (task #4466).
+      await tester.tap(find.byKey(const ValueKey('super-projects')));
+      await tester.pump();
       await tester.tap(find.byKey(const ValueKey('super-group-lead')));
       await _settle(tester);
       await tester.binding.setSurfaceSize(const Size(880, 800));
@@ -206,7 +207,7 @@ void main() {
       );
       await _settle(tester);
 
-      expect(_litRows(tester), ['super-group-lead']);
+      expect(_litRows(tester), ['super-projects']);
     },
   );
 

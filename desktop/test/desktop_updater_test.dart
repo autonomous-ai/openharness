@@ -10,6 +10,7 @@ import 'package:dio/dio.dart';
 import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/update/desktop_updater.dart';
+import 'package:harness/update/update_signature.dart';
 import 'package:path/path.dart' as p;
 
 Future<String> _sha256Hex(List<int> bytes) async {
@@ -157,6 +158,14 @@ Uint8List _windowsZip(String version) {
   return ZipEncoder().encodeBytes(archive);
 }
 
+/// The fixtures here are not signed; update_signature_*_test.dart checks real
+/// signatures, and these tests check what the updater does with the verdict.
+Future<void> _signedByUs(
+  String staged, {
+  String? launcher,
+  required String version,
+}) async {}
+
 void main() {
   late Directory scratch;
   HttpServer? server;
@@ -254,6 +263,7 @@ void main() {
       windowsInstallRoot: root,
       startDetached: (exe, args) async => starts.add((exe, args)),
       dio: dio,
+      verifySignature: _signedByUs,
     );
     final staged = await updater.downloadAndStage(
       UpdateInfo(
@@ -278,6 +288,57 @@ void main() {
     );
   });
 
+  test('Windows refuses a package its signature check rejects and keeps the current version', () async {
+    final root = p.join(scratch.path, 'Harness');
+    Directory(p.join(root, 'app', '1.2.0')).createSync(recursive: true);
+    File(p.join(root, 'app', '1.2.0', 'harness-desktop.exe'))
+        .writeAsStringSync('old app');
+    File(p.join(root, 'Harness.exe')).writeAsStringSync('old launcher');
+    File(p.join(root, 'Harness.ico')).writeAsStringSync('old icon');
+    File(p.join(root, 'current')).writeAsStringSync('1.2.0\r\n');
+    final bytes = _windowsZip('1.3.0');
+    final checked = <(String, String?)>[];
+    final updater = DesktopUpdater(
+      isWindows: true,
+      releaseMode: true,
+      windowsInstallRoot: root,
+      dio: Dio()..httpClientAdapter = _MemoryAdapter(bytes),
+      verifySignature: (staged, {launcher, required version}) async {
+        expect(
+          File(p.join(staged, 'harness-desktop.exe')).existsSync(),
+          isTrue,
+        );
+        expect(File(launcher!).readAsStringSync(), 'launcher 1.3.0');
+        // The staged app's own version is checked against the manifest's.
+        expect(version, '1.3.0');
+        checked.add((staged, launcher));
+        throw const UpdateRefused('it is not signed by AUTONOMOUS INC.');
+      },
+    );
+    await expectLater(
+      updater.downloadAndStage(
+        UpdateInfo(
+          version: '1.3.0',
+          url: 'https://fixture.invalid/update.zip',
+          sha256: await _sha256Hex(bytes),
+          size: bytes.length,
+        ),
+      ),
+      throwsA(isA<UpdateRefused>()),
+    );
+    expect(checked.single.$1, endsWith('1.3.0.staging'));
+    expect(Directory(checked.single.$1).existsSync(), isFalse);
+    expect(File(p.join(root, 'current')).readAsStringSync(), '1.2.0\r\n');
+    expect(
+      File(p.join(root, 'Harness.exe')).readAsStringSync(),
+      'old launcher',
+    );
+    expect(
+      Directory(p.join(root, 'app')).listSync().map((e) => p.basename(e.path)),
+      ['1.2.0'],
+    );
+  });
+
   test(
     'Windows reports partial publication when launcher start fails',
     () async {
@@ -296,6 +357,7 @@ void main() {
         startDetached: (_, _) async =>
             throw const ProcessException('Harness.exe', [], 'blocked'),
         dio: Dio()..httpClientAdapter = _MemoryAdapter(bytes),
+        verifySignature: _signedByUs,
       );
       final staged = await updater.downloadAndStage(
         UpdateInfo(
@@ -550,6 +612,7 @@ void main() {
       enabled: true,
       dio: Dio(),
       isLinux: false,
+      verifySignature: _signedByUs,
     );
     final info = UpdateInfo(
       version: newVersion,
@@ -600,6 +663,7 @@ void main() {
       enabled: true,
       dio: Dio(),
       isLinux: false,
+      verifySignature: _signedByUs,
     );
     final info = UpdateInfo(
       version: newVersion,
@@ -612,6 +676,41 @@ void main() {
     expect(staged!.version, newVersion);
     expect(Directory(staged.bundlePath).existsSync(), isTrue);
     await Directory(staged.stagingDirPath).delete(recursive: true);
+  }, skip: _macOnly);
+
+  test('downloadAndStage refuses a bundle its signature check rejects, and removes it', () async {
+    await serveMetadataAndZip(manifestVersion: newVersion);
+    final checked = <String>[];
+    final updater = DesktopUpdater(
+      isWindows: false,
+      enabled: true,
+      dio: Dio(),
+      isLinux: false,
+      verifySignature: (staged, {launcher, required version}) async {
+        expect(File('$staged/Contents/Info.plist').existsSync(), isTrue);
+        checked.add(staged);
+        throw const UpdateRefused('it is not signed by Autonomous Inc.');
+      },
+    );
+    await expectLater(
+      updater.downloadAndStage(
+        UpdateInfo(
+          version: newVersion,
+          url: 'http://127.0.0.1:${server!.port}/Harness-macos.zip',
+          sha256: zipSha,
+          size: zipBytes.length,
+        ),
+      ),
+      throwsA(
+        isA<UpdateRefused>().having(
+          (e) => e.message,
+          'message',
+          'it is not signed by Autonomous Inc.',
+        ),
+      ),
+    );
+    expect(checked.single, endsWith('Harness.app'));
+    expect(Directory(p.dirname(checked.single)).existsSync(), isFalse);
   }, skip: _macOnly);
 
   test('downloadAndStage rejects a bundle whose Info.plist does not match the advertised version', () async {
