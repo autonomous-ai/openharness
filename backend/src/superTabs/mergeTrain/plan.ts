@@ -50,13 +50,15 @@ const plainBase = (base: string | undefined): base is string => !!base && !HIDDE
 const countsFor = (verdict: CheckVerdict, url: string, heads: PullRequestHeads): boolean =>
   verdict.pullRequest === url && !!verdict.head && verdict.stale === undefined && verdictCounts(verdict, heads)
 
+const FAILED = 'a failed verdict counts at this head'
+
 /** The checkers whose passes count on [check], or in plain words why none does: a failure that counts, only the builders'
  *  passes (ignored), no verdict at this head and base, or no verdict at all. A verdict by an agent that has since left the
  *  project counts like any other: the train reads no roster. */
 function passers(check: Check, url: string, heads: PullRequestHeads, ignored: ReadonlySet<string> = new Set()): string[] | string {
   const verdicts = check.verdicts ?? []
   const counting = verdicts.filter(v => countsFor(v, url, heads)), others = counting.filter(v => !ignored.has(v.by))
-  if (others.some(v => !v.passed)) return 'a failed verdict counts at this head'
+  if (others.some(v => !v.passed)) return FAILED
   if (others.length) return others.map(v => v.by)
   if (counting.length) return 'only the task\'s own builders passed it, and a builder is never its own review or test'
   return verdicts.length ? 'no verdict was read at this head on this base: it moved since, or the verdict is marked stale' : 'nobody has passed it yet'
@@ -75,11 +77,14 @@ export function headReads(task: TrainTask, url: string, head: string, base: stri
   if (!heads || !now) return 'the pull request watch has not read this pull request yet'
   if (now.head.toLowerCase() !== head.toLowerCase()) return 'the pull request watch has not read its head on GitHub yet'
   if (!plainBase(now.base) || !plainBase(base) || now.base !== base) return 'its base branch is not the one the pull request watch recorded'
+  const builders = new Set(task.builders ?? [])
+  // A builder never passes its own check, here as on its steps (task #4561). A Done task's checks that nobody else passed at this
+  // head stand in by its steps below; a failure that counts holds it whatever.
   for (const check of task.checks) {
-    const found = passers(check, url, heads)
-    if (typeof found === 'string') return `the task's check "${check.description.slice(0, 60)}": ${found}`
+    const found = passers(check, url, heads, builders)
+    if (typeof found === 'string' && (!task.done || found === FAILED)) return `the task's check "${check.description.slice(0, 60)}": ${found}`
   }
-  const readers = new Set<string>(), builders = new Set(task.builders ?? [])
+  const readers = new Set<string>()
   let reviewed = false
   for (const step of task.steps) {
     const status = step.assignment?.status, name = step.step ?? step.title
@@ -95,6 +100,17 @@ export function headReads(task: TrainTask, url: string, head: string, base: stri
     }
   }
   return reviewed ? readers.size : 'no Review step has passed'
+}
+
+/**
+ * The descriptions of [task]'s own checks that count for its pull request [url] only through its steps (task #4561): nobody but
+ * its builders passed them at this head, and nobody failed them. Once the task is Done, every step said Yes at the head and
+ * ci/required is green, the train merges it on those steps and says so on the task.
+ */
+export function standsIn(task: TrainTask, url: string): string[] {
+  const heads = task.pullRequestHeads ?? {}, builders = new Set(task.builders ?? [])
+  return task.checks.filter(check => { const found = passers(check, url, heads, builders); return typeof found === 'string' && found !== FAILED })
+    .map(check => check.description)
 }
 
 export type Ineligible = 'closed' | 'draft' | 'base' | 'hold' | 'ci' | 'mergeable' | 'conflict' | 'verdict' | 'reads'
