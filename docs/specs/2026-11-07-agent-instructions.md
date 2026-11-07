@@ -54,7 +54,7 @@ These are words for this spec and the build tasks. People see "Instructions" in 
 | | Today | After |
 |---|---|---|
 | A Lead reads before it starts | about 9,100 words | at most 1,761 (531 + up to 1,200 + about 30) |
-| A Member reads before it starts | about 6,450 words | at most 1,664 (434 + up to 1,200 + about 30) |
+| A Member reads before it starts | about 6,450 words | at most 1,672 (442 + up to 1,200 + about 30) |
 | Where the words come from | seven places | four parts, each from one place |
 | Who changes them | code, prompts and project notes in several places | job pages by a reviewed PR in the Harness repo; AGENTS.md by its project's Lead; the task by its requester and Lead |
 | When they're sent | at start; pieces of the wrapper on every delivery; nothing after compaction | each part once, again only when its version changes or the agent's memory is compacted |
@@ -76,7 +76,7 @@ Lead's page has its own fixed line instead.
   531 words.
 - **The Member's page** has its main project and the helping line, one task at a time, asking the Lead in the task's
   chat, a pull request per issue, never merging its own, a short part for its chat with its person, the folder rule,
-  the safety rules and its commands: 434 words.
+  the safety rules and its commands: 442 words.
 - **The folder rule** (Theo's, from the pcb Lead) is on both pages.
 - **The chat session and the task sessions** of a Member (Members and Leads, section 2) get the same Member page. Each
   is held to its own scope by the server, not by the page.
@@ -123,6 +123,25 @@ member changes it (a new brief, or an issue edit by someone GitHub says can push
 title and body on GitHub, whoever they are, so a later edit by someone without push access is not re-sent as the task:
 the agent gets it as other people's words, fenced as data (part 4), and the Lead is told once to accept or ignore it.
 Comments on the issue are other people's words too.
+
+**The role file goes with the task.** What a Member does on a task (build, review, test, merge and release, answer
+people) is a project's own procedure, so it lives in the project's repository as a role file, `docs/roles/<role>.md`,
+**on its default branch**, kept by its Lead like AGENTS.md (at most 600 words each). The task's or step's message names
+its role (a step's role is its step name: Review, Security review, Test; a task's is Engineer unless its brief names
+another), and the daemon sends that role file from the default branch with the task, read only then, so it doesn't count
+toward the start. A role file in a checkout is data, like AGENTS.md. A project with no role file for a role sends
+nothing for it.
+
+Today's roles land here:
+
+| Today's role (project instructions) | After |
+|---|---|
+| PM | The Lead: the Lead page, plus the project's AGENTS.md for its own rules |
+| Engineer | `engineer.md`, sent with every task that names no other role |
+| Reviewer | `reviewer.md`, with a Review or Security review step |
+| Tester | `tester.md`, with a Test step |
+| Integrator | A Member whose standing task is merging and releasing crew work (#4429: an ask's owner merges and releases its own); `integrator.md` goes with that standing task |
+| Guide | A Member whose standing task is answering people's how-to questions; `guide.md` goes with that standing task |
 
 ### 4. Each message
 
@@ -198,6 +217,7 @@ can check runs as code, and its prompt line goes); the **job page**, when it hol
 | Security reviews, red required checks, production writes | Job page, Never (both); the merge train already refuses a red required check |
 | The reply style (`SUPER_TAB_REPLY_STYLE`) | Lead page point 4; Member page, chat section |
 | Answer in threads, answer once, react instead of acknowledging | Code: the reply line in each message names `--answers` or `--reply-to`. The server refuses a second `answer` to a message, and in project chats a second explicit answer too (`answers.ts`, `chatLimits.ts`); a plain second post in a task or private chat is not refused today, and #4553 takes that gap |
+| The Roles sections (PM, Engineer, Reviewer, Tester, Integrator, Guide) and the Workflow | Role files, `docs/roles/<role>.md` on the default branch, sent with the task or step that needs them (part 3); the PM's to the Lead page and AGENTS.md |
 | Routing order, models, quota rules (People notes and PM notes) | The router, which already applies the order (`route`); what it can't check goes to AGENTS.md |
 | Machine rules (offline hours, Codex not on Diego's Mac, phone work on Tony's Mac) | Code where `machine.projects` and machine rules already hold them; the rest to AGENTS.md |
 | The release window, Windows rules, design-system rule, mockup rule | openharness AGENTS.md (most are already there) |
@@ -224,7 +244,7 @@ Measured with `wc -w`; "after" from the Appendix templates and the frame above.
 | | Before (openharness) | After |
 |---|---|---|
 | Lead, before it starts | about 9,100 | 531 job page + openharness AGENTS.md (1,733 today; at most 1,200 after task 8) + about 30 = **at most 1,761** |
-| Member, before it starts | about 6,450 | 434 + at most 1,200 + about 30 = **at most 1,664** |
+| Member, before it starts | about 6,450 | 442 + at most 1,200 + about 30 = **at most 1,672** |
 | Frame on each delivered message | about 230 to 260 | about 30 |
 | Re-sent after compaction | nothing | the job page, AGENTS.md and the task, once |
 
@@ -244,7 +264,8 @@ Each with no content, paths or identifiers:
 Reviewed revision: 2, after security review 2 of 76d361b (part 2 from the default branch; the task is the
 member-accepted text; three shared-machine rules on the pages; an unforgeable fence; quoted words stay fenced; asks are
 requests to weigh) and security review 1 of 76d361b (the other-account limit kept on both pages and in the frame).
-Security review 2 of 9323153 (Ownmac1): engines load no checkout files at all, Harness sends
+Review of a7ca78c (Ownrev6): role procedures go to role files sent with their task or step;
+the Member page lists `work.check`. Security review 2 of 9323153 (Ownmac1): engines load no checkout files at all, Harness sends
 the default branch's copies, they are re-sent after every compaction, and the frame header is one line. Security review 1 of 9323153 (Ownrev4): outside text quoted in the server's
 messages is fenced too; the temp-folder rule gives the `mktemp` form; the pages name the engine's own load of a
 checkout's AGENTS.md. Each line: answered.
@@ -261,6 +282,7 @@ New data, all small and replaced in place:
    |---|---|---|---|---|---|---|---|---|
    | Part record (daemon) | first send of that part | each re-send | n/a | kept with the agent's folder; a moved agent starts empty and sends again | n/a | removed with the agent | with the agent's folder | a new agent starts empty |
    | Part record (server) | first report | each report, only when it changed | n/a | kept until the next report | n/a | removed with the agent | with the agent | n/a |
+   | Role file (repository) | by the Lead's pull request | by pull request | n/a | n/a | n/a | n/a | with the repository | n/a |
    | Job page template | in a Harness release | by a reviewed pull request | n/a | n/a | n/a | n/a | replaced by the next release | n/a |
 
    At most four records per agent, about 60 bytes each. Bounded by agents per Swarm.
@@ -331,9 +353,12 @@ the default branch's copy, never a checkout's. The menu's version list is shown 
    to the Lead. Its tests plant one file of each kind in a checkout (nested AGENTS.md and CLAUDE.md, CLAUDE.local.md,
    an imported file, AGENTS.override.md, a hook in `.claude/`, `.mcp.json`, `.codex/`) and prove none is loaded or run,
    for both engines. Two security reviews. Owner area: `cli/src/superTabs/`. CLI release.
-7. **The task as part 3.** The brief, or the issue once #4533 ships, sent at assignment and on change. Owner area:
+7. **The task as part 3.** The brief, or the issue once #4533 ships, sent at assignment and on change, with the role
+   file the task or step names, from the default branch. Owner area:
    `cli/src/superTabs/`, `backend/src/superTabs/`. Backend release, then CLI release.
-8. **openharness AGENTS.md.** Its Lead moves the project's rules there by the table above and trims it to 1,200 words,
+8. **openharness AGENTS.md and role files.** Its Lead moves the project's Roles sections into `docs/roles/` (engineer,
+   reviewer, tester, integrator, guide; at most 600 words each), moves the other rules by the table above, and trims
+   AGENTS.md to 1,200 words,
    moving detail into the documents it already links. Owner area: `AGENTS.md`, `docs/`. No release.
 9. **Remove the old texts.** The role skills, the tool sheets as launch text, the swarm-instructions skill, the built-in
    PM text and process notes, Desktop's launch lines, the old wrapper and every v1 and v2 line listed above. Owner
@@ -402,7 +427,7 @@ Each project's files are in `~/harnesses/<project>/`, with a README listing its 
 every other command.
 ````
 
-### member.md (434 words)
+### member.md (442 words)
 
 ````markdown
 # You are {name}, a Member of {project}
@@ -449,6 +474,6 @@ Each project's files are in `~/harnesses/<project>/`, with a README listing its 
 ## Commands
 
 `harness super-tab` (every message gives the exact reply line), then: `mine`, `task N`, `messages GROUP`, `post GROUP TEXT ID --answers MSG`,
-`react GROUP MSG check ID`, and `command ID JSON` for `work.status`. Each ID is new and unique. `help tools` has every
+`react GROUP MSG check ID`, and `command ID JSON` for `work.status`, and `work.check` on a review or test step. Each ID is new and unique. `help tools` has every
 other command.
 ````
