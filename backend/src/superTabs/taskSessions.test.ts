@@ -261,6 +261,16 @@ describe('a task session beside a private project\'s files', () => {
     expect(code(() => assign(f, app.newTask('unknown'), app.asPm))).toBe('MEMBER_PRIVATE_ON_DISK')
   })
 
+  // Mac test of e531b2c: a machine for one project runs only that project (machines.ts admitMachineStart), so its folder is the
+  // one private project's files it can hold, counted whatever its reports list.
+  it('takes no task on a machine set up for one project whose project is private, whatever that machine reports', () => {
+    const { f, app } = beside()
+    delete f.machine().scope
+    f.state.projects!.find(p => p.id === 'lead')!.visibility = 'private'
+    applyDiskReport(f.state, f.machine(), { ...f.machine().observation!, projectsOnDisk: [] })
+    expect(code(() => assign(f, app.newTask('one project'), app.asPm))).toBe('MEMBER_PRIVATE_ON_DISK')
+  })
+
   it('stops when its own project is made private', () => {
     const { f, app, session } = beside()
     f.state.projects!.find(p => p.id === app.projectId)!.visibility = 'private'

@@ -74,19 +74,6 @@ describe('the private projects whose files Harness put on a computer', () => {
   })
 })
 
-describe('a machine set up for one project', () => {
-  it('never loses a private project its list cannot show, as that list is only its one folder', () => {
-    const f = swarm()
-    const secret = f.project('secret', 'private')
-    delete f.machine().scope
-    const start = queued(f, secret.task)
-    notePrivateOnDisk(f.state, start)
-    start.harnessId = 'h-secret'
-    applyDiskReport(f.state, f.machine(), reading(f, ['lead']))
-    expect(f.machine().privateOnDisk).toEqual([secret.projectId])
-  })
-})
-
 describe('the host\'s report of its disk and its Members\' set-ups', () => {
   const base = { generation: 'g', resources: { cpuPercent: 1, memoryTotalBytes: 1, memoryUsedBytes: 1, diskFreeBytes: 1, diskTotalBytes: 1,
     projectDiskFreeBytes: 1, deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] }
