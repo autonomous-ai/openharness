@@ -355,7 +355,7 @@ void main() {
           expect(find.text('Direct messages'), findsNothing);
           expect(pmEntry, findsNothing);
           expect(
-            find.descendant(of: buddyEntry, matching: find.text('Buddy')),
+            find.descendant(of: buddyEntry, matching: find.text('Your agent')),
             findsOneWidget,
           );
           expect(
@@ -546,7 +546,7 @@ void main() {
         );
         final c = await show(tester, server);
         expect(
-          find.descendant(of: buddyEntry, matching: find.text('Buddy')),
+          find.descendant(of: buddyEntry, matching: find.text('Your agent')),
           findsOneWidget,
         );
         expect(
@@ -582,7 +582,7 @@ void main() {
           findsOneWidget,
         );
         expect(
-          find.descendant(of: buddyEntry, matching: find.text('Buddy')),
+          find.descendant(of: buddyEntry, matching: find.text('Your agent')),
           findsNothing,
         );
         await tester.tap(buddyEntry);
@@ -618,7 +618,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(c.selectedId, 'buddy-peer-lead');
         expect(
-          find.text('Start your Buddy to brainstorm here'),
+          find.text('Start your agent to brainstorm here'),
           findsOneWidget,
         );
         expect(find.text('Add a Buddy'), findsNothing);
@@ -861,7 +861,7 @@ void main() {
           expect(c.selectedId, 'buddy-peer-lead');
 
           expect(
-            find.text('Start your Buddy to brainstorm here'),
+            find.text('Start your agent to brainstorm here'),
             findsOneWidget,
           );
           expect(
@@ -889,7 +889,7 @@ void main() {
           });
           expect(c.selectedId, 'buddy-peer-lead');
           expect(
-            find.text('Start your Buddy to brainstorm here'),
+            find.text('Start your agent to brainstorm here'),
             findsNothing,
           );
           await close(tester, c);

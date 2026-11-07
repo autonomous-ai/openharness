@@ -589,7 +589,7 @@ void main() {
 
       for (final (row, project) in [(entry, 'Pilot'), (mobile, 'Mobile')]) {
         expect(
-          find.descendant(of: row, matching: find.text('Buddy')),
+          find.descendant(of: row, matching: find.text('Your agent')),
           findsOne,
         );
         expect(
