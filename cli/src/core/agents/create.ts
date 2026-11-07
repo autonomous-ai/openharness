@@ -43,7 +43,7 @@ import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPrepara
 import type { publishGridConfigDir } from '../../lib/publishedGridConfig.js'
 import { nativeHookLocations } from '../../engines/kit/nativeLocations.js'
 import { engineHooks } from '../../engines/hooks.js'
-import { acceptFullMode, folderTrust } from '../../engines/launchPrep.js'
+import { folderTrust } from '../../engines/launchPrep.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
 import { harnessMadeWorktree } from '../../lib/gitProject.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
@@ -144,12 +144,13 @@ export function createAgentCreator({
     // A Swarm agent's folder has content: the desktop's New Swarm clones a GitHub project into the projects root, or makes
     // a worktree of a local repository, itself, and sends the folder as a plain cwd. 2026-10-30: a Cmd+S Swarm's PM sat
     // at Claude Code's "do you trust this folder?", which no Swarm view shows; it read Idle and every message to it was
-    // withheld. The person chose that repository and full mode for the Swarm in this window, so a Claude Code Swarm agent
-    // in full mode is trusted in a Git checkout directly in the projects root or a worktree Harness made, read from disk.
+    // withheld. The person chose that repository for the Swarm in this window, so a Claude Code Swarm agent, in whatever mode
+    // its owner's settings give (task #4215), is trusted in a Git checkout directly in the projects root or a worktree Harness
+    // made, read from disk.
     // Never from a relayed request, which could name any repository here. Codex's trust also sets defaults for the
     // person's own sessions in that folder, so it stays theirs to give.
     const trustSwarmFolder = !trustEmptyProject && context?.local === true && !dsh && engine === 'claude' && !!input.swarmRole
-      && (permissionMode === 'full' || permissionMode === 'teamWritten') && await swarmFolder(cwd)
+      && await swarmFolder(cwd)
     if (!authority.current()) return stale()
     // A harness can pin its permission mode (`dshPinnedPermissionMode`): the Grid harness starts model
     // servers, which Codex's sandbox would start without a GPU. Pinned before anything reads the mode,
@@ -308,13 +309,6 @@ export function createAgentCreator({
       console.log(describeGridLaunch(engine, grid, built.launch.webSearch))
     }
     if (!current()) return stale()
-    // The Swarm starts its agents in full mode, so a machine that never accepted full mode's warning stops each one there
-    // before its first turn (Claude Code's "Yes, I accept", the Mac Studio, 2026-10-26). The Swarm's owner chose that mode
-    // for it; recorded the way the engine records the person's own yes, in the home this launch reads.
-    if (input.swarmRole && permissionMode === 'full') {
-      try { acceptFullMode(engine, native ? { ...native.environment, ...gridLaunch?.env, ...dshEnv } : undefined) }
-      catch (error) { console.warn(`[agent] full mode acceptance · ${error instanceof Error ? error.message : error}`) }
-    }
     if (trustEmptyProject || trustSwarmFolder) {
       try {
         // A clone or user edit can arrive while dependencies are being prepared.

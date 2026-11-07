@@ -108,29 +108,6 @@ function recordJson(trust: JsonTrust, file: string, cwd: string, create = false)
   return 'trusted'
 }
 
-/** Record the engine's acceptance of its warning for full mode (facets/launch.ts `BypassAcceptanceContract`) as `key` in
- *  the JSON settings `file`. Like trust, only ever adds: a file that is not an object, or a `key` the person set to anything
- *  else, stays as it is. A missing file is created holding the key alone: unlike `.claude.json`, which the engine writes on
- *  its first run, these settings may not exist yet on a fresh machine, whose first Lead would then stop at the warning. It is
- *  created before the engine's hooks are merged into it (core/agents/create.ts), and never over a file made meanwhile. */
-export function recordAcceptanceIn(file: string, key: string): 'accepted' | 'already' | 'skipped' {
-  if (!existsSync(file)) {
-    mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
-    try {
-      writeFileSync(file, JSON.stringify({ [key]: true }, null, 2), { mode: 0o600, flag: 'wx' })
-      return 'accepted'
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    }
-  }
-  let settings: unknown
-  try { settings = JSON.parse(readFileSync(file, 'utf8')) } catch { return 'skipped' }
-  if (!isPlainObject(settings)) return 'skipped'
-  if (settings[key] !== undefined) return settings[key] === true ? 'already' : 'skipped'
-  replaceConfigFile(file, JSON.stringify({ ...settings, [key]: true }, null, 2))
-  return 'accepted'
-}
-
 /** Its own entry, or a folder above it in the same Git repository, says yes: the inheritance Claude Code applies. Unreadable or absent
  *  settings read as no. */
 function jsonTrusts(trust: JsonTrust, file: string, path: string): boolean {
