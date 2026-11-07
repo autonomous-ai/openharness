@@ -955,9 +955,10 @@ void main() {
     await _close(tester, c);
   });
 
-  testWidgets('a project with no tasks says so', (tester) async {
+  // Empty means empty (anh Dee's rule 7, #4465).
+  testWidgets('a project with no tasks shows an empty Board', (tester) async {
     final c = await _show(tester, tasksServer(empty: true));
-    expect(find.text('No tasks yet'), findsOneWidget);
+    expect(find.text('No tasks yet'), findsNothing);
     expect(_column('proposals'), findsNothing);
     await _close(tester, c);
   });
@@ -1173,10 +1174,10 @@ void main() {
       await _close(tester, lonely);
     });
 
-    testWidgets('a project with no tasks still says so, with no filter to '
+    testWidgets('a project with no tasks is empty, with no filter to '
         'clear', (tester) async {
       final c = await _show(tester, tasksServer(empty: true));
-      expect(find.text('No tasks yet'), findsOneWidget);
+      expect(find.text('No tasks yet'), findsNothing);
       expect(noCards, findsNothing);
       await _close(tester, c);
     });
