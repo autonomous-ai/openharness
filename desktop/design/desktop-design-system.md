@@ -482,6 +482,19 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   lines, and two 18 faces: who asked, then who is doing it. Only while the
   task waits for the reader: Decline as plain text and Accept as the blue
   capsule, on the right.
+- **Chat message.** A message row (`SuperTabMessageRow`) leads with a round
+  28 face, then one header line: the name at 13 semibold and the time at 12
+  in tertiary ink (`textFaint`), nothing else; no engine mark, since colour
+  is only the face's. The text reads at 14 on 20 px lines (`SwarmType`).
+  An empty chat shows no line; only a chat that can't be read or is still
+  loading says so (task #4467).
+- **Chat composer.** Both composers (the chat's and a thread's) are Cmd-N's
+  field: radius 12, a hairline (`rim`) and the faint fill (`field`). Under
+  the text, the paperclip on the left and, on the right, the mic beside the
+  round send (`SwarmSendButton`, `super_tabs/chat/send_button.dart`): a 28
+  circle in a 32 target, `rim` with a `textFaint` arrow while there is
+  nothing to send, `AppPalette.accent` with a white (`onSelection`) arrow
+  once there is text or a file. No @ button: an @ typed tags.
 - **Decision card.** One question (`SuperTabDecisionCard`, in the Buddy chat
   and Notifications; the Decisions page row uses the same buttons): the
   question, `Unblocks:` line, one button per option with the recommended one

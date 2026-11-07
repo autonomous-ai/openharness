@@ -440,12 +440,12 @@ void main() {
 
   // The row's order, then Also send under the box (Huy and Scholes, 11-04).
   for (final width in [800.0, SuperTabPaneLayout.rightWidth]) {
-    testBox('Tab goes from the reply to +, @ Tag, New session, send and Also '
+    testBox('Tab goes from the reply to the paperclip, New session, send and '
+        'Also '
         'send at ${width.round()}px', (tester) async {
       await panel(tester, buddyChat(), 'offline', width: width);
       final order = [
         find.byKey(const ValueKey('new-harness-attach')),
-        find.byKey(const ValueKey('super-thread-tag')),
         newSession,
         send,
         alsoSend,
