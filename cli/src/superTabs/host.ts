@@ -502,6 +502,20 @@ const SUPER_TAB_REPLY_STYLE = 'Write to the people in this tab like a helpful co
   + 'If you have already answered a message, do not post again. '
   + 'When you hand over finished work, give the result with the revision and links they need.'
 
+/** The same rules in a project that answers people in threads (task #3747, anh Dee 11-06: "i don't know which one you reply to
+ *  which"): every person's message is answered in its thread. */
+const SUPER_TAB_REPLY_STYLE_THREADED = SUPER_TAB_REPLY_STYLE.replace(
+  'A message in the main chat is answered right below it (--answers); one in a thread, inside its thread (--reply-to). Open a thread only for a back-and-forth on one topic, or to answer something far up the chat. ',
+  'Answer every person\'s message in its own thread (--reply-to), never as a new line in the main chat; the main chat is only for news the whole team needs. ')
+
+/** Whether [groupId]'s project answers people in threads (backend projects.ts answersInThread). A group from before projects is
+ *  in the first. */
+export function answersInThread(state: Record<string, unknown>, groupId: string): boolean {
+  const group = (Array.isArray(state.conversations) ? state.conversations.map(object) : []).find(c => c.id === groupId)
+  const project = group && (Array.isArray(state.projects) ? state.projects.map(object) : []).find(p => p.id === (group.projectId ?? 'lead'))
+  return project?.answersInThread === true
+}
+
 /** Owns only the handoff between a durable backend claim and the core's native input.
  * A process restart never interprets a lost acknowledgement as permission to type twice. */
 export class SuperTabHost {
@@ -546,6 +560,8 @@ export class SuperTabHost {
   private readonly contexts = new Map<string, string>()
   /** Deliveries whose message is the coordinator's in the reader's own task or step, with no question to answer (#3057). */
   private readonly plainReplies = new Set<string>()
+  /** Deliveries of a person's message in a project that answers in threads (task #3747): answered with --reply-to. */
+  private readonly threadAnswers = new Set<string>()
   /** The tasks and steps where a coordinator's delivery carried their state (#3114), by Swarm, agent and conversation: a later
    *  one there reads its latest messages beside the Swarm read, not after it (review 1, AGENTS.md standard 4). The
    *  newest KNOWN_TASKS_MAX. */
@@ -1442,7 +1458,7 @@ export class SuperTabHost {
     for (const deliveryId of this.files.keys()) if (!this.journal.entries[deliveryId]) this.files.delete(deliveryId)
     for (const deliveryId of [...this.downloads.keys()]) if (!this.journal.entries[deliveryId]) this.dropDownload(deliveryId)
     for (const deliveryId of this.quotes.keys()) if (!this.journal.entries[deliveryId]) this.quotes.delete(deliveryId)
-    for (const deliveryId of this.contexts.keys()) if (!this.journal.entries[deliveryId]) { this.contexts.delete(deliveryId); this.plainReplies.delete(deliveryId) }
+    for (const deliveryId of this.contexts.keys()) if (!this.journal.entries[deliveryId]) { this.contexts.delete(deliveryId); this.plainReplies.delete(deliveryId); this.threadAnswers.delete(deliveryId) }
     for (const deliveryId of this.replyPages.keys()) if (!this.journal.entries[deliveryId]) this.replyPages.delete(deliveryId)
     for (const entry of Object.values(this.journal.entries)) {
       const id = typedId(entry)
@@ -2548,6 +2564,7 @@ export class SuperTabHost {
       const author = object(message.author)
       if (author.kind === 'agent' && identifier(author.id) && !asksQuestion(message.text)
         && coordinatorInOwnTask(state, group, author.id, entry.agentId)) this.plainReplies.add(entry.deliveryId)
+      if (author.kind === 'person' && answersInThread(state, group)) this.threadAnswers.add(entry.deliveryId)
       lines.push(placeLine(state, group))
       // "Release urgent" in #3022 reached the PM with its place alone, while its pull request had passed review with CI green,
       // and the PM answered about something else: its state, and what was said just before, come with it.
@@ -2647,7 +2664,9 @@ export class SuperTabHost {
     const author = object(message.author)
     const to = author.kind === 'agent' && identifier(author.id) ? ` --to ${shellQuote(author.id)}` : ''
     // A thread reply is answered in its thread, and a Buddy session's thread stays its own; any other message right below it.
-    const threaded = (identifier(message.thread) && message.thread !== message.id) || message.buddySession === true
+    // In a project that answers people in threads, a person's message too (task #3747); the server threads an --answers there anyway.
+    const threadAnswer = this.threadAnswers.has(entry.deliveryId)
+    const threaded = (identifier(message.thread) && message.thread !== message.id) || message.buddySession === true || threadAnswer
     // Task #3057 (Ken, 11-05): 29 of 55 agent posts to the PM still did not name it, mostly an assignee writing in its own task,
     // because this line carried --to <sender> and the PM sends the briefs. The coordinator's message in the reader's own task or
     // step, with no question, shows the plain form: in a task it reaches no agent, and the people see it. To acknowledge, react.
@@ -2660,7 +2679,7 @@ export class SuperTabHost {
       + `Read its state: ${command} status\nRead this conversation: ${command} messages ${shellQuote(group)}\n`
       + replyLine
       + `Manage agreed work and delegation: ${command} help.\n`
-      + `Ask questions and post results in this conversation. ${SUPER_TAB_REPLY_STYLE} Replies to these delivered instructions must be posted here explicitly.\n\n`
+      + `Ask questions and post results in this conversation. ${threadAnswer ? SUPER_TAB_REPLY_STYLE_THREADED : SUPER_TAB_REPLY_STYLE} Replies to these delivered instructions must be posted here explicitly.\n\n`
       + context + native + reply + said
   }
 

@@ -22,6 +22,8 @@ export const BUDDY_MODEL_CAPABILITY = 'buddyModel'
 export const BUDDY_MODEL_LEASE_MS = 10 * 60_000
 /** How long nobody serves the model a Buddy runs on before it is sent home: a machine's reading may lapse for a moment. */
 export const BUDDY_MODEL_GONE_MS = 2 * 60_000
+/** How many times a thread session may stay on a shared model when sent home before its owner is told to end it (#3810). */
+export const HOME_TRIES = 3
 
 /** One line the switch writes: in a Buddy chat, naming the machines a Buddy reading it must not learn (store.ts
  *  withoutMachineNames). */
@@ -119,7 +121,7 @@ function hiddenMachines(state: SuperTabState, buddy: Agent, request: NonNullable
 /** The Buddy's machine reports the switch it carried out: the Buddy is on the model, or stays where it was. The first line is
  *  the owner's; then one for each other member who serves the model it landed on. */
 export function buddyModelResult(state: SuperTabState, actor: Actor,
-  command: { agentId: string; requestId: string; ok: boolean; fresh?: boolean; error?: string }, now: number): ModelLine[] {
+  command: { agentId: string; requestId: string; ok: boolean; fresh?: boolean; error?: string; stayed?: string[] }, now: number): ModelLine[] {
   const buddy = state.agents.find(a => a.id === command.agentId)
   if (!buddy || actor.kind !== 'agent' || actor.agentId !== buddy.id || !isSwarmBuddy(buddy)) fail('BUDDY_FORBIDDEN', 'Only the Buddy\'s machine reports its switch.', 403)
   const request = buddy.modelRequest
@@ -136,11 +138,32 @@ export function buddyModelResult(state: SuperTabState, actor: Actor,
   }
   delete buddy.gridModelUnservedSince
   // Its machine moved its thread sessions with it (cli superTabs/buddyModel.ts): what they run on is recorded the same way, so
-  // costs and the serving member's "Used by" read it right.
+  // costs and the serving member's "Used by" read it right. One it could not move (`stayed`) runs where it was, and is
+  // recorded there (task #3810); left on a shared model by a move home, it is owed one, which the liveness sweep asks for.
+  const stayedIds = new Set(command.stayed ?? []), words = clean(command.error ?? '')
   const sessions = chat ? sessionAgentsOf(state, chat) : state.agents.filter(a => a.buddySession && a.buddyOf?.personId === owner.personId && a.buddyOf.generation === owner.generation)
+  const gaveUp: Agent[] = []
   for (const session of sessions) {
-    if (request.gridModel === null) delete session.gridModel
-    else session.gridModel = request.gridModel
+    if (!stayedIds.has(session.harnessId)) {
+      if (request.gridModel === null) delete session.gridModel
+      else session.gridModel = request.gridModel
+      delete session.homeOwed
+    } else if (request.gridModel !== null || !session.gridModel) delete session.homeOwed
+    else {
+      const tries = (session.homeOwed?.tries ?? 0) + 1
+      if (tries > HOME_TRIES) { delete session.homeOwed; gaveUp.push(session) }
+      else session.homeOwed = { ...request.reason ? { reason: request.reason } : {}, tries }
+    }
+  }
+  if (request.sessionsOnly) {
+    if (gaveUp.length) {
+      const on = gaveUp[0]!.gridModel!
+      // The host's words name why (cli superTabs/buddyModel.ts), after its own lead-in, which this line says differently.
+      const why = words.replace(/^(?:A thread session stayed where it was|\d+ thread sessions stayed where they were): /, '')
+      return mine(stillOn(state, on, why || 'its computer could not move it', now, request.name))
+    }
+    // Another try is owed while one stays; its owner hears once it lands or gives up, not at every try.
+    return stayedIds.size ? [] : mine('Your Buddy\'s thread sessions are back on your subscription too.')
   }
   if (request.gridModel === null) {
     delete buddy.gridModel
@@ -187,14 +210,44 @@ export function expiredModelRequests(state: SuperTabState, now: number): Array<{
     const request = buddy.modelRequest
     if (!request || !buddy.buddyOf || now < Date.parse(request.at) + BUDDY_MODEL_LEASE_MS) continue
     delete buddy.modelRequest
-    out.push({ buddy, requestId: request.id, conversationId: buddyChatOf(state, buddy)?.id ?? swarmBuddyChatId({ id: buddy.buddyOf.personId, generation: buddy.buddyOf.generation }),
+    const conversationId = buddyChatOf(state, buddy)?.id ?? swarmBuddyChatId({ id: buddy.buddyOf.personId, generation: buddy.buddyOf.generation })
+    // A sessions-only move home its machine never answered counts as a try, said only when it gives up (task #3810; review of
+    // #3393: the last one gave up without a word).
+    if (request.sessionsOnly) {
+      const gaveUp = owedHome(state, buddy).filter(countTry)
+      if (gaveUp.length) out.push({ buddy, requestId: request.id, machines: hiddenMachines(state, buddy, request, now), conversationId,
+        text: stillOn(state, gaveUp[0]!.gridModel!, 'its computer didn\'t answer', now, request.name) })
+      continue
+    }
+    out.push({ buddy, requestId: request.id, conversationId,
       machines: hiddenMachines(state, buddy, request, now),
       text: `Couldn't switch your Buddy: its computer didn't answer. It is still on ${current(state, buddy, now)}.` })
   }
   return out
 }
 
-/** Buddies on a model nobody has served for BUDDY_MODEL_GONE_MS are sent home; one served again is unmarked. */
+/** [buddy]'s thread sessions a move home left on a shared model (task #3810): those in its own chat, as buddyModelResult moves
+ *  them (task #3818: a person may have several Buddies), else all of its owner's. */
+function owedHome(state: SuperTabState, buddy: Agent): Agent[] {
+  const chat = buddyChatOf(state, buddy)
+  const sessions = chat ? sessionAgentsOf(state, chat)
+    : state.agents.filter(a => a.buddySession && a.buddyOf?.personId === buddy.buddyOf!.personId && a.buddyOf.generation === buddy.buddyOf!.generation)
+  return sessions.filter(a => a.homeOwed && a.gridModel)
+}
+/** One more try at moving [session] home; true when that was the last, and its follow-up is dropped. */
+function countTry(session: Agent): boolean {
+  const tries = session.homeOwed!.tries + 1
+  if (tries <= HOME_TRIES) { session.homeOwed = { ...session.homeOwed!, tries }; return false }
+  delete session.homeOwed
+  return true
+}
+/** The owner's line when a thread session stays on [model] after its last try home: what to do about it. [known]: the name the
+ *  request recorded, for when no machine serves the model by now. */
+const stillOn = (state: SuperTabState, model: string, why: string, now: number, known?: string) =>
+  `A thread session is still on ${served(state, model, now)?.name ?? known ?? model}: ${why}. End that thread's session to bring it back to your subscription.`
+
+/** Buddies on a model nobody has served for BUDDY_MODEL_GONE_MS are sent home; one served again is unmarked. A Buddy at home
+ *  whose thread session a move home left on a shared model asks its machine to move that session home (task #3810). */
 export function unservedBuddyModels(state: SuperTabState, now: number, requestId: (buddy: Agent) => string): void {
   for (const buddy of state.agents) {
     if (!buddy.gridModel || buddy.buddySession || !isSwarmBuddy(buddy)) continue
@@ -203,6 +256,13 @@ export function unservedBuddyModels(state: SuperTabState, now: number, requestId
     if (now - buddy.gridModelUnservedSince < BUDDY_MODEL_GONE_MS) continue
     sendBuddyHome(state, buddy, 'gone', requestId(buddy), now)
     if (buddy.modelRequest) delete buddy.gridModelUnservedSince
+  }
+  for (const buddy of state.agents) {
+    if (buddy.buddySession || !isSwarmBuddy(buddy) || buddy.gridModel || buddy.modelRequest) continue
+    const owed = owedHome(state, buddy)[0]
+    if (!owed || !switchable(state, buddy, now).ok) continue
+    buddy.modelRequest = { id: requestId(buddy), gridModel: null, sessionsOnly: true, name: served(state, owed.gridModel!, now)?.name ?? owed.gridModel!,
+      ...owed.homeOwed!.reason ? { reason: owed.homeOwed!.reason } : {}, requestedBy: buddy.buddyOf!.personId, at: new Date(now).toISOString() }
   }
 }
 

@@ -16,7 +16,7 @@ export interface EngineReadiness {
   /** `true`, or `null`: the probe reads a missing command, a login shell that timed out and a failed spawn
    *  all as not installed (engineProbe.ts), so only a failed start says an engine is missing. */
   installed: true | null
-  /** Read for claude and codex only, and only once installed; `null` for every other engine. */
+  /** Read only once installed; `null` when the engine's account reader cannot say. */
   signedIn: boolean | null
   installable: boolean | null
   /** Whether that machine's Harness can start the engine with a first prompt; `null` from an older Harness. */
@@ -77,7 +77,7 @@ export async function runMachinesEngines(argv: string[], dataDir: string, port: 
   }
   let answer: { machineId: string; reply: Record<string, unknown> }
   try {
-    answer = await probe(words[0], engines.length ? { engines } : {})
+    answer = await probe(words[0], { ...(engines.length ? { engines } : {}), accounts: true })
   } catch (error) {
     console.error((error as Error).message)
     return 1
