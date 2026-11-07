@@ -91,7 +91,7 @@ void main() {
       'Models',
       'Devices',
       'Swarm',
-      'Backlog',
+      'Scorecard',
     ]) {
       expect(
         find.descendant(
@@ -105,6 +105,16 @@ void main() {
     await tester.tap(find.text('Swarm'));
     await tester.pump();
     expect(find.text('Owner'), findsOneWidget);
+  });
+
+  // The team works from the project's Board (Scholes, task #3885).
+  testWidgets('no Backlog tab: the Board shows the work', (tester) async {
+    await show(tester);
+    expect(find.text('Backlog'), findsNothing);
+    expect(
+      SuperTabManageTab.values.map((tab) => tab.name),
+      isNot(contains('backlog')),
+    );
   });
 
   testWidgets('without devices there is no Devices tab', (tester) async {

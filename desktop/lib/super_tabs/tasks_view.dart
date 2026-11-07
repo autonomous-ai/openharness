@@ -147,7 +147,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
 
   void _readShipped() => unawaited(
     widget.controller.readClosedShipped(
-      widget.now().subtract(superTabBacklogShippedWindow),
+      widget.now().subtract(superTabShippedWindow),
     ),
   );
 
