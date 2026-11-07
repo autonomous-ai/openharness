@@ -92,7 +92,12 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, update) => AlertDialog(
-          title: const Text('Reject task'),
+          // Names the task, so the person knows which one they turn down.
+          title: Text(
+            'Reject “${task.title}”?',
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+          ),
           content: TextField(
             key: const ValueKey('task-reject-reason'),
             controller: reason,
@@ -398,6 +403,10 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                                                         .isBuddy
                                                 ? task.agentId
                                                 : null,
+                                            // The row's own text size: a dropdown's default is
+                                            // larger and bolder than the task titles around it.
+                                            style: DefaultTextStyle.of(context)
+                                                .style,
                                             decoration: const InputDecoration(
                                               labelText: 'Suggested agent',
                                               isDense: true,
