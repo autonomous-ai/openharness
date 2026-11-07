@@ -34,9 +34,9 @@ void main() {
 
   for (final brightness in Brightness.values) {
     for (final scale in [1.0, 2.0]) {
-      // Huy and Scholes, 11-04: the text has its own line above the row of
-      // actions, as on the phone; the caret and the hint centre on it.
-      testWidgets('composer text sits on its line above the actions in '
+      // anh Dee's mockup (11-07, #4529): the text sits in its pill, the mic or
+      // send beside it; the caret and the hint centre on its line.
+      testWidgets('composer text sits on its line inside the pill in '
           '${brightness.name} at ${scale}x', (tester) async {
         final previousBrightness = grid.AppTheme.brightness.value;
         grid.AppTheme.brightness.value = brightness;
@@ -117,12 +117,8 @@ void main() {
             });
           }
           debugPrint('Composer $name: ${measurements[name]}');
-          final actions = tester.getRect(
-            find.byKey(const ValueKey('super-message-composer-actions')),
-          );
-          expect(editableRect.top, greaterThan(rect.top));
-          expect(editableRect.bottom, lessThanOrEqualTo(actions.top));
-          expect(actions.bottom, lessThanOrEqualTo(rect.bottom));
+          expect(editableRect.top, greaterThanOrEqualTo(rect.top));
+          expect(editableRect.bottom, lessThanOrEqualTo(rect.bottom));
           expect(caret.center.dy, closeTo(editableRect.center.dy, .75));
           if (name == 'empty') {
             expect(

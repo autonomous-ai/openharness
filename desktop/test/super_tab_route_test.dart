@@ -7,7 +7,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_row.dart';
-import 'package:harness/super_tabs/message_text.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/route_row.dart';
 
@@ -485,7 +484,10 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        final messageX = tester.getTopLeft(find.byType(SuperTabMessageText)).dx;
+        // The routing line starts where the chat's bubbles do (#4529).
+        final messageX = tester
+            .getTopLeft(find.byKey(const ValueKey('swarm-bubble')).first)
+            .dx;
         final routeX = tester.getTopLeft(find.text('Routed to Multiply')).dx;
         expect(routeX, messageX);
         expect(tester.takeException(), isNull);

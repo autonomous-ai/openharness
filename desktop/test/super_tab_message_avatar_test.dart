@@ -100,24 +100,32 @@ void main() {
     expect((fill.decoration! as BoxDecoration).shape, BoxShape.circle);
   });
 
-  testWidgets('a new sender starts a group gap and a control gap down', (
+  Finder bubble() => find.byKey(const ValueKey('swarm-bubble'));
+
+  testWidgets('a new sender starts a group gap down, its face by its bubble', (
     tester,
   ) async {
     await _show(tester, [_row(_message('m1'))]);
     final rowTop = tester.getTopLeft(find.byType(SuperTabMessageRow)).dy;
-    final avatarTop = tester.getTopLeft(find.byType(SuperTabAvatar)).dy;
     expect(
-      avatarTop - rowTop,
-      grid.AppDesktop.groupGap + grid.AppDesktop.controlGap,
+      tester.getTopLeft(find.text('ivy')).dy - rowTop,
+      grid.AppDesktop.groupGap,
+    );
+    // The face sits by the bottom of its sender's last bubble (#4529).
+    expect(
+      tester.getBottomLeft(find.byType(SuperTabAvatar)).dy,
+      tester.getBottomLeft(bubble()).dy,
     );
   });
 
-  testWidgets('a grouped follow-up line keeps today\'s tight spacing', (
+  testWidgets('a grouped follow-up bubble sits close under the one above', (
     tester,
   ) async {
     await _show(tester, [_row(_message('m2'), grouped: true)]);
     final rowTop = tester.getTopLeft(find.byType(SuperTabMessageRow)).dy;
-    final textTop = tester.getTopLeft(find.text('Shipped the fix')).dy;
-    expect(textTop - rowTop, 6);
+    expect(
+      tester.getTopLeft(bubble()).dy - rowTop,
+      SuperTabMessageRow.joinedGap,
+    );
   });
 }

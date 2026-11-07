@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_icons.dart';
 import '../widgets/desktop_chrome.dart';
+import 'chat/chat_card.dart';
 import 'confetti.dart';
 import 'controller.dart';
 import 'identity.dart';
+import 'message_row.dart';
 import 'model.dart';
 import 'pull_requests.dart';
 
@@ -63,56 +66,59 @@ class _SuperTabShipRowState extends State<SuperTabShipRow> {
         if (snapshot?.agent(id) case final agent?)
           (SuperTabAvatar.agent(agent, size: 20), snapshot!.agentName(id)),
     ]);
-    final line = Container(
-      margin: const EdgeInsets.fromLTRB(24, 12, 24, 0),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: DesktopChrome.selection,
-        borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-        border: Border.all(color: DesktopChrome.accent.withValues(alpha: .4)),
+    // A compact card, as the chat draws a sent brief (anh Dee's mockup,
+    // 11-07, #4529): Shipped, the title, and What changed for the rest.
+    final line = Padding(
+      padding: const EdgeInsets.fromLTRB(
+        SuperTabMessageRow.bodyInset,
+        12,
+        SuperTabMessageRow.horizontalInset,
+        0,
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const ExcludeSemantics(
-                child: Text('🎉', style: TextStyle(fontSize: 20)),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Shipped: $title',
-                  style: DesktopChrome.control(medium: true),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 16,
-            runSpacing: 6,
-            children: [
-              if (requester != null)
-                _Credit('Requested by', [
-                  (
-                    SuperTabAvatar.person(requester, size: 20),
-                    requester.shownName,
+      child: Align(
+        alignment: Alignment.centerLeft,
+        // As wide as its words, up to a bubble's share, as a brief's card is.
+        child: LayoutBuilder(
+          builder: (context, room) => ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: room.maxWidth * SuperTabMessageRow.bubbleShare,
+            ),
+            child: SwarmChatCard(
+              icon: AppIcons.circleCheck,
+              label: 'Shipped',
+              title: title,
+              action: 'What changed',
+              details: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Wrap(
+                    spacing: 16,
+                    runSpacing: 6,
+                    children: [
+                      if (requester != null)
+                        _Credit('Requested by', [
+                          (
+                            SuperTabAvatar.person(requester, size: 20),
+                            requester.shownName,
+                          ),
+                        ]),
+                      agents('Built by', _ids('builderIds')),
+                      agents('Reviewed by', _ids('reviewerIds')),
+                    ],
                   ),
-                ]),
-              agents('Built by', _ids('builderIds')),
-              agents('Reviewed by', _ids('reviewerIds')),
-            ],
+                  SuperTabPullRequestLinks(
+                    _ids('pullRequests').join(' '),
+                    repositoryUrl:
+                        snapshot
+                                ?.projectFor(message.conversationId)
+                                ?.repository?['repositoryUrl']
+                            as String?,
+                  ),
+                ],
+              ),
+            ),
           ),
-          SuperTabPullRequestLinks(
-            _ids('pullRequests').join(' '),
-            repositoryUrl:
-                snapshot
-                        ?.projectFor(message.conversationId)
-                        ?.repository?['repositoryUrl']
-                    as String?,
-          ),
-        ],
+        ),
       ),
     );
     if (!_throws) return line;
