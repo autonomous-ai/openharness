@@ -95,7 +95,7 @@ const Map<String, List<PermissionMode>> kLaunchOnlyPermissionModes = {
     PermissionMode(
       'teamWritten',
       'Full, project settings off',
-      'Runs in a Team account and reads none of the branch\'s own settings',
+      'Reads none of the branch\'s own settings',
     ),
   ],
   'codex': [
@@ -107,7 +107,7 @@ const Map<String, List<PermissionMode>> kLaunchOnlyPermissionModes = {
     PermissionMode(
       'teamWritten',
       'Full, project settings off',
-      'Runs in a Team account and reads none of the branch\'s own settings',
+      'Reads none of the branch\'s own settings',
     ),
   ],
 };

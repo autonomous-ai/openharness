@@ -629,6 +629,14 @@ const wsMock = vi.hoisted(() => {
 })
 
 vi.mock('ws', () => ({ WebSocket: wsMock.MockWebSocket }))
+// A creation writes a durable receipt and flushes it to disk synchronously (lib/agentCreationReceipt.ts). On a busy
+// Linux runner a flush blocked for seconds and a creation case timed out at 5 s (#4363); macOS barely waits. This spec
+// checks what the socket says and counts, not durability (agentCreationReceipt.spec.ts does), so a flush returns at once.
+vi.mock('node:fs', async (real) => {
+  const fs = await real<typeof import('node:fs')>()
+  const fsyncSync = () => {}
+  return { ...fs, fsyncSync, default: { ...fs, fsyncSync } }
+})
 // Grid's set-up, which the models service asks for before a move onto a grid model: set up already here,
 // as on a machine that has used grid before. Never a real install or sign-in from a spec.
 vi.mock('./lib/gridAttach.js', async (real) => ({

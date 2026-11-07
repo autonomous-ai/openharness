@@ -21,6 +21,8 @@ import { launch as claudeLaunch } from './launch.js'
 
 const SCRIPT = fileURLToPath(new URL('../../../hook/statusline.mjs', import.meta.url))
 const posix = process.platform !== 'win32'
+/** How the person's `echo owner-line` ends, run with `shell: true`: cmd.exe on Windows ends a line with CRLF (#4184). */
+const OWNER_LINE = posix ? 'owner-line\n' : 'owner-line\r\n'
 const b64 = (text: string) => Buffer.from(text, 'utf8').toString('base64url')
 
 /** What Claude Code 2.1.316 hands its status line command, with the fields the report must never copy. */
@@ -60,7 +62,7 @@ function run(args: string[], input: unknown, extraEnv: NodeJS.ProcessEnv = {}) {
 describe('hook/statusline.mjs', () => {
   it('records only the five-hour and seven-day windows, then prints the owner\'s own status line', () => {
     const out = run(['--data', data, '--then', b64('echo owner-line')], STATUS)
-    expect(out.stdout).toBe('owner-line\n')
+    expect(out.stdout).toBe(OWNER_LINE)
     expect(out.status).toBe(0)
     const file = reportPath(data, configDir)
     const text = readFileSync(file, 'utf8')
@@ -136,7 +138,7 @@ describe('hook/statusline.mjs', () => {
 
   it('writes nothing without rate limits (an API key\'s session), and still prints the owner\'s line', () => {
     const out = run(['--data', data, '--then', b64('echo owner-line')], { ...STATUS, rate_limits_available: false, rate_limits: null })
-    expect(out.stdout).toBe('owner-line\n')
+    expect(out.stdout).toBe(OWNER_LINE)
     expect(out.status).toBe(0)
     expect(existsSync(join(data, 'quota'))).toBe(false)
   })
@@ -144,9 +146,9 @@ describe('hook/statusline.mjs', () => {
   it('prints the owner\'s line when the report cannot be written, or the input is not JSON', () => {
     const blocked = join(root, 'a-file')
     writeFileSync(blocked, 'not a folder')
-    expect(run(['--data', blocked, '--then', b64('echo owner-line')], STATUS).stdout).toBe('owner-line\n')
-    expect(run(['--data', data, '--then', b64('echo owner-line')], '{not json').stdout).toBe('owner-line\n')
-    expect(run(['--then', b64('echo owner-line')], STATUS).stdout).toBe('owner-line\n')
+    expect(run(['--data', blocked, '--then', b64('echo owner-line')], STATUS).stdout).toBe(OWNER_LINE)
+    expect(run(['--data', data, '--then', b64('echo owner-line')], '{not json').stdout).toBe(OWNER_LINE)
+    expect(run(['--then', b64('echo owner-line')], STATUS).stdout).toBe(OWNER_LINE)
   })
 
   it.skipIf(!posix)('hands the owner\'s command the same input, and exits as it does', () => {

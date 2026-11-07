@@ -141,12 +141,14 @@ describe('what a Buddy reads', () => {
     expect(JSON.stringify(seen)).not.toContain('/Users/owner/app')
     // No machines means none: agents and a task's assignment keep no machine or terminal id (review 1 of #2115, item 3).
     f.state.conversations.find(c => c.id === f.group)!.assignment = { id: 'a1', agentId: f.pm, status: 'working', result: null,
-      execution: { machineId: 'machine', harnessId: 'app-pm', machineOwnerId: 'host' } } as never
+      execution: { machineId: 'machine', harnessId: 'app-pm', machineOwnerId: 'host', contributorId: 'runner-login' } } as never
     f.state.conversations.find(c => c.id === f.group)!.lostAttempt = { id: 'a0', agentId: f.pm, machineId: 'machine', engine: 'claude' }
     const strict = visibleState(f.state, agentActor('buddy'))
     expect(strict.agents.map(a => [a.machineId, a.harnessId])).toEqual(strict.agents.map(() => ['', '']))
     const task = strict.conversations.find(c => c.id === f.group)!
-    expect(task.assignment!.execution).toEqual({ machineId: '', harnessId: '', machineOwnerId: '' })
+    // Nor whose login its agent runs under (the Tasks feed's, #4203), as an agent's own contributor is blanked.
+    expect(task.assignment!.execution).toEqual({ machineId: '', harnessId: '', machineOwnerId: '', contributorId: '' })
+    expect(JSON.stringify(strict)).not.toContain('runner-login')
     expect(task.lostAttempt).toEqual({ id: 'a0', agentId: f.pm })
     expect(visibleState(f.state, agentActor(f.pm)).agents.find(a => a.id === f.pm)!.machineId).toBe('machine')
     // A lost task's reason without its machine, on the task and on the agent; a reason naming none stays (re-check 2).

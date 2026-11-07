@@ -306,7 +306,9 @@ class PersonalLeadStarter extends ChangeNotifier {
             )
           : null,
       swarmId: tab.id,
-      permissionMode: integration.forcedPermissionMode,
+      // No dialog, so no mode the person chose: the PM starts with its owner's
+      // own permission settings (Swarm v3, task #4215).
+      bypassPermission: false,
       swarmRole: integration.swarmRole,
       swarmSkillMode: integration.swarmSkillMode,
       prompt: prompt,

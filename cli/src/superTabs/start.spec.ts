@@ -7,7 +7,7 @@ import { buddyOwnerFile, buddyOwnerOf } from '../lib/buddyGuard.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { env } from '../config/env.js'
 import { homedir, tmpdir } from 'node:os'
-import { BUDDY_CLAUDE_SIGNED_OUT, BUDDY_NOT_OWN_MACHINE, HEAVY_NOT_RECORDED, HEAVY_REFUSED, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent } from './start.js'
+import { BUDDY_CLAUDE_SIGNED_OUT, BUDDY_NOT_OWN_MACHINE, HEAVY_NOT_RECORDED, HEAVY_REFUSED, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent, TEAM_WRITTEN_CLAUDE_ONLY, TEAM_WRITTEN_WORKTREE_ONLY } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 import { readCapacityDisk } from './disk.js'
 import { SuperTabHostError } from './wire.js'
@@ -124,20 +124,25 @@ describe('Swarm permission mode', () => {
       : request(type, payload, ms))
     expect(await inspectCapacity(await f.open() as never, f.start.request)).toMatchObject({ allowed: true, engine: { installed: true, signedIn: false } })
   })
-  it.each(['claude', 'codex'] as const)('starts %s in full mode on direct and contributed hosts', async engine => {
+  // Swarm v3 (task #4215): each agent starts with its owner's own settings. A mode an older backend still relays is the
+  // PM's, not the person's, so it is not used either.
+  it.each(['claude', 'codex'] as const)('starts %s with its owner\'s own permission settings on direct and contributed hosts', async engine => {
     for (const hostDispatch of [false, true]) {
       const f = fixture()
-      Object.assign(f.start.request, { engine, permissionMode: 'ask' })
+      Object.assign(f.start.request, { engine, permissionMode: 'full' })
       if (hostDispatch) Object.assign(f.start, { poolGeneration: 'pool' })
       const result = await startAgent({ action: 'resume', tabId: 'tab', startId: 'start', hostDispatch }, f.scoped, where, f.open)
       expect(result).toMatchObject({ ok: true })
       const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
-      expect(payload).toMatchObject({ permissionMode: 'full', bypassPermission: true, swarmRole: 'dev' })
+      expect(payload).toMatchObject({ bypassPermission: false, swarmRole: 'dev' })
+      expect(payload).not.toHaveProperty('permissionMode')
       // On Windows a launch first verifies the flags the engine's startup takes (lib/windows/engineStart.ts); given here as a
       // verified launch gives them, so this reads the permission flags alone (Window of Tim, #3815).
-      const argv = buildEngineCommandArgv(engine, { permissionMode: String(payload.permissionMode),
+      const argv = buildEngineCommandArgv(engine, { bypassPermission: payload.bypassPermission as boolean,
         ...(process.platform === 'win32' ? { native: { startupArgs: [] } as never } : {}) })
-      expect(argv).toContain(engine === 'claude' ? '--dangerously-skip-permissions' : '--dangerously-bypass-approvals-and-sandbox')
+      for (const flag of ['--dangerously-skip-permissions', '--dangerously-bypass-approvals-and-sandbox', '--permission-mode', '--ask-for-approval', '--sandbox']) {
+        expect(argv).not.toContain(flag)
+      }
     }
   })
 
@@ -150,8 +155,8 @@ describe('Swarm permission mode', () => {
       Object.assign(f.start.request, { engine: 'claude', projectSettings: 'off' })
       expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
       const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
-      expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: true })
-      expect(buildEngineCommandArgv('claude', { permissionMode: 'teamWritten' })).toEqual(expect.arrayContaining(['--dangerously-skip-permissions', '--setting-sources', 'user', '--strict-mcp-config']))
+      expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: false })
+      expect(buildEngineCommandArgv('claude', { permissionMode: 'teamWritten' })).toEqual(expect.arrayContaining(['--setting-sources', 'user', '--strict-mcp-config']))
     } finally { teamDaemon.value = false }
   })
 
@@ -163,7 +168,7 @@ describe('Swarm permission mode', () => {
       Object.assign(f.start.request, { engine: 'codex', projectSettings: 'off' })
       expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
       const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
-      expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: true })
+      expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: false })
       expect(String(payload.codexHome)).toContain(`${sep}${PM_HOMES}${sep}`)
       rmSync(dirname(String(payload.codexHome)), { recursive: true, force: true })
     } finally { teamDaemon.value = false }
@@ -203,12 +208,54 @@ describe('Swarm permission mode', () => {
     } finally { teamDaemon.value = false }
   })
 
-  it.each(['claude', 'codex'] as const)('refuses Team-written %s work in the main account, before anything is created', async engine => {
+  // Swarm v3 (task #4307): no Team machine is left, and the server sends Team-written work only to the project owner's own
+  // computer with project settings off (backend superTabs/teamWritten.ts, ruling #4120). It launches there as on a Team daemon.
+  it('starts Team-written Claude Code work on the owner\'s own computer with project settings off', async () => {
     const f = fixture()
-    Object.assign(f.start.request, { engine, projectSettings: 'off' })
-    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ error: 'START_FAILED' })
+    Object.assign(f.start.request, { engine: 'claude', projectSettings: 'off' })
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+    const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
+    expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: false })
+    expect(payload).not.toHaveProperty('codexHome')
+    expect(f.start.error).toBeNull()
+  })
+
+  // Review of #3485: another account's agent wrote this code, and it runs as the owner on their own computer, not in a Team
+  // account's own OS user, so it gets the owner's own permission checks and sandbox: no flag that skips them.
+  it.each(['claude', 'codex'] as const)('launches Team-written %s work with no flag that skips permissions or the sandbox', async engine => {
+    const argv = buildEngineCommandArgv(engine, { permissionMode: 'teamWritten', bypassPermission: false,
+      ...(process.platform === 'win32' ? { native: { startupArgs: [] } as never } : {}) })
+    expect(argv).not.toContain('--dangerously-skip-permissions')
+    expect(argv).not.toContain('--dangerously-bypass-approvals-and-sandbox')
+    expect(argv.join(' ')).not.toMatch(/--permission-mode|--approve-for-me|--sandbox|bypass/)
+  })
+
+  // Codex keeps the branch's settings out only in an engine home of its own, which here has no sign-in, and Harness never reads
+  // or links one (loginReads.spec.ts, security review 2 of #3485).
+  it('refuses Team-written Codex work on the owner\'s own computer before anything is made, naming Claude Code', async () => {
+    const f = fixture()
+    Object.assign(f.start.request, { engine: 'codex', projectSettings: 'off' })
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ error: 'START_FAILED', detail: TEAM_WRITTEN_CLAUDE_ONLY })
     expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
-    expect(f.start.error).toContain('Team account')
+    expect(f.start.error).toContain('Claude Code')
+    expect(existsSync(join(homedir(), PM_HOMES, f.start.creationId))).toBe(false)
+  })
+
+  // Task #4353: its Claude trust is saved for the folder it runs in and cleared with the worktree Harness made for it. The
+  // owner's main checkout is neither Harness's to trust for it nor to delete, so it never runs there.
+  it('refuses Team-written work that names no worktree, the owner\'s main checkout, before anything is made', async () => {
+    const f = fixture()
+    Object.assign(f.start.request, { engine: 'claude', projectSettings: 'off', worktree: false, cwd: '/repo' })
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ error: 'START_FAILED', detail: TEAM_WRITTEN_WORKTREE_ONLY })
+    expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
+    expect(f.start.error).toContain('worktree')
+  })
+
+  it('gives a normal Codex start no engine home of its own', async () => {
+    const f = fixture()
+    Object.assign(f.start.request, { engine: 'codex' })
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+    expect(f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!).not.toHaveProperty('codexHome')
   })
 
   it.each(['opencode', 'kilo'])('fails a pending legacy %s Swarm start before native creation', async engine => {
@@ -265,7 +312,8 @@ describe('Swarm permission mode', () => {
       const result = await heavyStart(f, () => undefined)
       expect(result).toMatchObject({ ok: true, queued: true, startId: 'start' })
       expect(result).not.toHaveProperty('heavyWarning')
-      expect(submitted(f)).toEqual([expect.objectContaining({ heavy: ['build'], permissionMode: 'full' })])
+      expect(submitted(f)).toEqual([expect.objectContaining({ heavy: ['build'] })])
+      expect(submitted(f)[0]).not.toHaveProperty('permissionMode')
     })
     it('sends the start once more without it when an older server refuses that field, and says routes will not count it', async () => {
       const f = fixture()
@@ -274,7 +322,8 @@ describe('Swarm permission mode', () => {
       const sent = submitted(f)
       expect(sent).toHaveLength(2)
       expect(sent[1]).not.toHaveProperty('heavy')
-      expect(sent[1]).toEqual({ ...sent[0], heavy: undefined, permissionMode: 'full' } as never)
+      expect(sent[1]).toEqual({ ...sent[0], heavy: undefined } as never)
+      expect(sent[1]).not.toHaveProperty('permissionMode')
       expect(new Set(f.scoped.mock.calls.filter(c => (c[0].command as { type?: string } | undefined)?.type === 'agent.start').map(c => c[0].operationId))).toEqual(new Set(['op-heavy']))
     })
     it('never sends it again on a timeout or any other refusal, which may have started an agent', async () => {
@@ -297,26 +346,6 @@ describe('Swarm permission mode', () => {
     })
   })
 
-  it('recovers the same legacy start after its accepted reply is lost', async () => {
-    const f = fixture(), scoped = f.scoped.getMockImplementation()!
-    Object.assign(f.start, { poolGeneration: 'pool' })
-    let recorded: string | undefined, accepted = 0
-    f.scoped.mockImplementation(async payload => {
-      const command = payload.command as Record<string, any> | undefined
-      if (command?.type !== 'agent.start') return scoped(payload)
-      const hash = JSON.stringify(command)
-      if (recorded) return recorded === hash ? scoped(payload) : { error: 'OPERATION_REUSED', detail: 'Use a new operation ID for a different request.' }
-      if (command.request.permissionMode) return { error: 'OUTSIDE_CONTRIBUTION', detail: 'Refused: permissionMode (it runs with its own default account settings, so leave it out).' }
-      recorded = hash; accepted++
-      throw new Error('Accepted reply lost')
-    })
-    const input = { action: 'start', tabId: 'tab', operationId: 'same-op', request: f.start.request }
-    await expect(startAgent(input, f.scoped, where, f.open)).rejects.toThrow('Accepted reply lost')
-    expect(await startAgent(input, f.scoped, where, f.open, noPause)).toMatchObject({ ok: true, queued: true, startId: 'start' })
-    expect(accepted).toBe(1)
-    expect(f.open).not.toHaveBeenCalled()
-  })
-
   it('tells the Lead a contributed start is still being prepared on its machine, so it waits rather than starting another', async () => {
     const f = fixture()
     Object.assign(f.start, { poolGeneration: 'pool', dispatched: true, preparing: true })
@@ -330,59 +359,19 @@ describe('Swarm permission mode', () => {
     expect(f.open).not.toHaveBeenCalled()
   })
 
-  it('asks the backend for full mode even when the caller asks for another mode', async () => {
-    const f = fixture()
-    await startAgent({ action: 'start', tabId: 'tab', operationId: 'op', request: { ...f.start.request, permissionMode: 'ask' } }, f.scoped, where, f.open)
-    const command = f.scoped.mock.calls[0]![0].command as Record<string, any>
-    expect(command.request.permissionMode).toBe('full')
-  })
-
-  it.each([false, true])('recovers an older CLI start without warning that the backend is old (settled=%s)', async settled => {
-    const f = fixture()
-    Object.assign(f.start, { poolGeneration: 'pool', ...(settled ? { harnessId: 'existing', poolSettled: true } : {}) })
-    f.scoped.mockResolvedValueOnce({ error: 'OPERATION_REUSED', detail: 'Use a new operation ID for a different request.' })
-    const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'same-op', request: f.start.request }, f.scoped, where, f.open, noPause)
-    expect(result).toMatchObject({ ok: true, ...(settled ? { harnessId: 'existing' } : { queued: true }) })
-    expect(result).not.toHaveProperty('permissionWarning')
-    const attempts = f.scoped.mock.calls.map(c => c[0]).filter(c => (c.command as any)?.type === 'agent.start')
-    expect(attempts).toHaveLength(2)
-    expect(attempts.map(a => a.operationId)).toEqual(['same-op', 'same-op'])
-    expect(f.open).not.toHaveBeenCalled()
-  })
-
-  it.each([false, true])('retries an older backend permission refusal once and warns (settled=%s)', async settled => {
-    const f = fixture(), scoped = f.scoped.getMockImplementation()!
-    Object.assign(f.start, { poolGeneration: 'pool', ...(settled ? { harnessId: 'existing', poolSettled: true } : {}) })
-    f.scoped.mockImplementation(async payload => {
-      const command = payload.command as Record<string, any> | undefined
-      if (command?.type === 'agent.start' && command.request.permissionMode) return {
-        error: 'OUTSIDE_CONTRIBUTION', detail: 'Studio Mac accepts only its contributed project folder, engines and default account settings. Refused: permissionMode (it runs with its own default account settings, so leave it out).',
-      }
-      return scoped(payload)
-    })
-    const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'same-op', request: f.start.request }, f.scoped, where, f.open, noPause)
-    expect(result).toMatchObject({ ok: true, ...(settled ? { harnessId: 'existing' } : { queued: true }), permissionWarning: expect.stringContaining("machine's default") })
-    const attempts = f.scoped.mock.calls.map(c => c[0]).filter(c => (c.command as any)?.type === 'agent.start')
-    expect(attempts).toHaveLength(2)
-    expect(attempts.map(a => a.operationId)).toEqual(['same-op', 'same-op'])
-    expect((attempts[0]!.command as any).request.permissionMode).toBe('full')
-    expect((attempts[1]!.command as any).request).not.toHaveProperty('permissionMode')
-    expect(f.open).not.toHaveBeenCalled()
+  it('asks the backend for no permission mode, even when the caller names one', async () => {
+    for (const permissionMode of [undefined, 'ask', 'full']) {
+      const f = fixture()
+      await startAgent({ action: 'start', tabId: 'tab', operationId: 'op', request: { ...f.start.request, ...(permissionMode ? { permissionMode } : {}) } }, f.scoped, where, f.open)
+      const command = f.scoped.mock.calls[0]![0].command as Record<string, any>
+      expect(command.request).not.toHaveProperty('permissionMode')
+    }
   })
 
   it('does not retry an uncertain backend reply', async () => {
     const f = fixture(); f.scoped.mockRejectedValue(new Error('Reply lost'))
     await expect(startAgent({ action: 'start', tabId: 'tab', operationId: 'op', request: f.start.request }, f.scoped, where, f.open)).rejects.toThrow('Reply lost')
     expect(f.scoped).toHaveBeenCalledOnce()
-    expect(f.open).not.toHaveBeenCalled()
-  })
-
-  it('ends after the single legacy retry fails', async () => {
-    const f = fixture()
-    f.scoped.mockResolvedValueOnce({ error: 'OUTSIDE_CONTRIBUTION', detail: 'Refused: permissionMode (it runs with its own default account settings, so leave it out).' })
-      .mockResolvedValueOnce({ error: 'MACHINE_OFFLINE', detail: 'Wait for the machine.' })
-    await expect(startAgent({ action: 'start', tabId: 'tab', operationId: 'op', request: f.start.request }, f.scoped, where, f.open)).rejects.toThrow('Wait for the machine.')
-    expect(f.scoped).toHaveBeenCalledTimes(2)
     expect(f.open).not.toHaveBeenCalled()
   })
 
@@ -399,6 +388,8 @@ describe('Swarm permission mode', () => {
     { error: 'OUTSIDE_CONTRIBUTION', detail: 'Refused: codexHome, permissionMode (leave them out).' },
     { error: 'OUTSIDE_CONTRIBUTION', detail: 'Refused: cwd (wrong folder); permissionMode (leave it out).' },
     { error: 'FORBIDDEN', detail: 'permissionMode is forbidden' },
+    { error: 'OUTSIDE_CONTRIBUTION', detail: 'Refused: permissionMode (it runs with its own default account settings, so leave it out).' },
+    { error: 'OPERATION_REUSED', detail: 'Use a new operation ID for a different request.' },
   ])('does not retry an unrelated refusal: $detail', async refusal => {
     const f = fixture(); f.scoped.mockResolvedValue(refusal)
     await expect(startAgent({ action: 'start', tabId: 'tab', operationId: 'op', request: f.start.request }, f.scoped, where, f.open)).rejects.toThrow(refusal.detail)
@@ -533,7 +524,7 @@ it('launches a Codex thread session as any Buddy: the guard its refusal stood fo
   const result = await startAgent({ ...OWN_HOST, action: 'start', tabId: 'tab', operationId: 'buddy-codex-session', request: f.start.request } as never, f.scoped, where, f.open)
   expect(result.error).toBeUndefined()
   const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
-  expect([payload.engine, payload.permissionMode, payload.bypassPermission]).toEqual(['codex', 'full', true])
+  expect([payload.engine, payload.permissionMode, payload.bypassPermission]).toEqual(['codex', undefined, false])
 })
 
 it('starts a plain Buddy for a thread session whose thread is not an id', async () => {
@@ -546,7 +537,7 @@ it('starts a plain Buddy for a thread session whose thread is not an id', async 
   expect(payload.prompt).not.toContain('--thread')
 })
 
-it('starts a Buddy in full mode, like its owner\'s own session, and never with the GitHub App\'s token (task #2832)', async () => {
+it('starts a Buddy with its owner\'s own permission settings, and never with the GitHub App\'s token (tasks #2832, #4215)', async () => {
   for (const engine of ['claude', 'codex'] as const) {
     const f = fixture()
     f.start.request = { ...f.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
@@ -554,7 +545,7 @@ it('starts a Buddy in full mode, like its owner\'s own session, and never with t
     await startAgent({ ...OWN_HOST, action: 'start', tabId: 'tab', operationId: `buddy-${engine}`, request: f.start.request, github: { requester: 'peer' } } as never,
       f.scoped, where, f.open)
     const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
-    expect([engine, payload.permissionMode, payload.bypassPermission, payload.swarmGitHub]).toEqual([engine, 'full', true, undefined])
+    expect([engine, payload.permissionMode, payload.bypassPermission, payload.swarmGitHub]).toEqual([engine, undefined, false, undefined])
     expect(payload.prompt).not.toContain('GitHub')
   }
 })
@@ -1747,7 +1738,7 @@ describe('neutral start prompts', () => {
   })
   it('keeps the agent_create payload keys unchanged for old machines', async () => {
     // The keys this payload carried before roleName existed (worktree fixture); an older machine's launches.ts refuses others.
-    const base = ['branchBase', 'branchName', 'bypassPermission', 'creationId', 'engine', 'gitSource', 'name', 'permissionMode', 'projectSource', 'prompt', 'startedBy', 'swarmRole', 'swarmSkillMode']
+    const base = ['branchBase', 'branchName', 'bypassPermission', 'creationId', 'engine', 'gitSource', 'name', 'projectSource', 'prompt', 'startedBy', 'swarmRole', 'swarmSkillMode']
     for (const extra of [lead, {}, { role: 'reviewer' }]) {
       for (const roleName of [undefined, 'Tester']) {
         const { payload } = await starts(extra, roleName)
@@ -1761,7 +1752,7 @@ describe('neutral start prompts', () => {
   // Project instructions, phase 4 (decision 1): the CLI's kinds stay inside it this release; an older machine's launches.ts
   // takes lead, dev, review and buddy alone, and refuses a key it does not know.
   it('sends an older machine only the role values it knows', async () => {
-    const keys = ['branchBase', 'branchName', 'bypassPermission', 'creationId', 'engine', 'gitSource', 'name', 'permissionMode', 'projectSource', 'prompt', 'startedBy', 'swarmRole', 'swarmSkillMode']
+    const keys = ['branchBase', 'branchName', 'bypassPermission', 'creationId', 'engine', 'gitSource', 'name', 'projectSource', 'prompt', 'startedBy', 'swarmRole', 'swarmSkillMode']
     for (const [extra, roleName, swarmRole] of [[{}, 'Tester', 'dev'], [{}, undefined, 'dev'], [lead, 'Product Manager', 'lead'], [lead, undefined, 'lead'],
       [{ role: 'reviewer' }, 'Reviewer', 'review'], [{ role: 'reviewer' }, undefined, 'review'], [{ role: 'builder' }, 'Engineer', 'dev']] as const) {
       const { payload } = await starts(extra, roleName)

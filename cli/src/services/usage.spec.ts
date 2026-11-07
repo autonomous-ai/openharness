@@ -30,6 +30,8 @@ const CODEX: CodexRateLimits = {
   secondary: { usedPercent: 7, windowDurationMins: 10_080, resetsAt: s('2026-11-12T00:00:00Z') },
 }
 const NO_REPORT = 'Claude Code has not reported its allowance on this machine yet: it does after its first reply in a session Harness started.'
+const STALE_REPORT = 'Claude Code last reported its allowance on this machine more than an hour ago: it reports again after its next reply in a session Harness started.'
+const RESET_SINCE = 'Claude Code\'s allowance reset after its last report on this machine: it reports again after its next reply in a session Harness started.'
 
 let dataDir: string
 beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'usage-service-')); shell.env = {} })
@@ -106,12 +108,26 @@ describe('the usage service', () => {
     ] })
   })
 
-  it('usage_read: an old report still answers, and a window whose reset has passed reads as unused', async () => {
-    report({ five_hour: { used_percentage: 98, resets_at: s('2026-11-06T20:00:00Z') }, seven_day: { used_percentage: 60, resets_at: s('2026-11-10T00:00:00Z') } },
-      undefined, NOW - 9 * 3_600_000)
+  it('usage_read: a window whose reset has passed is unknown, never unused; one with none left is unknown, with why (task #4217)', async () => {
+    report({ five_hour: { used_percentage: 98, resets_at: s('2026-11-07T00:30:00Z') }, seven_day: { used_percentage: 60, resets_at: s('2026-11-10T00:00:00Z') } })
     const reply = await usage().requests.usage_read!({}, ASKER) as { providers: Array<Record<string, unknown>> }
-    expect(reply.providers[0]).toMatchObject({ outcome: 'answered',
-      body: { five_hour: { utilization: 0, resets_at: null }, seven_day: { utilization: 60, resets_at: '2026-11-10T00:00:00.000Z' } } })
+    expect(reply.providers[0]).toMatchObject({ outcome: 'answered', body: { seven_day: { utilization: 60, resets_at: '2026-11-10T00:00:00.000Z' } } })
+    expect(reply.providers[0]!.body).not.toHaveProperty('five_hour')
+    expect(quotaOf(reply, 'claude', false).windows).toEqual([{ name: 'weekly', usedPercent: 60, resetsAt: '2026-11-10T00:00:00.000Z' }])
+    report({ five_hour: { used_percentage: 98, resets_at: s('2026-11-07T00:30:00Z') } })
+    const passed = await usage().requests.usage_read!({}, ASKER) as Record<string, unknown>
+    expect((passed.providers as unknown[])[0]).toEqual({ provider: 'claude', account: null, outcome: 'unreachable', source: 'cli', message: RESET_SINCE })
+    expect(quotaOf(passed, 'claude', false).known).toBe(false)
+  })
+
+  it('usage_read: a report more than an hour old is unknown, with why, however its windows read (task #4217)', async () => {
+    const windows = { five_hour: { used_percentage: 20, resets_at: s('2026-11-07T03:00:00Z') }, seven_day: { used_percentage: 60, resets_at: s('2026-11-10T00:00:00Z') } }
+    report(windows, undefined, NOW - 3_600_000)
+    expect(((await usage().requests.usage_read!({}, ASKER)) as { providers: Array<Record<string, unknown>> }).providers[0]).toMatchObject({ outcome: 'answered' })
+    report(windows, undefined, NOW - 3_600_001)
+    const stale = await usage().requests.usage_read!({}, ASKER) as Record<string, unknown>
+    expect((stale.providers as unknown[])[0]).toEqual({ provider: 'claude', account: null, outcome: 'unreachable', source: 'cli', message: STALE_REPORT })
+    expect(quotaUnknownReason(stale, 'claude')).toBe(STALE_REPORT)
   })
 
   it('usage_read: no report yet is unreachable, with the reason the route shows', async () => {

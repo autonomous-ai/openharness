@@ -24,9 +24,13 @@ export function shippedOnMachine(state: SuperTabState, group: Conversation): str
   return shipping.machineId ?? runMachine(state, ledger.runs?.find(r => r.assignmentId === shipping.assignmentId) ?? {})
 }
 
-/** Verified, as far as the server knows (the PM's north star): shipped with a pull request, and no fix merged after it. */
-export const verified = (group: Conversation): boolean =>
-  group.ledger?.shippedAt != null && (group.pullRequestUrls?.length ?? 0) > 0 && group.ledger.fixedAfterMergeAt == null
+/** Shipped: its pull request's merge recorded (leaderboard/record.ts recordMerged, which ships it then), not Done alone, which
+ *  a task with a PR nobody merged reaches too (task #4217). */
+export const shippedByMerge = (group: Conversation): boolean =>
+  group.ledger?.mergedAt != null && group.ledger.shippedAt != null && (group.pullRequestUrls?.length ?? 0) > 0
+
+/** Verified, as far as the server knows (the PM's north star): shipped by its merge, and no fix merged after it. */
+export const verified = (group: Conversation): boolean => shippedByMerge(group) && group.ledger!.fixedAfterMergeAt == null
 
 /** The machine a pool stands for among [machines]: a Harness Team account's Mac when the reader sees it, else itself. */
 export function homeOf(machines: readonly ContributedMachine[], machineId: string): ContributedMachine | undefined {

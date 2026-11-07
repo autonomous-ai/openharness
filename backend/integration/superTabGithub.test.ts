@@ -299,7 +299,7 @@ describe('a queued start\'s preparation token', () => {
     const conversationId = String((await env.run(tab, { type: 'conversation.create', title: 'Add search', brief: 'Add a search field',
       checks: [], ...(requester ? { requesterId: requester.sub } : {}) } as Command)).result.conversationId)
     const startId = String((await env.run(tab, { type: 'agent.start', request: { conversationId, machineId, engine: 'codex', name: 'Builder',
-      cwd: '/swarm-root/lead', permissionMode: 'full', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as Command,
+      cwd: '/swarm-root/lead', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as Command,
       contributor)).result.startId)
     return { tab, startId }
   }

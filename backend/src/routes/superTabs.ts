@@ -97,6 +97,8 @@ const scorecardQuery = z.object({ projectId: id, scope: z.literal('all').optiona
 const leaderboardQuery = z.object({ projectId: id, week: z.coerce.number().int().nonnegative().safe().optional(), period: z.enum(PERIODS).optional(), scope: z.literal('all').optional() }).strict()
   .refine(query => query.week === undefined || query.period === undefined, 'Ask for a week or a period, not both.')
 const dormantQuery = agentQuery.extend({ dormant: z.literal('1'), projectId: id.optional(), before: cursor.optional() })
+/** An older page of the person's Tasks feed (task #4203): the `olderCursor` a first load or an earlier page gave. */
+const personalTasksQuery = z.object({ before: cursor.optional() }).strict()
 const groupParams = tabParams.extend({ conversationId: id })
 const hostChangesQuery = z.object({ cursor: cursor.optional(), full: z.literal('1').optional() }).strict()
 const etag = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/)
@@ -696,6 +698,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof leaderboardQuery> }>('/api/super-tabs/:tabId/leaderboard',
     { preHandler: [validateParams(tabParams), validateQuery(leaderboardQuery)] },
     (req, reply) => respond(reply, () => reads.leaderboard(req.user!, req.params.tabId, req.query.projectId, req.query.week, req.query.period, req.query.scope === 'all')))
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof personalTasksQuery> }>('/api/super-tabs/:tabId/personal-tasks',
+    { preHandler: [validateParams(tabParams), validateQuery(personalTasksQuery)] },
+    (req, reply) => respond(reply, () => reads.personalTasks(req.user!, req.params.tabId, req.query.before)))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof dormantQuery> }>('/api/super-tabs/:tabId/groups',
     { preHandler: [validateParams(tabParams), validateQuery(dormantQuery)] },
     (req, reply) => respond(reply, () => reads.dormant(req.user!, req.params.tabId, { projectId: req.query.projectId, before: req.query.before }, req.query.asAgentId)))
