@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/engine_availability.dart';
@@ -219,6 +220,12 @@ void main() {
       expect(integration.agentKind, 'lead');
       expect(find.descendant(of: _kind, matching: find.text('Lead')),
           findsOneWidget);
+      // The crown is only the leaderboard's number one's (task #4461).
+      expect(
+        find.descendant(of: _kind, matching: find.byIcon(AppIcons.circleUser)),
+        findsOneWidget,
+      );
+      expect(find.byIcon(AppIcons.crown), findsNothing);
       await capture(tester, mounted.image, 'new-agent-lead-${brightness.name}');
     });
   }

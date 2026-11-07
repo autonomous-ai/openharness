@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/appearance_prefs_store.dart';
 import 'package:harness/state/harness_activity.dart';
@@ -143,7 +144,10 @@ void main() {
         expect(
           find.descendant(
             of: _mark('task'),
-            matching: find.text(activity.mark),
+            // Failed draws the triangle, not the terminal's ✗ (task #4461).
+            matching: activity == HarnessActivity.failed
+                ? find.byIcon(AppIcons.triangleAlert)
+                : find.text(activity.mark),
           ),
           findsOneWidget,
         );

@@ -400,7 +400,7 @@ void main() {
       expect(agent.identity, 'agent:river');
       expect(agent.name, 'River');
       expect(agent.picture, isA<SuperTabPresetAvatar>());
-      expect(agent.pattern, isTrue);
+      expect(agent.face, isTrue);
       // The row names the engine already where an agent writes; its reply
       // line does not badge it either.
       expect(agent.engine, isNull);
@@ -453,7 +453,7 @@ void main() {
       await tester.pumpAndSettle();
       [_, agent, _] = faces(tester);
       expect(agent.picture, isNull);
-      expect(agent.pattern, isTrue);
+      expect(agent.face, isTrue);
       expect(agent.name, 'River');
       expect(find.text('🦊'), findsNothing);
       expect(find.text('🦉'), findsNothing);
