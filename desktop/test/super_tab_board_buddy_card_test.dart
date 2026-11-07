@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -22,6 +23,11 @@ import 'swarm_state_test.dart' show createApp;
 void main() {
   late RestartConnection connection;
   late AppNotifier app;
+  late ConversationServer server;
+
+  // Writes nothing unless HARNESS_SUPER_TAB_CAPTURE names a folder.
+  final shots = Platform.environment['HARNESS_SUPER_TAB_CAPTURE'];
+  if (shots != null) setUpAll(() => loadCaptureFonts(shots));
 
   Finder key(String k) => find.byKey(ValueKey(k));
   final button = key('super-board-buddy-button');
@@ -64,7 +70,7 @@ void main() {
     final before = grid.AppTheme.brightness.value;
     grid.AppTheme.brightness.value = brightness;
     addTearDown(() => grid.AppTheme.brightness.value = before);
-    final server = swarm();
+    server = swarm();
     server.state['buddies'] = true;
     giveBuddy(server, person: 'owner', machineId: machineId);
     (server.state['conversations'] as List)
@@ -88,6 +94,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: grid.buildAppTheme(brightness: brightness),
+        debugShowCheckedModeBanner: false,
         home: Scaffold(
           body: SuperTabView(
             controller: c,
@@ -364,7 +371,8 @@ void main() {
         await tester.tap(
           find.descendant(
             of: key('super-middle-chat'),
-            matching: find.byTooltip('Buddy options'),
+            // The chat's own options; the card is the Buddy's (audit finding 15 of #4436).
+            matching: find.byTooltip('Chat options'),
           ),
         );
         await settle(tester);
@@ -682,14 +690,141 @@ void main() {
     await end(tester, c);
   });
 
-  testWidgets('Remove opens the remove confirm', (tester) async {
+  for (final brightness in Brightness.values) {
+    testWidgets('Remove names the Buddy, is red, and a refusal keeps the '
+        'dialog open with the reason (${brightness.name})', (tester) async {
+      final c = await show(tester, brightness: brightness);
+      await open(tester);
+      await tester.tap(key('super-buddy-card-remove'));
+      await settle(tester);
+      expect(find.text('Remove Wren?'), findsOneWidget);
+      expect(
+        find.text(
+          'Wren stops. Your chat stays, and your next Buddy here picks it up.',
+        ),
+        findsOneWidget,
+      );
+      final confirm = find.widgetWithText(FilledButton, 'Remove');
+      expect(
+        tester
+            .widget<FilledButton>(confirm)
+            .style
+            ?.backgroundColor
+            ?.resolve({}),
+        grid.AppPalette.dangerFill,
+      );
+      await captureWindow(
+        tester,
+        shots,
+        '15-buddy-remove-confirm-${brightness.name}',
+      );
+      server.refuse = {
+        'code': 'BUDDY_BUSY',
+        'message': 'Wren is answering. Try again in a moment.',
+      };
+      await tester.tap(confirm);
+      await settle(tester);
+      expect(find.text('Remove Wren?'), findsOneWidget);
+      expect(
+        tester
+            .widget<Text>(
+              find.descendant(
+                of: find.byType(AlertDialog),
+                matching: find.text(
+                  'Wren is answering. Try again in a moment.',
+                ),
+              ),
+            )
+            .style
+            ?.color,
+        grid.AppPalette.dangerFill,
+      );
+      server.refuse = null;
+      await tester.tap(confirm);
+      await settle(tester);
+      expect(find.text('Remove Wren?'), findsNothing);
+      expect(c.buddy('lead'), isNull);
+      await end(tester, c);
+    });
+  }
+
+  for (final brightness in Brightness.values) {
+    testWidgets("a Buddy whose computer is offline says it can't reach it, "
+        'not Running or Stopped (${brightness.name})', (tester) async {
+      app.stateOf('m')!.nodeOnline = false;
+      final c = await show(tester, brightness: brightness);
+      await open(tester);
+      expect(find.text("Can't reach Test host"), findsOneWidget);
+      expect(
+        find.text('Restart and launch flags come back when Test host answers.'),
+        findsOneWidget,
+      );
+      expect(find.text('Running'), findsNothing);
+      expect(find.text('Stopped'), findsNothing);
+      expect(restart, findsNothing);
+      expect(input, findsNothing);
+      await captureWindow(
+        tester,
+        shots,
+        '15-buddy-card-cant-reach-${brightness.name}',
+      );
+      await end(tester, c);
+    });
+  }
+
+  testWidgets("a Buddy whose computer hasn't listed its agents says it can't "
+      'reach it', (tester) async {
+    app.stateOf('m')!
+      ..agents = []
+      ..agentLoadStatus = AgentLoadStatus.loading;
     final c = await show(tester);
     await open(tester);
-    await tester.tap(key('super-buddy-card-remove'));
-    await settle(tester);
-    expect(find.text('Remove Buddy?'), findsOneWidget);
+    expect(find.text("Can't reach Test host"), findsOneWidget);
+    expect(find.text('Stopped'), findsNothing);
+    expect(restart, findsNothing);
     await end(tester, c);
   });
+
+  for (final brightness in Brightness.values) {
+    testWidgets('a restart whose answer was lost offers Check status, which '
+        'checks that restart and sends no second one (${brightness.name})', (
+      tester,
+    ) async {
+      final c = await show(tester, brightness: brightness);
+      await open(tester);
+      await tester.tap(restart);
+      await tester.pump();
+      final first = creationId();
+      connection.restartReplies.single.completeError(TimeoutException('lost'));
+      await settle(tester);
+      expect(find.text("The restart isn't confirmed yet."), findsOneWidget);
+      expect(find.textContaining('close this prompt'), findsNothing);
+      // The card knows it after closing and opening again.
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await settle(tester);
+      await open(tester);
+      expect(find.text("The restart isn't confirmed yet."), findsOneWidget);
+      expect(
+        find.descendant(of: restart, matching: find.text('Check status')),
+        findsOneWidget,
+      );
+      await captureWindow(
+        tester,
+        shots,
+        '15-buddy-card-check-status-${brightness.name}',
+      );
+      await tester.tap(restart);
+      await tester.pump();
+      expect(connection.types, ['agent_restart']);
+      expect(connection.checks.single['creationId'], first);
+      connection.checkReplies.single.complete(
+        restartReceipt(first, agentId: 'h-wren'),
+      );
+      await settle(tester);
+      expect(card, findsNothing);
+      await end(tester, c);
+    });
+  }
 
   testWidgets('a Buddy whose machine agent is unknown shows Stopped and no '
       'flags', (tester) async {
@@ -704,9 +839,6 @@ void main() {
     await end(tester, c);
   });
 
-  // Writes nothing unless HARNESS_SUPER_TAB_CAPTURE names a folder.
-  final shots = Platform.environment['HARNESS_SUPER_TAB_CAPTURE'];
-  if (shots != null) setUpAll(() => loadCaptureFonts(shots));
   testWidgets('the open card in the light theme', (tester) async {
     final c = await show(tester);
     await open(tester);
