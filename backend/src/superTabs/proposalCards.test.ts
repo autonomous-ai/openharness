@@ -10,6 +10,10 @@ import { CREDENTIAL_MARKER } from './credentials.js'
 const words = 'Keep edits offline until the connection returns.'
 const proposal = { title: 'Offline edits', text: words, goal: 'Keep drafts', why: 'People lose offline work',
   doneWhen: 'Reconnect restores edits', evidence: ['Reproduced with network disabled'], priority: 'P2' as const }
+/** Rows a command wrote in a person's private chat with their own agent, or as a proposal notice: none since task #4558. */
+const inPrivate = (f: { state: SuperTabState }, messages: Array<{ conversationId: string; source?: Record<string, unknown> | null }>) =>
+  messages.filter(m => m.source?.kind === 'proposal-notice' || m.source?.kind === 'proposal-overdue'
+    || ['buddy', 'swarm-buddy'].includes(f.state.conversations.find(c => c.id === m.conversationId)?.kind ?? ''))
 function fixture(switched = true) {
   const f = fullSwarm(NOW)
   if (switched) Object.assign(f.state.projects![0]!, { boardMode: true })
@@ -159,7 +163,7 @@ const ask = (conversationId: unknown, extra = {}) => ({ type: 'proposal.ask', co
   question: 'Keep drafts for seven days?', defaultAnswer: 'Keep seven days', deadline, ...extra })
 
 describe('PM decisions and card questions', () => {
-  it('sends shipped notices once to every proposer after verified release, never at merge', async () => {
+  it('shows shipped on the card after verified release, never at merge, and tells no proposer privately', async () => {
     const { notePendingRelease, pendingKey, settleReleases } = await import('./releases.js')
     const { shippedNotice } = await import('./buddyNews.js')
     const { author } = await import('./model.js')
@@ -174,8 +178,9 @@ describe('PM decisions and card questions', () => {
     expect(settleReleases(f.state, 'lead', facts, NOW).messages.filter(m => m.source?.moment === 'shipped')).toHaveLength(0)
     const verified = { resolved: [], releases: { backend: { tag: 'v1.0.0_backend', sha: 'verified', at: NOW + 1000, carries: [pendingKey(entry)] } } }
     const result = settleReleases(f.state, 'lead', verified, NOW + 1000)
-    expect(result.messages.filter(m => m.source?.moment === 'shipped')).toHaveLength(2)
-    expect(settleReleases(f.state, 'lead', verified, NOW + 2000).messages.filter(m => m.source?.moment === 'shipped')).toHaveLength(0)
+    // The card says it shipped; no proposer's private chat gets a line (task #4558).
+    expect(f.card(id).released).toMatchObject({ at: NOW + 1000 })
+    expect(inPrivate(f, result.messages)).toEqual([])
   })
 
   it.each(['accept', 'reshape', 'later', 'no'])('records %s with its reason on the same card exactly once', decision => {
@@ -183,7 +188,7 @@ describe('PM decisions and card questions', () => {
     const result = f.run(decide(id, decision, decision === 'later' ? { revisitAt: deadline } : {}), f.pm)
     expect(f.card(id).proposal?.decision).toMatchObject({ kind: decision, reason: 'Prevents lost work for contributors', at: NOW, by: f.lead })
     expect(result.messages.some(m => m.conversationId === id && m.text.includes('Prevents lost work'))).toBe(true)
-    expect(result.messages.some(m => m.source?.kind === 'proposal-notice' && m.source.moment === 'decided')).toBe(true)
+    expect(inPrivate(f, result.messages)).toEqual([])
     if (['accept', 'reshape'].includes(decision)) {
       expect(f.card(id).task).toEqual(acceptedTask)
       expect(queueSiblings(f.state, f.state.projects![0]!)).toContainEqual(f.card(id))
@@ -211,7 +216,7 @@ describe('PM decisions and card questions', () => {
     // A direct Board proposal has no sending Buddy: its current default may answer for its person.
     const asked = f.run(ask(id), f.pm), q = f.card(id).proposal!.questions[0]!
     expect(q).toMatchObject({ personId: peer.userId, question: 'Keep drafts for seven days?', defaultAnswer: 'Keep seven days', deadline, requiresConsent: false })
-    expect(asked.messages.some(m => m.source?.kind === 'proposal-notice' && m.source.moment === 'needs-you')).toBe(true)
+    expect(inPrivate(f, asked.messages)).toEqual([])
     const answer = { type: 'proposal.answer', conversationId: id, questionId: q.id, text: 'Keep fourteen days' }
     expect(() => f.run(answer, outsider)).toThrow(expect.objectContaining({ code: 'PROPOSAL_ANSWER_FORBIDDEN' }))
     f.state.people.find(p => p.id === peer.userId)!.role = 'viewer'
@@ -265,12 +270,12 @@ describe('PM decisions and card questions', () => {
     expect(f.card(id).proposal!.questions[0]!.answer?.by).toBe(fallback.id)
   })
 
-  it('merges duplicates into one card, preserving attribution and notifying every proposer', () => {
+  it('merges duplicates into one card, preserving attribution, and writes nothing in a proposer\'s private chat', () => {
     const f = fixture(), first = f.create().result.conversationId, second = f.create(outsider).result.conversationId
     const merged = f.run({ type: 'proposal.merge', conversationId: second, intoConversationId: first, reason: 'Same reconnect loss' }, f.pm)
     expect(f.card(second)).toMatchObject({ archived: true, proposal: { mergedInto: first } })
     expect(f.card(first).proposal!.senders.map(s => s.personId).sort()).toEqual([peer.userId, outsider.userId].sort())
-    expect(merged.messages.filter(m => m.source?.kind === 'proposal-notice')).toHaveLength(2)
+    expect(inPrivate(f, merged.messages)).toEqual([])
     expect(() => f.run({ type: 'proposal.merge', conversationId: first, intoConversationId: second, reason: 'Cycle' }, f.pm)).toThrow()
     expect(() => f.run({ type: 'proposal.merge', conversationId: first, intoConversationId: f.secretGroup, reason: 'Other project' }, f.pm)).toThrow()
     const third = f.create(owner).result.conversationId
@@ -303,9 +308,8 @@ describe('credentials in proposal words', () => {
     sent.push(f.run({ type: 'proposal.merge', conversationId: f.create(owner).result.conversationId, intoConversationId: id, reason: `Same as ${token}` }, f.pm))
     const ruled = f.run(decide(id, 'accept', { reason: `Rotate ${token} first`, task: { ...acceptedTask, changes: `Remove ${token}` },
       checks: [{ description: `No ${token} in logs`, independent: false }] }), f.pm)
-    // Both proposers hear the ruling in their Buddy chats, in its cleaned words.
-    const notices = ruled.messages.filter(m => m.source?.kind === 'proposal-notice')
-    expect(notices.map(m => m.text)).toEqual([0, 1].map(() => `Rotate ${CREDENTIAL_MARKER}: accept. Rotate ${CREDENTIAL_MARKER} first`))
+    // The ruling stays on the card, in its cleaned words; no proposer's private chat gets a copy (task #4558).
+    expect(inPrivate(f, ruled.messages)).toEqual([])
     expect(f.card(id).proposal!.decision!.reason).toBe(`Rotate ${CREDENTIAL_MARKER} first`)
     expect(f.card(id).proposal!.questions[0]!.answer!.text).toBe(`Yes, ${CREDENTIAL_MARKER}`)
     expect(JSON.stringify([...sent, ruled].map(e => e.messages))).not.toContain(token)
@@ -337,7 +341,7 @@ describe('proposal time and delivery boundaries', () => {
   it('marks explicit consent overdue without defaulting, and still permits the named person', async () => {
     const { advanceProposalCards } = await import('./proposalCards.js')
     const f = fixture(), id = f.create().result.conversationId, qid = f.run(ask(id, { requiresConsent: true }), f.pm).result.questionId
-    advanceProposalCards(f.state, deadline)
+    expect(inPrivate(f, advanceProposalCards(f.state, deadline))).toEqual([])
     expect(f.card(id).proposal!.questions[0]).toMatchObject({ overdue: true })
     expect(f.card(id).proposal!.questions[0]!.answer).toBeUndefined()
     expect(advanceProposalCards(f.state, deadline + 1)).toEqual([])
@@ -353,7 +357,7 @@ describe('proposal time and delivery boundaries', () => {
     expect(f.card(id).proposal!.decision).toBeUndefined()
     const overdue = advanceProposalCards(f.state, date + 30 * 60_000)
     expect(f.card(id).proposal!.overdue).toBe(true)
-    expect(overdue.some(m => m.source?.kind === 'proposal-overdue')).toBe(true)
+    expect(inPrivate(f, overdue)).toEqual([])
     expect(advanceProposalCards(f.state, date + 31 * 60_000)).toEqual([])
   })
 
