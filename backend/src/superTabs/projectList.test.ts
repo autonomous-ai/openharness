@@ -32,11 +32,11 @@ function swarm() {
     for (const [id, recorded] of wanted) { const chat = chatOf(id); if (recorded) chat.pulse = recorded; else delete chat.pulse }
     return state
   }
-  const lead = (projectId: string, name: string) => {
+  const lead = (projectId: string, name: string, displayName?: string) => {
     const chat = chatOf(projectId)
     const id = `agent-${name}`
     state.agents.push({ id, machineId: 'mac', harnessId: name, machineOwnerId: 'owner', contributorId: 'owner',
-      membershipGeneration: state.people[0]!.generation, hostGrant: null, name, configuration: null, configurationVersion: 'v' } as unknown as SuperTabState['agents'][number])
+      membershipGeneration: state.people[0]!.generation, hostGrant: null, name, ...(displayName ? { displayName } : {}), configuration: null, configurationVersion: 'v' } as unknown as SuperTabState['agents'][number])
     chat.leadId = id
     chat.agentIds.push(id)
   }
@@ -73,6 +73,14 @@ describe('the project list', () => {
       lead: { agentId: 'agent-River', name: 'River' }, waiting: 12 })
     // A repository's name, never a folder on someone's computer.
     expect(rows.find(r => r.id === lamp)).toEqual({ id: lamp, name: 'lamp', about: null, repositoryName: 'lamp-os', lead: null, waiting: 0 })
+  })
+
+  // Review of #3552: a Lead goes by the name people see (River), not its internal one (Lead).
+  it('names each Lead as people see it', () => {
+    const f = swarm()
+    const harness = f.project('harness')
+    f.lead(harness, 'Lead', 'River')
+    expect(projectList(f.read(), peer).projects.find(r => r.id === harness)!.lead).toEqual({ agentId: 'agent-Lead', name: 'River' })
   })
 
   it('starts on the project the person was invited to', () => {
