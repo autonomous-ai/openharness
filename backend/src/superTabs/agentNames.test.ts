@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { agentDisplayName, assignAgentDisplayNames, type NamedAgent } from './agentNames.js'
+import { agentDisplayName, assignAgentDisplayNames, AGENT_NAMES, freeAgentName, type NamedAgent } from './agentNames.js'
 import { applyCommand } from './commands.js'
 import { author, createSuperTab, visibleState, type Actor, type Agent } from './model.js'
 
@@ -93,5 +93,41 @@ describe('individual agent names', () => {
     expect(state.agents.every(a => a.displayName === undefined)).toBe(true)
     const sender = author(result.state, { kind: 'agent', agentId: 'agent-0', machineOwnerId: 'host' })
     expect(sender).toMatchObject({ id: 'agent-0', name: 'Lead', displayName: before.agents[0]!.displayName })
+  })
+})
+
+// Task #4568 (anh Dee, 11-07 19:40): every agent has a real name, and the list never runs out.
+describe('a free agent name', () => {
+  const none = () => false
+  it('comes from a list of 200 distinct names', () => {
+    expect(AGENT_NAMES).toHaveLength(200)
+    expect(new Set(AGENT_NAMES.map(n => n.toLowerCase())).size).toBe(200)
+    expect(AGENT_NAMES).toContain(freeAgentName(none, 'seed'))
+  })
+
+  it('is the same for the same seed, and skips a taken one', () => {
+    const first = freeAgentName(none, 'agent-1')
+    expect(freeAgentName(none, 'agent-1')).toBe(first)
+    const next = freeAgentName(name => name.toLowerCase() === first.toLowerCase(), 'agent-1')
+    expect(next).not.toBe(first)
+    expect(AGENT_NAMES).toContain(next)
+  })
+
+  it('reads as two names once every list name is taken, and is numbered only past every pair', () => {
+    const single = new Set(AGENT_NAMES.map(n => n.toLowerCase()))
+    const pair = freeAgentName(name => single.has(name.toLowerCase()), 'seed')
+    const [given, family, more] = pair.split(' ')
+    expect(AGENT_NAMES).toContain(given)
+    expect(AGENT_NAMES).toContain(family)
+    expect(given).not.toBe(family)
+    expect(more).toBeUndefined()
+    expect(freeAgentName(name => !/\d/.test(name), 'seed')).toMatch(/^[A-Z][a-z]+ \d+$/)
+  })
+
+  it('gives an agent named for its engine a member name', () => {
+    const agents: NamedAgent[] = [{ id: 'a', name: 'Claude Code' }, { id: 'b', name: 'Codex' }, { id: 'c', name: 'claude code' }]
+    assignAgentDisplayNames(agents)
+    for (const agent of agents) expect(AGENT_NAMES).toContain(agent.displayName)
+    expect(new Set(agents.map(a => a.displayName)).size).toBe(3)
   })
 })
