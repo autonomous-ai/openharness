@@ -78,19 +78,24 @@ void main() {
     testWidgets('every Swarm element matches its image in ${brightness.name}', (
       tester,
     ) async {
-      await _show(tester, brightness);
+      final bars = await _show(tester, brightness);
       (goldenFileComparator as _NearlyComparator).parts = _parts(tester);
       await expectLater(
         find.byKey(_Gallery.boundary),
         matchesGoldenFile('goldens/swarm-elements-${brightness.name}.png'),
       );
+      await _close(tester, bars);
     });
   }
 
   // Review of task #4461: a whole-image tolerance let a changed element pass. Ellis has Kai's colour with another
   // tilt: only its eyes and smile move.
   testWidgets('one changed face fails the gallery', (tester) async {
-    await _show(tester, Brightness.light, faces: ['Ellis', ..._faces.skip(1)]);
+    final bars = await _show(
+      tester,
+      Brightness.light,
+      faces: ['Ellis', ..._faces.skip(1)],
+    );
     final boundary = tester.renderObject<RenderRepaintBoundary>(
       find.byKey(_Gallery.boundary),
     );
@@ -105,10 +110,11 @@ void main() {
       );
     });
     expect(problem, contains('agent face Ellis'));
+    await _close(tester, bars);
   });
 }
 
-Future<void> _show(
+Future<List<SuperTabController>> _show(
   WidgetTester tester,
   Brightness brightness, {
   List<String> faces = _faces,
@@ -141,6 +147,15 @@ Future<void> _show(
   );
   await tester.pump();
   expect(tester.takeException(), isNull);
+  return [buddy, member];
+}
+
+/// Takes the gallery down and lets the bars' chats save, so no timer outlives the test.
+Future<void> _close(WidgetTester tester, List<SuperTabController> bars) async {
+  await tester.pumpWidget(const SizedBox());
+  for (final c in bars) {
+    await c.flush();
+  }
 }
 
 /// One element's area in the gallery and the share of it that may differ.
