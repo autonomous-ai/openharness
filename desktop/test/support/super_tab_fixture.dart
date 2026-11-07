@@ -1967,6 +1967,7 @@ class ConversationServer {
         'project.rename',
         'project.cadence',
         'project.sharing',
+        'project.about',
       ].contains(command['type'])) {
         final project = (state['projects'] as List?)
             ?.cast<Map<String, dynamic>>()
@@ -1975,6 +1976,8 @@ class ConversationServer {
         if (project != null) {
           if (command['type'] == 'project.rename') {
             project['name'] = command['name'];
+          } else if (command['type'] == 'project.about') {
+            project['about'] = command['about'];
           } else if (command['type'] == 'project.cadence') {
             project['updateMinutes'] = command['minutes'];
           } else {

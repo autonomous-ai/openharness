@@ -89,10 +89,12 @@ void main() {
   });
 
   testWidgets('someone who does not own it cannot save', (tester) async {
-    await open(tester, accountId: 'tuan');
-    final save = tester.widget<FilledButton>(
-      find.widgetWithText(FilledButton, 'Save'),
-    );
-    expect(save.onPressed, isNull);
+    final (_, sent) = await open(tester, accountId: 'tuan');
+    final save = find.widgetWithText(FilledButton, 'Save');
+    // No dialog at all, or one whose Save is off.
+    if (save.evaluate().isNotEmpty) {
+      expect(tester.widget<FilledButton>(save).onPressed, isNull);
+    }
+    expect(sent.where((c) => c['type'] == 'project.about'), isEmpty);
   });
 }

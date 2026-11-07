@@ -667,7 +667,8 @@ class SuperTabProject {
       canChatIds = List.unmodifiable(
         (row['canChat'] as List? ?? const []).whereType<String>(),
       ),
-      deciderId = row['decider'] is String ? row['decider'] as String : null;
+      deciderId = row['decider'] is String ? row['decider'] as String : null,
+      about = _words(row['about']);
   final String id, name, ownerId, leadConversationId;
 
   /// Whether its owner switched it to the Board way of working (#3819, spec 2026-11-06-buddy-board-final-spec):
@@ -677,6 +678,9 @@ class SuperTabProject {
 
   /// The people granted Can chat in it; its owner and the Swarm's owner always have it and are not listed.
   final List<String> canChatIds;
+
+  /// What it is, in one line its owner or Lead set (task #4541); null when none is set, and from a backend before it.
+  final String? about;
 
   /// Its top decider (for openharness, Dee), who may set P0 and pause like its owner; null when none is set.
   final String? deciderId;
