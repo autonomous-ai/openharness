@@ -51,6 +51,8 @@ function lineOf(state: SuperTabState, project: SwarmProject, task: Conversation,
   const merged = task.ledger?.mergedAt != null
   const waiting = merged && awaitingRelease(project, task)
   if (assignment && ENDED.has(assignment.status) && !waiting) return null
+  // A task its requester rejected never runs (taskApproval.ts, Swarm v3): it is no longer active work.
+  if (!assignment && task.taskApproval?.state === 'rejected') return null
   const name = task.number !== undefined ? `#${task.number} ${JSON.stringify(task.title)}` : JSON.stringify(task.title)
   const owner = assignment ? agentDisplayName(state.agents, assignment.agentId) ?? 'an agent that left' : 'none'
   const steps = openSteps(state, task)
@@ -61,6 +63,13 @@ function lineOf(state: SuperTabState, project: SwarmProject, task: Conversation,
   if (merged && (waiting || !assignment || assignment.status !== 'done')) {
     status = `merged${prText}`
     waits = waiting ? 'the next release' : 'its builder to close it'
+  } else if (task.paused) {
+    // Paused by someone who steers the project (boardRights.ts): its worker stops at a safe point, whatever its status says.
+    status = 'paused'; waits = `a person to resume it${task.paused.reason ? ` (${task.paused.reason})` : ''}`
+  } else if (!assignment && task.taskApproval?.state === 'proposal') {
+    // No work starts before the requesting person approves it (taskApproval.ts, Swarm v3).
+    const asked = usernameOf(state, task.taskApproval.personId)
+    status = 'proposed'; waits = asked ? `@${asked}'s approval` : 'its requester\'s approval'
   } else if (!assignment) {
     const hold = holdOf(task, today)
     status = hold ? 'held' : 'to do'

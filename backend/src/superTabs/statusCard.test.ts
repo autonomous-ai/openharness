@@ -6,6 +6,7 @@ import { projectOf } from './projects.js'
 import { PROJECT_STATUS_MAX } from './projects.js'
 import { cardText } from './statusCard.js'
 import { owner, stepsFixture } from './steps.test-support.js'
+import { usernameOf } from './usernames.js'
 
 const PR = 'https://github.com/acme/app/pull/7'
 
@@ -48,6 +49,20 @@ describe('the status card the server writes (#3593)', () => {
     f.group(f.task).assignment!.status = 'lost'
     f.run({ type: 'message.send', conversationId: f.task, text: 'ping', replyTo: null, recipientIds: [] })
     expect(f.line()!.text).toContain('lost. Waits on: another engineer.')
+  })
+
+  it('says a task waits on its requester\'s approval, leaves out a rejected one, and says a paused one is paused (Swarm v3)', () => {
+    const f = cardFixture()
+    f.run({ type: 'member.approvalMode', mode: 'review' })
+    const proposed = f.run({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits.', checks: [{ description: 'Saves', independent: true }],
+      priority: 'P2', requesterId: 'owner' }, f.as(f.lead)).result.conversationId as string
+    expect(f.line(proposed)!.text).toBe(`#2 "Offline editing": proposed. Waits on: @${usernameOf(f.state, 'owner')}'s approval. Owner: none.`)
+    f.run({ type: 'task.reject', conversationId: proposed, reason: 'Not now.' })
+    expect(f.line(proposed)).toBeUndefined()
+    f.run({ type: 'work.pause', conversationId: f.task, paused: true, reason: 'release freeze' })
+    expect(f.line()!.text).toBe('#1 "Fix login": paused. Waits on: a person to resume it (release freeze). Owner: Jules.')
+    f.run({ type: 'work.pause', conversationId: f.task, paused: false })
+    expect(f.line()!.text).toBe('#1 "Fix login": working. Waits on: nothing. Owner: Jules.')
   })
 
   it('drops a task whose work ended, and shows a merged one until its release carries it', () => {
