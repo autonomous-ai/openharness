@@ -170,7 +170,7 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.text('Auto approve'), findsOneWidget);
+    expect(find.text('Accept all'), findsOneWidget);
   });
   testWidgets(
     'ordinary proposals open their conversation without approval controls',
@@ -193,8 +193,8 @@ void main() {
       await t.tap(find.text('Task new'));
       await t.pump();
       expect(opened, ['new']);
-      expect(inCard('new', find.text('Approve')), findsNothing);
-      expect(inCard('new', find.text('Reject')), findsNothing);
+      expect(inCard('new', find.text('Accept')), findsNothing);
+      expect(inCard('new', find.text('Decline')), findsNothing);
       expect(find.byType(DropdownButtonFormField<String>), findsNothing);
       expect(f.commands, isEmpty);
       f.rows.last['canApprove'] = false;
@@ -218,7 +218,7 @@ void main() {
       final choice = find.byKey(const ValueKey('tasks-approval-mode'));
       final label = t
           .widget<Text>(
-            find.descendant(of: choice, matching: find.text('Auto approve')),
+            find.descendant(of: choice, matching: find.text('Accept all')),
           )
           .style!;
       expect(label.fontSize, 12);
@@ -256,7 +256,7 @@ void main() {
     await mount(t);
     await t.tap(find.byKey(const ValueKey('tasks-approval-mode')));
     await t.pumpAndSettle();
-    await t.tap(find.text('Review').last);
+    await t.tap(find.text('Ask me').last);
     await t.pumpAndSettle();
     expect(f.commands.single, {
       'type': 'member.approvalMode',
@@ -274,23 +274,23 @@ void main() {
       await t.pump();
       expect(find.byType(DropdownButtonFormField<String>), findsNothing);
       expect(
-        inCard('new', find.widgetWithText(TextButton, 'Reject')),
+        inCard('new', find.widgetWithText(TextButton, 'Decline')),
         findsOneWidget,
       );
       expect(
-        inCard('new', find.widgetWithText(FilledButton, 'Approve')),
+        inCard('new', find.widgetWithText(FilledButton, 'Accept')),
         findsOneWidget,
       );
-      // Reject is plain text: no fill and no rim over the theme's text button (#4468).
+      // Decline is plain text: no fill and no rim over the theme's text button (#4468).
       final reject = t
           .widget<TextButton>(
-            inCard('new', find.widgetWithText(TextButton, 'Reject')),
+            inCard('new', find.widgetWithText(TextButton, 'Decline')),
           )
           .style!;
       expect(reject.side?.resolve({}), BorderSide.none);
       expect(reject.backgroundColor?.resolve({}), Colors.transparent);
       expect(find.text('Suggested'), findsNothing);
-      await t.tap(inCard('new', find.text('Approve')));
+      await t.tap(inCard('new', find.text('Accept')));
       await t.pumpAndSettle();
       expect(f.commands.single, {
         'type': 'task.approve',
@@ -302,9 +302,9 @@ void main() {
   testWidgets('approve sends once while waiting and keeps the task', (t) async {
     await mount(t);
     f.hold = Completer<void>();
-    await t.tap(inCard('new', find.text('Approve')));
+    await t.tap(inCard('new', find.text('Accept')));
     await t.pump();
-    await t.tap(inCard('new', find.text('Approve')));
+    await t.tap(inCard('new', find.text('Accept')));
     await t.pump();
     expect(f.commands.length, 1);
     f.hold!.complete();
@@ -324,7 +324,7 @@ void main() {
       ..['version'] = 2;
     await f.controller.refresh();
     await t.pump();
-    await t.tap(inCard('new', find.text('Approve')));
+    await t.tap(inCard('new', find.text('Accept')));
     await t.pumpAndSettle();
     expect(f.commands.single, {
       'type': 'task.approve',
@@ -334,7 +334,7 @@ void main() {
   });
   testWidgets('rejection needs a reason and remains in the list', (t) async {
     await mount(t);
-    await t.tap(inCard('new', find.text('Reject')));
+    await t.tap(inCard('new', find.text('Decline')));
     await t.pumpAndSettle();
     expect(f.commands, isEmpty);
     await t.enterText(
@@ -342,7 +342,7 @@ void main() {
       'Too much scope',
     );
     await t.pump();
-    await t.tap(find.text('Reject task').last);
+    await t.tap(find.text('Decline task').last);
     await t.pumpAndSettle();
     expect(f.commands.single, {
       'type': 'task.reject',
@@ -351,7 +351,7 @@ void main() {
     });
     // The mark says why on hover (finding 17).
     expect(
-      inCard('new', find.byTooltip('Rejected: Too much scope')),
+      inCard('new', find.byTooltip('Declined: Too much scope')),
       findsOneWidget,
     );
   });
@@ -360,7 +360,7 @@ void main() {
   ) async {
     await mount(t);
     f.fail = true;
-    await t.tap(inCard('new', find.text('Approve')));
+    await t.tap(inCard('new', find.text('Accept')));
     await t.pumpAndSettle();
     expect(find.textContaining('fixture private'), findsNothing);
     expect(find.text('Retry'), findsOneWidget);
@@ -385,7 +385,7 @@ void main() {
       ('reconciling', 'Checking its agent', HarnessActivity.unknown),
       ('lost', 'Agent lost', HarnessActivity.offline),
       ('proposal', 'Proposal', null),
-      ('rejected', 'Rejected', null),
+      ('rejected', 'Declined', null),
       ('a-later-status', 'Status unavailable', HarnessActivity.unknown),
     ];
     await mount(t);
@@ -432,7 +432,7 @@ void main() {
     FilledButton approve(String id) =>
         find
                 .ancestor(
-                  of: inCard(id, find.text('Approve')),
+                  of: inCard(id, find.text('Accept')),
                   matching: find.byType(FilledButton),
                 )
                 .evaluate()
@@ -449,7 +449,7 @@ void main() {
         await mount(t);
         f.refuse = SuperTabFailure(code, sentence, statusCode: status);
         final before = f.reads;
-        await t.tap(inCard('new', find.text('Approve')));
+        await t.tap(inCard('new', find.text('Accept')));
         await t.pumpAndSettle();
         expect(find.text(sentence), findsOneWidget);
         expect(find.text('Retry'), findsNothing);
@@ -457,7 +457,7 @@ void main() {
         expect(approve('new').onPressed, isNotNull);
         expect(f.reads, greaterThan(before), reason: 'reads the task again');
         f.refuse = null;
-        await t.tap(inCard('old', find.text('Approve')));
+        await t.tap(inCard('old', find.text('Accept')));
         await t.pumpAndSettle();
         expect(f.commands.length, 2);
         expect(f.operations.toSet().length, 2, reason: 'a new change');
@@ -467,7 +467,7 @@ void main() {
     testWidgets('a refused Retry of a lost answer unlocks too', (t) async {
       await mount(t);
       f.fail = true;
-      await t.tap(inCard('new', find.text('Approve')));
+      await t.tap(inCard('new', find.text('Accept')));
       await t.pumpAndSettle();
       expect(find.text('Retry'), findsOneWidget);
       expect(approve('old').onPressed, isNull);
@@ -491,7 +491,7 @@ void main() {
         'fixture private payload',
         statusCode: 426,
       );
-      await t.tap(inCard('new', find.text('Approve')));
+      await t.tap(inCard('new', find.text('Accept')));
       await t.pumpAndSettle();
       expect(find.text('Update Harness to change Tasks.'), findsOneWidget);
       expect(find.textContaining('fixture private'), findsNothing);
@@ -506,7 +506,7 @@ void main() {
       );
       await t.tap(find.byKey(const ValueKey('tasks-approval-mode')));
       await t.pumpAndSettle();
-      await t.tap(find.text('Review').last);
+      await t.tap(find.text('Ask me').last);
       await t.pumpAndSettle();
       expect(
         find.text('Only members choose how their tasks are approved.'),
@@ -528,7 +528,7 @@ void main() {
     );
     await t.tap(find.byKey(const ValueKey('tasks-approval-mode')));
     await t.pumpAndSettle();
-    await t.tap(find.text('Review').last);
+    await t.tap(find.text('Ask me').last);
     await t.pumpAndSettle();
     expect(
       find.text('Only the project\'s owner changes this.'),
@@ -538,7 +538,7 @@ void main() {
     f.refuse = null;
     await t.tap(find.byKey(const ValueKey('tasks-approval-mode')));
     await t.pumpAndSettle();
-    await t.tap(find.text('Review').last);
+    await t.tap(find.text('Ask me').last);
     await t.pumpAndSettle();
     expect(f.commands.length, 2);
     expect(f.operations.toSet().length, 2);
@@ -567,7 +567,7 @@ void main() {
     'an open rejection cannot be submitted under a replacement account',
     (t) async {
       await mount(t);
-      await t.tap(inCard('new', find.text('Reject')));
+      await t.tap(inCard('new', find.text('Decline')));
       await t.pumpAndSettle();
       await t.enterText(
         find.byKey(const ValueKey('task-reject-reason')),
@@ -590,7 +590,7 @@ void main() {
           ),
         ),
       );
-      await t.tap(find.text('Reject task').last);
+      await t.tap(find.text('Decline task').last);
       await t.pumpAndSettle();
       expect(f.commands, isEmpty);
       expect(replacement.commands, isEmpty);
@@ -850,7 +850,7 @@ void main() {
   ) async {
     await mount(t);
     f.hold = Completer<void>();
-    await t.tap(inCard('new', find.text('Approve')));
+    await t.tap(inCard('new', find.text('Accept')));
     await t.pump();
     for (final id in ['new', 'old']) {
       expect(

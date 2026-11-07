@@ -118,7 +118,7 @@ void main() {
       await t.tap(find.text('Add the project export'));
       await t.pumpAndSettle();
       await captureWindow(t, shots, 'tasks-open-row-${brightness.name}');
-      await t.tap(find.text('Reject'));
+      await t.tap(find.text('Decline'));
       await t.pumpAndSettle();
       expect(t.takeException(), isNull);
       await captureWindow(t, shots, 'reject-dialog-${brightness.name}');

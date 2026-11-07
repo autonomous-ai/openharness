@@ -34,7 +34,7 @@ void main() {
   // Each waiting card has its own Reject: the one on this task's card.
   final reject = find.descendant(
     of: find.byKey(const ValueKey('personal-task-new')),
-    matching: find.text('Reject'),
+    matching: find.text('Decline'),
   );
 
   testWidgets('the Reject dialog names the task', (t) async {
@@ -44,11 +44,11 @@ void main() {
     expect(
       find.descendant(
         of: find.byType(AlertDialog),
-        matching: find.text('Reject “Add the project export”?'),
+        matching: find.text('Decline “Add the project export”?'),
       ),
       findsOneWidget,
     );
-    expect(find.text('Reject task'), findsOneWidget, reason: 'the button');
+    expect(find.text('Decline task'), findsOneWidget, reason: 'the button');
   });
 
   testWidgets('a long title wraps in the dialog without overflowing', (
@@ -60,7 +60,7 @@ void main() {
     await t.pumpAndSettle();
     final heading = find.descendant(
       of: find.byType(AlertDialog),
-      matching: find.textContaining('Reject “Add the project export'),
+      matching: find.textContaining('Decline “Add the project export'),
     );
     expect(heading, findsOneWidget);
     expect(t.takeException(), isNull);
