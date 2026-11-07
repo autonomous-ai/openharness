@@ -115,6 +115,7 @@ import 'buddy_rows.dart';
 import 'task_groups.dart';
 import 'tasks_view.dart';
 import 'chat/agent_chat_header.dart';
+import 'chat/send_button.dart';
 import 'tasks/personal_tasks_pane.dart';
 import 'tasks/task_header.dart';
 import 'voice_length.dart';
@@ -6057,7 +6058,6 @@ class _SuperTabViewState extends State<SuperTabView>
                               NewHarnessAttachButton(
                                 attachments: _files,
                                 enabled: writable && !busy,
-                                icon: AppIcons.plus,
                               ),
                             ),
                             tag: fingerTarget(
@@ -6111,10 +6111,8 @@ class _SuperTabViewState extends State<SuperTabView>
                               listenable: Listenable.merge([_composer, _files]),
                               builder: (context, _) => fingerTarget(
                                 enabled: _phone,
-                                AppIconButton(
-                                  icon: AppIcons.arrowUp,
+                                SwarmSendButton(
                                   tooltip: 'Send message',
-                                  color: DesktopChrome.accent,
                                   onPressed:
                                       writable &&
                                           !c.uploading &&

@@ -124,6 +124,9 @@ void main() {
         await tester.pump();
         expectBlue(sendFill(tester, surface));
         c.attachments('lead').clear();
+        // The typed draft's save waits on a timer: let it run.
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
       });
 
       testWidgets('a thread\'s reply box is drawn the same '
@@ -144,6 +147,8 @@ void main() {
         await tester.enterText(key('super-thread-composer'), 'Agreed');
         await tester.pump();
         expectBlue(sendFill(tester, surface));
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
       });
     }
   });

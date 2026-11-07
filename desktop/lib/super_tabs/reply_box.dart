@@ -2,13 +2,12 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import '../shared/widgets/app_icon_button.dart';
 import '../state/harness_attachments.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/new_harness_attachments.dart';
 import '../widgets/new_harness_paste.dart';
+import 'chat/send_button.dart';
 import 'composer_actions.dart';
 import 'composer_files.dart';
 import 'composer_newline.dart';
@@ -18,8 +17,9 @@ import 'swarm_type.dart';
 /// A thread's reply box, one everywhere a reply is written (the thread pane,
 /// the Threads view): files dropped, pasted or attached, Enter sends and
 /// ⇧Enter breaks the line. Under the text, one row as on the phone (Huy and
-/// Scholes, 11-04): + (attach) and @ Tag, then [options] such as the pane's
-/// New session, and the mic (with [onMic]) and the arrow at its right end.
+/// Scholes, 11-04): the paperclip and @ Tag, then [options] such as the pane's
+/// New session, and the mic (with [onMic]) and the round send at its right
+/// end, drawn as Cmd-N's field (anh Dee, 11-07, #4467).
 class SuperTabReplyBox extends StatelessWidget {
   const SuperTabReplyBox({
     super.key,
@@ -200,7 +200,6 @@ class SuperTabReplyBox extends StatelessWidget {
                         child: NewHarnessAttachButton(
                           attachments: files,
                           enabled: writable && !busy,
-                          icon: AppIcons.plus,
                         ),
                       ),
                       FocusTraversalOrder(
@@ -223,11 +222,9 @@ class SuperTabReplyBox extends StatelessWidget {
                         order: sendOrder,
                         child: ListenableBuilder(
                           listenable: Listenable.merge([files, text]),
-                          builder: (context, _) => AppIconButton(
+                          builder: (context, _) => SwarmSendButton(
                             key: sendKey,
-                            icon: AppIcons.arrowUp,
                             tooltip: 'Send reply',
-                            color: DesktopChrome.accent,
                             onPressed:
                                 writable &&
                                     !busy &&
