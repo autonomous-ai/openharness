@@ -10,7 +10,7 @@ failing flow stops the Desktop release, naming the flow.
 **Architecture:** One disposable stack per test run: the real backend (`backend/src/server.ts`) on a
 throwaway MongoDB and Redis with a stub sign-in (`cli/e2e/harness/realBackend.ts`), and the real daemon
 from this checkout under a throwaway home with fake Claude Code and Codex engines that answer
-(`cli/e2e/harness/daemon.ts`, `fakeEngine.mjs`). `scripts/swarm-flows-stack.ts` boots it and prints its
+(`cli/e2e/harness/daemon.ts`, `fakeEngine.mjs`). `scripts/swarm-flows-stack.mts` boots it and prints its
 ports; it exits when its stdin closes. The Flutter tests in `desktop/test/swarm_flows/` start it, build the
 real `AppNotifier` with a `WsConn` to that daemon (exactly the path the shipped app uses: app → daemon →
 backend), pump the real `SwarmScreen` headless in `flutter_tester` and tap through each flow as a person
@@ -43,7 +43,7 @@ New agent first.
 ## Tasks
 
 ### Task 1: the stack
-Files: `scripts/swarm-flows-stack.ts`.
+Files: `scripts/swarm-flows-stack.mts`.
 Interfaces: stdout one JSON line `{localPort, machineId, backendUrl, logs}`; stdin EOF stops everything.
 - [ ] Boot the real backend and one signed-in isolated daemon with fake engines; print the line.
 

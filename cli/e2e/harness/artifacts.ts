@@ -29,8 +29,11 @@ export function folderName(name: string): string {
 }
 
 /** The folder of the test file running in this worker ([path], or the one vitest says is running). */
-function fileFolder(path = expect.getState().testPath): string | null {
-  if (!ROOT || !path) return null
+function fileFolder(given?: string): string | null {
+  // Only with artifacts on: outside vitest (scripts/swarm-flows-stack.mts) there is no test state to read.
+  if (!ROOT) return null
+  const path = given ?? expect.getState().testPath
+  if (!path) return null
   return join(ROOT, folderName(basename(path).replace(/\.e2e\.ts$/, '')))
 }
 
