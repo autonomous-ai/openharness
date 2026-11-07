@@ -5891,7 +5891,8 @@ export class SuperTabStore {
       await recordAttempts(tx, tabId, { ...state, conversations: before.conversations }, state, this.now())
       await recordEvidence(tx, tabId, { ...state, conversations: before.conversations }, state, this.now())
       await this.writeMessages(tx, tabId, state, notices, sequences)
-      if (!prior) await tx.superTabStopReceipt.create({ data: { id, tabId, assignmentId, ...execution, receipt } })
+      if (!prior) await tx.superTabStopReceipt.create({ data: { id, tabId, assignmentId, machineId: execution.machineId, harnessId: execution.harnessId,
+        machineOwnerId: execution.machineOwnerId, receipt } })
       ended = endedHolds(before, state)
       return { confirmed: true }
     })
