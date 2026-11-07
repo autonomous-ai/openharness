@@ -317,6 +317,20 @@ describe('the merge train finishes batches', () => {
     expect(swarm.told).toHaveLength(1)
   })
 
+  it('names the pull request a member left waiting after main moved shares a file with', async () => {
+    const { repo, swarm, pass } = setup()
+    const a = repo.addPull(7, ['backend/src/a.ts'])
+    swarm.approve(a)
+    await pass()
+    const first = repo.batches()[0]!
+    // Main moves, and an older pull request changing the same file is ready now: it goes first.
+    repo.state.main = 'd'.repeat(40)
+    swarm.approve(repo.addPull(5, ['backend/src/a.ts']))
+    await pass()
+    expect(swarm.told.map(t => t.key)).toEqual([`train-moved:${first.number}:${a.head}`])
+    expect(swarm.told[0]!.text).toContain('changes a file that #5 also changes')
+  })
+
   it('says nothing on a member merged by hand meanwhile, often why main moved', async () => {
     const { repo, swarm, pass } = setup()
     const a = repo.addPull(7, ['backend/src/a.ts']), b = repo.addPull(8, ['cli/src/b.ts'])
