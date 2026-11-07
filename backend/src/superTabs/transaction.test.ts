@@ -129,3 +129,30 @@ describe('work after a Swarm transaction commits', () => {
     expect(() => afterCommit({} as never, () => {})).toThrow(/Swarm transaction/)
   })
 })
+
+// Task #4560: a command's wait is named by phase: the connection before its body runs, the body, the commit, each attempt and
+// the backoff between them, the cache stamps after the commit, and the after-commit work.
+describe('a Swarm transaction\'s phases', () => {
+  it('times the connection wait, body, commit, attempts, backoff, stamps and after-commit work of a command', async () => {
+    const { timeCommand } = await import('./commandTiming.js')
+    let now = 0
+    const failures: unknown[] = [conflict()]
+    const db = { $transaction: async (body: (tx: never) => Promise<unknown>) => {
+      now += 40 // waiting for a pool connection
+      const failure = failures.shift()
+      if (failure) { now += 10; throw failure }
+      const result = await body({} as never)
+      now += 25 // the commit
+      return result
+    } }
+    let phases: Record<string, number> = {}
+    const result = await timeCommand(() => now, () => transaction(db as never, async tx => {
+      now += 100
+      afterCommit(tx, () => { now += 7 })
+      return 'done'
+    }, async () => { now += 300 }), recorded => { phases = recorded })
+    expect(result).toBe('done')
+    // The first attempt failed before its body ran: all of its time was spent waiting to begin.
+    expect(phases).toEqual({ attempts: 2, pool: 90, body: 100, commit: 25, backoff: 300, stamps: 0, afterCommit: 7 })
+  })
+})
