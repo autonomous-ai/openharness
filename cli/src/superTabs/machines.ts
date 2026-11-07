@@ -804,9 +804,11 @@ export class ContributedMachines {
               // at each start, as the start itself says whether it is a Buddy's. One that cannot be read is none: a Buddy refuses.
               const signedIn = await Promise.resolve().then(() => this.core.account.identity()).then(identity => identity?.accountId ?? null, () => null)
               const helperOf = object(object(start.request).helperOf)
-              const beforeJoin = identifier(helperOf.harnessId) ? (harnessId: string) => this.readyHelper(String(row.tabId), String(helperOf.harnessId), harnessId) : null
-              // Its Member's commands reach a helper only from a Member this machine's Swarm started here (security review 1 of #3579).
-              const memberHere = beforeJoin ? !!this.worktreeOf(String(row.tabId), String(helperOf.harnessId)) : null
+              const helperRequest = object(start.request)
+              const beforeJoin = identifier(helperOf.harnessId) ? (harnessId: string) => this.readyHelper(String(row.tabId), String(helperOf.harnessId), harnessId, helperRequest) : null
+              // Its Member's commands reach a helper only from a Member this machine's Swarm started here (security review 1 of #3579),
+              // and only in a worktree of its own.
+              const memberHere = beforeJoin ? helperRequest.worktree === true && !!this.worktreeOf(String(row.tabId), String(helperOf.harnessId)) : null
               const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, signedIn, ...(github ? { github } : {}), ...(beforeJoin ? { beforeJoin, memberHere } : {}) },
                 scoped, where, this.deps.open)
               this.refused.delete(String(start.id))
@@ -1172,10 +1174,17 @@ export class ContributedMachines {
   /** A helper's new worktree gets its Member's set-up folders (task #4698), from the Member's worktree this machine's Swarm made.
    *  A Member set up elsewhere, or a copy this disk cannot make, leaves the helper to install itself; the log says which,
    *  with no path. */
-  private async readyHelper(tabId: string, memberHarnessId: string, harnessId: string): Promise<void> {
+  private async readyHelper(tabId: string, memberHarnessId: string, harnessId: string, request: Record<string, unknown>): Promise<void> {
     try {
       const member = this.worktreeOf(tabId, memberHarnessId)?.path, helper = this.core.agents.byAgent(harnessId)?.cwd
       if (!member || !helper) { this.log('Started a helper without its Member\'s setup: HELPER_SETUP_NOT_HERE'); return }
+      // Only into the new worktree its own start made: never the Member's folder, nor the checkout it came from, which may be a
+      // person's own (security review 2 of #3579).
+      const source = typeof request.cwd === 'string' ? request.cwd : null
+      const shared = (a: string, b: string) => within(a, b) || within(b, a)
+      if (request.worktree !== true || !source || shared(helper, member) || shared(helper, source)) {
+        this.log('Started a helper without its Member\'s setup: HELPER_FOLDER_NOT_OWN'); return
+      }
       const copy = await (this.deps.readySetup ?? copySetup)(member, helper)
       this.log(copy.skipped ? `Started a helper without its Member's setup: ${copy.skipped}`
         : `Readied a helper from its Member's setup: ${copy.copied.length} folder${copy.copied.length === 1 ? '' : 's'} copied`)

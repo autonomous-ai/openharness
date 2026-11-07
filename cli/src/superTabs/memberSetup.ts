@@ -22,6 +22,9 @@ const MAX_FOLDERS = 100
  *  helper never doubles a Member's disk use. */
 const CLONE_UNSUPPORTED = new Set(['ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV', 'EINVAL'])
 
+/** What a copy says when something is already where it writes. */
+const EXISTED = new Set(['EEXIST', 'ERR_FS_CP_EEXIST', 'ERR_FS_CP_DIR_TO_NON_DIR', 'ERR_FS_CP_NON_DIR_TO_DIR'])
+
 export type SetupCopy = { copied: string[]; skipped?: 'CLONE_UNSUPPORTED' | 'COPY_FAILED' | 'NOT_READ' }
 export type CloneFolder = (from: string, to: string) => Promise<void>
 
@@ -48,8 +51,11 @@ export async function copySetup(from: string, to: string, clone: CloneFolder = c
       await clone(join(from, folder), join(to, folder))
       copied.push(folder)
     } catch (error) {
-      for (const made of [...copied, folder]) await rm(join(to, made), { recursive: true, force: true }).catch(() => {})
       const code = (error as NodeJS.ErrnoException).code ?? ''
+      // Only what this copy made goes: a folder there that the copy found in its way (made meanwhile) is someone else's
+      // (security review 2 of #3579). The failed one was not there before it, so anything else left of it is the copy's.
+      const mine = EXISTED.has(code) ? copied : [...copied, folder]
+      for (const made of mine) await rm(join(to, made), { recursive: true, force: true }).catch(() => {})
       return { copied: [], skipped: !copied.length && CLONE_UNSUPPORTED.has(code) ? 'CLONE_UNSUPPORTED' : 'COPY_FAILED' }
     }
   }
