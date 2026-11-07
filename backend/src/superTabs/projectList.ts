@@ -30,7 +30,7 @@ export function projectList(state: SuperTabState, actor: Actor, invitedTo?: stri
     const lead = leadId ? state.agents.find(a => a.id === leadId) : undefined
     const row: ProjectRow = { id: project.id, name: project.name, about: project.about ?? null,
       repositoryName: project.about ? null : githubRepository(project.repository?.repositoryUrl)?.name ?? null,
-      lead: lead ? { agentId: lead.id, name: lead.name } : null, waiting: pulse?.nextUp.count ?? 0 }
+      lead: lead ? { agentId: lead.id, name: lead.displayName ?? lead.name } : null, waiting: pulse?.nextUp.count ?? 0 }
     return { row, perMember: perMember(row.waiting, pulse?.working.crew ?? 0) }
   })
   rows.sort((a, b) => b.perMember - a.perMember || b.row.waiting - a.row.waiting || a.row.name.localeCompare(b.row.name))
