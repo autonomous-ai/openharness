@@ -32,10 +32,10 @@ void _menu(WidgetTester tester, String method) {
 }
 
 /// A Swarm v3 tab, its left pane with My agents and + New agent.
-Future<SuperTabLaunchFixture> _mount(
+Future<SuperTabLaunchFixture> mountSwarm(
   WidgetTester tester, {
-  double width = 1500,
   double textScale = 1,
+  Brightness brightness = Brightness.light,
   bool reader = false,
   // The title bar and menus are AppKit's, reached through their channel.
   bool native = false,
@@ -60,12 +60,16 @@ Future<SuperTabLaunchFixture> _mount(
   final projects = SwarmProjectStore();
   addTearDown(projects.dispose);
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = Size(width, 900);
+  tester.view.physicalSize = const Size(1500, 900);
+  final previous = grid.AppTheme.brightness.value;
+  grid.AppTheme.brightness.value = brightness;
+  addTearDown(() => grid.AppTheme.brightness.value = previous);
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
   await tester.pumpWidget(
     MaterialApp(
-      theme: grid.buildAppTheme(brightness: Brightness.light),
+      debugShowCheckedModeBanner: false,
+      theme: grid.buildAppTheme(brightness: brightness),
       builder: (context, child) => MediaQuery(
         data: MediaQuery.of(context)
             .copyWith(textScaler: TextScaler.linear(textScale)),
@@ -83,13 +87,13 @@ Future<SuperTabLaunchFixture> _mount(
 }
 
 /// Inside the test body: the Swarm's saves finish before the app goes.
-Future<void> _unmount(WidgetTester tester, SuperTabLaunchFixture f) async {
+Future<void> unmountSwarm(WidgetTester tester, SuperTabLaunchFixture f) async {
   await tester.pumpWidget(const SizedBox());
   await f.app.superTabs.peek(tabId)!.flush();
   f.app.superTabs.dispose();
 }
 
-Future<void> _tapNewAgent(WidgetTester tester) async {
+Future<void> tapNewAgent(WidgetTester tester) async {
   final row = find.byKey(const ValueKey('super-new-agent-row'));
   await tester.ensureVisible(row);
   await tester.tap(row);
@@ -116,8 +120,8 @@ void main() {
   testWidgets('the role chip and menu say Agent or Product Manager, whole', (
     tester,
   ) async {
-    final f = await _mount(tester, textScale: 1.3);
-    await _tapNewAgent(tester);
+    final f = await mountSwarm(tester, textScale: 1.3);
+    await tapNewAgent(tester);
     // The narrowest window, where the left pane may fold away: the form stays.
     tester.view.physicalSize = const Size(880, 900);
     await tester.pumpAndSettle();
@@ -162,7 +166,7 @@ void main() {
       findsOneWidget,
     );
     expect(tester.widget<NewHarnessForm>(_form).controller.agentKind, 'lead');
-    await _unmount(tester, f);
+    await unmountSwarm(tester, f);
   });
 
   // Audit 1.3.89 finding 11 (task #4445): in a Swarm, every way to New Agent
@@ -181,22 +185,22 @@ void main() {
   };
   for (final MapEntry(key: way, value: open) in ways.entries) {
     testWidgets('$way in a Swarm opens + New agent’s form', (tester) async {
-      final f = await _mount(tester, native: way == 'File ▸ New Agent');
+      final f = await mountSwarm(tester, native: way == 'File ▸ New Agent');
       await open(tester);
       await tester.pumpAndSettle();
       _expectNewAgentForm(tester);
-      await _unmount(tester, f);
+      await unmountSwarm(tester, f);
     });
   }
 
   testWidgets('Cmd-N gives a reader what + New agent does: nothing', (
     tester,
   ) async {
-    final f = await _mount(tester, reader: true);
+    final f = await mountSwarm(tester, reader: true);
     expect(find.byKey(const ValueKey('super-new-agent-row')), findsNothing);
     await key(tester, LogicalKeyboardKey.keyN, cmd: true);
     await tester.pumpAndSettle();
     expect(_form, findsNothing);
-    await _unmount(tester, f);
+    await unmountSwarm(tester, f);
   });
 }
