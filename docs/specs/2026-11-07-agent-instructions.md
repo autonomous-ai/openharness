@@ -197,7 +197,7 @@ can check runs as code, and its prompt line goes); the **job page**, when it hol
 | Shared-machine rules from today's tool sheet: temporary files only in your own folder, never remove a worktree a live process uses, never ask for a token in chat or a file | Job page, Never (both) |
 | Security reviews, red required checks, production writes | Job page, Never (both); the merge train already refuses a red required check |
 | The reply style (`SUPER_TAB_REPLY_STYLE`) | Lead page point 4; Member page, chat section |
-| Answer in threads, answer once, react instead of acknowledging | Code: the reply line in each message already names `--answers` or `--reply-to`, and the server refuses a second answer |
+| Answer in threads, answer once, react instead of acknowledging | Code: the reply line in each message names `--answers` or `--reply-to`. The server refuses a second `answer` to a message, and in project chats a second explicit answer too (`answers.ts`, `chatLimits.ts`); a plain second post in a task or private chat is not refused today, and #4553 takes that gap |
 | Routing order, models, quota rules (People notes and PM notes) | The router, which already applies the order (`route`); what it can't check goes to AGENTS.md |
 | Machine rules (offline hours, Codex not on Diego's Mac, phone work on Tony's Mac) | Code where `machine.projects` and machine rules already hold them; the rest to AGENTS.md |
 | The release window, Windows rules, design-system rule, mockup rule | openharness AGENTS.md (most are already there) |
