@@ -878,11 +878,10 @@ class ProjectSidebar extends StatelessWidget {
       key: ValueKey('super-agent-${agent.id}'),
       leading: _face(agent, name, lead: pm),
       name: name,
-      tooltip: chat != null
-          ? name
-          : onOpenAgentTerminal != null
-          ? '$name · opens its terminal'
-          : '$name · no chat yet',
+      // Only what the row does not say itself.
+      tooltip: chat == null && onOpenAgentTerminal != null
+          ? 'Opens its terminal'
+          : null,
       detail: _detail(
         agent,
         leads: pm ? snapshot.leadProjectForAgent(agent.id)?.name : null,

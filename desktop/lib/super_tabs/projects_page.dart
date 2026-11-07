@@ -48,14 +48,8 @@ class SuperTabProjectsPage extends StatelessWidget {
               ),
             ),
           const SizedBox(height: grid.AppDesktop.groupGap),
-          if (projects.isEmpty)
-            Text(
-              'No projects yet',
-              style: DesktopChrome.control(
-                color: grid.AppPalette.textSecondary,
-              ),
-            )
-          else
+          // Empty means empty: New project above is what fills it (anh Dee 11-07).
+          if (projects.isNotEmpty)
             LayoutBuilder(
               builder: (context, box) {
                 final across = math.max(
