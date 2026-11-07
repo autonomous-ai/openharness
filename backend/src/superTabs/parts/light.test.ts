@@ -69,6 +69,7 @@ const conversation: Required<Conversation> = {
   paused: { by: 'person:owner', at: 1, reason: 'Wait' },
   pin: { agentId: 'a', why: 'ci', at: 1 },
   priority: 'P0',
+  process: 'full',
   projectId: 'p',
   proposal: { version: 1, text: 'Words', goal: 'Goal', why: 'Why', doneWhen: 'Done', evidence: ['Evidence'], priority: 'P2', createdAt: 0, senders: [], questions: [] },
   proposals: [],

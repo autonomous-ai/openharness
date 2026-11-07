@@ -870,10 +870,12 @@ describe('several Buddies through the store (#3818)', () => {
     const research = await named(f, 'Research')
     await quiet(f, research.chat)
     const reads = await profiled(db, () => send(f, 'lead', 'Hello', {}, owner))
-    // Every live row of the Swarm, by tab: not one row's version check by its id.
+    // Every live row of the Swarm, by tab: not one row's version check by its id. Prisma's filters name a field as `$tabId`, a
+    // plain match (the held listing, parts/held.ts) as `tabId`.
+    const names = (filter: string, field: string) => filter.includes(`"$${field}"`) || filter.includes(`"${field}":`)
     const wholeSwarm = (collection: string) => reads.filter(e => e.ns.endsWith(`.${collection}`) && e.op !== 'update').filter(e => {
       const filter = JSON.stringify(e.command?.pipeline ?? e.command?.filter ?? {})
-      return filter.includes('"$tabId"') && filter.includes('"$deleted"') && !filter.includes('"$_id"')
+      return names(filter, 'tabId') && names(filter, 'deleted') && !names(filter, '_id')
     }).length
     expect(['SwarmMachine', 'SwarmAgent', 'SwarmMember', 'SwarmProgress'].map(c => [c, wholeSwarm(c)]))
       .toEqual([['SwarmMachine', 1], ['SwarmAgent', 1], ['SwarmMember', 1], ['SwarmProgress', 1]])
