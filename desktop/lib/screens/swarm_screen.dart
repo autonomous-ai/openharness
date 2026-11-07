@@ -85,7 +85,6 @@ import '../state/new_harness.dart';
 import '../state/harness_launch_integration.dart';
 import '../super_tabs/launch.dart';
 import '../super_tabs/message_link.dart' show swarmMessageLinkInbox;
-import '../super_tabs/buddy_chat.dart' show countText;
 import '../super_tabs/buddy_chat_shortcut.dart';
 import '../super_tabs/workspace.dart';
 import '../super_tabs/quick_switcher.dart';
@@ -122,7 +121,6 @@ import '../widgets/session_work_dialog.dart';
 import '../widgets/web_download_button.dart';
 import '../widgets/workspace_share_button.dart';
 import '../widgets/workspace_account_button.dart';
-import '../widgets/workspace_store_button.dart';
 import '../widgets/grid_model_picker.dart';
 import '../widgets/workspace_subscription_usage.dart';
 import '../store/store_mark.dart';
@@ -2520,8 +2518,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
   Future<void> _actOnNative(MethodCall call) async {
     if (mounted && call.method == 'keymapCommand') {
       final command = (call.arguments as Map?)?['command'];
-      if (command is String && dispatchSwarmQuickSwitcherCommand(command))
+      if (command is String && dispatchSwarmQuickSwitcherCommand(command)) {
         return;
+      }
     }
 
     if (mounted && call.method == 'keymapPending') {
