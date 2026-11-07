@@ -96,8 +96,8 @@ void main() {
       findsOneWidget,
     );
     expect(inHeader(find.byType(SuperTabTaskStatusMark)), findsOneWidget);
-    final person = f.controller.snapshot!.people.single;
-    expect(inHeader(find.text(person.shownName)), findsOneWidget);
+    // Who asked, as the feed names them, not a username.
+    expect(inHeader(find.text('Ken')), findsOneWidget);
     expect(inHeader(find.text('Hugo')), findsOneWidget);
     expect(
       t

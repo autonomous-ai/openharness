@@ -12,6 +12,7 @@ import 'package:harness/state/harness_activity.dart';
 
 import 'swarm_state_test.dart' show createApp;
 
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/task_card.dart';
 import 'package:harness/super_tabs/tasks/personal_task_card.dart';
@@ -526,6 +527,16 @@ void main() {
       await t.pump();
       expect(opened, ['new']);
       expect(f.commands, isEmpty);
+    });
+
+    test('a project tag is never red or amber, kept for P0 and P1', () {
+      const palette = grid.AppPalette.avatarPalette;
+      for (var i = 0; i < 200; i++) {
+        expect(
+          superTabProjectColor('p$i'),
+          isNot(anyOf(palette[3], palette[4])),
+        );
+      }
     });
 
     test('a project keeps its colour', () {
