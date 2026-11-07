@@ -762,7 +762,9 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     8,
                               ),
                               child: Padding(
-                                padding: const EdgeInsets.only(bottom: 4),
+                                padding: const EdgeInsets.only(
+                                  bottom: grid.AppDesktop.bubbleNoteGap,
+                                ),
                                 child: status,
                               ),
                             ),
@@ -785,10 +787,8 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   children: [
                                     if (named)
                                       Padding(
-                                        padding: const EdgeInsets.only(
-                                          left: 12,
-                                          bottom: 2,
-                                        ),
+                                        padding:
+                                            grid.AppDesktop.bubbleNamePadding,
                                         child: Wrap(
                                           spacing: 8,
                                           crossAxisAlignment:

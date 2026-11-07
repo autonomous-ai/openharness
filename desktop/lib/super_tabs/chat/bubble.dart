@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/theme/app_theme.dart' as grid;
 import '../../shared/theme/swarm_palette.dart';
 import '../../widgets/desktop_chrome.dart';
 
@@ -66,10 +67,7 @@ class SwarmBubble extends StatelessWidget {
       color: own ? SwarmPalette.ownBubble : DesktopChrome.field,
       borderRadius: _corners,
     ),
-    child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-      child: child,
-    ),
+    child: Padding(padding: grid.AppDesktop.bubblePadding, child: child),
   );
 }
 

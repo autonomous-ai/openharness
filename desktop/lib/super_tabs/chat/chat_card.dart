@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../shared/theme/app_icons.dart';
+import '../../shared/theme/app_theme.dart' as grid;
 import '../../widgets/desktop_chrome.dart';
 import '../swarm_type.dart';
 import 'bubble.dart';
@@ -38,7 +39,7 @@ class _SwarmChatCardState extends State<SwarmChatCard> {
       border: Border.all(color: DesktopChrome.rim),
     ),
     child: Padding(
-      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      padding: grid.AppDesktop.chatCardPadding,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,

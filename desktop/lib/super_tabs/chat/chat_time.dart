@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/theme/app_theme.dart' as grid;
 import '../swarm_type.dart';
 
 /// A time centered between chat messages, shown only after a pause of more
@@ -23,7 +24,7 @@ class SwarmChatTime extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(top: 12, bottom: 4),
+    padding: grid.AppDesktop.chatTimePadding,
     child: Center(
       child: Text(
         TimeOfDay.fromDateTime(time.toLocal()).format(context),

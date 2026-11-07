@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
+import '../../shared/theme/app_theme.dart' as grid;
 import '../../widgets/desktop_chrome.dart';
 import '../swarm_type.dart';
 
@@ -47,7 +48,9 @@ class _SwarmFoldState extends State<SwarmFold> {
               child: Semantics(
                 button: true,
                 child: Padding(
-                  padding: const EdgeInsets.only(top: 4),
+                  padding: const EdgeInsets.only(
+                    top: grid.AppDesktop.bubbleNoteGap,
+                  ),
                   child: Text(
                     'More',
                     style: SwarmType.body(context, color: DesktopChrome.accent),
