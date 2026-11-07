@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { personalTasksFor } from './personalTasks.js'
+import { personalTasksFor, personalTasksPage } from './personalTasks.js'
 import { readerView } from './views.js'
 import { fullSwarm, NOW, owner, peer, outsider } from './fixture.test-support.js'
 import * as parts from '../parts/index.js'
@@ -101,6 +101,17 @@ describe('personal Tasks summaries', () => {
     const closed = { ...did, data: { ...did.data, assignment: { ...work('closed-agent'), execution: { ...work('closed-agent').execution, contributorId: peer.userId } } } }
     expect(personalTasksFor([closed], view, peer)!.upserts).toEqual([expect.objectContaining({ id: row.key, status: 'done', agent: null })])
     expect(personalTasksFor([closed], view, owner)!.upserts.map(r => r.id)).toEqual([row.key])
+  })
+
+  it('reads by at most 200 keys: the person\'s two and their newest 198 agents (review of #3465)', async () => {
+    const s = scene(), template = s.f.state.agents.find(a => a.id === s.f.worker)!
+    const agents = Array.from({ length: 250 }, (_, i) => ({ ...template, id: `agent-${String(i).padStart(3, '0')}`, harnessId: `h-${i}`, contributorId: peer.userId }))
+    const stored = parts.split({ ...s.f.state, agents: [...s.f.state.agents, ...agents] }, { tabId: 'tab', version: 7, now: NOW })
+    let read: string[] = []
+    await personalTasksPage(async ids => { read = ids; return [] }, readerView(stored, peer, NOW, { teamMachines: [] }), peer)
+    expect(read).toHaveLength(200)
+    expect(read).toEqual(expect.arrayContaining([peer.userId, 'agent-249', 'agent-052']))
+    expect(read).not.toContain('agent-051')
   })
 
   it('carries who asked and the newest linked pull request', () => {

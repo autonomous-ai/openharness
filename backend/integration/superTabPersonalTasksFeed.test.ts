@@ -179,4 +179,19 @@ describe('the person\'s Tasks feed (task #4203)', () => {
   })
 })
 
+describe('the Tasks feed backfill when the database refuses its writes (review of #3465)', () => {
+  it('stops and says so, never reading the same rows again forever', async () => {
+    const f = await fixture()
+    await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { tabId: f.tab }, u: { $unset: { feedIds: '' } }, multi: true }] })
+    // Any row that would get a non-empty column is refused.
+    await db.$runCommandRaw({ collMod: 'SwarmGroup', validator: { $or: [{ feedIds: { $exists: false } }, { feedIds: { $size: 0 } }] }, validationAction: 'error' })
+    try {
+      await expect(markFeedIds(db)).rejects.toThrow(/refused/)
+    } finally {
+      await db.$runCommandRaw({ collMod: 'SwarmGroup', validator: {} })
+    }
+    expect(await markFeedIds(db)).toBeGreaterThan(0)
+  }, 20_000)
+})
+
 const readsOf = (entries: Awaited<ReturnType<typeof profiled>>) => reads(entries, 'SwarmGroup', ['feedIds'])
