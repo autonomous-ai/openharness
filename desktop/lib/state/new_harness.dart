@@ -1499,6 +1499,12 @@ class NewHarnessController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Reads the project list again after it failed, then redraws the form.
+  Future<void> retryProjects() async {
+    await integration?.retryProjects?.call();
+    if (!_disposed) notifyListeners();
+  }
+
   void setNewProjectName(String name) {
     integration?.newProjectName = name;
     if (error != null) {
@@ -1506,6 +1512,7 @@ class NewHarnessController extends ChangeNotifier {
       notifyListeners();
     }
   }
+
   bool get taskTooLong => task.trim().length > kFirstTaskMaxLength;
   List<PermissionMode> get _modes =>
       _noAgentSetup || isCloud || leadThroughSwarm

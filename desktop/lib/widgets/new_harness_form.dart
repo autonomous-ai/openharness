@@ -4674,7 +4674,7 @@ class _NewHarnessMainProjectState extends State<NewHarnessMainProject> {
             children: [
               Flexible(child: words(failed)),
               TextButton(
-                onPressed: box.locked ? null : integration.retryProjects,
+                onPressed: box.locked ? null : box.retryProjects,
                 child: const Text('Retry'),
               ),
             ],

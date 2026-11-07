@@ -1,6 +1,9 @@
 import 'controller.dart';
 import 'model.dart' show superTabMap;
 
+/// What the form says when the list could not be read, beside Retry.
+const kProjectsUnread = 'Couldn’t load the projects.';
+
 /// A project's Lead, as the project list names it.
 typedef SuperTabProjectLead = ({String agentId, String name});
 
