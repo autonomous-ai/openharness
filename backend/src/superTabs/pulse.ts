@@ -39,7 +39,7 @@ const counted = (group: Conversation): boolean => !group.audience && !group.kind
 
 /** Records [message] as owed when a person wrote it and it reached [group]'s PM. */
 export function owe(state: SuperTabState, group: Conversation, message: { id: string; author: Author; recipients: readonly string[]; thread: string | null; source?: unknown }, now: number): void {
-  if (message.author.kind !== 'person' || message.source || !counted(group)) return
+  if (message.author.kind !== 'person' || (message.source && (message.source as { kind?: string }).kind !== 'buddy-proposal') || !counted(group)) return
   const project = projectOfGroup(state, group)
   const pm = project && pmOf(state, project)
   // A project switched to the Board way of working owes its PM no chat messages (boardRights.ts, task #3819).
@@ -89,7 +89,7 @@ export function settleRequest(state: SuperTabState, project: SwarmProject, agent
 
 /** When each rule turns the strip red (anh Dee's brief), sent with the pulse so no app holds a threshold. */
 export interface PulseLimits { askMinutes: number; idleMinutes: number; lostMinutes: number }
-export const PULSE_LIMITS: PulseLimits = { askMinutes: 15, idleMinutes: 10, lostMinutes: 10 }
+export const PULSE_LIMITS: PulseLimits = { askMinutes: 5, idleMinutes: 10, lostMinutes: 10 }
 
 /** A project's pulse. `redAt`: when each rule turns red (0: already, by its nature), null while it cannot. */
 export interface Pulse {

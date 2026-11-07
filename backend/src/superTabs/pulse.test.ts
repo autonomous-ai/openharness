@@ -252,11 +252,11 @@ describe('the pulse', () => {
 
   it('says when each red rule turns red, by the limits it sends', () => {
     const { f, post } = setup()
-    expect(pulseOf(f).limits).toEqual({ askMinutes: 15, idleMinutes: 10, lostMinutes: 10 })
+    expect(pulseOf(f).limits).toEqual({ askMinutes: 5, idleMinutes: 10, lostMinutes: 10 })
     expect(pulseOf(f).redAt).toEqual({ asks: null, idle: null, lost: null, held: null })
     post(null, 'lead', 'An ask.')
     const askedAt = f.now
-    expect(pulseOf(f).redAt.asks).toBe(askedAt + 15 * MINUTE)
+    expect(pulseOf(f).redAt.asks).toBe(askedAt + 5 * MINUTE)
     status(f, f.task, f.dev, 'blocked', null)
     expect(pulseOf(f).redAt.held).toBe(0)
   })

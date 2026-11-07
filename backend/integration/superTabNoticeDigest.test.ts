@@ -947,35 +947,33 @@ describe('the PM\'s inbox at its turn\'s end', () => {
   const listed = async (f: Awaited<ReturnType<typeof swarm>>, turn?: 'idle' | 'busy') =>
     (await f.timed.deliveries(host, f.tab, f.lead, turn) as Array<{ messageId: string }>).map(d => d.messageId)
 
-  it('waits while the PM works, then goes in one inbox when its turn ends, under New from people', async () => {
+  it('delivers people and thread follow-ups while the PM works, keeping agent notices batched', async () => {
     const f = await swarm({ capable: true })
     await f.report()
+    const notice = await f.write({ kind: 'work-stalled' }, f.lead)
     const message = await ask(f, 'Is the parser release out yet?')
-    expect((await deliveryOf(message, f.lead)).status).toBe('gathered')
-    expect(await listed(f, 'busy')).not.toContain(message)
+    const followup = String((await f.execute({ type: 'message.send', conversationId: 'lead', text: 'And the next build?', replyTo: message, recipientIds: [] })).result.messageId)
+    expect((await deliveryOf(message, f.lead)).status).toBe('queued')
+    expect(await listed(f, 'busy')).toEqual(expect.arrayContaining([message, followup]))
+    expect((await deliveryOf(notice, f.lead)).status).toBe('gathered')
     expect(await inboxes(f.tab)).toEqual([])
-    f.clock.now += MIN
-    expect(await listed(f, 'idle')).not.toContain(message)
-    const [inbox] = await inboxes(f.tab)
-    expect(inbox).toContain('New from people (1)')
-    expect(inbox).toContain('Is the parser release out yet?')
-    expect((await deliveryOf(message, f.lead)).status).toBe('digested')
-    // Its next idle read writes no second inbox.
-    await listed(f, 'idle')
-    expect(await inboxes(f.tab)).toHaveLength(1)
+    // Delivery is not an answer: the later notice inbox lists these again as owed.
+    f.clock.now += 16 * MIN
+    await f.report()
+    await listed(f, 'busy')
+    expect((await inboxes(f.tab)).join('\n')).toContain(`message ${message} in lead`)
+    expect((await inboxes(f.tab)).join('\n')).toContain(`message ${followup} in lead`)
   })
 
-  it('goes after 15 minutes of one long turn', async () => {
+  it('releases people gathered by the previous server on the first busy poll without releasing notices', async () => {
     const f = await swarm({ capable: true })
     await f.report()
     const message = await ask(f, 'Still there?')
-    f.clock.now += 14 * MIN
-    await listed(f, 'busy')
+    await db.superTabDelivery.update({ where: { id: stableId(message, f.lead) }, data: { status: 'gathered', inboxSection: 'people' } })
+    const notice = await f.write({ kind: 'work-stalled' }, f.lead)
+    expect(await listed(f, 'busy')).toContain(message)
+    expect((await deliveryOf(notice, f.lead)).status).toBe('gathered')
     expect(await inboxes(f.tab)).toEqual([])
-    f.clock.now += 2 * MIN
-    await listed(f, 'busy')
-    expect((await inboxes(f.tab)).join('\n')).toContain('Still there?')
-    expect((await deliveryOf(message, f.lead)).status).toBe('digested')
   })
 
   it('goes at once in the same read when the read sends no turn: an older host is unchanged', async () => {
@@ -1008,9 +1006,9 @@ describe('the PM\'s inbox at its turn\'s end', () => {
     await listed(f, 'idle')
     expect(await inboxes(f.tab)).toHaveLength(1)
     // A person's message at idle goes in the next read, with no wait.
-    await ask(f, 'One more thing.')
-    await listed(f, 'idle')
-    expect((await inboxes(f.tab)).at(-1)).toContain('One more thing.')
+    const message = await ask(f, 'One more thing.')
+    expect(await listed(f, 'idle')).toContain(message)
+    expect(await inboxes(f.tab)).toHaveLength(1)
   })
 
   it('lists a crew need under Crew needs, with its options', async () => {
@@ -1023,5 +1021,46 @@ describe('the PM\'s inbox at its turn\'s end', () => {
     const [inbox] = await inboxes(f.tab)
     expect(inbox).toContain('Crew needs (1)')
     expect(inbox).toContain('Ship on Friday or Monday? Options: Friday / Monday (recommended)')
+  })
+})
+
+// #3609: receipt means the native session accepted input; listing, claiming and uncertain input do not.
+describe('PM person receipt eyes', () => {
+  it('adds eyes only on confirmed receipt, once, without answering or hiding the owed ask', async () => {
+    const f = await swarm({ capable: true })
+    await f.report()
+    const message = String((await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Is it out?', replyTo: null, recipientIds: [] })).result.messageId)
+    const id = stableId(message, f.lead)
+    const eyes = () => db.superTabReaction.findMany({ where: { tabId: f.tab, messageId: message, emoji: 'eyes' } })
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'receipt' })
+    expect(await eyes()).toEqual([])
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'receipt', receipt: 'unknown', uncertain: true })
+    expect(await eyes()).toEqual([])
+    const before = await f.timed.messages(owner, f.tab, 'lead', {})
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'receipt', receipt: 'native input', uncertain: false })
+    expect(await eyes()).toEqual([expect.objectContaining({ actorKind: 'agent', actorId: f.lead })])
+    const after = await f.timed.messages(owner, f.tab, 'lead', {})
+    expect(after.reactionSeq).toBe(before.reactionSeq + 1)
+    expect(after.messages.find(m => m.id === message)?.reactions).toContainEqual({ emoji: 'eyes', count: 1, by: [{ kind: 'agent', id: f.lead }] })
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'receipt', receipt: 'native input', uncertain: false })
+    expect(await eyes()).toHaveLength(1)
+    expect((await f.timed.messages(owner, f.tab, 'lead', {})).reactionSeq).toBe(after.reactionSeq)
+    expect((await deliveryOf(message, f.lead)).status).toBe('delivered')
+    expect((await deliveryOf(message, f.lead)).answeredAt).toBeNull()
+    const state = await f.timed.read(owner, f.tab)
+    expect(state.state.conversations.find(c => c.id === 'lead')?.owed?.map(a => a.id)).toContain(message)
+  })
+
+  it('does not add eyes for worker receipts or agent-authored input to the PM', async () => {
+    const f = await swarm({ capable: true })
+    await f.report()
+    const person = String((await f.execute({ type: 'message.send', conversationId: f.group, text: 'Check this.', replyTo: null, recipientIds: [f.worker] })).result.messageId)
+    const notice = await f.write({ kind: 'prompt' }, f.lead)
+    for (const [message, agent] of [[person, f.worker], [notice, f.lead]]) {
+      const id = stableId(message!, agent!)
+      await f.timed.delivery(host, f.tab, agent!, id, { type: 'claim', claimId: 'ordinary' })
+      await f.timed.delivery(host, f.tab, agent!, id, { type: 'ack', claimId: 'ordinary', receipt: 'native input', uncertain: false })
+      expect(await db.superTabReaction.findMany({ where: { tabId: f.tab, messageId: message } })).toEqual([])
+    }
   })
 })
