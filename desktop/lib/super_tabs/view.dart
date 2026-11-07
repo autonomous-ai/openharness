@@ -1421,14 +1421,6 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  /// [path] as it goes into a message: as it is, or in double quotes when it
-  /// holds a space or anything else a shell reads specially, with `"`, `\`,
-  /// `$` and `` ` `` escaped, so it reads back as the same path.
-  static String _pathText(String path) =>
-      path.contains(RegExp(r'''[\s"'$`\\!*?\[\]{}()<>|&;]'''))
-      ? '"${path.replaceAllMapped(RegExp(r'["\\$`]'), (m) => '\\${m[0]}')}"'
-      : path;
-
   /// Puts dropped folders' paths into chat [id]'s message at the cursor,
   /// space-separated, as a terminal takes a dropped folder.
   void _pasteFolders(String id, List<String> paths) {
@@ -1442,7 +1434,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final after = text.substring(selection.end);
     final pasted =
         '${before.isEmpty || RegExp(r'\s$').hasMatch(before) ? '' : ' '}'
-        '${paths.map(_pathText).join(' ')}'
+        '${paths.map(folderPathText).join(' ')}'
         '${after.startsWith(RegExp(r'\s')) ? '' : ' '}';
     final next = before + pasted + after;
     c.setDraft(id, next);
@@ -1459,7 +1451,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The dropped folders whose paths are still in chat [id]'s message.
   List<String> _foldersInMessage(String id) => [
     for (final path in _droppedFolders[id] ?? const <String>[])
-      if (_composer.text.contains(_pathText(path))) path,
+      if (_composer.text.contains(folderPathText(path))) path,
   ];
 
   /// Whether an agent of [group] runs on another computer than this one,
@@ -1517,7 +1509,7 @@ class _SuperTabViewState extends State<SuperTabView>
     ];
     String withoutPaths(String text) {
       for (final folder in attached) {
-        final path = _pathText(folder);
+        final path = folderPathText(folder);
         text = text.contains('$path ')
             ? text.replaceFirst('$path ', '')
             : text.contains(' $path')
