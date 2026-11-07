@@ -74,7 +74,9 @@ jobs:
           - runner: windows-11-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
+    # Measured on run 42370552362: arm64 takes 6 min to build, 52 min for the Desktop suite and about 25 min for the
+    # installer specs, 90 min in all before the last step ends; x64 takes 64 min. 90 cut arm64 off in its last step.
+    timeout-minutes: 120
     defaults:
       run:
         shell: pwsh

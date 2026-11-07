@@ -117,7 +117,7 @@ export function stepBrief(step: PlannedStep, task: BriefTask): string {
     : `${step.kind === 'security' ? 'Security-review' : 'Review'} ${pulls} for task #${task.number} "${task.title}".`
   const why = step.unread ? ' Its changed files could not be read, so it is reviewed as strictly as the review table goes.'
     : step.kind === 'security' ? ` It changes ${step.areas.join(', ')}: two independent security reviews before merge.` : ''
-  // A verdict counts only at the exact head and base it read (#3394): the role sheets' words (cli swarmToolSheets.ts work.check).
+  // A verdict counts only at the exact head and base it read (#3394): the manual's words (cli lib/swarmTools.ts work.check).
   return '<!-- harness-review-brief -->\n' + withHistoryBrief(`${what}${why} Record your verdict as this step's check at the pull request head (whole commit id) and base branch you read, and send `
     + 'it to the task\'s Engineer with "Ready to merge: Yes", "No" or "With fixes".', task.pulls) + '\n<!-- /harness-review-brief -->'
 }

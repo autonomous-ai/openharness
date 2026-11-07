@@ -13,13 +13,16 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/leaderboard/reader.dart';
 import 'package:harness/super_tabs/model.dart' show SuperTabAgent;
 import 'package:harness/super_tabs/places.dart';
-import 'package:harness/state/harness_activity.dart' show HarnessActivity;
+import 'package:harness/core/models.dart' show Agent;
+import 'package:harness/state/harness_activity.dart'
+    show HarnessActivity, harnessActivity;
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/widgets/harness_activity_mark.dart' show ActivityMark;
 
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
 
+import 'harness_activity_test.dart' show activityQuestion;
 import 'super_tab_activity_lists_test.dart' show load, swarm, wait;
 import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
@@ -76,14 +79,15 @@ void main() {
     SwarmPage? page,
     String? boardProjectId,
     SuperTabLeaderboardReader? leaderboard,
+    AppNotifier? withApp,
   }) async {
     final server = swarm();
     if (agents != null) server.state['agents'] = agents;
     setup?.call(server);
     final activity = (await tester.runAsync(() => load(server)))!;
     final c = activity.controller;
-    final AppNotifier app = createApp();
-    addTearDown(app.dispose);
+    final app = withApp ?? createApp();
+    if (withApp == null) addTearDown(app.dispose);
     // The design tokens follow the app's brightness, which main.dart sets from the theme.
     final previous = grid.AppTheme.brightness.value;
     grid.AppTheme.brightness.value = brightness;
@@ -656,19 +660,6 @@ void main() {
       }
     });
 
-    // anh Dee 11-07 (1.3.90): idle showed a hollow circle and finished a check on every row.
-    test('a mark only while an agent works, needs you or failed', () {
-      for (final activity in HarnessActivity.values) {
-        expect(superTabAgentMark(activity), switch (activity) {
-          HarnessActivity.working ||
-          HarnessActivity.needsInput ||
-          HarnessActivity.failed => activity,
-          _ => null,
-        }, reason: '$activity');
-      }
-      expect(superTabAgentMark(null), isNull);
-    });
-
     // Audit finding 9 of task #4436 (task #4444): working, waiting, offline and starting all looked the same. Since
     // task #4466 a state is the row's one quiet word on the right, grey, with no coloured mark.
     testWidgets('a row says "offline" on the right when its agent is down, '
@@ -714,14 +705,17 @@ void main() {
         of: key('super-agent-kestrel'),
         matching: find.text('Kestrel Windows crew agent'),
       );
-      // No empty columns at the right: the name runs to the row's last 40 px (its mark and inset).
-      expect(tester.getRect(name).right, greaterThan(row.right - 40));
-      double? size(Finder f) => tester.widget<Text>(f).style?.fontSize;
-      final newAgent = find.descendant(
-        of: key('super-new-agent-row'),
-        matching: find.text('New agent'),
+      // No empty columns at the right: the name runs to the row's inset (task #4645: no marks' column).
+      expect(
+        tester.getRect(name).right,
+        greaterThan(row.right - grid.AppDesktop.controlGap - 1),
       );
-      expect(size(name), size(newAgent));
+      double? size(Finder f) => tester.widget<Text>(f).style?.fontSize;
+      final buddyName = find.descendant(
+        of: key('super-swarm-buddy'),
+        matching: find.text('Buddy'),
+      );
+      expect(size(name), size(buddyName));
       expect(tester.takeException(), isNull);
     });
 
@@ -838,31 +832,6 @@ void main() {
       expect(find.byTooltip('Kestrel'), findsNothing);
     });
 
-    testWidgets('+ New agent is the last row, below the agents, and hands on '
-        'to the creation dialog', (tester) async {
-      final created = <String>[];
-      await show(tester, agents: mine, setup: agents, created: created);
-      expect(find.byTooltip('New agent'), findsNothing);
-      expect(
-        top(tester, 'super-new-agent-row'),
-        greaterThan(top(tester, 'super-agent-orion')),
-      );
-      expect(
-        top(tester, 'super-new-agent-row'),
-        lessThan(top(tester, 'project-sidebar-humans')),
-      );
-      expect(
-        find.descendant(
-          of: key('super-new-agent-row'),
-          matching: find.text('New agent'),
-        ),
-        findsOneWidget,
-      );
-      await tester.tap(key('super-new-agent-row'));
-      await tester.pumpAndSettle();
-      expect(created, ['new']);
-    });
-
     // Task #4192: My agents folds with the same chevron as Projects, and the choice is remembered.
     testWidgets('its heading folds and unfolds it, and the choice is saved', (
       tester,
@@ -879,11 +848,7 @@ void main() {
       expect(key('super-agent-kestrel'), findsOneWidget);
       await tester.tap(key('project-sidebar-agents'));
       await tester.pump();
-      for (final row in [
-        'super-swarm-buddy',
-        'super-agent-kestrel',
-        'super-new-agent-row',
-      ]) {
+      for (final row in ['super-swarm-buddy', 'super-agent-kestrel']) {
         expect(key(row), findsNothing, reason: row);
       }
       expect(key('project-sidebar-agents'), findsOneWidget);
@@ -943,6 +908,162 @@ void main() {
     });
   });
 
+  // Task #4645 (anh Dee 19:50 and 22:25): the left pane is calm and exactly aligned. A + on the My agents heading adds
+  // an agent, rows carry no status marks, and every row's right-side detail ends at one edge in every section.
+  group('a calm left pane', () {
+    final buddy = {
+      ..._agent('buddy', 'Buddy'),
+      'buddyScope': 'swarm',
+      'buddyOf': {'personId': 'owner'},
+    };
+    void agents(ConversationServer server) {
+      server.state['swarmBuddy'] = true;
+      (server.state['conversations'] as List)
+              .cast<Map<String, dynamic>>()
+              .firstWhere((g) => g['id'] == 'lead')['leadId'] =
+          'orion';
+      (server.state['people'] as List).add({
+        'id': 'dee',
+        'email': 'dee@example.com',
+        'role': 'collaborator',
+      });
+    }
+
+    SuperTabLeaderboardReader board() {
+      final reader = SuperTabLeaderboardReader(
+        tabId: 'tab',
+        request: (method, path, {body}) async => {
+          'projectId': 'lead',
+          'week': 0,
+          'people': [
+            {'personId': 'dee', 'points': 120, 'rank': 1},
+          ],
+        },
+      );
+      addTearDown(reader.dispose);
+      return reader;
+    }
+
+    final heading = find.byKey(const ValueKey('project-sidebar-agents-add'));
+
+    testWidgets('a + on the My agents heading opens New agent, and the New '
+        'agent row is gone while the person has agents', (tester) async {
+      final created = <String>[];
+      await show(
+        tester,
+        agents: [buddy, _agent('kestrel', 'Kestrel')],
+        setup: agents,
+        created: created,
+      );
+      expect(
+        find.descendant(
+          of: key('project-sidebar-agents'),
+          matching: find.byIcon(AppIcons.plus),
+        ),
+        findsOneWidget,
+      );
+      expect(find.byTooltip('New agent'), findsOneWidget);
+      // On the heading's line, at the pane's right.
+      expect(
+        tester.getCenter(heading).dy,
+        moreOrLessEquals(tester.getCenter(key('project-sidebar-agents')).dy),
+      );
+      expect(
+        tester.getRect(heading).right,
+        greaterThan(tester.getRect(key('project-sidebar-agents')).right - 8),
+      );
+      expect(key('super-new-agent-row'), findsNothing);
+      await tester.tap(heading);
+      await tester.pump();
+      expect(created, ['new']);
+    });
+
+    testWidgets('with no agents of their own, the New agent row shows too', (
+      tester,
+    ) async {
+      await show(tester, agents: [buddy], setup: agents);
+      expect(heading, findsOneWidget);
+      expect(key('super-new-agent-row'), findsOneWidget);
+    });
+
+    // The old mark test went with the marks: an agent that works, needs you or failed still draws none.
+    testWidgets('a working, waiting or failed agent\'s row draws no mark', (
+      tester,
+    ) async {
+      final app = createApp(connected: true);
+      addTearDown(app.dispose);
+      final machine = app.stateOf('m')!;
+      machine.agents = const [
+        Agent(id: 'busy', name: 'Busy', engine: 'codex'),
+        Agent(id: 'asks', name: 'Asks', engine: 'codex'),
+        Agent(
+          id: 'broke',
+          name: 'Broke',
+          engine: 'codex',
+          launchState: 'failed',
+        ),
+      ];
+      machine.processingAgentIds.add('busy');
+      machine.blockedAgents['asks'] = activityQuestion('asks');
+      for (final (id, activity) in [
+        ('busy', HarnessActivity.working),
+        ('asks', HarnessActivity.needsInput),
+        ('broke', HarnessActivity.failed),
+      ]) {
+        expect(harnessActivity(app, 'm', id), activity, reason: id);
+      }
+      await show(
+        tester,
+        withApp: app,
+        agents: [
+          buddy,
+          for (final id in ['busy', 'asks', 'broke'])
+            {..._agent(id, id), 'machineId': 'm', 'harnessId': id},
+        ],
+        setup: agents,
+      );
+      for (final id in ['busy', 'asks', 'broke']) {
+        expect(key('super-agent-$id'), findsOneWidget, reason: id);
+      }
+      expect(find.byType(ActivityMark), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+    });
+
+    testWidgets('every right-side detail ends at one edge: a Lead\'s project '
+        'in My agents, a person\'s points in Humans', (tester) async {
+      final reader = board();
+      await tester.runAsync(() => reader.show('lead'));
+      await show(
+        tester,
+        agents: [buddy, _agent('orion', 'Orion')],
+        setup: agents,
+        leaderboard: reader,
+      );
+      final project = find.descendant(
+        of: key('super-agent-orion'),
+        matching: find.byWidgetPredicate(
+          (w) => w is Text && w.textAlign == TextAlign.right,
+        ),
+      );
+      final points = find.descendant(
+        of: key('super-human-dee'),
+        matching: find.text('120'),
+      );
+      expect(project, findsOneWidget);
+      expect(points, findsOneWidget);
+      // The texts are right-aligned in their boxes: their boxes' right edges are where the words end.
+      expect(
+        tester.getRect(project).right,
+        moreOrLessEquals(tester.getRect(points).right),
+      );
+      expect(
+        tester.getRect(key('super-agent-orion')).right -
+            tester.getRect(project).right,
+        moreOrLessEquals(grid.AppDesktop.controlGap),
+      );
+    });
+  });
+
   // Task #4196: + New agent opens the workspace's Cmd-N form, so the view
   // offers it only when its workspace can open one.
   group('the view offers + New agent only with Cmd-N to open', () {
@@ -982,13 +1103,11 @@ void main() {
       return c;
     }
 
-    testWidgets('the last row of My agents is + New agent, which opens Cmd-N', (
-      tester,
-    ) async {
+    testWidgets('the + on My agents opens Cmd-N', (tester) async {
       var opened = 0;
       final c = await view(tester, withApp: true, onNewAgent: () => opened++);
-      expect(key('super-new-agent-row'), findsOneWidget);
-      await tester.tap(key('super-new-agent-row'));
+      expect(key('project-sidebar-agents-add'), findsOneWidget);
+      await tester.tap(key('project-sidebar-agents-add'));
       await tester.pump();
       expect(opened, 1);
       expect(find.text('Create agent'), findsNothing);
@@ -998,6 +1117,7 @@ void main() {
 
     testWidgets('without Cmd-N to open it has none', (tester) async {
       final c = await view(tester, withApp: true);
+      expect(key('project-sidebar-agents-add'), findsNothing);
       expect(key('super-new-agent-row'), findsNothing);
       await tester.pumpWidget(const SizedBox());
       c.dispose();

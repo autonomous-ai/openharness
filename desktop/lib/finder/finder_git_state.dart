@@ -126,7 +126,7 @@ class FinderGitState extends ChangeNotifier {
     final files = <String, GitChangeKind>{};
     final folders = <String, GitChangeKind>{};
     for (final change in repository?.changes ?? const <GitChange>[]) {
-      final path = p.join(repository!.root, change.path);
+      final path = repository!.pathOf(change);
       files[path] = _stronger(files[path], change.kind);
       if (change.kind == GitChangeKind.deleted) continue;
       for (var dir = p.dirname(path); p.isWithin(root, dir) || dir == root;) {

@@ -1,17 +1,15 @@
 /**
  * What changed for PMs (task #3581, anh Dee 11-06: lamp's PM did not know the Swarm v2 process, and nothing told a running PM
- * that a release changed how PMs work). A release that changes the coordinator's tool sheet (cli lib/swarmToolSheets.ts, which
- * pins the note it was announced with) or the built-in PM schedule (pmSchedule.ts PM_SCHEDULE_TEXT, pinned by `schedule`)
- * adds a note here, newest last. Each project's PM is woken once for the newest note it has not confirmed, and its wakes and
+ * that a release changed how PMs work). A release that changes how PMs work adds a note here, newest last. Each project's PM is woken once for the newest note it has not confirmed, and its wakes and
  * inbox list every note it has not confirmed as owed until it confirms the newest with `process.confirm`; the board's pulse names it until then (pulse.ts).
  */
 import type { SuperTabState } from './model.js'
 import { agentProjectId, type SwarmProject } from './projects.js'
 import { REBASE_SWARMS } from './migration/rebase.js'
 
-/** One note: its id, its words for the PM, and the built-in schedule's fingerprint when it was written. `rebasedOnly`: for the
+/** One note: its id and its words for the PM. `rebasedOnly`: for the
  *  Swarms whose instructions moved onto the base (migration/rebase.ts REBASE_SWARMS) alone, as the text it announces is. */
-export interface ProcessNote { id: string; text: string; schedule: string; rebasedOnly?: true }
+export interface ProcessNote { id: string; text: string; rebasedOnly?: true }
 
 /** Whether [swarm] is one whose instructions moved onto the base (migration/rebase.ts): its PM reads the v2 process text. */
 export const isRebasedSwarm = (swarm: Pick<SuperTabState, 'id'>): boolean => REBASE_SWARMS.some(rebased => rebased.tabId === swarm.id)
@@ -21,9 +19,8 @@ export const PROCESS_NOTES: readonly ProcessNote[] = [
     id: '2026-11-06-crew',
     text: 'Swarm v2: mark your project\'s standing crew once (crew.add with a role and a lane: backend, cli, desktop, mobile or docs), '
       + 'and give each task a lane (work.lane): the Swarm hands a free crew member its lane\'s next task by itself. Start a new agent only '
-      + 'to replace a broken one. Your tool sheet says it; '
+      + 'to replace a broken one. '
       + '`harness super-tab help tools` has every rule.',
-    schedule: '058d05641d40',
   },
   {
     id: '2026-11-06-v2-text',
@@ -31,7 +28,6 @@ export const PROCESS_NOTES: readonly ProcessNote[] = [
       + 'they keep only your project\'s own facts. Review and test steps open by themselves when a pull request is ready; don\'t open them by '
       + 'hand. Lost, stalled and idle notices are information: the Swarm hands lost work on, nudges stalled workers and stops idle Engineers '
       + 'by itself, so don\'t repeat those by hand. A rule a program can check belongs in code, not in your instructions.',
-    schedule: '52cb6172d956',
     // Diego 11-06 (#4097): the v2 text replaces process lines only where the instructions moved onto the base.
     rebasedOnly: true,
   },
@@ -39,8 +35,7 @@ export const PROCESS_NOTES: readonly ProcessNote[] = [
     // #4459: on a Mac, macOS mktemp ignores TMPDIR, so the shell guard now refuses a bare mktemp (#3506).
     id: '2026-11-07-mktemp',
     text: 'Make temp folders with mktemp -d "${TMPDIR:-/tmp}/name.XXXXXX". On a Mac a bare mktemp ignores your temp folder, '
-      + 'so the shell guard turns it away. Your tool sheet says it.',
-    schedule: '52cb6172d956',
+      + 'so the shell guard turns it away. The manual says it.',
   },
   {
     // #4547 (anh Dee, 11-07): a person's chat with their own agent is theirs alone, so person.tell is retired.
@@ -48,7 +43,6 @@ export const PROCESS_NOTES: readonly ProcessNote[] = [
     text: 'There is no private line to a person any more: their chat with their own agent is theirs alone, so person.tell is refused. '
       + 'Ask them with decision.ask when you need their choice, or post in the project chat when everyone may read it. Your proposal '
       + 'questions (proposal.ask) reach their Decisions by themselves.',
-    schedule: '52cb6172d956',
   },
 ]
 

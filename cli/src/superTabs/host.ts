@@ -55,9 +55,9 @@ const readCommand = (entry: Entry, prefix: string, group: string, id: string, bu
 export { backend, identifier, object, SuperTabHostError } from './wire.js'
 import { leadSwitchOf, leadSwitchRecovered, SWITCH_ADOPT_MS, SWITCH_RECOVERY_MS, switchWithin, type LeadSwitch } from './leadSwitch.js'
 import { backend, ENDED_WORK, identifier, object, SuperTabHostError, within } from './wire.js'
-import { parseSwarmSkill, recordSwarmSkillNotice, refreshSwarmSkill, wireRole, type CustomSwarmRole, type SkillRefresh, type SwarmSkill, type SwarmSkillGrant,
+import { parseSwarmSkill, recordBuddySkillNotice, refreshBuddySkill, wireRole, type SkillRefresh, type SwarmSkill, type SwarmSkillGrant,
   type SwarmSkillMode } from '../lib/swarmSkills.js'
-import { recordProjectSkillsNotice, refreshProjectSkills } from '../lib/swarmInstructionsSkill.js'
+import { recordInstructionsNotice, refreshInstructionsNotice } from './instructionsNotice.js'
 import { artifactLinks, buddyLaunchOf, buddyReadsOf, forgetBuddyReads, grantBuddyWide, heldByOldGuard, listSentToOldGuard, SentListsError,
   writeBuddyAccount } from '../lib/buddyGuard.js'
 import { authorName } from './personName.js'
@@ -103,7 +103,7 @@ export async function swarmRoleFor(sources: SwarmSources, harnessId: string): Pr
     const led = groups.find(group => group.leadId === target.id)
     if (led) return { role: 'coordinator' as const, mode: groupSkillMode(state, led) }
     // Every other member is an agent, whatever its role's name (project instructions, phase 4); one an older client started
-    // as a Reviewer (`role: 'reviewer'`) keeps its swarm-review file for a Swarm with no instructions.
+    // as a Reviewer (`role: 'reviewer'`) keeps that kind on its saved row.
     return member ? { role: 'agent' as const, ...(agent.role === 'reviewer' ? { fallback: 'review' as const } : {}), mode: groupSkillMode(state, member) } : null
   }))
   // A Buddy first: a session that is a Buddy anywhere keeps its role, whatever else it is elsewhere. Then the coordinator, an
@@ -179,9 +179,8 @@ interface Entry {
 /** `scrubs`: the Claude Code traces of ended Buddy sessions still to remove, by agent id, written before their close, so a host
  *  restarted between the close and the scrub still removes them (security re-check 2 of #2345). Older hosts drop it. */
 interface Journal { version: 1; machineId: string; entries: Record<string, Entry>; scrubs?: Record<string, PurgeTarget> }
-/** `skillMode` is the agent's project's skills; a row without it (an older backend, a project from before modes) is orchestration.
- *  `roleName` and `instructions` name its project's instructions (backend read/hostRows.ts); an older backend sends neither. */
-interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string; switchLanded?: { id?: unknown; candidateAgentId?: unknown } }; skillMode?: unknown; lead?: unknown; role?: unknown
+/** `roleName` and `instructions` name its project's instructions (backend read/hostRows.ts); an older backend sends neither. */
+interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string; switchLanded?: { id?: unknown; candidateAgentId?: unknown } }; lead?: unknown
   buddySleepManaged?: true; leadsConversationId?: unknown; roleName?: unknown; instructions?: unknown }
 export interface SuperTabHostOptions {
   now?: () => number
@@ -276,43 +275,21 @@ const SKILL_RETRY_MS = 60_000
 /** How long new instructions wait for their history (the save's summary and time) once its read fails, read again each
  *  SKILL_RETRY_MS: long enough for a backend blip, short enough that an unreadable history never keeps them from agents. */
 const HISTORY_WAIT_MS = 5 * 60_000
-/** Which skill each kind of Custom role is installed as, by the session's role file's name (wireRole). */
-const KIND_SKILLS: Record<string, string> = { lead: 'lead', builder: 'dev', reviewer: 'review' }
-interface CustomRole { id: string; name: string; kind: string; version: string; projectId: string }
-/** The roster's Custom role for this agent, or null: a built-in set, a role that is gone, or one not fit to use. */
-function customRole(target: HostAgent): CustomRole | null {
-  const role = object(target.role)
-  return identifier(role.id) && identifier(role.projectId) && typeof role.name === 'string' && role.name
-    && typeof role.version === 'string' && role.version && typeof role.kind === 'string' ? role as unknown as CustomRole : null
-}
 /** The project instructions the roster names for this agent (project instructions, phase 3), or null: an older backend's row
- *  has no `instructions` key and one in no project has null, and both keep their role files as before. */
-interface RowInstructions { projectId: string; revision: number; hash: string | null; coordinatorName: string; roleName: string
-  /** The hash of the Swarm's built-in PM schedule the coordinator's read carries (2026-11-04 PM schedule design): it changes
-   *  with backend builds while the document's revision and hash stay. Null for any other agent, and from an older backend. */
-  builtInHash: string | null }
+ *  has no `instructions` key and one in no project has null, and neither is told anything. */
+interface RowInstructions { projectId: string; revision: number; hash: string | null; roleName: string }
 function rowInstructions(target: HostAgent): RowInstructions | null {
-  const { projectId, revision, hash, coordinatorName, builtInHash } = object(target.instructions)
+  const { projectId, revision, hash } = object(target.instructions)
   return identifier(projectId) && Number.isSafeInteger(revision) && (revision as number) >= 0 && (hash === null || typeof hash === 'string')
-    && typeof coordinatorName === 'string' && coordinatorName !== '' && typeof target.roleName === 'string' && target.roleName !== ''
-    ? { projectId, revision: revision as number, hash, coordinatorName, roleName: target.roleName,
-      builtInHash: typeof builtInHash === 'string' ? builtInHash : null } : null
+    && typeof target.roleName === 'string' && target.roleName !== '' ? { projectId, revision: revision as number, hash, roleName: target.roleName } : null
 }
-/** The instructions text held for one project of a tab, shared by its agents here. A Buddy holds its own: the backend may
- *  refuse it a project its member lost while the project's agents still read it. So does the coordinator: only its read
- *  carries the built-in PM schedule (2026-11-04 PM schedule design), which a worker's shared text must not get, nor lack. */
-const instructionsKey = (tabId: string, projectId: string, buddyId?: string) => JSON.stringify(buddyId ? [tabId, projectId, buddyId] : [tabId, projectId])
-/** What a session's skill comes from: its project's instructions at a revision, in its role (a save is acted on at the next
- *  roster, not the next CLI release); else a built-in mode, or a Custom role's version and name (a rename rewrites the front
- *  matter without a fetch), or nothing (a role gone or unusable). */
+/** The instructions history held for one project of a tab, shared by its agents here. */
+const instructionsKey = (tabId: string, projectId: string) => JSON.stringify([tabId, projectId])
+/** What a session is told about: its project's instructions at a revision, in its role (a save is acted on at the next roster,
+ *  not the next CLI release); a Buddy's own skill, which only a CLI release changes; or nothing. */
 function skillSetOf(target: HostAgent): string {
   const doc = rowInstructions(target)
-  // The built-in PM schedule's hash only when there is one, so an older backend's rows keep the version they had.
-  if (doc) return JSON.stringify(['instructions', doc.projectId, doc.revision, doc.hash, doc.roleName, doc.coordinatorName, target.lead === true,
-    ...doc.builtInHash ? [doc.builtInHash] : []])
-  if (!('role' in target)) return target.skillMode === 'default' ? 'default' : 'orchestration'
-  const role = customRole(target)
-  return role ? JSON.stringify([role.projectId, role.id, role.version, role.name]) : 'none'
+  return doc ? JSON.stringify(['instructions', doc.projectId, doc.revision, doc.hash, doc.roleName]) : 'none'
 }
 const JOIN_RETRY_MAX_MS = 30 * 60_000
 /** A server that no longer serves this client's reads (HTTP 426): said once, then asked again a minute later (design 5.1). */
@@ -638,19 +615,16 @@ export class SuperTabHost {
   /** When each running Swarm session's skill is next compared with the built-in text: once per host, and again while
    *  its re-read notice is still owed. */
   private readonly skillChecks = new Map<string, number>()
-  /** The set each session's skill was last compared with (a mode, or a Custom role's version): a change makes it due again
-   *  at once. */
+  /** What each session was last compared with (skillSetOf): a change makes it due again at once. */
   private readonly skillModes = new Map<string, string>()
   /** Per running session, the skill set the latest roster names: a refresh started from an older roster installs and
    *  tells nothing once this has moved on (the review of #1660). */
   private readonly rosterSkills = new Map<string, string>()
-  /** Per session, the Custom role text last fetched and the roster version it is: fetched again only when that changes. */
-  private readonly roleTexts = new Map<string, { version: string; text: string }>()
-  /** Per tab and project (instructionsKey), the instructions text last read, its revision, and that revision's summary and
-   *  save time once a history read answered (`failedSince`: when it first failed): read again only when the roster's
-   *  revision moves, and dropped once no roster row names the project. */
-  private readonly instructionTexts = new Map<string, { revision: number; hash: string | null; text: string
-    builtInHash: string | null; builtIn: string | null; history: { summary: string | null; savedAt: number | null } | null; failedSince?: number }>()
+  /** Per tab and project (instructionsKey), the revision last named and its summary and save time once a history read
+   *  answered (`failedSince`: when it first failed): read again only when the roster's revision moves, and dropped once no
+   *  roster row names the project. */
+  private readonly instructionHistories = new Map<string, { revision: number; hash: string | null
+    history: { summary: string | null; savedAt: number | null } | null; failedSince?: number }>()
   private skillsRunning: Promise<void> | null = null
   private missing = new Map<string, number>()
   /** A Buddy with no pending switch is checked once at roster admission, never on idle passes. */
@@ -1240,7 +1214,7 @@ export class SuperTabHost {
     // Set as the roster arrives, before any delivery read can stall this poll: a refresh started from an older roster must
     // see this one at once (round 2 of the review of #1660).
     this.rosterSkills.clear()
-    /** The instructions texts this roster still names: a project's, and each of its agents' own (a Buddy's). */
+    /** The projects whose instructions this roster still names. */
     const instructionKeys = new Set<string>()
     for (const item of data) {
       const row = object(item), agent = object(row.agent)
@@ -1248,7 +1222,7 @@ export class SuperTabHost {
         this.rosterSkills.set(agent.harnessId, skillSetOf(row as unknown as HostAgent))
         const doc = rowInstructions(row as unknown as HostAgent)
         if (doc && identifier(row.tabId) && identifier(agent.id)) {
-          instructionKeys.add(instructionsKey(row.tabId, doc.projectId)).add(instructionsKey(row.tabId, doc.projectId, agent.id))
+          instructionKeys.add(instructionsKey(row.tabId, doc.projectId))
         }
       }
     }
@@ -1442,10 +1416,10 @@ export class SuperTabHost {
     for (const deliveryId of this.unreadable) if (!seen.has(deliveryId)) this.unreadable.delete(deliveryId)
     for (const key of this.lists.keys()) if (!running.some(r => `list:${r.tabId}:${r.agent.id}` === key)) this.lists.delete(key)
     // Diego's issue, 2026-10-27: kept for every session ever seen, a daemon running for weeks held each Custom role's text.
-    for (const skills of [this.skillChecks, this.skillModes, this.roleTexts]) {
+    for (const skills of [this.skillChecks, this.skillModes]) {
       for (const harnessId of skills.keys()) if (!this.rosterSkills.has(harnessId)) skills.delete(harnessId)
     }
-    for (const key of this.instructionTexts.keys()) if (!instructionKeys.has(key)) this.instructionTexts.delete(key)
+    for (const key of this.instructionHistories.keys()) if (!instructionKeys.has(key)) this.instructionHistories.delete(key)
     // A wait outlives a list that failed or was skipped: that says nothing of the delivery. It goes when a list that was read no
     // longer has the delivery, or when its agent is no longer here.
     for (const [key, retry] of this.deliveryRetries) {
@@ -1862,96 +1836,58 @@ export class SuperTabHost {
     return target
   }
 
-  /** A CLI update can ship new built-in skill text while Swarm sessions run; until now a running agent kept the text it
-   *  read at start, so a skill release reached nobody until each agent restarted (owner, 2026-10-22). Rewrite a role
-   *  session's file at once; tell its agent through the Swarm, as any delivery, once it is in an open group. The
-   *  operation id names the agent and the text, so a retry, a restart or a second daemon never sends it twice. */
+  /** What a running Swarm session is told (task #4673): a Buddy, when a CLI update ships new text for its skill; any other
+   *  agent, when its project's instructions or its role name change, to read them again with the instructions command, or once,
+   *  if an older release launched it, that its skill files are gone. Told through the Swarm, as any delivery, once it is in an
+   *  open group. The operation id names the agent and what it is told, so a retry, a restart or a second daemon never sends it
+   *  twice. */
   private async refreshSkill(target: HostAgent): Promise<void> {
     const session = this.core.agents.byAgent(target.agent.harnessId)
     // Read as every saved row is (project instructions, phase 4): a core from before role kinds answers in the wire's values.
     const skill = parseSwarmSkill(session?.swarmSkill)
-    const mode: SwarmSkillMode = target.skillMode === 'default' ? 'default' : 'orchestration'
-    // Project instructions (spec 2026-10-30): a row naming them installs them for every session, a Buddy too, in place of
-    // the role file's refresh (a Buddy keeps that too, below); its Custom role is one of the document's roles now.
     const doc = rowInstructions(target)
-    // Custom roles and skills per project (spec 2026-10-23): on Custom the roster names the agent's role and its text's
-    // version. A role that is gone (null) keeps its file; the backend tells the agent to finish its current work.
-    const custom = doc ? null : customRole(target)
-    if (!doc && 'role' in target && (!custom || !skill || KIND_SKILLS[custom.kind] !== wireRole(skill))) return
     const set = skillSetOf(target)
     const current = () => this.rosterSkills.get(target.agent.harnessId) === set
-    // A checked session waits for the next host (Infinity); the project's owner switching its skills must reach it now.
+    // A checked session waits for the next host (Infinity); a change the roster names must reach it now.
     if (this.skillModes.get(target.agent.harnessId) !== set) {
       this.skillModes.set(target.agent.harnessId, set)
       this.skillChecks.delete(target.agent.harnessId)
     }
     const due = this.skillChecks.get(target.agent.harnessId) ?? 0
-    if (!session || !skill || !session.cwd || this.now() < due) return
+    if (!session || !skill || !session.cwd || this.now() < due || (skill.role !== 'buddy' && !doc)) return
     this.skillChecks.set(target.agent.harnessId, Infinity)
     try {
-      if (doc) {
-        // A Buddy has no tools skill: its Buddy skill stays its Harness text, kept current by a CLI release as before (spec:
-        // "The Buddy skill stays, and a Buddy also gets the project's document"; Task 4's review). Its text is every mode's.
-        if (skill.role === 'buddy') {
-          if (!current()) { this.skillChecks.delete(target.agent.harnessId); return }
-          if (!await this.refreshRoleFile(target, session.cwd, skill, mode, undefined, current)) return
-        }
-        return await this.refreshInstructions(target, session.cwd, skill, doc, current)
-      }
-      let text: { name: string; text: string } | undefined
-      if (custom) {
-        let held = this.roleTexts.get(target.agent.harnessId)
-        if (held?.version !== custom.version) {
-          const answer = object(await backend(this.core, 'GET', `/api/super-tabs/${target.tabId}/projects/${custom.projectId}/roles/${custom.id}`))
-          if (answer.version !== custom.version || typeof answer.text !== 'string') {
-            throw new Error(`The ${custom.name} role's text is not the version this machine was told to install. Trying again later.`)
-          }
-          held = { version: custom.version, text: answer.text }
-          this.roleTexts.set(target.agent.harnessId, held)
-        }
-        text = { name: custom.name, text: held.text }
-      }
-      // Dropped, but due again: the roster may come back to this very role before anything was installed.
-      if (!current()) { this.skillChecks.delete(target.agent.harnessId); return }
-      await this.refreshRoleFile(target, session.cwd, skill, mode, text, current)
+      if (skill.role === 'buddy') await this.refreshBuddyFile(target, session.cwd, skill, current)
+      else await this.refreshInstructions(target, session.cwd, skill, doc!, current)
     } catch (error) {
       this.log(error instanceof Error ? error.message : String(error))
       this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
     }
   }
-  /** Put the session's role file on its text and tell its agent if owed. False when that notice could not be sent: it is
-   *  due again later, or dropped for a newer roster's refresh. */
-  private async refreshRoleFile(target: HostAgent, cwd: string, skill: SwarmSkill, mode: SwarmSkillMode, text: CustomSwarmRole | undefined,
-    current: () => boolean): Promise<boolean> {
-    const refresh = refreshSwarmSkill(cwd, skill, mode, text)
-    if (!refresh?.owed) return true
-    if (await this.tellSkill(target, refresh, current)) { recordSwarmSkillNotice(cwd, skill, refresh); return true }
-    if (!current()) this.skillChecks.delete(target.agent.harnessId)
+  /** Put a Buddy's skill file on this release's text and tell it if owed; when the notice could not be sent it is due again
+   *  later, or dropped for a newer roster's refresh. */
+  private async refreshBuddyFile(target: HostAgent, cwd: string, skill: SwarmSkill, current: () => boolean): Promise<void> {
+    const refresh = refreshBuddySkill(cwd, skill)
+    if (!refresh?.owed) return
+    if (await this.tellSkill(target, refresh, current)) recordBuddySkillNotice(cwd, skill, refresh)
+    else if (!current()) this.skillChecks.delete(target.agent.harnessId)
     else this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
-    return false
   }
-  /** Project instructions (spec 2026-10-30, How agents read it): the roster names the revision, never the text. The text is
-   *  read once per revision for the project's agents here, a Buddy's on its own, and installed beside the tools skill; the
-   *  agent is told once per change, however many saves came between two rosters. A read that answers another revision
-   *  installs nothing and is tried again later, as a Custom role's text. */
+  /** Project instructions (spec 2026-10-30, How agents read it): the roster names the revision, never the text, and the agent
+   *  reads the text itself with the instructions command. The history (the newest save's summary and when a revision was
+   *  saved) is read once per revision for the project's agents here; the agent is told once per change, however many saves
+   *  came between two rosters. */
   private async refreshInstructions(target: HostAgent, cwd: string, skill: SwarmSkill, doc: RowInstructions, current: () => boolean): Promise<void> {
-    const buddy = skill.role === 'buddy', harnessId = target.agent.harnessId
-    const key = instructionsKey(target.tabId, doc.projectId, buddy || target.lead === true ? target.agent.id : undefined)
-    const path = `/api/super-tabs/${target.tabId}/projects/${doc.projectId}/instructions`, as = `asAgentId=${target.agent.id}`
-    let held = this.instructionTexts.get(key)
+    const harnessId = target.agent.harnessId
+    const key = instructionsKey(target.tabId, doc.projectId)
+    const path = `/api/super-tabs/${target.tabId}/projects/${doc.projectId}/instructions/revisions?asAgentId=${target.agent.id}`
+    let held = this.instructionHistories.get(key)
     // The hash as well as the revision: a project with nothing saved stays at revision 0 while the template it reads changes
     // with backend builds (2026-11-02: running agents kept the old routing after #2495 until their daemon restarted).
-    if (held?.revision !== doc.revision || held.hash !== doc.hash || held.builtInHash !== doc.builtInHash) {
-      const answer = object(await backend(this.core, 'GET', `${path}?${as}`))
-      // A newer roster's refresh reads its own revision: this one installs and says nothing.
-      if (!current()) { this.skillChecks.delete(harnessId); return }
-      if (answer.revision !== doc.revision || typeof answer.text !== 'string') {
-        throw new Error(`The project's instructions read back are not revision ${doc.revision}, which this machine was told to install. Trying again later.`)
-      }
-      // A Buddy reads no history: it names who asked for what. Revision 0 is the built-in template: nothing was saved.
-      held = { revision: doc.revision, hash: doc.hash, text: answer.text, builtInHash: doc.builtInHash,
-        builtIn: typeof answer.builtIn === 'string' && answer.builtIn ? answer.builtIn : null, history: buddy || !doc.revision ? { summary: null, savedAt: null } : null }
-      this.instructionTexts.set(key, held)
+    if (held?.revision !== doc.revision || held.hash !== doc.hash) {
+      // Revision 0 is the built-in template: nothing was saved, and nothing has a history.
+      held = { revision: doc.revision, hash: doc.hash, history: doc.revision ? null : { summary: null, savedAt: null } }
+      this.instructionHistories.set(key, held)
     }
     // Task 4's review: a failed history read kept for the revision's life left every notice without its summary and gave each
     // fresh launch an extra notice (its save time unknown). Only a read that answered is kept; a failure is said once and
@@ -1959,7 +1895,7 @@ export class SuperTabHost {
     let unread = false
     if (!held.history) {
       try {
-        held.history = await this.instructionsHistory(`${path}/revisions?${as}`, doc.revision)
+        held.history = await this.instructionsHistory(path, doc.revision)
       } catch (error) {
         unread = true
         if (held.failedSince === undefined) {
@@ -1972,12 +1908,12 @@ export class SuperTabHost {
     if (!current()) { this.skillChecks.delete(harnessId); return }
     if (unread && this.now() - held.failedSince! < HISTORY_WAIT_MS) { this.skillChecks.set(harnessId, this.now() + SKILL_RETRY_MS); return }
     const { summary, savedAt } = held.history ?? { summary: null, savedAt: null }
-    const refresh = refreshProjectSkills(cwd, skill, { revision: doc.revision, text: held.text, builtIn: held.builtIn, summary, savedAt,
-      roleName: doc.roleName, coordinatorName: doc.coordinatorName, coordinator: target.lead === true })
+    const refresh = refreshInstructionsNotice(cwd, skill, { tabId: target.tabId, projectId: doc.projectId, revision: doc.revision, hash: doc.hash,
+      roleName: doc.roleName, summary, savedAt })
     if (!refresh?.owed) return
-    if (await this.tellSkill(target, refresh, current)) recordProjectSkillsNotice(cwd, skill, refresh)
-    else if (!current()) this.skillChecks.delete(target.agent.harnessId)
-    else this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
+    if (await this.tellSkill(target, refresh, current)) recordInstructionsNotice(cwd, skill, refresh)
+    else if (!current()) this.skillChecks.delete(harnessId)
+    else this.skillChecks.set(harnessId, this.now() + SKILL_RETRY_MS)
   }
   /** From the project's kept revisions (newest first): the newest one's one-line summary when it is [revision], and when
    *  [revision] was saved (epoch ms), which tells whether a session launched since has read it. Either is null when the

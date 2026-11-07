@@ -31,6 +31,7 @@ import { agentLaunchArgs } from '../../lib/agentAttribution.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { swarmGitHubLaunch } from '../../lib/swarmGitHub.js'
 import { SWARM_LAUNCH } from '../../superTabs/inCore/launch.js'
+import { SWARM_LAUNCH_LINE } from '../../lib/swarmSkills.js'
 
 // Every Buddy here was started on its owner's own machine: its start recorded its owner (security review 2 of #2832).
 vi.mock('../../lib/buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => 'peer' }))
@@ -182,33 +183,34 @@ describe('creating an agent', () => {
   })
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 
+  // Task #4673: no skill file; each Swarm role is sent to its project's instructions and the manual.
   it.each(['claude', 'codex'] as const)('attaches each Swarm role before %s pane dispatch', async engine => {
-    for (const [role, name] of [['coordinator', 'swarm-lead'], ['agent', 'swarm-dev']] as const) {
+    for (const role of ['coordinator', 'agent'] as const) {
       const cwd = folder()
       await setup().create(request({ cwd, engine, swarmRole: role }))
       const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
       expect(pane.swarmSkill).toEqual({ role, key: pane.sessionLabel })
       const place = vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2]
-      expect(place.swarmInstructions).toContain(`${name}/SKILL.md`)
+      expect(place.swarmInstructions).toBe(SWARM_LAUNCH_LINE)
     }
   })
 
-  // Project instructions, phase 4 (decision 1): a Reviewer started by an older client keeps its swarm-review file, and a
-  // launch an older CLI saved to finish later (a pending intent) names its role in the wire's values.
-  it('registers a Reviewer as an agent that keeps its swarm-review file, from this CLI\'s launch or an older one\'s saved intent', async () => {
+  // Project instructions, phase 4 (decision 1): a Reviewer started by an older client keeps its kind, and a launch an older CLI
+  // saved to finish later (a pending intent) names its role in the wire's values.
+  it('registers a Reviewer as an agent that keeps its Reviewer kind, from this CLI\'s launch or an older one\'s saved intent', async () => {
     for (const over of [{ swarmRole: 'agent', swarmFallback: 'review' }, { swarmRole: 'review' }]) {
       await setup().create(request({ cwd: folder(), ...over }))
       const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
       expect(pane.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: pane.sessionLabel })
-      expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toContain('swarm-review/SKILL.md')
+      expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toBe(SWARM_LAUNCH_LINE)
     }
     // A fallback is an agent's alone.
-    for (const [over, role, name] of [[{ swarmRole: 'lead' }, 'coordinator', 'swarm-lead'], [{ swarmRole: 'coordinator', swarmFallback: 'review' }, 'coordinator', 'swarm-lead'],
-      [{ swarmRole: 'dev' }, 'agent', 'swarm-dev']] as const) {
+    for (const [over, role] of [[{ swarmRole: 'lead' }, 'coordinator'], [{ swarmRole: 'coordinator', swarmFallback: 'review' }, 'coordinator'],
+      [{ swarmRole: 'dev' }, 'agent']] as const) {
       await setup().create(request({ cwd: folder(), ...over }))
       const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
       expect(pane.swarmSkill).toEqual({ role, key: pane.sessionLabel })
-      expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toContain(`${name}/SKILL.md`)
+      expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toBe(SWARM_LAUNCH_LINE)
     }
     expect(await setup().create(request({ cwd: folder(), swarmRole: 'pm' }))).toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED' })
   })
@@ -224,15 +226,12 @@ describe('creating an agent', () => {
     expect(await extraArgsOf({ engine: 'claude', swarmRole: 'agent' })).not.toContain('check_for_update_on_startup=false')
   })
 
-  it.each(['default', 'orchestration'] as const)('writes the %s skill text and its prompt line for the project\'s mode', async mode => {
+  it.each(['default', 'orchestration'] as const)('keeps the project\'s %s mode on the saved row, with the same launch line', async mode => {
     const cwd = folder()
     await setup().create(request({ cwd, swarmRole: 'agent', swarmSkillMode: mode }))
     const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
     expect(pane.swarmSkill).toEqual({ role: 'agent', key: pane.sessionLabel, mode })
-    const place = vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2]
-    const file = JSON.parse(/instead: read (".*")\.$/.exec(place.swarmInstructions!)![1]!)
-    expect(readFileSync(file, 'utf8').includes('Work otherwise the way you normally do.')).toBe(mode === 'default')
-    expect(place.swarmInstructions!.startsWith('Use the built-in swarm-tools skill')).toBe(true)
+    expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toBe(SWARM_LAUNCH_LINE)
   })
 
   // Swarm v3 (task #4215): a Swarm agent starts with its owner's own settings. Harness wrote full mode's warning acceptance
