@@ -21,6 +21,12 @@ class SuperTabPersonalTask {
   Map<String, dynamic> get agent =>
       json['agent'] == null ? const {} : superTabMap(json['agent']);
   String? get agentId => agent['id'] as String?;
+
+  /// The person who asked; empty from a backend before #4203.
+  Map<String, dynamic> get requester =>
+      json['requester'] == null ? const {} : superTabMap(json['requester']);
+  String? get requesterId => requester['id'] as String?;
+  String? get pullRequestUrl => json['pullRequestUrl'] as String?;
 }
 
 /// Lives with the parts cursor and is discarded with it on access revocation.
@@ -28,6 +34,9 @@ class SuperTabPersonalTask {
 class SuperTabPersonalTasks {
   bool supported = false;
   String mode = 'autoApprove';
+
+  /// Where the next older page starts; null when there is none, or the backend pages nothing.
+  String? olderCursor;
   final _rows = <String, SuperTabPersonalTask>{};
   final _versions = <String, int>{};
   List<SuperTabPersonalTask>? _ordered;
@@ -52,11 +61,29 @@ class SuperTabPersonalTasks {
       changed = true;
       _rows.clear();
       _versions.clear();
+      olderCursor = value['olderCursor'] as String?;
     }
     for (final id in value['removed'] as List? ?? const []) {
       if (id is String && _rows.remove(id) != null) changed = true;
     }
-    for (final raw in value['upserts'] as List? ?? const []) {
+    if (_upsert(value['upserts'])) changed = true;
+    if (changed) _ordered = null;
+    return changed;
+  }
+
+  /// Adds an older page, read [from] a cursor, below the rows held, and moves [olderCursor] past it. A page read
+  /// before a reset moved the cursor is dropped: its range may no longer follow the rows held.
+  bool applyOlder(Object? page, {required String from}) {
+    if (page is! Map || olderCursor != from) return false;
+    olderCursor = page['olderCursor'] as String?;
+    final changed = _upsert(page['upserts']);
+    if (changed) _ordered = null;
+    return changed;
+  }
+
+  bool _upsert(Object? upserts) {
+    var changed = false;
+    for (final raw in upserts as List? ?? const []) {
       final row = superTabMap(raw);
       if (row['id'] is! String || row['version'] is! num || row['at'] is! num) {
         throw const FormatException('Could not read a task summary.');
@@ -67,9 +94,11 @@ class SuperTabPersonalTasks {
       _rows[task.id] = task;
       changed = true;
     }
-    if (changed) _ordered = null;
     return changed;
   }
+
+  /// The row of task [id], or null when the feed holds none.
+  SuperTabPersonalTask? row(String id) => _rows[id];
 
   Map<String, int> get versions => Map.unmodifiable(_versions);
 
@@ -91,5 +120,6 @@ class SuperTabPersonalTasks {
     'reset': true,
     'upserts': [for (final row in rows) row.json],
     'removed': <String>[],
+    'olderCursor': ?olderCursor,
   };
 }

@@ -353,14 +353,16 @@ void main() {
       await _settle(tester);
       expectFixedPanes(tester);
       expect(_key('super-tasks-lead'), findsOneWidget);
-      expect(tester.getSize(_key('super-right-pane')).width, 340);
+      // The Tasks pane gives back to its minimum so the Board keeps room (#4211).
+      expect(tester.getSize(_key('super-right-pane')).width, 280);
       expect(tester.takeException(), isNull);
       await end(tester, c);
     },
   );
 
   testWidgets(
-    'the right pane stays 340 whatever width was saved, and has no divider',
+    'the right pane keeps its width whatever width was saved, and has no '
+    'divider',
     (tester) async {
       final store = MemoryKeyValueStore()
         ..values[SuperTabPaneLayout.storageKey] =
@@ -372,7 +374,8 @@ void main() {
       expect(_key('super-resize-right'), findsNothing);
       await tester.binding.setSurfaceSize(const Size(880, 900));
       await _settle(tester);
-      expect(tester.getSize(_key('super-right-pane')).width, 340);
+      // At the window minimum the Tasks pane is at its own minimum (#4211).
+      expect(tester.getSize(_key('super-right-pane')).width, 280);
       expectFixedPanes(tester);
       expect(tester.takeException(), isNull);
       await end(tester, c);
@@ -446,7 +449,7 @@ void main() {
       final right = tester.getSize(_key('super-right-pane')).width;
       final center = tester.getSize(_key('super-center-pane')).width;
       expect(left, greaterThanOrEqualTo(180));
-      expect(right, greaterThanOrEqualTo(340));
+      expect(right, greaterThanOrEqualTo(SuperTabPaneLayout.rightWidth));
       expect(center, greaterThanOrEqualTo(280));
       expect(left + center + right, closeTo(width, 0.01));
       // The Board itself is drawn, not an empty centre.

@@ -29,7 +29,7 @@ function group(ledger: GroupLedger, extra: Partial<Conversation> = {}): Conversa
 }
 /** A request someone asked for that shipped at [at] on an attempt that ran on [machineId]. */
 const shippedOn = (machineId: string | undefined, at: number, ledger: GroupLedger = {}, extra: Partial<Conversation> = {}) =>
-  group({ askedAt: at - HOUR, shippedAt: at, runs: [run(machineId, at - HOUR)], ...ledger }, extra)
+  group({ askedAt: at - HOUR, shippedAt: at, mergedAt: at, runs: [run(machineId, at - HOUR)], ...ledger }, extra)
 const board = (state: SuperTabState, groups: Conversation[], machines = state.machines ?? []) =>
   leaderboard({ state, groups, machines, projectId: 'lead', week: WEEK, now: NOW })
 const brought = (view: ReturnType<typeof board>, id: string) => view.people.find(p => p.personId === id)!.details.brought
@@ -54,7 +54,7 @@ describe('Brought: the machines a person brought, what shipped on each, and thei
   it('credits the attempt the request shipped on, not a later or earlier one', () => {
     const state = swarm()
     state.machines = [machine('studio', 'ken'), machine('box', 'diego')]
-    const g = group({ askedAt: WEEK, shippedAt: WEEK + 2 * HOUR, runs: [run('box', WEEK), run('studio', WEEK + HOUR), run('box', WEEK + 3 * HOUR)],
+    const g = group({ askedAt: WEEK, shippedAt: WEEK + 2 * HOUR, mergedAt: WEEK + 2 * HOUR, runs: [run('box', WEEK), run('studio', WEEK + HOUR), run('box', WEEK + 3 * HOUR)],
       shippedBy: { assignmentId: 'x', engine: 'claude', model: 'opus', at: WEEK + HOUR, machineId: 'studio' } })
     const view = board(state, [g])
     expect(brought(view, 'ken')[0]!.shipped).toBe(1)

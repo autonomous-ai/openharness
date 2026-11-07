@@ -165,7 +165,8 @@ class AppSwarmComputers extends ChangeNotifier
   }
 
   /// Starts the Lead on [machineId] as Desktop's card does (personal_lead.dart
-  /// `_launch`): approving everything, as a Swarm agent, with the Lead's
+  /// `_launch`): with its owner's own permission settings (no mode, task
+  /// #4215), as a Swarm agent, with the Lead's
   /// prompt and Claude's Lead model, in the repo's folder or a new one named
   /// after the project.
   @override
@@ -181,7 +182,6 @@ class AppSwarmComputers extends ChangeNotifier
       projectFolder: launch.folder == null
           ? ProjectFolderRequest.forTask(launch.projectName)
           : null,
-      permissionMode: 'full',
       prompt: launch.prompt,
       swarmRole: 'lead',
       swarmSkillMode: launch.skillMode,

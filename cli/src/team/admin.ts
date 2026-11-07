@@ -70,13 +70,13 @@ export function adminPromptShows(env: NodeJS.ProcessEnv = process.env, exists: (
 }
 
 /** What a Linux computer with no desktop session answers for the prompt (over SSH, or Desktop's daemon with no display). */
-export const NO_PROMPT_MESSAGE = 'No administrator prompt here: run harness team setup in a terminal.'
+export const NO_PROMPT_MESSAGE = 'No administrator prompt here: run the command in a terminal.'
 
 /**
  * Whether pkexec's answer is the person's "no". 126 is a dismissed dialog. 127 is a refused authorization only when pkexec
  * says so: it is also no authentication agent to ask with (pkexec 124 with no session: "Error creating textual
- * authentication agent", gridtest VM, 2026-10-28) and a command the script could not find. Those are failures; read as a
- * cancel, Desktop's offer would remember a "no" nobody gave, for good (./autoSetup.ts).
+ * authentication agent", gridtest VM, 2026-10-28) and a command the script could not find. Those are failures, not the person's
+ * answer.
  */
 function pkexecCancelled(code: number | null, stderr: string): boolean {
   if (code === 126) return true
