@@ -68,17 +68,21 @@ export async function trainPass(input: { projectId: string; github: TrainGitHub;
   const taskOf = new Map<string, TrainTaskPull>()
   for (const linked of tasks) if (!taskOf.has(linked.url)) taskOf.set(linked.url, linked)
 
-  /** [url] as it is now: GitHub's answer and the Swarm's verdicts. Null when it is not an open pull request of this repository. */
-  const read = async (linked: TrainTaskPull): Promise<Read | null> => {
+  /** [url] as it is now: GitHub's answer and the Swarm's verdicts. Null when it is not an open pull request of this repository.
+   *  [building]: for a new batch, where the train's own merge into the batch branch tests for a conflict, a code pull request
+   *  GitHub has not worked out yet (mergeable null, as it answers for every open one just after main moves) is read as
+   *  mergeable; a conflict there leaves it out and tells its Engineer. The fast lane merges on GitHub alone and still waits. */
+  const read = async (linked: TrainTaskPull, building = false): Promise<Read | null> => {
     const number = Number(PULL.exec(linked.url)?.[1])
     if (!number) return null
     const pull = await github.pull(number)
     if (pull.state !== 'open' || pull.url.toLowerCase() !== linked.url.toLowerCase() || pull.headRef.startsWith(TRAIN_BRANCH_PREFIX)) return null
     const files = await github.files(number), ciRequired = await github.ciRequired(pull.head)
     const reads = headReads(linked.task, linked.url, pull.head, pull.base), required = requiredReads(rules.rules, files)
-    const verdict = eligible({ url: linked.url, number, head: pull.head, state: pull.state, draft: pull.draft, base: pull.base, mergeable: pull.mergeable,
+    const lane = laneOf(files), mergeable = building && lane === 'code' && pull.mergeable === null ? true : pull.mergeable
+    const verdict = eligible({ url: linked.url, number, head: pull.head, state: pull.state, draft: pull.draft, base: pull.base, mergeable,
       labels: pull.labels, files, ciRequired }, reads, required)
-    return { member: { number, url: linked.url, head: pull.head, title: pull.title, files, taskId: linked.taskId }, verdict, reads, required, lane: laneOf(files) }
+    return { member: { number, url: linked.url, head: pull.head, title: pull.title, files, taskId: linked.taskId }, verdict, reads, required, lane }
   }
 
   const closeBatch = async (number: number, branch: string, why: string) => {
@@ -179,7 +183,7 @@ export async function trainPass(input: { projectId: string; github: TrainGitHub;
   const reads: Read[] = []
   for (const linked of taskOf.values()) {
     try {
-      const found = await read(linked)
+      const found = await read(linked, true)
       if (!found || memory.failed.has(`${found.member.url}@${found.member.head}`)) continue
       line.candidates++
       const { member, verdict } = found
