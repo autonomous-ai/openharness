@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../core/runtime_model_name.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
@@ -201,6 +202,7 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
         on == null ? 'not served now' : buddyModelServers(on),
       widget.rest,
     ].join(' · ');
+    final label = current == null ? _subscriptionModel(agent) : nameOf(current);
     final picker = request != null
         ? Text(
             request.gridModel == null
@@ -209,6 +211,15 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: DesktopChrome.metadata(),
+          )
+        // Only Claude switches to a shared model: on its subscription, any other engine's menu would hold the one row
+        // already chosen (#4445).
+        : current == null && agent.engine != 'claude'
+        ? Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: DesktopChrome.metadata(color: DesktopChrome.foreground),
           )
         : AppDropdown(
             controller: _menu,
@@ -236,7 +247,7 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
                   children: [
                     Flexible(
                       child: Text(
-                        current == null ? 'Your subscription' : nameOf(current),
+                        label,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: DesktopChrome.metadata(
@@ -273,3 +284,13 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
     );
   }
 }
+
+/// The model a Buddy on its own subscription runs, as people know it ("Opus 5.5"); while its configuration names none
+/// but the engine's default, the subscription it runs on.
+String _subscriptionModel(SuperTabAgent agent) =>
+    switch (agent.configuration['model']) {
+      final String id when id.isNotEmpty && id != 'default' => modelDisplayName(
+        id,
+      ),
+      _ => 'Your subscription',
+    };

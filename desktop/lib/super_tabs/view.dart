@@ -319,6 +319,9 @@ class _SuperTabViewState extends State<SuperTabView>
   /// last opened from it, or the task whose chat the board was opened from.
   String? _tasksSelectedId;
 
+  /// The Board page's Board, List or Members: its Board tab is on only while the Board is, and turns it back on.
+  final _tasksLayout = ValueNotifier(SuperTabTasksLayout.board);
+
   /// Why the last priority change was refused, and for which task: said
   /// beside that task's title (task #3117).
   ({String taskId, String error})? _priorityRefusal;
@@ -1223,6 +1226,7 @@ class _SuperTabViewState extends State<SuperTabView>
     _answer.dispose();
     _board.dispose();
     _facts.dispose();
+    _tasksLayout.dispose();
     c.removeListener(_changed);
     c.removeListener(_holdVoiceAway);
     _voice?.dispose();
@@ -3576,13 +3580,26 @@ class _SuperTabViewState extends State<SuperTabView>
   /// so it opens in the middle as a Tasks card's does (audit of 1.3.89, #4441: the card only turned grey).
   Future<void> _openTask(String id) async {
     if (_hasTasksPane) return _openPersonalTask(id);
-    if (!await c.loadGroup(id) || !mounted) return;
+    if (!await _readTask(id)) return;
     _openConversation(id);
+  }
+
+  /// Whether task [id]'s chat is held, read first if need be: a card whose chat can't be read says so rather than
+  /// doing nothing (audit polish, #4445).
+  Future<bool> _readTask(String id) async {
+    final read = await c.loadGroup(id);
+    if (!mounted) return false;
+    if (!read && !c.accessRevoked) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text("You can't open this task's chat.")),
+      );
+    }
+    return read;
   }
 
   /// A Tasks card opens its task's chat in the middle under the task's header, never the Board (#4204).
   Future<void> _openPersonalTask(String id) async {
-    if (!await c.loadGroup(id) || !mounted) return;
+    if (!await _readTask(id)) return;
     _openAgentChat(id);
     setState(() => _taskInMiddle = id);
   }
@@ -3606,11 +3623,19 @@ class _SuperTabViewState extends State<SuperTabView>
   );
 
   /// Above the Board: the project's name and its Board / Chat navigation.
-  Widget _boardHeader(SuperTabProject project) => SizedBox(
+  Widget _boardHeader(SuperTabProject project, bool narrow) => SizedBox(
+    key: const ValueKey('super-board-header'),
     height: 44,
     child: Row(
       children: [
         const SizedBox(width: 8),
+        // The left pane folded into its drawer: the chat header's button opens it.
+        if (narrow)
+          AppIconButton(
+            icon: AppIcons.menu,
+            tooltip: 'Conversations',
+            onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
+          ),
         // The name and its tabs take the room left, so what follows sits at the right edge: a Flexible name beside a
         // Spacer split the free space, and the name's unused half left the controls mid-bar (#3846).
         Expanded(
@@ -3625,7 +3650,10 @@ class _SuperTabViewState extends State<SuperTabView>
                 ),
               ),
               const SizedBox(width: 12),
-              _projectTabs(project, board: true),
+              ListenableBuilder(
+                listenable: _tasksLayout,
+                builder: (context, _) => _projectTabs(project, board: true),
+              ),
             ],
           ),
         ),
@@ -3648,7 +3676,16 @@ class _SuperTabViewState extends State<SuperTabView>
     mainAxisSize: MainAxisSize.min,
     children: [
       for (final (key, label, selected, open) in [
-        ('super-board-tab-board', 'Board', board, () => _openBoard(project)),
+        // On the Board page with List or Members on, the Board tab is the way back to the Board.
+        (
+          'super-board-tab-board',
+          'Board',
+          board && _tasksLayout.value == SuperTabTasksLayout.board,
+          () {
+            if (!board) return _openBoard(project);
+            _tasksLayout.value = SuperTabTasksLayout.board;
+          },
+        ),
         (
           'super-board-tab-chat',
           'Chat',
@@ -3978,6 +4015,8 @@ class _SuperTabViewState extends State<SuperTabView>
       controller: c,
       project: project,
       storage: widget.app?.localStore,
+      // Under the Board page's tabs, which show it.
+      layout: boardProject != null ? _tasksLayout : null,
       needsHuman: (g) => _needsHuman(g).length,
       selectedId: _tasksSelectedId,
       onOpenTask: (id) {
@@ -5059,6 +5098,36 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
+  /// What the Swarm cannot read, with Retry, over whatever the middle holds: a chat, a Board or a page (audit finding 7
+  /// of task #4211; it was drawn in the chat column only, so the Board and the pages looked live while offline).
+  Widget _connectionLine(SuperTabController c) {
+    if (c.error == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+      child: Row(
+        children: [
+          // A Swarm that was read and now cannot be (a backend or this
+          // computer's Harness restarting) keeps what it shows and says
+          // so quietly; it reads again by itself (task #2647).
+          Expanded(
+            child: c.backendUnreachable && c.snapshot != null
+                ? Text(
+                    'Reconnecting…',
+                    key: const ValueKey('super-reconnecting'),
+                    style: DesktopChrome.metadata(),
+                  )
+                : Text(c.error!, style: DesktopChrome.control()),
+          ),
+          if (!c.accessRevoked)
+            TextButton(
+              onPressed: () => unawaited(c.retryRead()),
+              child: const Text('Retry'),
+            ),
+        ],
+      ),
+    );
+  }
+
   /// On the web a conversation is read before anything else is drawn
   /// ([WorkspaceChrome.superTabRecovers]); Desktop keeps "Loading" meanwhile.
   bool get _readsFirst => WorkspaceChrome.of(context).superTabRecovers;
@@ -5269,33 +5338,49 @@ class _SuperTabViewState extends State<SuperTabView>
         !c.accessRevoked) {
       // The same + New agent as the left pane's: the Cmd-N form (task #4196).
       final newAgent = widget.board ? widget.onNewAgent : null;
+      final newProject =
+          widget.board || WorkspaceChrome.of(context).superTabRecovers
+          ? widget.onNewProject
+          : null;
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // One sentence for both ways to start (audit finding 20, #4445).
               Text(
-                'Create a project to get started.',
+                newAgent != null
+                    ? 'Start a project, or bring an agent to work with you.'
+                    : 'Create a project to get started.',
                 style: DesktopChrome.text(color: DesktopChrome.muted),
               ),
-              if ((widget.board ||
-                      WorkspaceChrome.of(context).superTabRecovers) &&
-                  widget.onNewProject != null) ...[
+              if (newProject != null || newAgent != null) ...[
                 const SizedBox(height: 12),
-                FilledButton(
-                  style: _thumb,
-                  onPressed: c.canWrite ? widget.onNewProject : null,
-                  child: const Text('New project'),
-                ),
-              ],
-              if (newAgent != null) ...[
-                const SizedBox(height: 8),
-                TextButton.icon(
-                  key: const ValueKey('super-empty-new-agent'),
-                  onPressed: c.canWrite ? newAgent : null,
-                  icon: const Icon(AppIcons.plus, size: 16),
-                  label: const Text('New agent'),
+                // Both in one style and one width, so neither reads as the lesser choice.
+                IntrinsicWidth(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (newProject != null)
+                        TextButton.icon(
+                          style: _thumb,
+                          onPressed: c.canWrite ? newProject : null,
+                          icon: const Icon(AppIcons.plus, size: 16),
+                          label: const Text('New project'),
+                        ),
+                      if (newProject != null && newAgent != null)
+                        const SizedBox(height: 8),
+                      if (newAgent != null)
+                        TextButton.icon(
+                          key: const ValueKey('super-empty-new-agent'),
+                          style: _thumb,
+                          onPressed: c.canWrite ? newAgent : null,
+                          icon: const Icon(AppIcons.plus, size: 16),
+                          label: const Text('New agent'),
+                        ),
+                    ],
+                  ),
                 ),
               ],
               if (c.operationError != null) ...[
@@ -5305,7 +5390,7 @@ class _SuperTabViewState extends State<SuperTabView>
               if (c.hasPendingAction)
                 TextButton(
                   onPressed: c.saving ? null : c.retry,
-                  child: const Text('Check pending action'),
+                  child: const Text('Check again'),
                 ),
             ],
           ),
@@ -5472,31 +5557,7 @@ class _SuperTabViewState extends State<SuperTabView>
             focus: _findFocus,
             onClose: _closeFind,
           ),
-        if (c.error != null && !unread)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-            child: Row(
-              children: [
-                // A Swarm that was read and now cannot be (a backend or this
-                // computer's Harness restarting) keeps what it shows and says
-                // so quietly; it reads again by itself (task #2647).
-                Expanded(
-                  child: c.backendUnreachable && c.snapshot != null
-                      ? Text(
-                          'Reconnecting…',
-                          key: const ValueKey('super-reconnecting'),
-                          style: DesktopChrome.metadata(),
-                        )
-                      : Text(c.error!, style: DesktopChrome.control()),
-                ),
-                if (!c.accessRevoked)
-                  TextButton(
-                    onPressed: () => unawaited(c.retryRead()),
-                    child: const Text('Retry'),
-                  ),
-              ],
-            ),
-          ),
+        if (!unread) _connectionLine(c),
         if (group != null && decisions != null && !c.isEarlierBuddyChat(group))
           // The list stops at an edge under the Buddy's line, as it does under
           // the header: without one, a message scrolled up to the line read as
@@ -6328,11 +6389,6 @@ class _SuperTabViewState extends State<SuperTabView>
           !_rosterOpen &&
           !_terminalsVisible;
       final fixedSides = boardLayout || tasksStay;
-      // The fixed layout never drops a side pane; every other surface keeps
-      // its own width rules.
-      final narrow =
-          !fixedSides &&
-          constraints.maxWidth < MediaQuery.textScalerOf(context).scale(720);
       // Wide enough for a right column beside the chat; it shows only an
       // open thread or Members, closed at rest (Quiet Swarm, 2026-11-02).
       final wide =
@@ -6362,6 +6418,16 @@ class _SuperTabViewState extends State<SuperTabView>
       final boardProject = boardLayout
           ? c.snapshot?.projectById(_boardProjectId ?? impliedBoard ?? '')?.id
           : null;
+      // The left pane folds into its drawer in a small window. With the Board in the middle that is under 1000, its
+      // header then opening the drawer, so the Board keeps two columns (audit finding 12, #4445); the fixed layout's
+      // other middles have no menu button and keep both side panes.
+      final narrow = boardLayout
+          ? boardProject != null &&
+                constraints.maxWidth <
+                    MediaQuery.textScalerOf(context).scale(1000)
+          : !fixedSides &&
+                constraints.maxWidth <
+                    MediaQuery.textScalerOf(context).scale(720);
       // The chat alone in the middle, under its one-row header (#4204); a project's own chat keeps the full view.
       final fullView =
           !boardLayout ||
@@ -6410,6 +6476,23 @@ class _SuperTabViewState extends State<SuperTabView>
         },
         onClose: _closeRoster,
       );
+      final pagesIndex = boardProject != null
+          ? 5
+          : _devicesVisible
+          ? 1
+          : _manageVisible
+          ? 4
+          : _notificationsVisible
+          ? 3
+          : c.snapshot?.projects.isEmpty == true
+          ? 0
+          : _terminalsVisible
+          ? 1
+          : _showPullRequests
+          ? 2
+          : _showTasks
+          ? 5
+          : 0;
       final view = Focus(
         canRequestFocus: false,
         skipTraversal: true,
@@ -6466,7 +6549,10 @@ class _SuperTabViewState extends State<SuperTabView>
                     : Column(
                         children: [
                           if (boardProject != null)
-                            _boardHeader(c.snapshot!.projectById(boardProject)!)
+                            _boardHeader(
+                              c.snapshot!.projectById(boardProject)!,
+                              narrow,
+                            )
                           else
                             _header(c.selected, narrow),
                           if (_manageOpen)
@@ -6480,25 +6566,15 @@ class _SuperTabViewState extends State<SuperTabView>
                                 onChoose: _chooseManageTab,
                               ),
                             ),
+                          // The chat draws the line itself, and a terminal's chat beside it answers for the terminal's own
+                          // connection; every other surface in the middle gets it here.
+                          if (pagesIndex != 0 &&
+                              !_terminalsVisible &&
+                              !(_readsFirst && c.snapshot == null))
+                            _connectionLine(c),
                           Expanded(
                             child: SuperTabPages(
-                              index: boardProject != null
-                                  ? 5
-                                  : _devicesVisible
-                                  ? 1
-                                  : _manageVisible
-                                  ? 4
-                                  : _notificationsVisible
-                                  ? 3
-                                  : c.snapshot?.projects.isEmpty == true
-                                  ? 0
-                                  : _terminalsVisible
-                                  ? 1
-                                  : _showPullRequests
-                                  ? 2
-                                  : _showTasks
-                                  ? 5
-                                  : 0,
+                              index: pagesIndex,
                               children: [
                                 chatBeside || boardProject != null
                                     ? const SizedBox.shrink()
@@ -6652,7 +6728,8 @@ class _SuperTabViewState extends State<SuperTabView>
                             child: Material(
                               color: grid.AppPalette.swarmSidebar,
                               elevation: 8,
-                              child: _sidebar(),
+                              // The same lit row as the left pane it stands in for.
+                              child: _sidebar(boardProjectId: boardProject),
                             ),
                           ),
                         ),

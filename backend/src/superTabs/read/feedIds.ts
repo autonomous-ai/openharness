@@ -1,7 +1,7 @@
 import type { PrismaClient } from '@prisma/client'
 import type { Conversation } from '../model.js'
 
-type FeedFields = Pick<Conversation, 'kind' | 'audience' | 'reviewOf' | 'requesterId' | 'taskApproval' | 'proposal' | 'assignment'>
+type FeedFields = Pick<Conversation, 'kind' | 'audience' | 'reviewOf' | 'requesterId' | 'taskApproval' | 'proposal' | 'assignment' | 'foldedInto'>
 
 /** A person at one membership, as an approval or a proposal names them: a later membership of the same account matches none. */
 export const askedKey = (personId: string, generation: string): string => `${personId}:${generation}`
@@ -11,10 +11,10 @@ export const askedKey = (personId: string, generation: string): string => `${per
  * reader's: who asked (the approver or proposal senders at their membership, else the requester), the login its agent runs
  * under, which outlives the agent, and the agent doing it or suggested for it. Stored as the conversation's indexed `feedIds`
  * on every write (parts/write.ts extracted), so a page is one read of the reader's keys and own agents. A conversation that
- * is no task, and a proposal merged into another, names nobody.
+ * is no task, a proposal merged into another, and a task closed into another (foldedInto), names nobody.
  */
 export function feedIdsOf(group: FeedFields): string[] {
-  if (group.kind || group.audience || group.reviewOf || group.proposal?.mergedInto) return []
+  if (group.kind || group.audience || group.reviewOf || group.proposal?.mergedInto || group.foldedInto) return []
   const approval = group.taskApproval
   const asked = approval ? [askedKey(approval.personId, approval.generation)]
     : group.proposal ? group.proposal.senders.map(s => askedKey(s.personId, s.generation)) : [group.requesterId]

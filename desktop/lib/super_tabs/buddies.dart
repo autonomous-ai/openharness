@@ -589,7 +589,13 @@ class _RenameBuddyDialogState extends State<_RenameBuddyDialog> {
               ),
               if (_error case final error?) ...[
                 const SizedBox(height: 12),
-                Text(error, style: DesktopChrome.control()),
+                Text(
+                  error,
+                  // The Buddy card's error colour.
+                  style: DesktopChrome.control(
+                    color: grid.AppPalette.dangerFill,
+                  ),
+                ),
               ],
             ],
           ),
