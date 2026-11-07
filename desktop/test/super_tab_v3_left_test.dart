@@ -1279,6 +1279,45 @@ void main() {
       await end(tester, c);
     });
 
+    // Security review of #3570: a chat opened at a membership its person left is not theirs; after they rejoin, the Lead's
+    // row asks again and opens a new one, never the answer it had the first time.
+    testWidgets('after its person leaves and rejoins, a Lead opens a new '
+        'private chat', (tester) async {
+      late ConversationServer server;
+      final c = await view(
+        tester,
+        setup: (s) {
+          server = s;
+          (s.state['agents'] as List<Map<String, dynamic>>)
+              .firstWhere((a) => a['id'] == 'orion')
+              .addAll({'kind': 'pm', 'chatId': null});
+          (s.state['people'] as List).cast<Map>().firstWhere(
+            (p) => p['id'] == 'owner',
+          )['generation'] = 'first';
+        },
+      );
+      await tester.tap(key('super-agent-orion'));
+      await settle(tester);
+      expect(c.selectedId, 'agent-chat-orion-first');
+      // They left and rejoined: the old chat is not theirs, and the Lead names none.
+      (server.state['people'] as List).cast<Map>().firstWhere(
+        (p) => p['id'] == 'owner',
+      )['generation'] = 'second';
+      (server.state['conversations'] as List).cast<Map>().removeWhere(
+        (g) => g['id'] == 'agent-chat-orion-first',
+      );
+      (server.state['agents'] as List<Map<String, dynamic>>).firstWhere(
+        (a) => a['id'] == 'orion',
+      )['chatId'] = null;
+      server.revision++;
+      await tester.runAsync(c.refresh);
+      await settle(tester);
+      await tester.tap(key('super-agent-orion'));
+      await settle(tester);
+      expect(c.selectedId, 'agent-chat-orion-second');
+      await end(tester, c);
+    });
+
     testWidgets('a person\'s own agent chat sends without a Lead', (
       tester,
     ) async {

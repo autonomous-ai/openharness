@@ -1761,7 +1761,14 @@ class ConversationServer {
         // As backend agent.chat (task #4664): the reader's private chat with
         // their own Lead, opened once; the Lead names it as its chat.
         final agentId = command['agentId'] as String;
-        final chatId = 'agent-chat-$agentId';
+        // One per membership: a rejoined reader gets a new chat.
+        final generation = (state['people'] as List? ?? const [])
+            .cast<Map>()
+            .where((p) => p['id'] == (reader ?? 'owner'))
+            .firstOrNull?['generation'];
+        final chatId = generation == null
+            ? 'agent-chat-$agentId'
+            : 'agent-chat-$agentId-$generation';
         final conversations = (state['conversations'] as List)
             .cast<Map<String, dynamic>>();
         final agent = (state['agents'] as List)
@@ -1775,7 +1782,7 @@ class ConversationServer {
             'agentIds': [agentId],
             'audience': {
               'people': [
-                {'id': reader ?? 'owner', 'generation': 'g'},
+                {'id': reader ?? 'owner', 'generation': generation ?? 'g'},
               ],
             },
           });
