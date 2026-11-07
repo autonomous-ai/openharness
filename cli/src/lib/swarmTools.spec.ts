@@ -9,7 +9,11 @@ describe('SWARM_TOOLS_SKILL', () => {
       expect(SWARM_TOOLS_SKILL).toContain(part)
     }
     expect(SWARM_TOOLS_SKILL).not.toMatch(/\b(Product Manager|Builder|Reviewer|Engineer|Tester|Lead)\b/)
-    expect(SWARM_TOOLS_SKILL).not.toMatch(/never merge|your own work|only you/i)
+    expect(SWARM_TOOLS_SKILL).not.toMatch(/your own work|only you/i)
+    // Security review 1 of #3574: instructions rev 90 no longer say it, so its one safety line sits with the other safety
+    // rules, and nowhere else in the manual.
+    const safety = SWARM_TOOLS_SKILL.indexOf('## Shared machines and secrets')
+    expect(SWARM_TOOLS_SKILL.slice(0, safety)).not.toMatch(/never merge/i)
     expect(Buffer.byteLength(SWARM_TOOLS_SKILL)).toBeLessThan(24 * 1024)
   })
   // Project instructions, phase 4: the server refuses only facts and access, routing rules live in the instructions, and

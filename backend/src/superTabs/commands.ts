@@ -43,7 +43,7 @@ import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
 import { CREW_NEED_KIND, crewNeedPlace, crewNeedText, projectPm, routedLine, routesToPm, type CrewNeed } from './crewNeeds.js'
 import { checkReason, heldReason, missingReason } from './heldReason.js'
-import { answerDecision, askDecisions, askedThroughBuddy, mustAgreePassed, asksDirectly, BUDDY_DECISION, BUDDY_SEND, checkBuddyAsker, checkDirectAsk, checkDecisionDeadline, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, SEND_OPTIONS, settleBuddyDecision, isBuddyDecision, type AskedQuestion, type DecisionTarget, type OwnerAnswer } from './decisions.js'
+import { answerDecision, askDecisions, askedThroughBuddy, mustAgreePassed, asksDirectly, BUDDY_DECISION, BUDDY_SEND, checkBuddyAsker, checkDirectAsk, checkDecisionDeadline, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, SEND_OPTIONS, PROPOSAL_QUESTION, proposalQuestionDecision, proposalQuestionDecisionId, settleBuddyDecision, isBuddyDecision, type AskedQuestion, type DecisionTarget, type OwnerAnswer } from './decisions.js'
 import { leadOf, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest, workedAgain } from './terminal.js'
 import { BACK_WITH_YOU, pickUp, reopenHanded } from './handed.js'
 import { changesRequested, engineerAnswered, leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, revisionReady, toldEngineer, waitingForReview } from './liveness.js'
@@ -89,7 +89,7 @@ import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, F
 import { repeatedRules } from './instructionsDiff.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { BASE_DOCUMENT, BASE_VERSION } from './instructionsRebase.js'
-import { BUILT_IN_HEADING, tidySaved } from './pmSchedule.js'
+import { tidySaved } from './pmSchedule.js'
 import { contractRefusal, missingContract } from './taskContract.js'
 import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, proposalPriority, titlePriority, type TaskPriority } from './taskPriority.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
@@ -1484,8 +1484,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
    *  (projects.ts isClosedPmChat); an app from before still sends this to open one. */
   const pmChatClosed = (): never =>
     fail('PM_CHAT_CLOSED', actor.kind === 'agent'
-      ? 'Chat with PM is closed: to tell one person something privately, send person.tell; it lands in their Buddy chat.'
-      : 'Chat with PM is closed: talk to the PM in the project chat, or brainstorm with your Buddy, where the PM\'s private lines reach you.', 403)
+      ? 'Chat with PM is closed: tell a person in the project chat, tagging them, or ask them with decision.ask.'
+      : 'Chat with PM is closed: talk to the PM in the project chat, or brainstorm with your Buddy.', 403)
   /** A Swarm-wide switch is the Swarm owner's, or a Lead's passing on a chat message the Swarm owner wrote in the last day,
    *  as rules are. */
   const swarmOwnerAsked = (askedIn: { conversationId: string; messageId: string } | undefined, what: string) => {
@@ -2483,11 +2483,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (!command.askedBy) fail('ASKED_BY_REQUIRED', 'Name the member who asked for this change (askedBy).', 400)
       }
       const askedBy = command.askedBy ? askedByOf(state, project, command.askedBy) : (actor as Extract<Actor, { kind: 'person' }>).userId
-      // The Swarm adds the built-in PM schedule to every coordinator's read (pmSchedule.ts); one copied into the document would
-      // be read twice, and go stale when the built-in one changes. Refused out loud, never stripped.
-      if (command.text.split('\n').some(line => line.trim() === BUILT_IN_HEADING)) {
-        fail('INSTRUCTIONS_BUILT_IN', 'Remove the "Built-in PM schedule" section: the Swarm adds it to every read, so it is never saved in the document.', 400)
-      }
       const current = project.instructionsRevision ?? 0
       if (command.baseRevision !== current) {
         // Refused with the text it missed, to merge and save again (design, Concurrency): never two writers' texts kept silently.
@@ -3206,6 +3201,19 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         result.keptWaiting = true
         break
       }
+      // A proposal card's question (task #4547): answering it answers the card, as its person would there.
+      if (context.decision?.kind === PROPOSAL_QUESTION) {
+        const asked = context.decision, card = conversation(state, asked.conversationId)
+        const q = card.proposal?.questions.find(x => proposalQuestionDecisionId(x.id) === asked.id)
+        if (!q || q.answer) fail('DECISION_ANSWERED', 'This decision is already answered.')
+        const { answer } = answerDecision(state, actor, asked, { choice: command.choice, note: command.note ?? null, delegate: command.delegate === true,
+          defaulted: context.defaulted === true, now: context.now })
+        effects.decisionAnswer = answer
+        const text = answer.choice !== null ? asked.options[answer.choice]! : answer.note!
+        effects.messages.push(...applyProposalAction(state, actor, { type: 'proposal.answer', conversationId: card.id, questionId: q.id, text }, operationId, context.now).messages)
+        result.decisionId = answer.id
+        break
+      }
       const { answer, noticeIn, notice, recipients, source, line } = answerDecision(state, actor, context.decision,
         { choice: command.choice, note: command.note ?? null, delegate: command.delegate === true, overdue: context.overdue === true, defaulted: context.defaulted === true, now: context.now })
       effects.decisionAnswer = answer
@@ -3633,6 +3641,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const outcome = applyProposalAction(state, actor, command, operationId, context.now)
       effects.messages.push(...outcome.messages)
       Object.assign(result, outcome.result)
+      // What needs its person lands in their Decisions (task #4547), and an answer on the card closes it there.
+      if (command.type === 'proposal.ask') {
+        const card = conversation(state, command.conversationId), q = card.proposal!.questions.find(x => x.id === outcome.result.questionId)!
+        effects.decisions = [proposalQuestionDecision(state, card, q, actor.kind === 'agent' ? actor.agentId : actor.userId, operationId)]
+      }
+      if (command.type === 'proposal.answer' && outcome.result.applied) effects.closedDecisions = [proposalQuestionDecisionId(command.questionId)]
       break
     }
     case 'proposal.create': {

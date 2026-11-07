@@ -60,7 +60,7 @@ import { taskProcess } from './process.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
 import { DELETED_TEXT, type MessageChangeTarget } from './messageEdits.js'
-import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, routingRow } from './buddies.js'
+import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, refuseOthersInPrivateChat, routingRow } from './buddies.js'
 import { TURN_END_WAIT_MS, waitsForTurnEnd, withTurnEnd } from './turnEnd.js'
 import { crewNeedOf } from './crewNeeds.js'
 import { CARRIES_KEPT } from './mergeCarry.js'
@@ -70,7 +70,7 @@ import { lostReasonWithoutMachine } from './lostReason.js'
 import { LEAD_NAME } from './leadStart.js'
 import { deleteInstructions, instructionsId, readNotes, revisionId, writeInstructions, writeNotes } from './instructionsStore.js'
 import { currentRules, deleteRules, readRules, readRulesHistory, writeRules } from './policyStore.js'
-import { SEED_RULES, seedRules, validMachineRules, type MachineRule, type ProjectRules } from './policy.js'
+import { SEED_RULES, seedRules, validMachineRules, type MachineRule } from './policy.js'
 import { coordinatorNameOf, FIRST_INSTRUCTIONS, FIRST_SUMMARY, liveNotes, MAX_REVISIONS } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
@@ -121,7 +121,7 @@ import { STATUS_LABELS,
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
 import { agentPost, digestIsDue, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredMessage, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
-import { pmScheduleText, recordTidy, recordWake, scheduleRequest, tidyRequest } from './pmSchedule.js'
+import { recordTidy, recordWake, scheduleRequest, tidyRequest } from './pmSchedule.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, startedHolds, tokenTask, type WorkHold } from '../github/holds.js'
 import { accrueLent, addLent, lentAgents, lentProjects } from './leaderboard/lent.js'
@@ -133,7 +133,7 @@ import { closeAssignment, closeUnassignedStart, LIST_SIZE, newestConversations, 
 import { answeredAgents, dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByAnswer, resolveByReply, resolveTags, resolveWhenWorked, writeMentions } from './mentions.js'
 import { stuckAlerts } from './stuck.js'
 import { OVERDUE_PER_PASS, overdueDecisions, dueDefaultDecisions } from './overdueDecisions.js'
-import { answerableBy, askDecisions, BUDDY_SEND, DECISION_ASKED_KIND, keepWaiting, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingConversations, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
+import { answerableBy, askDecisions, BUDDY_SEND, closeDecisions, DECISION_ASKED_KIND, keepWaiting, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingConversations, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
 import { recordMessageReach } from './messageReachStats.js'
@@ -739,16 +739,6 @@ async function machineRulesOf(tx: Transaction, tabId: string, projectId: string)
   const stored = read?.rules.machines
   if (Array.isArray(stored) && stored.length !== rules.length) logger.warn('[swarm-machine-rules] a rule failed its schema and is not applied', { tabId, projectId })
   return rules
-}
-
-/** [projectId]'s release window for its PM's built-in text (pmSchedule.ts), from its newest rules revision: the seed's for a
- *  record that does not pass the schema, said in the log, so the PM still reads its instructions. One indexed read. */
-async function releaseWindowOf(tx: Transaction, tabId: string, projectId: string): Promise<ProjectRules['releaseWindow']> {
-  return (await currentRules(tx, tabId, projectId).catch((error: unknown) => {
-    if (!(error instanceof SuperTabError) || error.code !== 'RULES_INVALID') throw error
-    logger.warn('[swarm-pm-text] rules record invalid; the seed release window is shown', { tabId, projectId })
-    return { revision: 0, rules: SEED_RULES }
-  })).rules.releaseWindow
 }
 
 export class SuperTabStore {
@@ -2234,7 +2224,14 @@ export class SuperTabStore {
       if (command.type === 'project.boardMode' && command.on) context.legacyProposals = await this.legacyProposalBodies(tx, original, command.projectId)
       const effects = applyCommand(original, actor, command, context)
       // Resolve repeats before numbering or writing Buddy notices: a repeated ask is the existing decision, already told.
-      const decisionIds = effects.decisions ? await writeDecisions(tx, tabId, effects.decisions, context.now) : []
+      // A card's question stays on its card when its person's Decisions from this PM are full: the ask still counts (task #4547).
+      const decisionIds = !effects.decisions ? [] : command.type !== 'proposal.ask' ? await writeDecisions(tx, tabId, effects.decisions, context.now)
+        : await writeDecisions(tx, tabId, effects.decisions, context.now).catch((error: unknown) => {
+          if (!(error instanceof SuperTabError) || error.code !== 'DECISIONS_FULL') throw error
+          logger.warn('[swarm-decisions] a proposal question stays on its card only: its person has the most open decisions from this asker')
+          effects.decisions = []
+          return []
+        })
       const newDecisions = effects.decisions?.filter((draft, i) => decisionIds[i] === draft.id) ?? []
       if (effects.decisions) {
         if (command.type === 'decision.ask') effects.result.decisionIds = decisionIds
@@ -2456,7 +2453,7 @@ export class SuperTabStore {
       }
       if (effects.closedAssignment) await closeAssignment(tx, tabId, effects.closedAssignment.assignmentId, effects.closedAssignment.outcome, context.now)
       await recordEvidence(tx, tabId, original, effects.state, context.now)
-      const threads = await this.writeMessages(tx, tabId, effects.state, effects.messages, sequences)
+      const threads = await this.writeMessages(tx, tabId, effects.state, effects.messages, sequences, false, original)
       if (effects.lateDeliveries?.length) await this.writeLateDeliveries(tx, tabId, effects.state, effects.lateDeliveries)
       if (command.type === 'message.send' && actor.kind === 'person') await resolveByReply(tx, tabId, command.conversationId, actor.userId, context.now)
       // Answering an agent settles its tags in other conversations too (mentions.ts answeredAgents).
@@ -2504,6 +2501,7 @@ export class SuperTabStore {
       // A new decision reaches its person's phones (task #3248); a repeat was already brought to them.
       if (newDecisions.length) this.tellPhones(tx, tabId, effects.state, { replies: [], tags: [], decisions: newDecisions }, [])
       if (effects.decisionAnswer) await recordAnswer(tx, tabId, effects.decisionAnswer, context.now)
+      if (effects.closedDecisions) await closeDecisions(tx, tabId, effects.closedDecisions, context.now)
       if (effects.decisionKeptWaiting) await keepWaiting(tx, tabId, effects.decisionKeptWaiting)
       // Work this command ended (done, cancelled, archived) closes the decisions still waiting there (Dee, 10-31). After this
       // command's own answer and asks, so an answer in the same write counts and a reopened task's new ask is a new decision.
@@ -3436,11 +3434,8 @@ export class SuperTabStore {
       if (revision && stored?.revision !== revision) fail('INSTRUCTIONS_UNAVAILABLE', 'This project\'s instructions cannot be read now. Try again in a moment.', 503)
       const notes = buddy ? undefined : liveNotes(await readNotes(tx, tabId, projectId), this.now())
         .map(n => ({ id: n.id, text: n.text, askedBy: n.askedBy, at: new Date(n.at), expiresAt: n.expiresAt === null ? null : new Date(n.expiresAt) }))
-      // The built-in PM schedule, beside the document and never in it: to the project's coordinator alone (pmSchedule.ts).
-      const coordinator = actor.kind === 'agent' && ledProject(state, actor.agentId)?.id === project.id
       return { projectId, revision, hash: stored ? stored.hash : FIRST_INSTRUCTIONS.instructionsHash, text: stored?.text ?? INSTRUCTIONS_TEMPLATE, template: !stored,
-        coordinatorName: coordinatorNameOf(project), notesRevision: project.notesRevision ?? 0, ...(notes ? { notes } : {}),
-        ...(coordinator ? { builtIn: pmScheduleText(state, project, await releaseWindowOf(tx, tabId, projectId)) } : {}) }
+        coordinatorName: coordinatorNameOf(project), notesRevision: project.notesRevision ?? 0, ...(notes ? { notes } : {}) }
     })
   }
 
@@ -3692,7 +3687,10 @@ export class SuperTabStore {
    *  kept, and only its missing deliveries are written. One duplicate had stopped every later report and poll
    *  (2026-10-28); any other message under the id still fails, so another task's notice is never delivered as this one. */
   private async writeMessages(tx: Transaction, tabId: string, state: SuperTabState, messages: MessageDraft[], sequences: ReadonlyMap<string, number>,
-    keepStored = false): Promise<Map<string, ThreadFacet>> {
+    keepStored = false, before: Pick<SuperTabState, 'agents'> = state): Promise<Map<string, ThreadFacet>> {
+    // Only a person and their own agent write in their private chat (task #4558): applyCommand checks a command's rows, and
+    // every write is checked again here, so a notice built off that path with the wrong author is refused too (#4547).
+    refuseOthersInPrivateChat(state, messages, before)
     const stored = keepStored ? await storedMessages(tx, messages.map(m => m.id)) : []
     const kept = new Set(stored.filter(row => messages.some(m => m.id === row.id && row.tabId === tabId && row.conversationId === m.conversationId
       && isDeepStrictEqual(row.source ?? undefined, m.source))).map(row => row.id))
@@ -4531,7 +4529,7 @@ export class SuperTabStore {
         await recordAttempts(tx, tabId, loaded.state, state, now)
         await recordEvidence(tx, tabId, loaded.state, state, now)
         const version = (await this.save(tx, loaded, state, stamp, touches)).versions.get(`machine:${machineId}`) ?? 0
-        await this.writeMessages(tx, tabId, state, rows, sequences, true)
+        await this.writeMessages(tx, tabId, state, rows, sequences, true, loaded.state)
         // Nothing more is delivered to an agent that left, whatever was written for it just now, and no terminal opened on its old
         // session stays valid (as a removal by command does). One plain match each: an `in` here is sent as $expr (hotFilters).
         for (const agentId of removedIds) {

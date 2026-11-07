@@ -3640,53 +3640,103 @@ describe('adding this Mac\'s Harness Team account where this Mac was added', () 
   })
 })
 
-describe('built-in skill text after a CLI update', () => {
-  const older = '---\nname: swarm-dev\n---\nAn older release of this skill.\n'
-  function syncFixture(stale = true, mode?: 'default' | 'orchestration') {
-    let skillMode = mode
-    const t = setup(), workspace = mkdtempSync(join(tmpdir(), 'super-tab-skills-')); roots.push(workspace)
-    const roles = { lead: 'lead', builder: 'dev', reviewer: 'review' } as const
-    const sessions = Object.fromEntries([...Object.entries(roles).map(([name, role]) => [`h-${name}`,
-      { agentId: `h-${name}`, cwd: workspace, swarmSkill: { role, key: `key-${name}` } }]),
-      ['h-personal', { agentId: 'h-personal', cwd: workspace }]])
-    const files = Object.fromEntries(Object.entries(roles).map(([name, role]) => {
-      const { file } = prepareSwarmSkill(workspace, { role, key: `key-${name}`, ...(mode ? { mode } : {}) })
-      // What an older CLI left: its own text and no record of which text it was.
-      if (stale) { writeFileSync(file, older); rmSync(join(dirname(file), 'version.json')) }
-      return [name, file]
-    }))
-    const agents = [...Object.keys(roles), 'personal'].map(name => ({ id: `a-${name}`, harnessId: `h-${name}`, machineId: 'machine-1' }))
+// Barebone agents (task #4673, anh Dee 11-07: "a barebone you so I can understand exactly how you're reacting and tune you"):
+// a Swarm agent reads its project's instructions with the instructions command and the manual with `help tools`, and Harness
+// writes no skill file for it. The roster names each agent's project, the document's revision and the agent's role name; when
+// they change, the host tells the agent once to read the instructions again. A session an older release launched is told once
+// that its skill files are gone, and they are removed. A Buddy keeps its own skill, whose limits are not in code yet.
+describe('barebone agents: what the host tells a Swarm agent about its instructions', () => {
+  /** A save's time before any launch in these tests: a session launched since has read that revision. */
+  const LONG_AGO = '2026-01-01T00:00:00.000Z'
+  const COMMAND = 'harness super-tab --tab tab instructions'
+  type Name = 'pm' | 'tester' | 'reviewer' | 'buddy'
+  const AGENTS: Record<Name, { role: 'lead' | 'dev' | 'review' | 'buddy'; roleName: string; lead?: true }> = {
+    pm: { role: 'lead', roleName: 'PM', lead: true }, tester: { role: 'dev', roleName: 'Tester' },
+    reviewer: { role: 'review', roleName: 'Reviewer' }, buddy: { role: 'buddy', roleName: 'Buddy' } }
+  const runtime = (cwd: string, name: string) => join(realpathSync(cwd), '.harness', 'runtime', createHash('sha256').update(`key-${name}`).digest('hex'), 'swarm')
+  /** What an older release left in a session's folder: its role file, its tools sheet and its instructions skill; a Buddy's
+   *  instructions skill beside the Buddy skill its launch wrote. */
+  function olderSkills(cwd: string, name: Name): string {
+    const skills = join(runtime(cwd, name), 'skills')
+    for (const skill of name === 'buddy' ? ['swarm-instructions'] : [`swarm-${AGENTS[name].role}`, 'swarm-tools', 'swarm-instructions']) {
+      mkdirSync(join(skills, skill), { recursive: true })
+      writeFileSync(join(skills, skill, 'SKILL.md'), `---\nname: ${skill}\n---\nAn older release of this skill.\n`)
+      writeFileSync(join(skills, skill, 'version.json'), JSON.stringify({ text: 'old', notified: 'old' }))
+    }
+    return skills
+  }
+
+  // The refusal itself (#2832): a Buddy is never prepared in a Harness Team account, and its folder is left as it was.
+  it('still refuses to prepare a Buddy in a Harness Team account', () => {
+    const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-')); roots.push(folder)
+    team.value = true
+    expect(() => prepareSwarmSkill(folder, { role: 'buddy', key: 'key-buddy' })).toThrow(/runs only on its owner's own machine/)
+    expect(readdirSync(folder)).toEqual([])
+    team.value = false
+    expect(() => prepareSwarmSkill(folder, { role: 'buddy', key: 'key-buddy' })).not.toThrow()
+  })
+
+  it('launches a Lead, an agent and a Reviewer with no skill file, sent to the instructions command and the manual', () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'super-tab-launch-')); roots.push(workspace)
+    for (const role of ['lead', 'dev', 'review'] as const) {
+      const { instructions } = prepareSwarmSkill(workspace, { role, key: `key-${role}` })
+      expect(instructions).toBe('Your role and how this project works are in its instructions: read them with harness super-tab --tab TAB instructions. '
+        + 'Read the manual too, with harness super-tab help tools: every command, and the rules for shared machines and secrets. Work by both.')
+      expect(existsSync(join(runtime(workspace, role), 'skills'))).toBe(false)
+    }
+  })
+
+  function fixture(names: Name[] = ['tester'], options: { older?: Name[] } = {}) {
+    const t = setup(), workspace = mkdtempSync(join(tmpdir(), 'super-tab-instructions-')); roots.push(workspace)
+    const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-')); roots.push(folder)
+    const sessions: Record<string, unknown> = { 'h-personal': { agentId: 'h-personal', cwd: workspace } }
+    const cwds: Partial<Record<Name, string>> = {}
+    for (const name of names) {
+      const { role } = AGENTS[name], cwd = role === 'buddy' ? folder : workspace
+      if (!options.older?.includes(name) || role === 'buddy') prepareSwarmSkill(cwd, { role, key: `key-${name}` })
+      if (options.older?.includes(name)) olderSkills(cwd, name)
+      cwds[name] = cwd
+      sessions[`h-${name}`] = { agentId: `h-${name}`, cwd, swarmSkill: { role, key: `key-${name}` } }
+    }
+    const agents = [...names.map(name => ({ id: `a-${name}`, harnessId: `h-${name}`, machineId: 'machine-1',
+      ...(name === 'buddy' ? { buddyOf: { personId: 'peer', generation: 'g' } } : {}) })), { id: 'a-personal', harnessId: 'h-personal', machineId: 'machine-1' }]
     let groups: Array<Record<string, unknown>> = [
-      { id: 'lead-group', leadId: 'a-lead', agentIds: ['a-lead', 'a-builder', 'a-reviewer'] },
-      { id: 'work', leadId: 'a-lead', agentIds: ['a-lead', 'a-builder'], assignment: { agentId: 'a-builder', status: 'working' } },
+      { id: 'lead-group', leadId: 'a-pm', agentIds: ['a-pm', 'a-tester', 'a-reviewer', 'a-personal'] },
+      { id: 'work', leadId: 'a-pm', agentIds: ['a-pm', 'a-tester'], assignment: { agentId: 'a-tester', status: 'working' } },
+      { id: 'chat', kind: 'buddy', leadId: null, agentIds: ['a-buddy'] },
     ]
+    /** The project's saved revisions, oldest first, the first long before any launch here; `history` refuses their read. */
+    const saves = [{ revision: 1, hash: 'hash-1', summary: 'Started from the built-in instructions.', at: LONG_AGO }]
+    let history = true
+    /** What the roster says of the agent's project: undefined leaves the keys out, as an old backend does. */
+    let doc: Record<string, unknown> | null | undefined = { projectId: 'app', revision: 1, hash: 'hash-1', coordinatorName: 'Product Manager' }
+    const roleNames: Partial<Record<Name, string>> = {}
+    const rows = () => agents.map(agent => {
+      const name = agent.id.slice(2) as Name, known = AGENTS[name]
+      return { tabId: 'tab', agent, lead: known?.lead === true, ...(doc === undefined || !known ? {} : { roleName: roleNames[name] ?? known.roleName, instructions: doc }) }
+    })
+    const reads: string[] = []
     const sent: Array<{ operationId: string; asAgentId: string; command: Record<string, any> }> = []
-    const receipts = new Map<string, string>()
-    /** On Custom, each agent's roster role (absent on a built-in set), and the role texts the backend serves. */
-    const rowRoles: Record<string, unknown> = {}
-    const texts: Record<string, { version: string; text: string }> = {}
-    const fetched: string[] = []
-    /** Backend calls held until the test releases them: the roster may change while the refresh waits on one. */
-    const holds: Array<{ match: (path: string, body: any) => boolean; until: Promise<void> }> = []
-    let inFlight = 0
-    /** A notice the backend refuses (an older backend, an outage), and every refused request. */
-    let refuse: ((request: any) => { status: number; body: Record<string, unknown> } | undefined) | undefined
     const refused: Array<{ operationId: string; asAgentId?: string; command: Record<string, any> }> = []
+    let refuse: ((request: any) => { status: number; body: Record<string, unknown> } | undefined) | undefined
+    const receipts = new Map<string, string>()
+    const holds: Array<{ match: (path: string) => boolean; until: Promise<void> }> = []
+    let inFlight = 0
     t.core.agents.byAgent = vi.fn(id => sessions[id] as never)
     t.core.agents.terminalAvailable = vi.fn(() => true)
-    t.core.account.backend = vi.fn(async (method, path, body) => {
-      const held = holds.findIndex(h => h.match(path, body))
+    t.core.account.backend = vi.fn(async (_method, path, body) => {
+      const held = holds.findIndex(h => h.match(path))
       if (held >= 0) await holds.splice(held, 1)[0]!.until
       inFlight++
       await Promise.resolve()
       inFlight--
       const request = body as any
-      if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(agents.map(agent => ({ tabId: 'tab', agent, ...(skillMode ? { skillMode } : {}),
-        ...(agent.id in rowRoles ? { role: rowRoles[agent.id] } : {}) })), { tabs: ['tab'] }) } }
-      const role = /^\/api\/super-tabs\/tab\/projects\/pilot\/roles\/([a-z0-9]+)$/.exec(path)?.[1]
-      if (role) {
-        fetched.push(role)
-        return texts[role] ? { status: 200, body: { data: texts[role] } } : { status: 404, body: { success: false, error: { code: 'NOT_FOUND', message: 'This role is unavailable.' } } }
+      if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(rows(), { tabs: ['tab'] }) } }
+      if (path.includes('/instructions')) {
+        reads.push(path)
+        if (!path.includes('/instructions/revisions?')) return { status: 500, body: { success: false, error: { code: 'UNEXPECTED', message: 'No text read.' } } }
+        if (!history) return { status: 503, body: { success: false, error: { code: 'INSTRUCTIONS_UNAVAILABLE', message: 'Try again in a moment.' } } }
+        return { status: 200, body: { data: { projectId: 'app', revisions: saves.map(save => ({ ...save, writtenBy: { kind: 'person', id: 'ken' }, askedBy: 'ken' })).reverse() } } }
       }
       if (/\/deliveries(\?|$)/.test(path)) return { status: 200, body: { data: [] } }
       const refusal = request?.command?.type === 'message.send' ? refuse?.(request) : undefined
@@ -3706,667 +3756,288 @@ describe('built-in skill text after a CLI update', () => {
       for (let idle = 0; idle < 3;) { await new Promise(resolve => setImmediate(resolve)); idle = inFlight ? 0 : idle + 1 }
       return host
     }
-    const holdNext = (match: (path: string, body: any) => boolean) => {
-      let release!: () => void
-      holds.push({ match, until: new Promise<void>(resolve => { release = resolve }) })
-      return release
-    }
-    return { t, files, sent, refused, pass, agents, rowRoles, texts, fetched, holdNext, setRefuse: (next: typeof refuse) => { refuse = next }, setGroups: (next: typeof groups) => { groups = next }, setMode: (next: typeof mode) => { skillMode = next } }
-  }
-
-  // Custom roles and skills per project (spec 2026-10-23): on Custom the roster names each agent's role and its text's
-  // version, never the text; the host fetches the text only when that version changes, installs it as the skill of the
-  // agent's kind, and tells the agent as any skill update.
-  describe('a project on its Custom skills', () => {
-    const version = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16)
-    const custom = (f: ReturnType<typeof syncFixture>, text: string, name = 'Planner') => {
-      f.texts.lead = { version: version(text), text }
-      f.rowRoles['a-lead'] = { id: 'lead', name, kind: 'lead', version: version(text), projectId: 'pilot' }
-    }
-    it('installs the Lead\'s role under swarm-lead, fetches its text once while the version holds, and tells it once', async () => {
-      const f = syncFixture(false, 'default')
-      custom(f, '---\nname: swarm-lead\n---\nPlan the work.\n')
-      const host = await f.pass()
-      expect(readFileSync(f.files.lead!, 'utf8')).toBe(`---\nname: swarm-lead\ndescription: "The Planner role of this project's Custom skills."\n---\nPlan the work.\n`)
-      expect(f.files.lead!.endsWith(join('swarm-lead', 'SKILL.md'))).toBe(true)
-      expect(f.sent.map(s => [s.asAgentId, s.command.text])).toEqual([['a-lead', expect.stringMatching(/^This project now uses its Custom skills, as Planner\./)]])
-      for (let i = 1; i <= 3; i++) await f.pass(host, i * 120_000)
-      expect(f.fetched).toEqual(['lead'])
-      expect(f.sent).toHaveLength(1)
-    })
-    it('fetches again when the version changes, overwrites the file and tells the agent to re-read it', async () => {
-      const f = syncFixture(false, 'default')
-      custom(f, 'Plan the work.\n')
-      const host = await f.pass()
-      custom(f, 'Plan the work, then ship it.\n')
-      await f.pass(host, 1_000)
-      expect(f.fetched).toEqual(['lead', 'lead'])
-      expect(readFileSync(f.files.lead!, 'utf8')).toMatch(/\n---\nPlan the work, then ship it\.\n$/)
-      expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^This project now uses its Custom skills/),
-        `The project owner updated your Planner role. Before your next step, read ${JSON.stringify(f.files.lead)} again with your file or shell tool and follow the new version.`])
-    })
-    it('renames the role in the file when the owner renames it, without fetching its unchanged text again', async () => {
-      const f = syncFixture(false, 'default')
-      custom(f, 'Plan the work.\n')
-      const host = await f.pass()
-      custom(f, 'Plan the work.\n', 'Coordinator')
-      await f.pass(host, 1_000)
-      expect(f.fetched).toEqual(['lead'])
-      expect(readFileSync(f.files.lead!, 'utf8')).toContain('description: "The Coordinator role of this project\'s Custom skills."')
-    })
-    it('keeps the file and installs nothing when the text read back is not the roster\'s version, and tries again later', async () => {
-      const f = syncFixture(false, 'default')
-      custom(f, 'Plan the work.\n')
-      f.texts.lead = { version: 'another-version0', text: 'Something else.\n' }
-      const before = readFileSync(f.files.lead!, 'utf8')
-      const host = await f.pass()
-      expect(readFileSync(f.files.lead!, 'utf8')).toBe(before)
-      expect(f.sent).toEqual([])
-      expect(f.t.log).toHaveBeenCalledWith(expect.stringContaining('Planner'))
-      custom(f, 'Plan the work.\n')
-      await f.pass(host, 60_000)
-      expect(readFileSync(f.files.lead!, 'utf8')).toMatch(/\nPlan the work\.\n$/)
-    })
-    // The review of #1660: a refresh works from the roster it started with, across its fetch and its notice. A role gone
-    // meanwhile must not get its old text installed, nor a re-read notice after the backend's role-gone one.
-    it.each([
-      ['its text is fetched', (path: string) => path.includes('/roles/'), false],
-      ['its notice is about to be sent', (path: string, body: any) => path.includes('asAgentId=a-lead') && !body, true],
-    ])('drops a refresh whose role is gone while %s', async (_case, match, installed) => {
-      const f = syncFixture(false, 'default')
-      custom(f, 'Plan the work.\n')
-      const before = readFileSync(f.files.lead!, 'utf8')
-      const release = f.holdNext(match)
-      const host = f.t.open()
-      await host.tick()
-      await vi.waitFor(() => expect(vi.mocked(f.t.core.account.backend).mock.calls.some(([, path, body]) => match(path, body))).toBe(true))
-      f.rowRoles['a-lead'] = null
-      await host.tick()
-      release()
-      await f.pass(host, 1_000)
-      expect(f.sent).toEqual([])
-      expect(readFileSync(f.files.lead!, 'utf8') === before).toBe(!installed)
-      // The role back as it was: installed and told after all.
-      custom(f, 'Plan the work.\n')
-      await f.pass(host, 1_000)
-      expect(readFileSync(f.files.lead!, 'utf8')).toMatch(/\nPlan the work\.\n$/)
-      expect(f.sent).toHaveLength(1)
-    })
-    // Round 2 of that review: the roster that drops the role arrives while that poll's own delivery read stalls; the
-    // older refresh must already see it, not wait for the poll to finish.
-    it('drops a refresh whose role is gone in a roster whose poll is still reading deliveries', async () => {
-      const f = syncFixture(false, 'default')
-      custom(f, 'Plan the work.\n')
-      const before = readFileSync(f.files.lead!, 'utf8')
-      const fetch = f.holdNext(path => path.includes('/roles/'))
-      const host = f.t.open()
-      await host.tick()
-      await vi.waitFor(() => expect(vi.mocked(f.t.core.account.backend).mock.calls.some(([, path]) => path.includes('/roles/'))).toBe(true))
-      f.rowRoles['a-lead'] = null
-      const deliveries = f.holdNext(path => path.endsWith('/agents/a-lead/deliveries'))
-      const poll = host.tick()
-      await vi.waitFor(() => expect(vi.mocked(f.t.core.account.backend).mock.calls.filter(([, path]) => path.endsWith('/agents/a-lead/deliveries'))).toHaveLength(2))
-      fetch()
-      for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve))
-      expect(f.sent).toEqual([])
-      expect(readFileSync(f.files.lead!, 'utf8')).toBe(before)
-      deliveries()
-      await poll
-      await f.pass(host, 1_000)
-      expect(f.sent).toEqual([])
-    })
-    // Diego's issue, 2026-10-27: nothing deleted a session's skill state, so a daemon running for weeks kept an entry, with
-    // the full Custom role text, for every Swarm agent it ever ran.
-    it('forgets a session\'s skill state once it leaves the roster', async () => {
-      const f = syncFixture(false, 'default')
-      custom(f, 'Plan the work.\n')
-      const host = await f.pass()
-      const state = host as unknown as Record<'skillChecks' | 'skillModes' | 'roleTexts', Map<string, unknown>>
-      expect(state.roleTexts.has('h-lead')).toBe(true)
-      f.agents.splice(0, f.agents.length)
-      await f.pass(host, 1_000)
-      expect([state.skillChecks.size, state.skillModes.size, state.roleTexts.size]).toEqual([0, 0, 0])
-    })
-    it('leaves an agent whose role is gone on its file, fetching and telling nothing: the backend tells it', async () => {
-      const f = syncFixture(false, 'default')
-      f.rowRoles['a-builder'] = null
-      const before = readFileSync(f.files.builder!, 'utf8')
-      await f.pass()
-      expect(readFileSync(f.files.builder!, 'utf8')).toBe(before)
-      expect(f.fetched).toEqual([])
-      expect(f.sent).toEqual([])
-    })
-  })
-
-  it('rewrites each running Lead, Builder and Reviewer skill once and tells each agent once, never a personal session', async () => {
-    const f = syncFixture()
-    const host = await f.pass()
-    for (const file of Object.values(f.files)) expect(readFileSync(file, 'utf8')).not.toBe(older)
-    expect(f.sent.map(s => [s.asAgentId, s.command.recipientIds, s.command.conversationId]).sort()).toEqual([
-      ['a-builder', ['a-builder'], 'work'], ['a-lead', ['a-lead'], 'lead-group'], ['a-reviewer', ['a-reviewer'], 'lead-group']])
-    for (const s of f.sent) expect(s.command.text).toContain(f.files[s.asAgentId.slice(2)]!)
-    // Only the agent sees its notice; no person reads it in a chat. Marked as a skills notice, its coordinator's goes in its digest.
-    for (const s of f.sent) expect(s.command.agentOnly).toBe(true)
-    for (const s of f.sent) expect(s.command.notice).toBe('skills')
-    expect(f.sent.find(s => s.asAgentId === 'a-reviewer')!.command.text).toContain('swarm-review skill')
-    // A second pass and a restarted host find the files current and say nothing more.
-    await f.pass(host, 5_000)
-    await f.pass()
-    expect(f.sent).toHaveLength(3)
-  })
-
-  // Ken's prod scan (11-04): 125 message.send refused with BUDDY_SESSION_THREAD in 32 minutes. A Buddy session's notice is
-  // a top-level post the backend refuses (a session answers only in its own thread), and the host tried it every minute.
-  it('stops a skill notice the Swarm refuses for good, and still tells the other agents (#2675)', async () => {
-    const f = syncFixture()
-    f.setRefuse(request => request.asAgentId === 'a-builder' ? { status: 403, body: { success: false,
-      error: { code: 'BUDDY_SESSION_THREAD', message: 'Answer only in your own thread: post with --reply-to a message in it.' } } } : undefined)
-    const host = await f.pass()
-    for (let i = 1; i <= 5; i++) await f.pass(host, 60_000)
-    expect(f.refused.filter(r => r.asAgentId === 'a-builder')).toHaveLength(1)
-    expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-lead', 'a-reviewer'])
-  })
-
-  it('drops the skills mark, once, when a backend refuses it, and keeps the notice agent-only', async () => {
-    const f = syncFixture()
-    f.setRefuse(request => 'notice' in request.command ? { status: 400, body: { success: false,
-      error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "notice"' } } } : undefined)
-    const host = await f.pass()
-    expect(f.refused).toHaveLength(3)
-    expect(f.sent.map(s => [s.asAgentId, s.command.agentOnly, 'notice' in s.command]).sort()).toEqual([
-      ['a-builder', true, false], ['a-lead', true, false], ['a-reviewer', true, false]])
-    await f.pass(host, 120_000)
-    expect(f.sent).toHaveLength(3)
-  })
-
-  it('sends each notice the old way, once, when an older backend refuses the agent-only mark', async () => {
-    const f = syncFixture()
-    f.setRefuse(request => request.command.agentOnly ? { status: 400, body: { success: false,
-      error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "agentOnly"' } } } : undefined)
-    const host = await f.pass()
-    expect(f.refused.map(r => r.operationId).sort()).toEqual(f.sent.map(s => s.operationId).sort())
-    expect(f.sent.map(s => [s.asAgentId, s.command.recipientIds, 'agentOnly' in s.command, 'notice' in s.command]).sort()).toEqual([
-      ['a-builder', ['a-builder'], false, false], ['a-lead', ['a-lead'], false, false], ['a-reviewer', ['a-reviewer'], false, false]])
-    await f.pass(host, 120_000)
-    expect(f.sent).toHaveLength(3)
-    expect(f.refused).toHaveLength(3)
-  })
-
-  it('never falls back to a visible notice on any other refusal, and retries later as before', async () => {
-    const f = syncFixture()
-    let reply = { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'command.text: Too big' } } }
-    f.setRefuse(() => reply)
-    const host = await f.pass()
-    reply = { status: 503, body: { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'agentOnly notice could not be stored' } } }
-    await f.pass(host, 60_000)
-    expect(f.sent).toEqual([])
-    expect(f.refused).toHaveLength(6)
-    expect(f.refused.every(r => r.command.agentOnly === true)).toBe(true)
-    f.setRefuse(undefined)
-    await f.pass(host, 60_000)
-    expect(f.sent.map(s => s.command.agentOnly)).toEqual([true, true, true])
-  })
-
-  it('records a notice that was sent before its record was lost, even after its group changed', async () => {
-    const f = syncFixture()
-    await f.pass()
-    const lead = join(dirname(f.files.lead!), 'version.json'), record = JSON.parse(readFileSync(lead, 'utf8'))
-    // The send succeeded, the record did not survive, and the Lead's group was archived meanwhile.
-    writeFileSync(lead, JSON.stringify({ ...record, notified: 'older', toldChange: undefined }))
-    f.setGroups([{ id: 'lead-group', archived: true, leadId: 'a-lead', agentIds: ['a-lead'] }, { id: 'next', leadId: 'a-lead', agentIds: ['a-lead'] }])
-    await f.pass()
-    expect(JSON.parse(readFileSync(lead, 'utf8'))).toMatchObject({ notified: record.notified, toldChange: record.toldChange })
-    expect(f.t.log).not.toHaveBeenCalled()
-    const calls = vi.mocked(f.t.core.account.backend).mock.calls.length
-    await f.pass()
-    expect(vi.mocked(f.t.core.account.backend).mock.calls.slice(calls).some(([, , body]) => (body as any)?.command?.type === 'message.send')).toBe(false)
-    expect(f.sent).toHaveLength(3)
-  })
-
-  it('moves running agents to the project\'s new mode at once, tells each once, and again when it switches back', async () => {
-    const f = syncFixture(false, 'default')
-    const defaults = Object.fromEntries(Object.entries(f.files).map(([name, file]) => [name, readFileSync(file, 'utf8')]))
-    // A new Default agent started with its mode's text: nothing to rewrite or tell.
-    const host = await f.pass()
-    expect(f.sent).toEqual([])
-    f.setMode('orchestration')
-    await f.pass(host, 1_000)
-    expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-builder', 'a-lead', 'a-reviewer'])
-    for (const s of f.sent) expect(s.command.text).toBe(`This project now uses the Harness orchestration skills. Before your next step, read ${JSON.stringify(f.files[s.asAgentId.slice(2)])} again with your file or shell tool and follow it in place of your earlier swarm-${({ lead: 'lead', builder: 'dev', reviewer: 'review' } as Record<string, string>)[s.asAgentId.slice(2)]} skill.`)
-    expect(readFileSync(f.files.builder!, 'utf8')).toContain('No production code without a failing test first.')
-    await f.pass(host, 1_000)
-    expect(f.sent).toHaveLength(3)
-    f.setMode('default')
-    await f.pass(host, 1_000)
-    expect(f.sent).toHaveLength(6)
-    expect(new Set(f.sent.map(s => s.operationId)).size).toBe(6)
-    expect(f.sent.slice(3).every(s => s.command.text.startsWith('This project now uses the Default skills.'))).toBe(true)
-    for (const [name, file] of Object.entries(f.files)) expect(readFileSync(file, 'utf8')).toBe(defaults[name])
-    await f.pass(host, 1_000)
-    await f.pass()
-    expect(f.sent).toHaveLength(6)
-  })
-
-  it('reads a roster row without a mode, or with one it does not know, as Harness orchestration', async () => {
-    const f = syncFixture(false, 'default')
-    f.setMode(undefined)
-    await f.pass()
-    expect(f.sent.map(s => s.command.text.split('.')[0])).toEqual(Array(3).fill('This project now uses the Harness orchestration skills'))
-    const g = syncFixture(false)
-    g.setMode('light' as never)
-    await g.pass()
-    expect(g.sent).toEqual([])
-  })
-
-  it('says nothing when the skill files already hold the built-in text', async () => {
-    const f = syncFixture(false)
-    await f.pass()
-    expect(f.sent).toEqual([])
-  })
-
-  it('rewrites the file of a session in no open group at once and tells it once it joins one', async () => {
-    const f = syncFixture()
-    f.setGroups([{ id: 'old', archived: true, leadId: 'a-lead', agentIds: ['a-lead', 'a-builder', 'a-reviewer'] }])
-    const host = await f.pass()
-    for (const file of Object.values(f.files)) expect(readFileSync(file, 'utf8')).not.toBe(older)
-    expect(f.sent).toEqual([])
-    f.setGroups([{ id: 'next', leadId: 'a-lead', agentIds: ['a-lead', 'a-builder', 'a-reviewer'] }])
-    await f.pass(host, 60_000)
-    expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-builder', 'a-lead', 'a-reviewer'])
-    await f.pass(host, 60_000)
-    expect(f.sent).toHaveLength(3)
-  })
-})
-
-// Project instructions (spec 2026-10-30, How agents read it): the roster names each agent's project, the document's revision
-// and the agent's role name, never the text. The host reads the text once per revision and project, installs it as the
-// agent's swarm-instructions skill beside its tools skill, and tells the agent once per change. An old backend's rows carry
-// no `instructions` key, and everything there runs as before.
-describe('project instructions from the roster', () => {
-  const NOTE = 'Ship on Fridays only.'
-  const START = '# How this project works\nTesters test every change.\n'
-  const older = (role: string) => `---\nname: swarm-${role}\n---\nAn older release of this skill.\n`
-  /** A save's time before any launch in these tests: a session launched since has read that revision. */
-  const LONG_AGO = '2026-01-01T00:00:00.000Z'
-  type Name = 'pm' | 'tester' | 'reviewer' | 'buddy'
-  const AGENTS: Record<Name, { role: 'lead' | 'dev' | 'review' | 'buddy'; roleName: string; lead?: true }> = {
-    pm: { role: 'lead', roleName: 'PM', lead: true }, tester: { role: 'dev', roleName: 'Tester' },
-    reviewer: { role: 'review', roleName: 'Reviewer' }, buddy: { role: 'buddy', roleName: 'Buddy' } }
-  // The refusal itself (#2832): a Buddy is never prepared in a Harness Team account, and its folder is left as it was.
-  it('still refuses to prepare a Buddy in a Harness Team account', () => {
-    const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-')); roots.push(folder)
-    team.value = true
-    expect(() => prepareSwarmSkill(folder, { role: 'buddy', key: 'key-buddy' })).toThrow(/runs only on its owner's own machine/)
-    expect(readdirSync(folder)).toEqual([])
-    team.value = false
-    expect(() => prepareSwarmSkill(folder, { role: 'buddy', key: 'key-buddy' })).not.toThrow()
-  })
-  function docFixture(names: Name[] = ['tester'], options: { stale?: Name[] } = {}) {
-    const t = setup(), workspace = mkdtempSync(join(tmpdir(), 'super-tab-instructions-')); roots.push(workspace)
-    const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-')); roots.push(folder)
-    const sessions: Record<string, unknown> = {}, roleFiles: Partial<Record<Name, string>> = {}, launched: Partial<Record<Name, string>> = {}
-    for (const name of names) {
-      const { role } = AGENTS[name], cwd = role === 'buddy' ? folder : workspace
-      const { file } = prepareSwarmSkill(cwd, { role, key: `key-${name}` })
-      launched[name] = readFileSync(file, 'utf8')
-      // What an older CLI left: its own text and no record of which text it was.
-      if (options.stale?.includes(name)) { writeFileSync(file, older(role)); rmSync(join(dirname(file), 'version.json')) }
-      roleFiles[name] = file
-      sessions[`h-${name}`] = { agentId: `h-${name}`, cwd, swarmSkill: { role, key: `key-${name}` } }
-    }
-    const agents = names.map(name => ({ id: `a-${name}`, harnessId: `h-${name}`, machineId: 'machine-1',
-      ...(name === 'buddy' ? { buddyOf: { personId: 'peer', generation: 'g' } } : {}) }))
-    const groups = [
-      { id: 'lead-group', leadId: 'a-pm', agentIds: ['a-pm', 'a-tester', 'a-reviewer'] },
-      { id: 'work', leadId: 'a-pm', agentIds: ['a-pm', 'a-tester'], assignment: { agentId: 'a-tester', status: 'working' } },
-      { id: 'chat', kind: 'buddy', leadId: null, agentIds: ['a-buddy'] },
-    ]
-    /** The project's saved revisions, oldest first, the first long before any launch here. The backend serves the newest, or
-     *  revision `lag` (a read behind the roster); `history` refuses the revisions read (an outage). */
-    const saves = [{ revision: 1, hash: 'hash-1', summary: 'Started from the built-in instructions.', text: START, at: LONG_AGO }]
-    let lag: number | undefined, history = true
-    /** The built-in PM schedule the backend serves its coordinator's read (2026-11-04 PM schedule design). */
-    let builtIn = '## Built-in PM schedule (from the Swarm)\n\nThe Swarm wakes you for these jobs.'
-    /** What the roster says of the agent's project: undefined leaves the keys out, as an old backend does. */
-    let doc: Record<string, unknown> | null | undefined = { projectId: 'app', revision: 1, hash: 'hash-1', coordinatorName: 'Product Manager' }
-    const rows = () => agents.map(agent => {
-      const { roleName, lead } = AGENTS[agent.id.slice(2) as Name]
-      return { tabId: 'tab', agent, lead: lead === true, ...(doc === undefined ? {} : { roleName, instructions: doc }) }
-    })
-    const reads: string[] = []
-    const sent: Array<{ operationId: string; asAgentId: string; command: Record<string, any> }> = []
-    const receipts = new Map<string, string>()
-    const holds: Array<{ match: (path: string) => boolean; until: Promise<void> }> = []
-    let inFlight = 0
-    t.core.agents.byAgent = vi.fn(id => sessions[id] as never)
-    t.core.agents.terminalAvailable = vi.fn(() => true)
-    t.core.account.backend = vi.fn(async (_method, path, body) => {
-      const held = holds.findIndex(h => h.match(path))
-      if (held >= 0) await holds.splice(held, 1)[0]!.until
-      inFlight++
-      await Promise.resolve()
-      inFlight--
-      const request = body as any
-      if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(rows(), { tabs: ['tab'] }) } }
-      const read = /^\/api\/super-tabs\/tab\/projects\/app\/instructions(\/revisions)?\?asAgentId=(a-[a-z]+)$/.exec(path)
-      if (read) {
-        reads.push(path)
-        // As the backend answers a Buddy: no notes, and none of the history, which names who asked for what.
-        const buddy = read[2] === 'a-buddy'
-        if (read[1]) {
-          if (!history) return { status: 503, body: { success: false, error: { code: 'INSTRUCTIONS_UNAVAILABLE', message: 'Try again in a moment.' } } }
-          return buddy ? { status: 404, body: { success: false, error: { code: 'NOT_FOUND', message: 'This project is unavailable.' } } }
-            : { status: 200, body: { data: { projectId: 'app', revisions: saves.map(({ text: _text, ...save }) => ({ ...save,
-              writtenBy: { kind: 'person', id: 'ken' }, askedBy: 'ken' })).reverse() } } }
-        }
-        const at = saves[(lag ?? saves.length) - 1]!
-        return { status: 200, body: { data: { projectId: 'app', revision: at.revision, hash: at.hash, text: at.text, template: false,
-          coordinatorName: 'Product Manager', notesRevision: 1, ...(read[2] === 'a-pm' ? { builtIn } : {}),
-          ...(buddy ? {} : { notes: [{ id: 'note', text: NOTE, askedBy: 'ken', at: '2026-10-30T09:00:00.000Z', expiresAt: null }] }) } } }
-      }
-      if (/\/deliveries(\?|$)/.test(path)) return { status: 200, body: { data: [] } }
-      if (request?.command?.type === 'message.send') {
-        const prior = receipts.get(request.operationId), same = JSON.stringify(request.command)
-        if (prior !== undefined && prior !== same) return { status: 409, body: { success: false, error: { code: 'OPERATION_REUSED', message: 'Use a new operation ID for a different request.' } } }
-        if (prior === undefined) { receipts.set(request.operationId, same); sent.push(request) }
-        return { status: 200, body: { data: {} } }
-      }
-      return { status: 200, body: { data: swarmReply(path, { agents, conversations: groups }) } }
-    })
-    const pass = async (host = t.open(), advance = 0) => {
-      t.wait(advance); await host.tick()
-      for (let idle = 0; idle < 3;) { await new Promise(resolve => setImmediate(resolve)); idle = inFlight ? 0 : idle + 1 }
-      return host
-    }
     const holdNext = (match: (path: string) => boolean) => {
       let release!: () => void
       holds.push({ match, until: new Promise<void>(resolve => { release = resolve }) })
       return release
     }
-    /** One of a session's skill files: its role file's neighbours. */
-    const file = (name: Name, skill = 'swarm-instructions') => join(dirname(dirname(roleFiles[name]!)), skill, 'SKILL.md')
-    return { t, sent, reads, pass, holdNext, file, roleFiles, launched, folder, agents,
-      save: (summary: string, text: string, at = LONG_AGO) => { const revision = saves.length + 1; saves.push({ revision, hash: `hash-${revision}`, summary, text, at }); return revision },
+    return { t, sent, refused, reads, pass, holdNext, agents, cwds,
+      skills: (name: Name) => join(runtime(cwds[name]!, name), 'skills'),
+      record: (name: Name) => join(runtime(cwds[name]!, name), 'instructions.json'),
+      save: (summary: string, at = LONG_AGO) => { const revision = saves.length + 1; saves.push({ revision, hash: `hash-${revision}`, summary, at }); return revision },
       move: (revision: number) => { doc = { projectId: 'app', revision, hash: `hash-${revision}`, coordinatorName: 'Product Manager' } },
-      /** The project on the built-in template (nothing saved: revision 0) whose text is [text], as a backend build serves it. */
-      template: (hash: string, text: string) => { saves.length = 0; saves.push({ revision: 0, hash, summary: '', text, at: LONG_AGO })
+      /** The project on the built-in template (nothing saved: revision 0) at [hash], as a backend build serves it. */
+      template: (hash: string) => { saves.length = 0; saves.push({ revision: 0, hash, summary: '', at: LONG_AGO })
         doc = { projectId: 'app', revision: 0, hash, coordinatorName: 'Product Manager' } },
-      setDoc: (next: typeof doc) => { doc = next }, setBuiltIn: (text: string) => { builtIn = text }, setLag: (revision: number | undefined) => { lag = revision }, setHistory: (served: boolean) => { history = served } }
+      rename: (name: Name, roleName: string) => { roleNames[name] = roleName },
+      setDoc: (next: typeof doc) => { doc = next }, setHistory: (served: boolean) => { history = served },
+      setRefuse: (next: typeof refuse) => { refuse = next }, setGroups: (next: typeof groups) => { groups = next } }
   }
-  const instructionsRead = (agentId: string) => `/api/super-tabs/tab/projects/app/instructions?asAgentId=${agentId}`
   const historyRead = (agentId: string) => `/api/super-tabs/tab/projects/app/instructions/revisions?asAgentId=${agentId}`
+  const changed = (summary?: string) => expect.stringMatching(summary
+    ? new RegExp(`^The project's instructions changed: ${summary.replace('.', '\\.')}\\. Before your next step, read them again with ${COMMAND} and work by them\\.$`)
+    : new RegExp(`^The project's instructions changed\\. Before your next step, read them again with ${COMMAND} and work by them\\.$`))
 
-  // 2026-11-04 PM schedule design: the coordinator's read carries the Swarm's built-in PM schedule, which changes with backend
-  // builds while the document's revision and hash stay; the roster's builtInHash says when.
-  it('rereads when the built-in hash moves', async () => {
-    const f = docFixture(['pm'])
-    f.setDoc({ projectId: 'app', revision: 1, hash: 'hash-1', coordinatorName: 'Product Manager', builtInHash: 'built-in-1' })
-    const host = await f.pass()
-    expect(readFileSync(f.file('pm'), 'utf8')).toContain('The Swarm wakes you for these jobs.')
-    f.setBuiltIn('## Built-in PM schedule (from the Swarm)\n\nEvery 30 minutes, the open-task sweep.')
-    f.setDoc({ projectId: 'app', revision: 1, hash: 'hash-1', coordinatorName: 'Product Manager', builtInHash: 'built-in-2' })
-    await f.pass(host, 120_000)
-    expect(f.reads.filter(path => path === instructionsRead('a-pm'))).toHaveLength(2)
-    expect(readFileSync(f.file('pm'), 'utf8')).toContain('Every 30 minutes, the open-task sweep.')
-  })
-
-  it('caches the coordinator\'s read apart from a worker\'s', async () => {
-    const f = docFixture(['pm', 'tester'])
-    await f.pass()
-    expect(f.reads.filter(path => path === instructionsRead('a-pm'))).toHaveLength(1)
-    expect(f.reads.filter(path => path === instructionsRead('a-tester'))).toHaveLength(1)
-    expect(readFileSync(f.file('pm'), 'utf8')).toContain('## Built-in PM schedule (from the Swarm)')
-    expect(readFileSync(f.file('tester'), 'utf8')).not.toContain('Built-in PM schedule')
-  })
-
-  // 2026-11-02, the rollout of #2495: a project with nothing saved stays at revision 0, so the text read once was kept until
-  // the daemon restarted. The template's hash moves with each backend build that changes it.
-  it('reads a changed template again at revision 0', async () => {
-    const f = docFixture()
-    f.template('template-1', 'Template one.\n')
-    const host = await f.pass()
-    expect(readFileSync(f.file('tester'), 'utf8')).toContain('Template one.')
-    f.template('template-2', 'Template two.\n')
-    await f.pass(host, 120_000)
-    expect(f.reads.filter(path => path === instructionsRead('a-tester'))).toHaveLength(2)
-    expect(readFileSync(f.file('tester'), 'utf8')).toContain('Template two.')
-  })
-
-  it('does not read the template again while its hash stays', async () => {
-    const f = docFixture()
-    f.template('template-1', 'Template one.\n')
+  it('tells an agent this release launched nothing for the revision it read at launch, and never reads the text', async () => {
+    const f = fixture(['pm', 'tester'])
     const host = await f.pass()
     for (let i = 1; i <= 3; i++) await f.pass(host, i * 120_000)
-    expect(f.reads.filter(path => path === instructionsRead('a-tester'))).toHaveLength(1)
-  })
-
-  it('installs a Tester\'s instructions from the roster and tells it nothing at first', async () => {
-    const f = docFixture()
-    const role = readFileSync(f.roleFiles.tester!, 'utf8')
-    const host = await f.pass()
-    const text = readFileSync(f.file('tester'), 'utf8')
-    expect(text).toContain('\nYou are this project\'s Tester. Product Manager is the project\'s coordinator.\n')
-    expect(text.endsWith(`Instructions revision 1:\n\n${START}`)).toBe(true)
-    // The notes are the PM's to print with the instructions command; the skill holds the document alone.
-    expect(text).not.toContain(NOTE)
-    // Its role file stays as the launch wrote it, beside the tools skill.
-    expect(readFileSync(f.roleFiles.tester!, 'utf8')).toBe(role)
-    expect(existsSync(f.file('tester', 'swarm-tools'))).toBe(true)
     expect(f.sent).toEqual([])
-    expect(f.reads).toEqual([instructionsRead('a-tester'), historyRead('a-tester')])
-    // Read once per revision: later rosters naming the same one read nothing and tell nothing.
-    for (let i = 1; i <= 3; i++) await f.pass(host, i * 120_000)
-    expect(f.reads).toHaveLength(2)
-    expect(f.sent).toEqual([])
+    // Only the history, once for the project here: the summary and save time a notice needs. No skill file was written.
+    expect(f.reads).toEqual([expect.stringMatching(/\/instructions\/revisions\?asAgentId=a-(pm|tester)$/)])
+    expect(existsSync(f.skills('tester'))).toBe(false)
   })
 
-  // Task 3's review: the launch line sends a new session to the instructions command, so its first install is told nothing only
-  // for a revision saved by its launch. One saved after it is told once.
-  it('tells a new session about a revision saved after its launch', async () => {
-    const f = docFixture()
-    f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n', new Date(Date.now() + 60_000).toISOString()))
+  it('tells it once when a save moves the revision, naming the command that reads them', async () => {
+    const f = fixture()
     const host = await f.pass()
-    expect(readFileSync(f.file('tester'), 'utf8').endsWith('Instructions revision 2:\n\nRevision two.\n')).toBe(true)
-    expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^The project's instructions changed: Reviews go to the Reviewer\. /)])
-    expect(f.sent[0]!.command.text).toContain(JSON.stringify(f.file('tester')))
+    f.move(f.save('Reviews go to the Reviewer'))
     await f.pass(host, 1_000)
-    expect(f.sent).toHaveLength(1)
-  })
-
-  // Task 4's review: one failed history read kept every notice of that revision without its summary, and gave each fresh
-  // launch an extra notice (its save time unknown). It is read again at the next pass, and said once.
-  it('retries a failed history read at the next pass', async () => {
-    const f = docFixture()
-    const host = await f.pass()
-    const before = readFileSync(f.file('tester'), 'utf8')
-    f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n'))
-    f.setHistory(false)
-    await f.pass(host, 1_000)
-    expect(readFileSync(f.file('tester'), 'utf8')).toBe(before)
-    expect(f.sent).toEqual([])
-    f.setHistory(true)
-    await f.pass(host, 60_000)
-    expect(f.reads.filter(path => path === historyRead('a-tester'))).toHaveLength(3)
-    // The text was kept: only the history was read again.
-    expect(f.reads.filter(path => path === instructionsRead('a-tester'))).toHaveLength(2)
-    expect(readFileSync(f.file('tester'), 'utf8').endsWith('Instructions revision 2:\n\nRevision two.\n')).toBe(true)
-    expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^The project's instructions changed: Reviews go to the Reviewer\. /)])
-    expect(f.t.log).toHaveBeenCalledTimes(1)
-    expect(f.t.log).toHaveBeenCalledWith(expect.stringContaining('history'))
-  })
-
-  // A history that stays unreadable never holds the instructions back for long: after five minutes they go out without the
-  // summary, and a new session whose save time is unknown is told once, as Task 3 decides.
-  it('installs without a summary once the history read has failed for five minutes, and says so once', async () => {
-    const f = docFixture()
-    f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n'))
-    f.setHistory(false)
-    const host = await f.pass()
-    for (let i = 1; i < 5; i++) await f.pass(host, 60_000)
-    expect(f.sent).toEqual([])
-    expect(existsSync(f.file('tester'))).toBe(false)
-    await f.pass(host, 60_000)
-    expect(readFileSync(f.file('tester'), 'utf8').endsWith('Instructions revision 2:\n\nRevision two.\n')).toBe(true)
-    expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^The project's instructions changed\. /)])
-    expect(f.t.log).toHaveBeenCalledTimes(1)
-    await f.pass(host, 60_000)
-    expect(f.sent).toHaveLength(1)
-  })
-
-  // Task 4's review: a Buddy has no tools skill, so its own Buddy skill stays its Harness text (spec: "The Buddy skill stays,
-  // and a Buddy also gets the project's document"), kept current by a CLI release as before.
-  it('keeps a Buddy\'s own skill current on an instructions row', async () => {
-    const f = docFixture(['buddy'], { stale: ['buddy'] })
-    const host = await f.pass()
-    expect(readFileSync(f.roleFiles.buddy!, 'utf8')).toBe(f.launched.buddy)
-    expect(readFileSync(f.file('buddy'), 'utf8').endsWith(`Instructions revision 1:\n\n${START}`)).toBe(true)
-    expect(f.sent.map(s => [s.asAgentId, s.command.conversationId])).toEqual([['a-buddy', 'chat'], ['a-buddy', 'chat']])
-    expect(f.sent[0]!.command.text).toMatch(/^Harness updated your built-in swarm-buddy skill\. /)
-    expect(f.sent[0]!.command.text).toContain(JSON.stringify(f.roleFiles.buddy))
-    expect(f.sent[1]!.command.text).toContain(JSON.stringify(f.file('buddy')))
-    await f.pass(host, 1_000)
-    await f.pass()
-    expect(f.sent).toHaveLength(2)
-  })
-
-  it('tells it once when a save moves the revision', async () => {
-    const f = docFixture()
-    const host = await f.pass()
-    f.move(f.save('Reviews go to the Reviewer', '# How this project works\nTesters test; the Reviewer reviews.\n'))
-    await f.pass(host, 1_000)
-    expect(readFileSync(f.file('tester'), 'utf8').endsWith('Instructions revision 2:\n\n# How this project works\nTesters test; the Reviewer reviews.\n')).toBe(true)
     expect(f.sent).toHaveLength(1)
     const [notice] = f.sent
     expect(notice!.asAgentId).toBe('a-tester')
     expect(notice!.operationId).toMatch(/^skill-a-tester-[0-9a-f]{32}-1$/)
-    expect(notice!.command).toMatchObject({ type: 'message.send', conversationId: 'work', replyTo: null, recipientIds: ['a-tester'], agentOnly: true })
-    expect(notice!.command.text.startsWith('The project\'s instructions changed: Reviews go to the Reviewer.')).toBe(true)
-    expect(notice!.command.text).toContain(JSON.stringify(f.file('tester')))
+    // Only the agent sees its notice; no person reads it in a chat. Marked as a skills notice, its coordinator's goes in its digest.
+    expect(notice!.command).toMatchObject({ type: 'message.send', conversationId: 'work', replyTo: null, recipientIds: ['a-tester'], agentOnly: true, notice: 'skills' })
+    expect(notice!.command.text).toEqual(changed('Reviews go to the Reviewer'))
     // A third poll, and a restarted host, find it told.
     await f.pass(host, 1_000)
     await f.pass()
     expect(f.sent).toHaveLength(1)
   })
 
-  it.each([
-    ['an old backend\'s rows (no instructions key)', undefined],
-    ['an agent in no project (instructions null)', null],
-  ])('keeps %s on the built-in skills', async (_case, doc) => {
-    const f = docFixture(['tester'], { stale: ['tester'] })
-    f.setDoc(doc)
+  // Task 3's review of the instructions skill: the launch line sends a new session to the instructions command, so it is told
+  // nothing only for a revision saved by its launch. One saved after it is told once.
+  it('tells a new session about a revision saved after its launch', async () => {
+    const f = fixture()
+    f.move(f.save('Reviews go to the Reviewer', new Date(Date.now() + 60_000).toISOString()))
     const host = await f.pass()
-    expect(vi.mocked(f.t.core.account.backend).mock.calls.some(([, path]) => path.includes('/instructions'))).toBe(false)
-    expect(existsSync(dirname(f.file('tester')))).toBe(false)
-    // Today's refresh: the role file on this release's text, and its notice.
-    expect(readFileSync(f.roleFiles.tester!, 'utf8')).toBe(f.launched.tester)
-    expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^Harness updated your built-in swarm-dev skill\. /)])
-    await f.pass(host, 120_000)
+    expect(f.sent.map(s => s.command.text)).toEqual([changed('Reviews go to the Reviewer')])
+    await f.pass(host, 1_000)
     expect(f.sent).toHaveLength(1)
-    expect(f.reads).toEqual([])
-  })
-
-  it('retries a read that answers another revision', async () => {
-    const f = docFixture()
-    const host = await f.pass()
-    const before = readFileSync(f.file('tester'), 'utf8')
-    f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n'))
-    f.setLag(1)
-    await f.pass(host, 1_000)
-    expect(readFileSync(f.file('tester'), 'utf8')).toBe(before)
-    expect(f.sent).toEqual([])
-    expect(f.t.log).toHaveBeenCalledWith(expect.stringContaining('instructions'))
-    // Not read again on every poll: a minute later, as a role text.
-    const reads = f.reads.length
-    await f.pass(host, 1_000)
-    expect(f.reads).toHaveLength(reads)
-    f.setLag(undefined)
-    await f.pass(host, 60_000)
-    expect(readFileSync(f.file('tester'), 'utf8').endsWith('Instructions revision 2:\n\nRevision two.\n')).toBe(true)
-    expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^The project's instructions changed: Reviews go to the Reviewer\. /)])
   })
 
   // Several saves between two roster passes make one notice, for the newest: never one per save.
   it('tells once, for the newest, when revisions 2 and 3 come in one pass', async () => {
-    const f = docFixture()
+    const f = fixture()
     const host = await f.pass()
-    f.save('Reviews go to the Reviewer', 'Revision two.\n')
-    f.move(f.save('Testers write the release notes', 'Revision three.\n'))
+    f.save('Reviews go to the Reviewer')
+    f.move(f.save('Testers write the release notes'))
     await f.pass(host, 1_000)
-    expect(readFileSync(f.file('tester'), 'utf8').endsWith('Instructions revision 3:\n\nRevision three.\n')).toBe(true)
-    expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^The project's instructions changed: Testers write the release notes\. /)])
-    await f.pass(host, 1_000)
-    expect(f.sent).toHaveLength(1)
+    expect(f.sent.map(s => s.command.text)).toEqual([changed('Testers write the release notes')])
   })
 
-  // The review of #1660, for instructions: a refresh works from the roster it started with. One whose revision moved on while
-  // it read installs and tells nothing; the newer roster's refresh does, once.
-  it('tells once, for the newest, when revision 3 arrives while revision 2 is being read', async () => {
-    const f = docFixture()
+  // The review of #1660: a refresh works from the roster it started with. One whose revision moved on while it read tells
+  // nothing; the newer roster's refresh does, once.
+  it('tells once, for the newest, when revision 3 arrives while revision 2\'s history is being read', async () => {
+    const f = fixture()
     const host = await f.pass()
-    f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n'))
-    const release = f.holdNext(path => path === instructionsRead('a-tester'))
+    f.move(f.save('Reviews go to the Reviewer'))
+    const release = f.holdNext(path => path === historyRead('a-tester'))
     await host.tick()
-    await vi.waitFor(() => expect(vi.mocked(f.t.core.account.backend).mock.calls.filter(([, path]) => path === instructionsRead('a-tester'))).toHaveLength(2))
-    f.move(f.save('Testers write the release notes', 'Revision three.\n'))
+    await vi.waitFor(() => expect(vi.mocked(f.t.core.account.backend).mock.calls.filter(([, path]) => path === historyRead('a-tester'))).toHaveLength(2))
+    f.move(f.save('Testers write the release notes'))
     await host.tick()
     release()
     await f.pass(host, 1_000)
-    expect(readFileSync(f.file('tester'), 'utf8').endsWith('Instructions revision 3:\n\nRevision three.\n')).toBe(true)
-    expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^The project's instructions changed: Testers write the release notes\. /)])
+    expect(f.sent.map(s => s.command.text)).toEqual([changed('Testers write the release notes')])
     expect(f.t.log).not.toHaveBeenCalled()
+  })
+
+  it('tells an agent its new role name once', async () => {
+    const f = fixture()
+    const host = await f.pass()
+    f.rename('tester', 'QA')
+    await f.pass(host, 1_000)
+    expect(f.sent.map(s => s.command.text)).toEqual([`You are now this project's QA. Before your next step, read the project's instructions again with ${COMMAND} and work by them.`])
     await f.pass(host, 1_000)
     expect(f.sent).toHaveLength(1)
   })
 
-  it('reads the text once for the project\'s agents here, each with its own role line, the coordinator\'s too', async () => {
-    const f = docFixture(['pm', 'tester'])
+  // 2026-11-02, the rollout of #2495: a project with nothing saved stays at revision 0, and the template's hash moves with each
+  // backend build that changes it.
+  it('tells a changed template at revision 0 once, and nothing while its hash stays', async () => {
+    const f = fixture()
+    f.template('template-1')
     const host = await f.pass()
-    // The coordinator's read carries the built-in PM schedule, so it is its own; the project's other agents share one.
-    expect([...f.reads].sort()).toEqual([instructionsRead('a-pm'), historyRead('a-pm'), instructionsRead('a-tester'), historyRead('a-tester')].sort())
-    expect(readFileSync(f.file('pm'), 'utf8')).toContain('\nYou are this project\'s PM, its coordinator: ')
-    expect(readFileSync(f.file('tester'), 'utf8')).toContain('\nYou are this project\'s Tester. Product Manager is the project\'s coordinator.\n')
-    f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n'))
+    for (let i = 1; i <= 2; i++) await f.pass(host, i * 120_000)
+    expect(f.sent).toEqual([])
+    f.template('template-2')
     await f.pass(host, 1_000)
-    expect(f.reads).toHaveLength(8)
-    expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-pm', 'a-tester'])
-    expect(new Set(f.sent.map(s => s.operationId)).size).toBe(2)
+    expect(f.sent.map(s => s.command.text)).toEqual([changed()])
   })
 
-  // Diego's issue, 2026-10-27, for instructions: a daemon running for weeks kept every text it read.
-  it('forgets a project\'s instructions text once no roster row names that project', async () => {
-    const f = docFixture()
+  // Task 4's review: one failed history read kept every notice of that revision without its summary. It is read again at the
+  // next pass, and said once.
+  it('retries a failed history read at the next pass', async () => {
+    const f = fixture()
     const host = await f.pass()
-    const texts = (host as unknown as { instructionTexts: Map<string, unknown> }).instructionTexts
-    expect(texts.size).toBe(1)
+    f.move(f.save('Reviews go to the Reviewer'))
+    f.setHistory(false)
+    await f.pass(host, 1_000)
+    expect(f.sent).toEqual([])
+    f.setHistory(true)
+    await f.pass(host, 60_000)
+    expect(f.reads.filter(path => path === historyRead('a-tester'))).toHaveLength(3)
+    expect(f.sent.map(s => s.command.text)).toEqual([changed('Reviews go to the Reviewer')])
+    expect(f.t.log).toHaveBeenCalledTimes(1)
+    expect(f.t.log).toHaveBeenCalledWith(expect.stringContaining('history'))
+  })
+
+  // A history that stays unreadable never holds a notice back for long: after five minutes it goes out without the summary.
+  it('tells without a summary once the history read has failed for five minutes, and says so once', async () => {
+    const f = fixture()
+    f.move(f.save('Reviews go to the Reviewer'))
+    f.setHistory(false)
+    const host = await f.pass()
+    for (let i = 1; i < 5; i++) await f.pass(host, 60_000)
+    expect(f.sent).toEqual([])
+    await f.pass(host, 60_000)
+    expect(f.sent.map(s => s.command.text)).toEqual([changed()])
+    expect(f.t.log).toHaveBeenCalledTimes(1)
+    await f.pass(host, 60_000)
+    expect(f.sent).toHaveLength(1)
+  })
+
+  it.each([
+    ['an old backend\'s rows (no instructions key)', undefined],
+    ['an agent in no project (instructions null)', null],
+  ])('tells nothing and reads nothing on %s', async (_case, doc) => {
+    const f = fixture(['tester', 'reviewer'], { older: ['reviewer'] })
+    f.setDoc(doc)
+    const host = await f.pass()
+    await f.pass(host, 120_000)
+    expect(f.sent).toEqual([])
+    expect(f.reads).toEqual([])
+  })
+
+  // Diego's issue, 2026-10-27: a daemon running for weeks kept every project's state it read.
+  it('forgets a project\'s history once no roster row names that project', async () => {
+    const f = fixture()
+    const host = await f.pass()
+    const held = (host as unknown as { instructionHistories: Map<string, unknown> }).instructionHistories
+    expect(held.size).toBe(1)
     f.agents.splice(0, f.agents.length)
     await f.pass(host, 1_000)
-    expect(texts.size).toBe(0)
+    expect(held.size).toBe(0)
   })
 
-  it('gives a Buddy the text without notes or summary', async () => {
-    const f = docFixture(['tester', 'buddy'])
-    const buddyRole = readFileSync(f.roleFiles.buddy!, 'utf8')
+  describe('a session an older release launched', () => {
+    const MOVED = `Harness no longer gives you skill files: don't read your swarm-tools, swarm-instructions or role skill again. Before your next step, `
+      + `read your project's instructions with ${COMMAND} and the manual with harness super-tab help tools, and work by them.`
+
+    it('tells each agent once that its skills are gone, and removes them; never a personal session', async () => {
+      const f = fixture(['pm', 'tester', 'reviewer'], { older: ['pm', 'tester', 'reviewer'] })
+      const host = await f.pass()
+      expect(f.sent.map(s => [s.asAgentId, s.command.recipientIds, s.command.conversationId]).sort()).toEqual([
+        ['a-pm', ['a-pm'], 'lead-group'], ['a-reviewer', ['a-reviewer'], 'lead-group'], ['a-tester', ['a-tester'], 'work']])
+      for (const s of f.sent) expect(s.command).toMatchObject({ text: MOVED, agentOnly: true, notice: 'skills' })
+      for (const name of ['pm', 'tester', 'reviewer'] as const) expect(existsSync(f.skills(name))).toBe(false)
+      // A second pass and a restarted host say nothing more.
+      await f.pass(host, 5_000)
+      await f.pass()
+      expect(f.sent).toHaveLength(3)
+    })
+
+    it('removes the skills of a session in no open group at once, and tells it once it joins one', async () => {
+      const f = fixture(['pm', 'tester'], { older: ['pm', 'tester'] })
+      f.setGroups([{ id: 'old', archived: true, leadId: 'a-pm', agentIds: ['a-pm', 'a-tester'] }])
+      const host = await f.pass()
+      expect(existsSync(f.skills('tester'))).toBe(false)
+      expect(f.sent).toEqual([])
+      f.setGroups([{ id: 'next', leadId: 'a-pm', agentIds: ['a-pm', 'a-tester'] }])
+      await f.pass(host, 60_000)
+      expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-pm', 'a-tester'])
+      await f.pass(host, 60_000)
+      expect(f.sent).toHaveLength(2)
+    })
+
+    // Ken's prod scan (11-04): 125 message.send refused with BUDDY_SESSION_THREAD in 32 minutes, tried every minute.
+    it('stops a notice the Swarm refuses for good, and still tells the other agents (#2675)', async () => {
+      const f = fixture(['pm', 'tester', 'reviewer'], { older: ['pm', 'tester', 'reviewer'] })
+      f.setRefuse(request => request.asAgentId === 'a-tester' ? { status: 403, body: { success: false,
+        error: { code: 'BUDDY_SESSION_THREAD', message: 'Answer only in your own thread: post with --reply-to a message in it.' } } } : undefined)
+      const host = await f.pass()
+      for (let i = 1; i <= 5; i++) await f.pass(host, 60_000)
+      expect(f.refused.filter(r => r.asAgentId === 'a-tester')).toHaveLength(1)
+      expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-pm', 'a-reviewer'])
+    })
+
+    it('drops the skills mark, once, when a backend refuses it, and keeps the notice agent-only', async () => {
+      const f = fixture(['pm', 'tester', 'reviewer'], { older: ['pm', 'tester', 'reviewer'] })
+      f.setRefuse(request => 'notice' in request.command ? { status: 400, body: { success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "notice"' } } } : undefined)
+      const host = await f.pass()
+      expect(f.refused).toHaveLength(3)
+      expect(f.sent.map(s => [s.asAgentId, s.command.agentOnly, 'notice' in s.command]).sort()).toEqual([
+        ['a-pm', true, false], ['a-reviewer', true, false], ['a-tester', true, false]])
+      await f.pass(host, 120_000)
+      expect(f.sent).toHaveLength(3)
+    })
+
+    it('sends each notice the old way, once, when an older backend refuses the agent-only mark', async () => {
+      const f = fixture(['pm', 'tester', 'reviewer'], { older: ['pm', 'tester', 'reviewer'] })
+      f.setRefuse(request => request.command.agentOnly ? { status: 400, body: { success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "agentOnly"' } } } : undefined)
+      const host = await f.pass()
+      expect(f.refused.map(r => r.operationId).sort()).toEqual(f.sent.map(s => s.operationId).sort())
+      expect(f.sent.map(s => [s.asAgentId, s.command.recipientIds, 'agentOnly' in s.command, 'notice' in s.command]).sort()).toEqual([
+        ['a-pm', ['a-pm'], false, false], ['a-reviewer', ['a-reviewer'], false, false], ['a-tester', ['a-tester'], false, false]])
+      await f.pass(host, 120_000)
+      expect(f.sent).toHaveLength(3)
+      expect(f.refused).toHaveLength(3)
+    })
+
+    it('never falls back to a visible notice on any other refusal, and retries later as before', async () => {
+      const f = fixture(['pm', 'tester', 'reviewer'], { older: ['pm', 'tester', 'reviewer'] })
+      let reply = { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'command.text: Too big' } } }
+      f.setRefuse(() => reply)
+      const host = await f.pass()
+      reply = { status: 503, body: { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'agentOnly notice could not be stored' } } }
+      await f.pass(host, 60_000)
+      expect(f.sent).toEqual([])
+      expect(f.refused).toHaveLength(6)
+      expect(f.refused.every(r => r.command.agentOnly === true)).toBe(true)
+      f.setRefuse(undefined)
+      await f.pass(host, 60_000)
+      expect(f.sent.map(s => s.command.agentOnly)).toEqual([true, true, true])
+    })
+
+    it('records a notice that was sent before its record was lost, even after its group changed', async () => {
+      const f = fixture(['pm'], { older: ['pm'] })
+      await f.pass()
+      const record = JSON.parse(readFileSync(f.record('pm'), 'utf8'))
+      // The send succeeded, the record of it did not survive, and the Lead's group was archived meanwhile.
+      writeFileSync(f.record('pm'), JSON.stringify({ ...record, told: null }))
+      f.setGroups([{ id: 'lead-group', archived: true, leadId: 'a-pm', agentIds: ['a-pm'] }, { id: 'next', leadId: 'a-pm', agentIds: ['a-pm'] }])
+      await f.pass()
+      expect(JSON.parse(readFileSync(f.record('pm'), 'utf8'))).toEqual(record)
+      expect(f.t.log).not.toHaveBeenCalled()
+      const calls = vi.mocked(f.t.core.account.backend).mock.calls.length
+      await f.pass()
+      expect(vi.mocked(f.t.core.account.backend).mock.calls.slice(calls).some(([, , body]) => (body as any)?.command?.type === 'message.send')).toBe(false)
+      expect(f.sent).toHaveLength(1)
+    })
+  })
+
+  // The Buddy skill stays (task #4673): its limits (only its owner's words ask it to do anything, `harness tell` passes only
+  // them, nothing crosses projects) are in no code yet. It reads its projects' instructions with the command, when it needs them.
+  it('keeps a Buddy\'s own skill current, and gives it no instructions file and no instructions notice', async () => {
+    const f = fixture(['buddy'], { older: ['buddy'] })
+    const file = join(f.skills('buddy'), 'swarm-buddy', 'SKILL.md'), launched = readFileSync(file, 'utf8')
+    // What an older release left: another text, with no record of it.
+    writeFileSync(file, '---\nname: swarm-buddy\n---\nAn older release of this skill.\n')
+    rmSync(join(dirname(file), 'version.json'))
     const host = await f.pass()
-    const file = f.file('buddy')
-    const text = readFileSync(file, 'utf8')
-    expect(text).toContain('\nYou are this project\'s Buddy. ')
-    expect(text.endsWith(`Instructions revision 1:\n\n${START}`)).toBe(true)
-    expect(text).not.toContain(NOTE)
-    // Only its instructions file beside its Buddy skill, which stays as it was: no tools skill.
-    expect(readdirSync(dirname(dirname(file))).sort()).toEqual(['swarm-buddy', 'swarm-instructions'])
-    expect(readFileSync(f.roleFiles.buddy!, 'utf8')).toBe(buddyRole)
-    // Its own read, never a member's text: and never the history, which names who asked for what.
-    expect(f.reads.filter(path => path.includes('a-buddy'))).toEqual([instructionsRead('a-buddy')])
-    const toBuddy = () => f.sent.filter(s => s.asAgentId === 'a-buddy')
-    expect(toBuddy().map(s => [s.command.conversationId, s.command.recipientIds])).toEqual([['chat', ['a-buddy']]])
-    expect(toBuddy()[0]!.command.text).toContain(JSON.stringify(file))
-    // A save reaches it with no summary.
-    f.move(f.save('Reviews go to the Reviewer', 'Revision two.\n'))
+    expect(readFileSync(file, 'utf8')).toBe(launched)
+    expect(readdirSync(f.skills('buddy'))).toEqual(['swarm-buddy'])
+    expect(f.sent.map(s => [s.asAgentId, s.command.conversationId])).toEqual([['a-buddy', 'chat']])
+    expect(f.sent[0]!.command.text).toBe(`Harness updated your built-in swarm-buddy skill. Before your next step, read ${JSON.stringify(file)} again with your file or shell tool and follow the new version.`)
+    f.move(f.save('Reviews go to the Reviewer'))
     await f.pass(host, 1_000)
-    expect(readFileSync(file, 'utf8').endsWith('Instructions revision 2:\n\nRevision two.\n')).toBe(true)
-    expect(toBuddy()).toHaveLength(2)
-    expect(toBuddy()[1]!.command.text).toMatch(/^The project's instructions changed\. /)
-    expect(f.reads.filter(path => path.includes('a-buddy'))).toEqual([instructionsRead('a-buddy'), instructionsRead('a-buddy')])
+    await f.pass()
+    expect(f.sent).toHaveLength(1)
+    expect(f.reads).toEqual([])
   })
 })
 

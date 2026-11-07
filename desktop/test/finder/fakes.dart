@@ -5,13 +5,18 @@ import 'package:harness/finder/finder_git.dart';
 import 'package:harness/finder/finder_models.dart';
 import 'package:path/path.dart' as p;
 
+/// [relative] (`lib/main.dart`) in the fake folder `/r`, spelled as this
+/// computer spells paths — `\r\lib\main.dart` on Windows — because the
+/// Finder joins paths the platform's way.
+String fakePath([String relative = '']) => p.normalize('/r/$relative');
+
 /// An in-memory folder: `/r` holds `lib/main.dart` and `README.md`.
 class FakeFinderFiles implements FinderFiles {
   final texts = <String, String>{
-    '/r/README.md': '# Readme\n\nHello',
-    '/r/lib/main.dart': 'void main() {}\n',
+    fakePath('README.md'): '# Readme\n\nHello',
+    fakePath('lib/main.dart'): 'void main() {}\n',
   };
-  final folders = <String>{'/r', '/r/lib'};
+  final folders = <String>{fakePath(), fakePath('lib')};
   final stamps = <String, DiskStamp>{};
   final listed = <String>[];
   final writes = <String, String>{};
@@ -120,7 +125,12 @@ class FakeFinderGit implements FinderGit {
   Future<GitChanges?> changes(String folder) async {
     reads++;
     if (fail) throw const FinderException('Git is gone.');
-    return GitChanges(root: '/r', branch: 'main', ahead: 1, changes: current);
+    return GitChanges(
+      root: fakePath(),
+      branch: 'main',
+      ahead: 1,
+      changes: current,
+    );
   }
 
   @override

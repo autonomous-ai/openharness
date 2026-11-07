@@ -23,6 +23,7 @@ import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/widgets/new_harness_paste.dart';
+import 'package:path/path.dart' as p;
 
 import 'support/super_tab_fixture.dart';
 
@@ -215,7 +216,9 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetDevicePixelRatio);
       final (_, controller) = await open(tester);
-      final file = File('${Directory.systemTemp.path}/swarm-drop-test.log');
+      final file = File(
+        p.join(Directory.systemTemp.path, 'swarm-drop-test.log'),
+      );
       await tester.runAsync(() => file.writeAsString('boom'));
       addTearDown(() => file.deleteSync());
       final inside = tester.getCenter(

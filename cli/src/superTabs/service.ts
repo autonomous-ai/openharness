@@ -69,7 +69,7 @@ const HELP = {
   messages: 'messages GROUP: read recent messages in a conversation, thread replies included: each names its thread, the root message it answers there. A post with --reply-to lands in that message\'s thread. messages GROUP --thread ROOT reads one thread, its root and replies; a Buddy\'s thread session also gets there, as context, the main-chat messages it started from.',
   message: 'message GROUP MESSAGE_ID: read one exact message, including an earlier question or result referenced by a reply.',
   instructions: 'instructions [PROJECT]: print your project\'s instructions (its roles, workflow and routing) and the coordinator\'s notes, each with its id. Work by them; ask the coordinator, or a person, to change them.',
-  decisions: 'decisions [--answered]: the decisions asked of people in your project, still open, or with --answered those answered (each with its choice and note). When your work needs a person to decide, ask through work.status needs_human with ask: the question as its result, 2 to 5 options, the one you recommend and what the answer unblocks; decision.ask puts up to 10 questions to one person at once. Keep working on your recommendation, marked provisional, until a notice in that conversation says it was answered; then read the answer here with --answered. The notice carries none of the answer. A decision is not a private channel: to tell one person something directly, send person.tell; it lands in their Buddy chat, which you cannot read. Project members watching your terminal see what you send: put nothing there you would not say in the project chat.',
+  decisions: 'decisions [--answered]: the decisions asked of people in your project, still open, or with --answered those answered (each with its choice and note). When your work needs a person to decide, ask through work.status needs_human with ask: the question as its result, 2 to 5 options, the one you recommend and what the answer unblocks; decision.ask puts up to 10 questions to one person at once. Keep working on your recommendation, marked provisional, until a notice in that conversation says it was answered; then read the answer here with --answered. The notice carries none of the answer. A decision is not a private channel, and there is none: a person\'s chat with their own agent is theirs alone. Tell them in the project chat, tagging them. Project members watching your terminal see what you send: put nothing there you would not say in the project chat.',
   costs: 'costs [--days N]: what the attempts routed in the last N days (7 unless set, at most 90) cost and how they went, per engine, model, effort and kind of job: attempts, first-review pass rate, shipped, median minutes to ship, tokens, API-equivalent cost and actual per-token spend in US dollars, and cost per shipped change, with the prices and their sources; models has the same per engine and model alone (a grid model by its own name), and stepUps counts the attempts that stepped up from a cheaper model. Only attempts routed since cost records began, in the groups you may read.',
   post: `post GROUP TEXT|- OPERATION_ID ${POST_FLAGS}: ${POST_HELP}${MENTION_HELP}`,
   // Reactions as Slack has them; backend reactions.ts holds the emoji. What each one means here is the instructions' to say.
@@ -124,8 +124,6 @@ const HELP = {
     // Up to 10 questions for one person at once, in one of the project's conversations.
     { type: 'decision.ask', conversationId: 'GROUP', personId: 'PERSON', questions: [{ question: 'One question a person decides',
       options: ['Option A', 'Option B'], recommended: 0, unblocks: 'What the answer unblocks' }] },
-    // A line to one person in their Buddy chat, which the sender cannot read (backend buddies.ts).
-    { type: 'person.tell', personId: 'PERSON', text: 'A line for one person, in their Buddy chat; members watching your terminal see it too' },
   ],
 }
 
@@ -687,7 +685,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             // Only a 404 that is not the backend's own error is a backend without the route (Fastify's default); the backend's
             // NOT_FOUND and its transient 503 pass through with their own words.
             if (error instanceof SuperTabHostError && error.status === 404 && error.code !== 'NOT_FOUND') {
-              return { error: 'INSTRUCTIONS_UNAVAILABLE', detail: 'This Swarm has no project instructions yet: work by the swarm skill Harness gave you at start.' }
+              return { error: 'INSTRUCTIONS_UNAVAILABLE', detail: 'This Swarm has no project instructions yet: ask its coordinator in your task chat what to work by.' }
             }
             throw error
           }
