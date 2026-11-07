@@ -137,6 +137,7 @@ jobs:
         # Through env, never `${{ }}` inline in run:. Git permits quotes, backticks and $() in a
         # ref name, so interpolating one into the shell would let a tag name execute as code.
         env:
+          REF: ${{ github.ref }}
           REF_NAME: ${{ github.ref_name }}
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_METADATA_PATH: ${{ inputs.metadata_path }}
@@ -146,6 +147,14 @@ jobs:
           set -euo pipefail
           if [[ "$PREPARE_ONLY" = true && "$TEST_REUSE" = true ]]; then
             echo '::error::prepare_only and test_candidate_reuse are separate runs'
+            exit 1
+          fi
+          # Only main and v*_desktop tags reach the release environment that signs. A release (or a
+          # metadata-test dry run) from anywhere else would build for 15 minutes and publish nothing.
+          on_release_ref=false
+          [[ "$REF" = refs/heads/main || "$REF" =~ ^refs/tags/v.*_desktop$ ]] && on_release_ref=true
+          if [[ "$on_release_ref" != true && "$PREPARE_ONLY" != true && "$TEST_REUSE" != true ]]; then
+            echo "::error::$REF cannot release: a release runs from main or a vX.Y.Z_desktop tag. A branch can only prepare, which builds unsigned"
             exit 1
           fi
           # A tag push names the ref "vX.Y.Z_desktop"; workflow_dispatch's input.version is already
@@ -180,6 +189,9 @@ jobs:
           echo "candidate_prefix=$candidate_prefix" >> "$GITHUB_OUTPUT"
           echo "test_prefix=$test_prefix" >> "$GITHUB_OUTPUT"
           echo "Desktop **$ver** · candidate=$PREPARE_ONLY · disposable promotion=$TEST_REUSE" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$PREPARE_ONLY" = true && "$on_release_ref" != true ]]; then
+            echo "Branch build check: every platform builds unsigned and nothing is sealed for reuse; the release builds and signs from its tag." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   # Reject duplicate/older versions and broken credentials before expensive builds.
   preflight:
@@ -259,17 +271,14 @@ jobs:
           name: desktop-candidate-reuse
           path: desktop-candidate-reuse.json
 
-  # Compile the universal app once, then derive the two renderer bundles. Both
-  # retain arm64+x86_64; their packaging/notarization/uploads run in parallel.
+  # Compile the universal app once, then derive the two renderer bundles. Both retain arm64+x86_64.
+  # This job runs the ref's own build (Xcode phases, Swift packages, Dart hooks), so it holds no
+  # signing material and no cloud identity: every bundle is signed ad hoc, and sign-macos signs them.
   build-macos:
     needs: [version, preflight]
     if: needs.preflight.outputs.reused != 'true'
     runs-on: macos-15
-    timeout-minutes: 60   # two notarization submissions per build (zip, then dmg) — see RELEASE.md
-    env:
-      MACOS_METADATA_PREFIX: ${{ needs.version.outputs.scratch_prefix }}
-      ARTIFACT_PREFIX: ${{ needs.version.outputs.artifact_prefix }}
-      CDN_ASSET_BASE_URL: ${{ needs.version.outputs.artifact_base_url }}
+    timeout-minutes: 40
     defaults:
       run:
         working-directory: desktop
@@ -292,9 +301,78 @@ jobs:
         with:
           version: ${{ env.FLUTTER_VERSION }}
 
+      # publish-macos-variant.sh refuses a bundle that is not signed ad hoc.
+      - name: Build once and derive both macOS variants, unsigned
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: python3 scripts/build-macos-variants.py "$VERSION"
+
+      # ditto keeps the frameworks' symlinks and modes, which an artifact upload alone would drop.
+      - name: Pack the unsigned bundles
+        run: |
+          set -euo pipefail
+          mkdir -p build/macos-unsigned
+          for variant in intel apple-silicon; do
+            ditto -c -k --zlibCompressionLevel 1 --keepParent "build/macos-variants/$variant/Harness.app" "build/macos-unsigned/$variant.zip"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-macos-unsigned
+          path: desktop/build/macos-unsigned/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-build-timings
+          path: desktop/build/macos-variants/timing.json
+          if-no-files-found: ignore
+
+  # The only job that reads the Apple signing material, which lives in the `release` environment
+  # (limited to main and v*_desktop tags by the repository's admin; a branch run skips this job). It
+  # builds nothing: it checks out single packaging files, signs the bundles build-macos made
+  # (scripts/sign-macos-app.sh), and notarizes, staples, packages and uploads both variants in parallel.
+  sign-macos:
+    needs: [version, preflight, build-macos]
+    if: ${{ needs.preflight.outputs.reused != 'true' && (github.ref == 'refs/heads/main' || (startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '_desktop'))) }}
+    runs-on: macos-15
+    timeout-minutes: 40   # two notarization submissions per variant (zip, then dmg) — see RELEASE.md
+    environment: release
+    env:
+      MACOS_METADATA_PREFIX: ${{ needs.version.outputs.scratch_prefix }}
+      ARTIFACT_PREFIX: ${{ needs.version.outputs.artifact_prefix }}
+      CDN_ASSET_BASE_URL: ${{ needs.version.outputs.artifact_base_url }}
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /.github/actions/macos-signing/
+            /desktop/scripts/build-macos-variants.py
+            /desktop/scripts/upload-desktop.sh
+            /desktop/scripts/sign-macos-app.sh
+            /desktop/macos/Runner/Release.entitlements
+            /scripts/validate-change.py
+            /scripts/verify-desktop-release.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-macos-unsigned
+          path: desktop/build/macos-unsigned
+      - name: Unpack the unsigned bundles
+        run: |
+          set -euo pipefail
+          for variant in intel apple-silicon; do
+            mkdir -p "build/macos-variants/$variant"
+            ditto -x -k "build/macos-unsigned/$variant.zip" "build/macos-variants/$variant"
+          done
+
       # The throwaway keychain, the Developer ID certificate in it and the `harness-notarize` profile
-      # upload-desktop.sh submits with. It sets KEYCHAIN_PATH. internal-build.yml signs with the same
-      # action, so every internal build proves these steps before a release depends on them.
+      # upload-desktop.sh submits with. It sets KEYCHAIN_PATH.
       - uses: ./.github/actions/macos-signing
         with:
           certificate-base64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
@@ -314,9 +392,8 @@ jobs:
           # Avoid copying the SDK into a local cache this hosted job discards.
           skip_tool_cache: ${{ runner.environment == 'github-hosted' }}
 
-      # SIGN_IDENTITY is read twice here: by publish-macos-variant.sh, re-signing the Intel build once
-      # it pins the renderer, and by upload-desktop.sh, signing the dmg.
-      - name: Build once, then sign, notarize and upload both macOS variants
+      # upload-desktop.sh reads SIGN_IDENTITY to sign each app (sign-macos-app.sh) and its dmg.
+      - name: Sign, notarize and upload both macOS variants
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
           SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -324,13 +401,13 @@ jobs:
         run: |
           set -euo pipefail
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          python3 scripts/build-macos-variants.py "$VERSION" \
+          python3 scripts/build-macos-variants.py "$VERSION" --no-build \
             --metadata-prefix "$MACOS_METADATA_PREFIX" --artifact-prefix "$ARTIFACT_PREFIX"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos-build-timings
+          name: macos-sign-timings
           path: desktop/build/macos-variants/timing.json
           if-no-files-found: ignore
 
@@ -507,7 +584,8 @@ jobs:
   # check-windows-zip.py see the shape they always have, and the published sha256 is the signed bytes'.
   sign-windows:
     needs: [version, build-windows]
-    if: vars.WINDOWS_SIGNING == 'required'
+    # Same rule as sign-macos: only main and v*_desktop tags reach the release environment.
+    if: ${{ vars.WINDOWS_SIGNING == 'required' && (github.ref == 'refs/heads/main' || (startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '_desktop'))) }}
     runs-on: windows-latest
     timeout-minutes: 20
     environment: release
@@ -618,8 +696,8 @@ jobs:
   # The only job that touches the REAL manifest, and the only one that can, because it is the only
   # one that runs after every build has finished.
   publish:
-    needs: [version, preflight, build-macos, build-linux, build-windows, upload-windows]
-    if: ${{ always() && !inputs.prepare_only && needs.version.result == 'success' && needs.preflight.result == 'success' && (needs.preflight.outputs.reused == 'true' || (needs.build-macos.result == 'success' && needs.build-linux.result == 'success' && needs.upload-windows.result == 'success')) }}
+    needs: [version, preflight, build-macos, sign-macos, build-linux, build-windows, upload-windows]
+    if: ${{ always() && !inputs.prepare_only && needs.version.result == 'success' && needs.preflight.result == 'success' && (needs.preflight.outputs.reused == 'true' || (needs.sign-macos.result == 'success' && needs.build-linux.result == 'success' && needs.upload-windows.result == 'success')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     concurrency:
@@ -777,7 +855,7 @@ jobs:
   # precisely when scratch manifests are left behind — the builds that DID succeed have already
   # written theirs. `if: always()` here means the prefix is cleared whatever happened upstream.
   cleanup:
-    needs: [version, preflight, build-macos, build-linux, build-windows, upload-windows, candidate, publish]
+    needs: [version, preflight, build-macos, sign-macos, build-linux, build-windows, upload-windows, candidate, publish]
     if: ${{ always() && needs.version.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
@@ -824,10 +902,10 @@ jobs:
   # destination differs. A successful receipt binds nine verified generations to
   # its full producer source tree, Desktop build inputs, version, run and attempt.
   candidate:
-    needs: [version, build-macos, build-linux, upload-windows]
+    needs: [version, sign-macos, build-linux, upload-windows]
     # Explicit results: an implicit success() also inspects skipped ancestors, and sign-windows is skipped while
-    # WINDOWS_SIGNING is off.
-    if: ${{ !cancelled() && inputs.prepare_only && needs.version.result == 'success' && needs.build-macos.result == 'success' && needs.build-linux.result == 'success' && needs.upload-windows.result == 'success' }}
+    # WINDOWS_SIGNING is off. A branch candidate has no signed macOS (sign-macos skipped), so it seals nothing.
+    if: ${{ !cancelled() && inputs.prepare_only && needs.version.result == 'success' && needs.sign-macos.result == 'success' && needs.build-linux.result == 'success' && needs.upload-windows.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
