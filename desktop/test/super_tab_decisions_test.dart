@@ -768,7 +768,13 @@ void main() {
         expect(inPanel('Send'), findsOneWidget);
         expect(inPanel('Send · Recommended'), findsNothing);
         // Its own Not now answers it; no second one that only folds it.
-        expect(inPanel('Not now'), findsOneWidget);
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('super-decision-decision-2')),
+            matching: find.text('Not now'),
+          ),
+          findsOneWidget,
+        );
         expect(notNow('decision-2'), findsNothing);
         expect(letPmDecide('decision-2'), findsNothing);
 

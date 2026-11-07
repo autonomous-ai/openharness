@@ -409,6 +409,14 @@ quarter of its box, and nothing else outside the words more than 38 pixels.
 - **Task card and row.** The Tasks pane card (`SuperTabPersonalTaskCard`) and
   the sidebar row (`SuperTabBuddyRow`) carry the elements above at their
   shipped sizes; their size and layout do not change when an element does.
+- **Decision card.** One question (`SuperTabDecisionCard`, in the Buddy chat
+  and Notifications; the Decisions page row uses the same buttons): the
+  question, `Unblocks:` line, one button per option with the recommended one
+  filled and marked `· Recommended`, then quiet `Let <coordinator> decide` and
+  Not now. A person's own Buddy's question has no Let decide: only they
+  answer it. A line their Buddy waits to post as them shows its exact words,
+  whole, with Send and Not now, neither marked; its Not now answers it, so the
+  quiet Not now that only folds a card is not shown (task #4525).
 - **Adding or changing one.** A new or changed element updates this section
   and the gallery, with its images, in the same pull request.
 
