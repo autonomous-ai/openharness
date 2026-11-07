@@ -67,6 +67,14 @@ describe('org-wide weekly team play', () => {
     expect(view.people.find(p => p.personId === 'owner')).toMatchObject({ agentsBrought: 1, points: 0 })
   })
 
+  it('counts a person\'s idle agent the same for every reader, though only its person sees it (task #4252, audit 2)', () => {
+    const { state, agent } = fixture()
+    state.agents = [agent('idle', { projectId: '' })]
+    const board = (visibleAgents: Agent[]) => leaderboard({ state, groups: [], machines: [], projectId: 'lead', week: WEEK, now: NOW,
+      allProjects: ['lead'], visibleAgents }).people.find(p => p.personId === 'owner')?.agentsBrought
+    expect(board([])).toBe(board(state.agents))
+  })
+
   it('preserves rolling and per-project scoring for existing clients', () => {
     const { state, request } = fixture()
     const args = { state, groups: [request('one')], machines: [], projectId: 'lead', week: WEEK, now: NOW }
