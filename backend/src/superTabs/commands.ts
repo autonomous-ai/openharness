@@ -1,3 +1,4 @@
+import { refuseTaggedQuestion } from './personQuestions.js'
 import { authorizeTaskApproval, pendingTaskApproval, personalApprovalCommand, rejectTaskApproval, reopenTaskApproval, REQUESTER_LEFT, requireTaskApproval, stageTaskApproval, undecidedProposal } from './taskApproval.js'
 import type { PullRequestFilesRead } from './pullRequestFiles.js'
 import { legacyProposalId, migrateLegacyProposals, type LegacyProposalAsk, pmAcceptsMessage, applyProposalAction, authorizeProposalAction, authorizePersonProposal, cardPriority, createPersonProposal, createProposalCard, proposalCreateSchema, proposalFields, proposalRoot } from './proposalCards.js'
@@ -4609,6 +4610,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const answering = pmInstead && (command.replyTo || command.answers) && context.reply?.author.kind === 'person' ? context.reply.author.id : null
       const tagged = pmInstead ? mentions.filter(id => id === answering) : mentions
       const routedTags = mentions.filter(id => !tagged.includes(id))
+      // A question for a person is a Decision (task #4623), never a chat tag, unless it answers that person's own message.
+      if (!command.agentOnly) refuseTaggedQuestion(state, actor, group, tagged, command.text, (command.replyTo || command.answers) ? context.reply : undefined)
       const unsaid = picked.filter(id => tagged.includes(id) && !named.includes(id) && !saysName(command.text, names.get(id)!))
       const text = voice ? context.voiceWords?.[voice.id] ?? '' : withTags(unsaid.map(id => `@${names.get(id)}`), command.text)
       if (command.replyTo && (!context.reply || context.reply.id !== command.replyTo || context.reply.conversationId !== group.id)) {
