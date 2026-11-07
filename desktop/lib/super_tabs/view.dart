@@ -4137,7 +4137,7 @@ class _SuperTabViewState extends State<SuperTabView>
       padding: _phone
           ? kPhoneBarRowPadding
           : tabsOf != null
-          ? const EdgeInsets.symmetric(horizontal: 4)
+          ? const EdgeInsets.symmetric(horizontal: grid.AppDesktop.menuInset)
           : const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: DesktopChrome.rim)),

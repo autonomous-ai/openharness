@@ -265,7 +265,9 @@ class SuperTabBuddyRow extends StatelessWidget {
                   // early (audit finding 9 of #4436).
                   if (detail == null && status != null)
                     Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: grid.AppDesktop.controlGap,
+                      ),
                       child: status,
                     )
                   else
