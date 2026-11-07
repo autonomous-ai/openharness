@@ -159,6 +159,8 @@ abstract final class AppIcons {
   static const panelLeft = LucideIcons.panelLeft400;
   static const panelLeftClose = LucideIcons.panelLeftClose400;
   static const panelLeftOpen = LucideIcons.panelLeftOpen400;
+  static const panelRightClose = LucideIcons.panelRightClose400;
+  static const panelRightOpen = LucideIcons.panelRightOpen400;
   static const panelsTopLeft = LucideIcons.panelsTopLeft400;
   static const pause = LucideIcons.pause400;
   static const pencil = LucideIcons.pencil400;
@@ -192,6 +194,7 @@ abstract final class AppIcons {
   static const sparkles = LucideIcons.sparkles400;
   static const square = LucideIcons.square400;
   static const squareCheck = LucideIcons.squareCheck400;
+  static const crown = LucideIcons.crown400;
   static const squareKanban = LucideIcons.squareKanban400;
   static const squarePlus = LucideIcons.squarePlus400;
   static const squareTerminal = LucideIcons.squareTerminal400;

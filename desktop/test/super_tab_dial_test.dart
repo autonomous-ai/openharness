@@ -656,7 +656,7 @@ void main() {
     expect(server.threadMarkPosts, hasLength(1));
   });
 
-  // Review of #2756 (ENGINEERING.md §1, §2): only the thread-only message
+  // Review of #2756 (AGENTS.md standards 1 and 2): only the thread-only message
   // opens or closes the dial's thread. An ordinary pick, which nothing sends
   // with a root, keeps whatever thread the person has open.
   test('an ordinary dial pick leaves the open thread as it is, whatever root it names', () async {
@@ -681,7 +681,7 @@ void main() {
     }
   });
 
-  // Review of #2756 (ENGINEERING.md §6): a dial thread whose root never
+  // Review of #2756 (AGENTS.md standard 6): a dial thread whose root never
   // reaches the chat is given up, and the log says so, without its root.
   test('a dial thread whose root never arrives is given up, and logged', () async {
     final lines = <String>[];
@@ -691,7 +691,8 @@ void main() {
     final (f, c) = await openChats();
     f.app.dialThreadWaitForTest = const Duration(milliseconds: 20);
     await threadOnly(f, 'design-lead', 'message-never');
-    // Waits for the give-up's log line itself, never a fixed time (ENGINEERING.md §3).
+    // Waits for the give-up's log line itself, never a fixed time (AGENTS.md
+    // standard 3).
     final given = DateTime.now().add(const Duration(seconds: 5));
     while (!lines.any((l) => l.contains('thread')) &&
         DateTime.now().isBefore(given)) {

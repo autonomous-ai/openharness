@@ -78,7 +78,6 @@ const SDDL = {
   // The owner adds the code and may replace it; the team account reads it and deletes it, and can neither remove nor
   // rename the folder (no DELETE on it, and its modify on the status folder holds no delete-child).
   handoff: '"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;0x1200ab;;;$OWNER_SID)(A;OIIO;0x1301bf;;;$OWNER_SID)(A;;0x1200a9;;;$teamSid)(A;OIIO;0x130189;;;$teamSid)"',
-  relay: '"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;$OWNER_SID)(A;OICI;0x1200a9;;;$teamSid)"',
 } as const
 
 /** Every elevated script starts with these lines. */
@@ -590,15 +589,13 @@ export function buildWindowsSetupScript(input: WindowsSetupScriptInput): string 
     '[IO.File]::WriteAllText("$CONFIG.next", $configText)',
     'Move-Item -LiteralPath "$CONFIG.next" -Destination $CONFIG -Force',
     `Set-Folder $STATUS_DIR ${SDDL.status}`,
-    // The owner's daemon leaves its subscription relay here for the team account (./relay.ts): the owner's folder, which a
-    // standard owner could not make in C:\ProgramData\Harness.
+    // An older setup's owner subscription relay left its grant here for the team account to read. The relay is gone (#4137):
+    // the grant goes, and the folder once empty, never through a junction (security review 2 of #3451).
     '$relay = Item-At $RELAY_DIR',
-    'if ($relay -and (-not $relay.PSIsContainer -or ($relay.Attributes -band $REPARSE) -or ((Owner-Of $RELAY_DIR) -notin @($OWNER_SID, $ADMINS)))) { die "$RELAY_DIR is not the owner\'s folder" 6 }',
-    'if (-not $relay) { $made = New-Object Security.AccessControl.DirectorySecurity; $made.SetSecurityDescriptorSddlForm("O:BA" + ' + SDDL.relay + '); [void][IO.Directory]::CreateDirectory($RELAY_DIR, $made) }',
-    `$relayAcl = New-Object Security.AccessControl.DirectorySecurity; $relayAcl.SetSecurityDescriptorSddlForm(${SDDL.relay}, 'Access'); (Item-At $RELAY_DIR).SetAccessControl($relayAcl)`,
-    // /L: on the folder itself, even if the owner (who may change it) has made it a junction since.
-    '& $ICACLS $RELAY_DIR /setowner "*$OWNER_SID" /L /q | Out-Null',
-    'if ($LASTEXITCODE -ne 0) { die "could not give $RELAY_DIR to $OWNER" 6 }',
+    "if ($relay -and $relay.PSIsContainer -and -not ($relay.Attributes -band $REPARSE)) {",
+    "  Remove-Item -LiteralPath (Join-Path $RELAY_DIR 'relay.json') -Force -ErrorAction SilentlyContinue",
+    "  if (-not @(Get-ChildItem -LiteralPath $RELAY_DIR -Force)) { Remove-Item -LiteralPath $RELAY_DIR -Force -ErrorAction SilentlyContinue }",
+    '}',
     '',
     '# 8. The sign-in handover folder. The owner\'s own process writes the single-use code here after this script, so its',
     '#    90 seconds start after the prompt, and from the right person: UAC may run this script as another administrator,',

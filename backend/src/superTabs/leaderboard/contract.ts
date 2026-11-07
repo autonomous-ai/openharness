@@ -34,6 +34,10 @@ export interface BroughtMachine {
 
 export interface PersonScore {
   personId: string
+  /** Weekly org board only: requests first assigned this week, credited once to their requester. */
+  accepted?: number
+  /** Weekly org board only: visible own-account agents currently contributed; never earns points. */
+  agentsBrought?: number
   /** Their profile name, else their email's local part. */
   displayName: string
   points: number
@@ -130,6 +134,6 @@ export interface Leaderboard {
   /** The models of the 7 days up to now, most attempts first. Absent from a backend before it. */
   recentModels: RecentModel[]
   /** People whose machine ran an attempt on the groups summed, this week and last, and how many of last week's ran again
-   *  this week: PRODUCT.md's contributors per week and kept next week. Counts only. Absent from a backend before it. */
+   *  this week: the PM's contributor targets (per week, kept next week). Counts only. Absent from a backend before it. */
   contributors: { thisWeek: number; lastWeek: number | null; kept: number | null }
 }

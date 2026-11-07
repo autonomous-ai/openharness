@@ -10,11 +10,10 @@
 import { CommandRetries, permanentRefusal } from './retries.js'
 import { createHash } from 'node:crypto'
 import type { CoreApi, SuperTabScreen } from '../core/api.js'
-import { updateDismissKeys } from '../engines/codex/screen.js'
+import { openRestrictedKeys, updateDismissKeys } from '../engines/codex/screen.js'
 import { feedbackDismissKeys } from '../engines/claude/screen.js'
 import type { MessageHold } from '../engines/facets/screen.js'
 import { backend } from './host.js'
-import type { RelaySeen } from './relayRecovery.js'
 import { identifier, object } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -29,7 +28,7 @@ export const SERVE_EVERY_MS = 3_000
 /** A screen read per agent; the 3-minute prompt wait does not need it finer. */
 const WATCH_EVERY_MS = 15_000
 const PROMPT_WAIT_MS = 3 * 60_000
-/** How often Skip is typed for one stuck update screen before the 3-minute alert is left to say it did not work. */
+/** How often a safe dismissal is tried before the 3-minute alert is left to say it did not work. */
 const SKIP_TRIES = 3
 /** The spec's cap on what a screen read returns. */
 const MAX_SCREEN_BYTES = 64 * 1024
@@ -97,9 +96,8 @@ export function modelFailing(text: string): boolean {
 
 /** An engine whose model refuses its sign-in: Claude Code's "Not logged in · Please run /login", "API Error: 401 {…
  *  authentication_error …} · Please run /login", "Invalid API key · Please run /login" and "OAuth token has expired", and
- *  Codex's "■ unexpected status 401 Unauthorized". A CLI release restarts the owner's daemon and its relay: a Team agent
- *  launched in that gap, or holding a token the relay no longer takes, showed one and sat there (task #3301, Quince,
- *  2026-11-05). Only a line that starts with the notice, bare or under the engines' own marks (Claude Code's "⎿", Codex's
+ *  Codex's "■ unexpected status 401 Unauthorized". An agent showing one sits there until it is signed in again (task #3301,
+ *  Quince, 2026-11-05). Only a line that starts with the notice, bare or under the engines' own marks (Claude Code's "⎿", Codex's
  *  "■"), where the engine draws its own ([ownNotice]), and near the prompt: an agent writing or printing these words, its
  *  reply under "⏺" or "•" included, is not signed out (security review 2 of #3172). */
 const SIGNED_OUT_LINE = /^\s*(?:⎿\s+|■\s+)?(?:api error:\s*401\b|not logged in\b|invalid api key\b|oauth token has (?:expired|been revoked)|unexpected status 401\b)/i
@@ -185,11 +183,6 @@ function screenDigest(text: string): string {
 }
 
 type Episode = { since: number; alerted: boolean } | null
-/** What the watch tells of each read (./relayRecovery.ts `RelayRecovery`). */
-export interface TerminalRelay {
-  seen(harnessId: string, engine: string | undefined, read: RelaySeen): Promise<void>
-  keep(harnessIds: ReadonlySet<string>): void
-}
 interface Watched { prompt: Episode; limit: Episode; model: Episode; retried?: number; skips?: number }
 
 export class TerminalHost {
@@ -213,15 +206,12 @@ export class TerminalHost {
   private readonly log: (message: string) => void
   /** Whether the server is known to push now (the host's delivery push lease). */
   private readonly pushes: () => boolean
-  /** On a Team daemon, what restarts an agent stranded on an old relay grant (./relayRecovery.ts). */
-  private readonly relay: TerminalRelay | null
 
   constructor(private readonly core: CoreApi, private readonly machineId: string,
-    options: { now?: () => number; log?: (message: string) => void; pushes?: () => boolean; relay?: TerminalRelay } = {}) {
+    options: { now?: () => number; log?: (message: string) => void; pushes?: () => boolean } = {}) {
     this.now = options.now ?? Date.now
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
     this.pushes = options.pushes ?? (() => false)
-    this.relay = options.relay ?? null
   }
 
   /** Each host roster read. Serving and watching run on their own cadence, and the returned promise is only for specs:
@@ -332,7 +322,6 @@ export class TerminalHost {
     const harnesses = new Set(own.map(a => a.harnessId))
     for (const id of this.progress.keys()) if (!harnesses.has(id)) this.progress.delete(id)
     for (const id of this.still.keys()) if (!harnesses.has(id)) this.still.delete(id)
-    this.relay?.keep(harnesses)
     for (const agent of own) {
       const key = `${agent.tabId}:${agent.agentId}`
       const state = this.watched.get(key) ?? { prompt: null, limit: null, model: null }
@@ -340,7 +329,7 @@ export class TerminalHost {
       // A screen that could not be read says nothing either way.
       const read = await this.core.superTabs!.screen(agent.harnessId, 0).catch(() => null)
       if (!read?.ok) continue
-      state.skips = await this.skipUpdate(agent, read, state.skips ?? 0)
+      state.skips = await this.dismissScreen(agent, read, state.skips ?? 0)
       const now = this.now()
       const digest = screenDigest(read.text), seen = this.progress.get(agent.harnessId)
       const failing = unanswered(read.text)
@@ -356,27 +345,23 @@ export class TerminalHost {
       // Ten minutes up to the last retry seen, not up to now: the quiet minutes that confirm answers came again are not
       // failure, so a burst that recovers before ten minutes never alerts (and its task is never lost for it).
       state.model = await this.episode(agent, 'model', state.model, retrying, now, since => state.retried! - since >= MODEL_WAIT_MS, {})
-      // Failing now, on this read: the model alert's episode outlasts the retries by ten minutes, a restart's by as long. Not
-      // waited on: a restart takes up to a minute, and the other agents' reads and alerts must not wait behind it.
-      void this.relay?.seen(agent.harnessId, this.core.agents.byAgent(agent.harnessId)?.engine,
-        { failingSince: failing && state.model ? state.model.since : null, waiting: read.hold !== null && WAITING.has(read.hold) })
-        .catch(error => this.log(`relay recovery: ${error instanceof Error ? error.message : String(error)}`))
     }
   }
 
-  /** Codex's "Update available" screen on a Swarm agent's terminal, where no one will answer it and its task waits: Esc, through
-   *  the core's door that types only while the screen is still exactly the one read here, so a screen another writer cleared
-   *  meanwhile gets nothing (superTabs/inCore/terminal.ts `inputIfScreen`). Never a row number and Enter (on a misread row
-   *  that could run the update), and only a screen read as exactly that prompt (engines/codex/screen.ts `updateDismissKeys`).
-   *  After [SKIP_TRIES] the 3-minute alert takes over. Returns the tries made for this screen, none once it is gone. The held
-   *  task goes on by itself: the mailbox types it again once the prompt is gone. */
-  private async skipUpdate(agent: Own, read: Extract<SuperTabScreen, { ok: true }>, tries: number): Promise<number> {
-    // Codex's update screen, or one of Claude Code's own feedback popups (engines/claude/screen.ts feedbackDismissKeys).
-    const keys = read.hold === 'update_prompt_open' ? updateDismissKeys(read.text) : feedbackDismissKeys(read.text)
+  /** Safe choices on an unattended Swarm pane: skip an update or feedback popup, or open Codex restricted.
+   *  The core rechecks the exact screen under its input lock, so another writer clearing it receives no stray key.
+   *  After [SKIP_TRIES] the existing prompt alert takes over; the mailbox resumes once the screen is gone. */
+  private async dismissScreen(agent: Own, read: Extract<SuperTabScreen, { ok: true }>, tries: number): Promise<number> {
+    // Resumes already have a session identity, so startScreen cannot settle their folder-access prompt (#3904).
+    // Only the exact restricted choice is safe; never answer a trust grant or another engine's screen.
+    const restricted = read.hold === 'trust_open' && this.core.agents.byAgent(agent.harnessId)?.engine === 'codex'
+      ? openRestrictedKeys(read.text) : null
+    const keys = restricted ?? (read.hold === 'update_prompt_open' ? updateDismissKeys(read.text) : feedbackDismissKeys(read.text))
     if (!keys) return 0
     if (tries >= SKIP_TRIES) return tries
     const dismissed = await this.core.superTabs!.inputIfScreen(agent.harnessId, keys, read.text).catch(error => ({ ok: false as const, error: String(error) }))
     if (!dismissed.ok) this.log(`could not dismiss a screen for ${agent.agentId}: ${dismissed.error}`)
+    else if (restricted) this.log(`Opened Codex restricted for ${agent.agentId}; no folder trust granted`)
     return tries + 1
   }
 

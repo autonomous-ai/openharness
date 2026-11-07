@@ -35,7 +35,7 @@ export interface TeamLayout {
   statusFile: string
   /** What runs the team daemon as the team account from boot, and the root-owned file that defines it. */
   service: { kind: 'launchd' | 'systemd' | 'taskscheduler'; label: string; file: string }
-  /** The owner's folder for the subscription relay's hand-off (./relay.ts), per owner. */
+  /** The owner's folder where an older setup's subscription relay left its grant; setup and removal take it away (#4137). */
   relayDir(owner: string): string
   /** The team account's primary group. */
   group: string
@@ -54,7 +54,6 @@ const LAYOUTS: Record<TeamPlatform, TeamLayout> = {
     statusDir: `${MAC_SHARED}/Team`,
     statusFile: `${MAC_SHARED}/Team/status.json`,
     service: { kind: 'launchd', label: MAC_LABEL, file: `/Library/LaunchDaemons/${MAC_LABEL}.plist` },
-    // /Users/Shared lets anyone make a folder; a macOS ACL lets the team account read this one.
     relayDir: (owner) => `/Users/Shared/.harness-team-relay-${owner}`,
     // Every local account on a Mac is in staff.
     group: 'staff',

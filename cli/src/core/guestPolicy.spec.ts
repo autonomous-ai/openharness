@@ -9,7 +9,7 @@ describe('what a guest may ask', () => {
   const verdict = (type: string, payload: Record<string, unknown> = {}, guest = 'kim@acme.io') => guestVerdict(type, payload, guest, guestOf)
 
   it('may list and start its own harnesses, and use its terminals', () => {
-    for (const type of ['agents_list', 'agent_create', 'agent_create_status', 'agent_create_cancel', 'engines_probe', 'theme_set', 'usage_read', 'guest_folders',
+    for (const type of ['agents_list', 'agent_create', 'agent_create_status', 'agent_create_cancel', 'engines_probe', 'theme_set', 'guest_folders',
       'terminal_capabilities', 'terminal_alive', 'terminal_ack', 'terminal_input', 'terminal_resize', 'terminal_paste', 'terminal_paste_image',
       'terminal_paste_file', 'terminal_chunked_upload_begin', 'terminal_chunked_upload_cancel', 'terminal_scroll', 'terminal_resync', 'terminal_close']) {
       expect(verdict(type, type === 'agent_create' ? { engine: 'claude' } : {}), type).toEqual({ allow: true })
@@ -32,6 +32,11 @@ describe('what a guest may ask', () => {
       expect(verdict(type, { agentId: 'theirs' }), type).toEqual({ allow: false, error: 'NOT_YOUR_HARNESS' })
       expect(verdict(type), type).toEqual({ allow: false, error: 'NOT_YOUR_HARNESS' })
     }
+  })
+
+  it('reads none of the owner\'s plan allowances: its harnesses run on its own sign-in (anh Dee, 2026-11-07)', () => {
+    expect(verdict('usage_read')).toEqual({ allow: false, error: 'GUEST_NOT_ALLOWED' })
+    expect(verdict('usage_read', { profile: { engine: 'claude', id: 'default' } })).toEqual({ allow: false, error: 'GUEST_NOT_ALLOWED' })
   })
 
   it('a guest whose account was never recorded owns nothing', () => {

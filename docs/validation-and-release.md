@@ -552,6 +552,17 @@ Report the combined coverage and any retries explicitly. This is not an
 uninterrupted passing suite, and it is not permission to retry assertion failures
 until they disappear.
 
+## The merge train
+
+In a Swarm project whose rules switch the merge train on, the server merges routine work. Every 10 minutes it batches
+the pull requests that are ready, have every review and test step passed at their current head (as many reads as the
+review table asks), a green `ci/required`, no conflict and no `hold` label. It builds a `harness-train/` branch from
+main, squash-merges it when its CI is green and the heads are unchanged, closes the originals with a link and records
+the merges. A red batch splits by component; a pull request red on its own, or one that conflicts, gets a message in
+its task: fix and push, or merge main once. Docs merge on their own green CI; a CI workflow change is merged by hand.
+Never push to a `harness-train/` branch. Add the `hold` label to keep a pull request out; the rules'
+`mergeTrain.enabled` is the kill switch. Hand merges still work.
+
 ## Merge an already-reviewed PR
 
 After independent code review, required non-CI acceptance and merge authorization:
