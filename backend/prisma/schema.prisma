@@ -1390,6 +1390,9 @@ model SuperTabDecision {
   /// (decisions.ts withdrawIn; Dee, 10-31). Set with answeredAt and no choice, so it waits no more, is in no list and goes
   /// with the answered ones after the ledger's weeks. Absent on every other decision.
   withdrawn      Boolean?
+  /// With kind "buddy-send" (task #4525): the words its owner's Send posts as them, and the proposal's goal, scope, priority
+  /// and project (decisions.ts SendPayload), at most a message and a proposal's fields. Absent on every other decision.
+  send           Json?
 
   @@index([tabId, personId, createdAt])
   @@index([tabId, askerAgentId, createdAt])

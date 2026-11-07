@@ -11,6 +11,8 @@ const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'own
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
 const configuration = { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }
 const asAgent = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'peer' })
+/** The project's worker, on the Swarm owner's machine. */
+const asWorker = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'owner' })
 const NOW = 1_000_000
 const question = { question: 'Keep the old flag?', options: ['Keep it', 'Drop it'], recommended: 1, unblocks: 'The cleanup' }
 
@@ -71,9 +73,9 @@ describe('a Buddy asks its owner in Decisions', () => {
     expect(refused(() => f.run({ type: 'decision.ask', conversationId: f.ownerBuddy.chat, personId: 'owner', questions: [question] }, asAgent(f.peerBuddy.id)))).toBe('BUDDY_FORBIDDEN')
   })
 
-  it('refuses a project agent asking in a person’s Buddy chat', () => {
+  it('refuses a project agent asking in a person’s Buddy chat, which it cannot even read', () => {
     const f = fixture()
-    expect(refused(() => f.run({ type: 'decision.ask', conversationId: f.peerBuddy.chat, personId: 'peer', questions: [question] }, asAgent(f.worker)))).toBe('FORBIDDEN')
+    expect(refused(() => f.run({ type: 'decision.ask', conversationId: f.peerBuddy.chat, personId: 'peer', questions: [question] }, asWorker(f.worker)))).toBe('NOT_FOUND')
   })
 
   it('takes a default time, at least 15 minutes ahead', () => {
@@ -105,6 +107,6 @@ describe('a line waiting for its owner’s OK to send becomes a Send decision', 
     const f = fixture()
     const group = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Copy', brief: '', checks: [] }).result.conversationId as string
     f.run({ type: 'conversation.agent', conversationId: group, agentId: f.worker, present: true, lead: false })
-    expect(refused(() => f.run({ type: 'decision.ask', conversationId: group, personId: 'peer', questions: [{ send: { ...send, projectId: f.app.projectId } }] }, asAgent(f.worker)))).toBe('BUDDY_ONLY')
+    expect(refused(() => f.run({ type: 'decision.ask', conversationId: group, personId: 'peer', questions: [{ send: { ...send, projectId: f.app.projectId } }] }, asWorker(f.worker)))).toBe('BUDDY_ONLY')
   })
 })
