@@ -178,6 +178,8 @@ interface ReadMeta {
 export interface FirstLoad extends ReadMeta {
   /** Own active Tasks; absent for agent readers and older servers. */
   personalTasks?: import('./personalTasks.js').PersonalTasks
+  /** Desktop's Activity: every task of every project the person reads, with every one waiting on their Accept (task #4689). */
+  allTasks?: import('./personalTasks.js').PersonalTasks
   tabId: string
   githubApp?: true
   /** This backend opens a task's steps (`conversation.create` with `step`, task steps design); absent on an older one. */
@@ -211,6 +213,8 @@ export interface MachineReadings { format: number; serverTime: number; machines:
 export interface ChangesDelta extends ReadMeta {
   /** Only summaries changed since this response’s existing cursor. */
   personalTasks?: import('./personalTasks.js').PersonalTasks
+  /** Desktop's Activity: every task of every project the person reads, with every one waiting on their Accept (task #4689). */
+  allTasks?: import('./personalTasks.js').PersonalTasks
   reload: false
   head: LivePart<HeadView> | null
   members: PartChange<MemberView>[]

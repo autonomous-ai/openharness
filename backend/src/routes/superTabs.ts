@@ -707,6 +707,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof personalTasksQuery> }>('/api/super-tabs/:tabId/personal-tasks',
     { preHandler: [validateParams(tabParams), validateQuery(personalTasksQuery)] },
     (req, reply) => respond(reply, () => reads.personalTasks(req.user!, req.params.tabId, req.query.before)))
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof personalTasksQuery> }>('/api/super-tabs/:tabId/all-tasks',
+    { preHandler: [validateParams(tabParams), validateQuery(personalTasksQuery)] },
+    (req, reply) => respond(reply, () => reads.allTasks(req.user!, req.params.tabId, req.query.before)))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof dormantQuery> }>('/api/super-tabs/:tabId/groups',
     { preHandler: [validateParams(tabParams), validateQuery(dormantQuery)] },
     (req, reply) => respond(reply, () => reads.dormant(req.user!, req.params.tabId, { projectId: req.query.projectId, before: req.query.before }, req.query.asAgentId)))

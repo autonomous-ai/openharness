@@ -244,7 +244,8 @@ describe('all tasks: Desktop\'s Activity (task #4689)', () => {
     expect(ids(next.upserts)).toContain(oldest)
     const theirs = (await reads.firstLoad(bystander, f.tab)).allTasks!
     expect(ids(theirs.upserts)).not.toContain(oldest)
-    expect((await reads.firstLoad(owner, f.tab)).allTasks!.upserts.find(r => r.id === hidden)).toMatchObject({ canApprove: false })
+    // The owner reads the private project, but it waits on someone else: in its place, not pinned on their first page.
+    expect(ids((await reads.firstLoad(owner, f.tab)).allTasks!.upserts)).not.toContain(hidden)
   })
 
   it('reads a page through the feed index, examining about what it returns', async () => {
