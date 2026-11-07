@@ -7,8 +7,9 @@
  * read sees a whole file. It holds only percentages, reset times (unix seconds, as Claude Code gives them) and when.
  */
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { readFileSync, realpathSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
 
 export type UsageProviderId = 'claude' | 'codex'
 
@@ -29,15 +30,31 @@ export function accountKey(provider: UsageProviderId, accountId: string): string
 export interface ClaudeReportWindow { used_percentage: number; resets_at: number | null }
 export interface ClaudeReport { at: number; five_hour?: ClaudeReportWindow; seven_day?: ClaudeReportWindow }
 
-/** The report for the Claude config folder [configDir] (CLAUDE_CONFIG_DIR); unset and empty are both the default one. */
+/**
+ * What names the report of the Claude config folder [configDir] (CLAUDE_CONFIG_DIR): '' for the default folder, unset
+ * or however it is written, else its absolute real path. The status line (hook/statusline.mjs) carries the same rule:
+ * it reads the folder from the session's shell and the daemon from its launch environment, which may spell one
+ * folder two ways (#4252).
+ */
+export function claudeReportKey(configDir?: string, home = homedir()): string {
+  const dir = configDir?.trim()
+  if (!dir) return ''
+  const key = realPath(resolve(dir))
+  return key === realPath(join(home, '.claude')) ? '' : key
+}
+
+/** The report for the Claude config folder [configDir] (CLAUDE_CONFIG_DIR), by its key (`claudeReportKey`). */
 export function claudeReportPath(dataDir: string, configDir?: string): string {
-  return join(dataDir, 'quota', `claude-${createHash('sha256').update(configDir ?? '').digest('hex').slice(0, 16)}.json`)
+  return reportFile(dataDir, claudeReportKey(configDir))
 }
 
 /** The last report for [configDir], or null when there is none or it is not a version-1 report with a window in it. */
 export function readClaudeReport(dataDir: string, configDir?: string): ClaudeReport | null {
   let raw: unknown
-  try { raw = JSON.parse(readFileSync(claudeReportPath(dataDir, configDir), 'utf8')) } catch { return null }
+  try { raw = JSON.parse(readFileSync(claudeReportPath(dataDir, configDir), 'utf8')) } catch {
+    // A status line from before the key rule named the file after the raw variable. Until 2026-12-07 (30 days).
+    try { raw = JSON.parse(readFileSync(reportFile(dataDir, configDir ?? ''), 'utf8')) } catch { return null }
+  }
   const file = record(raw)
   if (!file || file.v !== 1 || !finite(file.at)) return null
   const five_hour = windowOf(file.five_hour), seven_day = windowOf(file.seven_day)
@@ -52,5 +69,8 @@ function windowOf(raw: unknown): ClaudeReportWindow | null {
   return { used_percentage: w.used_percentage, resets_at: finite(w.resets_at) ? w.resets_at : null }
 }
 
+const reportFile = (dataDir: string, key: string) => join(dataDir, 'quota', `claude-${createHash('sha256').update(key).digest('hex').slice(0, 16)}.json`)
+// The native call gives the case the file system keeps (macOS, Windows), so one folder typed two ways is one key.
+const realPath = (path: string) => { try { return realpathSync.native(path) } catch { return path } }
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 const record = (v: unknown): Record<string, unknown> | null => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null

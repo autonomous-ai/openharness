@@ -1320,7 +1320,7 @@ describe('BackendSocket outbound queue', () => {
       { provider: 'codex', account: null, outcome: 'answered', httpStatus: 200, source: 'cli',
         body: { rate_limit: { primary_window: { used_percent: 42, limit_window_seconds: 18_000, reset_at: null } } } },
     ]
-    serveOn(socket, (host) => host.start('usage', (core, ports) => { ports.usage = { read: async () => ({}), stop: () => {} }; return startUsage(core, { codex: async () => codex, now: Date.now, env: {} }) }, fakeCore(), USAGE_FALLBACKS, USAGE_REQUESTS))
+    serveOn(socket, (host) => host.start('usage', (core, ports) => { ports.usage = { read: async () => ({}), stop: () => {} }; return startUsage(core, { codex: async () => codex, now: Date.now, env: async () => ({}) }) }, fakeCore(), USAGE_FALLBACKS, USAGE_REQUESTS))
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -3848,7 +3848,7 @@ describe('the connect burst with no network', () => {
     bindAgentList(socket)
     // A grid name that never comes, as a grid read that never lands; and a Codex that never answers, asked
     // of the usage service beside models.
-    serveModels(socket, { account: { privateGridName: () => new Promise<null>(() => {}) } }).start('usage', (core, ports) => { ports.usage = { read: async () => ({}), stop: () => {} }; return startUsage(core, { codex: () => new Promise(() => {}), now: Date.now, env: {} }) }, fakeCore(), USAGE_FALLBACKS, USAGE_REQUESTS)
+    serveModels(socket, { account: { privateGridName: () => new Promise<null>(() => {}) } }).start('usage', (core, ports) => { ports.usage = { read: async () => ({}), stop: () => {} }; return startUsage(core, { codex: () => new Promise(() => {}), now: Date.now, env: async () => ({}) }) }, fakeCore(), USAGE_FALLBACKS, USAGE_REQUESTS)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:burst', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
 
