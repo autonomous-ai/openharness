@@ -8,7 +8,8 @@
 # Exits non-zero when a flow fails, after one "FAILED FLOW: <name>" line per failing flow and what it said.
 # Needs flutter, node, tmux and the backend's and CLI's npm dependencies. HARNESS_E2E_SERVICES_DIR may name a
 # folder that already has mongodb-memory-server and redis-memory-server (HARNESS_E2E_MONGOD and
-# HARNESS_E2E_REDIS_SERVER may name their binaries); otherwise they are installed into a temporary folder.
+# HARNESS_E2E_REDIS_SERVER may name their binaries); otherwise scripts/swarm-flows-services/ is installed from its
+# lockfile into a temporary folder.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,8 +20,9 @@ trap 'rm -rf "$work"' EXIT
 if [ -z "${HARNESS_E2E_SERVICES_DIR:-}" ]; then
   export HARNESS_E2E_SERVICES_DIR="$work/services"
   mkdir -p "$HARNESS_E2E_SERVICES_DIR"
-  (cd "$HARNESS_E2E_SERVICES_DIR" && npm init -y >/dev/null &&
-    npm install --no-audit --no-fund --silent mongodb-memory-server@11.2.0 redis-memory-server@0.17.1)
+  cp "$ROOT/scripts/swarm-flows-services/package.json" "$ROOT/scripts/swarm-flows-services/package-lock.json" \
+    "$HARNESS_E2E_SERVICES_DIR/"
+  (cd "$HARNESS_E2E_SERVICES_DIR" && npm ci --no-audit --no-fund --silent)
 fi
 export HARNESS_SWARM_FLOWS_CLI_ROOT="$ROOT/cli"
 

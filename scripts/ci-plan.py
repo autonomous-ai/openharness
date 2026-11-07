@@ -62,7 +62,7 @@ ALSO.update(STYLE_ALLOWLISTS)
 # The Desktop VM runner and the measured file times it splits the shards by (task #3458): a change to either runs those
 # shards, so a split that runs short cannot merge on process checks alone.
 ALSO.update({"scripts/test-desktop.py": "desktop", "scripts/desktop-test-durations.json": "desktop"})
-ALSO.update({"scripts/swarm-flows.sh": "desktop", "scripts/swarm-flows-stack.mts": "desktop"})
+ALSO.update({"scripts/swarm-flows.sh": "desktop", "scripts/swarm-flows-stack.mts": "desktop", "scripts/swarm-flows-services/": "desktop"})
 # The desktop files the phone's tests read (mobile/test): the Swarm models the phone carries as copies or must parse alike
 # (swarm/desktop_parity_test.dart), the words and helpers its other tests compare. A desktop-only change to one runs
 # mobile-checks too; it once failed only in a batch, two batches later (River, 2026-11-03). test_ci_plan's

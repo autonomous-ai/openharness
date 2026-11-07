@@ -1,0 +1,9 @@
+{
+  "name": "swarm-flows-services",
+  "private": true,
+  "description": "The throwaway MongoDB and Redis of scripts/swarm-flows-stack.mts, installed by scripts/swarm-flows.sh",
+  "dependencies": {
+    "mongodb-memory-server": "11.2.0",
+    "redis-memory-server": "0.17.1"
+  }
+}
