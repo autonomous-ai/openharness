@@ -195,4 +195,49 @@ void main() {
       expect(join, containsPair('conversationId', chatId));
     });
   });
+
+  // anh Dee 20:00 (hotfix #4647): after the failed start, 'Remove this request?' came back until he pressed Discard
+  // anyway three times. One New agent request is kept per Swarm, whichever tab opened it, and one Discard clears it.
+  group('Discard', () {
+    String perTab(SuperTabLaunchFixture f) =>
+        'super_tab.launch.${f.app.currentUser!.id}.${f.app.activeSwarm.id}.new-agent';
+
+    test('one press clears the request, and it never comes back', () async {
+      final f = SuperTabLaunchFixture()..connection.failCreation = true;
+      final first = await _newAgent(f);
+      expect(await first.create(), NewHarnessOutcome.failed);
+      final recovered = await _newAgent(f);
+      final integration = recovered.integration!;
+      expect(integration.pending, isTrue);
+      expect(await recovered.discardPending(anyway: true), isNull);
+      expect(recovered.discarded, isTrue);
+      // A late write of the dropped request does not bring it back.
+      await integration.beforeSubmit('m', 'late');
+      final fresh = await _newAgent(f);
+      expect(fresh.integration!.pending, isFalse);
+      expect(fresh.canDiscardPending, isFalse);
+    });
+
+    test('a request a tab kept before this fix is the one request, and one '
+        'press clears it', () async {
+      final f = SuperTabLaunchFixture()..connection.failCreation = true;
+      final first = await _newAgent(f);
+      expect(await first.create(), NewHarnessOutcome.failed);
+      // Move the kept request to where an older Desktop kept it, under its tab.
+      final storage = f.app.superTabs.storage;
+      final swarmKey =
+          'super_tab.launch.${f.app.currentUser!.id}.swarm:$tabId.new-agent';
+      final saved = await storage.read(swarmKey);
+      expect(saved, isNotNull);
+      await storage.write(perTab(f), saved!);
+      await storage.delete(swarmKey);
+      final recovered = await _newAgent(f);
+      expect(recovered.integration!.pending, isTrue);
+      expect(await recovered.discardPending(anyway: true), isNull);
+      expect(await storage.read(perTab(f)), isNull);
+      expect(await storage.read(swarmKey), isNull);
+      final fresh = await _newAgent(f);
+      expect(fresh.integration!.pending, isFalse);
+    });
+  });
 }
