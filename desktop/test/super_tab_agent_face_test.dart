@@ -23,7 +23,7 @@ Map<String, dynamic> _agent(String id, String name) => {
 };
 
 /// The reader's agents in My agents: Kestrel, a Regular agent with no picture
-/// (its pattern) talking in its own chat, and Orion, the project's PM, wearing
+/// (its face) talking in its own chat, and Orion, the project's PM, wearing
 /// a picture.
 ConversationServer agentFaceSwarm() {
   final server = swarm();
@@ -121,9 +121,9 @@ Future<SuperTabController> showAgentFaces(
 void main() {
   Finder key(String k) => find.byKey(ValueKey(k));
 
-  /// What a face draws: whose, its picture, and the pattern in its place.
+  /// What a face draws: whose, its picture, and the face in its place.
   String look(SuperTabAvatarFace face) =>
-      '${face.identity} pattern=${face.pattern} picture=${switch (face.picture) {
+      '${face.identity} face=${face.face} picture=${switch (face.picture) {
         SuperTabPresetAvatar(:final key) => key,
         _ => null,
       }}';
@@ -160,7 +160,7 @@ void main() {
       selectedId: 'agent-chat-kestrel',
     );
     final face = rowFace(tester, 'kestrel');
-    expect(face.pattern, isTrue, reason: 'its pattern, not the letter K');
+    expect(face.face, isTrue, reason: 'its face, not the letter K');
     expect(elsewhere(tester, 'kestrel'), {look(face)});
     // The face alone: the row draws no engine badge.
     expect(
