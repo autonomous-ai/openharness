@@ -11,6 +11,7 @@ import 'package:harness/state/harness_activity.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/shared/widgets/app_icon_button.dart';
+import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/buddy_card.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/chat/agent_chat_header.dart';
@@ -19,7 +20,9 @@ import 'package:harness/super_tabs/decisions.dart';
 import 'package:harness/super_tabs/decisions_view.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
 import 'package:harness/super_tabs/identity.dart';
+import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/reply_box.dart';
 import 'package:harness/super_tabs/tasks/personal_task_card.dart';
 import 'package:harness/super_tabs/tasks/personal_tasks.dart';
 import 'package:harness/super_tabs/tasks/tasks_pane_header.dart';
@@ -28,7 +31,7 @@ import 'package:harness/terminal/terminal_typography.dart';
 
 import 'super_tab_personal_tasks_pane_test.dart' show TasksFixture;
 import 'support/buddy_engine_fixture.dart';
-import 'support/super_tab_fixture.dart' show conversationFixture;
+import 'support/super_tab_fixture.dart';
 
 /// The Swarm elements gallery (desktop-design-system.md, Swarm elements): every
 /// element drawn in light and dark against its checked-in image. A new or
@@ -165,7 +168,7 @@ Future<List<SuperTabController>> _show(
   await member.select('aeef');
   await lead.select('agent-chat-faye');
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 1510);
+  tester.view.physicalSize = const Size(760, 1790);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -641,6 +644,29 @@ class _Gallery extends StatelessWidget {
                   ),
                 ],
               ),
+              title('Chat: message rows, and the composer empty and typed'),
+              SizedBox(
+                width: 440,
+                child: Column(
+                  children: [
+                    _message(
+                      'River',
+                      'New Project is in the sidebar now.',
+                      agent: _agent('River'),
+                    ),
+                    _message('dee', 'Found it, thanks!', person: _person),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(width: 340, child: _Composer('empty', '')),
+                  SizedBox(width: 16),
+                  SizedBox(width: 340, child: _Composer('typed', 'Ship it')),
+                ],
+              ),
               title('Top bar: your Buddy, a member agent, a Lead'),
               for (final c in bars)
                 SizedBox(
@@ -747,6 +773,78 @@ class _Gallery extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A chat message row, as the chat draws one. Its time is words, which the
+/// comparison leaves out, so the image holds in every time zone.
+Widget _message(
+  String author,
+  String text, {
+  SuperTabAgent? agent,
+  SuperTabPerson? person,
+}) => SuperTabMessageRow(
+  message: SuperTabMessage.fromJson({
+    'id': 'm-$author',
+    'conversationId': 'lead',
+    'text': text,
+    'sequence': 1,
+    'createdAt': '2026-11-07T09:12:00Z',
+    'author': agent != null
+        ? {'kind': 'agent', 'id': agent.id, 'name': author}
+        : {'kind': 'person', 'id': person!.id, 'name': 'dee@example.com'},
+  }),
+  author: author,
+  agent: agent,
+  person: person,
+  receipts: const [],
+  onReturnToComposer: () {},
+  readerId: 'p1',
+);
+
+/// A chat composer ([SuperTabReplyBox], the box both composers draw) holding
+/// [typed]: the round send grey while empty, blue once there is text.
+class _Composer extends StatefulWidget {
+  const _Composer(this.name, this.typed);
+  final String name, typed;
+
+  @override
+  State<_Composer> createState() => _ComposerState();
+}
+
+class _ComposerState extends State<_Composer> {
+  final SuperTabController controller = ConversationServer().controller();
+  late final text = TextEditingController(text: widget.typed);
+  final focus = FocusNode();
+  final files = HarnessAttachments();
+
+  @override
+  void dispose() {
+    text.dispose();
+    focus.dispose();
+    files.dispose();
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SuperTabReplyBox(
+    controller: controller,
+    text: text,
+    focus: focus,
+    files: files,
+    enabled: true,
+    writable: true,
+    busy: false,
+    error: null,
+    onEdited: (_) {},
+    onSend: () {},
+    onMic: () {},
+    hint: 'Message #Pilot',
+    surfaceKey: ValueKey('gallery-composer-${widget.name}'),
+    fieldKey: ValueKey('gallery-composer-field-${widget.name}'),
+    sendKey: ValueKey('gallery-composer-send-${widget.name}'),
+    micKey: ValueKey('gallery-composer-mic-${widget.name}'),
+  );
 }
 
 /// Matches when [galleryDifference] finds none. A mismatch fails with what
