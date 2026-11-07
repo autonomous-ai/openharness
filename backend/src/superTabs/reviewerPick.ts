@@ -23,6 +23,18 @@ export function builtBy(task: Conversation): Set<string> {
   return ids
 }
 
+/** The agents that hold, finished or judged a security review of [task] other than [stepId], at any head (task #4534): the two
+ *  security reviews are independent, so none of them takes this one. The step's own reviewer may take it again at a new head. */
+export function otherSecurityReviewers(state: SuperTabState, task: Conversation, stepId: string | undefined): Set<string> {
+  const ids = new Set<string>()
+  for (const step of stepsOf(state, task.id)) {
+    if (step.id === stepId || !/security/i.test(stepName(step))) continue
+    if (step.assignment && (activeWork(step) || step.assignment.status === 'done')) ids.add(step.assignment.agentId)
+    for (const check of step.checks) for (const verdict of check.verdicts ?? []) if (verdict.by.startsWith('agent:')) ids.add(verdict.by.slice('agent:'.length))
+  }
+  return ids
+}
+
 /** The catalog's row for what [agent] runs (catalog.ts), or undefined: a grid model (never a reviewer), or a model the
  *  catalog does not list. An agent on its engine's own model is rated by the engine's named default. */
 function catalogRow(state: SuperTabState, agent: Agent) {
@@ -67,9 +79,11 @@ const atHead = (verdict: CheckVerdict & { head?: string }, head: string | null) 
  * The agents that may take a [kind] step of [task] at [head], best first: the step's own role (Reviewer, Tester) before any
  * other free agent, then the cheaper of equal standing, then by id. Excluded: anyone that built the task; a grid model, an
  * unknown model or one weaker than the engineer; anyone busy, coordinating a conversation, a Buddy, stopping, or of another
- * project; anyone holding another open step of this task; anyone with a verdict at this head on the task or its steps.
+ * project; anyone holding another open step of this task; anyone with a verdict at this head on the task or its steps; for a
+ * security review, anyone that held, did or judged the task's other one (otherSecurityReviewers, for [stepId], the step it fills).
  */
-export function reviewerCandidates(state: SuperTabState, task: Conversation, kind: StepKind, head: string | null, now: number, os?: StepOs): Agent[] {
+export function reviewerCandidates(state: SuperTabState, task: Conversation, kind: StepKind, head: string | null, now: number, os?: StepOs,
+  stepId?: string): Agent[] {
   const projectId = groupProject(state, task).id
   const index = workerIndex(state)
   const built = builtBy(task)
@@ -80,11 +94,12 @@ export function reviewerCandidates(state: SuperTabState, task: Conversation, kin
   const holding = new Set(steps.filter(step => activeWork(step)).map(step => step.assignment!.agentId))
   const judged = new Set([task, ...steps].flatMap(group => group.checks.flatMap(check => check.verdicts ?? []))
     .filter(verdict => atHead(verdict, head)).map(verdict => verdict.by))
+  const otherSecurity = kind === 'security' ? otherSecurityReviewers(state, task, stepId) : new Set<string>()
   const ranked = state.agents.flatMap(agent => {
     if (built.has(agent.id) || index.leaders.has(agent.id) || index.working.has(agent.id) || holding.has(agent.id)) return []
     // Nor a Team account's agent, which takes no new work (task #4120).
     if (isBuddy(agent) || agent.workDecision === 'stop' || onTeamAccount(state, agent) || agentProjectId(state, agent) !== projectId) return []
-    if (judged.has(`agent:${agent.id}`)) return []
+    if (judged.has(`agent:${agent.id}`) || otherSecurity.has(agent.id)) return []
     const role = roleNameOf(state, agent)
     if (NEVER.test(role) || NEVER_NAMED.test(agent.name) || NEVER_NAMED.test(agent.displayName ?? '')) return []
     // Only the step's own role, Reviewer or Tester, with no other agent standing in (task #3602: #3576's Test went to an Engineer).
@@ -111,5 +126,5 @@ export function stepCandidates(state: SuperTabState, step: Conversation, now: nu
   const kind: StepKind = /test/i.test(name) ? 'test' : /security/i.test(name) ? 'security' : 'review'
   const latest = task.pullRequestUrls?.at(-1)
   const head = latest ? task.pullRequestHeads?.[latest]?.head ?? null : null
-  return reviewerCandidates(state, task, kind, head, now, stepOs(step))
+  return reviewerCandidates(state, task, kind, head, now, stepOs(step), step.id)
 }
