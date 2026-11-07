@@ -29,6 +29,17 @@ this spec). Code review stays a pull request review on GitHub, tied to a commit,
 - Harness doesn't know people's GitHub logins (`docs/swarm-github-app.md`, Attribution).
 - `conversation.merged` (`commands.ts:3204`) marks a task merged. It is sent by the builder, the PM or the merge train.
 
+## Departures from the ask (for anh Dee)
+
+- **Harness keeps a read-only copy of the issue.** The ask says Harness keeps only the link and what isn't the task.
+  This spec also keeps a copy of the issue's title, details, owner and status. Without it, every screen and agent read
+  would be a GitHub call, which runs into GitHub's rate limits and goes down whenever GitHub does. An older release
+  couldn't roll back either, since it would show empty tasks. The copy is never the truth: only GitHub's answers and
+  webhooks write it, and GitHub replaces it whenever the two differ (A, and Design 2).
+- **Some tasks never become issues** (confidential tasks, steps, and public-repository briefs that name people), and on a
+  public repository the issue is created at Accept, not at creation. An issue can't be unpublished, and these protect
+  security work and people's names. Ownrev6's review asked for this.
+
 ## Product spec
 
 ### Which projects
@@ -101,7 +112,7 @@ the task's fields are Harness's own, as today. The issue is created from them, a
 
 | Harness | Issue |
 | --- | --- |
-| Task created; its requester's mode is Ask me, waiting for their Accept | open, `harness: assigned` |
+| Task created; its requester's mode is Ask me, waiting for their Accept | Private repository: open, `harness: assigned`. Public repository: no issue yet; it is created at Accept, so a task the requester declines is never published. |
 | Accepted (by the owner, or at once under Accept all); waiting for an agent, or an agent working | open, `harness: accepted` |
 | Agent reports `review` with its PR | open, `harness: in review` |
 | `conversation.merged`, and CI was green at the merged head | `harness: done`, then closed (`completed`) with the note below |
@@ -135,8 +146,21 @@ access the repository, Harness reads that from its answer and tells the PM.
 **The Tasks screen.** One screen shows both kinds of task, as today: GitHub tasks and Harness tasks mix in one list. A
 GitHub task's card shows the issue number beside the project tag. Clicking the number opens the issue in the browser,
 and clicking anywhere else opens the task's chat. A task with no issue shows no number. Issues and PRs share one sequence
-of numbers in a repository, so the issue number never collides with a PR number. The Harness task number stays in
-commands and the CLI. The look follows `desktop/design/desktop-design-system.md` and comes from its own mockup task.
+of numbers in a repository, so the issue number never collides with a PR number. The look follows
+`desktop/design/desktop-design-system.md` and comes from its own mockup task.
+
+**Two numbers, and how `#N` is read.** A GitHub task has its Harness number (#4533) and its issue number (212). Each
+place shows one of them, and where a `#N` came from decides what it links to:
+
+| Place | Shows | `#N` there means |
+| --- | --- | --- |
+| Task card | The issue number, with GitHub's mark | The issue (opens GitHub) |
+| Commands, CLI, `status`/`mine`/`task` | The Harness number; `task` also prints the issue URL | A Harness task |
+| Harness chat written in Harness (people, agents, cancel and close reasons since #3545) | — | A Harness task, as today. Harness's own lines about a GitHub task name both: "#4533 (issue 212)" |
+| Text copied from GitHub (the issue's title and body copy, "The issue changed on GitHub" messages) | — | That repository's issue or PR, linked to GitHub, never to a Harness task, so "Duplicate of #212" opens issue 212 |
+| What Harness writes to GitHub (issue body, labels, close note, the PR line `Refs #212`) | Only GitHub numbers | GitHub's own linking; no Harness number is written there |
+
+The renderer knows which kind of text it draws: the copy carries its source, so no guessing from the text is needed.
 
 ### B) Agents talk in the task's chat
 
@@ -153,7 +177,8 @@ commands and the CLI. The look follows `desktop/design/desktop-design-system.md`
 
 ## Design (docs/feature-design-rules.md)
 
-Reviewed revision: ______  Reviewers: ______ (review), ______ and ______ (security: app tokens; private repositories).
+Reviewed revision: the head PR #3549 merges at. Reviewers: Ownrev6 and Ownrev1 (review), Ownrev5 (security: GitHub
+App tokens), Ownrev2 (security: private repositories).
 
 ### 1. Growth
 
@@ -208,10 +233,10 @@ issue.
   and 400 an hour. Above it, writes wait in order. Tasks shows "Syncing to GitHub" on the card, and nothing fails.
   `Retry-After` and secondary-limit answers back off (1 s, 2 s, 4 s ... up to 5 min) and never retry in a loop. Every
   request keeps the existing 10 s timeout.
-- **Missed webhooks:** GitHub doesn't retry a failed delivery itself. Every 15 minutes the worker reads one page of the
-  app's delivery log with the app's JWT (`GET /app/hook/deliveries`, 100 entries) and asks GitHub to redeliver the
-failed ones. That is one
-  request per server, not per task. Opening a task's chat and assigning an agent also do a conditional GET of its issue.
+- **Missed webhooks:** GitHub doesn't retry a failed delivery itself. Every 15 minutes the worker reads the app's
+  delivery log with the app's JWT (`GET /app/hook/deliveries`, 100 a page), paging back to where its last pass ended,
+  and asks GitHub to redeliver the failed ones. It reads at most 20 pages a pass. A backlog past that is counted and
+  logged, and the next pass carries on from there. Idle, that is one request per server per pass, not per task. Opening a task's chat and assigning an agent also do a conditional GET of its issue.
 
 ### 4. Scale (10x)
 
