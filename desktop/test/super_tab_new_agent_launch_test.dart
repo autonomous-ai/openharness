@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/state/new_harness.dart';
+import 'package:harness/super_tabs/controller.dart' show SuperTabFailure;
 import 'package:harness/super_tabs/launch.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
@@ -239,5 +240,86 @@ void main() {
       final fresh = await _newAgent(f);
       expect(fresh.integration!.pending, isFalse);
     });
+  });
+
+  // Hotfix #4709 (anh Dee, Mac 3): New agent ended at "The harness started on Mac 3. Check status to add it to the
+  // project." and nothing joined; Mac 3 ran no harness. A saved request whose agent is not running says so and Start
+  // begins again, and an own computer added in v2 (team-account only, no checkout) takes its person's agent.
+  group('a Member on a computer added in v2', () {
+    void v2Computer(SuperTabLaunchFixture f) =>
+        ((f.connection.server.state['machines'] ??= <dynamic>[]) as List).add({
+          'machineId': 'm',
+          'name': 'Mac 3',
+          'contributorId': f.app.currentUser!.id,
+          'teamAccountOnly': true,
+          'observation': {
+            'readiness': {'checkouts': <dynamic>[]},
+          },
+        });
+
+    test('joins on the first try', () async {
+      final f = SuperTabLaunchFixture();
+      v2Computer(f);
+      final box = await _newAgent(f);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      final join = f.connection.joins.single['command'] as Map;
+      expect(join, containsPair('machineId', 'm'));
+      expect(join, containsPair('harnessId', 'native-lead'));
+    });
+
+    for (final (why, status) in [
+      ('stopped on its computer', <String, dynamic>{'state': 'unavailable'}),
+      (
+        'listed but not running',
+        <String, dynamic>{
+          'state': 'created',
+          'agent': {
+            'id': 'native-lead',
+            'name': 'Claude Code',
+            'engine': 'claude',
+            'status': 'stopped',
+          },
+        },
+      ),
+    ]) {
+      test('a saved request whose agent $why says so, and Start starts it '
+          'again', () async {
+        final f = SuperTabLaunchFixture();
+        v2Computer(f);
+        f.connection.failJoin = const SuperTabFailure(
+          'INTERNAL_ERROR',
+          'An internal server error occurred',
+          statusCode: 500,
+        );
+        final first = await _newAgent(f);
+        expect(await first.create(), NewHarnessOutcome.failed);
+        f.connection.creationRecovery = (type, payload) async => {
+          'creationId': payload['creationId'],
+          ...status,
+        };
+        final again = await _newAgent(f);
+        expect(again.integration!.pending, isTrue);
+        expect(await again.create(), NewHarnessOutcome.failed);
+        expect(
+          again.error,
+          'The harness stopped on Test host before it joined. Press Start to '
+          'try again.',
+        );
+        expect(again.integration!.pending, isFalse);
+        expect(again.canDiscardPending, isFalse);
+        expect(f.connection.joins, hasLength(1));
+        f.connection.creationRecovery = null;
+        expect(
+          await again.create(),
+          NewHarnessOutcome.created,
+          reason: again.error,
+        );
+        expect(
+          f.connection.calls.where((c) => c.$1 == 'agent_create'),
+          hasLength(2),
+        );
+        expect(f.connection.joins, hasLength(2));
+      });
+    }
   });
 }
