@@ -1,12 +1,15 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
+import 'package:harness/super_tabs/avatar_art.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/tasks/personal_task_card.dart';
@@ -67,31 +70,200 @@ void main() {
     testWidgets('every Swarm element matches its image in ${brightness.name}', (
       tester,
     ) async {
-      final old = grid.AppTheme.brightness.value;
-      grid.AppTheme.brightness.value = brightness;
-      addTearDown(() => grid.AppTheme.brightness.value = old);
-      tester.view.devicePixelRatio = 1;
-      tester.view.physicalSize = const Size(760, 500);
-      addTearDown(tester.view.reset);
-      await tester.pumpWidget(
-        MaterialApp(
-          debugShowCheckedModeBanner: false,
-          theme: grid.buildAppTheme(brightness: brightness),
-          // A still spinner, so the image holds one frame.
-          home: MediaQuery(
-            data: const MediaQueryData(disableAnimations: true),
-            child: _Gallery(brightness),
-          ),
-        ),
-      );
-      await tester.pump();
-      expect(tester.takeException(), isNull);
+      await _show(tester, brightness);
+      (goldenFileComparator as _NearlyComparator).parts = _parts(tester);
       await expectLater(
         find.byKey(_Gallery.boundary),
         matchesGoldenFile('goldens/swarm-elements-${brightness.name}.png'),
       );
     });
   }
+
+  // Review of task #4461: a whole-image tolerance let a changed element pass. Ellis has Kai's colour with another
+  // tilt: only its eyes and smile move.
+  testWidgets('one changed face fails the gallery', (tester) async {
+    await _show(tester, Brightness.light, faces: ['Ellis', ..._faces.skip(1)]);
+    final boundary = tester.renderObject<RenderRepaintBoundary>(
+      find.byKey(_Gallery.boundary),
+    );
+    final problem = await tester.runAsync(() async {
+      final image = await boundary.toImage();
+      final png = await image.toByteData(format: ui.ImageByteFormat.png);
+      image.dispose();
+      return galleryDifference(
+        png!.buffer.asUint8List(),
+        File('test/goldens/swarm-elements-light.png').readAsBytesSync(),
+        _parts(tester),
+      );
+    });
+    expect(problem, contains('agent face Ellis'));
+  });
+}
+
+Future<void> _show(
+  WidgetTester tester,
+  Brightness brightness, {
+  List<String> faces = _faces,
+}) async {
+  final old = grid.AppTheme.brightness.value;
+  grid.AppTheme.brightness.value = brightness;
+  addTearDown(() => grid.AppTheme.brightness.value = old);
+  tester.view.devicePixelRatio = 1;
+  tester.view.physicalSize = const Size(760, 500);
+  addTearDown(tester.view.reset);
+  await tester.pumpWidget(
+    MaterialApp(
+      debugShowCheckedModeBanner: false,
+      theme: grid.buildAppTheme(brightness: brightness),
+      // A still spinner, so the image holds one frame.
+      home: MediaQuery(
+        data: const MediaQueryData(disableAnimations: true),
+        child: _Gallery(brightness, faces: faces),
+      ),
+    ),
+  );
+  await tester.pump();
+  expect(tester.takeException(), isNull);
+}
+
+/// One element's area in the gallery and the share of it that may differ.
+typedef GalleryRegion = ({String name, Rect rect, double limit});
+
+/// Faces and the Lead ring are paths Skia draws the same on every host: almost
+/// nothing of them may differ.
+const _art = .01;
+
+/// An icon or letter is a font glyph that each host smooths differently; a
+/// different glyph changes far more than this.
+const _glyph = .25;
+
+/// Everything else but words (fills, pills, borders, where each element sits)
+/// is drawn alike on every host: at most 0.01% of the image (38 pixels) may
+/// differ, under the smallest Lead ring's 80, so a lost element fails too. Words
+/// are left out: macOS and Linux smooth their edges too differently to compare
+/// by pixel (14,638 pixels on one image), and their copy is tested where they
+/// are written.
+const _rest = .0001;
+
+/// Every element the gallery draws, each held to its own area, and its words,
+/// held to none.
+({List<GalleryRegion> regions, List<Rect> words}) _parts(WidgetTester tester) =>
+    (
+      regions: _regions(tester),
+      // A glyph's smoothed edge reaches a little past its box.
+      words: [
+        for (final text in find.byType(RichText).evaluate())
+          tester.getRect(find.byElementPredicate((e) => e == text)).inflate(2),
+      ],
+    );
+
+List<GalleryRegion> _regions(WidgetTester tester) {
+  final faces = find.byType(SuperTabAvatarFace);
+  final avatars = find.byType(SuperTabAvatar);
+  final marks = find.descendant(
+    of: find.byType(SuperTabTaskStatusMark),
+    matching: find.byType(Icon),
+  );
+  return [
+    for (var i = 0; i < faces.evaluate().length; i++)
+      if (tester.widget<SuperTabAvatarFace>(faces.at(i)) case final face)
+        face.face && face.picture == null
+            ? (
+                name: 'agent face ${face.name}',
+                rect: tester.getRect(faces.at(i)),
+                limit: _art,
+              )
+            : (
+                name: 'avatar ${face.name}',
+                rect: tester.getRect(faces.at(i)),
+                limit: _glyph,
+              ),
+    for (var i = 0; i < avatars.evaluate().length; i++)
+      if (tester.widget<SuperTabAvatar>(avatars.at(i)) case final avatar
+          when avatar.lead)
+        (
+          name: 'Lead ring ${avatar.name}',
+          // The ring, 12% of the face outside its box, and its smoothed edge.
+          rect: tester.getRect(avatars.at(i)).inflate(avatar.size * .12 + 1),
+          limit: _art,
+        ),
+    for (var i = 0; i < marks.evaluate().length; i++)
+      (
+        name: 'status mark ${tester.widget<Icon>(marks.at(i)).semanticLabel}',
+        rect: tester.getRect(marks.at(i)),
+        limit: _glyph,
+      ),
+  ];
+}
+
+/// Why [actual] does not match [expected], or null when it does. A pixel
+/// differs when a channel moves by more than a quarter; each region may hold
+/// its share of such pixels, and the image outside the words [_rest].
+Future<String?> galleryDifference(
+  Uint8List actual,
+  Uint8List expected,
+  ({List<GalleryRegion> regions, List<Rect> words}) parts,
+) async {
+  final (a, b) = (await _pixels(actual), await _pixels(expected));
+  if (a.width != b.width || a.height != b.height) {
+    return 'size ${a.width}x${a.height}, expected ${b.width}x${b.height}';
+  }
+  bool off(int x, int y) {
+    final i = (y * a.width + x) * 4;
+    for (var c = 0; c < 4; c++) {
+      if ((a.bytes[i + c] - b.bytes[i + c]).abs() > 64) return true;
+    }
+    return false;
+  }
+
+  int count(Rect rect, {List<Rect> skip = const []}) {
+    final r = rect.intersect(
+      Rect.fromLTWH(0, 0, a.width.toDouble(), a.height.toDouble()),
+    );
+    var n = 0;
+    for (var y = r.top.floor(); y < r.bottom.ceil(); y++) {
+      for (var x = r.left.floor(); x < r.right.ceil(); x++) {
+        final at = Offset(x + .5, y + .5);
+        if (off(x, y) && !skip.any((w) => w.contains(at))) n++;
+      }
+    }
+    return n;
+  }
+
+  for (final region in parts.regions) {
+    final n = count(region.rect);
+    final limit = math.max(
+      2,
+      region.rect.width * region.rect.height * region.limit,
+    );
+    if (n > limit) {
+      return '${region.name}: $n pixels differ (limit ${limit.floor()})';
+    }
+  }
+  final n = count(
+    Rect.fromLTWH(0, 0, a.width.toDouble(), a.height.toDouble()),
+    skip: parts.words,
+  );
+  final limit = a.width * a.height * _rest;
+  return n > limit
+      ? 'the image outside its words: $n pixels differ (limit ${limit.floor()})'
+      : null;
+}
+
+Future<({int width, int height, Uint8List bytes})> _pixels(
+  Uint8List png,
+) async {
+  final codec = await ui.instantiateImageCodec(png);
+  final image = (await codec.getNextFrame()).image;
+  final data = await image.toByteData();
+  final pixels = (
+    width: image.width,
+    height: image.height,
+    bytes: data!.buffer.asUint8List(),
+  );
+  image.dispose();
+  codec.dispose();
+  return pixels;
 }
 
 /// Agent names that pick each of the face's eight colours, in palette order.
@@ -136,8 +308,9 @@ final _person = SuperTabPerson.fromJson({
 });
 
 class _Gallery extends StatelessWidget {
-  const _Gallery(this.brightness);
+  const _Gallery(this.brightness, {required this.faces});
   final Brightness brightness;
+  final List<String> faces;
   static const boundary = ValueKey('swarm-elements-gallery');
 
   @override
@@ -164,7 +337,7 @@ class _Gallery extends StatelessWidget {
               title('Agent face: eight colours'),
               Row(
                 children: [
-                  for (final name in _faces) ...[
+                  for (final name in faces) ...[
                     SuperTabAvatar.agent(
                       _agent(name),
                       size: 40,
@@ -282,44 +455,28 @@ class _Gallery extends StatelessWidget {
   }
 }
 
-/// Matches when at most 0.5% of pixels differ by more than a quarter of a
-/// channel: hosts anti-alias the same font slightly differently, while a
-/// changed element moves far more. Anything else fails as the stock
-/// comparator does, writing its diff images.
+/// Matches when [galleryDifference] finds none; anything else fails as the
+/// stock comparator does, writing its diff images, with what differs first.
 class _NearlyComparator extends LocalFileComparator {
   _NearlyComparator(super.testFile);
+
+  /// The elements and words of the image being compared.
+  ({List<GalleryRegion> regions, List<Rect> words}) parts = (
+    regions: const [],
+    words: const [],
+  );
 
   @override
   Future<bool> compare(Uint8List imageBytes, Uri golden) async {
     final file = File.fromUri(basedir.resolveUri(golden));
-    if (file.existsSync()) {
-      final (a, b) = (
-        await _pixels(imageBytes),
-        await _pixels(file.readAsBytesSync()),
-      );
-      if (a.size == b.size) {
-        var off = 0;
-        for (var i = 0; i < a.bytes.length; i += 4) {
-          for (var c = 0; c < 4; c++) {
-            if ((a.bytes[i + c] - b.bytes[i + c]).abs() > 64) {
-              off++;
-              break;
-            }
-          }
-        }
-        if (off <= a.bytes.length / 4 * .005) return true;
-      }
+    final problem = file.existsSync()
+        ? await galleryDifference(imageBytes, file.readAsBytesSync(), parts)
+        : 'no image yet';
+    if (problem == null) return true;
+    try {
+      return await super.compare(imageBytes, golden);
+    } on FlutterError catch (error) {
+      throw FlutterError('$problem\n${error.message}');
     }
-    return super.compare(imageBytes, golden);
-  }
-
-  Future<({Size size, Uint8List bytes})> _pixels(Uint8List png) async {
-    final codec = await ui.instantiateImageCodec(png);
-    final image = (await codec.getNextFrame()).image;
-    final data = await image.toByteData();
-    final size = Size(image.width.toDouble(), image.height.toDouble());
-    image.dispose();
-    codec.dispose();
-    return (size: size, bytes: data!.buffer.asUint8List());
   }
 }

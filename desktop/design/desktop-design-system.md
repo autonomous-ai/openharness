@@ -373,7 +373,9 @@ Goal: every element in a Swarm looks like it came from one hand, Apple-quality
 and never random (anh Dee, 2026-11-07, task #4461). Each element below has one
 implementation; a screen uses it and never draws its own. The gallery
 (`test/swarm_elements_gallery_test.dart`) draws every one in light and dark
-against `test/goldens/swarm-elements-{light,dark}.png`.
+against `test/goldens/swarm-elements-{light,dark}.png`, holding each element
+to its own area: a face or ring may barely differ, an icon or letter a
+quarter of its box, and nothing else outside the words more than 38 pixels.
 
 - **Agent face.** An agent with no chosen picture wears a face
   (`SuperTabAvatarFace`, `avatar_art.dart`) in rows, cards, chat and profile:
