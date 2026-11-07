@@ -1,8 +1,14 @@
-import { describe, expect, it, afterEach } from 'vitest'
+import { describe, expect, it, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, statSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { discoverCodexProfiles } from './codexProfileDiscovery.js'
+
+const host = vi.hoisted(() => ({ win32: false }))
+vi.mock('../engines/kit/windowsFiles.js', async original => {
+  const actual = await original<typeof import('../engines/kit/windowsFiles.js')>()
+  return { ...actual, hostPlatform: () => host.win32 ? 'win32' : actual.hostPlatform() }
+})
 
 const dirs: string[] = []
 
@@ -23,11 +29,19 @@ function write(path: string, content: string, { executable = false } = {}): void
 }
 
 describe('discoverCodexProfiles — conventional homes', () => {
-  it('finds a .codex folder that has auth.json', () => {
+  it('finds a .codex folder that has config.toml', () => {
+    const home = tempHome()
+    mkdirSync(join(home, '.codex'))
+    writeFileSync(join(home, '.codex', 'config.toml'), '')
+    expect(discoverCodexProfiles({ home, environment: {} })).toContain(join(home, '.codex'))
+  })
+
+  // A sign-in file is not Harness's to look at, not even for whether it is there (#4137).
+  it('does not take a sign-in file for a profile', () => {
     const home = tempHome()
     mkdirSync(join(home, '.codex'))
     writeFileSync(join(home, '.codex', 'auth.json'), '{}')
-    expect(discoverCodexProfiles({ home, environment: {} })).toContain(join(home, '.codex'))
+    expect(discoverCodexProfiles({ home, environment: {} })).not.toContain(join(home, '.codex'))
   })
 
   it('finds a folder named like a Codex profile that has config.toml', () => {
@@ -41,7 +55,7 @@ describe('discoverCodexProfiles — conventional homes', () => {
     const home = tempHome()
     const config = join(home, 'myconfig')
     mkdirSync(join(config, 'codex-team'), { recursive: true })
-    writeFileSync(join(config, 'codex-team', 'auth.json'), '{}')
+    writeFileSync(join(config, 'codex-team', 'config.toml'), '')
     const found = discoverCodexProfiles({ home, environment: { XDG_CONFIG_HOME: config } })
     expect(found).toContain(join(config, 'codex-team'))
   })
@@ -65,6 +79,17 @@ describe('discoverCodexProfiles — CODEX_HOME', () => {
     const home = tempHome()
     const found = discoverCodexProfiles({ home, environment: { CODEX_HOME: '/opt/codex-ci' } })
     expect(found).toContain('/opt/codex-ci')
+  })
+
+  // #4183: on Windows CODEX_HOME is `C:\\…`; the check that wanted a leading '/' dropped it.
+  it('honors a drive-letter CODEX_HOME on Windows', () => {
+    const home = tempHome()
+    host.win32 = true
+    try {
+      expect(discoverCodexProfiles({ home, environment: { CODEX_HOME: 'C:\\Users\\u\\.codex-work' } })).toContain('C:\\Users\\u\\.codex-work')
+    } finally {
+      host.win32 = false
+    }
   })
 
   it('ignores a relative CODEX_HOME', () => {

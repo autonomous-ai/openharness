@@ -14,11 +14,12 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import { sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
-import type { Command } from '../src/superTabs/commands.js'
+import { commandSchema, type Command } from '../src/superTabs/commands.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
 import { quotaReset } from './holds.test-support.js'
+import { profiled, reads, plan } from './plans.test-support.js'
 
 // Buddies end to end through the store (buddies.ts): a person adds one on their own Swarm machine, its host starts it, they
 // talk to it alone, and it sends their proposal to the PM. A fresh loopback replica set, created here.
@@ -72,9 +73,9 @@ async function closedPmChat(f: { store: SuperTabStore; tab: string }, conversati
 }
 
 /** A Swarm whose PM runs on the owner's Mac, and peer a member with their own Mac in the Machines list. */
-async function swarm() {
+async function swarm(now: () => number = () => Date.now()) {
   const files = new MemoryAttachmentStore()
-  const store = new SuperTabStore(db, () => Date.now(), { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
+  const store = new SuperTabStore(db, now, { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
   const tab = (await store.create(owner, randomUUID(), 'Buddies', 'public')).id
   const execute = (command: Command, user = owner, asAgentId?: string, hostMachineId?: string) =>
     store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId, hostMachineId)
@@ -104,8 +105,8 @@ async function launch(f: Swarm, startId: string) {
 
 /** peer's one Buddy of the Swarm (Dee, 10-31), added from # buddy and started by peer-mac's host; [pool] is what that host read
  *  while it started. */
-async function swarmBuddy(f: Swarm) {
-  const added = await f.execute({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude' }, peer)
+async function swarmBuddy(f: Swarm, fresh = false) {
+  const added = await f.execute({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', ...(fresh ? { name: 'Research' } : {}) }, peer)
   const pool = (await poolRows(f.store, peer, 'peer-mac')).find(p => p.tabId === f.tab)!
   return { swarmChat: String(added.result.conversationId), main: await launch(f, String(added.result.startId)), pool }
 }
@@ -483,6 +484,30 @@ describe('a Buddy through the store', () => {
     await expect(f.execute({ type: 'message.send', conversationId: 'lead', text: '', replyTo: null, recipientIds: [], attachmentIds: [loose] }, peer, agentId))
       .rejects.toThrow('Attach this file again')
   })
+  it('persists approved files on a proposal card for the PM to open after the switch', async () => {
+    const f = await swarm()
+    const { chat, agentId } = await buddy(f)
+    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
+    const upload = async (name: string, asBuddy: boolean) =>
+      (await f.store.upload(peer, f.tab, chat, { name, mime: 'text/plain', body: Readable.from([Buffer.from(name)]) }, asBuddy ? agentId : undefined)).attachment.id
+    const plan = await upload('plan.txt', true), log = await upload('sync.log', false)
+    await f.execute({ type: 'message.send', conversationId: chat, text: 'Here is my log', replyTo: null, recipientIds: [], attachmentIds: [log] }, peer)
+    const ask = async () => String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send these files to the PM', replyTo: null, recipientIds: [] }, peer)).result.messageId)
+    const propose = async (attachmentIds: string[]) => f.execute({ type: 'buddy.propose', conversationId: chat,
+      ownerMessageId: await ask(), text: 'Send these files to the PM', goal: 'Offline sync', scope: 'Desktop only', priority: 'normal',
+      why: 'Drafts disappear', doneWhen: 'Drafts return', evidence: ['Network-off reproduction'], attachmentIds }, peer, agentId)
+    const sent = await propose([plan, log]), cardId = String(sent.result.conversationId)
+    const read = (await f.store.messages(owner, f.tab, cardId, {}, f.lead)).messages.find(m => (m.source as { kind?: string })?.kind === 'proposal-card')!
+    expect(read.attachments?.map(a => a.name)).toEqual(['plan.txt', 'sync.log'])
+    expect(read.attachments!.map(a => f.files.open(a.link!)?.toString())).toEqual(['plan.txt', 'sync.log'])
+    expect(sent.result.messageId).toBe(read.id)
+    const card = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: cardId } } })
+    expect(card.data).toHaveProperty('proposal.scope', 'Desktop only')
+    expect(await db.superTabAttachment.findUniqueOrThrow({ where: { id: plan } })).toHaveProperty('usedBy', read.id)
+    await expect(propose([plan])).rejects.toThrow('Upload this file again')
+    await expect(propose([log])).rejects.toThrow('already went with a proposal')
+  })
+
   it('never carries a file the expiry sweep took, its owner\'s or its own (Diego, 10-30)', async () => {
     const f = await swarm()
     const { chat, agentId } = await buddy(f)
@@ -833,7 +858,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
       configuration: config, lead: false })).result.agentId)
     await f.execute({ type: 'work.assign', conversationId: group, agentId: builder })
     const notice = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, conversationId: group, recipientIds: { has: agentId } } })
-    expect(notice).toMatchObject({ source: { kind: 'agent-only' }, text: expect.stringMatching(/^News for your owner: #\d+ "Offline sync", which they requested, is assigned and working\.$/) })
+    expect(notice).toMatchObject({ source: { kind: 'agent-only' }, text: expect.stringMatching(/^News for your owner: #\d+ "Offline sync", recorded as their request, is assigned and working\.$/) })
     const got = await heard()
     expect(got).toEqual([answer, followUp, tag, notice.id])
     expect(got).not.toContain(unrelated)
@@ -899,7 +924,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
       configuration: config, lead: false })).result.agentId)
     await f.execute({ type: 'work.assign', conversationId: group, agentId: builder })
     const notice = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, conversationId: group, recipientIds: { has: agentId } } })
-    expect(notice.text).toMatch(/^News for your owner: #\d+ "Offline sync", which they requested, is assigned and working\.$/)
+    expect(notice.text).toMatch(/^News for your owner: #\d+ "Offline sync", recorded as their request, is assigned and working\.$/)
     expect(await heard()).toEqual([notice.id])
   })
 
@@ -1251,5 +1276,112 @@ describe('the person\'s own browser, reading and writing the Swarm straight from
     }
     expect(await refusal(f.store.messages(peerWeb, f.tab, 'lead', {}, f.lead))).toMatchObject({ code: 'FORBIDDEN', status: 403 })
     expect(await refusal(new SwarmReads(f.store).firstLoad(peerTeam, f.tab))).toMatchObject(LIMITED)
+  })
+})
+
+
+describe('idle Buddy sleep (#3824)', () => {
+  it('sleeps only after an idle hour and no open delivery, using the agent status index', async () => {
+    let now = Date.now()
+    const f = await swarm(() => now)
+    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
+    const { main, swarmChat, pool } = await swarmBuddy(f)
+    const agent = (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === main)!
+    const sent = await f.execute({ type: 'message.send', conversationId: swarmChat, text: 'Remember this', replyTo: null, recipientIds: [] }, peer)
+    const { receivedAt: _, sessionKind: __, ...report } = pool.machine.observation!
+    const idle = { ...report, runningHarnessIds: [agent.harnessId], idleBuddyHarnessIds: [agent.harnessId] }
+    const current = async () => (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === main)!
+    now += 3_600_000 - 1
+    await f.store.observeMachine(peer, f.tab, 'peer-mac', idle)
+    expect((await current()).asleep).toBeUndefined()
+    now++
+    for (const status of ['queued', 'claimed', 'uncertain']) {
+      await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: main, messageId: String(sent.result.messageId) }, data: { status } })
+      await f.store.observeMachine(peer, f.tab, 'peer-mac', idle)
+      expect((await current()).asleep, status).toBeUndefined()
+      now += 30_001
+    }
+    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: main }, data: { status: 'answered' } })
+    const entries = await profiled(db, () => f.store.observeMachine(peer, f.tab, 'peer-mac', idle))
+    expect((await current()).asleep).toEqual({ since: now })
+    const pending = reads(entries, 'SuperTabDelivery', ['tabId', 'agentId', 'status'])
+    expect(pending.length).toBeGreaterThan(0)
+    for (const row of plan(pending)) {
+      expect(row.plan).toContain('IXSCAN { tabId: 1, agentId: 1, status: 1, createdAt: 1 }')
+      expect(row.docsExamined).toBe(0)
+      expect(row.keysExamined).toBeLessThanOrEqual(3)
+    }
+    const row = (await rosterRows(f.store, peer, 'peer-mac')).find(r => 'agent' in r && r.agent.id === main)
+    expect(row).toMatchObject({ buddySleepManaged: true, agent: { harnessId: agent.harnessId, buddyOf: agent.buddyOf } })
+  })
+})
+
+
+describe('Buddy input and sleep race (#3824)', () => {
+  it('wakes only the authorized recipient and retries sleep when input commits first', async () => {
+    let now = Date.now()
+    const f = await swarm(() => now)
+    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
+    const first = await swarmBuddy(f), second = await swarmBuddy(f, true)
+    const agents = (await f.store.read(peer, f.tab)).state.agents.filter(a => [first.main, second.main].includes(a.id))
+    const { receivedAt: _, sessionKind: __, ...report } = first.pool.machine.observation!
+    const idle = { ...report, runningHarnessIds: agents.map(a => a.harnessId), idleBuddyHarnessIds: agents.map(a => a.harnessId) }
+    const current = async (id: string) => (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === id)!
+    now += 3_600_000
+    await f.store.observeMachine(peer, f.tab, 'peer-mac', idle)
+    expect((await current(first.main)).asleep).toBeDefined()
+    expect((await current(second.main)).asleep).toBeDefined()
+    await expect(f.execute({ type: 'message.send', conversationId: first.swarmChat, text: 'Not yours', replyTo: null, recipientIds: [] })).rejects.toThrow()
+    expect((await current(first.main)).asleep).toBeDefined()
+    const input = { type: 'message.send' as const, conversationId: first.swarmChat, text: 'Continue', replyTo: null, recipientIds: [] }
+    const sent = await f.execute(input, peer)
+    expect((await current(first.main)).asleep).toBeUndefined()
+    expect((await current(second.main)).asleep).toBeDefined()
+    const waiting = (await f.store.deliveries(peer, f.tab, first.main)).find(d => d.messageId === sent.result.messageId)!
+    const claim = await f.store.delivery(peer, f.tab, first.main, waiting.id, { type: 'claim', claimId: randomUUID() })
+    expect(claim).toMatchObject({ message: { id: sent.result.messageId } })
+    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: first.main }, data: { status: 'answered' } })
+    now += 3_600_001
+    let injected = false
+    const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
+      if (injected) return
+      injected = true
+      await f.execute({ ...input, text: 'A message just before sleep' }, peer)
+    }), () => now)
+    await racing.observeMachine(peer, f.tab, 'peer-mac', idle)
+    expect(injected).toBe(true)
+    expect((await current(first.main)).asleep).toBeUndefined()
+    expect((await f.store.deliveries(peer, f.tab, first.main)).some(d => d.status === 'queued')).toBe(true)
+  })
+})
+
+
+describe('a sleeping proposal sender (#3824)', () => {
+  it('wakes the card’s original Buddy for a PM question even when another Buddy is the default', async () => {
+    let now = Date.now()
+    const f = await swarm(() => now)
+    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
+    const first = await swarmBuddy(f), second = await swarmBuddy(f, true)
+    const approved = await f.execute({ type: 'message.send', conversationId: first.swarmChat, text: 'Preserve drafts', replyTo: null, recipientIds: [] }, peer)
+    const proposal = await f.execute(commandSchema.parse({ type: 'buddy.propose', conversationId: first.swarmChat, projectId: 'lead', ownerMessageId: approved.result.messageId,
+      title: 'Preserve drafts', text: 'Preserve drafts', goal: 'Preserve work', scope: 'Draft storage', priority: 'P2',
+      why: 'Reconnect loses work', doneWhen: 'Draft returns', evidence: ['Offline reproduction'] }), peer, first.main)
+    await f.execute({ type: 'buddy.default', conversationId: second.swarmChat }, peer)
+    const agents = (await f.store.read(peer, f.tab)).state.agents.filter(a => [first.main, second.main].includes(a.id))
+    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: { in: agents.map(a => a.id) } }, data: { status: 'answered' } })
+    const { receivedAt: _, sessionKind: __, ...report } = first.pool.machine.observation!
+    now += 3_600_001
+    await f.store.observeMachine(peer, f.tab, 'peer-mac', { ...report, runningHarnessIds: agents.map(a => a.harnessId), idleBuddyHarnessIds: agents.map(a => a.harnessId) })
+    const current = async (id: string) => (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === id)!
+    expect((await current(first.main)).asleep).toBeDefined()
+    expect((await current(second.main)).asleep).toBeDefined()
+    await f.execute(commandSchema.parse({ type: 'proposal.ask', conversationId: proposal.result.conversationId, personId: peer.sub,
+      question: 'How long?', defaultAnswer: 'Seven days', deadline: now + 60_000 }), owner, f.lead)
+    expect((await current(first.main)).asleep).toBeUndefined()
+    expect((await current(second.main)).asleep).toBeDefined()
+    const waiting = (await f.store.deliveries(peer, f.tab, first.main)).find(d => d.conversationId === first.swarmChat)!
+    expect(waiting).toBeDefined()
+    const claim = await f.store.delivery(peer, f.tab, first.main, waiting.id, { type: 'claim', claimId: randomUUID() })
+    expect(claim).toMatchObject({ message: { source: { kind: 'proposal-notice' } } })
   })
 })

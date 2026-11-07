@@ -173,6 +173,9 @@ class SuperTabAgent {
       machineOwnerId =
           row['machineOwnerId'] as String? ?? _text(row, 'contributorId'),
       role = row['role'] as String?,
+      kind = row['kind'] as String?,
+      chatId = row['chatId'] as String?,
+      myAgent = row['myAgent'] as bool?,
       roleId = row['roleId'] as String?,
       roleName = row['roleName'] as String?,
       buddyOf = switch (row['buddyOf']) {
@@ -220,6 +223,14 @@ class SuperTabAgent {
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
 
+  /// What it is and where its person talks to it (Swarm v3, backend #4116): `buddy`, `pm` or `regular`, and the chat it
+  /// has, or none yet. An older backend sends neither.
+  final String? kind, chatId;
+
+  /// Whether it is in the reader's My agents (backend agentKind.ts inMyAgents, task #4192): their Buddy, or an agent of
+  /// theirs running on their own account and not finished. Null from an older backend.
+  final bool? myAgent;
+
   /// Set by its contributor or its project's Lead; null draws its pattern.
   final SuperTabAvatarPicture? avatar;
 
@@ -231,8 +242,8 @@ class SuperTabAgent {
   /// while it waits at a prompt in its terminal, gone once that is answered.
   final List<String> alerting;
 
-  /// A Product Manager's switch to another engine or account that is asked for
-  /// and not yet done (backend `switchRequest`); null otherwise.
+  /// A Product Manager or Buddy's engine switch that is asked for and not yet
+  /// done (backend `switchRequest`); null otherwise.
   final Map<String, dynamic>? switchRequest;
 
   /// The model on the Swarm's grid it runs on; null on its own subscription
@@ -373,10 +384,14 @@ class SuperTabConversation {
     : id = _text(row, 'id'),
       // A group from before projects belongs to the first; a person's one
       // Buddy chat for the Swarm belongs to none (spec
-      // 2026-10-31-one-buddy-per-swarm).
+      // 2026-10-31-one-buddy-per-swarm), and so does a person's chat with
+      // one of their own agents (v3, #4116): it is not a task of the first
+      // project (audit #4211, finding 3).
       projectId =
           row['projectId'] as String? ??
-          (row['kind'] == 'swarm-buddy' ? '' : 'lead'),
+          (row['kind'] == 'swarm-buddy' || row['kind'] == 'agent-chat'
+              ? ''
+              : 'lead'),
       kind = row['kind'] as String?,
       buddyOwnerId = row['buddyOwnerId'] as String?,
       buddyName = row['buddyName'] as String?,
@@ -469,6 +484,10 @@ class SuperTabConversation {
   /// chat with their Buddy. A `leads` one is never kept ([SuperTabSnapshot]).
   final String? kind;
   bool get isBuddyChat => kind == 'buddy' || kind == 'swarm-buddy';
+
+  /// A person's chat with one of their own agents (Swarm v3, backend #4116): the agent takes the message, so it needs no
+  /// Lead, as a Buddy chat needs none.
+  bool get isAgentChat => kind == 'agent-chat';
 
   /// A person's one Buddy chat for the whole Swarm (spec
   /// 2026-10-31-one-buddy-per-swarm): in no project, keyed by the empty id.

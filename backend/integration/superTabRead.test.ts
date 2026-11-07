@@ -189,13 +189,24 @@ describe('first load (design 4.3)', () => {
     }
   })
 
+  it('pages the person\'s Tasks feed by its cursor, and refuses a cursor it never gave (task #4203)', async () => {
+    const s = await scene()
+    const page = await get(`/api/super-tabs/${s.tabId}/personal-tasks`, peer)
+    expect(page.status).toBe(200)
+    expect(page.body.data).toEqual({ approvalMode: 'autoApprove', reset: true, upserts: [], removed: [], olderCursor: null })
+    const bad = await get(`/api/super-tabs/${s.tabId}/personal-tasks?before=bm90LWEtY3Vyc29y`, peer)
+    expect(bad.status).toBe(400)
+    expect(bad.body.error.code).toBe('INVALID_CURSOR')
+  })
+
   it('answers the design\'s shape: cursor 30 s before the read, epoch, newest change, the reader\'s parts and derived values', async () => {
     const s = await scene()
     clock = NOW
     const { status, body } = await get(`/api/super-tabs/${s.tabId}/parts`, peer)
     expect(status).toBe(200)
     expect(Object.keys(body.data).sort()).toEqual(['agents', 'cursor', 'derived', 'derivedEtag', 'epoch', 'format', 'groups', 'head', 'lastChangedAt',
-      'machines', 'members', 'progress', 'serverTime', 'starts', 'steps', 'tabId'].sort())
+      'machines', 'members', 'personalTasks', 'progress', 'serverTime', 'starts', 'steps', 'tabId'].sort())
+    expect(body.data.personalTasks).toEqual({ approvalMode: 'autoApprove', reset: true, upserts: [], removed: [], olderCursor: null })
     expect(body.data).toMatchObject({ format: 2, tabId: s.tabId, serverTime: NOW, epoch: 1, lastChangedAt: MIGRATED, steps: true,
       head: { key: 'head', version: R, changedAt: MIGRATED, data: { id: s.tabId, name: 'Pilot' } } })
     expect(JSON.parse(Buffer.from(body.data.cursor, 'base64url').toString())).toEqual({ v: 2, t: NOW - 30_000, e: 1 })

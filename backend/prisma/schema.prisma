@@ -1508,6 +1508,8 @@ model SuperTabDelivery {
   // A row gathered for its PM's inbox rather than the notice digest (inbox.ts, task #3545): "people" or "crew". At idle the
   // inbox goes at once only for these; unset on notices and on older rows.
   inboxSection          String?
+  /// Server-derived proposal priority, 0 first. Absent on rows before proposal cards; retained until existing delivery compaction.
+  inputPriority         Int?
   // A queued delivery whose claims keep answering SWARM_BUSY (prod 10-30, v1.3.71): written outside the failed claim, unset by
   // the claim that gets in. The settle pass alarms on them and page reads show the sender (store.ts recordFailedClaim).
   claimFailingSince     DateTime?
@@ -1520,6 +1522,7 @@ model SuperTabDelivery {
   updatedAt             DateTime @updatedAt
 
   @@index([tabId, agentId, status, createdAt])
+  @@index([tabId, agentId, status, inputPriority, createdAt])
   @@index([machineId, status])
   // A page of messages reads its deliveries by message (pageReads.ts).
   @@index([tabId, messageId])
@@ -1948,6 +1951,8 @@ model SwarmMember {
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])
+  /// A command's live parts by the columns a held part is compared by (parts/held.ts): the listing reads no document (task #4368).
+  @@index([tabId, deleted, key, version, changedAt])
   /// Tombstones past their purge time, compacted by the hourly sweep (superTabs/sweeps.ts compactTombstones). Not a TTL: the tombstone stays.
   @@index([purgeAt])
 }
@@ -1969,11 +1974,16 @@ model SwarmGroup {
   /// Out of first loads and changes: work done or cancelled and quiet for a day, or archived by hand. A message wakes it.
   dormant            Boolean   @default(false)
   agentIds           String[]
+  /// The people and agents whose Tasks feed lists it (read/feedIds.ts); [] for a conversation that is no task. Set on every
+  /// write; parts written before it are set at worker startup (markFeedIds).
+  feedIds            String[]  @default([])
   /// The machine running its active assignment, for the host's change read.
   executionMachineId String?
   messageSeq         Int       @default(0)
   reportSeq          Int       @default(0)
   lastActivityAt     DateTime
+  /// Next proposal deadline/revisit; null once none is due. Existing card history lives until project/Swarm deletion.
+  proposalDueAt      DateTime?
   /// The machines whose hosts this group's last write concerned: its agents' and its work's, before and after (host reads).
   hostMachineIds     String[]  @default([])
   /// A short hash of the fields host rows read (read/hostRows.ts); a post leaves it. Missing on a part written before it.
@@ -1985,10 +1995,13 @@ model SwarmGroup {
   /// Not indexed on `data.kind` (Atlas advisor, 2026-11-04, task #2841): no backend read filters by it, the only one that
   /// does is the rollback script scripts/buddy-sessions/end-all.ts, across every Swarm; and every hot read keeps its plan
   /// with such an index (the numbers are in task #2841's pull request). The top-level `kind` holds the same value.
+  @@index([deleted, proposalDueAt, tabId, key])
   @@unique([tabId, key])
   @@index([tabId, changedAt])
   @@index([tabId, dormant, changedAt])
   @@index([tabId, agentIds])
+  /// A person's Tasks feed, newest activity first, then by key (read/personalTasks.ts): the person and their own agents.
+  @@index([tabId, feedIds, lastActivityAt, key])
   /// A project's quiet conversations by activity (leaderboard, digest), and their pages newest first, then by key (parts/load.ts loadDormant).
   @@index([tabId, projectId, dormant, lastActivityAt, key])
   @@index([tabId, projectId, dormant, reportSeq])
@@ -2024,8 +2037,11 @@ model SwarmAgent {
   @@unique([tabId, key])
   @@index([tabId, changedAt])
   /// A Swarm's live agents (parts/light.ts, load.ts, read/host.ts): without it the read planned on [tabId, changedAt] and
-  /// examined every tombstone too (prod 2026-11-02: 1,070 examined for 40 returned).
+  /// examined every tombstone too (prod 2026-11-02: 1,070 examined for 40 returned). The held index below has it as its prefix;
+  /// it stays until a prod scan shows that one in use (task #4368).
   @@index([tabId, deleted])
+  /// A command's live parts by the columns a held part is compared by (parts/held.ts): the listing reads no document (task #4368).
+  @@index([tabId, deleted, key, version, changedAt])
   @@index([machineId, deleted])
   @@index([tabId, contributorId])
   /// One agent's registrations in every Swarm (confidential.ts, sessionScope.ts): host rows read them on every changed tab.
@@ -2060,6 +2076,8 @@ model SwarmMachine {
   @@unique([tabId, key])
   @@index([tabId, changedAt])
   @@index([tabId, readAt])
+  /// A command's live parts by the columns a held part is compared by (parts/held.ts): the listing reads no document (task #4368).
+  @@index([tabId, deleted, key, version, changedAt, readAt])
   @@index([machineId, deleted])
   /// Machines whose settings changed since a host's cursor (read/host.ts woken).
   @@index([tabId, hostChangedAt])
@@ -2109,6 +2127,8 @@ model SwarmProgress {
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])
+  /// A command's live parts by the columns a held part is compared by (parts/held.ts): the listing reads no document (task #4368).
+  @@index([tabId, deleted, key, version, changedAt])
   /// Removed parts go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
   @@index([purgeAt], map: "part_purge")
 }

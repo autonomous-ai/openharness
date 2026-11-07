@@ -141,12 +141,14 @@ describe('what a Buddy reads', () => {
     expect(JSON.stringify(seen)).not.toContain('/Users/owner/app')
     // No machines means none: agents and a task's assignment keep no machine or terminal id (review 1 of #2115, item 3).
     f.state.conversations.find(c => c.id === f.group)!.assignment = { id: 'a1', agentId: f.pm, status: 'working', result: null,
-      execution: { machineId: 'machine', harnessId: 'app-pm', machineOwnerId: 'host' } } as never
+      execution: { machineId: 'machine', harnessId: 'app-pm', machineOwnerId: 'host', contributorId: 'runner-login' } } as never
     f.state.conversations.find(c => c.id === f.group)!.lostAttempt = { id: 'a0', agentId: f.pm, machineId: 'machine', engine: 'claude' }
     const strict = visibleState(f.state, agentActor('buddy'))
     expect(strict.agents.map(a => [a.machineId, a.harnessId])).toEqual(strict.agents.map(() => ['', '']))
     const task = strict.conversations.find(c => c.id === f.group)!
-    expect(task.assignment!.execution).toEqual({ machineId: '', harnessId: '', machineOwnerId: '' })
+    // Nor whose login its agent runs under (the Tasks feed's, #4203), as an agent's own contributor is blanked.
+    expect(task.assignment!.execution).toEqual({ machineId: '', harnessId: '', machineOwnerId: '', contributorId: '' })
+    expect(JSON.stringify(strict)).not.toContain('runner-login')
     expect(task.lostAttempt).toEqual({ id: 'a0', agentId: f.pm })
     expect(visibleState(f.state, agentActor(f.pm)).agents.find(a => a.id === f.pm)!.machineId).toBe('machine')
     // A lost task's reason without its machine, on the task and on the agent; a reason naming none stays (re-check 2).
@@ -782,10 +784,10 @@ describe('a Buddy\'s proposal to the PM', () => {
   })
 
   it('gives a task opened from it the proposal\'s goal, scope and priority as its brief, unless the PM writes one', () => {
-    const { f, propose } = asked()
-    const root = propose().messages[0]!
-    const context = { proposal: { id: root.id, conversationId: f.app.conversationId, author: root.author, source: root.source as Record<string, unknown> } }
     const open = (brief: string) => {
+      const { f, propose } = asked()
+      const root = propose().messages[0]!
+      const context = { proposal: { id: root.id, conversationId: f.app.conversationId, author: root.author, source: root.source as Record<string, unknown> } }
       const id = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline drafts', brief, checks: [{ description: 'Done', independent: false }], proposalMessageId: root.id },
         agentActor(f.pm), context).result.conversationId
       return group(f, id as string)
@@ -795,17 +797,20 @@ describe('a Buddy\'s proposal to the PM', () => {
   })
 
   it('gives a task opened from it the proposal\'s priority on the one P0-P3 scale, unless the PM gives one (task #3117)', () => {
-    const { f, propose } = asked()
-    const root = propose().messages[0]!
-    const context = { proposal: { id: root.id, conversationId: f.app.conversationId, author: root.author, source: root.source as Record<string, unknown> } }
-    const open = (fields: Record<string, unknown> = {}) => f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline drafts',
-      brief: '', checks: [{ description: 'Done', independent: false }], proposalMessageId: root.id, ...fields } as Command, agentActor(f.pm), context).result
+    const open = (fields: Record<string, unknown> = {}) => {
+      const { f, propose } = asked()
+      const root = propose().messages[0]!
+      const context = { proposal: { id: root.id, conversationId: f.app.conversationId, author: root.author, source: root.source as Record<string, unknown> } }
+      const result = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline drafts',
+        brief: '', checks: [{ description: 'Done', independent: false }], proposalMessageId: root.id, ...fields } as Command, agentActor(f.pm), context).result
+      return { result, task: group(f, result.conversationId as string) }
+    }
     // Its Buddy said high: a P1, with no warning that none was given.
-    const opened = open()
+    const { result: opened, task } = open()
     expect(opened).toMatchObject({ priority: 'P1' })
     expect(opened.warnings ?? []).not.toContainEqual(expect.stringContaining('No priority given'))
-    expect(group(f, opened.conversationId as string).priority).toBe('P1')
-    expect(group(f, open({ priority: 'P0' }).conversationId as string).priority).toBe('P0')
+    expect(task.priority).toBe('P1')
+    expect(open({ priority: 'P0' }).task.priority).toBe('P0')
   })
 
   it('counts as shown only the Buddy\'s own lines in the ask\'s lane, since its owner\'s previous message', () => {

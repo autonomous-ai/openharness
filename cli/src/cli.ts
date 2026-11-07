@@ -53,7 +53,6 @@ import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type 
 import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
 import { AUTH_DIR, AuthSessionError, AuthSessionManager, harnessSessionRequest, knownSsoClientId, recordMachineId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { revokeHarnessRefresh } from './team/handoff.js'
-import { TEAM_RELAY_GRANT_FILE } from './team/relay.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { claimTicket, qrSignIn, type QrSignInTokens } from './lib/qrSignIn.js'
 import { pickSignInMethod, signInMethodFlag, signInProviderName, withSignInProvider, type SignInMethod, type SignInProvider } from './lib/signInMethodPicker.js'
@@ -221,10 +220,8 @@ Machine:
   harness flash [flags]        re-flash a plugged-in circle device over USB. Flags go straight to the
                                flasher: --detect-only, --port, --version, --yes, --erase-nvs
 
-Team account (the separate "harnessteam" user that runs Swarm work on this computer):
-  harness team setup           make the account, its daemon and its engines, so teammates' agents cannot read
-                               your files; run again to repair (--sign-in-again: a new sign-in)
-  harness team status          whether it exists and runs, its sign-in, privacy check and engines
+Team account (the separate "harnessteam" user made for Swarm work before Swarm v3, which has none):
+  harness team status          whether it is still there, its daemon (which stops once no agent runs), and how to delete it
   harness team on | off        a computer used only for agents runs Swarm work only (on), or signs back in as
                                your own computer (off)
   harness team remove          delete the account, its home folder and its daemon
@@ -1812,8 +1809,6 @@ function clearAdapterState(): void {
       'summaries.json',
       'summary-scratch',
       'e2e',
-      // The Team account's kept relay grant (team/relay.ts): a reset starts its token over.
-      TEAM_RELAY_GRANT_FILE,
       // The session search index (lib/sessionSearch/): rebuilt from the transcripts on the next start.
       SESSION_SEARCH_FILE,
       `${SESSION_SEARCH_FILE}-wal`,
@@ -3127,7 +3122,7 @@ switch (cmd) {
     if (rest[0] === 'ps') {
       usableMachines().then(async (machines) => {
         const team = machines.find((machine) => machine.label.endsWith('· Team'))
-        if (!team) { console.error('No Harness Team account on this account yet: harness team setup makes one.'); return 1 }
+        if (!team) { console.error('No Harness Team account on this account.'); return 1 }
         return psCommand(['--machine', team.label, '--all', ...rest.slice(1)], { machines: async () => machines })
       }).then((code) => { process.exitCode = code }).catch(onError)
       break

@@ -88,7 +88,7 @@ export function permissionModeFlags(engine: AgentEngine, mode: string): readonly
 
 /** Whether [mode] lets the agent act without stopping to ask — what `bypassPermission` records. */
 export function permissionModeApproves(mode: string): boolean {
-  return mode === 'auto' || mode === 'full' || mode === 'teamWritten'
+  return mode === 'auto' || mode === 'full'
 }
 
 /**

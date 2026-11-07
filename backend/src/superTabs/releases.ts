@@ -1,3 +1,5 @@
+import { proposalNotices } from './proposalCards.js'
+import { shippedNotice } from './buddyNews.js'
 /**
  * Releases scheduled by the Swarm (task #3405, anh Dee's Swarm redesign, 2026-11-05: the server does the routine). A merge
  * recorded on a task puts it on its project's release list; the worker (releaseWatch.ts) reads GitHub for each component's
@@ -10,6 +12,7 @@ import { localNow } from './digest.js'
 import { activeWork, nextConversationNumber, stableId, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, projectsOf, type SwarmProject } from './projects.js'
 import { SEED_RULES, type ProjectRules } from './policy.js'
+import { processOf, taskProcess } from './process.js'
 
 /** The release window, pace and backend pause: the project rules record's own (policy.ts, task #3393), which people edit
  *  without a release. The store reads each project's record when it settles (store.ts settleReleases). */
@@ -147,7 +150,8 @@ export const shipped = (entry: PendingRelease): boolean => !!entry.components &&
 
 /** Puts [group]'s merge of [url] at [mergedAt] on [project]'s release list, in the merge record's own write. The same merge
  *  recorded again adds nothing; a later merge of the same task waits on its own. Returns the entries the cap pushed out. */
-export function notePendingRelease(project: SwarmProject, group: Pick<Conversation, 'id' | 'releasing'>, url: string, mergedAt: number): PendingRelease[] {
+export function notePendingRelease(project: SwarmProject, group: Pick<Conversation, 'id' | 'releasing' | 'process' | 'number'>, url: string, mergedAt: number): PendingRelease[] {
+  if (taskProcess(project, group) === 'simple') return []
   const ledger = project.releases ??= { pending: [] }
   if (ledger.pending.some(e => e.groupId === group.id && e.url === url)) return []
   // Releasing from its merge on; its parts are known once the worker reads its pull request's files.
@@ -276,6 +280,23 @@ export function settleReleases(state: SuperTabState, projectId: string, facts: R
     else delete group.releasing
   }
 
+
+  // Shipped once a verified release holds all of it (task #4217: a merge alone is not shipped): a proposal's card says so, and a
+  // task's requester's Buddy hears it, by an id the release fixes, so a settle retried tells nobody twice.
+  if (lead) for (const id of new Set(outcome.shipped)) {
+    const group = state.conversations.find(c => c.id === id)
+    if (!group || group.releasing) continue
+    const sender = { kind: 'agent' as const, id: lead.id, name: lead.name, membershipGeneration: lead.membershipGeneration }
+    const once = stableId(group.id, 'shipped', String(group.released!.at))
+    if (group.proposal) {
+      outcome.messages.push(...proposalNotices(state, group as Conversation & { proposal: NonNullable<Conversation['proposal']> },
+        'shipped', `${group.title} shipped.`, sender, once))
+    } else {
+      const news = shippedNotice(state, group, sender, once)
+      if (news) outcome.messages.push(news)
+    }
+  }
+
   for (const component of RELEASE_COMPONENTS) {
     const step = ledger.steps?.[component.id]
     if (!step || !ended(state.conversations.find(c => c.id === step.groupId))) continue
@@ -290,12 +311,16 @@ export function settleReleases(state: SuperTabState, projectId: string, facts: R
   }
   if (JSON.stringify(ledger.nextAt) !== JSON.stringify(nextAt)) ledger.nextAt = nextAt
 
-  const due = RELEASE_COMPONENTS.filter(c => releaseDue(ledger, c.id, now, rules))
-  if (!due.length || state.paused) return outcome
+  // A return to Full applies to new work only. Keep the old pending history for verified releases, but open no new
+  // release step for a task the switch made Simple. The ledger is bounded by PENDING_MAX.
+  const tasks = new Map(state.conversations.map(group => [group.id, group]))
+  const scheduled = { ...ledger, pending: ledger.pending.filter(entry => taskProcess(project, tasks.get(entry.groupId) ?? {}) === 'full') }
+  const due = RELEASE_COMPONENTS.filter(c => releaseDue(scheduled, c.id, now, rules))
+  if (!due.length || state.paused || processOf(project) === 'simple') return outcome
   const id = stableId('release-step', state.id, projectId, due.map(c => c.id).join(','), String(now))
   if (state.conversations.some(c => c.id === id)) return outcome
   const integrator = integratorOf(state, projectId)
-  const waiting = [...new Set(due.flatMap(c => waitingFor(ledger, c.id).map(e => e.groupId)))].map(groupId => named(state, groupId))
+  const waiting = [...new Set(due.flatMap(c => waitingFor(scheduled, c.id).map(e => e.groupId)))].map(groupId => named(state, groupId))
   const names = joined(due.map(c => c.name)), window = rules.releaseWindow
   const brief = [`Release ${names}: ${waiting.length} merged ${waiting.length === 1 ? 'task waits' : 'tasks wait'} for it (${waiting.join('; ')}).`,
     `Release between ${window.start} and ${window.end} (${window.timeZone}), applying the merged pull requests' rollout notes first, and verify each release is live.`,

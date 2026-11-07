@@ -13,7 +13,7 @@ const env = { cwd: '/work/repo', home: '/home/me', platform: 'linux' as const }
 describe('harness new: the words', () => {
   it('asks nothing: claude, here, on this machine', () => {
     expect(parseNewArgs([], env)).toEqual({
-      agent: 'claude', machine: null, cwd: '/work/repo', projectName: null, mode: 'auto', modeGiven: false, prompt: null, name: null, repo: null, acuLimit: null, model: null, json: false,
+      agent: 'claude', machine: null, cwd: '/work/repo', projectName: null, mode: null, prompt: null, name: null, repo: null, acuLimit: null, model: null, json: false,
     })
   })
 
@@ -116,7 +116,8 @@ describe('harness new: the words', () => {
     expect(here).not.toHaveProperty('projectSource')
     expect(typeof here.creationId).toBe('string')
     const fresh = newAgentPayload(parseNewArgs(['claude', 'My Game'], env), null)
-    expect(fresh).toMatchObject({ engine: 'claude', projectSource: 'new', projectName: 'My-Game', permissionMode: 'auto', bypassPermission: true })
+    expect(fresh).toMatchObject({ engine: 'claude', projectSource: 'new', projectName: 'My-Game', bypassPermission: false })
+    expect(fresh).not.toHaveProperty('permissionMode')
     expect(fresh).not.toHaveProperty('cwd')
     expect(newAgentPayload(parseNewArgs(['acme/blender', '.'], env), '/work/repo', 'codex')).toMatchObject({ engine: 'codex', dsh: 'acme/blender' })
   })
@@ -132,21 +133,24 @@ describe('harness new: the words', () => {
     expect(() => parseNewArgs(['devin-cloud', '--acu-limit', '2.5'], env)).toThrow(/1 to 1000/)
   })
 
-  it('only sends a permission mode to the engines that take one', () => {
-    // The engines with no PERMISSION_MODES row cannot be handed the default `auto`: the daemon refuses
-    // a mode the engine has no contract for (INVALID_PERMISSION_MODE), which made `harness new hermes`
-    // — and pi, amp, muse, kilo, grok, devin, commandcode, agy, copilot — impossible to run at all.
-    for (const agent of ['hermes', 'pi', 'amp', 'muse', 'kilo', 'grok', 'devin', 'commandcode', 'agy', 'copilot']) {
+  // Swarm v3 (task #4215): an agent starts with its owner's own settings. A mode is sent only when the person typed one;
+  // the default `auto` went to every engine that has it, and before that to every engine, which the daemon refused
+  // (INVALID_PERMISSION_MODE) for the ten without a PERMISSION_MODES row.
+  it('sends a permission mode only when the person typed one', () => {
+    for (const agent of ['claude', 'codex', 'opencode', 'hermes', 'pi', 'amp', 'muse', 'kilo', 'grok', 'devin', 'commandcode', 'agy', 'copilot']) {
       const payload = newAgentPayload(parseNewArgs([agent], env), '/work/repo')
       expect(payload, agent).toMatchObject({ engine: agent, bypassPermission: false })
       expect(payload, agent).not.toHaveProperty('permissionMode')
     }
-    // An engine that has the mode still gets it, and the store harness is judged on the engine it runs on.
-    expect(newAgentPayload(parseNewArgs(['opencode'], env), '/work/repo')).toMatchObject({ permissionMode: 'auto', bypassPermission: true })
-    expect(newAgentPayload(parseNewArgs(['acme/blender'], env), '/work/repo', 'hermes')).not.toHaveProperty('permissionMode')
+    expect(newAgentPayload(parseNewArgs(['acme/blender'], env), '/work/repo', 'claude')).not.toHaveProperty('permissionMode')
+    expect(newAgentPayload(parseNewArgs(['claude', '--mode', 'auto'], env), '/work/repo')).toMatchObject({ permissionMode: 'auto', bypassPermission: true })
+    expect(newAgentPayload(parseNewArgs(['codex', '--mode', 'full'], env), '/work/repo')).toMatchObject({ permissionMode: 'full', bypassPermission: true })
+    expect(newAgentPayload(parseNewArgs(['claude', '--plan'], env), '/work/repo')).toMatchObject({ permissionMode: 'plan', bypassPermission: false })
+    expect(newAgentPayload(parseNewArgs(['terminal', '--mode', 'auto'], env), '/work/repo')).not.toHaveProperty('permissionMode')
     // A mode the person typed stays theirs to get wrong: the daemon refuses it, it is not silently swapped.
     expect(newAgentPayload(parseNewArgs(['hermes', '--mode', 'ask'], env), '/work/repo')).toMatchObject({ engine: 'hermes', permissionMode: 'ask', bypassPermission: false })
     expect(newAgentPayload(parseNewArgs(['hermes', '--plan'], env), '/work/repo')).toMatchObject({ engine: 'hermes', permissionMode: 'plan', bypassPermission: false })
+    expect(newAgentPayload(parseNewArgs(['hermes', '--mode', 'auto'], env), '/work/repo')).toMatchObject({ engine: 'hermes', permissionMode: 'auto', bypassPermission: false })
   })
 
   it('finds the machine by id, name or an unambiguous start of one', () => {

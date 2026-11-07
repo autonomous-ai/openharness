@@ -183,7 +183,9 @@ describe('saved catalog reads', () => {
       expect(store.list()).toHaveLength(2050)
       expect(readFileSync).toHaveBeenCalledTimes(2)
     }
-  })
+  // 2,050 files written and listed three times: 0.8 to 0.9 s alone on the Mac Studio, 7.7 s inside `npm run test:resume`
+  // beside six other files at a load of 6 to 7, past the 5 s default (task #4405).
+  }, 30_000)
 })
 
 async function fixture() {

@@ -7,10 +7,10 @@
 import type { ContributedMachine } from '../machines.js'
 import { isLeads, type Agent, type Conversation, type SuperTabState } from '../model.js'
 import { isBuddy, isSwarmBuddy } from '../buddies.js'
-import { agentProjectId, canReadProject, projectOf } from '../projects.js'
+import { agentProjectId, canReadProject, NO_PROJECT, projectOf } from '../projects.js'
 import { firstAssignedAt, waitedOn, waitsNow, type RanOn, type Unblock } from './record.js'
 import { lentIn, periodSpans, reviewsIn, weekSpan, within, type PeriodName, type Span } from './rolling.js'
-import { broughtMachines, contributorsIn } from './brought.js'
+import { broughtMachines, contributorsIn, shippedByMerge } from './brought.js'
 import { DAY_MS, WEEK_MS } from './week.js'
 import type { AgentScore, Leaderboard, Medal, ModelScore, ModelShare, PersonDetails, PersonScore, RecentModel, WeekGoal } from './contract.js'
 
@@ -45,9 +45,12 @@ export interface LeaderboardInput {
   allProjects?: string[]
   /** People's profile names by id, read with the board (read.ts profileNames); absent ones go by their email. */
   names?: ReadonlyMap<string, string>
+  /** Agents the authenticated reader may see, before presentation redaction. */
+  visibleAgents?: Agent[]
 }
 
-export function leaderboard({ state, groups, machines: visibleMachines, projectId, week, now, period, allProjects, names }: LeaderboardInput): Leaderboard {
+export function leaderboard({ state, groups, machines: visibleMachines, projectId, week, now, period, allProjects, names, visibleAgents = state.agents }: LeaderboardInput): Leaderboard {
+  const weeklyOrg = !!allProjects && !period
   const project = projectOf(state, projectId)
   // The Lead conversation is where plans are approved: its answers count, though nothing there is a request that ships.
   const projectIds = new Set(allProjects ?? [projectId])
@@ -55,14 +58,21 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
   const leadConversations = new Set([...projectIds].map(id => projectOf(state, id).leadConversationId))
   const shared = visible.filter(g => !leadConversations.has(g.id))
   const requests = shared.filter(g => !g.reviewOf)
-  // Shipped with a PR: what agents and models are credited for. A person's points also need them to have asked (review
-  // of #2097: a group opened from a Buddy's proposal may name no requester).
-  const shippedRequests = requests.filter(g => g.ledger?.shippedAt != null && (g.pullRequestUrls?.length ?? 0) > 0)
+  // Shipped by a recorded merge: what agents and models are credited for (Done with a PR nobody merged is not, task #4217). A
+  // person's points also need them to have asked (review of #2097: a group opened from a Buddy's proposal may name no requester).
+  const shippedRequests = requests.filter(shippedByMerge)
   const landed = shippedRequests.filter(g => g.requesterId)
   const players = allProjects ? state.people : state.people.filter(p => canReadProject(state, { kind: 'person', userId: p.id, email: p.email }, project))
   const { current, previous } = period ? periodSpans(period, now) : { current: weekSpan(week), previous: weekSpan(week - WEEK_MS) }
   // Each person's records, gathered once: the board scores every player three times (Diego's issue file, 2026-10-27).
   const landedBy = byKey(landed, g => g.requesterId!)
+  const acceptedBy = weeklyOrg ? byKey(requests.filter(g => g.requesterId && firstAssignedAt(g.ledger ?? {}) != null), g => g.requesterId!) : new Map<string, Conversation[]>()
+  const generations = new Map(state.people.map(p => [p.id, p.generation]))
+  // An idle v3 Regular agent and a Swarm Buddy have no project; visibility is resolved by the caller.
+  const agentProjects = new Set([...projectIds, NO_PROJECT])
+  const agentsBy = weeklyOrg ? byKey(visibleAgents.filter(a => !a.teamAccount && !a.buddySession
+    && generations.get(a.contributorId) === a.membershipGeneration
+    && agentProjects.has(agentProjectId(state, a))), a => a.contributorId) : new Map<string, Agent[]>()
   const answersBy = byKey(visible.flatMap(group => (group.ledger?.unblocks ?? []).map(unblock => ({ ...unblock, group }))), u => u.personId)
   const machinesBy = byKey(visibleMachines, m => m.contributorId)
   // Under All projects, whether a board of this reader's already shows the person; a project's board lists only its own.
@@ -76,7 +86,9 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
     const lentOf = (m: ContributedMachine) => lentIn(m, span, now, { projects: projectIds, unsplit: sharesBoard(personId) })
     const machines = (machinesBy.get(personId) ?? []).map(m => ({ name: m.name, busyMs: lentOf(m) })).filter(m => m.busyMs > 0)
     const freedMs = sum(answers.map(u => u.waitedMs)), lentMs = sum(machines.map(m => m.busyMs))
-    const points = shippedHere.length * SHIPPED_POINTS + sum(answers.map(unblockPoints)) + Math.floor(lentMs / (LENT_HOURS_PER_POINT * HOUR_MS))
+    const accepted = (acceptedBy.get(personId) ?? []).filter(g => within(firstAssignedAt(g.ledger!)!, span)).length
+    const points = shippedHere.length * SHIPPED_POINTS + sum(answers.map(unblockPoints))
+      + (weeklyOrg ? accepted : Math.floor(lentMs / (LENT_HOURS_PER_POINT * HOUR_MS)))
     const details: PersonDetails = {
       shipped: newest(shippedHere, g => g.ledger!.shippedAt!)
         .map(g => ({ title: g.title, prUrl: g.pullRequestUrls!.at(-1)!, mergedAt: g.ledger!.shippedAt! })),
@@ -84,10 +96,12 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
         .map(u => ({ title: u.group.title, conversationId: u.group.id, kind: u.kind ?? 'needs_human', waitedMinutes: Math.round(u.waitedMs / 60_000) })),
       lent: [...machines].sort((a, b) => b.busyMs - a.busyMs).slice(0, DETAILS_LIMIT)
         .map(m => ({ machineName: m.name, busyHours: Math.round(m.busyMs / HOUR_MS * 10) / 10 })),
-      brought: broughtMachines(state, machinesBy.get(personId) ?? [], visibleMachines, shippedRequests, span, lentOf).slice(0, DETAILS_LIMIT),
+      // The weekly board counts agents instead of presenting machine/subscription contributions.
+      brought: weeklyOrg ? [] : broughtMachines(state, machinesBy.get(personId) ?? [], visibleMachines, shippedRequests, span, lentOf).slice(0, DETAILS_LIMIT),
     }
     return {
       points,
+      ...weeklyOrg ? { accepted, agentsBrought: agentsBy.get(personId)?.length ?? 0 } : {},
       shipped: { count: shippedHere.length, medianAskToShipMs: median(askToShip(shippedHere)) },
       unblocked: { count: answers.length, agentMs: freedMs, medianAnswerMs: median(answers.map(u => u.waitedMs)) },
       lent: { machines: machines.length, agentMs: lentMs },
@@ -102,9 +116,11 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
   const scored = players.map(p => ({ personId: p.id, email: p.email, displayName: names?.get(p.id)?.trim() || p.email.split('@')[0]!,
     ...score(p.id, current), prevWeekPoints: previous && score(p.id, previous).points,
     streakDays: streak(new Set((landedBy.get(p.id) ?? []).map(g => Math.floor(g.ledger!.shippedAt! / DAY_MS))), today) }))
-    .sort((a, b) => b.points - a.points || a.email.localeCompare(b.email))
+    .sort((a, b) => (weeklyOrg ? b.shipped.count - a.shipped.count : 0) || b.points - a.points || a.email.localeCompare(b.email))
   const people: PersonScore[] = scored.map(({ email: _email, details, ...entry }) => {
-    const rank = 1 + scored.filter(other => other.points > entry.points).length
+    const rank = 1 + scored.filter(other => weeklyOrg
+      ? other.shipped.count > entry.shipped.count || (other.shipped.count === entry.shipped.count && other.points > entry.points)
+      : other.points > entry.points).length
     return { ...entry, rank, medal: entry.points > 0 ? MEDALS[rank - 1] ?? null : null, details }
   })
   const shippedNow = shippedRequests.filter(g => within(g.ledger!.shippedAt!, current))

@@ -20,7 +20,7 @@ function swarm(): SuperTabState {
 let n = 0
 const group = (extra: Partial<Conversation> & { ledger?: GroupLedger } = {}): Conversation => ({ id: `r${++n}`, projectId: 'lead', title: `Group ${n}`, leadId: null,
   agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0, ...extra })
-const shipped = (at: number, extra: Partial<Conversation> = {}) => group({ requesterId: 'dee', pullRequestUrls: ['https://github.com/o/r/pull/1'], ledger: { askedAt: at - HOUR, shippedAt: at }, ...extra })
+const shipped = (at: number, extra: Partial<Conversation> = {}) => group({ requesterId: 'dee', pullRequestUrls: ['https://github.com/o/r/pull/1'], ledger: { askedAt: at - HOUR, shippedAt: at, mergedAt: at }, ...extra })
 const machine = (extra: Partial<ContributedMachine>): ContributedMachine => ({ machineId: 'mac', name: 'Studio', contributorId: 'dee', membershipGeneration: 'g', generation: 'g1',
   cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false, ...extra })
 const read = (period: PeriodName, groups: Conversation[], machines: ContributedMachine[] = [], now = NOW) =>
@@ -50,7 +50,7 @@ describe('the rolling periods', () => {
 
   it('scores points, details, agents and models over the same period', () => {
     const answers = group({ ledger: { unblocks: [{ personId: 'dee', at: NOW - HOUR, waitedMs: 0, kind: 'decision' }, { personId: 'dee', at: NOW - 3 * DAY, waitedMs: 0, kind: 'decision' }] } })
-    const ran = shipped(NOW - HOUR, { ledger: { askedAt: NOW - 2 * HOUR, shippedAt: NOW - HOUR, runs: [{ assignmentId: 'a', at: NOW - 2 * HOUR, ...opus }] } })
+    const ran = shipped(NOW - HOUR, { ledger: { askedAt: NOW - 2 * HOUR, shippedAt: NOW - HOUR, mergedAt: NOW - HOUR, runs: [{ assignmentId: 'a', at: NOW - 2 * HOUR, ...opus }] } })
     const view = read('24h', [answers, ran, shipped(NOW - 3 * DAY)])
     expect(dee(view)).toMatchObject({ points: 4, prevWeekPoints: 0, shipped: { count: 1 }, unblocked: { count: 1 } })
     expect(dee(view).details.shipped).toHaveLength(1)
@@ -59,7 +59,7 @@ describe('the rolling periods', () => {
   })
 
   it('never counts a private conversation or a machine it was not handed', () => {
-    const hidden = shipped(NOW - HOUR, { audience: { people: [{ id: 'dee', generation: 'g' }] }, ledger: { askedAt: 0, shippedAt: NOW - HOUR,
+    const hidden = shipped(NOW - HOUR, { audience: { people: [{ id: 'dee', generation: 'g' }] }, ledger: { askedAt: 0, shippedAt: NOW - HOUR, mergedAt: NOW - HOUR,
       reviewHours: [{ hour: TODAY, ...opus, count: 9 }] } })
     const view = read('7d', [hidden])
     expect(dee(view).shipped.count).toBe(0)

@@ -474,5 +474,6 @@ describe('what a PM owes', () => {
     expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, agentId: 1, status: 1, createdAt: 1/)
     // The two unanswered rows of the last day, at most one key past each status's range.
     expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(2)
+    expect(rows[0]!.keysExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(7)
   })
 })

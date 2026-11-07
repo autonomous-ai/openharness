@@ -824,15 +824,15 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
       .toEqual([engineBin('claude'), '--dangerously-skip-permissions'])
     expect(buildEngineCommandArgv('codex', { permissionMode: 'readOnly' }))
       .toEqual([engineBin('codex'), '--sandbox', 'read-only', ...CODEX_SCREEN])
-    // An older Claude Buddy's saved mode: relaunched like its owner's own session, in full mode (Ken, 11-04, task #2832).
-    expect(buildEngineCommandArgv('claude', { permissionMode: 'buddy', bypassPermission: true }))
-      .toEqual([engineBin('claude'), '--dangerously-skip-permissions'])
-    // Team-written work reads none of the branch's own settings, `settings.local.json` included (audit H2).
+    // Team-written work reads none of the branch's own settings, `settings.local.json` included (audit H2), and since v3 runs
+    // as its owner on their own computer, so it skips no permission check and no sandbox (review of #3485).
     expect(buildEngineCommandArgv('claude', { permissionMode: 'teamWritten', bypassPermission: true }))
-      .toEqual([engineBin('claude'), '--dangerously-skip-permissions', '--setting-sources', 'user', '--strict-mcp-config'])
-    // An older Codex Buddy's saved mode: full access, as its owner's own session (task #2832).
-    expect(buildEngineCommandArgv('codex', { permissionMode: 'readOnlyAsk', bypassPermission: true }))
-      .toEqual([engineBin('codex'), '--dangerously-bypass-approvals-and-sandbox', ...CODEX_SCREEN])
+      .toEqual([engineBin('claude'), '--setting-sources', 'user', '--strict-mcp-config'])
+    expect(buildEngineCommandArgv('codex', { permissionMode: 'teamWritten', bypassPermission: true }))
+      .toEqual([engineBin('codex'), ...CODEX_SCREEN])
+    // An older Buddy's saved mode is no mode: the registry clears it on load (task #4215).
+    expect(permissionModeFlags('claude', 'buddy')).toBeNull()
+    expect(permissionModeFlags('codex', 'readOnlyAsk')).toBeNull()
     expect(buildEngineCommandArgv('codex', { permissionMode: 'full' }))
       .toEqual([engineBin('codex'), '--dangerously-bypass-approvals-and-sandbox', ...CODEX_SCREEN])
     // A mode the engine lacks falls back to the yes/no.
@@ -1295,18 +1295,6 @@ describe('the permission gates', () => {
     const refusal = await refusePermissionFlagIfUnsupported('claude', { permissionMode: 'ask' }, shell)
     expect(refusal?.detail).toContain('Update claude by running npm install -g @anthropic-ai/claude-code, then try again.')
     expect(refusal?.detail).not.toContain('choose Ask')
-  })
-
-  it('relaunches an older Buddy\'s saved mode as full, never holding it for a flag (task #2832)', async () => {
-    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-gate-'))
-    dirs.push(binDir)
-    process.env.HARNESS_ENGINE_TEST_PATH = binDir
-    fakeEngine(binDir, 'codex', '--dangerously-bypass-approvals-and-sandbox')
-    const codex = await dropPermissionFlagIfUnsupported('codex', { permissionMode: 'readOnlyAsk', bypassPermission: false }, bashProbeShell())
-    expect([codex.choice.permissionMode, codex.droppedFlag, codex.nativeHold]).toEqual(['readOnlyAsk', null, undefined])
-    fakeEngine(binDir, 'claude', '--dangerously-skip-permissions')
-    const claude = await dropPermissionFlagIfUnsupported('claude', { permissionMode: 'buddy', bypassPermission: false }, bashProbeShell())
-    expect([claude.choice.permissionMode, claude.droppedFlag, claude.nativeHold]).toEqual(['buddy', null, undefined])
   })
 
   it('leaves a relaunch alone when the flag is supported', async () => {

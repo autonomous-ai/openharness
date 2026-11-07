@@ -16,7 +16,6 @@ class LeadMachine {
     this.own = true,
     this.native = true,
     this.team = false,
-    this.teamEngines,
     this.engineRefusals = const {},
     this.owner,
   });
@@ -42,17 +41,9 @@ class LeadMachine {
   /// It runs in that machine's Harness Team account.
   final bool team;
 
-  /// The engines it runs in that Mac's Harness Team account, as the server
-  /// decided (backend leadStart.ts leadChoices); the others run on the Mac
-  /// itself. Null from a server that does not say: then [team] holds for all.
-  final Set<String>? teamEngines;
-
   /// Whose machine it is, for a teammate's (its menu row wears their
   /// avatar); null for the person's own.
   final SuperTabPerson? owner;
-
-  /// It runs with [engine] in that Mac's Harness Team account.
-  bool inTeam(String engine) => teamEngines?.contains(engine) ?? team;
 
   /// The repositories the Swarm already checked out there, as
   /// [leadRepositoryKey] reads them.

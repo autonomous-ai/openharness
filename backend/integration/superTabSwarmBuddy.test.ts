@@ -15,6 +15,7 @@ import { poolRows } from './hostRows.test-support.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
 import { readInbox } from '../src/superTabs/read/inbox.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
+import { profiled } from './plans.test-support.js'
 
 // One Buddy per person per Swarm (docs/specs/2026-10-31-one-buddy-per-swarm.md; Dee, 10-31): one chat at Swarm level, a main
 // Buddy that reads every project its person reads and writes nowhere but that chat, and project sessions, the only Buddies that
@@ -861,6 +862,27 @@ describe('several Buddies through the store (#3818)', () => {
     expect(chats.find(c => c.id === first.chat)!.buddyChats).toBeUndefined()
   })
 
+  // Ken's 06:20 VN prod scan on v1.4.26 (task #4213): loading the listed chats loaded the whole Swarm again, so every command
+  // in a Swarm with a quiet second Buddy read its machines, agents, members and progress twice.
+  it('loads a quiet listed chat by itself: any command reads the Swarm\'s machines, agents, members and progress once', async () => {
+    const f = await swarm()
+    await buddy(f)
+    const research = await named(f, 'Research')
+    await quiet(f, research.chat)
+    const reads = await profiled(db, () => send(f, 'lead', 'Hello', {}, owner))
+    // Every live row of the Swarm, by tab: not one row's version check by its id. Prisma's filters name a field as `$tabId`, a
+    // plain match (the held listing, parts/held.ts) as `tabId`.
+    const names = (filter: string, field: string) => filter.includes(`"$${field}"`) || filter.includes(`"${field}":`)
+    const wholeSwarm = (collection: string) => reads.filter(e => e.ns.endsWith(`.${collection}`) && e.op !== 'update').filter(e => {
+      const filter = JSON.stringify(e.command?.pipeline ?? e.command?.filter ?? {})
+      return names(filter, 'tabId') && names(filter, 'deleted') && !names(filter, '_id')
+    }).length
+    expect(['SwarmMachine', 'SwarmAgent', 'SwarmMember', 'SwarmProgress'].map(c => [c, wholeSwarm(c)]))
+      .toEqual([['SwarmMachine', 1], ['SwarmAgent', 1], ['SwarmMember', 1], ['SwarmProgress', 1]])
+    await expect(f.execute({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Research' } as Command, peer))
+      .rejects.toMatchObject({ code: 'BUDDY_NAME_TAKEN' })
+  })
+
   it('keeps a quiet Buddy\'s name taken, and counts it against the cap', async () => {
     const f = await swarm()
     await buddy(f)
@@ -872,5 +894,101 @@ describe('several Buddies through the store (#3818)', () => {
     await expect(f.execute({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Planning' } as Command, peer))
       .rejects.toMatchObject({ code: 'BUDDY_CAP' })
     expect((await f.store.read(peer, f.tab)).state.buddyCap).toBe(2)
+  })
+})
+
+// Task #4116 (Swarm v3, anh Dee 11-07): + New agent makes a Regular or a PM agent on the person's own computer, through the store:
+// its grant is the store's reading of the machine's account row, never the request's.
+describe('+ New agent through the store', () => {
+  const capable = async (f: Swarm) => f.store.observeMachine(peer, f.tab, 'peer-mac', { generation: f.generation, resources: { cpuPercent: 10,
+    memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture',
+    os: 'macOS', gpuPercent: null }, quotas: [], tools: {}, runningHarnessIds: [...f.running], stoppedHarnessIds: [],
+  capabilities: ['buddySessions', 'swarmBuddy', 'leadStart', 'regularAgent'] })
+
+  it('starts a Regular agent on the person\'s own computer, in a chat only they and it read', async () => {
+    const f = await swarm()
+    await capable(f)
+    const made = await f.execute({ type: 'agent.new', kind: 'regular', name: 'Ada', engine: 'claude', machineId: 'peer-mac' }, peer)
+    const chat = String(made.result.conversationId)
+    const ada = await f.launch(String(made.result.startId))
+    await capable(f)
+    await expect(send(f, chat, 'Hello Ada')).resolves.toBeTruthy()
+    await expect(send(f, chat, 'Hello', {}, peer, ada)).resolves.toBeTruthy()
+    await expect(f.store.messages(owner, f.tab, chat, {})).rejects.toThrow(UNAVAILABLE)
+    await expect(send(f, chat, 'Peeking', {}, owner)).rejects.toThrow(UNAVAILABLE)
+    const read = await f.store.read(peer, f.tab)
+    expect(read.state.agents.find(a => a.id === ada)).toMatchObject({ regular: true })
+  })
+
+  it('starts a PM that names its new project, on the person\'s own computer', async () => {
+    const f = await swarm()
+    await capable(f)
+    const made = await f.execute({ type: 'agent.new', kind: 'pm', projectName: 'Docs', engine: 'claude', machineId: 'peer-mac' }, peer)
+    const read = await f.store.read(peer, f.tab)
+    expect(read.state.projects!.find(p => p.id === made.result.projectId)).toMatchObject({ name: 'Docs', ownerId: peer.sub })
+    expect(read.state.starts!.find(s => s.id === made.result.startId)?.request).toMatchObject({ machineId: 'peer-mac', conversationId: made.result.conversationId })
+  })
+
+  it('is refused on a computer that is not the person\'s own', async () => {
+    const f = await swarm()
+    await expect(f.execute({ type: 'agent.new', kind: 'regular', name: 'Ada', engine: 'claude', machineId: 'owner-mac' }, peer)).rejects.toMatchObject({ code: 'AGENT_OWN_MACHINE' })
+  })
+
+  it('gives a Regular agent a task in a project its person reads, and never in one they do not', async () => {
+    const f = await swarm()
+    await capable(f)
+    const made = await f.execute({ type: 'agent.new', kind: 'regular', name: 'Ada', engine: 'claude', machineId: 'peer-mac' }, peer)
+    const ada = await f.launch(String(made.result.startId))
+    const hidden = (await f.execute({ type: 'project.create', name: 'Hidden', visibility: 'private', brief: '' })).result as { projectId: string; conversationId: string }
+    const hiddenPm = String((await f.execute({ type: 'agent.add', conversationId: hidden.conversationId, machineId: 'owner-mac', harnessId: randomUUID(),
+      name: 'PM hidden', configuration: config, lead: true })).result.agentId)
+    const task = async (projectId: string) => String((await f.execute({ type: 'conversation.create', projectId, title: 'A task', brief: 'Do it.', checks: [] })).result.conversationId)
+    const hiddenTask = await task(hidden.projectId)
+    await expect(f.execute({ type: 'work.assign', conversationId: hiddenTask, agentId: ada }, owner, hiddenPm)).rejects.toBeTruthy()
+    const webTask = await task(f.web.projectId)
+    await f.execute({ type: 'work.assign', conversationId: webTask, agentId: ada }, owner, f.pms.web)
+    const read = await f.store.read(owner, f.tab)
+    expect(read.state.conversations.find(c => c.id === webTask)?.assignment).toMatchObject({ agentId: ada })
+  })
+
+  // Security review 2 of #4116 (Rowan): its next task takes it out of the earlier project's chats, loaded or quiet.
+  it('takes a Regular agent out of an earlier project\'s chats when it takes a task elsewhere', async () => {
+    const f = await swarm()
+    await capable(f)
+    const made = await f.execute({ type: 'agent.new', kind: 'regular', name: 'Ada', engine: 'claude', machineId: 'peer-mac' }, peer)
+    const ada = await f.launch(String(made.result.startId))
+    const task = async (projectId: string) => String((await f.execute({ type: 'conversation.create', projectId, title: 'A task', brief: 'Do it.', checks: [] })).result.conversationId)
+    const webTask = await task(f.web.projectId)
+    const first = await f.execute({ type: 'work.assign', conversationId: webTask, agentId: ada }, owner, f.pms.web)
+    await f.execute({ type: 'work.status', conversationId: webTask, assignmentId: String(first.result.assignmentId), status: 'done', result: 'Done.' }, peer, ada)
+    // Long enough for the web task to go quiet, so no read loads it by activity.
+    f.clock.now += 3 * 86_400_000
+    const secretTask = await task(f.secret.projectId)
+    await f.execute({ type: 'work.assign', conversationId: secretTask, agentId: ada }, owner, f.pms.secret)
+    // Read straight from its stored part: a quiet group is in no first load.
+    const stored = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: webTask } } })
+    expect((stored.data as { agentIds: string[] }).agentIds).not.toContain(ada)
+  })
+
+  // Security review 1 of #4116 (SecAlder): a dormant chat is in no first load. Its Regular agent leaves it even so, and a message
+  // that wakes it reaches the agent nowhere while it works in another project.
+  it('takes a Regular agent out of a dormant chat of an earlier project, and a message that wakes it never reaches the agent', async () => {
+    const f = await swarm()
+    await capable(f)
+    const made = await f.execute({ type: 'agent.new', kind: 'regular', name: 'Ada', engine: 'claude', machineId: 'peer-mac' }, peer)
+    const ada = await f.launch(String(made.result.startId))
+    const task = async (projectId: string) => String((await f.execute({ type: 'conversation.create', projectId, title: 'A task', brief: 'Do it.', checks: [] })).result.conversationId)
+    const webTask = await task(f.web.projectId)
+    const first = await f.execute({ type: 'work.assign', conversationId: webTask, agentId: ada }, owner, f.pms.web)
+    await f.execute({ type: 'work.status', conversationId: webTask, assignmentId: String(first.result.assignmentId), status: 'done', result: 'Done.' }, peer, ada)
+    // Dormant, as the sweep leaves a finished task a day quiet (sweeps.ts).
+    await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: webTask }, data: { dormant: true } })
+    const secretTask = await task(f.secret.projectId)
+    await f.execute({ type: 'work.assign', conversationId: secretTask, agentId: ada }, owner, f.pms.secret)
+    const stored = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: webTask } } })
+    expect(stored.agentIds).not.toContain(ada)
+    const woke = await send(f, webTask, 'What is Ada on now?', { recipientIds: [] }, owner)
+    const queued = await f.store.deliveries(peer, f.tab, ada)
+    expect(queued.map(d => d.messageId)).not.toContain(String(woke.result.messageId))
   })
 })
