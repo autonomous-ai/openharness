@@ -96,8 +96,14 @@ describe('readClaudeReport', () => {
     expect(readClaudeReport(dataDir)).toEqual({ at: 5, seven_day: { used_percentage: 0, resets_at: 9 } })
   })
 
+  // Claude Code reports a window it ran past as more than 100 (finding 10, #4252): that is a used-up window, not a bad one.
+  it('reads a percentage above 100 as 100', () => {
+    write({ ...report, five_hour: { used_percentage: 103, resets_at: 1 } })
+    expect(readClaudeReport(dataDir)?.five_hour).toEqual({ used_percentage: 100, resets_at: 1 })
+  })
+
   it('drops a window that is not a measured percentage, and the report when no window is left', () => {
-    write({ ...report, five_hour: { used_percentage: 101, resets_at: 1 } })
+    write({ ...report, five_hour: { used_percentage: -1, resets_at: 1 } })
     expect(readClaudeReport(dataDir)).toEqual({ at: report.at, seven_day: report.seven_day })
     for (const window of [{ used_percentage: -1, resets_at: 1 }, { used_percentage: Number.NaN }, { used_percentage: '5', resets_at: 1 },
       { used_percentage: 5, resets_at: 'soon' }, null, 'full']) {

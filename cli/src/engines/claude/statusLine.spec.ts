@@ -106,8 +106,15 @@ describe('hook/statusline.mjs', () => {
   })
 
   it('leaves out a window Claude Code did not report, and one whose percentage is not one', () => {
-    run(['--data', data], { rate_limits: { five_hour: { used_percentage: 12, resets_at: null }, seven_day: { used_percentage: 140, resets_at: 1 } } })
+    run(['--data', data], { rate_limits: { five_hour: { used_percentage: 12, resets_at: null }, seven_day: { used_percentage: -3, resets_at: 1 } } })
     expect(JSON.parse(readFileSync(reportPath(data, configDir), 'utf8'))).toEqual({ v: 1, at: expect.any(Number), five_hour: { used_percentage: 12, resets_at: null } })
+  })
+
+  // A window Claude Code ran past reads above 100 (finding 10, #4252): it is used up, and recorded so.
+  it('records a percentage above 100 as 100', () => {
+    run(['--data', data], { rate_limits: { five_hour: { used_percentage: 103, resets_at: 1 }, seven_day: { utilization: 140, resets_at: null } } })
+    expect(JSON.parse(readFileSync(reportPath(data, configDir), 'utf8'))).toEqual({ v: 1, at: expect.any(Number),
+      five_hour: { used_percentage: 100, resets_at: 1 }, seven_day: { used_percentage: 100, resets_at: null } })
   })
 
   // Claude Code 2.1.316's own schema for these windows names them `utilization` with an ISO `resets_at`, where its status
