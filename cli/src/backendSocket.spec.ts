@@ -629,16 +629,12 @@ const wsMock = vi.hoisted(() => {
 })
 
 vi.mock('ws', () => ({ WebSocket: wsMock.MockWebSocket }))
-// A creation's receipt flushes to disk synchronously (lib/agentCreationReceipt.ts). `disk.flushMs` is how long one
-// flush blocks: on the Linux runner a creation case was held ~850 ms per flush and timed out at 5 s (#4363).
-const disk = vi.hoisted(() => ({ flushMs: 0, flushes: 0 }))
+// A creation writes a durable receipt and flushes it to disk synchronously (lib/agentCreationReceipt.ts). On a busy
+// Linux runner a flush blocked for seconds and a creation case timed out at 5 s (#4363); macOS barely waits. This spec
+// checks what the socket says and counts, not durability (agentCreationReceipt.spec.ts does), so a flush returns at once.
 vi.mock('node:fs', async (real) => {
   const fs = await real<typeof import('node:fs')>()
-  const fsyncSync = (fd: number) => {
-    disk.flushes++
-    if (disk.flushMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, disk.flushMs)
-    fs.fsyncSync(fd)
-  }
+  const fsyncSync = () => {}
   return { ...fs, fsyncSync, default: { ...fs, fsyncSync } }
 })
 // Grid's set-up, which the models service asks for before a move onto a grid model: set up already here,
@@ -4120,7 +4116,6 @@ describe('request sources', () => {
     socket.registerLocalClient('local:creation-report', { sendFrame: () => true, sendBinary: () => true })
     vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
     vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
-    disk.flushMs = 850
     try {
       for (const engine of ['claude', 'codex']) {
         const creationId = randomUUID()
@@ -4137,7 +4132,6 @@ describe('request sources', () => {
       expect(socket.onCreateAgent).not.toHaveBeenCalled()
       expect(JSON.stringify([counters, signals])).not.toContain('PRIVATE')
     } finally {
-      disk.flushMs = 0
       await socket.unregisterLocalClient('local:creation-report')
       await socket.stop()
       vi.restoreAllMocks()
