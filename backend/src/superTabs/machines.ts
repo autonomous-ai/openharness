@@ -41,9 +41,9 @@ export interface ContributedMachine {
    *  the host says it cleaned up (machine.cleaned) or REMOVAL_FALLBACK_MS passes. An offline one leaves the list at once and
    *  its cleanup waits for its host (expireRemovals). No chat hears how it ended (#2742). */
   removal?: { id: string; state: 'cleaning'; requestedAt: string }
-  /** Added by Desktop as its person joined the Swarm, not lent to teammates by choice: their work runs here only through
-   *  its Harness Team account whose privacy check passed, whether or not the Swarm requires that everywhere
-   *  (teamWorkRefusal). Kept when the contribution is saved again; gone with the machine. */
+  /** Added by Desktop as its person joined the Swarm. Swarm v3 has no Team accounts, so it no longer keeps teammates' projects
+   *  off it: its person's own agents take any project they read (teamWorkCheck; #4248, finding 8 of #4212). Kept, and kept
+   *  when the contribution is saved again, only because Desktop's launch.dart still reads it; gone with the machine. */
   teamAccountOnly?: true
   /** Its owner's choice whether teammates' work may also run in their own account here (commands.ts machine.ownAccountWork,
    *  Scholes 11-04): who chose (the owner, whose word it is) and when. `allowed` lets a teammate's start run on this entry,
@@ -357,7 +357,7 @@ export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow =
   // Its owner let teammates' work run in their own account here: their explicit choice wins over the Swarm-wide rule, for
   // this machine only (River, 11-04).
   if (ownAccountWork(pool)) return null
-  if (!teamRow && reading?.sessionKind !== 'team' && !required && !pool.teamAccountOnly) return null
+  if (!teamRow && reading?.sessionKind !== 'team' && !required) return null
   if (otherWorkspace) return { code: 'MACHINE_IN_OTHER_WORKSPACE', reason: `The Harness Team account on ${name} also serves another ${WORKSPACE_LABEL}'s Swarms, ${ONLY_OWN} here.` }
   if (!reading || now - reading.receivedAt > MACHINE_FRESH_MS) {
     // A Mac's team account goes by its Mac's name ("One machine"), and the Mac itself may well be online.
@@ -603,7 +603,11 @@ export function recordAgentPresence(state: SuperTabState, machineId: string, run
     if (running.includes(target.harnessId)) {
       delete target.downSince
       delete target.downNamed
-    } else target.downSince = downSince(state, target, now) ?? new Date(now).toISOString()
+    } else {
+      // A stop is counted once, when a reading first shows the session gone; the last hour's, at most five (task #3662).
+      if (!target.downSince) target.stops = [...(target.stops ?? []).filter(at => now - at < 3_600_000), now].slice(-5)
+      target.downSince = downSince(state, target, now) ?? new Date(now).toISOString()
+    }
   }
 }
 
@@ -872,7 +876,7 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   }
   // A Buddy-only machine is recorded with its Buddy's start, before its host ever read the Swarm: the start waits for it.
   if (machineOffline(pool, now) && !(pool.buddyOnly && !pool.observation)) fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')
-  if (!start) admitByRoom(state, pool, slots(pool), request.requirements.memoryBytes)
+  if (!start) admitByRoom(state, pool, slots(pool), request.requirements.memoryBytes, request.buddyOf ? 'a Buddy' : 'an agent')
   const machineReason = !start ? machineSuspensionReason(pool, now) : null
   if (machineReason) fail('MACHINE_UNAVAILABLE', machineReason)
   // A new start only: a grid model runs without the engine's subscription, and one already asked for is settled by its host.
@@ -943,9 +947,9 @@ export function availableSlots(state: SuperTabState, pool: ContributedMachine, u
   return free === null ? 0 : Math.min(ceiling, Math.floor(free / AGENT_MEMORY_BYTES))
 }
 
-const gib = (bytes: number) => `${Math.round(bytes / 1024 ** 3 * 10) / 10} GB`
+const gib = (bytes: number) => `${Math.round(bytes / 1024 ** 3 * 100) / 100} GB`
 /** A new start's room on [pool], said in words its owner can act on: its own count, or its free memory. */
-export function admitByRoom(state: SuperTabState, pool: ContributedMachine, used: number, memoryBytes: number) {
+export function admitByRoom(state: SuperTabState, pool: ContributedMachine, used: number, memoryBytes: number, who = 'an agent') {
   const limit = agentLimit(pool)
   if (limit !== null) {
     if (used >= limit) fail('MACHINE_FULL', `${pool.name} is set to run at most ${limit} agent${limit === 1 ? '' : 's'} and runs ${used}. Its owner can change that in its settings, or try again when one finishes.`)
@@ -954,7 +958,7 @@ export function admitByRoom(state: SuperTabState, pool: ContributedMachine, used
   if (used >= MACHINE_AGENTS_CEILING) fail('MACHINE_FULL', `${pool.name} already runs ${used} agents, the most any machine runs.`)
   const free = startableMemoryBytes(state, pool)
   if (free !== null && free < memoryBytes) {
-    fail('MACHINE_FULL', `${pool.name} is out of free memory: ${gib(free)} free, and an agent needs ${gib(memoryBytes)}. Try again when an agent there finishes, or pick another machine.`,
+    fail('MACHINE_FULL', `${pool.name} is out of free memory: ${gib(free)} free, and ${who} needs ${gib(memoryBytes)}. Try again when an agent there finishes, or pick another machine.`,
       409, { reason: 'memory' })
   }
 }

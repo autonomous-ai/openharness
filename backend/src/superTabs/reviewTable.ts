@@ -16,7 +16,7 @@ export interface PlannedStep { name: string; kind: StepKind; areas: string[]; wh
 
 /** An OS a test step runs on, as the rules record's `where` names it (task #3602): "on a Mac", "on a Linux machine". */
 export type StepOs = 'mac' | 'linux' | 'windows'
-const OS_PLACE: Record<StepOs, string> = { mac: 'a Mac', linux: 'a Linux machine', windows: 'a Windows machine' }
+export const OS_PLACE: Record<StepOs, string> = { mac: 'a Mac', linux: 'a Linux machine', windows: 'a Windows machine' }
 const OS_WORDS: Record<StepOs, RegExp> = { mac: /\bmac(?:os|book)?\b/i, linux: /\blinux\b/i, windows: /\bwindows\b/i }
 /** The OSes [where] names, in a fixed order. */
 export const osesIn = (where: readonly string[]): StepOs[] => (['mac', 'linux', 'windows'] as const).filter(os => where.some(line => OS_WORDS[os].test(line)))

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { PROCESS_ENGINES } from '../engines/types.js'
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -211,6 +212,9 @@ export class ContributedMachines {
   /** A pass or one of its publishes failed: the next one waits a whole beat, as every pass once did. */
   private failed = false
   private readonly cursors = new Map<string, number>()
+  /** A stale host feed kept reporting a missing failed start 581 times (Ken, 2026-11-06). Keep its one report until the feed
+   *  drops the start: terminal after acceptance/NOT_FOUND, otherwise retry its original receipt without launching again. */
+  private readonly failureReports = new Map<string, { path: string; input: Record<string, unknown>; failures: number; nextAt: number; done: boolean }>()
   private repairTrust?: ReturnType<typeof createSwarmCloneTrustRepair>
   /** Per tab, when its observation was last sent and what it said that matters to a reader: the harnesses
    *  running and stopped, whether new work is paused, and which starts are waiting. A change in any of them is
@@ -306,12 +310,14 @@ export class ContributedMachines {
   }
   /** The engines' own installs and sign-ins, probed again once [READINESS_MS] old. */
   private async ownEngines(local: { request: (type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown> }, now: number): Promise<ReadyEngine[] | null> {
+    // Periodic work asks only engines with account readers. Add a vendor here when its reader lands;
+    // unsupported engines would spawn login shells just to return unknown (#3839 security review).
     const answer = await local.request('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000).catch(() => null)
     const engines = object(answer).engines
     // An engine that says nothing of its sign-in (an older daemon, an engine not installed) is unknown, never signed out.
     // Not installed is unknown too: the probe answers the same for a login shell that timed out (lib/engineProbe.ts), and
     // such a machine fails its first start loudly instead (review of #1743).
-    const value = Array.isArray(engines) ? list(engines).filter(e => e.engine === 'claude' || e.engine === 'codex')
+    const value = Array.isArray(engines) ? list(engines).filter(e => (PROCESS_ENGINES as readonly unknown[]).includes(e.engine))
       .map((e): ReadyEngine => ({ engine: String(e.engine), installed: e.installed === true ? true : null,
         signedIn: e.installed === true && typeof e.signedIn === 'boolean' ? e.signedIn : null })) : null
     this.engineRead = { value, until: now + (value ? READINESS_MS : READINESS_RETRY_MS) }
@@ -422,6 +428,29 @@ export class ContributedMachines {
     this.waiting.set(startId, reason)
     this.log(`Swarm start ${startId} is waiting: ${reason}`)
   }
+  private async reportStartFailure(startId: string, path: string, input: Record<string, unknown>): Promise<void> {
+    let report = this.failureReports.get(startId)
+    if (!report) {
+      report = { path, input: { operationId: input.operationId, command: input.command }, failures: 0, nextAt: 0, done: false }
+      this.failureReports.set(startId, report)
+    }
+    if (report.done || this.deps.now() < report.nextAt) return
+    try {
+      await this.deps.backend(this.core, 'POST', report.path, report.input)
+      report.done = true
+      if (report.failures) this.log(`Swarm start ${startId}: its failed-start report reached the server.`)
+    } catch (error) {
+      if (error instanceof SuperTabHostError && error.code === 'NOT_FOUND') {
+        report.done = true
+        this.log(`Swarm start ${startId}: the server no longer has this start; dropped its failed-start report.`)
+        return
+      }
+      // Error bodies may contain private server text; only the report's state belongs in this log.
+      if (!report.failures) this.log(`Swarm start ${startId}: could not report its failure; retrying with backoff capped at five minutes.`)
+      report.failures = Math.min(report.failures + 1, 6)
+      report.nextAt = this.deps.now() + Math.min(15_000 * 2 ** (report.failures - 1), 300_000)
+    }
+  }
   /** Diego's Mac, 2026-10-28: 410 reading timeouts in two days, none of them in the log. */
   private noteReading(tabId: string, error: unknown) {
     const was = this.readingFailures.get(tabId)
@@ -493,8 +522,9 @@ export class ContributedMachines {
   private async poll(began: number) {
     const where = { dataDir: this.core.dataDir, port: this.core.daemon.port, machineId: this.machineId }
     const pools = list((await this.sources.feed.current(POOLS_FRESH_MS)).pools).filter(row => identifier(row.tabId) && object(row.machine).machineId === this.machineId && identifier(object(row.machine).generation))
-    if (this.stopped || pools.length === 0) { this.published.clear(); this.lastSent.clear(); this.waiting.clear(); this.readingFailures.clear(); return }
+    if (this.stopped || pools.length === 0) { this.published.clear(); this.lastSent.clear(); this.waiting.clear(); this.readingFailures.clear(); this.failureReports.clear(); return }
     const pendingIds = new Set(pools.flatMap(row => startsOf(row).map(start => start.id)))
+    for (const id of this.failureReports.keys()) if (!pendingIds.has(id)) this.failureReports.delete(id)
     for (const id of this.waiting.keys()) if (!pendingIds.has(id)) this.waiting.delete(id)
     for (const id of this.refusedSince.keys()) if (!pendingIds.has(id)) this.refusedSince.delete(id)
     for (const id of this.preparing) if (!pendingIds.has(id)) this.preparing.delete(id)
@@ -695,17 +725,30 @@ export class ContributedMachines {
         const round = pending.length ? [...pending.slice(cursor % pending.length), ...pending.slice(0, cursor % pending.length)].slice(0, 2) : []
         for (const start of round) {
           if (this.stopped) return
-          if (!identifier(start.id) || ((row.paused || pool.paused) && !start.dispatched)) continue
+          if (!identifier(start.id)) continue
+          const report = this.failureReports.get(start.id)
+          if (report) {
+            await this.reportStartFailure(start.id, report.path, report.input)
+            // A dispatched receipt may already own a native session: retain its existing reconciliation/abandoned cleanup.
+            if (!report.done || !start.dispatched) continue
+          }
+          if ((row.paused || pool.paused) && !start.dispatched) continue
           if (this.cleaningTabs.has(String(row.tabId))) { this.noteWaiting(start.id, CLEANING_WAIT); continue }
           const launched = this.startInFlight(String(row.tabId))
           try {
             const path = `/api/super-tabs/hosts/${this.machineId}/starts/${row.tabId}/${start.id}`
             // The start endpoint reads this start and takes its commands, nothing else. Any other read went out as an empty
             // command, which the backend refused with a 400 at every start (prod logs 2026-10-28).
-            const scoped: ScopedRequest = async input => input.action !== 'startStatus' && input.action !== 'command'
-              ? { error: 'HOST_UNSUPPORTED', detail: 'A contributed machine reads only its own starts.' }
-              : { ok: true, value: await this.deps.backend(this.core, input.action === 'startStatus' ? 'GET' : 'POST', path,
+            const scoped: ScopedRequest = async input => {
+              if (input.action !== 'startStatus' && input.action !== 'command') return { error: 'HOST_UNSUPPORTED', detail: 'A contributed machine reads only its own starts.' }
+              if (input.action === 'command' && object(input.command).type === 'agent.startFailed') {
+                await this.reportStartFailure(String(start.id), path, input)
+                // The host owns this queued report now; the launch path can finish its existing cleanup.
+                return { ok: true, value: {} }
+              }
+              return { ok: true, value: await this.deps.backend(this.core, input.action === 'startStatus' ? 'GET' : 'POST', path,
                 input.action === 'startStatus' ? undefined : { operationId: input.operationId, command: input.command }) }
+            }
             try {
               // The Harness Team account is not private (its owner's home folder opened again, say): a new start is refused
               // here as well as by routing, and never moved to the owner's account instead.

@@ -3,7 +3,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
-import 'package:harness/super_tabs/buddy_restart.dart' show launchArgsLine;
+import 'package:harness/super_tabs/buddy_restart.dart'
+    show
+        BuddyRestartOutcome,
+        BuddyRestartResult,
+        launchArgsLine,
+        restartBuddyWithFlags,
+        splitLaunchArgs;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/ws/ws_conn.dart';
@@ -442,5 +448,112 @@ void main() {
       launchArgsLine(['--add-dir', '/a b', "it's", '']),
       "--add-dir '/a b' 'it'\\''s' ''",
     );
+  });
+
+  group('splitLaunchArgs', () {
+    test('splits on whitespace', () {
+      expect(splitLaunchArgs('--chrome'), ['--chrome']);
+      expect(splitLaunchArgs('  '), <String>[]);
+    });
+
+    test('reads quotes and backslash escapes', () {
+      expect(splitLaunchArgs('--add-dir "a b" --x=\'y z\' c\\ d'), [
+        '--add-dir',
+        'a b',
+        '--x=y z',
+        'c d',
+      ]);
+    });
+
+    test('an unclosed quote or a trailing backslash is null', () {
+      expect(splitLaunchArgs('--x "a'), isNull);
+      expect(splitLaunchArgs('a\\'), isNull);
+    });
+
+    test('is the inverse of launchArgsLine', () {
+      final w = ['--add-dir', 'a b', "it's", r'back\slash'];
+      expect(splitLaunchArgs(launchArgsLine(w)), w);
+    });
+  });
+
+  group('restartBuddyWithFlags', () {
+    Future<BuddyRestartResult> run(
+      WidgetTester tester,
+      SuperTabController c,
+      Future<void> Function() reply,
+    ) async {
+      final result = restartBuddyWithFlags(
+        c,
+        'lead',
+        app,
+        text: '--chrome',
+        saved: '--chrome',
+      );
+      await tester.pump();
+      await reply();
+      await tester.pumpAndSettle();
+      return result;
+    }
+
+    testWidgets('success is done', (tester) async {
+      final c = await show(tester, swarm());
+      final result = await run(tester, c, () async {
+        connection.restartReplies.single.complete({
+          ...restartReceipt(creationId(), agentId: 'h-wren'),
+          'launchArgs': ['--chrome'],
+        });
+      });
+      expect(result.outcome, BuddyRestartOutcome.done);
+      expect(result.message, isNull);
+      await close(tester, c);
+    });
+
+    testWidgets('a refusal carries the daemon detail', (tester) async {
+      final c = await show(tester, swarm());
+      final result = await run(tester, c, () async {
+        connection.restartReplies.single.completeError(
+          const WsRequestFailure(
+            responseType: 'agent_restart_result',
+            code: 'INVALID_LAUNCH_ARGS',
+            detail: "--model is set by Harness and can't be added here.",
+          ),
+        );
+      });
+      final r = result;
+      expect(r.outcome, BuddyRestartOutcome.refused);
+      expect(r.message, "--model is set by Harness and can't be added here.");
+      await close(tester, c);
+    });
+
+    testWidgets('an unconfirmed receipt is notStarted', (tester) async {
+      final c = await show(tester, swarm());
+      final result = await run(tester, c, () async {
+        connection.restartReplies.single.complete({
+          'creationId': creationId(),
+          'state': 'unconfirmed',
+        });
+      });
+      final r = result;
+      expect(r.outcome, BuddyRestartOutcome.notStarted);
+      expect(
+        r.message,
+        "The Buddy didn't start with these flags. Fix or clear them and "
+        'restart.',
+      );
+      await close(tester, c);
+    });
+
+    testWidgets('a reply with no echo is ignored', (tester) async {
+      final c = await show(tester, swarm());
+      final result = await run(tester, c, () async {
+        connection.restartReplies.single.complete(
+          restartReceipt(creationId(), agentId: 'h-wren'),
+        );
+      });
+      final r = result;
+      expect(r.outcome, BuddyRestartOutcome.ignored);
+      expect(r.message, 'Update Harness on Test host to use launch flags.');
+      await close(tester, c);
+    });
   });
 }

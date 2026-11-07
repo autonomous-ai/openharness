@@ -26,7 +26,7 @@ import { SEED_RULES } from '../src/superTabs/policy.js'
 import { stableId, type Agent, type SuperTabState } from '../src/superTabs/model.js'
 import { agentDisplayName } from '../src/superTabs/agentNames.js'
 import { roleVersion } from '../src/superTabs/projects.js'
-import { ensureTerminalExpiry, TERMINAL_EXPIRY_MS } from '../src/superTabs/terminal.js'
+import { ensureTerminalExpiry, TERMINAL_EXPIRY_MS, TERMINAL_RECHECK_MS } from '../src/superTabs/terminal.js'
 import { ensureMentionExpiry, MENTION_EXPIRY_MS, swarmsWithTags } from '../src/superTabs/mentions.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { swarmTransaction } from '../src/superTabs/cache.js'
@@ -860,9 +860,9 @@ describe('private swarm projects on the real control API', () => {
       name: 'Moved lead', configuration: config, lead: false })).rejects.toMatchObject({ code: 'PROJECT_SESSION' })
   })
 
-  // Quiet project chats (Dee, 2026-10-31): a work group's change of state wakes the coordinator at most once every 15 minutes,
-  // an ordinary message never; its report sets the project's status card and posts nothing; the digest is on by default.
-  it('wakes the coordinator only on work changes, at most every 15 minutes, and keeps its report in the status card', async () => {
+  // Quiet project chats (Dee, 2026-10-31; task #3593): the server writes the status card's lines from task state and wakes the coordinator
+  // for none of them; its report adds its own lines after them and posts nothing; the digest is on by default.
+  it('wakes the coordinator for no work change, shows the server\'s card with its own lines, and sends the digest by default', async () => {
     wantDefaultDigest()
     // 14:00 in Vietnam: the default digest starts tomorrow at 08:00.
     let now = Date.UTC(2026, 9, 31, 7, 0)
@@ -874,46 +874,37 @@ describe('private swarm projects on the real control API', () => {
       harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true })).result.agentId)
     const updates = async () => (await timed.deliveries(host, tab, lead)).filter(d => d.conversationId === 'lead')
     const chat = async () => db.superTabMessage.findMany({ where: { tabId: tab, conversationId: 'lead' } })
+    const status = async () => (await timed.read(owner, tab)).state.projects!.find(p => p.id === 'lead')!.status
     expect(await updates()).toEqual([])
     const group = String((await execute({ type: 'conversation.create', title: 'Work', brief: 'Implement it',
       checks: [{ description: 'Verified', independent: true }] })).result.conversationId)
-    // Five minutes on, so a burst of changes is one wake-up (the quiet poll's 30 s fit within that).
-    now += 299_999
+    // No wake-up however long it waits: the poll that used to carry the card's request finds nothing.
+    now += 330_000
     expect(await updates()).toEqual([])
-    now += 30_001
-    const polls = await Promise.all(Array.from({ length: 3 }, () => updates()))
-    const ids = new Set(polls.flat().map(d => d.id))
-    expect(ids.size).toBe(1)
-    // After the row naming who added the Lead (#2207); a task no message asked for posts nothing in the chat (#2925).
-    expect((await chat()).map(m => (m.source as Record<string, unknown>)?.kind)).toEqual(['system', 'update-request'])
-    await execute({ ...message('New evidence'), conversationId: group } as Command)
     now += 900_000
-    expect((await updates()).map(d => d.id)).toEqual([...ids])
-    // The Lead reports through what it read of each workgroup: the card, and nothing in the chat.
-    const read = (await timed.read(owner, tab)).state.conversations.find(c => c.id === group)!
-    const card = 'Work: implementation ready, verification next.'
-    await execute({ type: 'project.report', projectId: 'lead', through: { [group]: read.lastMessageSequence }, text: card }, lead)
+    expect(await updates()).toEqual([])
+    // After the row naming who added the Lead (#2207); a task no message asked for posts nothing in the chat (#2925).
+    expect((await chat()).map(m => (m.source as Record<string, unknown>)?.kind)).toEqual(['system'])
+    // The server wrote the card: one line for the task, which waits on an owner.
+    expect((await status())!.text).toContain('"Work": to do. Waits on: an owner. Owner: none.')
+    // The Lead's report adds its own lines after the server's, and posts nothing.
+    const card = 'Freeze starts Friday.'
+    await execute({ type: 'project.report', projectId: 'lead', through: {}, text: card }, lead)
     expect(await updates()).toEqual([])
     expect((await chat()).filter(m => m.text === card || (m.source as Record<string, unknown>)?.kind === 'project-report')).toEqual([])
-    expect((await timed.read(owner, tab)).state.projects!.find(p => p.id === 'lead')!.status).toEqual({ text: card, at: new Date(now).toISOString(), by: lead })
-    // An ordinary message, here an hour of them, wakes nobody.
+    expect((await status())!.text).toContain('"Work": to do.')
+    expect((await status())!.text.endsWith(card)).toBe(true)
+    // An ordinary message, a second task and a merge wake nobody.
     await execute({ ...message('Tests passed'), conversationId: group } as Command)
     now += 3_600_000
-    expect(await updates()).toEqual([])
-    // Two changes within 15 minutes: one wake-up now, the second waits for the next window.
     await execute({ type: 'conversation.create', title: 'Docs', brief: 'Write them', checks: [{ description: 'Read', independent: false }] })
-    now += 300_000
-    expect(await updates()).toHaveLength(1)
-    const answered = (await timed.read(owner, tab)).state.conversations.filter(c => c.title === 'Docs' || c.id === group)
-    await execute({ type: 'project.report', projectId: 'lead', through: Object.fromEntries(answered.map(c => [c.id, c.lastMessageSequence])), text: null }, lead)
-    expect(await updates()).toEqual([])
     await execute({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/7' })
-    now += 600_000
+    now += 900_000
     expect(await updates()).toEqual([])
-    now += 300_000
-    expect(await updates()).toHaveLength(1)
-    // The card stayed through the acknowledgement, and the morning digest comes by default at 08:00 the next day.
-    expect((await timed.read(owner, tab)).state.projects!.find(p => p.id === 'lead')!.status!.text).toBe(card)
+    const lines = (await status())!.text
+    expect(lines).toContain('"Docs": to do.')
+    expect(lines.endsWith(card)).toBe(true)
+    // The morning digest comes by default at 08:00 the next day.
     expect((await chat()).some(m => (m.source as Record<string, unknown>)?.kind === 'digest-request')).toBe(false)
     now = Date.UTC(2026, 10, 1, 1, 0) + 30_000
     await updates()
@@ -2073,6 +2064,30 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
     await expect(run(tab, { type: 'message.send', conversationId: group, text: 'Here.', replyTo: null, answers: messageId, recipientIds: [] } as Command, host, lead))
       .rejects.toMatchObject({ code: 'INVALID_ANSWER' })
+  })
+
+  it('a PM reaction settles the joke and question in durable owed state without an extra reply', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const sent = async (text: string) => String((await run(tab, { type: 'message.send', conversationId: 'lead', text,
+      replyTo: null, recipientIds: [lead] }, peer)).result.messageId)
+    const joke = await sent('The PM has more tabs than my browser 😂')
+    const question = await sent('Are we collecting tabs now?')
+    const react = (messageId: string, emoji: string, on = true, as = lead) => run(tab,
+      { type: 'message.react', conversationId: 'lead', messageId, emoji, on } as Command, host, as)
+    const owed = async () => (await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!.owed?.map(a => a.id) ?? []
+    expect(await owed()).toEqual([joke, question])
+    await run(tab, { type: 'message.react', conversationId: 'lead', messageId: joke, emoji: 'laugh', on: true }, peer)
+    await react(joke, 'laugh', false)
+    expect(await owed()).toEqual([joke, question])
+    await react(joke, 'laugh')
+    expect(await owed()).toEqual([question])
+    await react(question, 'eyes')
+    await react(question, 'eyes')
+    const restarted = new SuperTabStore(db)
+    const chat = (await restarted.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!
+    expect(chat.owed ?? []).toEqual([])
+    expect(chat.pulse!.asks.count).toBe(0)
   })
 
   // Task #3391: acknowledging is a reaction, not a post, so a reaction settles the recipient's delivery as an answer does.
@@ -3981,6 +3996,35 @@ describe('the Lead reads and types in an agent terminal', () => {
     return { at, loads: () => load.mock.calls.length, listeners: (requestId: string) => notices.listenerCount(requestId) }
   }
 
+  /** The wait's re-checks (store.ts terminalResult, every TERMINAL_RECHECK_MS), held while a test sets up its answer, then run
+   *  for their whole period: an answer that comes while none has fired was woken by its notice, however slow the runner (task
+   *  #4308: a 100 ms wall-clock bound failed at 154 ms on a busy CI runner). `asleep` settles once the wait sleeps on one. */
+  function heldRechecks() {
+    const realSet = globalThis.setTimeout, realClear = globalThis.clearTimeout
+    const held = new Map<object, { run: () => void; timer?: ReturnType<typeof realSet> }>()
+    let released = false, fired = 0, sleeping = () => {}
+    const asleep = new Promise<void>(resolve => { sleeping = resolve })
+    const start = (handle: object, entry: { run: () => void; timer?: ReturnType<typeof realSet> }) => {
+      entry.timer = realSet(() => { held.delete(handle); fired++; entry.run() }, TERMINAL_RECHECK_MS)
+    }
+    const set = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((run: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
+      if (ms !== TERMINAL_RECHECK_MS) return realSet(run, ms, ...args)
+      const handle = {}, entry = { run: () => run(...args) }
+      held.set(handle, entry)
+      if (released) start(handle, entry)
+      sleeping()
+      return handle
+    }) as typeof setTimeout)
+    const clear = vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((handle?: object) => {
+      const entry = handle && held.get(handle)
+      if (!entry) return realClear(handle as ReturnType<typeof realSet>)
+      held.delete(handle)
+      if (entry.timer) realClear(entry.timer)
+    }) as typeof clearTimeout)
+    onTestFinished(() => { set.mockRestore(); clear.mockRestore() })
+    return { asleep, release: () => { released = true; for (const [handle, entry] of held) start(handle, entry) }, fired: () => fired }
+  }
+
   it('waits for an answer without loading the Swarm again and again', async () => {
     const { tab, lead, worker, claim } = await terminalFixture()
     const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
@@ -3996,13 +4040,14 @@ describe('the Lead reads and types in an agent terminal', () => {
     const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
     expect(await claim()).toHaveLength(1)
     const { at, loads } = watched()
-    const waiting = at.terminalResult(host, tab, requestId, lead, 20_000).then(answer => ({ answer, at: Date.now() }))
-    await new Promise(resolve => setTimeout(resolve, 300))
+    const rechecks = heldRechecks()
+    const waiting = at.terminalResult(host, tab, requestId, lead, 20_000)
+    await rechecks.asleep
     await at.execute(host, tab, { operationId: randomUUID(), command: { type: 'agent.screenResult', requestId, ok: true, text: 'screen' } }, worker)
-    const answeredAt = Date.now()
-    const { answer, at: returnedAt } = await waiting
-    expect(answer).toEqual({ requestId, ok: true, text: 'screen' })
-    expect(returnedAt - answeredAt).toBeLessThan(100)
+    rechecks.release()
+    expect(await waiting).toEqual({ requestId, ok: true, text: 'screen' })
+    // Woken by the commit's notice: no re-check ran, so the answer did not wait for one.
+    expect(rechecks.fired()).toBe(0)
     expect(loads()).toBeLessThanOrEqual(4)
   })
 
@@ -4044,12 +4089,14 @@ describe('the Lead reads and types in an agent terminal', () => {
     const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
     expect(await claim()).toHaveLength(1)
     const { at, loads } = watched({ heard: false })
+    const rechecks = heldRechecks()
     const waiting = at.terminalResult(host, tab, requestId, lead, 20_000)
-    await new Promise(resolve => setTimeout(resolve, 300))
+    await rechecks.asleep
     await run(tab, { type: 'agent.screenResult', requestId, ok: true, text: 'screen' }, host, worker)
-    const answeredAt = Date.now()
+    rechecks.release()
     expect(await waiting).toEqual({ requestId, ok: true, text: 'screen' })
-    expect(Date.now() - answeredAt).toBeLessThan(6_000)
+    // The one re-check after the answer found it.
+    expect(rechecks.fired()).toBe(1)
     expect(loads()).toBeLessThanOrEqual(3)
   })
 
@@ -5196,14 +5243,11 @@ describe('Swarm sweeps', () => {
     await run(tab, { type: 'project.report', projectId: 'lead', through: { [group]: read.lastMessageSequence }, text: null }, host, lead)
   }
 
-  it('puts a conversation archived by hand to sleep once its reports are acknowledged, and ordinary loads stop reading it', async () => {
+  it('puts a conversation archived by hand to sleep at once, with no report to wait for, and ordinary loads stop reading it (#3593)', async () => {
     const { tab, lead } = await fixture()
     const group = await finishedGroup(tab, lead)
     await run(tab, { type: 'conversation.archive', conversationId: group, archived: true })
     const loaded = async () => (await db.$transaction(tx => parts.loadActive(tx, tab))).groups.map(p => p.key)
-    expect(await loaded()).toContain(group)
-    await acknowledge(tab, lead, group)
-    await sweepSwarms(db)
     expect(await loaded()).not.toContain(group)
     expect((await db.$transaction(tx => parts.loadDormant(tx, tab, {}))).map(p => p.key)).toEqual([group])
     // Reopened, it is active again.
@@ -5217,10 +5261,7 @@ describe('Swarm sweeps', () => {
     const listed = async () => (await store.read(owner, tab)).state.conversations.map(c => c.id)
     await sweepSwarms(db, Date.now() + day - 60_000)
     expect(await listed()).toContain(group)
-    // Its reports are not acknowledged yet: it stays awake, where the Lead's report check sees it.
-    await sweepSwarms(db, Date.now() + day + 60_000)
-    expect(await listed()).toContain(group)
-    await acknowledge(tab, lead, group)
+    // No report is waited for (task #3593): after the quiet day it sleeps.
     await sweepSwarms(db, Date.now() + day + 60_000)
     expect(await listed()).not.toContain(group)
     // The Lead conversation stays awake whatever its age.
