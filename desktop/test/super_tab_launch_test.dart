@@ -66,16 +66,6 @@ class SuperTabFixtureConnection extends WsConn {
   /// from before setup reported it.
   int? maxAvailableAgents = 16;
 
-  /// What this Mac's daemon remembers of its Harness Team account setup
-  /// (`teamSetupStatus`); null answers as a daemon too old to say.
-  Map<String, dynamic>? teamSetup;
-
-  /// What this Mac's daemon answers whether its Harness Team account is wanted
-  /// (`teamSetupCheck`); null answers as a daemon too old to say.
-  Map<String, dynamic>? teamCheck;
-
-  /// What starting the account's setup answers (`teamSetup`, `manual`).
-  Map<String, dynamic> teamRun = {'state': 'started'};
   bool loseCreate = false, loseJoin = false;
 
   /// Refuses the next join as the backend would, before anything is written.
@@ -201,15 +191,6 @@ class SuperTabFixtureConnection extends WsConn {
         throw backendFailure!;
       }
       if (payload['action'] == 'wake') return {'ok': true};
-      if (payload['action'] == 'teamSetupStatus') {
-        if (teamSetup case final setup?) return {'ok': true, ...setup};
-        throw const SuperTabFailure('INVALID_REQUEST', 'Unknown action.');
-      }
-      if (payload['action'] == 'teamSetup') return {'ok': true, ...teamRun};
-      if (payload['action'] == 'teamSetupCheck') {
-        if (teamCheck case final check?) return {'ok': true, ...check};
-        throw const SuperTabFailure('INVALID_REQUEST', 'Unknown action.');
-      }
       if (payload['action'] == 'prepareContribution') {
         if (prepared.add(payload['operationId']) || keepPreparing) {
           return {'ok': true, 'state': 'preparing'};
@@ -1294,7 +1275,7 @@ void main() {
       expect(mac.engineRefusals, {
         'codex': 'Codex isn’t offered on Diego MacBook',
       });
-      expect((mac.startable, mac.inTeam('claude')), (true, false));
+      expect(mac.startable, isTrue);
       box.chooseLeadMachine('diego-mac');
       // The engine it can run there, on the Mac itself, as the server said.
       expect(box.engine, 'claude');
@@ -1309,32 +1290,6 @@ void main() {
         commandsOf(f, 'lead.start').single,
         containsPair('machineId', 'diego-mac'),
       );
-    });
-
-    test('each engine runs where the server says: Codex in the Team account, '
-        'Claude Code on the Mac whose account signed it out', () async {
-      final f = SuperTabLaunchFixture();
-      addDiego(f);
-      knownRepo(f);
-      f.connection.server.state['machines'] = rows({
-        'claude': {'machineId': 'diego-mac'},
-        'codex': {'machineId': 'diego-team'},
-      });
-      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
-      final box = await f.box(newProject: true, engine: 'codex', lead: null);
-      box.chooseLeadMachine('diego-mac');
-      expect(box.engine, 'codex');
-      expect(
-        box.leadLine,
-        startsWith('Product Manager on Diego MacBook’s Team account · Codex'),
-      );
-      box.focusField(NewHarnessField.agent);
-      box.accept(box.options.where((o) => o.id == 'claude').single);
-      expect(
-        box.leadLine,
-        startsWith('Product Manager on Diego MacBook · Claude Code'),
-      );
-      expect(box.leadBlocked, isNull);
     });
 
     test('with every engine refused, the Mac cannot be chosen and says why '

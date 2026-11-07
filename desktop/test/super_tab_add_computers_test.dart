@@ -401,6 +401,8 @@ void main() {
     },
   );
 
+  // Swarm v3 makes no Team account (#4221): a computer without one is short of nothing, while one whose existing Team
+  // account fails its check still says so.
   testWidgets(
     'an added computer without a working Team account says only your projects run there',
     (tester) async {
@@ -424,10 +426,11 @@ void main() {
       });
       await openBox(tester, c, f.app);
       // A word or two on the row, the whole reason on hover.
-      expect(inRow('studio', 'added · not set up'), findsOneWidget);
+      expect(inRow('studio', 'added'), findsOneWidget);
+      expect(find.textContaining('not set up'), findsNothing);
       expect(
         find.byTooltip('No Team account yet, so only your projects run here.'),
-        findsOneWidget,
+        findsNothing,
       );
       expect(inRow('air', 'added · check failed'), findsOneWidget);
       expect(
@@ -436,37 +439,6 @@ void main() {
         ),
         findsOneWidget,
       );
-      await close(tester, f, c);
-    },
-  );
-
-  testWidgets(
-    'this Mac\'s failed Team account setup is said in plain words on its row',
-    (tester) async {
-      final (:f, :c) = await swarm((f) {
-        f.app.teamAccountHereForTest = true;
-        f.connection.teamSetup = {
-          'state': 'failed',
-          'detail': 'dscl exited 64',
-        };
-        f.connection.server.state['machines'] = [
-          {
-            'machineId': 'm',
-            'name': f.app.stateOf('m')!.machine.displayName,
-            'contributorId': 'owner',
-            'teamWork': {'allowed': false, 'code': 'TEAM_ACCOUNT_REQUIRED'},
-          },
-        ];
-      });
-      await openBox(tester, c, f.app);
-      expect(inRow('m', 'added · setup failed'), findsOneWidget);
-      expect(
-        find.byTooltip(
-          'Team account setup failed, so only your projects run here.',
-        ),
-        findsOneWidget,
-      );
-      expect(find.textContaining('dscl'), findsNothing);
       await close(tester, f, c);
     },
   );
@@ -832,7 +804,7 @@ void main() {
 
   // The PR's pictures, light and dark, over in-memory Swarms only: the first
   // box with this Mac not added, several computers, all added, offline rows,
-  // Team account setup failed, Dee's Swarm with six computers, and a row
+  // a Team account's failed check, Dee's Swarm with six computers, and a row
   // that could not be added.
   Map<String, dynamic> pool(String id, String name, [String? teamCode]) => {
     'machineId': id,
@@ -881,13 +853,8 @@ void main() {
       },
     ),
     (
-      '5-team-account-setup-failed',
+      '5-team-account-check-failed',
       (f) {
-        f.app.teamAccountHereForTest = true;
-        f.connection.teamSetup = {
-          'state': 'failed',
-          'detail': 'dscl exited 64',
-        };
         computer(f, 'studio', 'Studio');
         computer(f, 'mini', 'Mac mini');
         f.connection.server.state['machines'] = [

@@ -1689,11 +1689,9 @@ class NewHarnessController extends ChangeNotifier {
   /// The Product Manager line: where it starts, its engine and model.
   String get leadLine {
     final target = leadMachine;
-    final name = target == null
-        ? machineLabel
-        : target.inTeam(_engine)
-        ? '${target.name}’s Team account'
-        : target.name;
+    // Never a Team account's: the Swarm starts a PM only on its person's own
+    // computer (backend leadStart.ts leadHost, #4120).
+    final name = target?.name ?? machineLabel;
     return ['Product Manager on $name', agentLabel, leadModelLabel].join(' · ');
   }
 
