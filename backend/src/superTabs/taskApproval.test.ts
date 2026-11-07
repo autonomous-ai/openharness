@@ -98,6 +98,24 @@ describe('personal approval enforced before work', () => {
     expect(() => f.runCommand({ type: 'task.approve', conversationId: id })).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_DECIDED' }))
     expect(() => f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm)).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
   })
+  // Task #4218: a rejection wrote only the approval, so the PM was told the proposal still waited and could accept it into a task
+  // that could never run.
+  it('settles the proposal its person rejects, which its PM can no longer accept', () => {
+    const f = fixture(); f.mode('review'); f.propose()
+    const card = f.state.conversations.find(c => c.proposal)!
+    f.runCommand({ type: 'task.reject', conversationId: card.id, reason: 'Not now' })
+    expect(f.card(card.id).proposal).toMatchObject({ decision: { kind: 'no', reason: 'Not now', at: NOW } })
+    expect(() => f.runCommand({ type: 'proposal.decide', conversationId: card.id, decision: 'accept', reason: 'Build it', task,
+      checks: [{ description: 'Restores drafts' }] }, f.pm)).toThrow(expect.objectContaining({ code: 'PROPOSAL_DECIDED' }))
+  })
+  // Task #4218: approval is the requesting membership's, so once they left nobody could approve or reject it again, and the task
+  // stayed open for good. A rejoined person decides nothing of the membership they left.
+  it('rejects a leaving requester\'s pending approvals and tells the PM', () => {
+    const f = fixture(); f.mode('review'); const id = f.create()
+    const left = f.runCommand({ type: 'member.remove', userId: peer.userId })
+    expect(f.card(id).taskApproval).toMatchObject({ state: 'rejected', decidedAt: NOW, reason: 'Its requester left the Swarm.' })
+    expect(left.messages.some(m => m.conversationId === id && m.recipients.includes(f.lead))).toBe(true)
+  })
   it.each([undefined, owner.userId])('stages personal approval when an unassigned task is attributed from %s to a Review requester', previous => {
     const f = fixture(); f.mode('review')
     const id = f.runCommand({ type: 'conversation.create', title: 'PM maintenance', task, priority: 'P2',
