@@ -335,10 +335,7 @@ export interface HostAgentRow {
   roleName: string
   /** Its project's instructions as the state names them: the host reads the text when `revision` moves. Revision 0 (no
    *  `hash`): no document yet, so the built-in template. */
-  instructions: { projectId: string; revision: number; hash: string | null; coordinatorName: string
-    /** The coordinator's alone: the built-in PM schedule's hash (pmSchedule.ts), which its read carries beside the text. The host
-     *  reads again when it moves, as it does for `revision`. */
-    builtInHash?: string } | null
+  instructions: { projectId: string; revision: number; hash: string | null; coordinatorName: string } | null
   lead: boolean
   /** A PM's own row: the oldest message a person sent it that it has not answered (timeChecks.ts owedAsk), and how long it may
    *  owe one while it hangs before its host restarts it. Null on every other row, and while it owes nothing. */
