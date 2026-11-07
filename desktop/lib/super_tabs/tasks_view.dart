@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -68,12 +67,18 @@ class SuperTabTasksView extends StatefulWidget {
   /// The least a Board column takes (task #3869): the columns share the pane's width, and below this the Board scrolls.
   static const minColumnWidth = 240.0;
 
+  /// An empty Board column's width (finding 5 of #4211): a slim lane of its name, turned, over its 0.
+  static const slimColumnWidth = 40.0;
+
   static String storageKey(String accountId) =>
       'super-tab-tasks-view/$accountId';
 
   @override
   State<SuperTabTasksView> createState() => _SuperTabTasksViewState();
 }
+
+/// Where a Board column sits in its row, from the row's start.
+typedef _Span = ({SuperTabTaskColumn column, double left, double right});
 
 /// How the Tasks view lays its cards out, kept by its name.
 enum _Layout { board, list, members }
@@ -445,11 +450,14 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   static const _searchWidth = 220.0;
   static const _columnGap = grid.AppDesktop.groupGap;
 
+  /// A Board lane's name is its bold title, as Trello's (task #3787).
+  static TextStyle get _laneTitle =>
+      DesktopChrome.control(color: DesktopChrome.foreground)
+          .copyWith(fontWeight: grid.AppFont.semibold);
+
   Widget _heading(SuperTabTaskColumn column, int count, {bool? folded}) {
-    // A Board lane's name is its bold title, as Trello's (task #3787).
     final style = folded == null
-        ? DesktopChrome.control(color: DesktopChrome.foreground)
-              .copyWith(fontWeight: grid.AppFont.semibold)
+        ? _laneTitle
         : DesktopChrome.control(medium: true);
     final row = Row(
       children: [
@@ -638,6 +646,11 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
         task?.requesterId ??
         task?.proposal?.senderIds.firstOrNull ??
         entry.proposal?.personId;
+    final activity = _activity(entry);
+    final review =
+        task?.assignment?['status'] == 'review' ||
+        task?.liveness?['state'] == 'waiting' &&
+            task?.liveness?['why'] == 'review';
     return SuperTabTaskCard(
       key: ValueKey('super-task-card-$id'),
       // A legacy marker is the badge now: the title drops it.
@@ -652,7 +665,11 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       priority: superTabEntryPriority(entry),
       needsYou: entry.needsYou,
       unread: task != null && widget.controller.unreadShown(task),
-      activity: _activity(entry),
+      activity: activity,
+      // A review waits as a person's answer does, under the same mark: its tooltip says which (finding 13 of #4211).
+      markLabel: activity == HarnessActivity.needsInput && review
+          ? 'In review'
+          : null,
       titleLines: list ? 1 : 3,
       // What a merged task waits on, and how long a done one has waited, are
       // what the card is for: they wrap however long, never cut off (tasks
@@ -700,51 +717,166 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     );
   }
 
-  /// The Board: each column a neutral panel, all of one width that shares the
-  /// pane (task #3869), never under [SuperTabTasksView.minColumnWidth]. Below
-  /// it the row scrolls sideways under a scrollbar that stays in view, which a
-  /// mouse drags; a trackpad swipe and shift with the wheel scroll it too. Each
-  /// column scrolls its own cards.
+  /// The Board: each column a neutral panel, those with cards all of one
+  /// width that shares the pane (task #3869), never under
+  /// [SuperTabTasksView.minColumnWidth]; an empty one a slim lane (finding 5
+  /// of #4211). Below the minimum the row scrolls sideways under a scrollbar
+  /// that stays in view, which a mouse drags; a trackpad swipe and shift with
+  /// the wheel scroll it too; and a pill at each edge names the columns out of
+  /// view there. Each column scrolls its own cards.
   Widget _boardView(
     Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> shown,
     DateTime now,
   ) => LayoutBuilder(
     builder: (context, box) {
       const edge = grid.AppDesktop.groupGap;
-      final count = SuperTabTaskColumn.values.length;
-      final share =
-          (box.maxWidth - 2 * edge - (count - 1) * _columnGap) / count;
-      final width = math.max(SuperTabTasksView.minColumnWidth, share);
-      return Scrollbar(
-        key: const ValueKey('super-tasks-board-scrollbar'),
-        controller: _boardScroll,
-        thumbVisibility: share < SuperTabTasksView.minColumnWidth,
-        child: SingleChildScrollView(
-          key: const ValueKey('super-tasks-board'),
-          controller: _boardScroll,
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.only(
-            left: edge,
-            right: edge,
-            bottom: grid.AppDesktop.groupGap,
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              for (final column in SuperTabTaskColumn.values) ...[
-                if (column != SuperTabTaskColumn.values.first)
-                  const SizedBox(width: _columnGap),
-                SizedBox(
-                  width: width,
-                  child: _panel(column, shown[column]!, now),
+      final width = _fullWidth(box.maxWidth, [
+        for (final column in SuperTabTaskColumn.values) shown[column]!.isEmpty,
+      ]);
+      // Where each column sits in the row, for the pills.
+      final spans = <_Span>[];
+      var x = edge;
+      for (final column in SuperTabTaskColumn.values) {
+        final w = shown[column]!.isEmpty
+            ? SuperTabTasksView.slimColumnWidth
+            : width;
+        spans.add((column: column, left: x, right: x + w));
+        x += w + _columnGap;
+      }
+      final overflow = spans.last.right + edge > box.maxWidth + .5;
+      return Stack(
+        children: [
+          Positioned.fill(
+            child: Scrollbar(
+              key: const ValueKey('super-tasks-board-scrollbar'),
+              controller: _boardScroll,
+              thumbVisibility: overflow,
+              child: SingleChildScrollView(
+                key: const ValueKey('super-tasks-board'),
+                controller: _boardScroll,
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.only(
+                  left: edge,
+                  right: edge,
+                  bottom: grid.AppDesktop.groupGap,
                 ),
-              ],
-            ],
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (final span in spans) ...[
+                      if (span.column != SuperTabTaskColumn.values.first)
+                        const SizedBox(width: _columnGap),
+                      SizedBox(
+                        width: span.right - span.left,
+                        child: shown[span.column]!.isEmpty
+                            ? _slimLane(span.column)
+                            : _panel(span.column, shown[span.column]!, now),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
           ),
-        ),
+          if (overflow)
+            ListenableBuilder(
+              listenable: _boardScroll,
+              builder: (context, _) => _offView(spans, shown, box.maxWidth),
+            ),
+        ],
       );
     },
   );
+
+  /// The width the Board's columns with cards share in a [view] that wide,
+  /// [empty] saying which are slim lanes: all of it when they fit at
+  /// [SuperTabTasksView.minColumnWidth] or more; else as many whole columns
+  /// as fit at rest, the lanes after the last of them included, so none is
+  /// cut mid-word until the reader scrolls (finding 5 of #4211).
+  static double _fullWidth(double view, List<bool> empty) {
+    const edge = grid.AppDesktop.groupGap;
+    var width = SuperTabTasksView.minColumnWidth;
+    var full = 0, slim = 0;
+    for (final (i, isEmpty) in empty.indexed) {
+      isEmpty ? slim++ : full++;
+      if (full == 0 || i + 1 < empty.length && empty[i + 1]) continue;
+      final share =
+          (view -
+              2 * edge -
+              slim * SuperTabTasksView.slimColumnWidth -
+              (full + slim - 1) * _columnGap) /
+          full;
+      if (share < SuperTabTasksView.minColumnWidth) break;
+      width = share;
+    }
+    return width;
+  }
+
+  /// The pills over the Board's bottom corners: each names, with its count,
+  /// every column with cards out of view at its edge, and pressed scrolls
+  /// the nearest of them into view.
+  Widget _offView(
+    List<_Span> spans,
+    Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> shown,
+    double view,
+  ) {
+    const edge = grid.AppDesktop.groupGap;
+    final at = _boardScroll.hasClients ? _boardScroll.offset : 0.0;
+    final left = [
+      for (final span in spans)
+        if (span.left < at - .5) span,
+    ];
+    final right = [
+      for (final span in spans)
+        if (span.right > at + view + .5) span,
+    ];
+    void scrollTo(double offset) => unawaited(
+      _boardScroll.animateTo(
+        offset.clamp(0, _boardScroll.position.maxScrollExtent),
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      ),
+    );
+
+    Widget? pill(String side, List<_Span> off, VoidCallback onPressed) {
+      final named = [
+        for (final span in off)
+          if (shown[span.column]!.isNotEmpty)
+            '${span.column.label} ${shown[span.column]!.length}',
+      ];
+      if (named.isEmpty) return null;
+      return ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: (view / 2 - edge).clamp(0, double.infinity),
+        ),
+        child: DesktopPill(
+          key: ValueKey('super-tasks-board-more-$side'),
+          label: named.join(' · '),
+          icon: side == 'left' ? AppIcons.chevronLeft : null,
+          menu: side == 'right',
+          menuIcon: AppIcons.chevronRight,
+          surfaceColor: DesktopChrome.surface,
+          semanticHint: 'Scrolls them into view',
+          onPressed: onPressed,
+        ),
+      );
+    }
+
+    final back = pill(
+      'left',
+      left,
+      () => scrollTo(left.last.right + edge - view),
+    );
+    final more = pill('right', right, () => scrollTo(right.first.left - edge));
+    // Above the scrollbar, in from the edge as the columns are.
+    const bottom = grid.AppDesktop.groupGap + grid.AppDesktop.controlGap;
+    return Stack(
+      children: [
+        if (back != null) Positioned(left: edge, bottom: bottom, child: back),
+        if (more != null) Positioned(right: edge, bottom: bottom, child: more),
+      ],
+    );
+  }
 
   /// A lane's tint, as Trello's lists (anh Dee, task #3787): a step off the
   /// page, darker in light under white cards and darker in dark under lifted
@@ -786,14 +918,44 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     ),
   );
 
-  /// Said, not left blank: a column with nothing in it reads as one still
-  /// loading (task #2948).
+  /// Said, not left blank: Members' Unassigned with nothing in it reads as one
+  /// still loading (task #2948).
   static Widget _noTasks() => Padding(
     padding: const EdgeInsets.symmetric(vertical: grid.AppDesktop.groupGap),
     child: Text(
       'No tasks',
       textAlign: TextAlign.center,
       style: DesktopChrome.metadata(),
+    ),
+  );
+
+  /// An empty column of the Board (finding 5 of #4211): a slim lane, its name
+  /// turned to read downwards over its 0, as Trello folds a list, so the
+  /// columns with cards get the width. A card arriving opens it again.
+  Widget _slimLane(SuperTabTaskColumn column) => DecoratedBox(
+    key: ValueKey('super-tasks-column-${column.name}'),
+    decoration: BoxDecoration(
+      color: _laneFill,
+      borderRadius: BorderRadius.circular(grid.AppCard.radius),
+    ),
+    child: Padding(
+      key: ValueKey('super-tasks-heading-${column.name}'),
+      padding: const EdgeInsets.symmetric(vertical: grid.AppDesktop.controlGap),
+      child: Column(
+        children: [
+          RotatedBox(
+            quarterTurns: 1,
+            child: Text(
+              column.label,
+              maxLines: 1,
+              softWrap: false,
+              style: _laneTitle,
+            ),
+          ),
+          const SizedBox(height: grid.AppDesktop.controlGap),
+          Text('0', style: DesktopChrome.metadata()),
+        ],
+      ),
     ),
   );
 
@@ -805,9 +967,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   ) => _framed(
     ValueKey('super-tasks-column-${column.name}'),
     _heading(column, entries.length),
-    entries.isEmpty
-        ? _noTasks()
-        : column == SuperTabTaskColumn.nextUp
+    column == SuperTabTaskColumn.nextUp
         ? _nextUp(entries, now)
         : LaidOutListView.builder(
             padding: _laneInset,
