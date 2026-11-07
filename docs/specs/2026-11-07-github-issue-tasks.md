@@ -44,6 +44,26 @@ A project is a **GitHub project** when all of these hold. The server checks them
 Any other project keeps its tasks in Harness exactly as today. Project details shows which condition is missing, in one
 line: for example "Tasks stay in Harness: the app can't write issues here. An owner accepts Issues under Configure."
 
+### Tasks that stay in Harness on a GitHub project
+
+Harness can't take an issue back once it's published, since deleting one needs `administration`, which the app never
+gets. So the server decides before it creates an issue, and these tasks never get one:
+
+- **Confidential tasks**, on any repository, public or private. `conversation.create` takes an optional
+  `confidential: true`, set only at creation. The PM sets it for security work (an unfixed hole, an incident's details)
+  and for any brief that quotes a person's private chat; the PM's skill text says so. Setting it on a task whose issue
+  already exists is refused with `ISSUE_ALREADY_PUBLISHED`, and the PM is told that only a repository admin can delete
+  the issue.
+- **On a public repository, a brief that names someone.** Before publishing, the server runs the title and brief through
+  `redactCredentials`, and checks them for any email address and any person, machine or account name from the Swarm's
+  roster. On a match the task stays in Harness, and the PM is told which kind of name stopped it (never the name
+  itself). Editing the brief clears the hold, and the issue is created then.
+- **Steps** (review, security review, test), as they aren't tasks of their own.
+- **Open tasks on a public repository at migration.** Their briefs were written for Harness, not for the public, so they
+  finish in Harness (Design 6). Only tasks created after the project becomes a GitHub project get issues.
+
+The card of a withheld task shows no issue number, like any Harness task.
+
 ### A) The issue holds the task
 
 On a GitHub project, each task is one GitHub issue. The issue holds:
@@ -81,7 +101,7 @@ the task's fields are Harness's own, as today. The issue is created from them, a
 
 | Harness | Issue |
 | --- | --- |
-| Task created; its owner's mode is Ask me, waiting for Accept | open, `harness: assigned` |
+| Task created; its requester's mode is Ask me, waiting for their Accept | open, `harness: assigned` |
 | Accepted (by the owner, or at once under Accept all); waiting for an agent, or an agent working | open, `harness: accepted` |
 | Agent reports `review` with its PR | open, `harness: in review` |
 | `conversation.merged`, and CI was green at the merged head | `harness: done`, then closed (`completed`) with the note below |
@@ -96,16 +116,18 @@ Harness acts on these changes made on GitHub:
 | Status label changed by hand | Tasks shows GitHub's status. The PM is told. No agent is started or stopped. |
 | Closed by a person | The agent on it is told to push and stop, and the task shows Done or Declined from `state_reason`. The PM is told. |
 | Reopened | The task returns to Next up. The PM is told. |
-| Assignee changed | The new assignee is the owner, if they have linked their GitHub account; otherwise "Owner not in Harness". Accept and Decline belong to the new owner. Work in progress goes on; the PM is told. |
+| Assignee changed | Tasks shows the new assignee as the owner if they have linked their GitHub account, and "Owner not in Harness" otherwise. Accept and Decline stay with the task's requester in Harness, so write access on GitHub never approves a task. Work in progress goes on; the PM is told. |
 | `agent:` label changed by hand | Shown on GitHub only. Harness keeps its own record of the agent and changes the label only when the agent changes. |
 | Deleted or transferred | The link is removed. The task stays in Harness with its last copy, and the PM is told. |
 
 **The close note.** When a PR merges with CI green, Harness posts one comment and closes the issue. The comment says what
-changed (the PR's title and link) and how it was tested (the evidence lines from the task's `done` status). It is capped
-at 2,000 characters and passed through `redactCredentials` (`superTabs/credentials.ts`). It is the only comment Harness
-writes on an issue. PR bodies say `Refs #N`, never `Closes #N`, so GitHub doesn't close an issue on a red merge.
+changed (the PR's title and link) and how it was tested (the names of the checks green at the merged head, and of the
+review steps that said Yes). It carries no evidence text, so no machine name, path or agent output reaches GitHub. It is
+capped at 2,000 characters. It is the only comment Harness writes on an issue. PR bodies say `Refs #N`, never `Closes #N`, so GitHub doesn't close an issue on a red merge.
 
-**The owner.** A person links their GitHub account once, through the app's existing sign-in. Harness stores their GitHub
+**The owner.** The issue's assignee starts as the task's requester. Ownership on GitHub is shown, not obeyed: Accept,
+Decline and every other authority stay with the Harness requester and the existing server checks. A person links their
+GitHub account once, through the app's existing sign-in. Harness stores their GitHub
 user id and login only, and revokes the sign-in token at once, as approval does today. An owner who hasn't linked one
 leaves the issue unassigned. Harness writes no name or email of theirs to GitHub. If GitHub drops an assignee who can't
 access the repository, Harness reads that from its answer and tells the PM.
@@ -142,7 +164,7 @@ Reviewed revision: ______  Reviewers: ______ (review), ______ and ______ (securi
 | Pending GitHub write on the task (`issue.pending`: wanted fields and the copy each was based on) | A Harness edit or status change | Overwritten by the next wanted state, so it never queues more than one per field | Cleared when applied or refused | With the group | One per task, about 5 fields |
 | Person's GitHub link (`githubUserId`, `githubLogin` on the membership) | Linking | Relinking | Removed when the membership is | With the membership; rejoining starts unlinked | One per membership |
 | Webhook delivery receipt | Each applied delivery (an existing `SuperTabOperation` keyed by the `X-GitHub-Delivery` id) | Never | — | Existing operation-receipt expiry | One per delivery for a linked issue. Deliveries for issues with no task store nothing. |
-| `agent: <name>` label in the repository | First time that agent works a task there | Never | — | Harness deletes labels it created when the agent is removed from the Swarm and no open issue carries it | One per agent that worked there |
+| `agent: <name>` label in the repository | First time that agent works a task there | Never | — | Never by Harness: a label in the team's repository is theirs to remove | One per agent that worked there (tens per repository) |
 | Harness status labels (4) | Created once per repository on first use | Never | — | Left in place | 4 per repository |
 | The close note | One per merged task | Never | — | The team's, on GitHub | One per task |
 
@@ -163,8 +185,9 @@ issue.
   Title and body change through `PATCH` with only that field.
 - Invariant: **one issue per task.** Creation runs after the command commits, never inside the transaction. The task's
   wanted state marks `creating`, and the issue is created with the marker line, the task's id in it. A retry after a
-  crash lists the bot's issues since the mark (`GET /issues?creator=<bot>&since=`, one page) and adopts its own issue
-  rather than creating a second.
+  crash lists the bot's issues since the mark (`GET /issues?creator=<bot>&since=`, page by page, at most 10 pages of
+  100) and adopts its own issue rather than creating a second. If 10 pages don't reach the mark time, it stops, holds the
+  task's creation and tells the PM. It never creates a second issue.
 - The sync pass runs in the singleton worker. It wakes when a commit leaves a pending write (push, not a timer) and
   handles one task at a time per installation, so a task's writes stay in order.
 
@@ -226,7 +249,10 @@ of the code:
 
 - An older Desktop against the new backend shows GitHub tasks as ordinary tasks, without the number.
 - A newer Desktop against an older backend sees no `issue` field and shows no number.
-- Command schemas are `.strict()`, but no command gains an input field.
+- Command schemas are `.strict()`. The one new input, `confidential` on `conversation.create`, ships with the backend
+  before the PM's skill text names it. Agents send command JSON as written, so no CLI release is needed for it. An agent
+  that leaves it out on a public repository is still caught by the server's name check. The skill text tells the PM to
+  set it for security work; a person or older PM that leaves it off is the remaining risk, and the reviewers weigh it.
 
 ### 6. Migration and rollback
 
@@ -240,8 +266,11 @@ Order:
 
 **Migration:**
 
-- A worker job takes each open task (not done, merged, archived or a step) and creates its issue at the task's current
-  status, within the write budget. It is a dry run first, listing per project what it would create.
+- On a **private** repository, a worker job takes each open task (not done, merged, archived, confidential or a step)
+  and creates its issue at the task's current status, within the write budget. It is a dry run first. The dry run lists
+  per project what it would create, so the PM can mark tasks confidential before the run.
+- On a **public** repository, nothing is migrated. Open tasks finish in Harness, and only new tasks get issues, under the
+  checks in "Tasks that stay in Harness".
 - The job is idempotent by the marker line and the bot's issue list.
 - Finished tasks get no issue; their history stays in Harness.
 - It is checked against the read-only anomaly queries on production (task counts per project and the largest brief per
@@ -278,9 +307,10 @@ Order:
   - Measures: counts and durations only.
   - Webhook payloads of unlinked issues: discarded unread, never stored.
   - A rolled-back release shows the copy only to the same predicate.
-- **What leaves Harness for GitHub:** the task's title and details (which the person wrote for that repository), status
-  and agent labels, the assignee (only for a person who linked their account), and the close note. No email, Harness
-  name, machine name or chat text.
+- **What leaves Harness for GitHub:** the title and details of tasks that aren't withheld ("Tasks that stay in Harness"),
+  status and agent labels, the assignee (only for a person who linked their account), and the close note (PR link and
+  check names). Confidential tasks and steps never leave. On a public repository, a brief naming a person, machine or
+  account from the roster, or holding an email, is held back by the server. No chat text leaves.
 - **Whose edits on GitHub direct agents:** GitHub lets only an issue's author (the app's bot) and people with write access
   edit its body. So the people who can change a task's brief on GitHub are the people who can already push to the
   repository. Comments are never read, so outside people on a public repository can't reach an agent through an issue.
@@ -319,6 +349,8 @@ Order:
 | Merged with CI red | Merge path | PM: the issue stays `in review` | A green fix-forward merge closes it |
 | Issue deleted or transferred | Receiver | PM, and the task loses its number | The task goes on in Harness |
 | Rate budget full | Sync pass | "Syncing to GitHub"; the wait histogram rises | Writes drain in order as the budget allows |
+| Brief names a person, machine or account, or holds an email (public repository) | Server, before creating the issue | PM: which kind of name held it back (never the name) | Edit the brief; the issue is created then. Until then the task works in Harness |
+| `confidential` set after the issue exists | The command | `ISSUE_ALREADY_PUBLISHED`: only a repository admin can delete the issue | The PM asks the repository's admin |
 
 ### 10. Platforms
 
@@ -356,6 +388,8 @@ spec.
    - The GitHub-project predicate, with the private-repository rule and the `repository` events.
    - `issueKey` index.
    - Creating the issue for a new task (marker, adopt on retry).
+   - What stays in Harness: `confidential`, steps, and the public-repository name check. The PM's skill text names
+     `confidential`.
    - Applying `issues` webhooks to the copy, with the newer-`updated_at` rule.
    - "The issue changed on GitHub" messages.
    - Two security reviews (server token permissions; private repositories). This must ship before any issue content
@@ -367,7 +401,7 @@ spec.
    - GitHub-side close and reopen acting on the task.
    - Agent tokens drop `issues` on GitHub projects.
    - Security review.
-6. **Close on a green merge** (S, backend). The close note (redacted, capped), `Refs #N` in the PR line, and red merges
+6. **Close on a green merge** (S, backend). The close note (PR link and check names only, capped), `Refs #N` in the PR line, and red merges
    left `in review`.
 7. **Issue number on the task card** (S, Desktop and web). Takes the mockup from its own task. Adds `issue` to
    `personalTasks` and group views. Design system doc and gallery updated in the same PR.
