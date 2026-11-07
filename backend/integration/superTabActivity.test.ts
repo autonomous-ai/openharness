@@ -154,11 +154,12 @@ describe('Activity: replies to a person\'s messages', () => {
     await run(s.tabId, { type: 'member.name', name: 'Peer Person' }, peer)
     expect((await items(s.tabId)).find(i => i.messageId === reply).actor.name).toBe('Peer Person')
     expect(typeof list[0].messageSequence).toBe('number')
-    // The person who replied hears of the replies after theirs, never of their own; nothing for a reply in one's own thread.
-    expect((await items(s.tabId, peer)).map(i => i.messageId)).toEqual([agentReply])
+    // The person who replied hears of the thread's replies after theirs, never of their own; nothing for a reply in one's own
+    // thread. The agent's answer shows in the chat, quoting the root (task #4555): it tells the root's author alone.
+    expect((await items(s.tabId, peer)).map(i => i.messageId)).toEqual([])
     const ownerAdds = await send(s.tabId, s.web, 'Owner adds', owner, root)
     expect((await items(s.tabId)).length).toBe(2)
-    expect((await items(s.tabId, peer)).map(i => i.messageId)).toEqual([ownerAdds, agentReply])
+    expect((await items(s.tabId, peer)).map(i => i.messageId)).toEqual([ownerAdds])
   })
 
   it('tells the author of the message replied to as well as the thread\'s, once each', async () => {
@@ -738,8 +739,9 @@ describe('Activity: read state and its digest', () => {
     const s = await scene()
     const before = (await derived(s.tabId, owner)).activityDigest
     const root = await send(s.tabId, s.web, 'Owner root')
-    const first = await send(s.tabId, s.web, 'Worker answers', owner, root, s.worker)
-    const second = await send(s.tabId, s.web, 'Worker answers again', owner, root, s.worker)
+    // A person's replies in the thread, which an older app still sends: an agent's answer shows in the chat (task #4555).
+    const first = await send(s.tabId, s.web, 'Peer answers', peer, root)
+    const second = await send(s.tabId, s.web, 'Peer answers again', peer, root)
     expect((await items(s.tabId)).map(i => i.read)).toEqual([false, false])
     expect((await derived(s.tabId, owner)).activityDigest).not.toBe(before)
     // A mark short of the second reply clears only the first.
@@ -759,8 +761,9 @@ describe('Activity: read state and its digest', () => {
     const other = await send(s.tabId, s.web, 'Owner other root')
     const peerRoot = await send(s.tabId, s.web, 'Peer root', peer)
     await send(s.tabId, s.web, 'Answer to peer', owner, peerRoot)
-    await send(s.tabId, s.web, 'Answer', owner, root, s.worker)
-    await send(s.tabId, s.web, 'Answer elsewhere', owner, other, s.worker)
+    // A person's replies in threads, which an older app still sends (task #4555).
+    await send(s.tabId, s.web, 'Answer', outsider, root)
+    await send(s.tabId, s.web, 'Answer elsewhere', outsider, other)
     await react(s.tabId, s.web, root, true, peer)
     const newest = await sequenceOf((await db.superTabMessage.findFirstOrThrow({ where: { tabId: s.tabId }, orderBy: { sequence: 'desc' } })).id)
     await markThread(s.tabId, s.web, root, newest)

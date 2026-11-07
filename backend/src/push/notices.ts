@@ -10,7 +10,7 @@ import type { PhoneNotice } from './sender.js'
 export type ReplyReason = 'starter' | 'quoted' | 'tagged' | 'replier'
 /** A reply's Activity row as writeReplyActivity wrote it: who it tells, whose reply, why, and when. */
 export interface ReplyRow {
-  id: string; personId: string; conversationId: string; messageId: string; threadId: string; actorKind: string; actorId: string
+  id: string; personId: string; conversationId: string; messageId: string; threadId: string | null; actorKind: string; actorId: string
   why: ReplyReason; createdAt: Date
 }
 /** A tag's row as writeMentions wrote it; `holdUntil` while it waits for a quiet chat's grace. */
@@ -67,10 +67,11 @@ export function phoneNotices(tabId: string, state: SuperTabState, written: { rep
   // agent's reply or tag stays in Activity and the badge. By the event's kind (who wrote it), never by its words.
   const replies = written.replies.filter(row => row.actorKind === 'person' && PUSHED.has(row.why) && !byId.get(row.messageId)?.source).map((row): PhoneNotice => ({
     personId: row.personId, key: `reply:${tabId}:${row.id}`,
-    title: `${actorName(state, row.actorKind, row.actorId, byId.get(row.messageId)?.author)} replied in a thread`,
+    // An answer in the chat (task #4555) has no thread: its own notification, by the message.
+    title: `${actorName(state, row.actorKind, row.actorId, byId.get(row.messageId)?.author)} ${row.threadId ? 'replied in a thread' : 'replied to you'}`,
     subtitle: project(row.conversationId), body: BODY, link: linkOf(tabId, row.conversationId, row.messageId, row.threadId),
-    slot: threadSlot(tabId, row.conversationId, row.threadId),
-    thread: { tabId, conversationId: row.conversationId, threadId: row.threadId, rowId: row.id, at: row.createdAt.getTime() },
+    slot: threadSlot(tabId, row.conversationId, row.threadId ?? row.messageId),
+    ...row.threadId ? { thread: { tabId, conversationId: row.conversationId, threadId: row.threadId, rowId: row.id, at: row.createdAt.getTime() } } : {},
   }))
   const tags = written.tags.filter(row => !row.holdUntil).flatMap((row): PhoneNotice[] => {
     const message = byId.get(row.messageId)

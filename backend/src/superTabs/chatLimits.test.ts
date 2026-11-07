@@ -49,12 +49,12 @@ describe('project chat content limits', () => {
     expect(() => send('Login now works offline.')).not.toThrow()
   })
 
-  it('preserves people, task posts, thread followups and substantive short answers', () => {
+  it('preserves people, task posts and substantive short answers; an agent\'s status reply shows in the chat, so it is refused', () => {
     const { f, send, ask } = setup()
     const question = ask()
     expect(() => send('Status: tests running.', { person: true })).not.toThrow()
     expect(() => send('Ready for review: PR #12.', { group: f.task, by: f.dev })).not.toThrow()
-    expect(() => send('CI: 3 checks pending.', { extra: { replyTo: question.id }, reply: question })).not.toThrow()
+    expect(() => send('CI: 3 checks pending.', { extra: { replyTo: question.id }, reply: question })).toThrow(expect.objectContaining({ code: 'CHAT_STATUS' }))
     expect(() => send('Is CI green?')).not.toThrow()
     expect(() => send('The release is out; login works offline.')).not.toThrow()
     expect(() => send('Status: tests running.', { extra: { agentOnly: true, recipientIds: [f.lead] } })).not.toThrow()
@@ -98,10 +98,10 @@ describe('two main posts per linked ask', () => {
     expect(() => mainReply('The old fix also handles expired tokens.')).toThrow(expect.objectContaining({ code: 'CHAT_MAIN_LIMIT' }))
   })
 
-  it('allows thread followups but counts replies mirrored into main', () => {
+  it('counts an agent\'s reply against its ask, as it shows in the chat (task #4555)', () => {
     const { send, question, mainReply } = exchange()
     mainReply('Login now works offline.')
-    expect(() => send('Expired tokens work too.', { reply: question, extra: { replyTo: question.id } })).not.toThrow()
+    expect(() => send('Expired tokens work too.', { reply: question, extra: { replyTo: question.id } })).toThrow(expect.objectContaining({ code: 'CHAT_MAIN_LIMIT' }))
     expect(() => mainReply('The mobile build also has the fix.')).toThrow(expect.objectContaining({ code: 'CHAT_MAIN_LIMIT' }))
   })
 
@@ -142,14 +142,15 @@ describe('two main posts per linked ask', () => {
 })
 
 describe('one answer across main and thread', () => {
-  it.each(['main', 'thread'] as const)('refuses a plain second answer after the first in %s, even by another agent', place => {
+  // The PM's answer settles the ask; another agent's no longer stops the PM's, which it still owes (task #4555, #3421).
+  it.each(['main', 'thread'] as const)('refuses a plain second answer after the PM\'s in %s, even by another agent', place => {
     const { f, send, ask } = setup()
     const question = ask()
-    const first = send('Login works offline.', { by: f.dev,
+    const first = send('Login works offline.', {
       extra: place === 'main' ? { answers: question.id } : { answers: question.id, answer: true }, reply: place === 'main' ? question : { ...question, thread: 'topic-root' } })
     const messageId = first.result.messageId
     for (const extra of [{ answers: question.id }, { replyTo: question.id, alsoSend: true }]) {
-      expect(() => send('Yes, it works offline.', { reply: question, extra }))
+      expect(() => send('Yes, it works offline.', { by: f.dev, reply: question, extra }))
         .toThrow(expect.objectContaining({ code: 'ALREADY_ANSWERED', message: expect.stringContaining(String(messageId)) }))
     }
   })
@@ -162,8 +163,8 @@ describe('one answer across main and thread', () => {
     expect(() => send('The phone build includes it too.', { reply, extra: { replyTo: reply.id } })).not.toThrow()
     const next = send('Does it handle expired tokens?', { person: true, reply, extra: { replyTo: reply.id } })
     const followup = { ...question, id: String(next.result.messageId) }
-    expect(() => send('Expired tokens are refreshed.', { by: f.dev, reply: followup, extra: { answers: followup.id, answer: true } })).not.toThrow()
-    expect(() => send('They are refreshed automatically.', { reply: followup, extra: { answers: followup.id, answer: true } }))
+    expect(() => send('Expired tokens are refreshed.', { reply: followup, extra: { answers: followup.id, answer: true } })).not.toThrow()
+    expect(() => send('They are refreshed automatically.', { by: f.dev, reply: followup, extra: { answers: followup.id, answer: true } }))
       .toThrow(expect.objectContaining({ code: 'ALREADY_ANSWERED' }))
   })
 
@@ -187,13 +188,13 @@ describe('one answer across main and thread', () => {
 })
 
 
-describe('thread discussion after an answer', () => {
-  it('lets another agent post details in the ask thread after a main answer', () => {
+describe('details after an answer', () => {
+  it('take no second answer to the ask, now that a reply shows in the chat (task #4555); a plain line still goes', () => {
     const { f, send, ask } = setup()
     const question = ask()
     send('Login now works offline.', { reply: question, extra: { answers: question.id } })
-    expect(() => send('The phone flow also passes.', { by: f.dev, reply: question, extra: { replyTo: question.id } })).not.toThrow()
-    expect(() => send('CI: all checks passed.', { by: f.dev, reply: question, extra: { replyTo: question.id } })).not.toThrow()
+    expect(() => send('The phone flow also passes.', { by: f.dev, reply: question, extra: { replyTo: question.id } })).toThrow(expect.objectContaining({ code: 'ALREADY_ANSWERED' }))
+    expect(() => send('The phone flow also passes.', { by: f.dev })).not.toThrow()
   })
 })
 
@@ -208,5 +209,32 @@ describe('answer recording at the ledger boundary', () => {
     expect(() => send('Yes, the phone build can use it.', { reply: response, extra: { answers: response.id } })).not.toThrow()
     expect(() => send('Another main result.', { reply: question, extra: { replyTo: question.id, alsoSend: true } }))
       .toThrow(expect.objectContaining({ code: 'CHAT_ASK_CLOSED' }))
+  })
+})
+
+// Task #4555: no chat has threads, so no refusal sends an agent to one.
+describe('what a refused agent post says', () => {
+  it('points at the task, an edit or a newer message, never a thread', () => {
+    const { f, send, ask } = setup()
+    const said = (body: () => unknown): string => {
+      try { body() } catch (error) { return (error as Error).message }
+      throw new Error('not refused')
+    }
+    const messages = [said(() => send('Status: tests running.'))]
+    const url = 'https://github.com/acme/repo/pull/12'
+    f.group('lead').cards = { pullRequests: [{ url, messageId: 'card' }] }
+    messages.push(said(() => send(url)))
+    const question = ask()
+    const answer = send('I can fix login.', { reply: question, extra: { answers: question.id } })
+    const response = { ...question, id: String(answer.result.messageId), author: answer.messages[0]!.author }
+    send('Login now works offline.', { by: f.dev, reply: response, extra: { answers: response.id } })
+    messages.push(said(() => send('The fix also handles expired tokens.', { reply: response, extra: { answers: response.id } })))
+    const old = ask()
+    for (let i = 0; i < 51; i++) { f.tick(1); ask() }
+    messages.push(said(() => send('Yes, offline works.', { reply: old, extra: { answers: old.id, answer: true } })))
+    const fresh = ask()
+    messages.push(said(() => send('Done.', { reply: fresh, extra: { answers: fresh.id, replyTo: fresh.id } })))
+    expect(messages).toHaveLength(5)
+    for (const message of messages) expect(message).not.toMatch(/thread/i)
   })
 })

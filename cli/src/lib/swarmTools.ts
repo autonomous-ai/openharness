@@ -26,8 +26,8 @@ Every command starts \`harness super-tab --tab TAB\` (your tab id is in your lau
 - \`type AGENT [TEXT] [--key K]...\`: type text, then keys (Enter, Esc, Tab, Up, Down, Left, Right, Ctrl-C, 0-9), into another agent's terminal in your project. Answer prompts within its task; ask the owner before approving anything risky. Codex's "Update available" screen is dismissed with Esc alone, never a number and Enter.
 
 ## Post
-\`post GROUP TEXT OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...\`
-- Answer a message once, where it was asked: \`answer GROUP MESSAGE_ID TEXT OPERATION_ID [--to AGENT]...\` goes in its thread if in one, else below it; a second is refused, naming where the first is. \`post --answers\` goes below a message, \`--reply-to\` in its thread. Open a thread yourself only for a back-and-forth on one topic, or to answer something far up the chat. Post with neither only to start a new topic.
+\`post GROUP TEXT OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID] [--attach PATH]... [--mention PERSON]...\`
+- Answer a message once, where it was asked: \`answer GROUP MESSAGE_ID TEXT OPERATION_ID [--to AGENT]...\` shows right below it in the chat, quoting it; a second is refused, naming where the first is. \`post --answers\` shows the same way. Never open a thread. Post with no --answers only to start a new topic.
 - \`--attach PATH\` sends a file (a screenshot, a log; up to 10 files of 256 MB each); TEXT may then be empty.
 - \`--mention PERSON\` tags a person by the username, display name or id shown in status (up to 5), when you need them to act or decide; an @username in TEXT tags too, outside code and links. Nobody is tagged who cannot read the conversation.
 - Never type a person's email: name them by username. A machine's privacy check stops a session whose command holds its owner's email until a person approves it.
@@ -36,7 +36,7 @@ Every command starts \`harness super-tab --tab TAB\` (your tab id is in your lau
 ### Who a post reaches
 - \`--to AGENT\` names the agents it reaches: any agent of this project, by id from status, up to 16. Named agents are told and join the conversation if they are not in it. A post reaches exactly the agents you name, no others.
 - \`@Name\` in TEXT names an agent of this conversation the same way, when only one agent there goes by that name and no person does.
-- A reply (\`--reply-to\`) also reaches the agent who wrote the message it answers.
+- An answer (\`--answers\`) also reaches the agent who wrote the message it answers.
 - A post that names no one reaches no agent, except in a task or step, where it reaches the agent assigned there unless that is you. It stays readable in its conversation, and the people it tags are still told; its result says when it reached no agent.
 - A post naming an agent that may not join its task is still delivered, without it, and its result says notReached with that agent named. Nothing is wrong with your post; the PM hands that work on.
 - The coordinator gets a post only when it is named: your status (done, needs_human, blocked) is how it hears your work, so never post it a result, a verdict, a Ready or an acknowledgement.
@@ -122,7 +122,7 @@ Swarm and machine settings (each refused unless you may change that setting; a p
 - After a restart, read the recovery notice and the last recorded checkpoint, then check the agent's actual session and saved work. Never replay old input or commands: they may already have taken effect.
 
 ## Threads
-Many people talk at once. Answer a message in the main chat right below it with \`--answers\`, and one in a thread inside that thread with \`--reply-to\`; summarize a long thread once and record an important decision once.
+Many people talk at once. Answer each message with \`--answers\`, which shows it quoted above your reply; summarize a long discussion once and record an important decision once.
 
 ## Accounts and machines
 - The Swarm's people are its members (\`status\`); someone may go by another name or email in the chat. Match a name to a member before asking for an invitation.

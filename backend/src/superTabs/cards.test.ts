@@ -52,15 +52,15 @@ describe('live cards', () => {
     expect(f.group(id).cards?.pullRequests).toEqual([{ url: PR, messageId: first.id }, { url: OTHER, messageId: both.id }])
   })
 
-  it('never makes a thread reply or an agent-only notice a card', () => {
+  it('makes an agent\'s reply a card, as it shows in the chat (task #4555), and never an agent-only notice', () => {
     const f = fixture()
     const id = f.create().result.conversationId as string
     const builder = f.add('Kai', id)
     const root = f.post(id, 'Starting.', f.as(builder))
-    f.post(id, `Opened ${PR}`, f.as(builder), { replyTo: root.id },
+    const reply = f.post(id, `Opened ${PR}`, f.as(builder), { replyTo: root.id },
       { reply: { id: root.id, conversationId: id, author: root.author, createdAt: 1000, thread: root.id } })
     f.post(id, `Notice ${OTHER}`, f.as(builder), { agentOnly: true, recipientIds: [builder] })
-    expect(f.group(id).cards?.pullRequests).toBeUndefined()
+    expect(f.group(id).cards?.pullRequests).toEqual([{ url: PR, messageId: reply.id }])
   })
 
   it('never makes a Lead-only notice a card, such as a resumed task notice, and reads its recipients', () => {

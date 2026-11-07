@@ -34,11 +34,11 @@ describe('SWARM_TOOLS_SKILL', () => {
     expect(section).toContain('Your status goes through work.status and your results to whoever asked for the work; name the PM with --to only when you need it to act.')
   })
   // Task #2963 (Ken, 2026-11-04): 402 of 437 agent posts in a day reached the PM as their only recipient; 1 named it.
-  it('says a post reaches only who it names, a reply its author, an unnamed one in a task its assignee, and the coordinator by status', () => {
+  it('says a post reaches only who it names, an answer its author, an unnamed one in a task its assignee, and the coordinator by status', () => {
     const at = SWARM_TOOLS_SKILL.indexOf('### Who a post reaches')
     const section = SWARM_TOOLS_SKILL.slice(at, SWARM_TOOLS_SKILL.indexOf('## Reactions'))
     expect(section).toContain('`@Name` in TEXT names an agent of this conversation the same way')
-    expect(section).toContain('A reply (`--reply-to`) also reaches the agent who wrote the message it answers.')
+    expect(section).toContain('An answer (`--answers`) also reaches the agent who wrote the message it answers.')
     expect(section).toContain('A post that names no one reaches no agent, except in a task or step, where it reaches the agent assigned there unless that is you.')
     expect(section).toContain('The coordinator gets a post only when it is named: your status (done, needs_human, blocked) is how it hears your work')
     expect(section).not.toContain('reaches the project\'s coordinator')

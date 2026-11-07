@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { SEED_SETTLE_MS } from '../src/superTabs/proposals.js'
+import { CLOSED_SEQUENCE, SEED_SETTLE_MS } from '../src/superTabs/proposals.js'
 import { AGENT_NAMES } from '../src/superTabs/agentNames.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -247,7 +247,8 @@ describe('a Buddy through the store', () => {
     expect(await listed()).toEqual([sent])
     await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Taking this as a task', replyTo: sent, recipientIds: [] }, owner, f.lead)
     expect(await listed()).toEqual([])
-    expect(await db.superTabOpenProposal.count({ where: { id: sent } })).toBe(0)
+    // Its answer shows in the chat, quoting it (task #4555): the proposal stays closed in the open set, out of every read.
+    expect(await db.superTabOpenProposal.findUnique({ where: { id: sent }, select: { sequence: true } })).toEqual({ sequence: CLOSED_SEQUENCE })
   })
 
   it('reads its project\'s work as its person: which task owns it, its pull request, its state and what blocks it', async () => {
@@ -674,7 +675,6 @@ describe('a Buddy matching agents to people (delta review 1 of #2258)', () => {
     const send = async (text: string, user: typeof owner, asAgentId?: string, replyTo: string | null = null) => String((await f.execute({ type: 'message.send',
       conversationId: 'lead', text, replyTo, recipientIds: [] }, user, asAgentId)).result.messageId)
     const pmRow = await send('The plan is up.', owner, f.lead), personRow = await send('Thanks.', peer)
-    await send('Glad it helps.', owner, f.lead, personRow)
     // The PM's grant as an older share policy wrote it, naming its contributor's email (lib/machineSharePolicy.ts).
     const stored = await db.swarmAgent.findFirstOrThrow({ where: { tabId: f.tab, key: f.lead } })
     await db.swarmAgent.update({ where: { id: stored.id }, data: { data: { ...stored.data as object, hostGrant: `share-1:email:${owner.email}` } } })
@@ -693,6 +693,11 @@ describe('a Buddy matching agents to people (delta review 1 of #2258)', () => {
     expect((await new SwarmReads(f.store).firstLoad(owner, f.tab)).agents.find(a => a.key === f.lead)!.data.hostGrant).toBe(`share-1:email:${owner.email}`)
     expect(roster.find(a => a.id === agentId)!.membershipGeneration).toBe(peerGeneration)
 
+    // The PM's reply in the person's thread, as one written before replies showed in the chat (task #4555): an agent's answer
+    // joins no thread now, and an older thread keeps its agents' replies, written as the PM's own row is.
+    const pmAuthor = (await db.superTabMessage.findUniqueOrThrow({ where: { id: pmRow } })).author as Record<string, unknown>
+    await db.superTabMessage.create({ data: { id: randomUUID().replaceAll('-', '').slice(0, 24), tabId: f.tab, conversationId: 'lead', sequence: 100_000,
+      author: pmAuthor as never, text: 'Glad it helps.', replyTo: personRow, thread: personRow, recipientIds: [], mentions: [] } })
     // Rows: an agent's has no membership, in the page and read alone; a person's keeps theirs, which its host compares.
     const authors = (rows: Array<{ id: string; author: { membershipGeneration: string } }>) =>
       [pmRow, personRow].map(id => rows.find(m => m.id === id)?.author.membershipGeneration)
@@ -956,7 +961,8 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
     await f.execute({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
     await expect(f.store.delivery(peer, f.tab, agentId, waiting!.id, { type: 'claim', claimId: randomUUID() })).rejects.toThrow('no longer authorized')
     expect(await heard()).toEqual([])
-    const later = String((await pm('One more question.', { replyTo: proposal })).result.messageId)
+    // The PM adds to its own answer: each ask is answered once in the chat (task #4555).
+    const later = String((await pm('One more question.', { replyTo: answer })).result.messageId)
     expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: later, agentId } })).toBe(0)
   })
 

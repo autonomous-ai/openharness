@@ -29,6 +29,16 @@ describe('phoneNotices: what a write tells phones (task #2905)', () => {
       slot: `thread:tab:${web}:root1`, thread: { tabId: 'tab', conversationId: web, threadId: 'root1', rowId: 'row1', at: AT.getTime() } }])
   })
 
+  // Task #4555: no chat has threads, so a reply shows in the chat quoting the message it answers.
+  it('words an answer in the chat as a reply to the person, with a notification of its own and no thread', () => {
+    const { state, web } = scene()
+    const answer = draft({ id: 'a1', conversationId: web, author: person(peer), answers: 'm0' })
+    const notices = phoneNotices('tab', state, { replies: [{ id: 'row1', personId: owner.userId, conversationId: web, messageId: 'a1', threadId: null,
+      actorKind: 'person', actorId: peer.userId, why: 'quoted', createdAt: AT }], tags: [] }, [answer])
+    expect(notices).toEqual([{ personId: owner.userId, key: 'reply:tab:row1', title: `${shownNameOf(state, peer.userId)} replied to you`,
+      subtitle: 'Web launch', body: 'Open Harness to read it.', link: `swarm:tab/${web}/message/a1`, slot: `thread:tab:${web}:a1` }])
+  })
+
   it('words a tag as the phone does, and links the message, in its thread only when it is only there', () => {
     const { state, web } = scene()
     const inChat = draft({ id: 'm1', conversationId: web, author: person(peer), mentions: [owner.userId] })

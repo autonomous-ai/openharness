@@ -1,7 +1,7 @@
 /**
- * The PM answers each ask once, in its place (task #3403, anh Dee's Swarm redesign, 11-05): `answer` posts in the ask's thread
- * when it is in one, or right below it in the main chat, settles what the PM owes for it, and a second answer is refused saying
- * where the first one is.
+ * The PM answers each ask once, in its place (task #3403, anh Dee's Swarm redesign, 11-05): `answer` posts right below the ask,
+ * quoting it, settles what the PM owes for it, and a second answer is refused saying where the first one is. No agent's post
+ * goes in a thread (task #4555, anh Dee 11-07: every chat is one flat conversation).
  */
 import { describe, expect, it } from 'vitest'
 import type { Command, CommandContext } from './commands.js'
@@ -45,15 +45,16 @@ describe('the PM\'s answer', () => {
     expect(f.group('lead').answered?.map(a => ({ id: a.id, answerId: a.answerId, thread: a.thread }))).toEqual([{ id: question.id, answerId: sent.id, thread: null }])
   })
 
-  it('to an ask inside a thread goes in that thread, not the main chat', () => {
+  it('to an ask inside an old thread shows right below it in the chat, quoting it', () => {
     const { f, ask, answer, owed } = setup()
     const root = ask('Why is Working 0?')
     const inThread = ask('Still nothing after an hour.', { reply: root.id, thread: root.id })
     const { sent } = answer(f.lead, inThread, 'Two agents start now.')
-    expect(sent.replyTo).toBe(inThread.id)
-    expect(sent.thread).toBe(root.id)
+    expect(sent.replyTo).toBeNull()
+    expect(sent.thread ?? null).toBeNull()
+    expect(sent.answers).toBe(inThread.id)
     expect(owed()).toEqual([])
-    expect(f.group('lead').answered?.find(a => a.id === inThread.id)?.thread).toBe(root.id)
+    expect(f.group('lead').answered?.find(a => a.id === inThread.id)?.thread).toBeNull()
   })
 
   it('is refused a second time, saying where the first answer is', () => {
@@ -67,12 +68,11 @@ describe('the PM\'s answer', () => {
     expect(again?.message).toContain(sent.id)
   })
 
-  it('names the thread when the first answer is there', () => {
+  it('names the thread when an answer from before #4555 is there', () => {
     const { f, ask, answer, refusal } = setup()
-    const root = ask('A topic.')
-    const inThread = ask('A follow-up.', { reply: root.id, thread: root.id })
-    answer(f.lead, inThread, 'Answered in the thread.')
-    expect(refusal(() => answer(f.lead, inThread, 'Again.'))?.message).toContain('in its thread')
+    const question = ask('A follow-up.')
+    f.group('lead').answered = [{ id: question.id, answerId: 'old-answer', thread: 'old-root', at: 0 }]
+    expect(refusal(() => answer(f.lead, question, 'Again.'))?.message).toContain('in its thread')
   })
 
   it('is refused after the PM already answered with a plain post right below the ask', () => {
@@ -98,13 +98,18 @@ describe('the PM\'s answer', () => {
     expect(refusal(() => answer(f.lead, question, 'Again.'))?.code).toBe(ALREADY_ANSWERED)
   })
 
-  it('by an Engineer leaves PM owed settlement alone but blocks a second answer', () => {
+  // Every agent's reply shows in the chat now (task #4555), so another agent's answer no longer takes the PM's, which it still
+  // owes (#3421): the PM answers once, and then nobody else does.
+  it('by an Engineer leaves the ask owed by the PM, who still answers it once; then nobody else does', () => {
     const { f, ask, answer, owed, refusal } = setup()
     const question = ask('Is the fix in?')
     // The Engineer has work in the project, so it posts in its chat without joining it.
     answer(f.dev, question, 'I pushed it.')
     expect(owed()).toEqual([question.id])
-    expect(refusal(() => answer(f.lead, question, 'Merged at 21:00.'))?.code).toBe(ALREADY_ANSWERED)
+    answer(f.lead, question, 'Merged at 21:00.')
+    expect(owed()).toEqual([])
+    // A third agent post on one ask is past its two in the chat, before it is a second answer.
+    for (const by of [f.lead, f.dev]) expect(refusal(() => answer(by, question, 'In the next build.'))?.code).toBe('CHAT_MAIN_LIMIT')
   })
 
   it('needs the message it answers', () => {
@@ -121,50 +126,44 @@ describe('the PM\'s answer', () => {
   })
 })
 
-// Task #3747 (anh Dee, 11-06: "i don't know which one you reply to which... why don't you answer in those replies as threads?"):
-// answers right below their asks stacked in the main chat and lost their questions. A project can answer every person's
-// message in its thread instead.
-describe('in a project that answers people in threads', () => {
-  function threaded() {
-    const s = setup()
-    const projectId = s.f.group('lead').projectId ?? 'lead'
-    s.f.run({ type: 'project.answers', projectId, inThread: true } as Command, s.f.as(s.f.lead))
-    return { ...s, projectId }
-  }
+// Task #4555 (anh Dee, 11-07 18:56): every chat is one flat conversation, and each reply shows which message it answers.
+// Task #3747's setting, which put every answer to a person in its thread, is gone.
+describe('no agent\'s post goes in a thread', () => {
+  it('an agent\'s reply to a message shows in the chat, quoting it, as an older host\'s --reply-to too', () => {
+    const { f, ask } = setup()
+    const root = ask('Why is Working 0?')
+    const inThread = ask('Still nothing after an hour.', { reply: root.id, thread: root.id })
+    const person: Author = { kind: 'person', id: 'owner', name: owner.email, membershipGeneration: f.state.people[0]!.generation } as Author
+    for (const [question, thread] of [[root.id, root.id], [inThread.id, root.id]] as const) {
+      const text = `On ${question}.`
+      const effects = f.run({ type: 'message.send', conversationId: 'lead', text, replyTo: question, recipientIds: [] }, f.as(f.dev),
+        { reply: { id: question, conversationId: 'lead', author: person, createdAt: 0, thread } })
+      const sent = effects.messages.find(m => m.text === text)!
+      expect(sent).toMatchObject({ replyTo: null, answers: question })
+      expect(sent.thread ?? null).toBeNull()
+    }
+  })
 
-  it('puts a plain answer and an answer to a person\'s main-chat message in its thread, and settles it', () => {
-    const { f, ask, answer, owed } = threaded()
+  it('leaves a person\'s reply in its thread, which an older app still sends', () => {
+    const { f, ask } = setup()
+    const root = ask('A topic.')
+    const effects = f.run({ type: 'message.send', conversationId: 'lead', text: 'A reply.', replyTo: root.id, recipientIds: [] }, owner,
+      { reply: { id: root.id, conversationId: 'lead', author: { kind: 'person', id: 'owner', name: owner.email, membershipGeneration: f.state.people[0]!.generation } as Author,
+        createdAt: 0, thread: root.id } })
+    expect(effects.messages.find(m => m.text === 'A reply.')).toMatchObject({ replyTo: root.id, thread: root.id })
+  })
+
+  it('reads a project\'s stored answer-in-thread setting no more', () => {
+    const { f, ask, answer } = setup()
+    const projectId = f.group('lead').projectId ?? 'lead'
+    Object.assign(f.state.projects!.find(p => p.id === projectId)!, { answersInThread: true })
     const question = ask('Can the board show who works?')
     const { sent } = answer(f.lead, question, 'Yes, from tonight.', { plain: true })
-    expect(sent.replyTo).toBe(question.id)
-    expect(owed()).toEqual([])
-    const second = ask('And the costs?')
-    const { sent: answered } = answer(f.lead, second, 'Tomorrow.')
-    expect(answered.replyTo).toBe(second.id)
-    expect(f.group('lead').answered?.find(a => a.id === second.id)).toMatchObject({ answerId: answered.id, thread: second.id })
+    expect(sent).toMatchObject({ replyTo: null, answers: question.id })
   })
 
-  it('leaves a post that answers nothing in the main chat, and an answer to an agent below it', () => {
-    const { f } = threaded()
-    const news = f.run({ type: 'message.send', conversationId: 'lead', text: 'v1.4.23 is out.', replyTo: null, recipientIds: [] }, f.as(f.lead))
-    expect(news.messages.find(m => m.text === 'v1.4.23 is out.')).toMatchObject({ replyTo: null })
-    const agent = { kind: 'agent', id: f.dev, name: 'dev' } as Author
-    const effects = f.run({ type: 'message.send', conversationId: 'lead', text: 'The login fix ships tonight.', replyTo: null, recipientIds: [], answers: 'agent-line' } as Command,
-      f.as(f.lead), { reply: { id: 'agent-line', conversationId: 'lead', author: agent, createdAt: 0, thread: null } })
-    expect(effects.messages.find(m => m.text === 'The login fix ships tonight.')!.replyTo).toBeNull()
-  })
-
-  it('is set by the project\'s coordinator or a person who manages it, and turned off again; nobody else', () => {
-    const { f, projectId, refusal } = threaded()
-    expect(f.state.projects?.find(p => p.id === projectId)?.answersInThread).toBe(true)
-    expect(refusal(() => f.run({ type: 'project.answers', projectId, inThread: false } as Command, f.as(f.dev)))?.code).toBe('COORDINATOR_REQUIRED')
-    f.run({ type: 'project.answers', projectId, inThread: false } as Command, owner)
-    expect(f.state.projects?.find(p => p.id === projectId)?.answersInThread).toBeUndefined()
-  })
-
-  it('other projects answer right below, as before', () => {
-    const { f, ask, answer } = setup()
-    const question = ask('Can the board show who works?')
-    expect(answer(f.lead, question, 'Yes.', { plain: true }).sent.replyTo).toBeNull()
+  it('has no command to turn it on', () => {
+    const { f } = setup()
+    expect(() => f.run({ type: 'project.answers', projectId: f.group('lead').projectId ?? 'lead', inThread: true } as unknown as Command, f.as(f.lead))).toThrow()
   })
 })

@@ -1471,13 +1471,13 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(answered.lastPersonSequence).toBe(written.lastMainSequence)
   })
 
-  it('files replies under their thread root, summarises each thread for its page, and reads one thread', async () => {
+  it('files an older app\'s replies under their thread root, summarises each thread for its page, and reads one thread', async () => {
     const { tab, lead } = await fixture()
     await invite(tab)
     const reply = (text: string, replyTo: string, extra: Record<string, unknown> = {}) =>
       ({ type: 'message.send', conversationId: 'lead', text, replyTo, recipientIds: [], ...extra }) as Command
     const root = String((await run(tab, message('Should we do thread replies?'))).result.messageId)
-    const first = String((await run(tab, reply('Yes, threads.', root, { mentions: [owner.sub] }), host, lead)).result.messageId)
+    const first = String((await run(tab, reply('Yes, threads.', root, { mentions: [peer.sub] }))).result.messageId)
     // A reply only in its thread leaves the chat's newest main-stream message where it was; an also-sent one moves it.
     const lead1 = async () => (await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!
     const afterFirst = await lead1()
@@ -1495,7 +1495,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const page = await store.messages(owner, tab, 'lead', {})
     const last = feed.find(m => m.id === second)!
     expect(page.threads).toEqual([{ id: root, replies: 2, lastSequence: last.sequence, lastAt: last.createdAt,
-      authors: [expect.objectContaining({ kind: 'person', id: peer.sub }), expect.objectContaining({ kind: 'agent', id: lead })],
+      authors: [expect.objectContaining({ kind: 'person', id: peer.sub }), expect.objectContaining({ kind: 'person', id: owner.sub })],
       people: [owner.sub, peer.sub] }])
     // A poll that reads only a new reply still learns its root's summary.
     const poll = await store.messages(owner, tab, 'lead', { after: feed.find(m => m.id === first)!.sequence })
@@ -1509,8 +1509,13 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await run(tab, { type: 'member.remove', userId: peer.sub })
     const left = (await store.messages(owner, tab, 'lead', { thread: root })).threads[0]!
     expect(left.people).toEqual([owner.sub])
-    expect(left.authors.map(a => a.id)).toEqual([lead])
+    expect(left.authors.map(a => a.id)).toEqual([owner.sub])
     expect(left.replies).toBe(2)
+
+    // An agent's reply shows in the chat, quoting the root, and joins no thread (task #4555).
+    const inline = String((await run(tab, reply('No threads now.', root), host, lead)).result.messageId)
+    expect((await store.messages(owner, tab, 'lead', {})).messages.find(m => m.id === inline)).toMatchObject({ replyTo: null, answers: root, thread: inline })
+    expect((await store.messages(owner, tab, 'lead', { thread: root })).threads[0]!.replies).toBe(2)
   })
 
   it('keeps a reply to a message written before threads inline, and refuses a thread of a conversation the reader cannot see', async () => {

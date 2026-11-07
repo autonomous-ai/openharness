@@ -31,15 +31,16 @@ function listeningBuddy(state: SuperTabState, personId: string, group: Conversat
 
 /** The Buddy that sent the proposal [message]'s thread answers, when it does (task #3818): its news goes back to that one. */
 const senderOf = (message: MessageDraft, threadSource: Record<string, unknown> | null): string | undefined =>
-  message.replyTo && threadSource?.kind === PROPOSAL_KIND && typeof threadSource.buddyId === 'string' ? threadSource.buddyId : undefined
+  (message.replyTo || message.answers) && threadSource?.kind === PROPOSAL_KIND && typeof threadSource.buddyId === 'string' ? threadSource.buddyId : undefined
 
-/** The people a project-chat row is news for: whoever's proposal its thread answers, each person it tags, and who requested
+/** The people a project-chat row is news for: whoever's proposal it answers, in its thread or quoting it, each person it tags, and who requested
  *  the work it says shipped. Never its own author: they know what they wrote. */
 function newsFor(message: MessageDraft, threadSource: Record<string, unknown> | null): string[] {
   const source = message.source
   const people = [...message.mentions ?? []]
   if (source?.kind === SHIP_KIND && typeof source.requesterId === 'string') people.push(source.requesterId)
-  if (message.replyTo && threadSource?.kind === PROPOSAL_KIND && typeof threadSource.personId === 'string') people.push(threadSource.personId)
+  // A reply, or an answer quoting a message, about a person's proposal (task #4555: answers show inline, quoting it).
+  if ((message.replyTo || message.answers) && threadSource?.kind === PROPOSAL_KIND && typeof threadSource.personId === 'string') people.push(threadSource.personId)
   return [...new Set(people)].filter(id => message.author.kind !== 'person' || message.author.id !== id)
 }
 

@@ -313,13 +313,18 @@ describe('Super Tab collaboration policy', () => {
       { reply: { id: posted.id, conversationId: 'elsewhere', author: posted.author, createdAt: 0 } })).toThrow('Reply to a message in this conversation')
   })
 
-  it('files a reply under its thread root, never a nested thread, and keeps a reply to a pre-thread message inline', () => {
+  it('files an older app\'s reply under its thread root, never a nested thread, keeps a reply to a pre-thread message inline, and an agent\'s reply in the chat', () => {
     const f = fixture()
     const lead = f.add('lead', 'owner', 'lead', true)
     const root = f.run({ type: 'message.send', conversationId: 'lead', text: 'Should we do threads?', replyTo: null, recipientIds: [] }).messages[0]!
     expect(root.thread).toBeUndefined()
-    const first = f.run({ type: 'message.send', conversationId: 'lead', text: 'Yes.', replyTo: root.id, recipientIds: [] },
+    // An agent's reply shows in the chat, quoting what it answers (task #4555).
+    const byAgent = f.run({ type: 'message.send', conversationId: 'lead', text: 'No.', replyTo: root.id, recipientIds: [] },
       { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }, { reply: { id: root.id, conversationId: 'lead', author: root.author, createdAt: 0, thread: root.id } }).messages[0]!
+    expect(byAgent).toMatchObject({ replyTo: null, answers: root.id })
+    expect(byAgent.thread).toBeUndefined()
+    const first = f.run({ type: 'message.send', conversationId: 'lead', text: 'Yes.', replyTo: root.id, recipientIds: [] },
+      owner, { reply: { id: root.id, conversationId: 'lead', author: root.author, createdAt: 0, thread: root.id } }).messages[0]!
     expect(first).toMatchObject({ replyTo: root.id, thread: root.id })
     expect(first.alsoInChat).toBeUndefined()
     // A reply to a reply joins the root's thread.
@@ -2176,7 +2181,7 @@ describe('any agent of the project', () => {
       return { f, task, step, engineer, reviewer, chat, assigned }
     }
 
-    it('posts a top-level line and a thread reply there, joins nothing, and reaches the coordinator only by name (#2963)', () => {
+    it('posts a top-level line and a reply there, joins nothing, and reaches the coordinator only by name (#2963)', () => {
       const { f, engineer, reviewer, chat } = working()
       const members = [...chat().agentIds]
       for (const agentId of [engineer, reviewer]) {
@@ -2186,7 +2191,9 @@ describe('any agent of the project', () => {
         expect(line).toMatchObject({ conversationId: 'lead', author: { kind: 'agent', id: agentId }, replyTo: null, recipients: [] })
         const reply = f.run(post('Found it: the token expired.', asked.id), actorOf(agentId),
           { reply: { id: asked.id, conversationId: 'lead', author: asked.author, createdAt: 0, thread: asked.id } }).messages.at(-1)!
-        expect(reply).toMatchObject({ conversationId: 'lead', replyTo: asked.id, thread: asked.id, recipients: [] })
+        // Its reply shows in the chat, quoting the ask (task #4555).
+        expect(reply).toMatchObject({ conversationId: 'lead', replyTo: null, answers: asked.id, recipients: [] })
+        expect(reply.thread).toBeUndefined()
         expect(f.run(post('Need a ruling.', null, [f.lead]), actorOf(agentId)).messages.at(-1)!.recipients).toEqual([f.lead])
       }
       expect(chat().agentIds).toEqual(members)

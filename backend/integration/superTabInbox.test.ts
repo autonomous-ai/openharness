@@ -186,7 +186,9 @@ async function busyScene() {
   await markRead(s.tabId, s.buddyId, await sequenceOf(buddyRoot!), peer)
   await send(s.tabId, s.web, 'Web reply 1', { replyTo: webRoot.id })
   await send(s.tabId, s.web, 'Web reply 2', { replyTo: webRoot.id })
-  await send(s.tabId, s.web, 'Web worker reply', { replyTo: webRoot.id, agentId: s.worker })
+  // An agent's reply in the thread, as one written before replies showed in the chat (task #4555): an agent's answer joins no
+  // thread now, and an older thread keeps its agents' replies.
+  await insert(s.tabId, s.web, [{ text: 'Web worker reply', author: agentAuthor(s.worker), thread: webRoot.id }])
   const webLatest = await send(s.tabId, s.web, 'Web latest')
   await insert(s.tabId, s.secretGroup, [{ text: 'Secret reply', author: agentAuthor(s.worker), thread: secretRoot }, { text: 'Secret latest', author: personAuthor(owner) }])
   await insert(s.tabId, s.buddyId, [{ text: 'Buddy reply', author: agentAuthor('buddy-agent'), thread: buddyRoot }, { text: 'Buddy latest', author: agentAuthor('buddy-agent') }])

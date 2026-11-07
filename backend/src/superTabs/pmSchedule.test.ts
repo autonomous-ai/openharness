@@ -395,10 +395,10 @@ describe('the built-in PM text by Swarm', () => {
     const v2 = PROCESS_NOTES.find(note => note.id === '2026-11-06-v2-text')!
     const outside = swarm()
     outside.projects![0]!.processNote = { confirmed: '2026-11-06-crew' }
-    // A later note for every PM (#4459) wakes it, without the v2 text.
-    expect(wake(outside)?.processNote).toBe('2026-11-07-mktemp')
+    // Later notes for every PM (#4459, #4555) wake it, without the v2 text.
+    expect(wake(outside)?.processNote).toBe('2026-11-07-no-threads')
     expect(wake(outside)?.draft.text).not.toContain(v2.text)
-    outside.projects![0]!.processNote = { confirmed: '2026-11-07-mktemp' }
+    outside.projects![0]!.processNote = { confirmed: '2026-11-07-no-threads' }
     expect(wake(outside)).toBeNull()
     const rebased = { ...swarm(), id: REBASED }
     rebased.projects![0]!.processNote = { confirmed: '2026-11-06-crew' }

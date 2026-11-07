@@ -2049,17 +2049,19 @@ export class SuperTabStore {
       if (command.type === 'message.send' && (command.replyTo || command.answers)) {
         const reply = await tx.superTabMessage.findFirst({ where: { id: (command.replyTo ?? command.answers)!, tabId, conversationId: command.conversationId } })
         // The thread's root says whose proposal the reply answers (buddyNews.ts): the reply itself, or one more read by id.
-        const root = reply?.thread && reply.thread !== reply.id
-          ? await tx.superTabMessage.findFirst({ where: { id: reply.thread, tabId, conversationId: command.conversationId }, select: { source: true } }) : reply
+        // An answer in the chat quoting another message is about that one, as a reply in a thread is about its root (task #4555).
+        const topic = reply?.thread && reply.thread !== reply.id ? reply.thread : reply?.answers ?? null
+        const root = topic
+          ? await tx.superTabMessage.findFirst({ where: { id: topic, tabId, conversationId: command.conversationId }, select: { id: true, source: true } }) : reply
         // In a Buddy chat: whether the thread ever had a session (buddySessions.ts), by the thread index, one row at most: its
         // latest, whose project a session reopened there keeps.
         const buddyChat = original.conversations.find(c => c.id === command.conversationId)
-        const sessionRow = command.replyTo && reply?.thread && buddyChat && isBuddyChat(buddyChat)
+        const sessionRow = reply?.thread && buddyChat && isBuddyChat(buddyChat)
           ? await tx.superTabMessage.findFirst({ where: { tabId, conversationId: command.conversationId, thread: reply.thread, buddySession: true },
             orderBy: [{ sequence: 'desc' }, { id: 'desc' }], select: { buddyProject: true } })
           : null
         if (reply) context.reply = { id: reply.id, conversationId: reply.conversationId, author: reply.author as unknown as Author, createdAt: reply.createdAt.getTime(),
-          thread: reply.thread, threadSource: (root?.source ?? null) as Record<string, unknown> | null,
+          thread: reply.thread, threadSource: (root?.source ?? null) as Record<string, unknown> | null, ...root ? { threadRoot: root.id } : {},
           ...(agentOnly(reply.source, reply.recipientIds) ? { agentOnly: true } : {}), ...(sessionRow ? { sessionThread: true as const, ...(sessionRow.buddyProject ? { sessionProject: sessionRow.buddyProject } : {}) } : {}) }
       }
       if (command.type === 'message.send' && actor.kind === 'person') context.openTags = await openTags(tx, tabId, command.conversationId, actor.userId, context.now)
@@ -5195,7 +5197,8 @@ export class SuperTabStore {
   private async otherAccounts(tx: Transaction, state: SuperTabState, target: Agent, row: SuperTabMessage): Promise<{ message: boolean; quoted: string[] }> {
     const accounts = new Map<string, Promise<string>>()
     const from = (written: Pick<SuperTabMessage, 'author' | 'source'>) => this.otherAccount(tx, state, target, written, accounts)
-    const pointed = [...new Set([row.replyTo, row.thread].filter((id): id is string => !!id && id !== row.id))]
+    // The message it quotes, as a reply or an inline answer (task #4555), and its thread's root.
+    const pointed = [...new Set([row.replyTo, row.answers, row.thread].filter((id): id is string => !!id && id !== row.id))]
     const reads = readsRow({ kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, isBuddy(target))
     const quotedRows = (await messagesById(tx, row.tabId, row.conversationId, pointed)).filter(reads)
     const [message, ...quoted] = await Promise.all([from(row), ...quotedRows.map(async m => await from(m) ? [m.id] : [])])

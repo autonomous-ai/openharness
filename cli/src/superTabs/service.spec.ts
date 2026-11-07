@@ -348,7 +348,7 @@ it('gives every agent the same help, with no rule the server dropped', async () 
   // Task #2924: an agent with work in the project posts in its project chat itself, joining nobody there (#2207).
   expect(String(help.post)).toContain('In the project chat, an agent with a task or step in the project posts and reacts without joining it, and a person\'s answer to its line reaches it; --to there adds no agent, so name only the PM.')
   // Task #2963: an unnamed post no longer reaches the PM.
-  expect(String(help.post)).toContain('With no --to or @Name it reaches no agent, except the agent a reply answers and, in a task or step, its assignee. Your status tells the PM your work: never post it results, verdicts or acknowledgements.')
+  expect(String(help.post)).toContain('With no --to or @Name it reaches no agent, except the agent whose message it answers and, in a task or step, its assignee. Your status tells the PM your work: never post it results, verdicts or acknowledgements.')
   expect(String(help.post)).not.toContain('your post reaches the PM')
   expect((help.commands as Array<{ type: string }>).map(c => c.type)).toEqual(expect.arrayContaining(['decision.ask', 'person.tell']))
   expect(help.plan).toEqual(expect.stringMatching(/^plan \[JSON\]/))
@@ -1277,7 +1277,7 @@ describe('mentions on a post', () => {
     swarm(t, t.agentId)
     const lead = await help(t, { tabId: 'tab', agentId: t.agentId })
     expect(lead.post).toContain(`post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... ${mention}:`)
-    expect(lead.post).toContain('--answers puts your answer right below that message, in the main chat; --reply-to puts it in that message\'s thread.')
+    expect(lead.post).toContain('--answers shows your answer in the chat, quoting that message. Never open a thread; --reply-to is only for a Buddy\'s thread session, in its own thread.')
     // 2026-10-30: TEXT - posted a literal dash; help says - reads the message from stdin (command.ts postStdin).
     expect(lead.post).toContain("when it holds quotes, or is only -, put - in its place and send the message on stdin (post GROUP - OPERATION_ID <<'MSG' … MSG); an empty stdin is refused and nothing is posted.")
     // By username, display name or id, never email (task #2954).

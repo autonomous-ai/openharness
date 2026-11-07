@@ -5,7 +5,7 @@
  *
  * An owed ask is a person's message that reached the PM, kept on its conversation (`Conversation.owed`) until the PM answers
  * it in its place (a reply in its thread, or an answer right below it), explicitly reacts, or opens a task from it.
- * A project agent explicitly entrusted with an ask by the PM may also settle that ask by replying in its thread.
+ * A project agent explicitly entrusted with an ask by the PM may also settle that ask by answering it.
  * Nothing here refuses anything: a settle that finds nothing does nothing.
  */
 import { isBuddy, isBuddyChat } from './buddies.js'
@@ -79,16 +79,17 @@ export function handoffAsk(state: SuperTabState, group: Conversation, agentId: s
 }
 
 /** The PM's post in [group]: a reply in a thread ([thread], its root) settles every ask in that thread; an answer right below a
- *  message ([answers]) settles that message. An entrusted project agent settles only its named ask, in that ask's thread. */
+ *  message ([answers]) settles that message. An entrusted project agent settles only its named ask: answered in the chat, or in
+ *  that ask's older thread. */
 export function settleReply(state: SuperTabState, group: Conversation, agentId: string, place: { answers: string | null; thread: string | null }): void {
   if (!group.owed) return
   if (byPm(state, group, agentId)) {
     settle(group, ask => ask.id === place.answers || (!!place.thread && ask.thread === place.thread))
-  } else if (place.thread && group.owed.some(ask => ask.delegatedTo === agentId && ask.thread === place.thread)) {
-    const target = state.agents.find(a => a.id === agentId)
-    if (target && !isBuddy(target) && agentProjectId(state, target) === projectOfGroup(state, group)?.id) {
-      settle(group, ask => ask.delegatedTo === agentId && ask.thread === place.thread)
-    }
+  } else {
+    // Its own ask, answered in the chat quoting it (task #4555), or a reply in that ask's older thread.
+    const entrusted = (ask: OwedAsk) => ask.delegatedTo === agentId && (ask.id === place.answers || (!!place.thread && ask.thread === place.thread))
+    const target = group.owed.some(entrusted) ? state.agents.find(a => a.id === agentId) : undefined
+    if (target && !isBuddy(target) && agentProjectId(state, target) === projectOfGroup(state, group)?.id) settle(group, entrusted)
   }
 }
 

@@ -93,7 +93,7 @@ import { BUILT_IN_HEADING, tidySaved } from './pmSchedule.js'
 import { contractRefusal, missingContract } from './taskContract.js'
 import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, proposalPriority, titlePriority, type TaskPriority } from './taskPriority.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
-import { inThread, leadsGroup, recordAnswered, requireUnanswered } from './answers.js'
+import { leadsGroup, recordAnswered, requireUnanswered } from './answers.js'
 import { laneNamed, pinBuilder, spokenList, stampLane } from './dispatch.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
@@ -296,8 +296,6 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.coordinatorName'), projectId: id, name: roleNameSchema }).strict(),
   // What the project is, in one line, for the Cmd-N and join project list (task #4540): empty clears it.
   z.object({ type: z.literal('project.about'), projectId: id, about: z.string().trim().max(80).regex(/^[^\r\n]*$/, 'One line.') }).strict(),
-  // Whether its agents answer each person's message in that message's thread (projects.ts answersInThread, task #3747).
-  z.object({ type: z.literal('project.answers'), projectId: id, inThread: z.boolean() }).strict(),
   z.object({ type: z.literal('lead.start'), projectId: id, machineId: id.nullable(), engine: swarmEngine,
     model: z.string().trim().min(1).max(200).optional(), effort: z.string().trim().min(1).max(80).optional(),
     branchRef: z.string().max(1024).regex(/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/).optional(), repositoryUrl: repositoryUrl.optional() }).strict(),
@@ -472,8 +470,8 @@ export const commandSchema = z.discriminatedUnion('type', [
     answers: id.optional(),
     // The PM entrusts this owed project-chat ask to the one project agent explicitly addressed by this post in its task.
     handoff: id.optional(),
-    // The answer to the message in `answers` (answers.ts, task #3403): placed in that message's thread when it is a reply in
-    // one, else right below it, and refused when it was answered already. Only with `answers`.
+    // The answer to the message in `answers` (answers.ts, task #3403): right below it, quoting it, and refused when it was
+    // answered already. Only with `answers`.
     answer: z.literal(true).optional(),
     // An agent's own skills notice (instructions changed, skills replaced): the coordinator's goes in its digest
     // (noticeDigest.ts gatheredNotice). Only with `agentOnly`, which keeps it to the agent itself.
@@ -672,10 +670,12 @@ export interface CommandContext {
     teamSession?: true }
   /** Loaded from this tab and conversation by the store. */
   /** `thread` is the replied message's thread root, null for a message written before threads (it keeps inline replies), and
-   *  `threadSource` that root's source: a Buddy's proposal is news for its Buddy (buddyNews.ts). */
+   *  `threadSource` that root's source: a Buddy's proposal is news for its Buddy (buddyNews.ts). `threadRoot`: that root's id,
+   *  or for an answer in the chat the message it quotes (task #4555). */
   /** `agentOnly`: a notice people cannot read (model.ts agentOnly), whose thread a reply does not join. */
   reply?: { id: string; conversationId: string; author: Author; createdAt: number; thread?: string | null; threadSource?: Record<string, unknown> | null
     agentOnly?: true
+    threadRoot?: string
     /** In a Buddy chat: its thread has had a thread session (a `buddySession` reply), read by the store (buddySessions.ts). */
     sessionThread?: true
     /** The project of the thread's latest session row: a session reopened there keeps it (Scholes, 11-02). */
@@ -1129,25 +1129,17 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   return effects
 }
 
-/** An answer (answers.ts) to a reply inside a thread goes in that thread: a reply to it, never right below it in the main chat.
- *  Worked out before anything reads where the post goes, so it routes, settles and threads as that reply would. */
-function placeAnswer(command: Command, context: CommandContext, state: SuperTabState): Command {
+/** Every chat is one flat conversation (task #4555, anh Dee 11-07): an agent's post that names a message shows in the chat,
+ *  quoting it (`answers`), an older host's --reply-to too. Only a Buddy's thread session keeps its replies in its own thread,
+ *  which its main Buddy never reads (buddySessions.ts). A person's reply from an older app stays in its thread. Worked out
+ *  before anything reads where the post goes, so it routes and settles as the inline answer it becomes. */
+function placeAnswer(command: Command, context: CommandContext, state: SuperTabState, actor: Actor): Command {
   if (command.type !== 'message.send') return command
-  // In a project that answers people in threads (task #3747), any post naming a person's message in the main chat goes in its
-  // thread, whatever the client sent: an older host's --answers, or an agent that skipped its reply line. A post naming
-  // nothing stays in the main chat, and an agent's message is answered as before.
+  if (command.answer && (!command.answers || command.replyTo)) fail('VALIDATION_ERROR', 'An answer names the message it answers, and nothing else to reply to.', 400)
   const reply = context.reply
-  if (command.answers && !command.replyTo && reply?.id === command.answers && reply.author.kind === 'person' && !inThread(reply)
-    && answersInThread(state, command.conversationId)) return { ...command, replyTo: command.answers, answers: undefined }
-  if (!command.answer) return command
-  if (!command.answers || command.replyTo) fail('VALIDATION_ERROR', 'An answer names the message it answers, and nothing else to reply to.', 400)
-  return reply && reply.id === command.answers && inThread(reply) ? { ...command, replyTo: command.answers, answers: undefined } : command
-}
-
-/** Whether [conversationId]'s project answers people in threads. Never throws: a conversation outside every project does not. */
-function answersInThread(state: SuperTabState, conversationId: string): boolean {
-  const group = state.conversations.find(c => c.id === conversationId)
-  try { return !!group && groupProject(state, group).answersInThread === true } catch { return false }
+  if (actor.kind !== 'agent' || !command.replyTo || command.answers || reply?.id !== command.replyTo || reply.agentOnly) return command
+  if (state.agents.find(a => a.id === actor.agentId)?.buddySession) return command
+  return { ...command, replyTo: null, answers: command.replyTo, alsoSend: undefined }
 }
 
 /** The project `project.closeTab` may close (task #3929): a no-repo tab's, in the caller's own Personal Swarm, by that person.
@@ -1166,7 +1158,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   // A credential someone pasted, or an agent echoed from its terminal, is gone before anything is stored or delivered
   // (Oct 2026: a Harness access token in a shared Lead chat). The sender's result says what went.
   const removed: CredentialKind[] = []
-  const command = placeAnswer(withoutCredentials(commandSchema.parse(input), removed), context, original)
+  const command = placeAnswer(withoutCredentials(commandSchema.parse(input), removed), context, original, actor)
   const state = cloneData(original)
   numberConversations(state)
   placeRules(state)
@@ -1583,7 +1575,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       return { inSession: true, to: null, ...(self.buddySession.projectId ? { project: self.buddySession.projectId } : {}) }
     }
     if (self) {
-      if (entry || context.reply?.sessionThread) fail('BUDDY_SESSION_THREAD', 'That thread has its own session. Answer in the main chat or a thread without one.', 403)
+      if (entry || context.reply?.sessionThread) fail('BUDDY_SESSION_THREAD', 'That thread has its own session. Answer in the chat instead.', 403)
       if (command.newSession) fail('BUDDY_SESSION_CHAT', 'Only the chat\'s person starts a session.', 403)
       return { inSession: false, to: null }
     }
@@ -2591,17 +2583,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const stored = projectOf(state, project.id)
       // Confirming an older note after a newer one never brings the newer back.
       if (noteIndex(command.noteId) > noteIndex(stored.processNote?.confirmed)) stored.processNote = { ...stored.processNote, confirmed: command.noteId }
-      break
-    }
-    case 'project.answers': {
-      // As its coordinator's name: the coordinator sets it, or a person who manages the project.
-      const project = readProject(state, actor, command.projectId)
-      if (actor.kind === 'agent') coordinatorOf(project)
-      else manageProject(state, actor, project.id)
-      mutableProjects(state)
-      const stored = projectOf(state, project.id)
-      if (command.inThread) stored.answersInThread = true
-      else delete stored.answersInThread
       break
     }
     case 'project.digest': {
@@ -4540,11 +4521,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // An answer below a message is read as its reply is (store.ts): context.reply is the message it answers.
       if (command.answers && (command.replyTo || !context.reply || context.reply.id !== command.answers || context.reply.conversationId !== group.id)) {
-        fail('INVALID_ANSWER', command.replyTo ? 'Answer a message right below it or reply in its thread, not both.' : 'Answer a message in this conversation.', 400)
+        fail('INVALID_ANSWER', command.replyTo ? 'Name the message you answer once, with --answers.' : 'Answer a message in this conversation.', 400)
       }
       const chatPost = actor.kind === 'agent' && !command.agentOnly && isProjectChat(state, group)
       const chatAsk = chatPost ? requireChatPost(group, command, context.reply) : null
-      const chatAnswer = chatPost ? requireChatAnswer(group, command, context.reply) : null
+      const owedByPoster = actor.kind === 'agent' && !!group.owed?.some(ask => ask.id === context.reply?.id
+        && (leadsGroup(state, group, actor.agentId) || ask.delegatedTo === actor.agentId))
+      const chatAnswer = chatPost ? requireChatAnswer(group, command, context.reply, owedByPoster) : null
       if (chatPost && inMainChat(command, context.reply)) {
         requireChatContent(state, group, command.text)
       }
@@ -4628,7 +4611,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         handoffAsk(state, group, poster?.id ?? null, command.handoff, addressed)
       }
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
-      const postText = command.handoff ? `${text}\n\nAnswer message ${command.handoff} in ${groupProject(state, group).leadConversationId} in its thread.` : text
+      const postText = command.handoff ? `${text}\n\nAnswer message ${command.handoff} in ${groupProject(state, group).leadConversationId}.` : text
       message(group.id, postText, recipients, command.replyTo, command.agentOnly ? { ...AGENT_ONLY, ...command.notice ? { notice: command.notice } : {} } : undefined, attachments, tagged,
         tagged.length ? command.mentionsIfNoWorker : undefined)
       if (!command.agentOnly) effects.messages.at(-1)!.post = true
@@ -4679,7 +4662,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         }
         else {
           const owedBefore = group.owed ?? []
-          settleReply(state, group, actor.agentId, { answers: command.answers ?? null, thread: root })
+          // An inline answer to a message in an older thread settles that thread's asks, as a reply in it did (task #4555).
+          const topic = command.answers && context.reply?.id === command.answers && context.reply.thread && context.reply.thread !== command.answers
+            ? context.reply.thread : null
+          settleReply(state, group, actor.agentId, { answers: command.answers ?? null, thread: root ?? topic })
+          // The PM's answer to a Buddy's proposal, in the chat or in its older thread, takes it from the open proposals as a reply in
+          // its thread did (proposals.ts; task #4555).
+          if (command.answers && context.reply?.threadRoot && context.reply.threadSource?.kind === 'buddy-proposal' && leadsGroup(state, group, actor.agentId)) {
+            effects.closedProposal = { messageId: context.reply.threadRoot, conversationId: group.id, reason: 'Answered by the PM in the chat.' }
+          }
           const settled = owedBefore.filter(ask => !group.owed?.some(left => left.id === ask.id))
           // The PM's answer is recorded for the asks it settled, and for the message `answer` names though nobody owed it.
           const asked = command.answer && leadsGroup(state, group, actor.agentId) ? [{ id: (command.answers ?? command.replyTo)! }] : []
@@ -5276,7 +5267,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if (group) bindPullRequestCards(group, draft, groupRepositoryUrl(state, group))
   }
   // A Buddy hears the project-chat rows about its person's proposals and requested work (buddyNews.ts).
-  for (const draft of effects.messages) tellBuddies(state, draft, draft.replyTo && draft.replyTo === context.reply?.id ? context.reply.threadSource ?? null : null)
+  for (const draft of effects.messages) {
+    const named = draft.replyTo ?? draft.answers
+    tellBuddies(state, draft, named && named === context.reply?.id ? context.reply.threadSource ?? null : null)
+  }
   assertUniqueMessageIds(command.type, effects.messages)
   return effects
 }

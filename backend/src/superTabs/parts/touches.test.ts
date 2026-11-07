@@ -56,7 +56,6 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
       [{ type: 'note.add', projectId: 'lead', text: 'Not machine B.', askedBy: 'owner' }, {}],
       [{ type: 'note.remove', projectId: 'lead', noteId: 'n1' }, { notes }],
       [{ type: 'project.coordinatorName', projectId: 'lead', name: 'Lead engineer' }, {}],
-      [{ type: 'project.answers', projectId: 'lead', inThread: true }, {}],
       [{ type: 'project.about', projectId: 'lead', about: 'The Harness app' }, {}],
       // An older CLI's rule, a save to the instructions after the one above (project instructions, phase 4).
       [{ type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Idle first.', askedIn: { conversationId: 'lead', messageId: 'm1' } },
