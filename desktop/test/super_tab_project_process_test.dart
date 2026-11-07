@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/task_groups.dart';
 import 'package:harness/super_tabs/tasks_view.dart';
 
 import 'super_tab_tasks_view_test.dart' show taskFixture, tasksServer;
@@ -45,6 +46,26 @@ void main() {
       expect(project.isSimple, isTrue);
       expect(project.columnIds, ['todo', 'doing', 'done']);
       expect(project.columnTitle('doing'), 'Doing');
+    });
+
+    // #3427 sends Simple's columns under the Board's own ids (process.ts): nextUp, working, done.
+    test('simple\'s titles are read by the Board\'s column ids', () {
+      final project = SuperTabProject.fromJson(
+        _project({
+          'process': 'simple',
+          'columns': [
+            {'id': 'nextUp', 'title': 'Queue'},
+            {'id': 'working', 'title': 'In progress'},
+            {'id': 'done', 'title': 'Finished'},
+          ],
+        }),
+      );
+      expect(superTabColumnLabel(project, SuperTabTaskColumn.nextUp), 'Queue');
+      expect(
+        superTabColumnLabel(project, SuperTabTaskColumn.working),
+        'In progress',
+      );
+      expect(superTabColumnLabel(project, SuperTabTaskColumn.done), 'Finished');
     });
 
     test('an unknown value, or a column without an id, is Full', () {
