@@ -406,7 +406,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   // person's own listed computer and account.
   z.object({ type: z.literal('agent.new'), kind: z.enum(['regular', 'pm']), machineId: id, engine: swarmEngine,
     model: z.string().trim().min(1).max(200).optional(), name: z.string().trim().min(1).max(80).optional(), projectName: title.optional(),
-    repositoryUrl: repositoryUrl.optional() }).strict(),
+    repositoryUrl: repositoryUrl.optional(),
+    // A Member its person's Desktop starts itself through Cmd-N (task #4196): only its chat opens here; agent.add brings in the session.
+    local: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
   z.object({ type: z.literal('agent.started'), startId: id, harnessId: id, configuration,
     startedSession: z.object({ sessionId: id, createdAt: z.iso.datetime() }).strict().optional() }).strict(),
@@ -1787,6 +1789,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     return project
   }
 
+  /** A Regular agent's chat with its person, which nobody else reads (projects.ts readsAgentChat), for this command's agent. */
+  const openAgentChat = (me: { id: string; generation: string }, title: string): string => {
+    const chatId = stableId('agent-chat', me.id, me.generation, operationId)
+    state.conversations.push({ id: chatId, kind: 'agent-chat', title, leadId: null, agentIds: [], archived: false, brief: '', checks: [],
+      assignment: null, lastMessageSequence: 0, audience: { people: [{ id: me.id, generation: me.generation }] } })
+    return chatId
+  }
   const addBuddyMachine = (machineId: string, setup: NonNullable<Extract<Command, { type: 'buddy.create' }>['setup']>, me: { id: string; generation: string }) => {
     // Its last Buddy's folders are still being deleted there: a new one would lose its own (machine.contribute does the same).
     if (state.machineCleanups?.some(c => c.machineId === machineId)) {
@@ -3230,6 +3239,29 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person adds a session already running. Start a new agent instead.', 403)
       const addedName = addedAgentName(state, actor, command.name)
       const group = open(state, command.conversationId)
+      // A Member's own chat (local agent.new, task #4196) takes the one session its person started for it on their own computer,
+      // in their own account, as a Regular agent in no project: as agent.started records a server-started one.
+      if (isAgentChat(group)) {
+        readConversation(state, actor, group.id)
+        const me = person(state, actor.userId)
+        if (me.role === 'viewer') fail('READ_ONLY', 'A viewer cannot contribute agents.', 403)
+        const grant = context.contribution ?? fail('HOST_REQUIRED', 'Choose your own computer.', 403)
+        if (grant.machineOwnerId !== me.id || grant.contributorId !== me.id || grant.hostGrant || grant.hostMachineId || grant.teamSession) {
+          fail('AGENT_OWN_MACHINE', 'A new agent runs only on your own computer, in your own account.', 403)
+        }
+        if (command.lead) fail('AGENT_CHAT_LEAD', 'An agent\'s own chat has no lead.', 400)
+        if (group.agentIds.length) fail('AGENT_CHAT_TAKEN', 'This chat already has its agent.', 409)
+        const agentId = stableId(command.machineId, command.harnessId)
+        if (state.agents.some(a => a.id === agentId)) fail('ALREADY_SHARED', 'This native harness is already in the tab.')
+        reserveHarnessSlot(state, command.machineId, command.harnessId, operationId)
+        state.agents.push({ id: agentId, machineId: command.machineId, harnessId: command.harnessId, regular: true,
+          machineOwnerId: me.id, contributorId: me.id, membershipGeneration: me.generation, hostGrant: null, name: addedName,
+          configuration: command.configuration, configurationVersion: operationId })
+        group.agentIds.push(agentId)
+        result.agentId = agentId
+        if (command.initialMessage) message(group.id, command.initialMessage)
+        break
+      }
       const project = groupProject(state, group)
       if (state.projects && group.id === project.leadConversationId && command.lead && command.project) {
         project.repository ??= { machineId: command.machineId, ...command.project }
@@ -3692,6 +3724,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (grant.machineOwnerId !== me.id || grant.contributorId !== me.id || grant.hostGrant || grant.hostMachineId || grant.teamSession) {
         fail('AGENT_OWN_MACHINE', 'A new agent runs only on your own computer, in your own account.', 403)
       }
+      // A Member started through Cmd-N (task #4196, anh Dee 11-07): a server start waited on its host (p50 18 s, p95 4 min), so
+      // its person's Desktop starts it on their own computer at once. Only its chat opens here, with no start, so neither a listed
+      // computer nor a host that runs Regular starts is needed; agent.add then brings the running session into the chat.
+      if (command.local) {
+        if (command.kind !== 'regular') fail('LOCAL_MEMBER_ONLY', 'A Lead started on your computer starts its project with project.create.', 400)
+        const name = command.name ?? fail('AGENT_NAME_REQUIRED', 'Name your agent.', 400)
+        result.conversationId = openAgentChat(me, name)
+        break
+      }
       // A Buddy-only record is not the computer in the Swarm: its person adds it first (Desktop does, with no screen).
       const pool = state.machines?.find(m => m.machineId === command.machineId && m.contributorId === me.id && !m.buddyOnly && !m.removal)
         ?? fail('MACHINE_NOT_LISTED', 'Add this computer to the Swarm first.', 403)
@@ -3708,9 +3749,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const name = command.name ?? fail('AGENT_NAME_REQUIRED', 'Name your agent.', 400)
       // Only a host that says it runs one gets its start (read/hostRows.ts regularStarts): an older one would leave it waiting.
       if (!pool.observation?.capabilities?.includes(REGULAR_AGENT_CAPABILITY)) fail('HOST_OUTDATED', `Update Harness on ${pool.name ?? 'your computer'} to start this agent there.`, 409)
-      const chatId = stableId('agent-chat', me.id, me.generation, operationId)
-      state.conversations.push({ id: chatId, kind: 'agent-chat', title: name, leadId: null, agentIds: [], archived: false, brief: '', checks: [],
-        assignment: null, lastMessageSequence: 0, audience: { people: [{ id: me.id, generation: me.generation }] } })
+      const chatId = openAgentChat(me, name)
       const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
         ...(command.model ? { model: command.model } : {}), name, cwd: buddyHomeFolder(pool, me), worktree: false, requirements: BUDDY_REQUIREMENTS, regular: true }
       const admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)!

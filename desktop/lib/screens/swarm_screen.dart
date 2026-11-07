@@ -3847,11 +3847,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
     String? task,
     String? superTabConversationId,
     bool newSwarmProject = false,
+    bool newSwarmAgent = false,
     HarnessPlacement? placement,
     _NewHarnessSource source = _NewHarnessSource.workspace,
     bool Function()? stillCurrent,
   }) async {
     if (!newSwarmProject &&
+        !newSwarmAgent &&
         _newHarnessEmbedded &&
         _newHarness != null &&
         source == _NewHarnessSource.workspace &&
@@ -3962,8 +3964,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
         integration = await SuperTabLaunch.open(
           app,
           superTab,
-          newSwarmProject ? 'new-project' : conversation,
+          newSwarmProject
+              ? 'new-project'
+              : newSwarmAgent
+              ? 'new-agent'
+              : conversation,
           newProject: newSwarmProject,
+          newAgent: newSwarmAgent,
         );
       } catch (failure) {
         _showPaneActionHint(failure.toString());
@@ -8426,6 +8433,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                           app: app,
                                           onNewProject: () => unawaited(
                                             _newAgent(newSwarmProject: true),
+                                          ),
+                                          // + New agent (task #4196): Cmd-N,
+                                          // with Member or Lead.
+                                          onNewAgent: () => unawaited(
+                                            _newAgent(newSwarmAgent: true),
                                           ),
                                           onNewSwarm: () =>
                                               _newTab(superTab: true),

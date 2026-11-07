@@ -63,7 +63,6 @@ import 'crew_panel.dart';
 import 'instructions_panel.dart';
 import 'project_rules.dart';
 import 'model.dart';
-import 'join/new_agent_dialog.dart';
 import 'agent_details.dart';
 import 'identity.dart' show superTabMachineName;
 import 'identity_card.dart';
@@ -140,6 +139,7 @@ class SuperTabView extends StatefulWidget {
     this.terminalsVisible = false,
     this.app,
     this.onNewProject,
+    this.onNewAgent,
     this.rightPane,
     this.onNewSwarm,
     this.onChooseAgentTerminal,
@@ -170,6 +170,10 @@ class SuperTabView extends StatefulWidget {
   final bool terminalsVisible;
   final AppNotifier? app;
   final VoidCallback? onNewProject;
+
+  /// + New agent (task #4196): opens the workspace's Cmd-N form with Member or
+  /// Lead. Null shows no + New agent.
+  final VoidCallback? onNewAgent;
 
   /// The Desktop's right pane (Swarm v3's Tasks, task #4119): always shown, never collapsing, in the pane layout's right
   /// slot. Given, the chat of the selected agent or project is in the middle; without it the right pane keeps the Board's
@@ -2104,7 +2108,7 @@ class _SuperTabViewState extends State<SuperTabView>
     compact: _phone,
     app: widget.app,
     onNewProject: widget.onNewProject,
-    onNewAgent: widget.app == null ? null : _newAgent,
+    onNewAgent: widget.onNewAgent,
     onOpenAgentChat: _openAgentChat,
     onNewSwarm: widget.onNewSwarm,
     page: _pageShown,
@@ -2135,15 +2139,6 @@ class _SuperTabViewState extends State<SuperTabView>
     },
     onOpenBuddyChat: (projectId) => unawaited(_openBuddyChat(projectId)),
   );
-
-  /// + New agent (Swarm v3, task #4118): the creation dialog, where Regular or PM is chosen and the agent starts on this
-  /// computer. It needs the app: a view without one has no +.
-  void _newAgent() {
-    final app = widget.app;
-    if (app != null) {
-      unawaited(showSwarmNewAgentDialog(context, controller: c, app: app));
-    }
-  }
 
   /// Opens the reader's Buddy chat in [projectId] in front of Notifications,
   /// pull requests and a terminal, opening it on the server when they have
@@ -5151,7 +5146,8 @@ class _SuperTabViewState extends State<SuperTabView>
     if ((!widget.board || c.selected == null) &&
         c.snapshot?.projects.isEmpty == true &&
         !c.accessRevoked) {
-      final newAgent = widget.board && widget.app != null ? _newAgent : null;
+      // The same + New agent as the left pane's: the Cmd-N form (task #4196).
+      final newAgent = widget.board ? widget.onNewAgent : null;
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
