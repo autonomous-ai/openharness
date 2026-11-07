@@ -8,6 +8,7 @@ import { commandSchema } from '../src/superTabs/commands.js'
 import type { Conversation } from '../src/superTabs/model.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { feedIdsOf, markFeedIds } from '../src/superTabs/read/feedIds.js'
+import { linkOlderDuplicates } from '../src/superTabs/read/olderDuplicates.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
 
@@ -210,6 +211,42 @@ describe('a duplicate of a quiet task (task #4480)', () => {
       const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key } } })
       expect((row.data as unknown as Conversation).foldedInto, key).toEqual([f.asked])
     }
+  })
+
+  it('leaves at worker start when it was cancelled before #4480 shipped, with a line saying where its work goes on', async () => {
+    const f = await fixture()
+    const real = await quiet(f, f.asked)
+    const other = String((await f.execute({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' })).projectId)
+    const elsewhere = ((await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: await create(f, 'Real elsewhere', other) } } }))
+      .data as unknown as Conversation).number
+    // An assigned task cancelled as a duplicate, its reason in its assignment's result.
+    const assigned = await create(f, 'Assigned duplicate')
+    const agent = String((await f.execute({ type: 'agent.add', conversationId: assigned, machineId: 'feed-peer-mac', harnessId: randomUUID(), name: 'Dupe', configuration: config, lead: false }, peer)).agentId)
+    await f.execute({ type: 'work.assign', conversationId: assigned, agentId: agent })
+    const assignment = ((await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: assigned } } })).data as unknown as Conversation).assignment!
+    await f.execute({ type: 'work.cancel', conversationId: assigned, assignmentId: assignment.id, reason: `Duplicate of #${real}` })
+    // Tasks nobody was assigned, their reasons only in their cancel lines.
+    const inside = await create(f, 'Unassigned duplicate'), across = await create(f, 'Across projects'), waiting = await create(f, 'Waiting')
+    await cancel(f, inside, `Being done inside #${real}`)
+    await cancel(f, across, `Duplicate of #${elsewhere}`)
+    await cancel(f, waiting, `Waiting on #${real}`)
+    // As a backend from before #4480 stored them: no number column and no link, so each is still in the feed.
+    await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { tabId: f.tab }, u: { $unset: { number: '', feedIds: '', 'data.foldedInto': '' } }, multi: true }] })
+    await markFeedIds(db)
+    expect(await feedOf(f)).toEqual(expect.arrayContaining([assigned, inside, across, waiting]))
+
+    expect(await linkOlderDuplicates(db, f.store)).toBe(2)
+    const feed = await feedOf(f)
+    expect(feed).not.toContain(assigned)
+    expect(feed).not.toContain(inside)
+    expect(feed).toEqual(expect.arrayContaining([across, waiting, f.asked]))
+    for (const key of [assigned, inside]) {
+      const lines = await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: key } })
+      expect(lines.filter(m => m.text.includes(`goes on in #${real}`)), key).toHaveLength(1)
+    }
+    const rows = await db.swarmGroup.findMany({ where: { tabId: f.tab } })
+    for (const row of rows) expect(row.number, row.key).toBe((row.data as unknown as Conversation).number ?? null)
+    expect(await linkOlderDuplicates(db, f.store)).toBe(0)
   })
 
   it('stays when the task it names is in another project', async () => {
