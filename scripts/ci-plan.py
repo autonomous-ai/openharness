@@ -125,14 +125,16 @@ NOT_READS = {
                       "backend/src/superTabs/mergeTrain/plan.test.ts", "backend/src/superTabs/mergeTrain/train.test.ts",
                       "backend/src/superTabs/pullRequestFiles.test.ts")},
     **{source: ("test data: changed file names", {"docs/", "docs/plans/"})
-       for source in ("backend/src/superTabs/reviewSteps.test.ts", "backend/src/superTabs/reviewTable.test.ts")},
+       for source in ("backend/src/superTabs/prHistory.test.ts", "backend/src/superTabs/reviewSteps.test.ts",
+                      "backend/src/superTabs/reviewTable.test.ts")},
     "backend/src/superTabs/dispatch.test.ts": ("test data: a task's owned paths", {"docs/plans/"}),
     "backend/src/superTabs/dispatch.ts": ("a lane's owned paths, not file inputs", {"docs/"}),
     "backend/src/superTabs/policy.test.ts": ("test data: paths for policy matching, not file contents",
                                           {"docs/", "docs/plans/", "docs/autonomous-device-integration.md",
                                            "docs/performance/2026-09-22-pane-data/pane-sweep-after-1.json"}),
     "backend/src/superTabs/policy.ts": ("a policy's untested-path glob, not file inputs", {"docs/"}),
-    "backend/src/superTabs/releases.test.ts": ("test data: changed file names", {"docs/plans/"}),
+    **{source: ("test data: changed file names", {"docs/plans/"})
+       for source in ("backend/src/superTabs/prHistoryRead.test.ts", "backend/src/superTabs/releases.test.ts")},
     **{source: ("test data: owned-code paths and model names", {"desktop/lib/", "desktop/lib/super_tabs/",
                                                                 "desktop/lib/super_tabs/roster.dart"})
        for source in ("backend/src/superTabs/commands.test.ts", "backend/integration/superTabs.test.ts")},
