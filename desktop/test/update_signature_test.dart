@@ -295,4 +295,30 @@ void main() {
     );
     expect(script.indexOf(load), lessThan(script.indexOf('Test-FileCatalog')));
   });
+
+  // Windows CI run 42354774882: Resolve-Path gave the temp folder in another
+  // form than Get-ChildItem's FullName (8.3 RUNNER~1 against runneradmin), so
+  // cutting the root's length off named harness-desktop.exe
+  // "ng/harness-desktop.exe" and every update would have been refused. Each
+  // file is named relative to the very path it was listed from.
+  test(
+    'the Windows report names files relative to the path it lists them from',
+    () {
+      final script = windowsReportScript;
+      expect(script, isNot(contains('Resolve-Path')));
+      expect(
+        script,
+        contains(
+          r"$base = (Get-Item -LiteralPath $folder).FullName.TrimEnd('\')",
+        ),
+      );
+      expect(script, contains(r'Get-ChildItem -LiteralPath $base -Recurse'));
+      expect(
+        script,
+        contains(
+          r"if (-not $_.FullName.StartsWith($base + '\', [StringComparison]::OrdinalIgnoreCase))",
+        ),
+      );
+    },
+  );
 }
