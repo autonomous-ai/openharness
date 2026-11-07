@@ -5,38 +5,66 @@ import '../../shared/theme/app_theme.dart' as grid;
 import '../../shared/widgets/app_menu.dart';
 import '../../widgets/desktop_chrome.dart';
 
-/// The top of the Tasks pane (anh Dee, 11-07): "Tasks" in semibold on the left, and the reader's Accept all or
-/// Ask me choice on the right, shown only when [mode] is known.
+/// The top of the right pane (anh Dee, 11-07, task #4689): "Activity" in semibold on the left; on the right who the
+/// reader sees (Everyone or Mine) and their Accept all or Ask me choice, each a quiet icon that opens a small menu.
 class SuperTabTasksPaneHeader extends StatelessWidget {
-  const SuperTabTasksPaneHeader({super.key, this.mode, this.onChanged});
+  const SuperTabTasksPaneHeader({
+    super.key,
+    required this.mine,
+    required this.onMine,
+    this.mode,
+    this.onChanged,
+  });
+
+  /// The reader sees only their own tasks and their agents'.
+  final bool mine;
+  final ValueChanged<bool> onMine;
 
   /// `autoApprove` or `review`, as the server stores it; null when the backend has no Tasks.
   final String? mode;
 
-  /// Null while a change is sent or the reader can't write: the choice then stays plain text.
+  /// Null while a change is sent or the reader can't write: the choice then does not open.
   final ValueChanged<String>? onChanged;
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     return Padding(
-      padding: const EdgeInsets.symmetric(
-        horizontal: grid.AppDesktop.groupGap,
-        vertical: grid.AppDesktop.controlGap,
+      padding: const EdgeInsets.fromLTRB(
+        grid.AppDesktop.groupGap,
+        grid.AppDesktop.controlGap,
+        grid.AppDesktop.controlGap,
+        grid.AppDesktop.controlGap,
       ),
       child: Row(
         children: [
           Expanded(
             child: Text(
-              'Tasks',
+              'Activity',
               style: DesktopChrome.control(color: DesktopChrome.foreground)
                   .copyWith(fontWeight: grid.AppFont.semibold),
             ),
           ),
+          _IconChoice<bool>(
+            key: const ValueKey('tasks-scope'),
+            tooltip: 'Who you see',
+            value: mine,
+            choices: const [
+              (false, 'Everyone', AppIcons.users),
+              (true, 'Mine', AppIcons.user),
+            ],
+            onChanged: onMine,
+          ),
           if (mode case final mode?)
-            _ApprovalModeChoice(
+            _IconChoice<String>(
               key: const ValueKey('tasks-approval-mode'),
-              mode: mode,
+              tooltip: 'Your tasks',
+              value: mode,
+              // As a meeting invite (anh Dee, 11-07): the stored values stay.
+              choices: const [
+                ('autoApprove', 'Accept all', AppIcons.checkCheck),
+                ('review', 'Ask me', AppIcons.hand),
+              ],
               onChanged: onChanged,
             ),
         ],
@@ -45,96 +73,92 @@ class SuperTabTasksPaneHeader extends StatelessWidget {
   }
 }
 
-/// The Accept all or Ask me choice: plain secondary text at rest, its chevron and a faint fill only on hover,
-/// focus or while open (anh Dee, 11-07: dropdowns stay plain text until you hover).
-class _ApprovalModeChoice extends StatefulWidget {
-  const _ApprovalModeChoice({
+/// A 28-point icon that shows the current choice, quiet until hover, focus or while its menu is open; its menu
+/// lists each choice with its icon and a check on the current one.
+class _IconChoice<T> extends StatefulWidget {
+  const _IconChoice({
     super.key,
-    required this.mode,
+    required this.tooltip,
+    required this.value,
+    required this.choices,
     required this.onChanged,
   });
 
-  /// `autoApprove` or `review`, as the server stores it.
-  final String mode;
+  final String tooltip;
+  final T value;
+  final List<(T, String, IconData)> choices;
 
-  /// Null while a change is sent or the reader can't write: the choice then stays plain text.
-  final ValueChanged<String>? onChanged;
+  /// Null: the icon shows the choice and does not open.
+  final ValueChanged<T>? onChanged;
 
   @override
-  State<_ApprovalModeChoice> createState() => _ChoiceState();
+  State<_IconChoice<T>> createState() => _IconChoiceState<T>();
 }
 
-/// As a meeting invite (anh Dee, 11-07): Accept all, or Ask me before a task starts. The stored values stay.
-const _modes = {'autoApprove': 'Accept all', 'review': 'Ask me'};
+/// The icon's target (anh Dee, 11-07).
+const _target = 28.0;
 
-/// What each choice does, under it in the menu (#3532), in a few words.
-const _details = {
-  'autoApprove': 'Your tasks start right away.',
-  'review': 'Your tasks wait for you to accept them.',
-};
-
-class _ChoiceState extends State<_ApprovalModeChoice> {
+class _IconChoiceState<T> extends State<_IconChoice<T>> {
   bool _hovered = false, _focused = false;
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final onChanged = widget.onChanged;
+    final current = widget.choices.firstWhere(
+      (c) => c.$1 == widget.value,
+      orElse: () => widget.choices.first,
+    );
     return AppDropdown(
-      // Wide enough that each choice's line reads whole in the pane's 340 (#3532).
-      width: 300,
       alignment: AlignmentDirectional.bottomEnd,
       onClose: () {
         if (mounted) setState(() {});
       },
       children: [
-        for (final MapEntry(key: mode, value: label) in _modes.entries)
+        for (final (value, label, icon) in widget.choices)
           AppMenuItem(
+            icon: icon,
             label: label,
-            detail: _details[mode],
-            selected: mode == widget.mode,
+            selected: value == widget.value,
             // The stored choice closes the menu and sends nothing.
             onPressed: () {
-              if (mode != widget.mode) onChanged?.call(mode);
+              if (value != widget.value) onChanged?.call(value);
             },
           ),
       ],
       builder: (context, menu, _) {
-        // The chevron's room is held at rest, so the text never moves when it shows.
         final lit = onChanged != null && (_hovered || _focused || menu.isOpen);
-        return InkWell(
-          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-          hoverColor: grid.AppSurface.hoverFill,
-          focusColor: grid.AppSurface.hoverFill,
-          onHover: (hovered) => setState(() => _hovered = hovered),
-          onFocusChange: (focused) => setState(() => _focused = focused),
-          onTap: onChanged == null
-              ? null
-              : () {
-                  menu.isOpen ? menu.close() : menu.open();
-                  setState(() {});
-                },
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: grid.AppDesktop.badgeInset,
-              vertical: grid.AppDesktop.listRowGap,
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  _modes[widget.mode] ?? _modes.values.first,
-                  style: DesktopChrome.metadata(),
+        return Tooltip(
+          message: widget.tooltip,
+          child: Semantics(
+            button: true,
+            label: '${widget.tooltip}: ${current.$2}',
+            child: InkWell(
+              borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+              hoverColor: grid.AppSurface.hoverFill,
+              focusColor: grid.AppSurface.hoverFill,
+              onHover: (hovered) => setState(() => _hovered = hovered),
+              onFocusChange: (focused) => setState(() => _focused = focused),
+              onTap: onChanged == null
+                  ? null
+                  : () {
+                      menu.isOpen ? menu.close() : menu.open();
+                      setState(() {});
+                    },
+              child: Ink(
+                width: _target,
+                height: _target,
+                decoration: BoxDecoration(
+                  // Held while the menu is open, as the mockup's lit icon.
+                  color: menu.isOpen ? grid.AppSurface.hoverFill : null,
+                  borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
                 ),
-                Opacity(
-                  opacity: lit ? 1 : 0,
-                  child: Icon(
-                    AppIcons.chevronDown,
-                    size: AppIcons.metadataSize,
-                    color: DesktopChrome.muted,
-                  ),
+                child: Icon(
+                  current.$3,
+                  size: AppIcons.inlineSize,
+                  color: lit ? DesktopChrome.foreground : DesktopChrome.muted,
                 ),
-              ],
+              ),
             ),
           ),
         );

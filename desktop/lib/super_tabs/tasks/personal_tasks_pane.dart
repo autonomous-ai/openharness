@@ -14,7 +14,8 @@ import 'personal_task_card.dart';
 import 'personal_tasks.dart';
 import 'tasks_pane_header.dart';
 
-/// The person's active work, from the same authenticated cursor as the chat.
+/// Activity (task #4689): every task the person may read, what waits on their Accept first, from the same
+/// authenticated cursor as the chat.
 class SuperTabPersonalTasksPane extends StatefulWidget {
   const SuperTabPersonalTasksPane({
     super.key,
@@ -41,13 +42,20 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
   String? _error, _operationId;
   Map<String, dynamic>? _action;
   bool _sending = false, _olderFailed = false;
+
+  /// Mine: only the reader's tasks and their agents'; else Everyone's (task #4689).
+  bool _mine = false;
   SuperTabController get c => widget.controller;
+
+  /// Everyone reads every task's pages, once the backend sends them; Mine and an older backend read the reader's.
+  bool get _everyone => !_mine && c.allTasks?.supported == true;
 
   /// Near the end of the list, the next older page is read; the controller sends one read at a time.
   bool _onScroll(ScrollNotification note) {
     final m = note.metrics;
+    final feed = _everyone ? c.allTasks : c.personalTasks;
     if (!_olderFailed &&
-        c.personalTasks?.olderCursor != null &&
+        feed?.olderCursor != null &&
         m.pixels >= m.maxScrollExtent - m.viewportDimension) {
       unawaited(_loadOlder());
     }
@@ -56,7 +64,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
 
   Future<void> _loadOlder() async {
     final owner = c;
-    final ok = await owner.loadOlderPersonalTasks();
+    final ok = await owner.loadOlderPersonalTasks(everyone: _everyone);
     if (mounted && identical(owner, c) && ok == _olderFailed) {
       setState(() => _olderFailed = !ok);
     }
@@ -206,6 +214,15 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
       final people = {
         for (final p in snapshot?.people ?? <SuperTabPerson>[]) p.id: p,
       };
+      // What waits on the reader's Accept first, oldest first, with no heading; then the rest, newest first (#4689).
+      final activity = supported
+          ? superTabActivity(
+              mine: tasks!,
+              everyone: c.allTasks,
+              mineOnly: _mine,
+            )
+          : null;
+      final rows = [...?activity?.pinned, ...?activity?.rest];
       // One filled box as large as the slot, under a see-through Material that
       // only carries the rows' ink: a Material's own surface was drawn only as
       // far as the rows, and the window's backing showed below them. It is the
@@ -219,6 +236,11 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 SuperTabTasksPaneHeader(
+                  mine: _mine,
+                  onMine: (mine) => setState(() {
+                    _mine = mine;
+                    _olderFailed = false;
+                  }),
                   mode: supported ? tasks!.mode : null,
                   onChanged: enabled
                       ? (mode) => unawaited(
@@ -279,14 +301,14 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                 else if (supported)
                   Expanded(
                     // Empty means empty (anh Dee's rule 7, task #4465).
-                    child: tasks!.rows.isEmpty
+                    child: rows.isEmpty
                         ? const SizedBox.shrink()
                         : NotificationListener<ScrollNotification>(
                             onNotification: _onScroll,
                             child: LaidOutListView.builder(
-                              itemCount: tasks.rows.length,
+                              itemCount: rows.length,
                               itemBuilder: (context, index) {
-                                final task = tasks.rows[index];
+                                final task = rows[index];
                                 final agent = agents[task.agentId];
                                 final person = people[task.requesterId];
                                 final waiting =

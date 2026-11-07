@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
@@ -141,20 +140,34 @@ void main() {
       // No field, no words at rest (#4689): the icon of the current choice.
       expect(find.byType(AppSelectField<String>), findsNothing);
       expect(find.byType(DropdownButton<String>), findsNothing);
-      expect(find.descendant(of: mode, matching: find.byIcon(AppIcons.checkCheck)), findsOneWidget);
+      expect(
+        find.descendant(of: mode, matching: find.byIcon(AppIcons.checkCheck)),
+        findsOneWidget,
+      );
       expect(find.text('Accept all'), findsNothing);
       await t.tap(mode);
       await t.pumpAndSettle();
       expect(find.byType(AppMenuItem), findsNWidgets(2));
-      expect(t.widget<AppMenuItem>(find.widgetWithText(AppMenuItem, 'Accept all')).selected, isTrue);
-      expect(t.widget<AppMenuItem>(find.widgetWithText(AppMenuItem, 'Ask me')).icon, AppIcons.hand);
+      expect(
+        t
+            .widget<AppMenuItem>(find.widgetWithText(AppMenuItem, 'Accept all'))
+            .selected,
+        isTrue,
+      );
+      expect(
+        t.widget<AppMenuItem>(find.widgetWithText(AppMenuItem, 'Ask me')).icon,
+        AppIcons.hand,
+      );
       await t.tap(find.text('Ask me').last);
       await t.pumpAndSettle();
       expect(f.commands.single, {
         'type': 'member.approvalMode',
         'mode': 'review',
       });
-      expect(find.descendant(of: mode, matching: find.byIcon(AppIcons.hand)), findsOneWidget);
+      expect(
+        find.descendant(of: mode, matching: find.byIcon(AppIcons.hand)),
+        findsOneWidget,
+      );
     },
   );
 

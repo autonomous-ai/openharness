@@ -123,3 +123,35 @@ class SuperTabPersonalTasks {
     'olderCursor': ?olderCursor,
   };
 }
+
+/// What Activity lists (anh Dee, 11-07, task #4689): every task waiting on the reader's Accept pinned on top, oldest
+/// first, then the rest of [everyone] (or of [mine] when [mineOnly]), newest activity first; each task once, at its
+/// newest version. An older backend sends no [everyone] feed, and Everyone then lists [mine].
+({List<SuperTabPersonalTask> pinned, List<SuperTabPersonalTask> rest})
+superTabActivity({
+  required SuperTabPersonalTasks mine,
+  SuperTabPersonalTasks? everyone,
+  bool mineOnly = false,
+}) {
+  final newest = <String, SuperTabPersonalTask>{};
+  for (final row in [...mine.rows, ...?everyone?.rows]) {
+    if ((newest[row.id]?.version ?? -1) < row.version) newest[row.id] = row;
+  }
+  final pinned =
+      newest.values
+          .where((row) => row.status == 'proposal' && row.canApprove)
+          .toList()
+        ..sort((a, b) {
+          final time = a.at.compareTo(b.at);
+          return time == 0 ? a.id.compareTo(b.id) : time;
+        });
+  final held = {for (final row in pinned) row.id};
+  final feed = mineOnly || everyone?.supported != true ? mine : everyone!;
+  return (
+    pinned: pinned,
+    rest: [
+      for (final row in feed.rows)
+        if (!held.contains(row.id)) newest[row.id]!,
+    ],
+  );
+}

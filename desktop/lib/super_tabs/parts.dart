@@ -90,6 +90,7 @@ class SuperTabParts {
       }
     }
     parts.personalTasks.apply(answer['personalTasks']);
+    parts.allTasks.apply(answer['allTasks']);
     parts._takeReadMarks(marks);
     // Every one is news to a device whose own mark is higher.
     parts._takeUnreadMarks(unreadMarks, all: true);
@@ -117,6 +118,7 @@ class SuperTabParts {
       }
     }
     parts.personalTasks.restoreVersions(json['personalTaskVersions']);
+    parts.allTasks.restoreVersions(json['allTaskVersions']);
     parts._takeReadMarks(json['readMarks']);
     parts._takeThreadMarks(json['threadMarks']);
     parts._takeChatSettings(json['chatSettings']);
@@ -157,6 +159,10 @@ class SuperTabParts {
       };
 
   final personalTasks = SuperTabPersonalTasks();
+
+  /// Every task of every project the reader reads, for Activity's Everyone (backend #4689); unsupported from an
+  /// older backend, where Activity shows [personalTasks].
+  final allTasks = SuperTabPersonalTasks();
 
   Map<String, dynamic> _head;
   Map<String, dynamic> _derived;
@@ -378,6 +384,9 @@ class SuperTabParts {
     if (personalTasks.apply(changes['personalTasks'])) {
       changed = beyondMachines = true;
     }
+    if (allTasks.apply(changes['allTasks'])) {
+      changed = beyondMachines = true;
+    }
     derivedEtag = etag;
     cursor = _cursor(changes);
     epoch = _int(changes['epoch'] ?? epoch);
@@ -542,12 +551,14 @@ class SuperTabParts {
       'githubApp': githubApp,
       'head': _head,
       if (personalTasks.supported) 'personalTasks': personalTasks.toJson(),
+      if (allTasks.supported) 'allTasks': allTasks.toJson(),
       for (final kind in _lists)
         kind: (_live[kind] ?? const {}).values.toList(),
       'derived': _derived,
       if (derivedEtag != null) 'derivedEtag': derivedEtag,
     },
     if (personalTasks.supported) 'personalTaskVersions': personalTasks.versions,
+    if (allTasks.supported) 'allTaskVersions': allTasks.versions,
     'dormant': _dormant.values.toList(),
     'seen': Map<String, int>.of(_seen),
     'stale': _stale.toList(),

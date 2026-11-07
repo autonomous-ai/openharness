@@ -169,36 +169,37 @@ void main() {
     );
   }
 
-  testWidgets('waiting first, oldest first, with project, agent and proposal mark', (
-    t,
-  ) async {
-    await mount(t);
-    // Both wait on the reader's Accept: pinned, the one waiting longest on top (#4689).
-    expect(
-      t.getTopLeft(find.text('Task old')).dy,
-      lessThan(t.getTopLeft(find.text('Task new')).dy),
-    );
-    expect(find.text('Activity'), findsOneWidget);
-    expect(find.byTooltip('Proposal'), findsNWidgets(2));
-    expect(find.byIcon(AppIcons.lightbulb), findsNWidgets(2));
-    f.rows.first['status'] = 'working';
-    f.rows.first['version'] = 2;
-    await f.controller.refresh();
-    await t.pump();
-    expect(
-      find.byWidgetPredicate(
-        (w) => w is ActivityMark && w.activity == HarnessActivity.working,
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('tasks-approval-mode')),
-        matching: find.byIcon(AppIcons.checkCheck),
-      ),
-      findsOneWidget,
-    );
-  });
+  testWidgets(
+    'waiting first, oldest first, with project, agent and proposal mark',
+    (t) async {
+      await mount(t);
+      // Both wait on the reader's Accept: pinned, the one waiting longest on top (#4689).
+      expect(
+        t.getTopLeft(find.text('Task old')).dy,
+        lessThan(t.getTopLeft(find.text('Task new')).dy),
+      );
+      expect(find.text('Activity'), findsOneWidget);
+      expect(find.byTooltip('Proposal'), findsNWidgets(2));
+      expect(find.byIcon(AppIcons.lightbulb), findsNWidgets(2));
+      f.rows.first['status'] = 'working';
+      f.rows.first['version'] = 2;
+      await f.controller.refresh();
+      await t.pump();
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is ActivityMark && w.activity == HarnessActivity.working,
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('tasks-approval-mode')),
+          matching: find.byIcon(AppIcons.checkCheck),
+        ),
+        findsOneWidget,
+      );
+    },
+  );
   testWidgets(
     'ordinary proposals open their conversation without approval controls',
     (t) async {
@@ -249,7 +250,10 @@ void main() {
         final choice = find.byKey(ValueKey(key));
         final glyph = find.descendant(of: choice, matching: find.byIcon(icon));
         Color? ink() => t.widget<Icon>(glyph).color;
-        expect(t.getSize(find.descendant(of: choice, matching: find.byType(Ink))), const Size(28, 28));
+        expect(
+          t.getSize(find.descendant(of: choice, matching: find.byType(Ink))),
+          const Size(28, 28),
+        );
         expect(ink(), DesktopChrome.muted);
         final mouse = await t.createGesture(kind: PointerDeviceKind.mouse);
         await mouse.addPointer(location: Offset.zero);

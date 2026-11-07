@@ -215,16 +215,28 @@ void main() {
     SuperTabPersonalTasks of(List<Map<String, dynamic>> rows) =>
         SuperTabPersonalTasks()..apply(feed(rows, reset: true));
     Map<String, dynamic> working(String id, int version, int at) =>
-        task(id, version, at)..addAll({'status': 'working', 'canApprove': false});
+        task(id, version, at)
+          ..addAll({'status': 'working', 'canApprove': false});
     // Accepted since: Everyone holds the newer version, Mine the waiting one.
     final mine = of([task('a', 1, 5), task('b', 1, 1), working('m', 1, 3)]);
-    final everyone = of([working('a', 2, 9), task('b', 1, 1), working('m', 1, 3), working('t', 1, 7)]);
-    List<String> ids(List<SuperTabPersonalTask> rows) => [for (final r in rows) r.id];
+    final everyone = of([
+      working('a', 2, 9),
+      task('b', 1, 1),
+      working('m', 1, 3),
+      working('t', 1, 7),
+    ]);
+    List<String> ids(List<SuperTabPersonalTask> rows) => [
+      for (final r in rows) r.id,
+    ];
     final all = superTabActivity(mine: mine, everyone: everyone);
     expect(ids(all.pinned), ['b']);
     expect(ids(all.rest), ['a', 't', 'm']);
     expect(all.rest.first.version, 2);
-    final own = superTabActivity(mine: mine, everyone: everyone, mineOnly: true);
+    final own = superTabActivity(
+      mine: mine,
+      everyone: everyone,
+      mineOnly: true,
+    );
     expect(ids(own.pinned), ['b']);
     expect(ids(own.rest), ['a', 'm']);
     // An older backend sends no Everyone: both list the reader's.

@@ -439,23 +439,31 @@ class SuperTabController extends ChangeNotifier {
 
   SuperTabPersonalTasks? get personalTasks => _parts?.personalTasks;
 
-  Future<bool>? _olderPersonalTasks;
+  /// Every task the person may read (backend #4689): Activity's Everyone.
+  SuperTabPersonalTasks? get allTasks => _parts?.allTasks;
 
-  /// Reads the next older page of the person's Tasks (backend #4203), one read at a time. False when it failed.
-  Future<bool> loadOlderPersonalTasks() => _olderPersonalTasks ??=
-      _readOlderPersonalTasks().whenComplete(() => _olderPersonalTasks = null);
+  final _olderTasks = <bool, Future<bool>>{};
 
-  Future<bool> _readOlderPersonalTasks() async {
+  /// Reads the next older page of the person's Tasks (backend #4203), or of every task with [everyone] (#4689), one
+  /// read at a time per feed. False when it failed.
+  Future<bool> loadOlderPersonalTasks({bool everyone = false}) =>
+      _olderTasks[everyone] ??= _readOlderTasks(everyone).whenComplete(() {
+        // A block, not an arrow: the removed future returned here would be awaited by itself.
+        _olderTasks.remove(everyone);
+      });
+
+  Future<bool> _readOlderTasks(bool everyone) async {
     final parts = _parts;
-    final cursor = parts?.personalTasks.olderCursor;
-    if (parts == null || cursor == null) return true;
+    final feed = everyone ? parts?.allTasks : parts?.personalTasks;
+    final cursor = feed?.olderCursor;
+    if (parts == null || feed == null || cursor == null) return true;
     try {
       final page = await request(
         'GET',
-        '$_path/personal-tasks?before=${Uri.encodeComponent(cursor)}',
+        '$_path/${everyone ? 'all-tasks' : 'personal-tasks'}?before=${Uri.encodeComponent(cursor)}',
       );
       if (_disposed || !identical(parts, _parts)) return true;
-      if (parts.personalTasks.applyOlder(page, from: cursor)) _changed();
+      if (feed.applyOlder(page, from: cursor)) _changed();
       return true;
     } catch (failure) {
       if (_isUpdateRequired(failure)) _requireUpdate();

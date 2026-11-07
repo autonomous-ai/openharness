@@ -30,7 +30,11 @@ void main() {
     final opened = <String>[];
     // Mine: a task of the reader's agent, and two waiting on their Accept. Everyone: those, and a teammate's.
     final f = TasksFixture()
-      ..rows = [task('waits-old', 1, 10), task('waits-new', 1, 30), working('mine', 20)]
+      ..rows = [
+        task('waits-old', 1, 10),
+        task('waits-new', 1, 30),
+        working('mine', 20),
+      ]
       ..everyone = [
         task('waits-old', 1, 10),
         task('waits-new', 1, 30),
@@ -62,7 +66,10 @@ void main() {
       );
       final keys = [
         for (final e in cards.evaluate())
-          ((e.widget.key! as ValueKey<String>).value.substring(14), t.getTopLeft(find.byWidget(e.widget)).dy),
+          (
+            (e.widget.key! as ValueKey<String>).value.substring(14),
+            t.getTopLeft(find.byWidget(e.widget)).dy,
+          ),
       ]..sort((a, b) => a.$2.compareTo(b.$2));
       return [for (final k in keys) k.$1];
     }
@@ -73,17 +80,31 @@ void main() {
 
     // Mine: the person icon, and the teammate's task leaves.
     final scope = find.byKey(const ValueKey('tasks-scope'));
-    expect(find.descendant(of: scope, matching: find.byIcon(AppIcons.users)), findsOneWidget);
+    expect(
+      find.descendant(of: scope, matching: find.byIcon(AppIcons.users)),
+      findsOneWidget,
+    );
     await t.tap(scope);
     await t.pumpAndSettle();
-    expect(t.widget<AppMenuItem>(find.widgetWithText(AppMenuItem, 'Everyone')).selected, isTrue);
+    expect(
+      t
+          .widget<AppMenuItem>(find.widgetWithText(AppMenuItem, 'Everyone'))
+          .selected,
+      isTrue,
+    );
     await t.tap(find.text('Mine'));
     await t.pumpAndSettle();
-    expect(find.descendant(of: scope, matching: find.byIcon(AppIcons.user)), findsOneWidget);
+    expect(
+      find.descendant(of: scope, matching: find.byIcon(AppIcons.user)),
+      findsOneWidget,
+    );
     expect(order(), ['waits-old', 'waits-new', 'mine']);
     await t.tap(scope);
     await t.pumpAndSettle();
-    expect(t.widget<AppMenuItem>(find.widgetWithText(AppMenuItem, 'Mine')).selected, isTrue);
+    expect(
+      t.widget<AppMenuItem>(find.widgetWithText(AppMenuItem, 'Mine')).selected,
+      isTrue,
+    );
     await t.tap(find.text('Everyone'));
     await t.pumpAndSettle();
     expect(order(), ['waits-old', 'waits-new', 'teammate', 'mine']);
@@ -131,8 +152,16 @@ void main() {
   // The approved mockups' pane, at rest and with each menu open, light and dark: written only with
   // HARNESS_V3_TASKS_SHOTS set.
   for (final brightness in Brightness.values) {
-    testWidgets('Activity as the mockups draw it, in ${brightness.name}', (t) async {
-      Map<String, dynamic> row(String id, int at, String project, String title, String status) => {
+    testWidgets('Activity as the mockups draw it, in ${brightness.name}', (
+      t,
+    ) async {
+      Map<String, dynamic> row(
+        String id,
+        int at,
+        String project,
+        String title,
+        String status,
+      ) => {
         ...task(id, 1, at),
         'projectId': 'p-$project',
         'projectName': project,
@@ -142,12 +171,38 @@ void main() {
         'suggested': false,
       };
       final f = TasksFixture()
-        ..rows = [row('mockups', 5, 'harness', 'Build to the approved mockups', 'proposal')]
+        ..rows = [
+          row(
+            'mockups',
+            5,
+            'harness',
+            'Build to the approved mockups',
+            'proposal',
+          ),
+        ]
         ..everyone = [
-          row('mockups', 5, 'harness', 'Build to the approved mockups', 'proposal'),
+          row(
+            'mockups',
+            5,
+            'harness',
+            'Build to the approved mockups',
+            'proposal',
+          ),
           row('voice', 70, 'lamp', 'Fix the voice timeout on wake', 'done'),
-          row('projects', 60, 'harness', 'Projects page: a list like GitHub', 'working'),
-          row('wall', 50, 'pod', 'Left wall drawing for the factory', 'needs_human'),
+          row(
+            'projects',
+            60,
+            'harness',
+            'Projects page: a list like GitHub',
+            'working',
+          ),
+          row(
+            'wall',
+            50,
+            'pod',
+            'Left wall drawing for the factory',
+            'needs_human',
+          ),
           row('picker', 40, 'computer', 'Tidy the machine picker', 'working'),
           row('emails', 30, 'harness-gtm', 'First 10 retailer emails', 'stuck'),
           row('camera', 20, 'scout', 'Second camera angle', 'done'),
@@ -164,7 +219,10 @@ void main() {
           debugShowCheckedModeBanner: false,
           theme: grid.buildAppTheme(brightness: brightness),
           home: Scaffold(
-            body: SuperTabPersonalTasksPane(controller: f.controller, onOpenTask: (_) {}),
+            body: SuperTabPersonalTasksPane(
+              controller: f.controller,
+              onOpenTask: (_) {},
+            ),
           ),
         ),
       );
