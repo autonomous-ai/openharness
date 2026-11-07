@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Check, Conversation } from '../model.js'
-import { componentOf, eligible, headReads, laneOf, skipReason, splitRed, type TrainCandidate, type TrainTask } from './plan.js'
+import { componentOf, eligible, headReads, laneOf, skipReason, splitRed, standsIn, type TrainCandidate, type TrainTask } from './plan.js'
 import { requiredReads, SEED_RULES } from '../policy.js'
 
 const URL = 'https://github.com/acme/app/pull/7'
@@ -75,17 +75,50 @@ describe('headReads', () => {
     expect(headReads(task({ steps: [...task().steps, two], builders: ['agent:r0'] }), URL, HEAD, 'main')).toEqual(expect.any(String))
     expect(headReads(task({ steps: [...task().steps, two], builders: ['agent:someone-else'] }), URL, HEAD, 'main')).toBe(2)
   })
-  it('never counts a builder\'s pass of a test step, but keeps the builder\'s own task checks', () => {
+  it('never counts a builder\'s pass of a test step', () => {
     const tested = step([check([{ passed: true, head: HEAD }])], { step: 'Test', title: 'Test' })
     tested.checks[0]!.verdicts![0]!.by = 'agent:builder'
     expect(headReads(task({ steps: [...task().steps, tested], builders: ['agent:builder'] }), URL, HEAD, 'main')).toEqual(expect.any(String))
-    const own = task({ builders: ['agent:r0'] })
-    own.steps[0]!.checks[0]!.verdicts![0]!.by = 'agent:reviewer'
-    expect(headReads(own, URL, HEAD, 'main')).toBe(1)
   })
   it('ignores a cancelled step', () => {
     const t = task({ steps: [...task().steps, step([], { step: 'Test', assignment: { status: 'cancelled' } as Conversation['assignment'] })] })
     expect(headReads(t, URL, HEAD, 'main')).toBe(1)
+  })
+})
+
+// Task #4561 (River, 19:20 VN): #3540 and #3545 waited with every step Yes at the head and CI green, as their own acceptance check
+// was unpassed: a builder never passes its own check, and nobody else may record one once the task is Done. A Done task's
+// steps stand in for its own checks; a builder's own pass never counts, as on its steps.
+describe('a Done task\'s steps standing in for its own checks', () => {
+  const unpassed: Check = { id: 'c0', description: 'Every Member task scoped and tested', independent: false, evidence: null, passedBy: null }
+  const ownPass = () => { const c = check([{ passed: true, head: HEAD }]); c.verdicts![0]!.by = 'agent:builder'; return c }
+
+  it('counts a Done task\'s reads when every step said Yes at the head, and names the checks they stand in for', () => {
+    const t = task({ checks: [unpassed], done: true })
+    expect(headReads(t, URL, HEAD, 'main')).toBe(1)
+    expect(standsIn(t, URL)).toEqual(['Every Member task scoped and tested'])
+  })
+
+  it('still names the unpassed check of a task not Done', () => {
+    expect(headReads(task({ checks: [unpassed] }), URL, HEAD, 'main')).toBe('the task\'s check "Every Member task scoped and tested": nobody has passed it yet')
+  })
+
+  it('never counts the builder\'s own pass of its task\'s check: not Done, it waits; Done, its steps stand in', () => {
+    const own = task({ checks: [ownPass()], builders: ['agent:builder'] })
+    expect(headReads(own, URL, HEAD, 'main')).toEqual(expect.stringContaining('builders'))
+    expect(headReads({ ...own, done: true }, URL, HEAD, 'main')).toBe(1)
+    expect(standsIn({ ...own, done: true }, URL)).toEqual(['Review'])
+  })
+
+  it('holds a Done task whose check someone failed at the head, or with a step not passed there', () => {
+    expect(headReads(task({ checks: [check([{ passed: false, head: HEAD }])], done: true }), URL, HEAD, 'main')).toEqual(expect.stringContaining('failed'))
+    expect(headReads(task({ checks: [unpassed], done: true, steps: [step([check([{ passed: true, head: OLD, patch: 'p0' }])])] }), URL, HEAD, 'main'))
+      .toEqual(expect.any(String))
+    expect(headReads(task({ checks: [unpassed], done: true, steps: [] }), URL, HEAD, 'main')).toEqual(expect.any(String))
+  })
+
+  it('names nothing when someone other than the builder passed the check', () => {
+    expect(standsIn(task({ done: true, builders: ['agent:builder'] }), URL)).toEqual([])
   })
 })
 
