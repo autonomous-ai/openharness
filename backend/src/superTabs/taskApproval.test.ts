@@ -213,6 +213,20 @@ describe('personal approval enforced before work', () => {
     f.runCommand({ type: 'work.assign', conversationId: card.id, agentId: f.candidate }, f.pm)
     expect(f.card(card.id).assignment?.agentId).toBe(f.candidate)
   })
+  it('a new scope for an approved, unstarted task goes back to its person (#4249, security review 1)', () => {
+    const f = fixture(); f.mode('review'); const id = f.create()
+    f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate }, f.pm)
+    f.runCommand({ type: 'task.approve', conversationId: id })
+    f.runCommand({ type: 'work.define', conversationId: id, task: { ...task, changes: 'Persist drafts and rewrite sync' },
+      checks: [{ description: 'Restores and syncs drafts' }] }, f.pm)
+    expect(f.card(id).taskApproval).toMatchObject({ state: 'proposal', suggestedAgentId: f.candidate })
+    expect(f.card(id).taskApproval?.decidedAt).toBeUndefined()
+    expect(() => f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm))
+      .toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
+    f.runCommand({ type: 'task.approve', conversationId: id })
+    f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm)
+    expect(f.card(id).assignment?.agentId).toBe(f.candidate)
+  })
   it('a converted older proposal gets a fresh approval, never the card’s decision (#4249)', () => {
     const f = fixture(false); f.mode('review'); const sent = f.propose()
     const row = sent.messages.find(m => m.source?.kind === 'buddy-proposal')!
