@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from '../commands.js'
 import { createSuperTab, type Actor } from '../model.js'
+import { openSwarmBuddyChat } from '../buddies.js'
 import { touchesFor } from './touches.js'
 
 const HOLD = { kind: 'person', personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' } as const
@@ -55,6 +56,7 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
       [{ type: 'note.add', projectId: 'lead', text: 'Not machine B.', askedBy: 'owner' }, {}],
       [{ type: 'note.remove', projectId: 'lead', noteId: 'n1' }, { notes }],
       [{ type: 'project.coordinatorName', projectId: 'lead', name: 'Lead engineer' }, {}],
+      [{ type: 'project.answers', projectId: 'lead', inThread: true }, {}],
       // An older CLI's rule, a save to the instructions after the one above (project instructions, phase 4).
       [{ type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Idle first.', askedIn: { conversationId: 'lead', messageId: 'm1' } },
         { askedIn: { author: { kind: 'person', id: 'owner', name: 'owner', membershipGeneration: 'g' }, source: false, createdAt: 0 },
@@ -127,8 +129,22 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
     const f = swarm()
     const request = { conversationId: f.group('A').id, machineId: 'host', engine: 'codex', name: 'New', cwd: '/w', worktree: false,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
-    const { touches } = f.run({ type: 'agent.start', request }, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } })
+    const { touches } = f.run({ type: 'agent.start', request }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
     expect(has(touches, 'machine', 'host')).toBe(true)
     expect(has(touches, 'head', 'head')).toBe(true)
   })
+})
+
+
+it('guards an already awake Buddy hearing its own chat against a concurrent sleep', () => {
+  const f = swarm(), a = f.group('A')
+  const buddy = f.state.agents.find(agent => agent.id === a.worker)!
+  buddy.buddyOf = { personId: 'owner', generation: f.state.people[0]!.generation }
+  buddy.buddyScope = 'swarm'
+  const chat = openSwarmBuddyChat(f.state, f.state.people[0]!)
+  chat.agentIds.push(buddy.id)
+  const touches = touchesFor({ type: 'message.send', conversationId: chat.id, text: 'Hi', replyTo: null, recipientIds: [] },
+    owner, f.state, { state: f.state, messages: [{ id: 'input', conversationId: chat.id, text: 'Hi', replyTo: null,
+      recipients: [buddy.id], author: { kind: 'person', id: 'owner', name: 'Owner', membershipGeneration: f.state.people[0]!.generation } }] })
+  expect(has(touches, 'agent', buddy.id)).toBe(true)
 })

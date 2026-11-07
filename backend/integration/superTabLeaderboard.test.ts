@@ -17,6 +17,7 @@ import type { SuperTabState } from '../src/superTabs/model.js'
 import { WEEK_MS, weekStart } from '../src/superTabs/leaderboard/week.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { quotaReset } from './holds.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -66,12 +67,12 @@ async function scene(before?: (state: SuperTabState) => void) {
   const worker = s.add('worker-harness', waiting)
   s.run({ type: 'work.assign', conversationId: waiting, agentId: worker })
   s.run({ type: 'work.status', conversationId: waiting, assignmentId: s.state.conversations.find(c => c.id === waiting)!.assignment!.id,
-    status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Flag?' }, { kind: 'agent', agentId: worker, machineOwnerId: `${owner.sub}-machine` })
+    status: 'needs_human', hold: quotaReset(), result: 'Flag?' }, { kind: 'agent', agentId: worker, machineOwnerId: `${owner.sub}-machine` })
   s.edit(state => {
     const done = { id: 'done', agentId: worker, status: 'done' as const, result: PR, configuration: state.agents[0]!.configuration,
       execution: { machineId: 'host', harnessId: 'h', machineOwnerId: owner.sub } }
     const ship = (id: string, shippedAt: number) => Object.assign(state.conversations.find(c => c.id === id)!,
-      { requesterId: peer.sub, assignment: done, pullRequestUrls: [PR], ledger: { askedAt: shippedAt - 2 * HOUR, shippedAt } })
+      { requesterId: peer.sub, assignment: done, pullRequestUrls: [PR], ledger: { askedAt: shippedAt - 2 * HOUR, shippedAt, mergedAt: shippedAt } })
     ship(fresh, NOW - HOUR)
     ship(old, WEEK - 2 * 86_400_000)
     ship(chat, NOW - HOUR)
@@ -251,14 +252,35 @@ describe('the leaderboard read', () => {
       expect(JSON.stringify((await get(url, outsider)).body.data)).not.toContain('Secret PM')
     })
 
-    it('reads All projects\' dormant groups too, and refuses it for a week', async () => {
+    it('reads All projects\' dormant groups for both rolling periods and weeks', async () => {
       const s = await scene(state => {
         const secret = state.conversations.find(c => c.title === 'Hidden')!
         Object.assign(secret, { dormant: true, lastActivityAt: new Date(NOW - 2 * HOUR).toISOString() })
       })
       const url = `/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&period=7d&scope=all`
       expect(score((await get(url, owner)).body, peer.sub).details.shipped.map((d: { title: string }) => d.title)).toContain('Hidden')
-      expect((await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&scope=all`)).status).toBe(400)
+      const weekly = await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&scope=all`)
+      expect(weekly.status).toBe(200)
+      expect(score(weekly.body, peer.sub).shipped.count).toBe(2)
+    })
+
+    it('weekly org scores include only readable projects and agents, even after another audience reads', async () => {
+      const s = await scene(state => {
+        const hidden = state.conversations.find(c => c.title === 'Hidden')!
+        const fresh = state.conversations.find(c => c.title === 'Fresh')!
+        hidden.ledger!.firstAssignedAt = NOW - 2 * HOUR
+        fresh.ledger!.firstAssignedAt = NOW - 2 * HOUR
+        state.agents.push({ ...state.agents[0]!, id: 'hidden-worker', harnessId: 'hidden-worker', projectId: hidden.projectId,
+          name: 'Private worker', contributorId: peer.sub, membershipGeneration: state.people.find(p => p.id === peer.sub)!.generation })
+      })
+      const url = `/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&scope=all`
+      const own = await get(url, owner), other = await get(url, outsider)
+      expect(own.status).toBe(200)
+      expect(other.status).toBe(200)
+      expect(score(own.body, peer.sub)).toMatchObject({ accepted: 2, agentsBrought: 1, shipped: { count: 2 }, points: 8 })
+      expect(score(other.body, peer.sub)).toMatchObject({ accepted: 1, agentsBrought: 0, shipped: { count: 1 }, points: 4 })
+      expect(JSON.stringify(other.body.data)).not.toMatch(/Hidden|Secret|Private worker/)
+      expect((await get(url, outsider)).body.data).toEqual(other.body.data)
     })
 
     it('answers the same whatever the reader asks twice', async () => {

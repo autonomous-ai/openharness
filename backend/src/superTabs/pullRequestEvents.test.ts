@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { pullRequestEvents, SEEN_KEPT, type PullRequestWatch } from './pullRequestEvents.js'
+import { checksStateOf, pullRequestEvents, SEEN_KEPT, type PullRequestWatch } from './pullRequestEvents.js'
 import { appPullRequestWatch } from './pullRequestEvents.js'
 import type { GitHubApp } from '../github/app.js'
 
@@ -14,6 +14,35 @@ const run = (name: string, conclusion: string | null, completedAt: number | null
 /** Seen before: the pull request was read once already, a draft marked ready long ago. */
 const SEEN = [`ready:${NOW - 3_600_000}`]
 const events = (w: PullRequestWatch, seen: readonly string[] = SEEN, bot: string | null = 'harness[bot]') => pullRequestEvents(w, seen, bot, NOW)
+
+// Task #3827: the board's Done cards say whether the pull request's checks are green. The watch reads them every pass already.
+describe('checksStateOf', () => {
+  const passed = { checkRuns: [run('build', 'success'), run('docs', 'skipped')], checkSuites: [{ status: 'completed', runs: 2 }] }
+
+  it('is green once every run passed and every suite with runs is done', () => {
+    expect(checksStateOf(watch(passed))).toBe('green')
+    expect(checksStateOf(watch({ ...passed, checkSuites: [{ status: 'completed', runs: 2 }, { status: 'queued', runs: 0 }] }))).toBe('green')
+  })
+
+  it('is red as soon as one run failed, whatever else still runs', () => {
+    expect(checksStateOf(watch({ checkRuns: [run('build', 'failure'), run('test', null)], checkSuites: [{ status: 'in_progress', runs: 2 }] }))).toBe('red')
+    expect(checksStateOf(watch({ checkRuns: [run('ci/required', 'timed_out')], checkSuites: [{ status: 'completed', runs: 1 }] }))).toBe('red')
+  })
+
+  it('is running while a run or suite is not done, before any run is read, and for a draft', () => {
+    expect(checksStateOf(watch({ ...passed, checkRuns: [...passed.checkRuns, run('test', null)] }))).toBe('running')
+    expect(checksStateOf(watch({ ...passed, checkSuites: [{ status: 'in_progress', runs: 2 }] }))).toBe('running')
+    expect(checksStateOf(watch())).toBe('running')
+    expect(checksStateOf(watch({ ...passed, draft: true }))).toBe('running')
+  })
+
+  it('says green exactly when the watch posts CI passed', () => {
+    for (const patch of [passed, { ...passed, checkRuns: [run('x', 'failure')] }, { ...passed, checkSuites: [{ status: 'in_progress', runs: 2 }] }, {}]) {
+      const w = watch(patch)
+      expect(events(w).events.some(event => event.key === `ci-green:${HEAD}`)).toBe(checksStateOf(w) === 'green')
+    }
+  })
+})
 
 describe('pullRequestEvents', () => {
   it('posts CI failed with the failing job names', () => {

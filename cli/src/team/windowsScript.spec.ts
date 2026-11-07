@@ -207,6 +207,17 @@ describe('the Windows setup script', () => {
     expect(at(script, 'Stop-ScheduledTask')).toBeLessThan(at(script, '# 6.'))
   })
 
+  // Security review 2 of #3451: the relay is gone. Setup makes no relay folder, and removes an older one's grant, never
+  // through a junction, and the folder once empty.
+  it('makes no relay folder, and removes an older setup\'s grant and folder', () => {
+    const script = buildWindowsSetupScript(input())
+    expect(script).not.toContain('CreateDirectory($RELAY_DIR')
+    expect(script).not.toContain('/setowner "*$OWNER_SID" /L')
+    expect(script).toContain('$relay = Item-At $RELAY_DIR')
+    expect(script).toContain("if ($relay -and $relay.PSIsContainer -and -not ($relay.Attributes -band $REPARSE)) {")
+    expect(script).toContain("Remove-Item -LiteralPath (Join-Path $RELAY_DIR 'relay.json') -Force -ErrorAction SilentlyContinue")
+  })
+
   it.skipIf(!pwsh)('parses', () => parses(buildWindowsSetupScript(input())))
 })
 

@@ -1,5 +1,5 @@
 /**
- * Finds references to Codex state folders, without executing a shell or reading auth.json. This is
+ * Finds references to Codex state folders, without executing a shell or reading a sign-in. This is
  * a bounded reader of literal shell configuration, not a shell interpreter: computed paths remain
  * available through explicit linking (see `codexProfiles.ts`).
  *
@@ -10,6 +10,7 @@
 
 import { existsSync, openSync, closeSync, readSync, readdirSync, realpathSync, statSync } from 'fs'
 import { join } from 'path'
+import { homeIsAbsolute } from '../engines/kit/homeAdoption.js'
 
 const MAX_FILE_BYTES = 64 * 1024
 const MAX_FILES = 256
@@ -67,7 +68,7 @@ class CodexProfileDiscovery {
       if (value.startsWith('/') || key === 'PATH') variables[key] = value
     }
     const inherited = this.environment.CODEX_HOME
-    if (inherited && inherited.startsWith('/')) this.paths.add(inherited)
+    if (inherited && homeIsAbsolute(inherited)) this.paths.add(inherited)
     const config = this.environment.XDG_CONFIG_HOME || join(this.home, '.config')
     this.conventionalHomes(this.home)
     this.conventionalHomes(config)
@@ -121,7 +122,8 @@ class CodexProfileDiscovery {
       const base = entry.split('/').pop() ?? entry
       const name = base.replace(/^\./, '')
       if (!name.toLowerCase().startsWith('codex')) continue
-      if (existsSync(join(entry, 'auth.json')) || existsSync(join(entry, 'config.toml'))) {
+      // Its config, never its sign-in: whether a sign-in file is there is not Harness's to look at (loginReads.spec.ts).
+      if (existsSync(join(entry, 'config.toml'))) {
         this.paths.add(entry)
       }
     }

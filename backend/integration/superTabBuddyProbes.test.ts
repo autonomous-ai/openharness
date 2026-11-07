@@ -108,18 +108,16 @@ describe('security review 1 of #2115: a Buddy\'s reads, probed by two people', (
     await expect(f.store.routeDecision(peer,f.tab,'invented-route-id',agentId)).rejects.toThrow()
   })
 
-  it('still hands a Buddy an archived task awaiting the PM\'s report, in the active set its summary shows', async () => {
+  it('hands a Buddy an archived task in the dormant view the moment it is archived, with no report to wait for (#3593)', async () => {
     const f=await swarm(), {agentId}=await buddy(f)
-    const group=String((await f.execute({type:'conversation.create',projectId:'lead',title:'Archived but unsummarized',brief:'',checks:[]})).result.conversationId)
-    // A work change the PM has not reported yet (a plain message no longer is one: Dee, 2026-10-31).
+    const group=String((await f.execute({type:'conversation.create',projectId:'lead',title:'Archived at once',brief:'',checks:[]})).result.conversationId)
     await f.execute({type:'conversation.merged',conversationId:group,pullRequestUrl:'https://github.com/example/app/pull/7'})
     await f.execute({type:'conversation.archive',conversationId:group,archived:true})
     const reads=new SwarmReads(f.store), active=await reads.firstLoad(peer,f.tab,agentId)
-    const held=active.groups.find(g=>g.key===group)!
+    expect(active.groups.some(g=>g.key===group)).toBe(false)
+    // It is in the other of the two views, which only the project's readers may page.
+    const held=(await reads.dormant(peer,f.tab,{projectId:'lead'},agentId)).groups.find(g=>g.key===group)!
     expect(held.data.archived).toBe(true)
-    expect(held.data.dormant).not.toBe(true)
-    expect((await reads.dormant(peer,f.tab,{projectId:'lead'},agentId)).groups.map(g=>g.key)).not.toContain(group)
-    // So the summary shows it, marked archived (buddyStatus.spec.ts), and it is in one of the two views.
   })
 
   it('refuses private chats, other Buddies, Leads and other-project groups even with forged paging inputs',async()=>{

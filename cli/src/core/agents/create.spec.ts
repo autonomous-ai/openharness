@@ -34,6 +34,9 @@ import { SWARM_LAUNCH } from '../../superTabs/inCore/launch.js'
 
 // Every Buddy here was started on its owner's own machine: its start recorded its owner (security review 2 of #2832).
 vi.mock('../../lib/buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => 'peer' }))
+// Nor does the account the gate runs under matter: a Harness Team account is refused by prepareBuddyFolder before any launch, which
+// lib/swarmSkills.spec.ts tests on its own. These launches are the owner's, so the account boundary is fixed to "not a Team account".
+vi.mock('../../team/config.js', async (original) => ({ ...await original<object>(), isTeamAccount: () => false }))
 vi.mock('../../lib/gitProject.js', async (real) => ({ ...await real<object>(), harnessMadeWorktree: vi.fn(async () => false) }))
 vi.mock('../../lib/projectFolder.js', async real => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()
@@ -74,10 +77,9 @@ vi.mock('../../engines/kit/nativeHookFiles.js', () => ({
 const trust = vi.hoisted(() => ({
   claudeTrusts: vi.fn((_path: string) => false), codexTrusts: vi.fn((_path: string, _profile?: string | null) => false),
   preTrustClaudeProject: vi.fn((_path: string): unknown => undefined), preTrustCodexProject: vi.fn((_path: string, _profile?: string | null): unknown => undefined),
-  acceptFullMode: vi.fn((_engine: string, _environment?: NodeJS.ProcessEnv): unknown => 'accepted'),
 }))
-const { preTrustClaudeProject, preTrustCodexProject, acceptFullMode } = trust
-vi.mock('../../engines/launchPrep.js', () => ({ acceptFullMode: trust.acceptFullMode, folderTrust: (engine: string, profile?: string | null) => engine === 'claude'
+const { preTrustClaudeProject, preTrustCodexProject } = trust
+vi.mock('../../engines/launchPrep.js', () => ({ folderTrust: (engine: string, profile?: string | null) => engine === 'claude'
     ? { trusts: (path: string) => trust.claudeTrusts(path), record: (path: string) => trust.preTrustClaudeProject(path) }
     : engine === 'codex' ? { trusts: (path: string) => trust.codexTrusts(path, profile), record: (path: string) => trust.preTrustCodexProject(path, profile) } : null }))
 // The connections an agent on a profile home is given (lib/connectors/agents.ts): never written into a real folder here.
@@ -233,22 +235,21 @@ describe('creating an agent', () => {
     expect(place.swarmInstructions!.startsWith('Use the built-in swarm-tools skill')).toBe(true)
   })
 
-  // A Swarm Lead on the Mac Studio sat at Claude Code's "Yes, I accept" for full mode before its first turn (2026-10-26).
-  it('accepts full mode\'s warning for a Swarm agent the Swarm starts in full mode, and for nothing else', async () => {
-    await setup().create(request({ swarmRole: 'coordinator', permissionMode: 'full' }))
-    expect(acceptFullMode).toHaveBeenLastCalledWith('claude', undefined)
-    const launch = { current: () => true, environment: { HOME: root, CLAUDE_CONFIG_DIR: '/moved' }, prepareHooks: async () => true } as unknown as NativeLaunch
-    await setup({ native: async () => ({ ok: true, launch }) }).create(request({ swarmRole: 'agent', permissionMode: 'full' }))
-    expect(acceptFullMode).toHaveBeenLastCalledWith('claude', expect.objectContaining({ CLAUDE_CONFIG_DIR: '/moved' }))
-    await setup().create(request({ swarmRole: 'coordinator', permissionMode: 'auto' }))
-    await setup().create(request({ permissionMode: 'full' }))
-    expect(acceptFullMode).toHaveBeenCalledTimes(2)
-    // A settings file it cannot write leaves the engine to ask, and the launch goes on.
-    vi.mocked(acceptFullMode).mockImplementationOnce(() => { throw new Error('settings locked') }).mockImplementationOnce(() => { throw 'worse' })
-    expect(await setup().create(request({ swarmRole: 'coordinator', permissionMode: 'full' }))).toMatchObject({ ok: true })
-    expect(await setup().create(request({ swarmRole: 'coordinator', permissionMode: 'full' }))).toMatchObject({ ok: true })
-    expect(console.warn).toHaveBeenCalledWith('[agent] full mode acceptance · settings locked')
-    expect(console.warn).toHaveBeenCalledWith('[agent] full mode acceptance · worse')
+  // Swarm v3 (task #4215): a Swarm agent starts with its owner's own settings. Harness wrote full mode's warning acceptance
+  // into them for every Swarm agent in full mode (2026-10-26); a person who chooses full mode answers Claude Code's own warning.
+  it('writes nothing into the person\'s settings for a Swarm agent, with no mode or in full mode', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'own-settings-')), config = join(home, 'claude'), settings = join(config, 'settings.json')
+    mkdirSync(config); writeFileSync(settings, '{"theme":"dark"}\n')
+    const launch = { current: () => true, environment: { HOME: home, CLAUDE_CONFIG_DIR: config }, prepareHooks: async () => true } as unknown as NativeLaunch
+    try {
+      // Team-written work too: it runs in its owner's own mode and skips nothing (review of #3485).
+      for (const over of [{}, { permissionMode: 'full', bypassPermission: true }, { permissionMode: 'teamWritten', bypassPermission: false }]) {
+        for (const swarmRole of ['coordinator', 'agent']) {
+          expect(await setup({ native: async () => ({ ok: true, launch }) }).create(request({ swarmRole, ...over }))).toMatchObject({ ok: true })
+        }
+      }
+      expect(readFileSync(settings, 'utf8')).toBe('{"theme":"dark"}\n')
+    } finally { rmSync(home, { recursive: true, force: true }) }
   })
 
   // Audit M1: beside a Team account, the owner's agents get a private temporary folder, and the launch's own variables win.
@@ -305,28 +306,15 @@ describe('creating an agent', () => {
     expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.clearEnv).toContain('GH_TOKEN')
   })
 
-  it('in the Harness Team account, points an engine it has not signed in at the owner\'s relay; never one on a grid', async () => {
-    const ownerRelay = vi.fn(async () => ({ env: { HARNESS_RELAY_TOKEN: 't' }, args: ['-c', 'model_provider="harness_owner"'] }))
-    expect(await setup({ ownerRelay }).create(request({ engine: 'codex', cwd: folder() }))).toMatchObject({ ok: true })
-    expect(ownerRelay).toHaveBeenCalledWith('codex')
-    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ HARNESS_RELAY_TOKEN: 't' })
-    expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.extraArgs).toEqual(expect.arrayContaining(['model_provider="harness_owner"']))
-    // No relay there (signed in, or not a team account): the launch is as before.
-    const none = vi.fn(async () => null)
-    await setup({ ownerRelay: none }).create(request({ cwd: folder() }))
-    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env ?? {}).not.toHaveProperty('HARNESS_RELAY_TOKEN')
-    ownerRelay.mockClear()
-    await setup({ ownerRelay }).create(request({ cwd: folder(), grid: { baseUrl: 'https://grid.example/relay/v1', networkName: 'g', model: 'm' } }))
-    expect(ownerRelay).not.toHaveBeenCalled()
-    // A Codex launch in a home of its own (a Swarm Product Manager's): the relay readies, and asks about, that home.
-    await setup({ ownerRelay }).create(request({ engine: 'codex', cwd: folder(), codexHome: '/fixture/pm-home/codex' }))
-    expect(ownerRelay).toHaveBeenCalledWith('codex', '/fixture/pm-home/codex')
-    // A relay that cannot sign that home in refuses the launch with why: no pane is made.
-    vi.mocked(createAndRegisterPane).mockClear()
-    const refused = vi.fn(async () => ({ refused: 'No relay here.' }))
-    expect(await setup({ ownerRelay: refused }).create(request({ engine: 'codex', cwd: folder(), codexHome: '/fixture/pm-home/codex' })))
-      .toEqual({ ok: false, error: 'OWNER_RELAY_UNAVAILABLE', detail: 'No relay here.' })
-    expect(createAndRegisterPane).not.toHaveBeenCalled()
+  // No owner subscription relay (task #4137): Claude Code and Codex, a Product Manager's Codex home among them, launch on their
+  // own settings, with nothing of a relay in the pane's environment or on the engine's command line.
+  it('launches every engine on its own settings: no relay variables or provider', async () => {
+    for (const over of [{ engine: 'claude' }, { engine: 'codex' }, { engine: 'codex', codexHome: '/fixture/pm-home/codex' }]) {
+      expect(await setup().create(request({ cwd: folder(), ...over }))).toMatchObject({ ok: true })
+      const env = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env ?? {}
+      for (const name of ['HARNESS_RELAY_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN']) expect(env).not.toHaveProperty(name)
+      expect((vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.extraArgs ?? []).join(' ')).not.toMatch(/harness_owner/)
+    }
   })
 
   it('launches as before where the GitHub App does not apply, and without a role never asks', async () => {
@@ -349,12 +337,10 @@ describe('creating an agent', () => {
   // HARNESS_SWARM=off: the core holds none of the Swarm's launch code, so a start that asks for a Swarm role is
   // refused before anything is written or launched, and every other start is as it was.
   it('refuses a Swarm role while the Swarm is off, before opening a pane, and starts everything else as before', async () => {
-    acceptFullMode.mockClear()
     const off = setup({ swarmLaunch: undefined })
     expect(await off.create(request({ cwd: folder(), swarmRole: 'agent' })))
       .toEqual({ ok: false, error: 'SWARM_SKILL_FAILED', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' })
     expect(createAndRegisterPane).not.toHaveBeenCalled()
-    expect(acceptFullMode).not.toHaveBeenCalled()
     expect(await off.create(request({ cwd: folder() }))).toMatchObject({ ok: true })
     expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0]).not.toHaveProperty('swarmSkill')
   })
@@ -418,7 +404,8 @@ describe('creating an agent', () => {
 
   // 2026-10-30: a Cmd+S Swarm's PM, in a clone or worktree the desktop made and sent as a plain cwd, sat at Claude Code's
   // trust question, which no Swarm view shows.
-  it('trusts a local Claude Swarm agent in full mode in a clone in the projects root or a worktree Harness made', async () => {
+  // Its owner's own mode since task #4215: the trust follows the Swarm's checkout, not full mode.
+  it('trusts a local Claude Swarm agent in any mode in a clone in the projects root or a worktree Harness made', async () => {
     vi.mocked(projectsRoot).mockReturnValue(root)
     try {
       const clone = folder(), plain = folder(['README.md']), worktree = join(folder(), 'worktree')
@@ -427,19 +414,20 @@ describe('creating an agent', () => {
       vi.mocked(harnessMadeWorktree).mockImplementation(async path => path === worktree)
       const authority = { id: 'fixture', label: 'harness-claude-fixture', current: () => true, hold: () => {} }
       const prepare = (over: Record<string, unknown>, local = true) =>
-        setup().create.prepare(request({ swarmRole: 'coordinator', permissionMode: 'full', bypassPermission: true, ...over }), authority, { local })
+        setup().create.prepare(request({ swarmRole: 'coordinator', ...over }), authority, { local })
       expect((await prepare({ cwd: clone })).ok).toBe(true)
       expect(preTrustClaudeProject).toHaveBeenCalledWith(clone)
-      await prepare({ cwd: worktree })
+      await prepare({ cwd: worktree, permissionMode: 'full', bypassPermission: true })
       expect(preTrustClaudeProject).toHaveBeenLastCalledWith(worktree)
       expect(harnessMadeWorktree).toHaveBeenCalledWith(worktree, root)
-      // Not the person's own folder, not relayed, not outside a Swarm or full mode, not for Codex.
+      await prepare({ cwd: clone, permissionMode: 'ask' })
+      expect(preTrustClaudeProject).toHaveBeenCalledTimes(3)
+      // Not the person's own folder, not relayed, not outside a Swarm, not for Codex.
       await prepare({ cwd: plain })
       await prepare({ cwd: clone }, false)
-      await prepare({ cwd: clone, swarmRole: null })
-      await prepare({ cwd: clone, permissionMode: 'auto', bypassPermission: false })
+      await prepare({ cwd: clone, swarmRole: null, permissionMode: 'full', bypassPermission: true })
       await prepare({ cwd: clone, engine: 'codex' })
-      expect(preTrustClaudeProject).toHaveBeenCalledTimes(2)
+      expect(preTrustClaudeProject).toHaveBeenCalledTimes(3)
       expect(preTrustCodexProject).not.toHaveBeenCalled()
     } finally {
       vi.mocked(projectsRoot).mockReset()

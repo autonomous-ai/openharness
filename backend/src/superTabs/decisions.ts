@@ -3,14 +3,15 @@
  *  with one tap, and the answer reaches the asking agent and the Lead in the conversation it came from. Decisions live in
  *  SuperTabDecision, never in the tab state, as mentions do. A decision is not a private channel: the PM's private lines go
  *  to the person's Buddy chat (buddies.ts). Called inside SuperTabStore's transactions. */
-import { isBuddy, isSwarmBuddy, openBuddyChat, openSwarmBuddyChat } from './buddies.js'
+import { defaultBuddy, defaultBuddyChat, isBuddy, isSwarmBuddy, openBuddyChat } from './buddies.js'
+import { switched } from './boardRights.js'
 import { usernameOf } from './usernames.js'
 import { agentWrittenNameOf } from './personNames.js'
 import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
 import { agentDisplayName } from './agentNames.js'
-import { AGENT_ONLY, fail, isLeads, person, stableId, type Actor, type Author, type Conversation, type SuperTabState } from './model.js'
+import { AGENT_ONLY, fail, isLeads, person, stableId, type Actor, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, canReadGroup, groupProject, isClosedPmChat, ledProject, projectAgent, projectOf, projectsOf, readsRecordsIn } from './projects.js'
 import { LEDGER_WEEKS } from './leaderboard/record.js'
 import { coordinatorNameOf } from './instructions.js'
@@ -27,7 +28,9 @@ const line = (max: number) => z.string().trim().min(1).max(max)
 /** What a question offers besides itself: 2–5 distinct options, the index of the recommended one, and what an answer unblocks. */
 export const decisionChoices = z.object({ options: z.array(line(200)).min(2).max(5).refine(o => new Set(o).size === o.length, 'Give distinct options.'),
   recommended: z.number().int().min(0), unblocks: line(300),
-  defaultAt: z.string().datetime({ offset: true }).transform(value => new Date(value).toISOString()).optional() }).strict()
+  defaultAt: z.string().datetime({ offset: true }).transform(value => new Date(value).toISOString()).optional(),
+  /** A rule says the person must agree (task #3826): at defaultAt the PM is told instead of the default applying. */
+  mustAgree: z.literal(true).optional() }).strict()
 export const decisionQuestion = decisionChoices.extend({ question: line(1000) }).strict()
 type Question = z.infer<typeof decisionQuestion>
 
@@ -61,6 +64,7 @@ export interface DecisionTarget {
   kind?: string | null
   /** Closed unanswered once its work was over (withdrawIn). */
   withdrawn?: boolean
+  mustAgree?: boolean
 }
 /** `delegated`: the person asked left it to the PM, who took the recommended option. */
 /** `choice` null with a `note`: the person typed their own answer instead of choosing an option (task #2996). */
@@ -83,6 +87,36 @@ export function askDecisions(state: SuperTabState, group: Conversation, personId
   return questions.map((q, index) => ({ ...q, id: stableId(from.operationId, 'decision', String(index)), batchId: from.operationId,
     conversationId: group.id, projectId, personId, askerAgentId: from.askerAgentId, assignmentId: from.assignmentId, ...from.kind ? { kind: from.kind } : {} }))
 }
+
+/** Whether an agent's ask in [group] goes to the person directly, never through the PM: in a switched project (boardRights.ts;
+ *  task #3826, spec "When an agent needs a person"). Elsewhere people talk only to the PM (crewNeeds.ts). */
+export const asksDirectly = (state: SuperTabState, group: Conversation): boolean => switched(groupProject(state, group))
+
+/** A direct ask always says when its recommendation applies: the person may be away, and the work must not wait without end. */
+export function checkDirectAsk(questions: ReadonlyArray<{ defaultAt?: string }>): void {
+  if (questions.some(q => !q.defaultAt)) {
+    fail('INVALID_DECISION', 'In this project you ask the person directly, so each question needs defaultAt: the time its recommended option applies if they have not answered (at least 15 minutes ahead).', 400)
+  }
+}
+
+/** Each asked decision's line in its person's default Buddy chat, to their default Buddy, which brings it to them: the Buddy
+ *  cannot answer it (answerable), the person answers in their Needs you list. Marked with its project, so it hides once they
+ *  lose it (buddies.ts hiddenProjectRow). Written as [author], the agent that asked. */
+export function askedThroughBuddy(state: SuperTabState, group: Conversation, drafts: readonly DecisionDraft[], author: Author): MessageDraft[] {
+  return drafts.map(d => {
+    const to = person(state, d.personId)
+    const buddy = defaultBuddy(state, to.id)
+    const options = d.options.map((o, i) => i === d.recommended ? `${o} (recommended)` : o).join(' / ')
+    const task = group.number ? ` on task #${group.number}` : ''
+    const text = `${author.displayName ?? author.name} asks ${usernameOf(state, to.id)}${task}: ${d.question}\n\nOptions: ${options}\n`
+      + `Unblocks: ${d.unblocks}\n` + (d.mustAgree
+        ? `No default applies: your agreement is required. At ${d.defaultAt}, the PM is told if you have not answered.`
+        : `At ${d.defaultAt}, if not answered: ${d.options[d.recommended]!}.`)
+    return { id: stableId(d.id, 'buddy'), conversationId: defaultBuddyChat(state, to).id, author, text, replyTo: null,
+      recipients: buddy ? [buddy.id] : [], source: { kind: DECISION_ASKED_KIND, decisionId: d.id, projectId: d.projectId }, buddyProject: d.projectId }
+  })
+}
+export const DECISION_ASKED_KIND = 'decision-asked'
 
 /** Any agent of the project asks with `decision.ask`, in its own project's conversations (project instructions, phase 4); a
  *  worker may also ask through needs_human. */
@@ -172,6 +206,23 @@ export function answerDecision(state: SuperTabState, actor: Actor, decision: Dec
   return { answer, noticeIn: noticeIn.id, notice, recipients, source: { ...AGENT_ONLY, decisionId: asked.id }, line }
 }
 
+export const MUST_AGREE_KIND = 'decision-must-agree'
+/** What the PM is told when a decision its person must agree to reaches its time unanswered: none of the question, which the
+ *  PM reads in its decisions; the sweep never applies the default (task #3826, spec "When an agent needs a person"). */
+export function mustAgreePassed(state: SuperTabState, actor: Actor, decision: DecisionTarget | undefined, now: number) {
+  const group = answerable(state, actor, decision)
+  const asked = decision!
+  if (asked.withdrawn || workOver(state, group)) fail('DECISION_ANSWERED', NO_LONGER_WAITS)
+  if (asked.answeredAt !== null) fail('DECISION_ANSWERED', 'This decision is already answered.')
+  if (!asked.mustAgree || asked.defaultAt == null || asked.defaultAt > now) fail('INVALID_DECISION', 'This decision has not reached its default time.', 400)
+  const project = groupProject(state, group)
+  const lead = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
+  const noticeIn = isClosedPmChat(group) ? state.conversations.find(c => c.id === project.leadConversationId)! : group
+  const text = `A decision ${usernameOf(state, asked.personId)} must agree to reached its default time unanswered, so no default applied: `
+    + 'it waits for them. Read it with: harness super-tab decisions'
+  return { noticeIn: noticeIn.id, text, recipients: lead && noticeIn.agentIds.includes(lead) ? [lead] : [], source: { kind: MUST_AGREE_KIND, decisionId: asked.id } }
+}
+
 /** The Lead's one line saying what it chose, in the person's own Buddy chat of that project: only they and their Buddy read
  *  it, and they were asked the question. Opened for the line when they have none (buddies.ts openBuddyChat), so it never
  *  drops: Buddies replaced Chat with PM (Ken, 10-29). */
@@ -183,7 +234,7 @@ function delegatedLine(state: SuperTabState, projectId: string, leadId: string, 
   const question = asked.question.replace(/\s+/g, ' ')
   const text = `${defaulted ? `Default applied: ${asked.options[choice]!}` : answerText(asked.options[choice]!, true)} — ${question}`
   // In their one Buddy chat, marked with its project (Dee, 10-31), and in their older chat there for older apps.
-  return [{ conversationId: openSwarmBuddyChat(state, to).id, author, text, source: { kind: 'decision-delegated', decisionId: asked.id, projectId }, buddyProject: projectId },
+  return [{ conversationId: defaultBuddyChat(state, to).id, author, text, source: { kind: 'decision-delegated', decisionId: asked.id, projectId }, buddyProject: projectId },
     { conversationId: openBuddyChat(state, projectId, to).id, author, text, source: { kind: 'decision-delegated', decisionId: asked.id } }]
 }
 
@@ -227,10 +278,10 @@ export function workEnded(before: SuperTabState, after: SuperTabState): string[]
   return after.conversations.filter(c => workOver(after, c) && !(was.has(c.id) && workOver(before, was.get(c.id)!))).map(c => c.id)
 }
 
-/** What makes an ask a repeat: the same asker, task, person, conversation, question, options, recommendation and what it
- *  unblocks. Another asker, another task or other options with the same text is a decision of its own (review of #1753). */
-const repeatKey = (d: Pick<DecisionDraft, 'askerAgentId' | 'assignmentId' | 'personId' | 'conversationId' | 'question' | 'options' | 'recommended' | 'unblocks'> & { defaultAt?: string | Date | null }) =>
-  JSON.stringify([d.askerAgentId, d.assignmentId ?? null, d.personId, d.conversationId, d.question, d.options, d.recommended, d.unblocks, d.defaultAt ? new Date(d.defaultAt).toISOString() : null])
+/** What makes an ask a repeat: the same asker, task, person, conversation, question, options, recommendation, agreement requirement
+ *  and what it unblocks. Another asker, another task or other options with the same text is a decision of its own (review of #1753). */
+const repeatKey = (d: Pick<DecisionDraft, 'askerAgentId' | 'assignmentId' | 'personId' | 'conversationId' | 'question' | 'options' | 'recommended' | 'unblocks'> & { defaultAt?: string | Date | null; mustAgree?: boolean | null }) =>
+  JSON.stringify([d.askerAgentId, d.assignmentId ?? null, d.personId, d.conversationId, d.question, d.options, d.recommended, d.unblocks, d.defaultAt ? new Date(d.defaultAt).toISOString() : null, d.mustAgree === true])
 
 /** Writes the questions asked and returns the decision each one is: an open decision that this ask exactly repeats is that
  *  decision again, not a second one. New ones beyond MAX_OPEN_DECISIONS from this asker to this person are refused, and
@@ -290,9 +341,16 @@ export async function expireReflections(tx: Tx, tabId: string, projectId: string
 export async function readAskedDecision(tx: Tx, tabId: string, id: string): Promise<DecisionTarget | undefined> {
   const row = await tx.superTabDecision.findFirst({ where: { id, tabId },
     select: { id: true, personId: true, conversationId: true, projectId: true, askerAgentId: true, question: true, options: true, recommended: true,
-      answeredAt: true, defaultAt: true, createdAt: true, assignmentId: true, kind: true, withdrawn: true } })
+      answeredAt: true, defaultAt: true, createdAt: true, assignmentId: true, kind: true, withdrawn: true, mustAgree: true } })
   return row ? { ...row, answeredAt: row.answeredAt?.getTime() ?? null, defaultAt: row.defaultAt?.getTime() ?? null, createdAt: row.createdAt.getTime(), assignmentId: row.assignmentId ?? null,
-    withdrawn: row.withdrawn === true } : undefined
+    withdrawn: row.withdrawn === true, mustAgree: row.mustAgree === true } : undefined
+}
+
+/** A must-agree decision past its time keeps waiting for its person: its time is cleared, so the due range never reads it again
+ *  and the PM is told once. Conflicts with a concurrent answer, as recordAnswer does. */
+export async function keepWaiting(tx: Tx, tabId: string, id: string): Promise<void> {
+  const kept = await tx.superTabDecision.updateMany({ where: { id, tabId, mustAgree: true, defaultAt: { not: null }, ...waiting }, data: { defaultAt: null } })
+  if (!kept.count) fail('DECISION_ANSWERED', 'This decision is already answered.')
 }
 
 /** Conflicts with a concurrent answer of the same decision: only the first one counts. */
@@ -415,8 +473,8 @@ export async function listDecisions(tx: Tx, tabId: string, state: SuperTabState,
       question: row.question, options: row.options, recommended: row.recommended, unblocks: row.unblocks,
       createdAt: row.createdAt, answeredAt: row.answeredAt ?? null, choice: row.choice ?? null, note: row.note ?? null,
       delegated: row.delegated === true, overdue: row.overdue === true, defaultAt: row.defaultAt ?? null, defaulted: row.defaulted === true,
-      // What the 24-hour sweep can take: the sweep skips a reflection and a recommended option that is not one of the options.
-      pmTakesOver: row.kind !== REFLECTION_DECISION && row.recommended >= 0 && row.recommended < row.options.length,
+      // What the 24-hour sweep can take: the sweep skips required agreement, reflections and an invalid recommended option.
+      pmTakesOver: row.mustAgree !== true && row.kind !== REFLECTION_DECISION && row.recommended >= 0 && row.recommended < row.options.length,
       // A typed answer (no option) reads as its words.
       answer: row.choice == null ? (row.answeredAt ? row.note ?? null : null)
         : row.options[row.choice] === undefined ? null : row.defaulted ? `Default applied: ${row.options[row.choice]!}` : answerText(row.options[row.choice]!, row.delegated === true) }

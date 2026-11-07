@@ -11,6 +11,7 @@ import '../widgets/desktop_chrome.dart';
 import 'buddies.dart' show buddyMachineName;
 import 'controller.dart';
 import 'dialog_scope.dart';
+import 'model.dart' show SuperTabAgent;
 
 /// Restart the reader's Buddy in [projectId] with extra launch flags, which the
 /// machine keeps and applies on every later start of it (spec
@@ -44,6 +45,147 @@ String launchArgsLine(Iterable<String> words) => words
     )
     .join(' ');
 
+/// [line] split the way a shell splits words: whitespace, single and double
+/// quotes and backslash escapes, no expansion. Null for an unclosed quote or a
+/// trailing backslash. The inverse of [launchArgsLine].
+List<String>? splitLaunchArgs(String line) {
+  final words = <String>[];
+  final word = StringBuffer();
+  var inWord = false;
+  String? quote;
+  for (var i = 0; i < line.length; i++) {
+    final ch = line[i];
+    if (quote == "'") {
+      if (ch == "'") {
+        quote = null;
+      } else {
+        word.write(ch);
+      }
+    } else if (quote == '"') {
+      if (ch == '"') {
+        quote = null;
+      } else if (ch == r'\') {
+        if (i + 1 >= line.length) return null;
+        final next = line[i + 1];
+        if (next == '"' || next == r'\') {
+          word.write(next);
+          i++;
+        } else {
+          word.write(ch);
+        }
+      } else {
+        word.write(ch);
+      }
+    } else if (ch == "'" || ch == '"') {
+      quote = ch;
+      inWord = true;
+    } else if (ch == r'\') {
+      if (i + 1 >= line.length) return null;
+      word.write(line[++i]);
+      inWord = true;
+    } else if (RegExp(r'\s').hasMatch(ch)) {
+      if (inWord) words.add(word.toString());
+      word.clear();
+      inWord = false;
+    } else {
+      word.write(ch);
+      inWord = true;
+    }
+  }
+  if (quote != null) return null;
+  if (inWord) words.add(word.toString());
+  return words;
+}
+
+/// The reader's Buddy behind their Buddy chat in [projectId]: the main Buddy
+/// that chat names, so with several Buddies (#3818) it is that chat's, not
+/// another's; else the reader's Buddy in [projectId].
+SuperTabAgent? readerBuddy(SuperTabController c, String projectId) {
+  final snapshot = c.snapshot;
+  final named = c
+      .buddyChat(projectId)
+      ?.agentIds
+      .map((id) => snapshot?.agent(id))
+      .whereType<SuperTabAgent>()
+      .where((a) => a.isMainBuddy && a.buddyOf == c.accountId)
+      .firstOrNull;
+  return named ?? c.buddy(projectId);
+}
+
+/// The machine's agent behind the reader's Buddy in [projectId], if loaded.
+Agent? buddyMachineAgent(
+  SuperTabController c,
+  String projectId,
+  AppNotifier? app,
+) {
+  final buddy = readerBuddy(c, projectId);
+  if (buddy == null) return null;
+  return app
+      ?.stateOf(buddy.machineId)
+      ?.agents
+      .where((a) => a.id == buddy.harnessId)
+      .firstOrNull;
+}
+
+enum BuddyRestartOutcome { done, ignored, refused, notStarted, failed }
+
+class BuddyRestartResult {
+  const BuddyRestartResult(this.outcome, [this.message]);
+  final BuddyRestartOutcome outcome;
+
+  /// The exact line to show; null on [BuddyRestartOutcome.done].
+  final String? message;
+}
+
+/// Restart (or resume) the reader's Buddy in [projectId] with the flags in
+/// [text]; [saved] is the line the machine holds now.
+Future<BuddyRestartResult> restartBuddyWithFlags(
+  SuperTabController c,
+  String projectId,
+  AppNotifier app, {
+  required String text,
+  required String saved,
+}) async {
+  final buddy = readerBuddy(c, projectId);
+  if (buddy == null) {
+    return const BuddyRestartResult(
+      BuddyRestartOutcome.failed,
+      'Restart is not available here.',
+    );
+  }
+  // Nothing to clear and nothing to add is a plain restart, which an older
+  // daemon does as well as a new one.
+  final result = await app.restartAgent(
+    buddy.machineId,
+    buddy.harnessId,
+    // Every press is a new intent: an earlier attempt that never confirmed
+    // must not turn this one into a status check without the flags.
+    attempt: app.restartAttempt(buddy.machineId, buddy.harnessId, fresh: true),
+    launchArgs: text.isEmpty && saved.isEmpty ? null : text,
+  );
+  if (result.error == null && !result.launchArgsIgnored) {
+    return const BuddyRestartResult(BuddyRestartOutcome.done);
+  }
+  if (result.launchArgsIgnored) {
+    final machine = buddyMachineName(c, buddy.machineId, app: app);
+    return BuddyRestartResult(
+      BuddyRestartOutcome.ignored,
+      'Update Harness on $machine to use launch flags.',
+    );
+  }
+  if (result.launchArgsRefused) {
+    return BuddyRestartResult(BuddyRestartOutcome.refused, result.error);
+  }
+  if (result.engineNotStarted) {
+    return const BuddyRestartResult(
+      BuddyRestartOutcome.notStarted,
+      "The Buddy didn't start with these flags. Fix or clear them and "
+      'restart.',
+    );
+  }
+  return BuddyRestartResult(BuddyRestartOutcome.failed, result.error);
+}
+
 class _RestartBuddyDialog extends StatefulWidget {
   const _RestartBuddyDialog({
     required this.controller,
@@ -62,15 +204,7 @@ class _RestartBuddyDialogState extends State<_RestartBuddyDialog> {
   SuperTabController get c => widget.controller;
   AppNotifier? get app => widget.app;
 
-  Agent? get _machineAgent {
-    final buddy = c.buddy(widget.projectId);
-    if (buddy == null) return null;
-    return app
-        ?.stateOf(buddy.machineId)
-        ?.agents
-        .where((a) => a.id == buddy.harnessId)
-        .firstOrNull;
-  }
+  Agent? get _machineAgent => buddyMachineAgent(c, widget.projectId, app);
 
   late final _flags = TextEditingController(
     text: launchArgsLine(_machineAgent?.launchArgs ?? const []),
@@ -88,10 +222,9 @@ class _RestartBuddyDialogState extends State<_RestartBuddyDialog> {
   }
 
   Future<void> _submit() async {
-    final buddy = c.buddy(widget.projectId);
     final app = this.app;
     if (_busy) return;
-    if (buddy == null || app == null) {
+    if (app == null) {
       setState(() => _error = 'Restart is not available here.');
       return;
     }
@@ -99,44 +232,28 @@ class _RestartBuddyDialogState extends State<_RestartBuddyDialog> {
       _busy = true;
       _error = null;
     });
-    final text = _flags.text.trim();
-    // Nothing to clear and nothing to add is a plain restart, which an older
-    // daemon does it as well as a new one.
-    final result = await app.restartAgent(
-      buddy.machineId,
-      buddy.harnessId,
-      // Every press is a new intent: an earlier attempt that never confirmed
-      // must not turn this one into a status check without the flags.
-      attempt: app.restartAttempt(
-        buddy.machineId,
-        buddy.harnessId,
-        fresh: true,
-      ),
-      launchArgs: text.isEmpty && _saved.isEmpty ? null : text,
+    final result = await restartBuddyWithFlags(
+      c,
+      widget.projectId,
+      app,
+      text: _flags.text.trim(),
+      saved: _saved,
     );
     if (!mounted) return;
-    if (result.error == null && !result.launchArgsIgnored) {
+    if (result.outcome == BuddyRestartOutcome.done) {
       Navigator.pop(context);
       return;
     }
-    final machine = buddyMachineName(c, buddy.machineId, app: app);
     setState(() {
       _busy = false;
-      _error = result.launchArgsIgnored
-          ? 'Update Harness on $machine to use launch flags.'
-          : result.launchArgsRefused
-          ? result.error
-          : !result.engineNotStarted
-          ? result.error
-          : "The Buddy didn't start with these flags. Fix or clear them and "
-                'restart.';
+      _error = result.message;
     });
   }
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final buddy = c.buddy(widget.projectId);
+    final buddy = readerBuddy(c, widget.projectId);
     final engine = externalEngineName(
       _machineAgent?.engine ?? buddy?.engine ?? '',
     );

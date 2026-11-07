@@ -190,6 +190,18 @@ async function bringBackUnfollowed(tx: Tx, tabId: string, messages: MessageDraft
   if (answer.writeErrors?.length) throw new Error('The database refused some thread follows')
 }
 
+/** A stuck line fixed, or its task ended (stuck.ts, task #3915): its tags still waiting resolve as `fixed`. One update per person
+ *  on the `[tabId, conversationId, personId]` index, at most MAX_MENTIONS a line. */
+export async function resolveTags(tx: Tx, tabId: string, lines: ReadonlyArray<{ conversationId: string; messageId: string; personIds: readonly string[] }>,
+  now: number): Promise<void> {
+  for (const line of lines) {
+    for (const personId of line.personIds) {
+      await tx.superTabMention.updateMany({ where: { tabId, conversationId: line.conversationId, personId, messageId: line.messageId, ...waiting },
+        data: { resolvedAt: new Date(now), resolvedBy: 'fixed' } })
+    }
+  }
+}
+
 /** Any post by the tagged person in that conversation answers every earlier tag there, in a thread or not. */
 export async function resolveByReply(tx: Tx, tabId: string, conversationId: string, personId: string, now: number): Promise<void> {
   await tx.superTabMention.updateMany({ where: { tabId, conversationId, personId, createdAt: { lte: new Date(now) }, ...waiting },

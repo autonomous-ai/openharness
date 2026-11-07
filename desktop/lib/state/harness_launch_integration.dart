@@ -36,7 +36,6 @@ class HarnessLaunchIntegration {
     this.projectVisibilityLocked = false,
     this.initialTask,
     this.engines,
-    this.forcedPermissionMode,
     this.swarmRole,
     this.swarmSkillMode,
     this.roleSuggestions,
@@ -45,6 +44,9 @@ class HarnessLaunchIntegration {
     this.checkRepositoryOwner,
     this.createRepository,
     this.checkRepositoryAgain,
+    this.agentKind,
+    this.ownMachinesOnly = false,
+    this.startBuddy,
   });
   final String creationId, actionLabel;
   String? swarmRole;
@@ -63,10 +65,24 @@ class HarnessLaunchIntegration {
   final String? initialTask;
   // The only agents this destination may start, or null for any.
   final List<String>? engines;
-  // A destination can require a mode without changing ordinary launch preferences.
-  final String? forcedPermissionMode;
   String? projectVisibility;
   bool projectVisibilityLocked;
+
+  /// + New agent in a Swarm (task #4196): whether it starts as a `lead`, which
+  /// names and starts a project, or a `member`. Null shows no such choice.
+  String? agentKind;
+
+  /// Set once the choice's first request is sent: it cannot change after.
+  bool agentKindLocked = false;
+
+  /// Only the person's own computers, never a shared, guest or Team one: an
+  /// agent they start runs in their own account.
+  final bool ownMachinesOnly;
+
+  /// Join's Buddy (task #4196): the Swarm starts it on [machineId] with
+  /// [engine], as before; the form only chooses them. Set, the form shows no
+  /// project and takes no first message.
+  final Future<void> Function(String machineId, String engine)? startBuddy;
 
   /// A new project in a Swarm: the Swarm's machines its Product Manager may
   /// start on, best first. The form then shows only the task, repo and

@@ -1,11 +1,19 @@
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { launchClaudeConfigDir, launchCodexHome } from '../../lib/engineHomes.js'
 import { launch as claude } from '../claude/launch.js'
 import { launch as codex } from '../codex/launch.js'
-import { recordAcceptanceIn, recordTrustIn, trustsIn } from './folderTrust.js'
+import { forgetTrustIn, recordTrustIn, trustsIn } from './folderTrust.js'
+
+/** Whether this account may link to a file: Windows lets it only with Developer Mode or as an administrator (Window of Tim,
+ *  #3815), and a person there with neither has no such link to write through. */
+const canLinkFiles = (() => {
+  const dir = mkdtempSync(join(tmpdir(), 'file-link-'))
+  try { writeFileSync(join(dir, 'f'), ''); symlinkSync(join(dir, 'f'), join(dir, 'l'), 'file'); return true } catch { return false }
+  finally { rmSync(dir, { recursive: true, force: true }) }
+})()
 
 // The former lib/claudeTrust.spec.ts, its cases unchanged, against the two engines' declared trust (`trust` in
 // claude/launch.ts and codex/launch.ts) applied by the kit, in the homes the former functions read.
@@ -15,6 +23,17 @@ const codexTrusts = (path: string, codexHome?: string | null) => trustsIn(codex.
 const preTrustCodexProject = (cwd: string, codexHome?: string | null) => recordTrustIn(codex.trust!, join(launchCodexHome(codexHome), codex.trust!.file), cwd)
 
 describe('preTrustClaudeProject', () => {
+  it('creates the file holding only that folder when asked, for a machine Claude Code never ran on', () => {
+    const home = mkdtempSync(join(tmpdir(), 'trust-'))
+    const file = join(home, '.claude.json')
+    expect(recordTrustIn(claude.trust!, file, '/w')).toBe('skipped')
+    expect(readdirSync(home)).toEqual([])
+    expect(recordTrustIn(claude.trust!, file, '/w', { create: true })).toBe('trusted')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ projects: { '/w': { allowedTools: [], hasTrustDialogAccepted: true } } })
+    expect(recordTrustIn(claude.trust!, file, '/w', { create: true })).toBe('already')
+    expect(readdirSync(home)).toEqual(['.claude.json'])
+  })
+
   it('records trust for a new folder the way Claude Code does, keeping everything else', () => {
     const home = mkdtempSync(join(tmpdir(), 'trust-'))
     writeFileSync(join(home, '.claude.json'), JSON.stringify({ numStartups: 4, projects: { '/old': { allowedTools: ['Bash'], hasTrustDialogAccepted: true } } }))
@@ -60,7 +79,7 @@ describe('preTrustClaudeProject', () => {
     }
   })
 
-  it('writes through a symlinked ~/.claude.json instead of replacing the link', () => {
+  it.runIf(canLinkFiles)('writes through a symlinked ~/.claude.json instead of replacing the link', () => {
     const home = mkdtempSync(join(tmpdir(), 'trust-'))
     mkdirSync(join(home, 'dotfiles'))
     writeFileSync(join(home, 'dotfiles', 'claude.json'), JSON.stringify({ projects: {} }))
@@ -70,6 +89,60 @@ describe('preTrustClaudeProject', () => {
     const target = JSON.parse(readFileSync(join(home, 'dotfiles', 'claude.json'), 'utf8'))
     expect(target.projects['/Users/example/harnesses/harness-2'].hasTrustDialogAccepted).toBe(true)
     expect(readdirSync(join(home, 'dotfiles'))).toEqual(['claude.json'])
+  })
+})
+
+// Task #4353: the trust a Team-written start saved for its worktree goes with that worktree, and nothing else does.
+describe('forgetTrustIn', () => {
+  it('clears the trust flag of that one folder and keeps every other key of the file', () => {
+    const home = mkdtempSync(join(tmpdir(), 'forget-'))
+    const file = join(home, '.claude.json')
+    try {
+      writeFileSync(file, JSON.stringify({ userID: 'u', projects: {
+        '/repo': { hasTrustDialogAccepted: true, allowedTools: ['Bash'] },
+        '/repo/worktree': { hasTrustDialogAccepted: true, allowedTools: [], lastCost: 1 },
+        '/other': { hasTrustDialogAccepted: true } } }, null, 2))
+      expect(forgetTrustIn(claude.trust!, file, '/repo/worktree')).toBe('forgotten')
+      expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ userID: 'u', projects: {
+        '/repo': { hasTrustDialogAccepted: true, allowedTools: ['Bash'] },
+        '/repo/worktree': { allowedTools: [], lastCost: 1 },
+        '/other': { hasTrustDialogAccepted: true } } })
+      // Nothing left to clear: the file is not written again.
+      const before = readFileSync(file, 'utf8')
+      expect(forgetTrustIn(claude.trust!, file, '/repo/worktree')).toBe('absent')
+      expect(forgetTrustIn(claude.trust!, file, '/never')).toBe('absent')
+      expect(readFileSync(file, 'utf8')).toBe(before)
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  it('leaves a file that is missing, unreadable or not the engine\'s shape as it is, and skips a TOML engine', () => {
+    const home = mkdtempSync(join(tmpdir(), 'forget-'))
+    const file = join(home, '.claude.json')
+    try {
+      expect(forgetTrustIn(claude.trust!, file, '/w')).toBe('skipped')
+      expect(readdirSync(home)).toEqual([])
+      for (const text of ['{not json', '[]', '{"projects":[]}', '{"projects":{"/w":"yes"}}']) {
+        writeFileSync(file, text)
+        expect(forgetTrustIn(claude.trust!, file, '/w')).toBe('skipped')
+        expect(readFileSync(file, 'utf8')).toBe(text)
+      }
+      const toml = join(home, 'config.toml'), config = '[projects."/w"]\ntrust_level = "trusted"\n'
+      writeFileSync(toml, config)
+      expect(forgetTrustIn(codex.trust!, toml, '/w')).toBe('skipped')
+      expect(readFileSync(toml, 'utf8')).toBe(config)
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  })
+
+  it.skipIf(!canLinkFiles)('writes through a linked settings file, keeping the link', () => {
+    const home = mkdtempSync(join(tmpdir(), 'forget-'))
+    try {
+      const real = join(home, 'dotfiles.json'), file = join(home, '.claude.json')
+      writeFileSync(real, JSON.stringify({ projects: { '/w': { hasTrustDialogAccepted: true } } }))
+      symlinkSync(real, file, 'file')
+      expect(forgetTrustIn(claude.trust!, file, '/w')).toBe('forgotten')
+      expect(lstatSync(file).isSymbolicLink()).toBe(true)
+      expect(JSON.parse(readFileSync(real, 'utf8'))).toEqual({ projects: { '/w': {} } })
+    } finally { rmSync(home, { recursive: true, force: true }) }
   })
 })
 
@@ -145,7 +218,7 @@ describe('preTrustCodexProject', () => {
     expect(preTrustCodexProject(cwd, join(home, '.codex'))).toBe('already')
   })
 
-  it('writes through a symlinked config.toml instead of replacing the link', () => {
+  it.runIf(canLinkFiles)('writes through a symlinked config.toml instead of replacing the link', () => {
     const home = codexHome()
     mkdirSync(join(home, 'dotfiles'))
     mkdirSync(join(home, '.codex'))
@@ -284,31 +357,3 @@ describe('the config each engine actually reads', () => {
   })
 })
 
-// Claude Code's "Yes, I accept" for full mode writes this key to its user settings (2.1.310); a Swarm Lead on the Mac
-// Studio waited there before its first turn (2026-10-26).
-describe('full mode\'s warning accepted as the engine records it', () => {
-  const key = claude.bypassAcceptance!.key
-  it('adds the key to the settings, keeping everything else, once', () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'accept-')), 'settings.json')
-    writeFileSync(file, JSON.stringify({ theme: 'dark', hooks: { Stop: [] } }))
-    expect(recordAcceptanceIn(file, key)).toBe('accepted')
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ theme: 'dark', hooks: { Stop: [] }, skipDangerousModePermissionPrompt: true })
-    expect(recordAcceptanceIn(file, key)).toBe('already')
-  })
-
-  it('creates missing settings, its folder too, holding the key alone', () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'accept-')), '.claude', 'settings.json')
-    expect(recordAcceptanceIn(file, key)).toBe('accepted')
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ skipDangerousModePermissionPrompt: true })
-    expect(recordAcceptanceIn(file, key)).toBe('already')
-  })
-
-  it('leaves an unreadable or other-shaped file, and a value the person set, as it was', () => {
-    const folder = mkdtempSync(join(tmpdir(), 'accept-')), file = join(folder, 'settings.json')
-    for (const text of ['{not json', '[]', JSON.stringify({ [key]: false })]) {
-      writeFileSync(file, text)
-      expect(recordAcceptanceIn(file, key)).toBe('skipped')
-      expect(readFileSync(file, 'utf8')).toBe(text)
-    }
-  })
-})

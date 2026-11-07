@@ -3,24 +3,22 @@
  *
  * With the owner's home folder private, the engines installed under it are out of the team account's reach. Setup has
  * the team account install its own (./script.ts `TEAM_ENGINES`), with the vendors' npm packages, its own copy of
- * Harness's Node and a prefix in its own home, never as root. An engine it has not signed in spends the owner's
- * subscription through the owner's relay (./relay.ts): nothing of the owner's sign-ins is copied into it. One signed in
- * there (in a terminal on the team machine) still bills the account it is signed in with.
+ * Harness's Node and a prefix in its own home, never as root. Nothing of the owner's sign-ins is copied into it, and
+ * nothing spends the owner's subscription for it (anh Dee, 2026-11-07): an engine signed in there (in a terminal on the
+ * team machine) bills the account it is signed in with, and one not signed in shows its own sign-in.
  *
  * The owner cannot look inside the team account's home, so the team daemon reports what it finds (installed, signed in)
  * in its status file, as it starts and every minute after, and `harness team status` reads it there.
  */
 import { accessSync, constants, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
 import { userInfo } from 'node:os'
-import { dirname, join, posix, win32 } from 'node:path'
+import { delimiter, dirname, join, posix, win32 } from 'node:path'
 import { engineAccount, type EngineAccount } from '../lib/engineAccount.js'
 import { env } from '../config/env.js'
 import { readTeamConfig, type TeamConfig } from './config.js'
 import { receiveTeamModel } from './modelHandoff.js'
-import { TEAM_USER } from './layout.js'
 import type { EngineCopy } from './script.js'
 import { readTeamStatus, writeTeamStatus, type TeamStatus } from './privacy.js'
-import { teamRelayed } from './relay.js'
 
 export type TeamEngine = 'claude' | 'codex'
 
@@ -122,8 +120,7 @@ function installedPackage(dir: string, packageName: string, bin: string, uid: nu
   } catch { return null }
 }
 
-/** [relayed]: not signed in itself, it spends the owner's subscription through the owner's relay (team/relay.ts). */
-export interface EngineReadiness { installed: boolean; signedIn: boolean | null; relayed?: boolean }
+export interface EngineReadiness { installed: boolean; signedIn: boolean | null }
 export type TeamEngines = { checkedAt: number } & Record<TeamEngine, EngineReadiness>
 
 /** Where the team account's engines are: its npm prefix's bin folder, on its daemon's PATH (./script.ts). On Windows npm
@@ -138,8 +135,6 @@ export interface EngineCheckDeps {
   executable(path: string): boolean
   account(engine: TeamEngine): Promise<EngineAccount>
   now(): number
-  /** Whether the owner's relay is there for the team account's engines (team/relay.ts `teamRelayed`). */
-  relayed?(): boolean
 }
 
 /** What the team account has of each engine: installed in its own home, and signed in (null when it cannot say). */
@@ -149,7 +144,7 @@ export async function checkTeamEngines(deps: EngineCheckDeps): Promise<TeamEngin
     const installed = deps.executable(teamEngineBin(deps.home, engine, deps.platform))
     let signedIn: boolean | null = null
     try { signedIn = (await deps.account(engine)).signedIn } catch { /* cannot say */ }
-    result[engine] = { installed, signedIn, ...(signedIn !== true && deps.relayed?.() ? { relayed: true } : {}) }
+    result[engine] = { installed, signedIn }
   }
   return result
 }
@@ -158,10 +153,11 @@ export const realEngineCheckDeps = (home: string, env: NodeJS.ProcessEnv = proce
   home,
   platform: process.platform,
   executable: (path) => { try { accessSync(path, constants.X_OK); return true } catch { return false } },
-  // Only presence is read, never a secret (lib/engineAccount.ts). The team daemon has no login shell of the owner's to read.
-  account: (engine) => engineAccount(engine, { home, env, lastUsed: false }),
+  // The engine's own CLI says whether it is signed in (lib/engineAccount.ts), asked where the team's copy is: its home's bin,
+  // which the daemon's PATH need not name. The team daemon has no login shell of the owner's to read.
+  account: (engine) => engineAccount(engine, { home, lastUsed: false,
+    env: { ...env, PATH: [dirname(teamEngineBin(home, engine as TeamEngine, process.platform)), env.PATH].filter(Boolean).join(delimiter) } }),
   now: () => Date.now(),
-  relayed: teamRelayed,
 })
 
 /** How often the team daemon looks again: an engine signed in shows in `harness team status` within this long. */
@@ -210,8 +206,7 @@ export class TeamEngineReporter {
       const engines = await this.deps.check(config)
       const before = this.deps.read(config.statusFile)?.engines
       const same = before && TEAM_ENGINES.every(({ engine }) =>
-        before[engine].installed === engines[engine].installed && before[engine].signedIn === engines[engine].signedIn
-        && !before[engine].relayed === !engines[engine].relayed)
+        before[engine].installed === engines[engine].installed && before[engine].signedIn === engines[engine].signedIn)
       // Unchanged, the file is left alone, but a stamp more than ten minutes old is renewed so status can say it is current.
       if (same && engines.checkedAt - before.checkedAt < 10 * ENGINE_RECHECK_MS) return
       this.deps.write(config.statusFile, { engines })
@@ -230,43 +225,4 @@ export function teamEngineReporter(): TeamEngineReporter {
     ...(process.platform === 'win32' ? { receive: (config: TeamConfig) => receiveTeamModel({ home: config.home, dataDir: env.ADAPTER_DATA_DIR, now: Date.now,
       report: (update) => writeTeamStatus(config.statusFile, update) }) } : {}),
   })
-}
-
-/** What `harness team status` and setup say of the engines, and exactly how to sign them in, on [platform]'s computer. */
-export function engineLines(engines: TeamEngines | undefined, ago: (at: number) => string, platform: NodeJS.Platform = 'darwin'): string[] {
-  const computer = platform === 'darwin' ? 'this Mac' : 'this computer'
-  if (!engines) {
-    return ['  engines     ? not reported yet: the team daemon reports them once it runs']
-  }
-  const lines = TEAM_ENGINES.map(({ engine, name }, index) => {
-    const e = engines[engine]
-    const state = !e.installed ? '✗ not installed · harness team setup installs it'
-      : e.signedIn === true ? '✓ installed · ✓ signed in'
-        : e.relayed ? '✓ installed · ✓ uses your subscription'
-          : e.signedIn === false ? '✓ installed · ✗ not signed in' : '✓ installed · ? sign-in unknown'
-    return `  ${index === 0 ? 'engines' : '       '}     ${name.padEnd(12)}${state}`
-  })
-  lines.push(`              (checked ${ago(engines.checkedAt)})`)
-  const unsigned = TEAM_ENGINES.filter(({ engine }) => engines[engine].installed && engines[engine].signedIn !== true && !engines[engine].relayed)
-  if (unsigned.length) {
-    lines.push('', `  To sign the team account's engines in, once: in Harness, open a terminal on ${computer}'s Harness Team machine`,
-      '  (it is listed among your machines), and run there:')
-    for (const { name, signIn } of unsigned) lines.push(`    ${signIn.padEnd(28)}${name}`)
-    // A computer used over a terminal has no Harness app to open a terminal in (headless run, 2026-11-03): the same sign-in,
-    // from the terminal the person is already in.
-    if (platform !== 'win32') {
-      lines.push(`  Or from a terminal on ${computer}, as ${TEAM_USER}:`)
-      const terminal = unsigned.map(({ engine, name }) => ({
-        command: `sudo -u ${TEAM_USER} -H bash -lc ${engine === 'claude' ? 'claude' : "'codex login --device-auth'"}`, name,
-      }))
-      const width = Math.max(...terminal.map(({ command }) => command.length)) + 3
-      for (const { command, name } of terminal) lines.push(`    ${command.padEnd(width)}${name}`)
-    }
-    lines.push('  Your own sign-ins are not copied into the team account; each engine bills the account you sign in with.')
-    // Why a server reads "not signed in" with a subscription on the account: the relay that lends it lives in this
-    // computer's own daemon (team/relay.ts), so nothing is lent while that daemon is not running.
-    lines.push("  An engine the account has not signed in uses your subscription through this computer's Harness while it runs;",
-      '  when that is not running (harness start, or harness service install), there is nothing to lend.')
-  }
-  return lines
 }

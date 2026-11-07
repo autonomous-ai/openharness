@@ -9,6 +9,7 @@ import { swarmBuddyChatId } from './buddies.js'
 import { sweepLiveness } from './liveness.js'
 import { withoutMachineNames } from './store.js'
 import { BUDDY_MODEL_GONE_MS, BUDDY_MODEL_LEASE_MS } from './tidy.js'
+import { expiredModelRequests, unservedBuddyModels } from './buddyModel.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -60,6 +61,17 @@ function setup(options: { buddyCapabilities?: string[] } = {}) {
   const buddy = (): Actor => ({ kind: 'agent', agentId: buddyId, machineOwnerId: 'peer' })
   const agent = () => state.agents.find(a => a.id === buddyId)!
   return { run, grid, chat, buddyId, buddy, agent, get state() { return state } }
+}
+/** A thread session of peer's Buddy, as its machine runs it (task #3810). */
+const addSession = (f: ReturnType<typeof setup>, id: string, harnessId: string, gridModel?: string) => {
+  const session = { ...structuredClone(f.agent()), id, harnessId, buddySession: { thread: id, from: 0 } }
+  delete session.modelRequest
+  if (gridModel) session.gridModel = gridModel
+  else delete session.gridModel
+  f.state.agents.push(session)
+  // A session is in its Buddy's chat, as a New session puts it (commands.ts routeBuddySession).
+  f.state.conversations.find(c => c.id === f.chat)!.agentIds.push(id)
+  return () => f.state.agents.find(a => a.id === id)!
 }
 const code = (fn: () => unknown): string | undefined => {
   try { fn() } catch (error) { return (error as { code?: string }).code }
@@ -163,6 +175,8 @@ describe('the Buddy\'s machine reporting the switch', () => {
     const { f, requestId } = asked()
     f.state.agents.push({ ...structuredClone(f.agent()), id: 'session', harnessId: 'h-session', buddySession: { thread: 't', from: 0 } })
     delete f.state.agents.at(-1)!.modelRequest
+    // A session is in its Buddy's chat, as a New session puts it (commands.ts routeBuddySession).
+    f.state.conversations.find(c => c.id === f.chat)!.agentIds.push('session')
     f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId, ok: true }, f.buddy())
     expect(f.state.agents.find(a => a.id === 'session')!.gridModel).toBe(MODEL)
     f.run({ type: 'buddy.model', gridModel: null })
@@ -176,6 +190,19 @@ describe('the Buddy\'s machine reporting the switch', () => {
     const read = effects.messages.map(m => withoutMachineNames(m as unknown as Parameters<typeof withoutMachineNames>[0]).text)
     expect(read).toEqual(['Your Buddy now runs on DeepSeek 4.1 Flash, served by a machine.',
       "peer's Buddy now runs on DeepSeek 4.1 Flash, which your machine serves."])
+  })
+
+  // Task #3810 (Diego, 11-06): a thread session the daemon refused to move was recorded on the model anyway, so costs and the
+  // serving member's "Used by" read it wrong.
+  it('records the model only on the thread sessions that moved: one that stayed is left on its owner\'s subscription', () => {
+    const { f, requestId } = asked()
+    const moved = addSession(f, 'moved', 'h-moved'), stayed = addSession(f, 'stayed', 'h-stayed')
+    f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId, ok: true, stayed: ['h-stayed'],
+      error: 'A thread session stayed where it was: it was answering' }, f.buddy())
+    expect(moved().gridModel).toBe(MODEL)
+    expect(stayed().gridModel).toBeUndefined()
+    // Nothing is owed for it: it runs on its owner's own subscription.
+    expect(stayed().homeOwed).toBeUndefined()
   })
 
   it('says which of its thread sessions stayed where they were', () => {
@@ -295,6 +322,73 @@ describe('a Buddy coming home by itself', () => {
     expect(f.agent().gridModel).toBeUndefined()
   })
 
+  // Task #3810: a thread session left on the member's model by a limit was never moved home, so the limit stopped holding.
+  it('keeps a thread session that stayed on the member\'s model where it runs, and sends it home on the next sweep', () => {
+    const f = onModel()
+    const session = addSession(f, 'session', 'h-session', MODEL)
+    f.run({ type: 'agent.alert', agentId: f.buddyId, alert: 'limit', active: true }, f.buddy())
+    f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId: f.agent().modelRequest!.id, ok: true, stayed: ['h-session'],
+      error: 'A thread session stayed where it was: it was answering' }, f.buddy())
+    expect(f.agent().gridModel).toBeUndefined()
+    expect(session().gridModel).toBe(MODEL)
+    expect(session().homeOwed).toEqual({ reason: 'limit', tries: 1 })
+    unservedBuddyModels(f.state, NOW, () => 'follow-up')
+    expect(f.agent().modelRequest).toMatchObject({ id: 'follow-up', gridModel: null, sessionsOnly: true, reason: 'limit' })
+    const done = f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId: 'follow-up', ok: true }, f.buddy())
+    expect(done.messages.map(m => m.text)).toEqual(["Your Buddy's thread sessions are back on your subscription too."])
+    expect(session().gridModel).toBeUndefined()
+    expect(session().homeOwed).toBeUndefined()
+    unservedBuddyModels(f.state, NOW, () => 'again')
+    expect(f.agent().modelRequest).toBeUndefined()
+  })
+
+  it('stops sending a thread session home after three tries that it stayed, and tells its owner', () => {
+    const f = onModel()
+    const session = addSession(f, 'session', 'h-session', MODEL)
+    f.run({ type: 'agent.alert', agentId: f.buddyId, alert: 'limit', active: true }, f.buddy())
+    f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId: f.agent().modelRequest!.id, ok: true, stayed: ['h-session'] }, f.buddy())
+    let last: ReturnType<typeof f.run> | undefined
+    for (let i = 1; i <= 3; i++) {
+      unservedBuddyModels(f.state, NOW, () => `follow-up-${i}`)
+      last = f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId: `follow-up-${i}`, ok: true, stayed: ['h-session'],
+        error: 'A thread session stayed where it was: it was answering' }, f.buddy())
+    }
+    expect(session().homeOwed).toBeUndefined()
+    expect(session().gridModel).toBe(MODEL)
+    expect(last!.messages.map(m => m.text)).toEqual([
+      'A thread session is still on DeepSeek 4.1 Flash: it was answering. End that thread\'s session to bring it back to your subscription.'])
+    unservedBuddyModels(f.state, NOW, () => 'again')
+    expect(f.agent().modelRequest).toBeUndefined()
+  })
+
+  it('counts a sessions-only move home its machine never answered as a try, and says nothing for it', () => {
+    const f = onModel()
+    const session = addSession(f, 'session', 'h-session', MODEL)
+    f.run({ type: 'agent.alert', agentId: f.buddyId, alert: 'limit', active: true }, f.buddy())
+    f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId: f.agent().modelRequest!.id, ok: true, stayed: ['h-session'] }, f.buddy())
+    unservedBuddyModels(f.state, NOW, () => 'follow-up')
+    expect(expiredModelRequests(f.state, NOW + BUDDY_MODEL_LEASE_MS)).toEqual([])
+    expect(f.agent().modelRequest).toBeUndefined()
+    expect(session().homeOwed).toEqual({ reason: 'limit', tries: 2 })
+  })
+
+  // Review of #3393: the last unanswered follow-up dropped the session's follow-up with no word to its owner.
+  it('tells the owner when follow-ups its machine never answered run out, and asks no more', () => {
+    const f = onModel()
+    const session = addSession(f, 'session', 'h-session', MODEL)
+    f.run({ type: 'agent.alert', agentId: f.buddyId, alert: 'limit', active: true }, f.buddy())
+    f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId: f.agent().modelRequest!.id, ok: true, stayed: ['h-session'] }, f.buddy())
+    const said: string[][] = []
+    for (let i = 1; i <= 3; i++) {
+      unservedBuddyModels(f.state, NOW, () => `follow-up-${i}`)
+      said.push(expiredModelRequests(f.state, NOW + BUDDY_MODEL_LEASE_MS).map(line => line.text))
+    }
+    expect(said).toEqual([[], [], ["A thread session is still on DeepSeek 4.1 Flash: its computer didn't answer. End that thread's session to bring it back to your subscription."]])
+    expect(session().homeOwed).toBeUndefined()
+    unservedBuddyModels(f.state, NOW, () => 'again')
+    expect(f.agent().modelRequest).toBeUndefined()
+  })
+
   it('goes back when the model keeps failing', () => {
     const f = onModel()
     f.run({ type: 'agent.alert', agentId: f.buddyId, alert: 'model', active: true }, f.buddy())
@@ -365,5 +459,52 @@ describe('a Buddy\'s new thread session', () => {
     const request = f.state.starts!.at(-1)!.request
     expect(request.gridModel).toBeUndefined()
     expect(request.model).toBeUndefined()
+  })
+})
+
+// Task #3818: a person with several Buddies switches one of them, named by its chat (else their default); its own thread
+// sessions move with it, and the outcome is told in its own chat.
+describe('switching one of several Buddies', () => {
+  function two() {
+    const f = setup()
+    const added = f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Research' } as Command)
+    const startId = added.result.startId as string
+    const second = f.run({ type: 'agent.started', startId, harnessId: 'peer-research', configuration }).result.agentId as string
+    f.run({ type: 'agent.startSettled', startId, warning: null })
+    return { f, second, secondChat: added.result.conversationId as string, agent: (id: string) => f.state.agents.find(a => a.id === id)! }
+  }
+
+  it('switches the Buddy whose chat is named, and tells it there', () => {
+    const { f, second, secondChat, agent } = two()
+    f.run({ type: 'buddy.model', gridModel: MODEL, conversationId: secondChat } as Command)
+    expect(agent(second).modelRequest).toMatchObject({ gridModel: MODEL })
+    expect(f.agent().modelRequest).toBeUndefined()
+    const effects = f.run({ type: 'buddy.modelResult', agentId: second, requestId: agent(second).modelRequest!.id, ok: true },
+      { kind: 'agent', agentId: second, machineOwnerId: 'peer' })
+    expect(effects.messages.filter(m => m.text.startsWith('Your Buddy now runs')).map(m => m.conversationId)).toEqual([secondChat])
+  })
+
+  it('switches the default without a chat named, and refuses a chat that is not one of the person\'s Buddies', () => {
+    const { f, second, secondChat, agent } = two()
+    f.run({ type: 'buddy.default', conversationId: secondChat } as Command)
+    f.run({ type: 'buddy.model', gridModel: MODEL })
+    expect(agent(second).modelRequest).toBeDefined()
+    expect(f.agent().modelRequest).toBeUndefined()
+    expect(code(() => f.run({ type: 'buddy.model', gridModel: MODEL, conversationId: 'lead' } as Command))).toBe('NOT_FOUND')
+  })
+
+  // Task #3810 with #3818: a thread session a move home left on a shared model is moved by its own Buddy's machine request, never
+  // by another of its owner's Buddies, whose chat does not hold it.
+  it('asks only the Buddy whose thread session stayed on a shared model to move it home', () => {
+    const { f, second, agent } = two()
+    f.run({ type: 'buddy.model', gridModel: MODEL })
+    f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId: f.agent().modelRequest!.id, ok: true }, f.buddy())
+    const session = addSession(f, 'session', 'h-session', MODEL)
+    f.run({ type: 'agent.alert', agentId: f.buddyId, alert: 'limit', active: true }, f.buddy())
+    f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId: f.agent().modelRequest!.id, ok: true, stayed: ['h-session'] }, f.buddy())
+    expect(session().homeOwed).toEqual({ reason: 'limit', tries: 1 })
+    unservedBuddyModels(f.state, NOW, buddy => `follow-up-${buddy.id}`)
+    expect(f.agent().modelRequest).toMatchObject({ gridModel: null, sessionsOnly: true })
+    expect(agent(second).modelRequest).toBeUndefined()
   })
 })

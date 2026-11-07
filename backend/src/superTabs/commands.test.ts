@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { groupProject } from './projects.js'
 import { storeOldLeads } from './leads.test-support.js'
-import { applyCommand, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, type Command, type CommandContext } from './commands.js'
+import { applyCommand, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, WORDS, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { readsRawReason } from './startFailure.js'
 import { sweepLiveness } from './liveness.js'
@@ -59,16 +59,27 @@ function fixture() {
   return { run, invite, add, seat, group, get state() { return state } }
 }
 
-/** Makes [machineId] [contributorId]'s contributed machine used only for agents (`harness team on`), reporting now, so a
- *  teammate's agent there may take another person's project (machines.ts teamWorkCheck). */
-function teamMachine(f: ReturnType<typeof fixture>, contributorId: string, machineId = 'host') {
-  const team = { sessionKind: 'team' as const, privacy: { mode: 'dedicated' as const, seenAt: 1000 } }
+/** Makes [machineId] [contributorId]'s own contributed computer, reporting now, so its agents take any project [contributorId]
+ *  reads, in their own account (machines.ts teamWorkCheck; Swarm v3 has no Team accounts, task #4120). */
+function ownMachine(f: ReturnType<typeof fixture>, contributorId: string, machineId = 'host') {
+  const own = { sessionKind: 'computer' as const }
   const existing = f.state.machines?.find(m => m.machineId === machineId)
-  if (existing) return void Object.assign(existing.observation!, team)
+  if (existing) return void Object.assign(existing.observation!, own)
   f.state.machines = [...(f.state.machines ?? []), { machineId, name: 'Studio', contributorId, membershipGeneration: f.state.people.find(p => p.id === contributorId)!.generation,
-    generation: 'g1', cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false, observation: { generation: 'g1', receivedAt: 1000, ...team,
+    generation: 'g1', cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false, observation: { generation: 'g1', receivedAt: 1000, ...own,
       resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null,
         deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] } }]
+}
+
+/** Puts [agentId] on a machine of its own: [contributorId]'s own computer, or with [team] a Harness Team account's entry on it,
+ *  which Swarm v3 gives no new work (task #4120). */
+function placeOn(f: ReturnType<typeof fixture>, agentId: string, contributorId: string, machineId: string, team = false) {
+  if (!f.state.machines?.some(m => m.machineId === machineId)) {
+    ownMachine(f, contributorId, machineId)
+    const pool = f.state.machines!.find(m => m.machineId === machineId)!
+    if (team) Object.assign(pool, { hostMachineId: 'host' }, { observation: { ...pool.observation!, sessionKind: 'team' } })
+  }
+  f.state.agents.find(a => a.id === agentId)!.machineId = machineId
 }
 
 describe('five-part tasks', () => {
@@ -749,7 +760,7 @@ describe('Super Tab collaboration policy', () => {
   it('withdraws a departing contributor and preserves execution identity until the host confirms a stop', () => {
     const f = fixture()
     f.invite()
-    teamMachine(f, 'peer')
+    ownMachine(f, 'peer')
     const group = f.group()
     const worker = f.add('worker', 'peer', group)
     const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
@@ -839,11 +850,11 @@ describe('Super Tab collaboration policy', () => {
 it('starts only in the chosen conversation, captures authority, and never assigns on join', () => {
   const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
   const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
-  const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+  const contribution = { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }
   const request = { conversationId: group, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
   const startId = f.run({ type: 'agent.start', request, ...via }, actor, { contribution, ...decisionIn(group) }).result.startId as string
-  expect(f.state.starts![0]).toMatchObject({ request, hostGrant: 'grant-1', dispatched: false })
+  expect(f.state.starts![0]).toMatchObject({ request, hostGrant: null, dispatched: false })
   expect(f.state.agents).toHaveLength(1)
   expect(f.state.conversations).toHaveLength(2) // Lead and the group
   expect(() => f.run({ type: 'agent.startDispatch', startId }, actor, { contribution: { ...contribution, hostGrant: 'new-grant' } })).toThrow('revoked')
@@ -863,7 +874,7 @@ describe('a Codex start that asks for default', () => {
   const stored = (patch: Record<string, unknown>, withVia = false) => {
     const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
     const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
-    const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+    const contribution = { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }
     const request = { conversationId: group, machineId: 'host', engine: 'codex', name: 'Builder', cwd: '/repo', worktree: true,
       requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false }, ...patch }
     f.run({ type: 'agent.start', request, ...(withVia ? { routeDecisionId: 'd1' } : via) } as Command, actor, { contribution, ...decisionIn(group,
@@ -889,7 +900,7 @@ describe('a Codex start that asks for default', () => {
     for (const asked of [{ model: 'default', effort: 'default' }, { model: 'gpt-6.1-sol', effort: 'high' }]) {
       const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
       const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
-      const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+      const contribution = { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }
       const request = { conversationId: group, machineId: 'host', engine: 'codex', name: 'Builder', cwd: '/repo', worktree: true, ...asked,
         requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
       const routing = decisionIn(group, { candidates: [candidate('c0', { machineId: 'host', engine: 'codex', ...asked })], pick: undefined, via: 'instructions', p: null })
@@ -902,7 +913,7 @@ describe('a Codex start that asks for default', () => {
 it.each(['opencode', 'kilo'])('refuses to dispatch a stored legacy %s start before native launch', engine => {
   const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
   const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
-  const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+  const contribution = { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }
   const request = { conversationId: group, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
   const startId = f.run({ type: 'agent.start', request, ...via }, actor, { contribution, ...decisionIn(group) }).result.startId as string
@@ -914,7 +925,7 @@ it.each(['opencode', 'kilo'])('refuses to dispatch a stored legacy %s start befo
 describe('agent.start on the Swarm\'s listed machines', () => {
   const request = (group: string, machineId: string) => ({ conversationId: group, machineId, engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } })
-  const grant = { machineOwnerId: 'target-owner', contributorId: 'owner' }
+  const grant = { machineOwnerId: 'owner', contributorId: 'owner' }
 
   it('refuses an agent\'s start on a machine nobody listed, and records nothing', () => {
     const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
@@ -1054,7 +1065,7 @@ function routed() {
     f.state.starts.push({ id: `start-${agentId}`, harnessId: member.harnessId, request: { machineId: member.machineId } } as never)
     return `start-${agentId}`
   }
-  return { ...f, get state() { return f.state }, lead, worker, define, startedFor, contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' },
+  return { ...f, get state() { return f.state }, lead, worker, define, startedFor, contribution: { machineOwnerId: 'owner', contributorId: 'owner' },
     leadActor: agentActor(lead), workerActor: agentActor(worker) }
 }
 
@@ -1191,7 +1202,7 @@ describe('agent bookkeeping in the chats people read', () => {
   it('keeps an agent\'s joined and ready lines out of the project chat, and in a task\'s chat', () => {
     const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
     const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
-    const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+    const contribution = { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }
     const lines = (conversationId: string, harnessId: string) => {
       const request = { conversationId, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
         requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
@@ -1389,19 +1400,18 @@ describe('decisions linked to work', () => {
     const request = { conversationId: task, machineId: 'machine', engine: 'claude', model: 'opus', effort: 'xhigh', name: 'Builder', cwd: '/repo', worktree: false,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const start = (extra: Record<string, unknown> = {}) => f.run({ type: 'agent.start', request, routeDecisionId: 'd1', ...extra } as Command, f.leadActor, { routeDecision: open({ conversationId: task }), contribution: f.contribution })
-    expect(start().routeDecisions[0]).toMatchObject({ op: 'final', override: { by: 'lead', reason: 'No reason given.' } })
+    expect(() => start()).toThrow(expect.objectContaining({ code: 'ROUTE_REASON_REQUIRED' }))
     const effects = start({ overrideReason: 'Xhigh is needed here.' })
     expect(effects.routeDecisions[0]).toMatchObject({ op: 'final', override: { by: 'lead', reason: 'Xhigh is needed here.' } })
     expect(effects.messages[0]).toMatchObject({ text: 'lead started Builder instead of Title c0. Reason: Xhigh is needed here.',
       source: { kind: 'route-override', decisionId: 'd1', by: 'lead' } })
   })
 
-  it('records a mismatch as the agent\'s override, with its reason when one is given', () => {
+  it('records a mismatch as the agent\'s override, with its reason (required when the route picked)', () => {
     const f = routed()
     f.define('lead')
-    expect(f.run({ type: 'work.assign', conversationId: 'lead', agentId: f.worker, routeDecisionId: 'd1' }, f.leadActor, { routeDecision: open() }).routeDecisions[0])
-      .toMatchObject({ op: 'final', override: { by: 'lead', reason: 'No reason given.' } })
-    f.state.conversations.find(c => c.id === 'lead')!.assignment = null
+    expect(() => f.run({ type: 'work.assign', conversationId: 'lead', agentId: f.worker, routeDecisionId: 'd1' }, f.leadActor, { routeDecision: open() }))
+      .toThrow(expect.objectContaining({ code: 'ROUTE_REASON_REQUIRED' }))
     const effects = f.run({ type: 'work.assign', conversationId: 'lead', agentId: f.worker, routeDecisionId: 'd1', overrideReason: 'This worker already has the context.' }, f.leadActor, { routeDecision: open() })
     expect(effects.routeDecisions[0]).toMatchObject({ op: 'final', override: { by: 'lead', reason: 'This worker already has the context.' } })
     expect(effects.messages.some(m => m.source?.kind === 'route-override')).toBe(true)
@@ -1576,7 +1586,7 @@ describe('a route that names no pick', () => {
 
 // The route is advice (project instructions, phase 4): the server refuses no start, assignment or route for its model, its
 // machine, the owner's old rules, a task's requirement or quota; only facts and access. A route decision is optional, and
-// following another candidate needs no reason (it is still recorded).
+// following another candidate needs a reason when the route named a pick (task #3576; it is still recorded).
 describe('the route is advice', () => {
   const request = (patch: Record<string, unknown> = {}) => ({ conversationId: 'lead', machineId: 'machine', engine: 'claude', model: 'opus', effort: 'high',
     name: 'Builder', cwd: '/repo', worktree: false, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false },
@@ -1648,18 +1658,23 @@ describe('the route is advice', () => {
     expect(f.state.conversations.find(c => c.id === group)!.task!.requires).toEqual(requires)
   })
 
-  it('follows another candidate with no reason', () => {
+  // Anh Dee, 2026-11-06 (task #3576): the route picks by the Routing order, so the pick is followed as it is and another candidate
+  // is chosen only with a reason; it is still recorded as an override.
+  it('follows the pick with no reason, and another candidate only with one', () => {
     const f = routed(), group = f.group(), engineer = f.add('engineer')
     const decision = (id: string) => ({ id, conversationId: group, record: record(), final: null, override: null, assignmentId: null, outcome: null }) as unknown as RouteDecision
-    const assigned = f.run({ type: 'work.assign', conversationId: group, agentId: f.worker, routeDecisionId: 'd1' }, as(engineer), { routeDecision: decision('d1') })
-    expect(assigned.routeDecisions).toEqual([expect.objectContaining({ op: 'final', id: 'd1', override: expect.objectContaining({ by: 'lead', reason: 'No reason given.' }) })])
-    expect(assigned.messages.find(m => m.source?.kind === 'route-override')!.text).toBe('engineer assigned worker instead of Title c0.')
+    expect(() => f.run({ type: 'work.assign', conversationId: group, agentId: f.worker, routeDecisionId: 'd1' }, as(engineer), { routeDecision: decision('d1') }))
+      .toThrow(expect.objectContaining({ code: 'ROUTE_REASON_REQUIRED', message: expect.stringContaining('Title c0') }))
     const start = (id: string, overrideReason?: string) => f.run({ type: 'agent.start', request: request({ conversationId: group, effort: 'xhigh' }), routeDecisionId: id,
       ...(overrideReason ? { overrideReason } : {}) }, as(engineer), { routeDecision: decision(id), contribution: f.contribution })
-    expect(start('d2').messages.find(m => m.source?.kind === 'route-override')!.text).toBe('engineer started Builder instead of Title c0.')
+    expect(() => start('d2')).toThrow(expect.objectContaining({ code: 'ROUTE_REASON_REQUIRED' }))
     const reasoned = start('d3', 'Xhigh is needed here.')
     expect(reasoned.routeDecisions[0]).toMatchObject({ override: { by: 'lead', reason: 'Xhigh is needed here.' } })
     expect(reasoned.messages.find(m => m.source?.kind === 'route-override')!.text).toBe('engineer started Builder instead of Title c0. Reason: Xhigh is needed here.')
+    // The pick itself needs none and records no override.
+    const followed = f.run({ type: 'agent.start', request: request({ conversationId: group, effort: 'high' }), routeDecisionId: 'd4' }, as(engineer),
+      { routeDecision: decision('d4'), contribution: f.contribution })
+    expect(followed.routeDecisions).toEqual([expect.not.objectContaining({ override: expect.anything() })])
   })
 
   it('records the instructions revision a route relied on', () => {
@@ -1975,7 +1990,7 @@ it('lets the Lead stop a worker that never had an assignment, and never a Buddy'
 
 it('allows the contributor to keep a completed worker and refuses another project’s Lead', () => {
   const f = fixture(); f.invite()
-  teamMachine(f, 'peer')
+  ownMachine(f, 'peer')
   f.add('lead', 'owner', 'lead', true)
   const group = f.group(), worker = f.add('worker', 'peer', group)
   const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
@@ -2485,7 +2500,7 @@ describe('any agent of the project', () => {
 // An older client's role kind (builder or reviewer) is stored for older readers and decides nothing; its custom role or
 // kind becomes the agent's role name (project instructions, phase 4, decision 2).
 describe('role kinds decide nothing', () => {
-  const contribution = { machineOwnerId: 'host-owner', contributorId: 'owner' }
+  const contribution = { machineOwnerId: 'owner', contributorId: 'owner' }
   const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
   const request = (group: string, extra: Record<string, unknown> = {}) => ({ conversationId: group, machineId: 'host', engine: 'claude', name: 'Reviewer',
     cwd: '/repo', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false }, ...extra })
@@ -2598,17 +2613,18 @@ describe('role kinds decide nothing', () => {
     const f = fixture()
     f.invite()
     const lead = f.add('lead', 'owner', 'lead', true), group = f.group(), other = f.group()
-    // The teammate's own Mac, not its Harness Team account: another person's work runs there only through one (machines.ts).
-    teamMachine(f, 'peer')
-    const mac = f.state.machines!.find(m => m.machineId === 'host')!
-    mac.observation!.sessionKind = 'computer'
-    mac.teamAccountOnly = true
-    const mate = f.add('mate', 'peer', group)
+    // The teammate's own Mac takes another person's work in their own account; its Harness Team account takes none (task #4120).
+    ownMachine(f, 'peer')
+    const mate = f.add('mate', 'peer', group), own = f.add('own', 'peer', group)
+    placeOn(f, mate, 'peer', 'peer-team', true)
     expect(() => f.run({ type: 'conversation.agent', conversationId: other, agentId: mate, present: true, lead: false }, as(lead)))
-      .toThrow(expect.objectContaining({ code: 'TEAM_ACCOUNT_REQUIRED' }))
+      .toThrow(expect.objectContaining({ code: 'TEAM_ACCOUNTS_REMOVED' }))
     expect(f.state.conversations.find(c => c.id === other)!.agentIds).not.toContain(mate)
-    // The project owner's own agent there: added, and its finished-work decision cleared as an assignment clears it.
+    f.run({ type: 'conversation.agent', conversationId: other, agentId: own, present: true, lead: false }, as(lead))
+    expect(f.state.conversations.find(c => c.id === other)!.agentIds).toContain(own)
+    // The project owner's own agent on their own computer: added, and its finished-work decision cleared as an assignment clears it.
     const mine = f.add('mine', 'owner', group)
+    placeOn(f, mine, 'owner', 'owner-mac')
     f.state.agents.find(a => a.id === mine)!.workDecision = 'awaiting'
     f.run({ type: 'conversation.agent', conversationId: other, agentId: mine, present: true, lead: false }, as(lead))
     expect(f.state.agents.find(a => a.id === mine)).not.toHaveProperty('workDecision')
@@ -2621,19 +2637,19 @@ describe('role kinds decide nothing', () => {
 // The team-access check applies to every agent added to a task (spec, "Kept as access"): one named into it, one that posts
 // into it and one that opens it join it, as conversation.agent adds one (final review of the branch).
 describe('an agent joining a task by a post or by opening it', () => {
-  /** A teammate's agent (mate) on its own Mac, which runs another person's work only through its Harness Team account. */
+  /** A teammate's agent (mate) in its Mac's Harness Team account, which Swarm v3 gives no new work (task #4120), and the project
+   *  owner's own agent (mine) on the owner's own computer. */
   function teammate() {
     const f = fixture()
     f.invite()
     const lead = f.add('lead', 'owner', 'lead', true), group = f.group(), other = f.group()
-    teamMachine(f, 'peer')
-    const mac = f.state.machines!.find(m => m.machineId === 'host')!
-    mac.observation!.sessionKind = 'computer'
-    mac.teamAccountOnly = true
+    ownMachine(f, 'peer')
     const mate = f.add('mate', 'peer', group), mine = f.add('mine', 'owner', group)
+    placeOn(f, mate, 'peer', 'peer-team', true)
+    placeOn(f, mine, 'owner', 'owner-mac')
     return { f, lead, group, other, mate, mine }
   }
-  const refused = expect.objectContaining({ code: 'TEAM_ACCOUNT_REQUIRED' })
+  const refused = expect.objectContaining({ code: 'TEAM_ACCOUNTS_REMOVED' })
   const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
   const post = (conversationId: string, recipientIds: string[] = []) =>
     ({ type: 'message.send', conversationId, text: 'Look at this.', replyTo: null, recipientIds }) as Command
@@ -2658,7 +2674,8 @@ describe('an agent joining a task by a post or by opening it', () => {
   it('checks a person\'s add of a session already in the Swarm as conversation.agent does', () => {
     const { f, other, mate, mine } = teammate()
     const again = (harnessId: string, actor: Extract<Actor, { kind: 'person' }>) => f.run({ type: 'agent.add', conversationId: other,
-      machineId: 'host', harnessId, name: harnessId, configuration: config, lead: false }, actor, { contribution: { machineOwnerId: 'host-owner', contributorId: actor.userId } })
+      machineId: f.state.agents.find(a => a.harnessId === harnessId)!.machineId, harnessId, name: harnessId, configuration: config, lead: false }, actor,
+      { contribution: { machineOwnerId: 'host-owner', contributorId: actor.userId } })
     const members = (id: string) => f.state.conversations.find(c => c.id === id)!.agentIds
     expect(() => again('mate', peer)).toThrow(refused)
     f.state.agents.find(a => a.id === mine)!.workDecision = 'stop'
@@ -2839,7 +2856,7 @@ it('allows routing directly to the awaiting worker without first keeping it', ()
 })
 
 describe('Reviewer role', () => {
-  const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner' }
+  const contribution = { machineOwnerId: 'owner', contributorId: 'owner' }
   const request = (group: string, extra: Record<string, unknown> = {}) => ({ conversationId: group, machineId: 'host', engine: 'claude', name: 'Reviewer',
     cwd: '/repo', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false }, ...extra })
   function reviewed() {
@@ -2908,7 +2925,7 @@ describe('Reviewer role', () => {
     const check = { type: 'work.check', conversationId: review, assignmentId: verdict.assignment!.id, checkId: verdict.checks[0]!.id, passed: true, evidence: 'Looks fine.' } as Command
     f.run(check, { kind: 'agent', agentId: builder, machineOwnerId: 'host-owner' })
     expect(f.state.conversations.find(c => c.id === review)!.checks[0]!.passedBy).toBe(`agent:${builder}`)
-    f.run(check, { kind: 'agent', agentId: reviewer, machineOwnerId: 'target-owner' })
+    f.run(check, { kind: 'agent', agentId: reviewer, machineOwnerId: 'owner' })
     expect(f.state.conversations.find(c => c.id === review)!.checks[0]!.passedBy).toBe(`agent:${reviewer}`)
   })
 
@@ -2990,7 +3007,7 @@ describe('Reviewer role', () => {
     f.run({ type: 'route.record', conversationId: review, decision: pick(reviewer) } as Command, leadActor)
     const built = f.run({ type: 'work.assign', conversationId: group, agentId: builder }).result.assignmentId as string
     const assignmentId = f.run({ type: 'work.assign', conversationId: review, agentId: reviewer }).result.assignmentId as string
-    const reviewerActor: Actor = { kind: 'agent', agentId: reviewer, machineOwnerId: 'target-owner' }
+    const reviewerActor: Actor = { kind: 'agent', agentId: reviewer, machineOwnerId: 'owner' }
     const checkId = f.state.conversations.find(c => c.id === group)!.checks[0]!.id
     f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId, passed: true, evidence: 'Ready: yes — revision abc' }, reviewerActor)
     expect(f.state.conversations.find(c => c.id === group)!.checks[0]!.passedBy).toBe(`agent:${reviewer}`)
@@ -3009,7 +3026,7 @@ describe('Reviewer role', () => {
       const { f, group, builder, reviewer } = setup
       const built = f.run({ type: 'work.assign', conversationId: group, agentId: builder }).result.assignmentId as string
       const builderActor: Actor = { kind: 'agent', agentId: builder, machineOwnerId: 'host-owner' }
-      const reviewerActor: Actor = { kind: 'agent', agentId: reviewer, machineOwnerId: 'target-owner' }
+      const reviewerActor: Actor = { kind: 'agent', agentId: reviewer, machineOwnerId: 'owner' }
       f.run({ type: 'work.status', conversationId: group, assignmentId: built, status, result: 'Ready for review: PR #42 at abc1234' }, builderActor, { now: 2000 })
       const checkId = f.state.conversations.find(c => c.id === group)!.checks[0]!.id
       const verdict = (passed: boolean, now: number) => f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId, passed,
@@ -3091,7 +3108,7 @@ describe('Reviewer role', () => {
     const review = f.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: group, checks: [{ description: 'Verdict', independent: false }] },
       leadActor).result.conversationId as string
     f.run({ type: 'work.assign', conversationId: review, agentId: reviewer })
-    f.run({ type: 'agent.alert', agentId: reviewer, alert: 'model', active: true }, { kind: 'agent', agentId: reviewer, machineOwnerId: 'target-owner' })
+    f.run({ type: 'agent.alert', agentId: reviewer, alert: 'model', active: true }, { kind: 'agent', agentId: reviewer, machineOwnerId: 'owner' })
     expect(f.state.conversations.find(c => c.id === review)!.assignment).toMatchObject({ status: 'lost', lost: { reason: 'its model keeps failing' } })
     expect(f.state.agents.find(a => a.id === reviewer)!.lostTask).toMatchObject({ conversationId: review })
   })
@@ -3914,7 +3931,7 @@ describe('machine.remove', () => {
     f.state.agents.find(a => a.id === lead)!.machineId = 'elsewhere'
     f.invite()
     contribute(f, 'peer')
-    teamMachine(f, 'peer')
+    ownMachine(f, 'peer')
     const worker = f.add('worker', 'peer', group), owners = f.add('owners', 'owner')
     f.run({ type: 'work.assign', conversationId: group, agentId: worker })
     f.state.rules = [{ id: 'both', projectId: 'lead', rule: { kind: 'machines', machineIds: ['host', 'elsewhere'] }, text: 'Only these two.',
@@ -4224,7 +4241,7 @@ describe('the Local models add-on', () => {
   const start = (gridName: string, patch: Record<string, unknown> = {}) => ({ conversationId: 'lead', machineId: 'host', engine: 'claude', name: 'Local builder',
     cwd: '/repo/lead', worktree: true, gridModel: 'qwen3-30b', gridName, ...patch,
     requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } })
-  const grant = { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }
+  const grant = { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }
 
   it('is on in a new Swarm, its grid named, so the owner\'s computer sets it up in the background', () => {
     const f = fixture()
@@ -4484,6 +4501,136 @@ describe('credentials in Swarm chat', () => {
     // Commands with no words of their own are passed through untouched.
     const pause: Command = { type: 'tab.pause', paused: true }
     expect(withoutCredentials(pause, removed)).toBe(pause)
+  })
+})
+
+// Task #4340: WORDS listed only the older commands, so these were stored, and copied, as typed.
+describe('credentials in every command', () => {
+  const github = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_')
+  /** A command holding [value] at [path] (`[]` an item of a list), with only what withoutCredentials reads. */
+  const holding = (type: string, path: string, value: string): Command => {
+    const command: Record<string, unknown> = { type }
+    let holder = command
+    const keys = path.split('.')
+    keys.forEach((key, i) => {
+      const many = key.endsWith('[]'), name = many ? key.slice(0, -2) : key, last = i === keys.length - 1
+      const next = last ? value : {}
+      holder[name] = many ? [next] : next
+      holder = next as Record<string, unknown>
+    })
+    return command as unknown as Command
+  }
+  const at = (command: unknown, path: string): unknown => path.split('.').reduce<unknown>((value, key) => {
+    const many = key.endsWith('[]'), item = (value as Record<string, unknown>)[many ? key.slice(0, -2) : key]
+    return many ? (item as unknown[])[0] : item
+  }, command)
+
+  it.each([
+    ['proposal.decide', 'reason'], ['proposal.decide', 'task.changes'], ['proposal.decide', 'checks[].description'],
+    ['proposal.ask', 'question'], ['proposal.ask', 'defaultAnswer'], ['proposal.answer', 'text'], ['proposal.merge', 'reason'],
+    ['proposal.create', 'text'], ['proposal.create', 'evidence[]'], ['buddy.propose', 'why'], ['buddy.propose', 'evidence[]'],
+    ['decision.ask', 'questions[].question'], ['decision.ask', 'questions[].options[]'], ['decision.ask', 'questions[].unblocks'],
+    ['decision.answer', 'note'], ['work.status', 'ask.options[]'], ['work.status', 'ask.unblocks'], ['work.pause', 'reason'],
+    ['person.tell', 'text'], ['agent.new', 'name'], ['agent.new', 'projectName'], ['buddy.create', 'name'], ['buddy.create', 'setup.name'],
+    ['member.name', 'name'], ['member.username', 'username'], ['agent.add', 'roleName'], ['agent.start', 'request.roleName'],
+    ['project.role.set', 'role.name'], ['project.roles.create', 'roles[].name'], ['crew.add', 'lane'], ['work.lane', 'lane'],
+    ['swarm.delete', 'name'], ['tab.routingPolicy', 'policy.notes'],
+    ['rules.set', 'rules.machines[].why'], ['rules.set', 'rules.crew[].names[]'], ['conversation.create', 'step'],
+    ['conversation.create', 'task.requires.access[]'], ['route.record', 'decision.context.missing[]'], ['agent.screenResult', 'error'],
+  ])('removes a credential from %s %s', (type, path) => {
+    const removed: CredentialKind[] = []
+    expect(at(withoutCredentials(holding(type, path, `see ${github}`), removed), path)).toBe(`see ${CREDENTIAL_MARKER}`)
+    expect(removed).toEqual(['github'])
+  })
+
+  /** Strings that are not words people read, or that must reach their reader exactly, each with why. Anything else a
+   *  command takes as a string is in WORDS: a new command's text fails the walk below until it is listed in one of the two. */
+  const NOT_WORDS: readonly (readonly [why: string, fields: readonly string[]])[] = [
+    // agent.input: the host types the exact text and terminal.ts redacts its chat row. A screen goes, exact, only to the agent that asked.
+    ['A terminal\'s exact text', ['agent.input text', 'agent.screenResult text', 'agent.inputResult text']],
+    ['A role\'s skill text, read only by its project\'s owner, Lead and hosts', ['project.role.set role.text', 'project.roles.create roles[].text',
+      'project.roles.reset roles[].text']],
+    // A token here fails the launch rather than reaching anyone.
+    ['A lab\'s engine, model, effort or grid, passed to its CLI or matched to a list', [
+      'agent.add configuration.engine', 'agent.add configuration.model', 'agent.add configuration.effort', 'agent.add configuration.engineVersion',
+      'agent.add launchRefused.model', 'agent.add launchRefused.effort',
+      ...['agent.configuration', 'agent.rebind', 'agent.started', 'agent.startSettled'].flatMap(type =>
+        ['engine', 'model', 'effort', 'engineVersion'].map(field => `${type} configuration.${field}`)),
+      'agent.new engine', 'agent.new model', 'buddy.create engine', 'buddy.create model', 'buddy.create setup.engines[]', 'buddy.engine engine',
+      'buddy.model gridModel', 'lead.start engine', 'lead.start model', 'lead.start effort', 'lead.switch engine', 'lead.switch model',
+      'lead.switch effort', 'machine.contribute engines[]', 'machine.engineResume engine', 'localModels.status grid',
+      'agent.start request.engine', 'agent.start request.model', 'agent.start request.effort', 'agent.start request.permissionMode',
+      'agent.start request.gridModel', 'agent.start request.gridName', 'agent.start request.requirements.tools[]',
+      'route.modelResult model', 'route.modelResult effort', 'route.record decision.assessment.model', 'route.record decision.assessment.kind',
+      'route.record decision.candidates[].model', 'route.record decision.candidates[].effort', 'route.record decision.candidates[].gridModel',
+      'route.record decision.candidates[].gridName', 'rule.set rule.model', 'rule.set rule.taskKind',
+      'tab.routingPolicy policy.models[].model', 'tab.routingPolicy policy.models[].effort', 'tab.routingPolicy policy.localModels.models[].model',
+      'tab.routingPolicy policy.priorOverrides[].model',
+      ...['project.role.set role', 'project.roles.create roles[]', 'project.roles.reset roles[]'].flatMap(role =>
+        [`${role}.defaults.model`, `${role}.defaults.effort`])]],
+    // A repository URL that holds a credential is refused by its schema.
+    ['A folder a host opens, or a URL or ref held to its shape', ['agent.add project.cwd', 'agent.add project.repositoryUrl',
+      'agent.new repositoryUrl', 'agent.start request.cwd', 'agent.start request.codexHome', 'agent.start request.branchRef',
+      'agent.start request.requirements.devices[]', 'buddy.create setup.cwd', 'lead.start branchRef', 'lead.start repositoryUrl',
+      'machine.contribute cwd', 'project.repository repositoryUrl', 'tab.project project.cwd', 'tab.project project.repositoryUrl',
+      'conversation.create task.requires.devices[]', 'work.define task.requires.devices[]', 'proposal.decide task.requires.devices[]',
+      'conversation.merged pullRequestUrl', 'conversation.merged fixes', 'conversation.unlink pullRequestUrl', 'work.check head', 'work.check base']],
+    ['An id, an account key, a time or a time zone', ['agent.add roleId', 'agent.rebind profileId', 'agent.start request.roleId',
+      'machine.access entryId', 'process.confirm noteId', 'project.closeTab tabOperation', 'project.role.remove roleId', 'project.role.set role.id',
+      'project.roles.create roles[].id', 'project.roles.reset roles[].id', 'proposal.create projectId', 'route.override candidateId',
+      'route.record decision.candidates[].id', 'route.record decision.pick', 'route.record decision.candidates[].fit.account', 'work.assign roleId',
+      'work.queue hold.personId', 'work.status hold.personId', 'rules.set rules.instructionApprovals.topDeciderId',
+      'rules.set rules.instructionApprovals.people[].accountIds[]', 'member.timeZone timeZone', 'project.digest timeZone', 'project.digest time',
+      'work.queue notBefore', 'rules.set rules.releaseWindow.start', 'rules.set rules.releaseWindow.end', 'rules.set rules.releaseWindow.timeZone',
+      'rules.set rules.releasePace.backendPause.start', 'rules.set rules.releasePace.backendPause.end', 'rules.set rules.machines[].away.windows[][]',
+      'rules.set rules.machines[].away.timeZone']],
+    ['The address an invitation goes to, which its person signs in with', ['invite.create email']],
+    // Redacting first would hide the token from that refusal and store the marker instead.
+    ['Refused outright when it looks like a secret (machineAccess.ts ACCESS_SECRET)', ['machine.access name', 'machine.access note', 'machine.access check']],
+    ['Written by the server; the command\'s value is dropped (route.record)', ['route.record decision.stepUp.reason', 'route.record decision.sameEngine']],
+  ]
+
+  /** Every string a command takes, as `type path`, but ids and ISO times (shapes no credential fits). */
+  const strings = (): string[] => {
+    const found: string[] = []
+    const ID = /^[A-Za-z0-9_-]+$/.source
+    const walk = (schema: { _zod: { def: Record<string, any> } }, type: string, path: string): void => {
+      const def = schema._zod.def
+      switch (def.type) {
+        case 'object': for (const [key, field] of Object.entries(def.shape)) if (key !== 'type' || path) walk(field as never, type, path ? `${path}.${key}` : key); return
+        case 'array': return walk(def.element, type, `${path}[]`)
+        case 'tuple': return def.items.forEach((item: never) => walk(item, type, `${path}[]`))
+        case 'record': return walk(def.valueType, type, `${path}{}`)
+        case 'optional': case 'nullable': case 'default': case 'readonly': return walk(def.innerType, type, path)
+        case 'pipe': return walk(def.in._zod.def.type === 'transform' ? def.out : def.in, type, path)
+        case 'union': return def.options.forEach((option: never) => walk(option, type, path))
+        case 'lazy': return walk(def.getter(), type, path)
+        case 'string': {
+          const checks: { format?: string; pattern?: RegExp }[] = (def.checks ?? []).map((check: { _zod: { def: object } }) => check._zod.def)
+          const patterns = checks.map(check => check.pattern?.source).filter(Boolean)
+          const time = [def.format, ...checks.map(check => check.format)].some(format => format === 'datetime' || format === 'date')
+          if (time || (patterns.length === 1 && patterns[0] === ID)) return
+          return void found.push(`${type} ${path}`)
+        }
+        case 'enum': case 'literal': case 'number': case 'int': case 'boolean': case 'null': case 'undefined': return
+        default: throw new Error(`The walk does not read a ${def.type} (${type} ${path}): teach it.`)
+      }
+    }
+    for (const option of (commandSchema as unknown as { _zod: { def: { options: { _zod: { def: Record<string, any> } }[] } } })._zod.def.options) {
+      walk(option, option._zod.def.shape.type._zod.def.values[0], '')
+    }
+    return [...new Set(found)]
+  }
+
+  it('walks every command: each string is in WORDS or named, with why, as not words', () => {
+    const exempt = NOT_WORDS.flatMap(([, fields]) => fields)
+    const covered = new Set([...Object.entries(WORDS).flatMap(([type, paths]) => paths!.map(path => `${type} ${path}`)), ...exempt])
+    const all = strings()
+    expect(all.length).toBeGreaterThan(200)
+    expect(all.filter(field => !covered.has(field))).toEqual([])
+    // Nothing listed is stale or listed twice.
+    expect([...covered].filter(field => !all.includes(field))).toEqual([])
+    expect(exempt.filter(field => Object.entries(WORDS).some(([type, paths]) => paths!.some(path => `${type} ${path}` === field)))).toEqual([])
   })
 })
 
@@ -5101,7 +5248,7 @@ describe('linked tasks', () => {
   // untagged, in its chat. With no coordinator there, people read it, tagging who can fix it.
   it('tells the coordinator once when no machine the project may use can start either engine, and people when there is none', () => {
     const { f, T, E, built } = linked()
-    teamMachine(f, 'owner')
+    ownMachine(f, 'owner')
     f.state.machines![0]!.engines = ['claude', 'codex']
     f.state.machines![0]!.observation!.quotas = [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] },
       { engine: 'codex', known: true, windows: [{ name: 'weekly', usedPercent: 100, resetsAt: null }] }]
@@ -5378,7 +5525,7 @@ describe('an engine that cannot run on a contributed machine', () => {
 // Scholes, 2026-10-30: the sidebar's Models showed "Codex, model not reported". A Codex agent at its own default reported its
 // model only after the work it was assigned 30 s after its start was recorded; the start now settles with what it saw.
 describe('a settling start names the model its agent runs', () => {
-  const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+  const contribution = { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }
   const reported = { engine: 'codex', model: 'gpt-6.1-sol', effort: 'auto', contextWindow: null, engineVersion: '0.165.0' }
   const setup = () => {
     const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
@@ -5421,7 +5568,7 @@ describe('a settling start names the model its agent runs', () => {
     expect(activeWork(t.f.state.conversations.find(c => c.id === t.group)!)).toBe(false)
     const agent = t.worker(agentId)
     t.f.run({ type: 'agent.configuration', previousVersion: agent.configurationVersion!, configuration: reported },
-      { kind: 'agent', agentId, machineOwnerId: 'target-owner' })
+      { kind: 'agent', agentId, machineOwnerId: 'owner' })
     expect(t.run()).toMatchObject({ assignmentId, model: 'gpt-6.1-sol' })
   })
 
@@ -5465,9 +5612,9 @@ describe('lead.switch', () => {
     const f = fixture()
     f.invite()
     const pm = f.add('pm', contributorId, 'lead', true)
-    const team = { sessionKind: 'team' as const, privacy: { mode: 'dedicated' as const, seenAt: 1000 } }
+    // Its person's own computer (Swarm v3 has no Team accounts, task #4120).
     f.state.machines = [{ machineId: 'host', name: 'Studio', contributorId, membershipGeneration: f.state.people.find(p => p.id === contributorId)!.generation,
-      generation: 'g1', cwd: '/repo', engines: ['claude', 'codex'], maxAgents: 2, paused: false, observation: { generation: 'g1', receivedAt: 1000, ...team,
+      generation: 'g1', cwd: '/repo', engines: ['claude', 'codex'], maxAgents: 2, paused: false, observation: { generation: 'g1', receivedAt: 1000, sessionKind: 'computer',
         ...(capabilities ? { capabilities } : {}),
         profiles: [{ engine: 'codex', id: WORK, label: 'Work', leftPercent: 80, resetsAt: null }],
         resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null,

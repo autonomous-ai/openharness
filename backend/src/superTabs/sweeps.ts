@@ -1,7 +1,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AgentStart, Conversation } from './model.js'
 import { stepSleeps } from './steps.js'
-import { clock, guardedWrite, PartConflict, type HeadData, type ProgressData } from './parts/index.js'
+import { clock, guardedWrite, PartConflict, type HeadData } from './parts/index.js'
 import { DORMANT_AFTER_MS, RETENTION_MS } from './parts/types.js'
 import { deletedSwarms } from './deletion.js'
 import { logger } from '../utils/logger.js'
@@ -69,14 +69,13 @@ async function guarded(db: PrismaClient, write: Parameters<typeof guardedWrite>[
 
 /**
  * A conversation leaves the active set (spec, Archive) when its work is done or cancelled and it has had no message for a
- * day, or when it was archived by hand, and in both cases only once its Lead acknowledged its reports: a dormant
- * conversation is never read by ordinary loads, so it must owe its project nothing (design section 3.6). A project's
+ * day, or when it was archived by hand. Nothing waits on the Lead's report: the server writes the status card (task #3593). A project's
  * Lead conversation and the Leads conversation never sleep; a message wakes any of them. Candidates are read oldest
  * first with a cursor, so rejected ones never hold later ones back.
  */
 async function sleepQuietGroups(db: PrismaClient, now: number): Promise<number> {
   const base = { deleted: false, dormant: false, kind: null, OR: [{ lastActivityAt: { lt: new Date(now - DORMANT_AFTER_MS) } }, { archived: true }] }
-  const leads = new Map<string, Set<string>>(), progress = new Map<string, ProgressData | null>()
+  const leads = new Map<string, Set<string>>()
   const leadsOf = async (tabId: string) => {
     if (!leads.has(tabId)) {
       const head = await db.swarmHead.findUnique({ where: { id: `${tabId}:head` } })
@@ -84,11 +83,6 @@ async function sleepQuietGroups(db: PrismaClient, now: number): Promise<number> 
       leads.set(tabId, new Set(projects ? projects.map(p => p.leadConversationId) : ['lead']))
     }
     return leads.get(tabId)!
-  }
-  const progressOf = async (tabId: string, projectId: string) => {
-    const id = `${tabId}:${projectId}`
-    if (!progress.has(id)) progress.set(id, ((await db.swarmProgress.findUnique({ where: { id } }))?.data as unknown as ProgressData | undefined) ?? null)
-    return progress.get(id)!
   }
   const tasks = new Map<string, { archived: boolean; dormant: boolean } | null>()
   const taskOf = async (tabId: string, key: string) => {
@@ -110,8 +104,6 @@ async function sleepQuietGroups(db: PrismaClient, now: number): Promise<number> 
       if ((await leadsOf(row.tabId)).has(group.id)) continue
       // A step sleeps with its task (task steps design): read once per task in this pass.
       if (group.reviewOf && !stepSleeps(await taskOf(row.tabId, group.reviewOf))) continue
-      const reports = group.audience ? null : await progressOf(row.tabId, group.projectId ?? 'lead')
-      if (reports && (group.reportSeq ?? 0) > (reports.summarized[group.id] ?? reports.summarizedFloor)) continue
       if (await guarded(db, { tabId: row.tabId, op: 'update', kind: 'group', key: row.key, seen: row.version, data: { ...group, dormant: true } })) slept++
     }
     if (rows.length < BATCH) return slept
