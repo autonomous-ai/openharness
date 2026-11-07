@@ -166,6 +166,9 @@ export interface Agent {
   /** The Member this helper helps (members.ts, task #4697): a helper takes its Member's person's tasks in that project, and
    *  stops when none waits. */
   helperOf?: string
+  /** Its project set up on its computer, as its own host reported (agent.setUp, #4698): the commands it ran, or why it failed.
+   *  A Member on a host that reports it takes no task until it is set up (members.ts setUpReady). */
+  setUp?: { projectId: string; at: number; steps?: string[]; failed?: string }
   /** The private project a Regular agent first worked in: its one conversation holds that project's content, so it takes tasks
    *  only there from then on (projects.ts regularMayWorkIn; security review 2 of #4116). Set at its assignment, never cleared. */
   privateProjectId?: string

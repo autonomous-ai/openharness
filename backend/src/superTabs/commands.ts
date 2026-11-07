@@ -11,7 +11,7 @@ import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from 
 import { admitByRoom, admitMachineStart, AGENT_MEMORY_BYTES, noRepositoryStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamAccountPool, teamPoolsOf, teamWorkCheck, TEAM_ACCOUNTS_GONE, NOT_YOUR_COMPUTER, type ContributedMachine } from './machines.js'
 import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
-import { ACCEPT_ALL_REFUSAL, mayAcceptAll, memberMachine, memberOf } from './members.js'
+import { ACCEPT_ALL_REFUSAL, mayAcceptAll, memberMachine, memberOf, memberQueue } from './members.js'
 import { addedAgentName, newAgentName, renameAgentTo } from './agentRename.js'
 import { addCrew, CREW_ROLE_MAX, removeCrew } from './crew.js'
 import { noteIndex } from './processNotes.js'
@@ -419,6 +419,12 @@ export const commandSchema = z.discriminatedUnion('type', [
     // A Member its person's Desktop starts itself through Cmd-N (task #4196): only its chat opens here; agent.add brings in the session.
     local: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
+  // A Member for a waiting task's requester (members.ts, task #4697): sent by the dispatch pass as the project's coordinator.
+  z.object({ type: z.literal('member.start'), conversationId: id }).strict(),
+  // A Member's own host reports its project set up, with the commands it ran for a helper to repeat, or why it failed (#4698).
+  // ok true with its steps, ok false with its reason (checked in its handler).
+  z.object({ type: z.literal('agent.setUp'), projectId: id, ok: z.boolean(), steps: z.array(z.string().trim().min(1).max(300)).max(10).optional(),
+    reason: z.string().trim().min(1).max(500).optional() }).strict(),
   z.object({ type: z.literal('agent.started'), startId: id, harnessId: id, configuration,
     startedSession: z.object({ sessionId: id, createdAt: z.iso.datetime() }).strict().optional() }).strict(),
   // `configuration`: what the agent runs as its start last saw it, so work assigned after the settle records its model (CLI
@@ -551,6 +557,7 @@ export const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'member.username': ['username'],
   'agent.add': ['name', 'initialMessage', 'roleName'],
   'agent.new': ['name', 'projectName'],
+  'agent.setUp': ['steps[]', 'reason'],
   'buddy.create': ['name', 'setup.name'],
   'agent.rename': ['name'],
   'crew.add': ['role', 'lane'],
@@ -1853,10 +1860,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if ((state.starts ?? []).filter(s => !s.harnessId && !s.error).length >= 32) return none()
     const chatId = openAgentChat(owner, name)
     const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: pool.engines[0]!, name,
-      cwd: projectFolder(pool, project), worktree: true, requirements: { ...BUDDY_REQUIREMENTS, memoryBytes: AGENT_MEMORY_BYTES },
+      // Its home, as a Regular agent's (agent.new): its host makes the project's worktree inside it from `member` (#4698).
+      cwd: buddyHomeFolder(pool, owner), worktree: false, requirements: { ...BUDDY_REQUIREMENTS, memoryBytes: AGENT_MEMORY_BYTES },
       regular: true, mainProjectId: project.id, member: { projectId: project.id } }
     let admitted: ReturnType<typeof admitMachineStart>
-    try { admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines, project) } catch (error) {
+    try { admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines) } catch (error) {
       if (!(error instanceof SuperTabError)) throw error
       // Refused: its chat goes with it, so nothing is left behind for a start that never was.
       state.conversations = state.conversations.filter(c => c.id !== chatId)
@@ -5084,6 +5092,38 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (waited && activeWork(group) && !waitingForReview(assignment)) restartQuietTime(assignment, context.now)
       // A Ready ends its Reviewer's wait for this revision: the review counts its quiet time from now (liveness.ts revisionReady).
       if (activeWork(group) && waitingForReview(assignment)) revisionReady(state, group, context.now)
+      // A Member sleeps between its person's tasks (members.ts, task #4697): its next assignment wakes it.
+      if (!activeWork(group)) {
+        const worker = state.agents.find(a => a.id === assignment.agentId)
+        if (worker?.regular && worker.mainProjectId && !worker.helperOf && !memberQueue(state, worker.mainProjectId, worker.contributorId, context.now).length) {
+          worker.asleep = { since: context.now }
+        }
+      }
+      break
+    }
+    case 'member.start': {
+      // The dispatch pass, as the task's project's coordinator, or the task's own requester: a Member for that requester alone.
+      const group = open(state, command.conversationId)
+      const project = groupProject(state, group)
+      const requester = state.people.find(p => p.id === group.requesterId) ?? fail('NO_REQUESTER', 'This task has no person to start a Member for.', 409)
+      const lead = actor.kind === 'agent' && ledProject(state, actor.agentId)?.id === project.id
+      if (!lead && !(actor.kind === 'person' && actor.userId === requester.id)) fail('FORBIDDEN', 'Only the project\'s coordinator or the task\'s requester starts its Member.', 403)
+      if (group.taskApproval && group.taskApproval.state !== 'approved') fail('TASK_APPROVAL_REQUIRED', 'Its person accepts this task first.', 409)
+      startMember(group, requester.id)
+      break
+    }
+    case 'agent.setUp': {
+      // Only the Member itself, of that project, from its own host.
+      if (actor.kind !== 'agent') fail('FORBIDDEN', 'A Member reports its own set-up.', 403)
+      const self = agent(state, actor.agentId)
+      if (!self.regular || self.mainProjectId !== command.projectId) fail('NOT_MEMBER', 'Only this project\'s Member reports its set-up.', 403)
+      if (command.ok ? !command.steps || command.reason !== undefined : !command.reason || command.steps !== undefined) {
+        fail('INVALID_SET_UP', 'Report the steps that set it up, or why it failed.', 400)
+      }
+      self.setUp = { projectId: command.projectId, at: context.now, ...(command.ok ? { steps: command.steps! } : { failed: command.reason! }) }
+      // A failed set-up is seen by its person, in their agent's chat (AGENTS.md: nothing fails silently).
+      const chat = state.conversations.find(c => c.kind === 'agent-chat' && c.agentIds.includes(self.id))
+      if (!command.ok && chat) message(chat.id, `Could not set up ${projectOf(state, command.projectId).name}: ${command.reason}`, [], null, SYSTEM_ROW)
       break
     }
     case 'work.cancel': {

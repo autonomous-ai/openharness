@@ -1,3 +1,4 @@
+import { memberPlan } from './members.js'
 import { legacyAsks } from './boardRights.js'
 import { canReadProject } from './projects.js'
 import { proposalMeasures, proposalMessageMeasures } from './proposalMetrics.js'
@@ -2751,6 +2752,25 @@ export class SuperTabStore {
       if (lead && onTeamAccount(state, lead)) {
         if (openTasks(state, project.id, now).length) skipCode(PM_IN_TEAM_ACCOUNT)
         continue
+      }
+      // Each person's asked tasks go to their own Member (members.ts, task #4697), before the crew's lanes: a free Member gets
+      // its person's next task, and a person with none yet gets one started. Sent as its PM, as crew picks are, once per round.
+      if (lead) {
+        const memberUser: AuthUser = { sub: lead.machineOwnerId, email: '', autonomousEnv: row.autonomousEnv as AuthUser['autonomousEnv'], role: 'user' }
+        for (const pick of memberPlan(state, project.id, now)) {
+          const group = state.conversations.find(c => c.id === pick.conversationId)!
+          const command = pick.kind === 'assign' ? { type: 'work.assign' as const, conversationId: group.id, agentId: pick.agentId }
+            : { type: 'member.start' as const, conversationId: group.id }
+          try {
+            await this.executeOnce(memberUser, tabId, { operationId: stableId('member-dispatch', pick.kind, group.id, roundOf(group)), command },
+              undefined, undefined, false, { asProjectPm: lead.id })
+            if (pick.kind === 'assign') out.assigned++
+          } catch (error) {
+            const code = error instanceof SuperTabError ? error.code : 'unknown'
+            if (code === 'unknown') throw error
+            skipCode(code)
+          }
+        }
       }
       const free = freeCrew(state, project.id, rules, now)
       if (!free.length) continue

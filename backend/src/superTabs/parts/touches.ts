@@ -27,6 +27,13 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
   const leadCheck = (projectId: string | undefined) => { if (actor.kind === 'agent') group(leadGroupOf(projectId)) }
   const agentProject = (id: string) => { const a = before.agents.find(x => x.id === id); return a && agentProjectId(before, a) }
   /** Every slot `machineSlots` counts for a start on this machine: the Mac and its team account share them (machines.ts). */
+  /** A Member's start, from the first Accept or the dispatch pass (members.ts, task #4697): its free name is claimed on the head,
+   *  and its computer's slots counted as any start's. */
+  const newMemberStarts = () => {
+    for (const start of effects.state.starts ?? []) {
+      if (start.request.member && !(before.starts ?? []).some(s => s.id === start.id)) { head(); slots(start.request.machineId) }
+    }
+  }
   const slots = (machineId: string) => {
     const pool = before.machines?.find(m => m.machineId === machineId)
     const mac: ContributedMachine | undefined = pool?.hostMachineId ? before.machines?.find(m => m.machineId === pool.hostMachineId) : pool
@@ -76,6 +83,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       member(card?.taskApproval?.personId)
       agent(card?.taskApproval?.suggestedAgentId)
       leadCheck(card && groupProject(before, card).id)
+      newMemberStarts()
       break
     }
     case 'proposal.close':
@@ -123,6 +131,9 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     // A new agent's free name is picked against every name in the Swarm (agentRename.ts newAgentName, review of #3560).
     case 'agent.new':
       head()
+      break
+    case 'member.start':
+      newMemberStarts()
       break
     case 'project.report': case 'project.repository':
     // The coordinator's own writes check it leads the project, which a concurrent Lead change ends (review of phase 2).

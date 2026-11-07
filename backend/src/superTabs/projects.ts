@@ -209,7 +209,11 @@ export function agentProjectId(state: SuperTabState, target: Agent): string {
   // A Regular agent (task #4116: "the task decides where it works") is its active task's project's while it works, else none.
   if (target.regular) {
     const work = state.conversations.find(c => c.assignment?.agentId === target.id && activeWork(c))
-    return work ? groupProject(state, work).id : NO_PROJECT
+    if (work) return groupProject(state, work).id
+    // A Member is its main project's between tasks (task #4697), while its person still reads it: that project's Lead hands it
+    // the next task, and it reports its set-up there.
+    const main = target.mainProjectId ? projectsOf(state).find(p => p.id === target.mainProjectId) : undefined
+    return main && regularMayWorkIn(state, target, main) ? main.id : NO_PROJECT
   }
   return target.projectId ?? state.conversations.find(c => c.agentIds.includes(target.id))?.projectId ?? 'lead'
 }

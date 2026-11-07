@@ -4,6 +4,7 @@
  * each free member gets, the two clocks and the capacity line. The store's pass (store.ts dispatchCrew) sends each pick
  * through work.assign, whose own write refuses a second assignment.
  */
+import { askedByAnother } from './members.js'
 import { SEED_RULES, type MachineRule, type ProjectRules } from './policy.js'
 import { firstMachines, isReview, machineRuleRefusal } from './machineRules.js'
 import { isBuddy } from './buddies.js'
@@ -189,6 +190,8 @@ export function candidatesFor(state: SuperTabState, member: Agent, rules: Dispat
   const lane = open.filter(g => (!g.lane || !!laneNamed(rules.lanes, g.lane)) && !g.reviewOf && !pinned.includes(g) && !(pinOf(g) && members.has(pinOf(g)!.agentId)) && !lostByIt(g)
     // Ordinary workers recover work; new tasks still need the PM's route or a standing crew lane.
     && (member.crew || (g.assignment?.status === 'lost' && g.lostAttempt))
+    // Another person's ask goes to their own Member (members.ts, task #4697), never to this agent on its own.
+    && !askedByAnother(state, g, member)
     && acceptsLane(laneOf(g, rules.lanes)) && (!needsStrongModel(g) || onStrongModel(member)))
   // Team-written code goes to Team accounts only (teamWritten.ts); a pick refused this round is not sent again (store.ts).
   const allowed = (group: Conversation) => (group.reviewOf ? steps.includes(group) : !refusesWork) && !barredFromTeamWritten(state, group, member) && !skip(group.id, member.id)

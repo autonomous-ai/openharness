@@ -128,13 +128,14 @@ describe('a main project\'s readers', () => {
     expect(JSON.stringify(parts.agents)).not.toContain(secret)
   })
 
-  it('is cleared when the project is deleted, on agents and on starts still waiting', () => {
+  it('goes with its deleted project: the agent is removed, and a start still waiting loses it', () => {
     const f = swarm()
     const harness = f.project('harness')
     const agentId = f.started(f.newAgent({ kind: 'regular', name: 'Ada', mainProjectId: harness }).result.startId as string, 'h-ada')
     const waiting = f.newAgent({ kind: 'regular', name: 'Bo', mainProjectId: harness }).result.startId as string
     f.run({ type: 'project.delete', projectId: harness }, owner)
-    expect(f.state.agents.find(a => a.id === agentId)).not.toHaveProperty('mainProjectId')
+    // An idle Member is its main project's agent (task #4697), so it goes with the project, as the project's agents do.
+    expect(f.state.agents.find(a => a.id === agentId)).toBeUndefined()
     expect(f.state.starts!.find(s => s.id === waiting)!.request).not.toHaveProperty('mainProjectId')
   })
 })
