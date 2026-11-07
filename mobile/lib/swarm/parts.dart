@@ -1,6 +1,7 @@
 import 'package:collection/collection.dart' show DeepCollectionEquality;
 
 import 'model.dart';
+import 'tasks/personal_tasks.dart';
 
 /// The response shape a Swarm read answers in (docs/design/2026-10-26-swarm-state-parts.md, section 4), mirrored by
 /// hand from backend `superTabs/read/contract.ts` (final at cd004bf5c). A first load of any other format is from a
@@ -88,6 +89,7 @@ class SuperTabParts {
         parts._seen['$kind:${part['key']}'] = _int(part['version']);
       }
     }
+    parts.personalTasks.apply(answer['personalTasks']);
     parts._takeReadMarks(marks);
     // Every one is news to a device whose own mark is higher.
     parts._takeUnreadMarks(unreadMarks, all: true);
@@ -114,6 +116,7 @@ class SuperTabParts {
         }
       }
     }
+    parts.personalTasks.restoreVersions(json['personalTaskVersions']);
     parts._takeReadMarks(json['readMarks']);
     parts._takeThreadMarks(json['threadMarks']);
     parts._takeChatSettings(json['chatSettings']);
@@ -152,6 +155,8 @@ class SuperTabParts {
         final String etag when etag.isNotEmpty => etag,
         _ => null,
       };
+
+  final personalTasks = SuperTabPersonalTasks();
 
   Map<String, dynamic> _head;
   Map<String, dynamic> _derived;
@@ -370,6 +375,9 @@ class SuperTabParts {
       _derived = derived;
       changed = true;
     }
+    if (personalTasks.apply(changes['personalTasks'])) {
+      changed = beyondMachines = true;
+    }
     derivedEtag = etag;
     cursor = _cursor(changes);
     epoch = _int(changes['epoch'] ?? epoch);
@@ -499,6 +507,10 @@ class SuperTabParts {
     }
     // Each project's board pulse (backend superTabs/pulse.ts, task #3384).
     if (_derived['pulse'] case final Map pulse) state['pulse'] = pulse;
+    // When each release may next open, per project (backend releases.ts nextReleaseAt, task #3827).
+    if (_derived['releaseTimes'] case final Map times) {
+      state['releaseTimes'] = times;
+    }
     // Sent only where the server does not try Harness Team accounts yet.
     if (_derived['teamAccounts'] == false) state['teamAccounts'] = false;
     // Sent by a server that takes a thread reply's New session.
@@ -529,11 +541,13 @@ class SuperTabParts {
       'lastChangedAt': lastChangedAt,
       'githubApp': githubApp,
       'head': _head,
+      if (personalTasks.supported) 'personalTasks': personalTasks.toJson(),
       for (final kind in _lists)
         kind: (_live[kind] ?? const {}).values.toList(),
       'derived': _derived,
       if (derivedEtag != null) 'derivedEtag': derivedEtag,
     },
+    if (personalTasks.supported) 'personalTaskVersions': personalTasks.versions,
     'dormant': _dormant.values.toList(),
     'seen': Map<String, int>.of(_seen),
     'stale': _stale.toList(),

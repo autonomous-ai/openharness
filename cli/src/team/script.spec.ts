@@ -101,6 +101,15 @@ describe('setup script', () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order)
   })
 
+  // Security review 2 of #3451: the owner's daemon left the relay's grant in /Users/Shared for the team account to read.
+  // The relay is gone; setup takes an old grant and its folder away, never through a link.
+  it('removes an older owner relay\'s grant and folder', () => {
+    const script = buildSetupScript(input())
+    expect(script).toContain("RELAY_DIR='/Users/Shared/.harness-team-relay-owner-placeholder'")
+    expect(script).toContain('[ -L "$RELAY_DIR" ] || rm -f "$RELAY_DIR/relay.json"')
+    expect(script).toContain('[ -L "$RELAY_DIR" ] || rmdir "$RELAY_DIR" 2>/dev/null || :')
+  })
+
   it('never writes inside the team home as root: the team account copies and writes its own files', () => {
     const script = buildSetupScript(input())
     for (const line of script.split('\n')) {
@@ -888,7 +897,7 @@ describe('Linux', () => {
         'owned_by_root "$dir"', 'useradd -m', 'passwd -l "$TEAM"', 'chmod 700 "$TEAM_HOME"', OWNER_HOME_PRIVATE,
         'sh "$SENTINEL"', 'systemctl stop "$UNIT_NAME"', 'mktemp -d /var/tmp/harness-team.XXXXXX', 'as_team /bin/sh -c',
         'npm" install --global --prefix "$home/.local"', 'install -o 0 -g 0 -m 0644 "$STAGE/team.json" "$CONFIG"',
-        'chown "$TEAM:$TEAM_GROUP" "$STATUS_DIR"', 'chmod 700 "$RELAY_DIR"', 'team __handoff', 'as_team /bin/sh -c \'umask 077',
+        'chown "$TEAM:$TEAM_GROUP" "$STATUS_DIR"', 'rm -f "$RELAY_DIR/relay.json"', 'team __handoff', 'as_team /bin/sh -c \'umask 077',
         'install -o 0 -g 0 -m 0644 "$STAGE/team.service" "$UNIT"', 'systemctl daemon-reload', 'systemctl enable --now "$UNIT_NAME"',
       ].map((needle) => at(script, needle))
       expect([...order].sort((a, b) => a - b)).toEqual(order)
@@ -905,10 +914,14 @@ describe('Linux', () => {
       expect(at(script, 'owned_by_root "$STATE"')).toBeLessThan(at(script, '[ -z "$made_state" ] || : > "$STATE_MARK"'))
     })
 
-    it('makes the owner\'s relay folder, which only root can make there, the owner\'s and private', () => {
+    // Security review 2 of #3451: the owner subscription relay is gone, and an older setup's folder still held a token the
+    // team account could read. Setup makes none, and takes an old grant away, never through a link.
+    it('makes no relay folder, and removes an older setup\'s grant and folder', () => {
       const script = buildLinuxSetupScript(linuxInput())
-      expect(script).toContain('[ ! -L "$RELAY_DIR" ] || die "$RELAY_DIR is a symbolic link" 6')
-      expect(script).toContain('chown "$owner_uid:$owner_gid" "$RELAY_DIR"')
+      expect(script).not.toContain('mkdir "$RELAY_DIR"')
+      expect(script).not.toContain('chown "$owner_uid:$owner_gid" "$RELAY_DIR"')
+      expect(script).toContain('[ -L "$RELAY_DIR" ] || rm -f "$RELAY_DIR/relay.json"')
+      expect(script).toContain('[ -L "$RELAY_DIR" ] || rmdir "$RELAY_DIR" 2>/dev/null || :')
     })
 
     it('refuses a value that is not plain, before anything is written', () => {

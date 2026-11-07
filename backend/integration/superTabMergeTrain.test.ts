@@ -53,13 +53,14 @@ async function swarm() {
   for (const [machineId, name] of [['lead-host', 'Lead Mac'], ['test-host', 'Worker Mac']]) {
     await execute({ type: 'machine.contribute', machineId: machineId!, name: name!, cwd: '/repo', engines: ['codex'], maxAgents: 4 }, host)
   }
-  const add = async (conversationId: string, machineId: string, name: string, lead = false) => String((await execute({ type: 'agent.add',
-    conversationId, machineId, harnessId: randomUUID(), name, configuration: config, lead })).result.agentId)
+  // An agent runs as its own person, on their own computer (task #4120): the machines are host's, so host adds the worker.
+  const add = async (conversationId: string, machineId: string, name: string, lead = false, user = owner) => String((await execute({ type: 'agent.add',
+    conversationId, machineId, harnessId: randomUUID(), name, configuration: config, lead }, user)).result.agentId)
   await add('lead', 'lead-host', 'Lead', true)
   await execute({ type: 'tab.project', machineId: 'lead-host', project: { cwd: '/repo', repositoryUrl: null } })
   await execute({ type: 'project.repository', projectId: 'lead', repositoryUrl: 'https://github.com/acme/app' })
   const task = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief: 'Implement it', checks: [] })).result.conversationId)
-  const worker = await add(task, 'test-host', 'Worker')
+  const worker = await add(task, 'test-host', 'Worker', false, host)
   const assignment = String((await execute({ type: 'work.assign', conversationId: task, agentId: worker })).result.assignmentId)
   await execute({ type: 'work.status', conversationId: task, assignmentId: assignment, status: 'review', result: `Ready ${PR}` }, host, worker)
   const step = String((await execute({ type: 'conversation.create', title: 'Review', brief: 'Read it', reviewOf: task, step: 'Review',

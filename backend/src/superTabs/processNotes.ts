@@ -7,9 +7,14 @@
  */
 import type { SuperTabState } from './model.js'
 import { agentProjectId, type SwarmProject } from './projects.js'
+import { REBASE_SWARMS } from './migration/rebase.js'
 
-/** One note: its id, its words for the PM, and the built-in schedule's fingerprint when it was written. */
-export interface ProcessNote { id: string; text: string; schedule: string }
+/** One note: its id, its words for the PM, and the built-in schedule's fingerprint when it was written. `rebasedOnly`: for the
+ *  Swarms whose instructions moved onto the base (migration/rebase.ts REBASE_SWARMS) alone, as the text it announces is. */
+export interface ProcessNote { id: string; text: string; schedule: string; rebasedOnly?: true }
+
+/** Whether [swarm] is one whose instructions moved onto the base (migration/rebase.ts): its PM reads the v2 process text. */
+export const isRebasedSwarm = (swarm: Pick<SuperTabState, 'id'>): boolean => REBASE_SWARMS.some(rebased => rebased.tabId === swarm.id)
 
 export const PROCESS_NOTES: readonly ProcessNote[] = [
   {
@@ -27,19 +32,24 @@ export const PROCESS_NOTES: readonly ProcessNote[] = [
       + 'hand. Lost, stalled and idle notices are information: the Swarm hands lost work on, nudges stalled workers and stops idle Engineers '
       + 'by itself, so don\'t repeat those by hand. A rule a program can check belongs in code, not in your instructions.',
     schedule: '52cb6172d956',
+    // Diego 11-06 (#4097): the v2 text replaces process lines only where the instructions moved onto the base.
+    rebasedOnly: true,
   },
 ]
 
 export const latestProcessNote = (): ProcessNote | undefined => PROCESS_NOTES.at(-1)
 
 /** Every note after the newest one [project]'s PM confirmed, oldest first: all of them when it confirmed none (SecAlder's review:
- *  a PM that missed a note still reads it when the next one ships). Confirming the newest clears them all. */
-export function unconfirmedNotes(project: Pick<SwarmProject, 'processNote'>): ProcessNote[] {
-  return PROCESS_NOTES.slice(noteIndex(project.processNote?.confirmed) + 1)
+ *  a PM that missed a note still reads it when the next one ships). Confirming the newest clears them all. A note for the
+ *  rebased Swarms is none of another Swarm's. */
+export function unconfirmedNotes(swarm: Pick<SuperTabState, 'id'>, project: Pick<SwarmProject, 'processNote'>): ProcessNote[] {
+  const rebased = isRebasedSwarm(swarm)
+  return PROCESS_NOTES.slice(noteIndex(project.processNote?.confirmed) + 1).filter(note => rebased || !note.rebasedOnly)
 }
 
 /** The newest note [project]'s PM has not confirmed, or null: the one a wake is for and the board names. */
-export const unconfirmedNote = (project: Pick<SwarmProject, 'processNote'>): ProcessNote | null => unconfirmedNotes(project).at(-1) ?? null
+export const unconfirmedNote = (swarm: Pick<SuperTabState, 'id'>, project: Pick<SwarmProject, 'processNote'>): ProcessNote | null =>
+  unconfirmedNotes(swarm, project).at(-1) ?? null
 
 /** [id]'s place in PROCESS_NOTES, or -1 for none or an unknown one. */
 export const noteIndex = (id: string | undefined): number => PROCESS_NOTES.findIndex(note => note.id === id)
@@ -49,8 +59,8 @@ export const hasCrew = (state: SuperTabState, project: SwarmProject): boolean =>
   state.agents.some(a => !!a.crew && agentProjectId(state, a) === project.id)
 
 /** The what-changed notes [project]'s PM owes, oldest first, for its wakes and its inbox (inbox.ts owedLines), until it confirms it. */
-export function noteLines(project: SwarmProject): string[] {
-  const notes = unconfirmedNotes(project)
+export function noteLines(swarm: Pick<SuperTabState, 'id'>, project: SwarmProject): string[] {
+  const notes = unconfirmedNotes(swarm, project)
   const newest = notes.at(-1)
   if (!newest) return []
   return [...notes.map(note => `What changed for PMs (note ${note.id}): ${note.text}`),
@@ -62,7 +72,7 @@ export function noteLines(project: SwarmProject): string[] {
  *  first time. */
 export function processLines(state: SuperTabState, project: SwarmProject): string[] {
   return [
-    ...noteLines(project),
+    ...noteLines(state, project),
     ...hasCrew(state, project) ? [] : ['No crew yet in this project: mark its standing agents once with crew.add {agentId, role, lane}. Until then this line comes with every wake.'],
   ]
 }

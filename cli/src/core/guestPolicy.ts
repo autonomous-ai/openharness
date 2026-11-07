@@ -18,8 +18,8 @@ const ANY: ReadonlySet<string> = new Set([
   'agent_create', 'agent_create_status', 'agent_create_cancel',
   'engines_probe',
   'theme_set',
-  // The owner's plan limits, which a guest's harness uses through the subscription relay.
-  'usage_read',
+  // Not `usage_read`: those are the owner's plan allowances, and a guest's harness runs on the guest's own sign-in
+  // (lib/guestPaneCommand.ts, anh Dee 2026-11-07).
   // Where it may start a harness: its workspace and the folders the owner shares with guests.
   'guest_folders',
   // Stream-scoped: a stream answers only the connection that opened it (lib/terminalStreamManager.ts), and

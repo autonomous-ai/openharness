@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Assignment, Conversation, SuperTabState, WorkStatus } from './model.js'
-import { BUILT_IN_HEADING, PM_SCHEDULE_TEXT, recordTidy, recordWake, SCHEDULE_SLOT_MS, scheduleMessageId, scheduleRequest, scheduleSlot, tidyMessageId, tidyRequest, tidySaved } from './pmSchedule.js'
+import { BUILT_IN_HEADING, PM_SCHEDULE_TEXT, pmScheduleText, recordTidy, recordWake, SCHEDULE_SLOT_MS, scheduleMessageId, scheduleRequest, scheduleSlot, tidyMessageId, tidyRequest, tidySaved } from './pmSchedule.js'
 import { ARCHIVE_QUIET_MS } from './tidy.js'
 import { latestProcessNote } from './processNotes.js'
+import { REBASE_SWARMS } from './migration/rebase.js'
+import { SEED_RULES } from './policy.js'
 
 /** 10:00 on 4 November in Vietnam (03:00 UTC): a slot's first millisecond. */
 const T = Date.UTC(2026, 10, 4, 3, 0)
@@ -360,5 +362,42 @@ describe('the daily tidy', () => {
       expect(where).toContain('Never drop or weaken a person\'s rule on your own judgment, even one you think cannot be done: ask that person, and keep the rule until they answer.')
     }
     expect(text).not.toContain('Keep every rule a person gave and who gave it.')
+  })
+})
+
+// Diego 11-06 (#4097): the v2 section replaces a project's process lines only where its instructions were moved onto the base
+// (migration/rebase.ts REBASE_SWARMS). Elsewhere the project's own lines and people's rules keep their force, and the release
+// window is the project's own (its rules record), not Vietnam's.
+describe('the built-in PM text by Swarm', () => {
+  const REBASED = REBASE_SWARMS[0]!.tabId
+  const berlin = { start: '13:00', end: '22:00', timeZone: 'Europe/Berlin' }
+  const project = { boardMode: undefined }
+
+  it('outside the rebased Swarm, is the built-in schedule with the project\'s own release window, and no v2 section', () => {
+    const text = pmScheduleText({ id: 'other-swarm' }, project, berlin)
+    expect(text).not.toContain('replaces every process line')
+    expect(text).not.toContain('Swarm process v2')
+    expect(text).not.toContain('Vietnam time')
+    expect(text).toContain('Releases run 13:00-22:00 Europe/Berlin time')
+    expect(text).toContain(`${BUILT_IN_HEADING}\n`)
+    expect(text.slice(text.indexOf(BUILT_IN_HEADING))).toBe(PM_SCHEDULE_TEXT.slice(PM_SCHEDULE_TEXT.indexOf(BUILT_IN_HEADING)))
+  })
+
+  it('in the rebased Swarm, is today\'s text word for word with its rules\' window, and shows another window as written', () => {
+    expect(pmScheduleText({ id: REBASED }, project, SEED_RULES.releaseWindow)).toBe(PM_SCHEDULE_TEXT)
+    const text = pmScheduleText({ id: REBASED }, project, berlin)
+    expect(text).toContain('Swarm process v2')
+    expect(text).toContain('- Releases run 13:00-22:00 Europe/Berlin time. Sign-in')
+    expect(text).not.toContain('Vietnam time')
+  })
+
+  it('wakes no PM outside the rebased Swarm for the v2 text note; the rebased Swarm\'s PM still hears it', () => {
+    const outside = swarm()
+    outside.projects![0]!.processNote = { confirmed: '2026-11-06-crew' }
+    expect(wake(outside)).toBeNull()
+    const rebased = { ...swarm(), id: REBASED }
+    rebased.projects![0]!.processNote = { confirmed: '2026-11-06-crew' }
+    expect(wake(rebased)?.jobs).toEqual(['process'])
+    expect(wake(rebased)?.processNote).toBe('2026-11-06-v2-text')
   })
 })
