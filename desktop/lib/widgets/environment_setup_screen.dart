@@ -332,7 +332,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
       return _notice(
         AppIcons.circleCheck,
         'Nothing left to install',
-        'Every dependency is ready. Continue to final verification.',
+        'Continue to final verification.',
       );
     }
     final stacked = grid.appTextScaleOf(context) > 1.25;
@@ -379,7 +379,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
         _notice(
           AppIcons.circleCheck,
           'Nothing left to install',
-          'Every dependency is ready. Continue to final verification.',
+          'Continue to final verification.',
         ),
       for (var index = 0; index < items.length; index++)
         Padding(
@@ -957,7 +957,7 @@ class _EnvironmentSetupDetailsState extends State<EnvironmentSetupDetails> {
             child: SizedBox(
               width: double.infinity,
               child: SelectableText(
-                diagnostics.isEmpty ? 'Nothing logged yet.' : diagnostics,
+                diagnostics,
                 style: grid.AppType.monoLabel(
                   fontWeight: FontWeight.w400,
                   height: 1.55,

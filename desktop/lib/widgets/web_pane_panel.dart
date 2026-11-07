@@ -299,8 +299,8 @@ class _WebPanePanelState extends State<WebPanePanel> {
         error ??
         (action['action'] == 'assistant' && action['chooseModel'] == true
             ? (widget.ownerEngine == 'opencode'
-                  ? 'Use /models in OpenCode to choose a model before sending your question.'
-                  : 'Choose a model from your assistant’s model menu before sending your question.')
+                  ? 'Choose a model with /models in OpenCode first.'
+                  : 'Choose a model in your assistant’s model menu first.')
             : null);
     if (mounted && guidance != null) {
       ScaffoldMessenger.maybeOf(context)
@@ -527,7 +527,7 @@ class _WebPanePanelState extends State<WebPanePanel> {
         icon: AppIcons.globe,
         title: 'Viewer',
         detail: page == null
-            ? 'No viewer yet.'
+            ? null
             : defaultTargetPlatform == TargetPlatform.windows
             ? 'This viewer opens in your browser. Install Microsoft Edge WebView2 to see it here.\n$url'
             : 'This viewer opens in your browser on this platform.\n$url',
@@ -596,13 +596,13 @@ class _Notice extends StatelessWidget {
     super.key,
     required this.icon,
     required this.title,
-    required this.detail,
+    this.detail,
     this.action,
   });
 
   final IconData icon;
   final String title;
-  final String detail;
+  final String? detail;
   final Widget? action;
 
   @override
@@ -622,14 +622,16 @@ class _Notice extends StatelessWidget {
                 fontWeight: FontWeight.w600,
               ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              detail,
-              textAlign: TextAlign.center,
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
-              style: grid.AppType.body(color: AppColors.mutedStrong),
-            ),
+            if (detail case final detail?) ...[
+              const SizedBox(height: 4),
+              Text(
+                detail,
+                textAlign: TextAlign.center,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: grid.AppType.body(color: AppColors.mutedStrong),
+              ),
+            ],
             if (action != null) ...[const SizedBox(height: 8), action!],
           ],
         ),

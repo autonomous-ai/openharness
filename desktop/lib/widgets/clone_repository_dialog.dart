@@ -108,9 +108,7 @@ class _CloneRepositoryDialogState extends State<CloneRepositoryDialog> {
       if (mounted && !_closing) setState(() => _error = error.message);
     } catch (_) {
       if (mounted && !_closing) {
-        setState(
-          () => _error = 'Could not clone the repository. Please retry.',
-        );
+        setState(() => _error = 'Could not clone the repository. Try again.');
       }
     } finally {
       if (mounted) {

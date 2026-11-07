@@ -1550,8 +1550,8 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults>
                                   ? 'This tab is full (${AppNotifier.maxPanes} panes). Open a new tab to add more.'
                                   : search.adding && search.query.isEmpty
                                   ? desktop
-                                        ? 'No harnesses yet. Start one with New Harness, or choose Machines to connect a computer.'
-                                        : 'No harnesses yet. Start an agent or choose @ machines to connect a machine.'
+                                        ? 'Start one with New Harness, or connect a computer in Machines.'
+                                        : 'Start an agent, or connect a machine with @ machines.'
                                   : search.adding
                                   ? 'No matching harnesses'
                                   : 'No matching results',

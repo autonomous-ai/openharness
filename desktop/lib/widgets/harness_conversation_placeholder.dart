@@ -36,20 +36,19 @@ class HarnessConversationPlaceholder extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  opening ? 'Opening your chat…' : 'Chat isn’t ready yet',
+                  opening ? 'Opening your chat…' : 'Chat isn’t ready',
                   style: DesktopChrome.heading(),
                 ),
-                const SizedBox(height: 12),
-                Semantics(
-                  liveRegion: true,
-                  child: Text(
-                    opening
-                        ? 'Your conversation will appear here. You can keep using the dashboard.'
-                        : error ??
-                              'Start a conversation to work with your agent.',
-                    style: DesktopChrome.text(color: DesktopChrome.muted),
+                if (!opening && error != null) ...[
+                  const SizedBox(height: 12),
+                  Semantics(
+                    liveRegion: true,
+                    child: Text(
+                      error!,
+                      style: DesktopChrome.text(color: DesktopChrome.muted),
+                    ),
                   ),
-                ),
+                ],
                 const SizedBox(height: 20),
                 if (opening)
                   const SizedBox(

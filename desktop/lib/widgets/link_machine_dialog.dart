@@ -706,7 +706,7 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
       Text(
         clear
             ? 'Prevent new links using this password? Existing links and sessions stay connected.'
-            : 'Remove this computer’s saved link to ${_name(_unlinkTarget!)}? A new connection will need that machine’s password.',
+            : 'Remove this computer’s link to ${_name(_unlinkTarget!)}? Reconnecting needs that machine’s password.',
         style: DesktopChrome.text(color: DesktopChrome.muted),
       ),
     ];
