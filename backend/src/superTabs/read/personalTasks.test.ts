@@ -174,14 +174,22 @@ describe('personal Tasks summaries', () => {
   })
 })
 
-// Task #4538: nothing cancelled stays in a person's Tasks (a duplicate the Lead closed, an ask it took on a task of its own).
-describe('a cancelled task leaves the Tasks feed', () => {
-  it('is gone from a change poll, from a page, and names nobody', () => {
+// Task #4538: a cancelled task leaves a person's Tasks once its card is closed (a duplicate the Lead closed, an ask it took on a task of
+// its own), and stays listed while its card is open: cancelled work waiting to be assigned again is still their ask (review of #3558).
+describe('a cancelled task and the Tasks feed', () => {
+  it('leaves a change poll, a page and the keys when its card is closed', () => {
     const s = scene(), row = s.stored.groups.find(g => g.key === s.f.web)!
-    const cancelled = { ...row, data: { ...row.data!, assignment: { ...row.data!.assignment!, status: 'cancelled', result: 'Duplicate' } } } as typeof row
+    const cancelled = { ...row, data: { ...row.data!, archived: true, assignment: { ...row.data!.assignment!, status: 'cancelled', result: 'Duplicate' } } } as typeof row
     expect(personalTasksFor([cancelled], s.view(), peer)).toMatchObject({ upserts: [], removed: [row.key] })
     expect(feedIdsOf(cancelled.data!)).toEqual([])
     const working = personalTasksFor([row], s.view(), peer)!
     expect(working.upserts).toEqual([expect.objectContaining({ id: row.key, status: 'working' })])
+  })
+
+  it('stays listed, as cancelled, while its card is open', () => {
+    const s = scene(), row = s.stored.groups.find(g => g.key === s.f.web)!
+    const cancelled = { ...row, data: { ...row.data!, archived: false, assignment: { ...row.data!.assignment!, status: 'cancelled', result: 'Its builder is down' } } } as typeof row
+    expect(personalTasksFor([cancelled], s.view(), peer)!.upserts).toEqual([expect.objectContaining({ id: row.key, status: 'cancelled' })])
+    expect(feedIdsOf(cancelled.data!)).not.toEqual([])
   })
 })
