@@ -1057,10 +1057,16 @@ void main() {
       find.byTooltip('Starts a separate Buddy session for this message'),
       findsOneWidget,
     );
-    // Left of the attach and send buttons, on the composer's row.
+    // Inside the composer's pill, on its row (#4529).
     expect(
       tester.getRect(chatSession).right,
-      lessThan(tester.getRect(chatSend).left),
+      lessThanOrEqualTo(
+        tester
+            .getRect(
+              find.byKey(const ValueKey('super-message-composer-surface')),
+            )
+            .right,
+      ),
     );
     final chatNote = find
         .byKey(const ValueKey('super-chat-session-note'))

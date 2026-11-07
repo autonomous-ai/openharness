@@ -259,7 +259,9 @@ void main() {
     await showView(tester, server);
     expect(find.text('Save offline drafts · in review'), findsOneWidget);
     expect(find.byType(SuperTabShipRow), findsOneWidget);
-    expect(find.text('Shipped: Offline drafts'), findsOneWidget);
+    expect(find.text('Offline drafts'), findsOneWidget);
+    await tester.tap(find.text('What changed'));
+    await tester.pumpAndSettle();
     expect(find.text('Built by'), findsOneWidget);
   });
 

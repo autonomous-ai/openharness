@@ -752,9 +752,19 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                           // A line on its way says so beside its bubble, so
                           // the row keeps its height once it is confirmed.
                           if (widget.headerStatus case final status?) ...[
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 4),
-                              child: status,
+                            ConstrainedBox(
+                              // The room a bubble leaves: a long status
+                              // wraps there and never narrows the bubble.
+                              constraints: BoxConstraints(
+                                maxWidth:
+                                    room.maxWidth *
+                                        (1 - SuperTabMessageRow.bubbleShare) -
+                                    8,
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.only(bottom: 4),
+                                child: status,
+                              ),
                             ),
                             const SizedBox(width: 8),
                           ],
@@ -787,6 +797,9 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                             _name(
                                               DesktopChrome.text(
                                                 size: SwarmType.nameSize,
+                                                height:
+                                                    SwarmType.bodyLine /
+                                                    SwarmType.nameSize,
                                                 color: DesktopChrome.muted,
                                               ),
                                               finger,

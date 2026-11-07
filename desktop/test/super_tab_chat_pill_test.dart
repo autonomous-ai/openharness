@@ -9,8 +9,8 @@ import 'support/super_tab_fixture.dart';
 
 /// Task #4529 (anh Dee's mockup, 11-07): the composer is a rounded pill
 /// holding the text, and beside it the mic while there is nothing to send;
-/// send takes the mic's place once there is. No paperclip: a drop or a paste
-/// attaches.
+/// send takes the mic's place once there is. The paperclip stays at the
+/// pill's start, so a file can still be picked.
 void main() {
   Finder key(String value) => find.byKey(ValueKey(value));
 
@@ -58,10 +58,10 @@ void main() {
       final pill = tester.getRect(key(surface));
       final field = tester.getRect(key('super-message-composer'));
       final mic = tester.getRect(key('super-composer-mic'));
-      expect(
+      final attach = tester.getRect(
         find.descendant(of: key(surface), matching: key('new-harness-attach')),
-        findsNothing,
       );
+      expect(attach.right, lessThanOrEqualTo(field.left));
       // The text inside the pill, the mic outside it on the same line.
       expect(pill.contains(field.center), isTrue);
       expect(mic.left, greaterThanOrEqualTo(pill.right));

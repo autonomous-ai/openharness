@@ -143,6 +143,12 @@ void main() {
     );
     expect(find.byKey(const ValueKey('super-terminals')), findsOneWidget);
     expect(find.byTooltip('Project options'), findsOneWidget);
+    // Send shows once there is something to send (#4529).
+    await tester.enterText(
+      find.byKey(const ValueKey('super-message-composer')),
+      'Ready',
+    );
+    await tester.pump();
     const mouse = {
       'Reply': Size(32, 32),
       'Copy message': Size(32, 32),

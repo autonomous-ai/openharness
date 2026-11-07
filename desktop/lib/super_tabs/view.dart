@@ -3390,7 +3390,8 @@ class _SuperTabViewState extends State<SuperTabView>
     // Desktop's composer is one pill row (anh Dee's mockup, 11-07, #4529):
     // the paperclip, the text, and at its end the mic while there is nothing
     // to send, send once there is.
-    // Files still come by a drop or a paste; the mockup has no paperclip.
+    // The paperclip stays at the pill's start: without it no file could be
+    // picked, only dropped or pasted.
     if (!_phone && voice == null) {
       return Row(
         key: const ValueKey('super-message-composer-actions'),
@@ -3401,8 +3402,9 @@ class _SuperTabViewState extends State<SuperTabView>
               key: const ValueKey('super-message-composer-surface'),
               decoration: _composerPill,
               child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: grid.AppDesktop.composerSide,
+                padding: EdgeInsets.only(
+                  left: row.left,
+                  right: grid.AppDesktop.composerSide,
                 ),
                 child: ConstrainedBox(
                   constraints: BoxConstraints(
@@ -3410,6 +3412,7 @@ class _SuperTabViewState extends State<SuperTabView>
                   ),
                   child: Row(
                     children: [
+                      attach,
                       Expanded(child: field),
                       ...options,
                     ],
