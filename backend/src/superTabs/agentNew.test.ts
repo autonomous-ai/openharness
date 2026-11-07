@@ -179,6 +179,21 @@ describe('listing your computer while your Buddy is starting there', () => {
   })
 })
 
+// Task #4252 (audit 15): leave with the host online, get invited again, then Bring agent before the host reports its cleanup.
+describe('bringing an agent after leaving and rejoining', () => {
+  it('says the computer is finishing its cleanup, not that its contribution was withdrawn', () => {
+    const f = swarm()
+    f.run({ type: 'member.remove', userId: 'mate' }, mate)
+    const invited = f.run({ type: 'invite.create', email: mate.email, role: 'collaborator', conversationId: 'lead' }, owner)
+    f.run({ type: 'invite.accept', inviteId: invited.result.inviteId as string }, mate)
+    let refusal: unknown
+    try {
+      f.run({ type: 'buddy.create', machineId: 'mate-mac', engine: 'codex', setup: { name: 'mate-mac', cwd: '/swarm', engines: ['codex'] } } as Command, mate, own('mate'))
+    } catch (error) { refusal = error }
+    expect(refusal).toMatchObject({ code: 'MACHINE_CLEANING', message: expect.stringContaining('cleaning up') })
+  })
+})
+
 // A host from before Regular agents would launch one as a project's agent, in a project folder it does not have: the start is
 // listed apart, and a computer whose host cannot run one is told to update instead.
 describe('a Regular agent\'s start on its computer', () => {
