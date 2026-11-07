@@ -142,6 +142,20 @@ project name, Enter GitHub URL, Run Blender with. Standard named destinations
 retain their names, such as Harness Store and New Tab. Avoid repeated labels,
 internal state names, decorative punctuation and implementation details.
 
+All copy is sharp, not only empty states (anh Dee, 2026-11-07, task #4465):
+
+1. **One idea per line.** No line runs past one short sentence unless someone
+   asked for an explanation.
+2. **Buttons are one or two words, verb first:** Accept, New agent, Join.
+3. **Labels and notes are a few words.**
+4. **Cut filler:** please, you can, just, simply, currently, in order to,
+   will appear here.
+5. **Say it once.** Never repeat what the screen already shows.
+6. **Errors say what happened and what to do**, in two short sentences at
+   most.
+
+An empty list or pane says nothing (Swarm elements, rule 7).
+
 ## Color and state
 
 Use semantic light/dark tokens throughout. Floating surfaces share the same

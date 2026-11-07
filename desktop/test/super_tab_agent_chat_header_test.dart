@@ -201,14 +201,11 @@ void main() {
       expect(t.getRect(line), before);
       await t.tap(line);
       await t.pumpAndSettle();
-      // The engines, then the shared models, in one menu.
+      // The engines, then the shared models, in one menu; nobody shares one here, so the menu says nothing of them
+      // (rule 7).
       expect(row('Claude Code'), findsOneWidget);
       expect(row('Codex'), findsOneWidget);
-      expect(find.text('SHARED IN THIS SWARM'), findsOneWidget);
-      expect(
-        t.getRect(row('Codex')).top,
-        lessThan(t.getRect(find.text('SHARED IN THIS SWARM')).top),
-      );
+      expect(find.text('SHARED IN THIS SWARM'), findsNothing);
       expect(row('Your subscription'), findsNothing);
       // The engine it is on sends nothing; another switches it.
       await t.tap(row('Claude Code'));

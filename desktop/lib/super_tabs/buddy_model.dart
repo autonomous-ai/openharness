@@ -121,15 +121,15 @@ List<Widget> buddyModelMenuRows({
           onPressed: busy ? null : () => pick(null),
         ),
       ),
-    if (agent.engine == 'claude') ...[
+    // A Buddy-only machine never joins the Swarm's grid (backend
+    // read/hostRows.ts), so nothing shared reaches a Buddy there: the line
+    // says who fixes it. With nothing shared, nothing is said (rule 7).
+    if (agent.engine == 'claude' &&
+        (pool == null || pool['buddyOnly'] == true || offers.isNotEmpty)) ...[
       if (subscription) const AppMenuDivider(),
       words('SHARED IN THIS SWARM'),
-      // A Buddy-only machine never joins the Swarm's grid (backend
-      // read/hostRows.ts), so nothing shared reaches a Buddy there.
       if (pool == null || pool['buddyOnly'] == true)
         words("Add $machine to the Swarm's Machines to use shared models.")
-      else if (offers.isEmpty)
-        words('Nobody shares a model in this Swarm yet.')
       else
         for (final offer in offers)
           row(

@@ -5562,7 +5562,8 @@ class _SuperTabViewState extends State<SuperTabView>
                     : group == null
                     ? 'Loading conversation…'
                     : _buddyName(group) != null
-                    ? "Only you and ${_buddyName(group)} read this chat. Say what you want to build; say 'send to the ${c.snapshot!.coordinatorNameOf(group.projectId)}' when it's ready."
+                    // One short line that helps the reader act (anh Dee's copy rules, task #4465).
+                    ? "Say what to build, then 'send to the ${c.snapshot!.coordinatorNameOf(group.projectId)}'."
                     // Empty means empty (anh Dee's rule 7, task #4465): no words for a chat with nothing in it.
                     : null) {
                   final words? => Padding(
