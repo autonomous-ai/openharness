@@ -20,12 +20,9 @@ void main() {
     return server;
   }
 
-  Finder rowOf(String text) => find.byKey(
-    ValueKey(switch (text) {
-      'Should we do thread replies?' => 'super-message-message-1',
-      'Yes, like Slack.' => 'super-message-message-2',
-      _ => 'super-message-message-3',
-    }),
+  Finder rowOf(String text) => find.ancestor(
+    of: find.text(text),
+    matching: find.byType(SuperTabMessageRow),
   );
 
   testWidgets('an old thread reply shows inline in time order, under a quote '

@@ -224,6 +224,29 @@ class SuperTabAttention extends ChangeNotifier {
     ].join(', ');
   }
 
+  /// The reader's unread tags in replies that live only in their thread, in
+  /// [conversationId], oldest first: what the chat's top row names and opens
+  /// (#2814). The same tags, read the same way, as [tagsIn] counts for the
+  /// sidebar, so reading one drops it from both.
+  List<SuperTabMention> threadTagsIn(String conversationId) {
+    if (controller.accessRevoked ||
+        controller.notifyOf(conversationId) == SuperTabNotify.muted) {
+      return const [];
+    }
+    return [
+      for (final m in mentions.waiting)
+        if (m.conversationId == conversationId &&
+            m.threadId != null &&
+            (m.messageSequence ?? _unknown) >
+                controller.threadReadMark(m.threadId!))
+          m,
+    ]..sort(
+      (a, b) => (a.messageSequence ?? _unknown).compareTo(
+        b.messageSequence ?? _unknown,
+      ),
+    );
+  }
+
   /// How many replies of [root]'s thread in [conversationId] are new to the
   /// reader, as Activity lists it; 0 when it does not list it as new.
   int newRepliesIn(String conversationId, String root) {
