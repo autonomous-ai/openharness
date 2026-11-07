@@ -131,6 +131,7 @@ import { closeAssignment, closeUnassignedStart, LIST_SIZE, newestConversations, 
 import { answeredAgents, dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByAnswer, resolveByReply, resolveTags, resolveWhenWorked, writeMentions } from './mentions.js'
 import { stuckAlerts } from './stuck.js'
 import { OVERDUE_PER_PASS, overdueDecisions, dueDefaultDecisions } from './overdueDecisions.js'
+import { checkPrivateChat } from './privateChat.js'
 import { answerableBy, askDecisions, BUDDY_SEND, DECISION_ASKED_KIND, keepWaiting, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingConversations, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
@@ -1103,7 +1104,6 @@ export class SuperTabStore {
       }
     }
     // A private line from an agent goes to the person's default Buddy (task #3818): their Buddy chats, quiet or not.
-    if (command.type === 'person.tell') swarmChat(command.personId)
     // A switch's result tells the machine's owner in their one Buddy chat, quiet or not (commands.ts agent.switchResult).
     if (command.type === 'agent.switchResult') swarmChat(state.agents.find(a => a.id === command.agentId)?.machineOwnerId)
     // A project's sharing ends its sessions in the one Buddy chats of whoever loses it (commands.ts endLostProjectSessions).
@@ -1167,12 +1167,6 @@ export class SuperTabStore {
       const projectId = command.projectId ?? (self ? agentProjectId(state, self) : undefined)
       const chat = projectsOf(state).find(p => p.id === projectId)?.leadConversationId
       if (chat) groupIds.push(chat)
-    }
-    // Any agent of a project tells a person in that project's Buddy chat (commands.ts person.tell), loaded even when quiet.
-    if (command.type === 'person.tell' && asAgentId) {
-      const self = state.agents.find(a => a.id === asAgentId)
-      if (self) buddyChat(agentProjectId(state, self), command.personId)
-      swarmChat(command.personId)
     }
     if (command.type === 'delivery.resolve') {
       const delivery = await tx.superTabDelivery.findFirst({ where: { id: command.deliveryId, tabId }, select: { conversationId: true } })
@@ -3687,6 +3681,8 @@ export class SuperTabStore {
     const kept = new Set(stored.filter(row => messages.some(m => m.id === row.id && row.tabId === tabId && row.conversationId === m.conversationId
       && isDeepStrictEqual(row.source ?? undefined, m.source))).map(row => row.id))
     if (kept.size) logger.warn('Kept Swarm notices already stored', { tabId, ids: [...kept] })
+    // Only a person and their own agent write in their private chat (task #4547).
+    checkPrivateChat(state, messages)
     const measured = proposalMessageMeasures(state, messages.filter(m => !kept.has(m.id)), this.now())
     if (measured.length) afterCommit(tx, () => proposalMeasures(measured))
     const rows: Prisma.SuperTabMessageCreateManyInput[] = []

@@ -2409,24 +2409,17 @@ describe('any agent of the project', () => {
     for (const [command, context] of commands) {
       // The outsider reads none of this project, and its own project's chat is not the peer's to read.
       expect(() => f.run(command, outsider, context), command.type).toThrow(expect.objectContaining({
-        code: command.type === 'person.tell' ? 'INVALID_PERSON' : command.type === 'agent.input' ? 'AGENT_UNAVAILABLE' : 'NOT_FOUND' }))
+        code: command.type === 'person.tell' ? 'PRIVATE_CHAT' : command.type === 'agent.input' ? 'AGENT_UNAVAILABLE' : 'NOT_FOUND' }))
       expect(() => f.run(command, buddy, context), command.type).toThrow(expect.objectContaining({ code: 'BUDDY_FORBIDDEN' }))
     }
     expect(JSON.stringify(f.state)).toBe(before)
   })
 
-  // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts, task #3404): another agent's line is the PM's crew need.
-  it('lets the PM tell a person of its project, and turns another agent\'s line into a crew need', () => {
+  // Retired (task #4547): a person's chat with their own agent is theirs alone; agents ask in Decisions or the project chat.
+  it('refuses a private line to a person from the PM and every other agent', () => {
     const { f, E } = project(), pm = f.leadActor
     f.invite()
-    expect(f.run({ type: 'person.tell', personId: 'peer', text: 'Your fix is merged.' }, E).messages.map(m => m.source?.kind)).toEqual(['crew-need'])
-    const told = f.run({ type: 'person.tell', personId: 'peer', text: 'Your fix is merged.' }, pm)
-    // In their one Buddy chat, marked with its project, and in their older chat there for older apps (Dee, 10-31).
-    const swarm = f.state.conversations.find(c => c.kind === 'swarm-buddy')!, chat = f.state.conversations.find(c => c.kind === 'buddy')!
-    expect(told.messages).toEqual([
-      expect.objectContaining({ conversationId: swarm.id, text: 'Your fix is merged.', recipients: [], source: { kind: 'pm-line', projectId: chat.projectId } }),
-      expect.objectContaining({ conversationId: chat.id, text: 'Your fix is merged.', recipients: [] })])
-    expect(() => f.run({ type: 'person.tell', personId: 'peer', text: 'Hello.' })).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    for (const actor of [E, pm]) expect(() => f.run({ type: 'person.tell', personId: 'peer', text: 'Your fix is merged.' }, actor)).toThrow(expect.objectContaining({ code: 'PRIVATE_CHAT' }))
   })
 
   // A person keeps today's rule (decision 4); an agent's start, its maker and the project's coordinator (decision 6).

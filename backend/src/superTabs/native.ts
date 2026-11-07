@@ -1,3 +1,4 @@
+import { checkPrivateChat } from './privateChat.js'
 import { createHash } from 'node:crypto'
 import type { Prisma, SuperTabNativeContext } from '@prisma/client'
 import { z } from 'zod'
@@ -241,6 +242,8 @@ export class SuperTabNativeStore {
       // which the turn writes: removing that person, or taking away their access, revokes the context (rule b,
       // revokeNativeContexts). Touching the person instead would make one person's terminals in different groups conflict.
       await this.deps.save(tx, loaded, state, this.deps.stamp(), [{ kind: 'agent', key: target.id }])
+      // Only a person and their own agent write in their private chat (task #4547).
+      checkPrivateChat(state, [draft])
       await tx.superTabMessage.create({ data: { id: eventId, tabId, conversationId: group.id, sequence,
         author: json(observedBy), source: json({ kind: 'native', phase: event.kind, turnId: event.turnId,
           operator: binding.operator, truncated: event.truncated, interrupted: event.interrupted, ...(recovery ? { recovery: recovery.source } : {}) }),

@@ -160,15 +160,9 @@ describe('an agent’s needs_human, decision ask and line to a person go to the 
     expect(needs(byPm)).toEqual([])
   })
 
-  it('turns a worker’s line to a person into a crew need in the project chat, and keeps the PM’s', () => {
+  // Retired (task #4547): a worker asks with decision.ask, which reaches the PM as above.
+  it('refuses a worker’s private line to a person', () => {
     const f = assigned()
-    const byWorker = f.run({ type: 'person.tell', personId: 'peer', text: 'Look at the mockup in #12' }, asAgent(f.worker))
-    // Nothing lands in the person's Buddy chats: the crew need is the command's only message.
-    expect(byWorker.messages.filter(m => !crewNeedOf(m.source))).toEqual([])
-    expect(needs(byWorker).map(m => [m.conversationId, m.recipients, crewNeedOf(m.source)!.personIds])).toEqual([[f.app.conversationId, [f.pm], ['peer']]])
-    expect(byWorker.result.routedToPm).toMatch(/PM/)
-    const byPm = f.run({ type: 'person.tell', personId: 'peer', text: 'Look at the mockup in #12' }, asAgent(f.pm))
-    expect(needs(byPm)).toEqual([])
-    expect(byPm.messages.length).toBeGreaterThan(0)
+    expect(() => f.run({ type: 'person.tell', personId: 'peer', text: 'Look at the mockup in #12' }, asAgent(f.worker))).toThrow(expect.objectContaining({ code: 'PRIVATE_CHAT' }))
   })
 })

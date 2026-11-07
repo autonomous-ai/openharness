@@ -1471,8 +1471,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
    *  (projects.ts isClosedPmChat); an app from before still sends this to open one. */
   const pmChatClosed = (): never =>
     fail('PM_CHAT_CLOSED', actor.kind === 'agent'
-      ? 'Chat with PM is closed: to tell one person something privately, send person.tell; it lands in their Buddy chat.'
-      : 'Chat with PM is closed: talk to the PM in the project chat, or brainstorm with your Buddy, where the PM\'s private lines reach you.', 403)
+      ? 'Chat with PM is closed: ask one person with decision.ask, or post in the project chat.'
+      : 'Chat with PM is closed: talk to the PM in the project chat, or brainstorm with your Buddy.', 403)
   /** A Swarm-wide switch is the Swarm owner's, or a Lead's passing on a chat message the Swarm owner wrote in the last day,
    *  as rules are. */
   const swarmOwnerAsked = (askedIn: { conversationId: string; messageId: string } | undefined, what: string) => {
@@ -3723,29 +3723,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       endBuddySession(found.chat, found.entry!, command.reason)
       break
     }
-    case 'person.tell': {
-      // Any agent of a project, in its own project (project instructions, phase 4); a Buddy is refused before here.
-      const projectId = actor.kind === 'agent' ? agentProjectId(state, agent(state, actor.agentId)) : undefined
-      if (!projectId || !projectAgent(state, actor, projectId)) fail('FORBIDDEN', 'An agent sends a person a private line, in its own project.', 403)
-      const project = projectOf(state, projectId)
-      const to = state.people.find(p => p.id === command.personId) ?? fail('INVALID_PERSON', 'Tell a person in this Swarm.', 400)
-      if (!canReadProject(state, { kind: 'person', userId: to.id, email: to.email }, project)) fail('INVALID_PERSON', `${usernameOf(state, to.id)} cannot read this project.`, 400)
-      // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts): another agent's line is the PM's crew need, in the project chat.
-      const projectChat = state.conversations.find(c => c.id === project.leadConversationId)
-      const pmInstead = projectChat ? routesToPm(state, actor, projectChat) : null
-      if (projectChat && pmInstead) {
-        crewNeed(projectChat, pmInstead, { personIds: [to.id], conversationId: projectChat.id }, command.text)
-        break
-      }
-      // To nobody: the person reads it; their Buddy, if they have one, is not asked to answer for them. In their one Buddy chat,
-      // marked with its project so it hides once they lose it (buddies.ts hiddenProjectRow), and in their older chat there,
-      // which older apps and the phone still show (spec: Older apps).
-      message(defaultBuddyChat(state, to).id, command.text, [], null, { kind: PM_LINE_KIND, projectId: project.id })
-      Object.assign(effects.messages.at(-1)!, { buddyProject: project.id })
-      effects.messages.push({ id: stableId(operationId, 'project-chat'), conversationId: openBuddyChat(state, project.id, to).id, author: sender,
-        text: command.text, replyTo: null, recipients: [] })
-      break
-    }
+    case 'person.tell':
+      // Retired (task #4547): a person's chat with their own agent is theirs alone. Older Lead skills still send it.
+      fail('PRIVATE_CHAT', 'A person\'s chat with their own agent is theirs alone. Ask them with decision.ask when you need an answer, or post in the project chat when everyone may read it.', 403)
     case 'buddy.create': {
       if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person adds their own Buddy.', 403)
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
