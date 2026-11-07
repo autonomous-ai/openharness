@@ -15,8 +15,8 @@
  * The callers decide (core/agents/create.ts, launches.ts). A worktree only inherits the answer its source
  * repo already has.
  *
- * Only ever ADDS trust, never removes anything, and does nothing when the engine has never run here (no
- * file), when the file does not parse, or when it already says yes.
+ * Recording only ever ADDS trust, and does nothing when the engine has never run here (no file), when the file does not
+ * parse, or when it already says yes. The one removal is `forgetTrustIn`: the flag of a folder Harness made and is deleting.
  */
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, posix, win32 } from 'node:path'
@@ -35,6 +35,30 @@ export function trustsIn(trust: TrustContract, file: string, path: string): bool
  *  missing: the engine writes it on its first run, and a caller that did not make the folder has no business starting it. */
 export function recordTrustIn(trust: TrustContract, file: string, cwd: string, options: { create?: boolean } = {}): 'trusted' | 'already' | 'skipped' {
   return trust.format === 'json' ? recordJson(trust, file, cwd, options.create === true) : recordToml(trust, file, cwd)
+}
+
+/**
+ * Clears the trust flag of `path` itself, and only it, when Harness deletes a folder whose trust it saved: a Team-written
+ * start's worktree (superTabs/machines.ts, task #4353). Its folder was new at that start, so the flag was saved in its life;
+ * the person's own answers are under other keys (its repository, a folder above it) and stay. The rest of its entry stays
+ * too. One atomic write; a file it cannot read as the engine's shape is left as it is. JSON engines only: a Codex start of
+ * this kind runs in an engine home of its own.
+ */
+export function forgetTrustIn(trust: TrustContract, file: string, path: string): 'forgotten' | 'absent' | 'skipped' {
+  if (trust.format !== 'json' || !existsSync(file)) return 'skipped'
+  let config: unknown
+  try { config = JSON.parse(readFileSync(file, 'utf8')) } catch { return 'skipped' }
+  if (!isPlainObject(config)) return 'skipped'
+  const projects = config[trust.projects]
+  if (projects === undefined) return 'absent'
+  if (!isPlainObject(projects)) return 'skipped'
+  const entry = projects[path]
+  if (entry === undefined) return 'absent'
+  if (!isPlainObject(entry)) return 'skipped'
+  if (!(trust.accepted in entry)) return 'absent'
+  delete entry[trust.accepted]
+  replaceConfigFile(file, JSON.stringify(config, null, 2))
+  return 'forgotten'
 }
 
 /** A folder as this platform compares it. DESKTOP-0TFH0OJ, 2026-10-23: a Swarm worktree's source came as
