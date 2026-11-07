@@ -3,6 +3,7 @@
  *  reads what its person reads of its project but no private conversation (Ken, 10-29), and does nothing but post in its
  *  chat and propose. On in every Swarm: Buddies replaced Chat with PM (Ken, 10-29). */
 import { agentDisplayName, freeAgentName, isOldBuddyName, isRoleName } from './agentNames.js'
+import { swarmUsernames } from './usernames.js'
 import { fail, nextConversationNumber, person, stableId, type Actor, type Agent, type AgentStartRequest, type Author, type Conversation, type MessageDraft, type Person, type SuperTabState } from './model.js'
 
 export const isBuddy = (target: Pick<Agent, 'buddyOf'>): boolean => !!target.buddyOf
@@ -239,7 +240,8 @@ function takenNames(state: SuperTabState, chat: Conversation, chosen: readonly C
     ...state.agents.filter(a => !chat.agentIds.includes(a.id)).map(a => agentDisplayName(state.agents, a.id) ?? a.name),
     // An agent still starting has its name already (review of #2094): its own Buddy's start excepted.
     ...(state.starts ?? []).filter(st => !st.harnessId && !st.error && st.request.conversationId !== chat.id).map(st => st.request.name),
-    ...state.people.map(p => p.email.split('@')[0]!),
+    // Every name a person goes by (security review 2 of #3560): no Buddy passes as a teammate.
+    ...state.people.flatMap(p => [p.email.split('@')[0]!, ...(p.name ? [p.name] : [])]), ...swarmUsernames(state).values(),
     // The name older Buddies of another person still go by, until they become Members (redesign part 4).
     ...state.people.filter(p => p.id !== owner).map(p => `${p.email.split('@')[0]}'s Buddy`),
     ...state.conversations.filter(c => isBuddyChat(c) && c.id !== chat.id && c.buddyName).map(c => c.buddyName!),
