@@ -15,6 +15,7 @@ import { recordCache, type ReloadReason } from './cacheStats.js'
 import type { PartKind } from './parts/types.js'
 import type { SwarmDelta } from './parts/load.js'
 import { OVERLAP_MS } from './read/cursor.js'
+import { addPhase, phaseClock, timedPhase } from './commandTiming.js'
 
 /** The stamps of one Swarm. A stamp only grows; one that never moved is 0. */
 export interface Stamp { main: number; machine: number }
@@ -532,8 +533,27 @@ function owe(changes: Changes, tabId: string, scopes: Iterable<StampScope>, host
 export async function swarmTransaction<T>(db: Pick<PrismaClient, '$transaction'>, body: (tx: Prisma.TransactionClient) => Promise<T>,
   options?: { maxWait?: number; timeout?: number }): Promise<T> {
   const changes: Changes = new Map()
-  const result = await db.$transaction(tx => { changesOf.set(tx, changes); return body(tx) }, options)
-  await announce(changes)
+  // A command's phases (commandTiming.ts): the wait for a connection before the body runs, the body, then the commit. An
+  // attempt that fails before its body spent all its time waiting to begin.
+  const clock = phaseClock()
+  const asked = clock?.()
+  let begun: number | undefined, ended: number | undefined
+  let result: T
+  try {
+    result = await db.$transaction(async tx => {
+      changesOf.set(tx, changes)
+      begun = clock?.()
+      try { return await body(tx) } finally { ended = clock?.() }
+    }, options)
+  } finally {
+    if (clock) {
+      const now = clock()
+      addPhase('pool', (begun ?? now) - asked!)
+      if (begun !== undefined) addPhase('body', (ended ?? now) - begun)
+      if (ended !== undefined) addPhase('commit', now - ended)
+    }
+  }
+  await timedPhase('stamps', () => announce(changes))
   return result
 }
 

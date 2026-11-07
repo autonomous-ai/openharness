@@ -2,11 +2,14 @@ import 'package:harness/super_tabs/zone_time.dart';
 
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/harness_activity_mark.dart';
 import 'package:harness/state/harness_activity.dart';
 
@@ -119,6 +122,15 @@ class TasksFixture {
 Finder inCard(String id, Finder f) =>
     find.descendant(of: find.byKey(ValueKey('personal-task-$id')), matching: f);
 
+/// The card of task [id] is quiet: one hairline at radius 10 and no shadow (#4468).
+bool quietCard(WidgetTester t, String id) {
+  final ink = t.widget<Ink>(inCard(id, find.byType(Ink)).first);
+  final d = ink.decoration! as BoxDecoration;
+  return d.borderRadius == BorderRadius.circular(10) &&
+      d.border == Border.all(color: DesktopChrome.rim) &&
+      (d.boxShadow ?? const []).isEmpty;
+}
+
 void main() {
   setUpAll(superTabLoadZones);
   late TasksFixture f;
@@ -168,7 +180,7 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.text('Auto approve'), findsOneWidget);
+    expect(find.text('Accept all'), findsOneWidget);
   });
   testWidgets(
     'ordinary proposals open their conversation without approval controls',
@@ -191,8 +203,8 @@ void main() {
       await t.tap(find.text('Task new'));
       await t.pump();
       expect(opened, ['new']);
-      expect(inCard('new', find.text('Approve')), findsNothing);
-      expect(inCard('new', find.text('Reject')), findsNothing);
+      expect(inCard('new', find.text('Accept')), findsNothing);
+      expect(inCard('new', find.text('Decline')), findsNothing);
       expect(find.byType(DropdownButtonFormField<String>), findsNothing);
       expect(f.commands, isEmpty);
       f.rows.last['canApprove'] = false;
@@ -224,13 +236,87 @@ void main() {
     );
   });
 
+  testWidgets(
+    'the header is quiet: Tasks in semibold, the choice plain text until hover',
+    (t) async {
+      await mount(t);
+      final title = t.widget<Text>(find.text('Tasks')).style!;
+      expect(title.fontSize, 13);
+      expect(title.fontWeight, FontWeight.w600);
+      expect(find.byType(DropdownButton<String>), findsNothing);
+      final choice = find.byKey(const ValueKey('tasks-approval-mode'));
+      final label = t
+          .widget<Text>(
+            find.descendant(of: choice, matching: find.text('Accept all')),
+          )
+          .style!;
+      expect(label.fontSize, 12);
+      expect(label.color, DesktopChrome.muted);
+      double chevron() => t
+          .widget<Opacity>(
+            find
+                .ancestor(
+                  of: find.descendant(
+                    of: choice,
+                    matching: find.byIcon(AppIcons.chevronDown),
+                  ),
+                  matching: find.byType(Opacity),
+                )
+                .first,
+          )
+          .opacity;
+      final rest = t.getSize(choice);
+      expect(chevron(), 0);
+      final mouse = await t.createGesture(kind: PointerDeviceKind.mouse);
+      addTearDown(mouse.removePointer);
+      await mouse.addPointer(location: Offset.zero);
+      await mouse.moveTo(t.getCenter(choice));
+      await t.pump();
+      expect(chevron(), 1);
+      expect(t.getSize(choice), rest);
+      await mouse.moveTo(Offset.zero);
+      await t.pump();
+      expect(chevron(), 0);
+    },
+  );
+  testWidgets(
+    'empty means empty: no tasks, or still loading, shows only the header',
+    (t) async {
+      List<String> words() => [
+        for (final text in t.widgetList<Text>(
+          find.descendant(
+            of: find.byType(SuperTabPersonalTasksPane),
+            matching: find.byType(Text),
+          ),
+        ))
+          text.data ?? '',
+      ];
+      Widget pane(SuperTabController c) => MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 340,
+            child: SuperTabPersonalTasksPane(controller: c, onOpenTask: (_) {}),
+          ),
+        ),
+      );
+      final loading = TasksFixture();
+      addTearDown(() => loading.controller.dispose());
+      await t.pumpWidget(pane(loading.controller));
+      expect(words(), ['Tasks']);
+      final empty = TasksFixture()..rows = [];
+      addTearDown(() => empty.controller.dispose());
+      await empty.controller.refresh();
+      await t.pumpWidget(pane(empty.controller));
+      expect(words(), ['Tasks', 'Accept all']);
+    },
+  );
   testWidgets('mode is saved by authenticated command and server read', (
     t,
   ) async {
     await mount(t);
     await t.tap(find.byKey(const ValueKey('tasks-approval-mode')));
     await t.pumpAndSettle();
-    await t.tap(find.text('Review').last);
+    await t.tap(find.text('Ask me').last);
     await t.pumpAndSettle();
     expect(f.commands.single, {
       'type': 'member.approvalMode',
@@ -248,15 +334,23 @@ void main() {
       await t.pump();
       expect(find.byType(DropdownButtonFormField<String>), findsNothing);
       expect(
-        inCard('new', find.widgetWithText(TextButton, 'Reject')),
+        inCard('new', find.widgetWithText(TextButton, 'Decline')),
         findsOneWidget,
       );
       expect(
-        inCard('new', find.widgetWithText(FilledButton, 'Approve')),
+        inCard('new', find.widgetWithText(FilledButton, 'Accept')),
         findsOneWidget,
       );
+      // Decline is plain text: no fill and no rim over the theme's text button (#4468).
+      final reject = t
+          .widget<TextButton>(
+            inCard('new', find.widgetWithText(TextButton, 'Decline')),
+          )
+          .style!;
+      expect(reject.side?.resolve({}), BorderSide.none);
+      expect(reject.backgroundColor?.resolve({}), Colors.transparent);
       expect(find.text('Suggested'), findsNothing);
-      await t.tap(inCard('new', find.text('Approve')));
+      await t.tap(inCard('new', find.text('Accept')));
       await t.pumpAndSettle();
       expect(f.commands.single, {
         'type': 'task.approve',
@@ -268,9 +362,9 @@ void main() {
   testWidgets('approve sends once while waiting and keeps the task', (t) async {
     await mount(t);
     f.hold = Completer<void>();
-    await t.tap(inCard('new', find.text('Approve')));
+    await t.tap(inCard('new', find.text('Accept')));
     await t.pump();
-    await t.tap(inCard('new', find.text('Approve')));
+    await t.tap(inCard('new', find.text('Accept')));
     await t.pump();
     expect(f.commands.length, 1);
     f.hold!.complete();
@@ -290,7 +384,7 @@ void main() {
       ..['version'] = 2;
     await f.controller.refresh();
     await t.pump();
-    await t.tap(inCard('new', find.text('Approve')));
+    await t.tap(inCard('new', find.text('Accept')));
     await t.pumpAndSettle();
     expect(f.commands.single, {
       'type': 'task.approve',
@@ -300,7 +394,7 @@ void main() {
   });
   testWidgets('rejection needs a reason and remains in the list', (t) async {
     await mount(t);
-    await t.tap(inCard('new', find.text('Reject')));
+    await t.tap(inCard('new', find.text('Decline')));
     await t.pumpAndSettle();
     expect(f.commands, isEmpty);
     await t.enterText(
@@ -308,7 +402,7 @@ void main() {
       'Too much scope',
     );
     await t.pump();
-    await t.tap(find.text('Reject task').last);
+    await t.tap(find.text('Decline').last);
     await t.pumpAndSettle();
     expect(f.commands.single, {
       'type': 'task.reject',
@@ -317,7 +411,7 @@ void main() {
     });
     // The mark says why on hover (finding 17).
     expect(
-      inCard('new', find.byTooltip('Rejected: Too much scope')),
+      inCard('new', find.byTooltip('Declined: Too much scope')),
       findsOneWidget,
     );
   });
@@ -326,9 +420,11 @@ void main() {
   ) async {
     await mount(t);
     f.fail = true;
-    await t.tap(inCard('new', find.text('Approve')));
+    await t.tap(inCard('new', find.text('Accept')));
     await t.pumpAndSettle();
     expect(find.textContaining('fixture private'), findsNothing);
+    // What happened and what to do, in two short sentences (anh Dee, 11-07).
+    expect(find.text('Not confirmed. Retry to check.'), findsOneWidget);
     expect(find.text('Retry'), findsOneWidget);
     f.fail = false;
     await t.tap(find.text('Retry'));
@@ -351,7 +447,7 @@ void main() {
       ('reconciling', 'Checking its agent', HarnessActivity.unknown),
       ('lost', 'Agent lost', HarnessActivity.offline),
       ('proposal', 'Proposal', null),
-      ('rejected', 'Rejected', null),
+      ('rejected', 'Declined', null),
       ('a-later-status', 'Status unavailable', HarnessActivity.unknown),
     ];
     await mount(t);
@@ -398,7 +494,7 @@ void main() {
     FilledButton approve(String id) =>
         find
                 .ancestor(
-                  of: inCard(id, find.text('Approve')),
+                  of: inCard(id, find.text('Accept')),
                   matching: find.byType(FilledButton),
                 )
                 .evaluate()
@@ -415,7 +511,7 @@ void main() {
         await mount(t);
         f.refuse = SuperTabFailure(code, sentence, statusCode: status);
         final before = f.reads;
-        await t.tap(inCard('new', find.text('Approve')));
+        await t.tap(inCard('new', find.text('Accept')));
         await t.pumpAndSettle();
         expect(find.text(sentence), findsOneWidget);
         expect(find.text('Retry'), findsNothing);
@@ -423,7 +519,7 @@ void main() {
         expect(approve('new').onPressed, isNotNull);
         expect(f.reads, greaterThan(before), reason: 'reads the task again');
         f.refuse = null;
-        await t.tap(inCard('old', find.text('Approve')));
+        await t.tap(inCard('old', find.text('Accept')));
         await t.pumpAndSettle();
         expect(f.commands.length, 2);
         expect(f.operations.toSet().length, 2, reason: 'a new change');
@@ -433,7 +529,7 @@ void main() {
     testWidgets('a refused Retry of a lost answer unlocks too', (t) async {
       await mount(t);
       f.fail = true;
-      await t.tap(inCard('new', find.text('Approve')));
+      await t.tap(inCard('new', find.text('Accept')));
       await t.pumpAndSettle();
       expect(find.text('Retry'), findsOneWidget);
       expect(approve('old').onPressed, isNull);
@@ -457,7 +553,7 @@ void main() {
         'fixture private payload',
         statusCode: 426,
       );
-      await t.tap(inCard('new', find.text('Approve')));
+      await t.tap(inCard('new', find.text('Accept')));
       await t.pumpAndSettle();
       expect(find.text('Update Harness to change Tasks.'), findsOneWidget);
       expect(find.textContaining('fixture private'), findsNothing);
@@ -472,7 +568,7 @@ void main() {
       );
       await t.tap(find.byKey(const ValueKey('tasks-approval-mode')));
       await t.pumpAndSettle();
-      await t.tap(find.text('Review').last);
+      await t.tap(find.text('Ask me').last);
       await t.pumpAndSettle();
       expect(
         find.text('Only members choose how their tasks are approved.'),
@@ -494,7 +590,7 @@ void main() {
     );
     await t.tap(find.byKey(const ValueKey('tasks-approval-mode')));
     await t.pumpAndSettle();
-    await t.tap(find.text('Review').last);
+    await t.tap(find.text('Ask me').last);
     await t.pumpAndSettle();
     expect(
       find.text('Only the project\'s owner changes this.'),
@@ -504,7 +600,7 @@ void main() {
     f.refuse = null;
     await t.tap(find.byKey(const ValueKey('tasks-approval-mode')));
     await t.pumpAndSettle();
-    await t.tap(find.text('Review').last);
+    await t.tap(find.text('Ask me').last);
     await t.pumpAndSettle();
     expect(f.commands.length, 2);
     expect(f.operations.toSet().length, 2);
@@ -533,7 +629,7 @@ void main() {
     'an open rejection cannot be submitted under a replacement account',
     (t) async {
       await mount(t);
-      await t.tap(inCard('new', find.text('Reject')));
+      await t.tap(inCard('new', find.text('Decline')));
       await t.pumpAndSettle();
       await t.enterText(
         find.byKey(const ValueKey('task-reject-reason')),
@@ -556,7 +652,7 @@ void main() {
           ),
         ),
       );
-      await t.tap(find.text('Reject task').last);
+      await t.tap(find.text('Decline').last);
       await t.pumpAndSettle();
       expect(f.commands, isEmpty);
       expect(replacement.commands, isEmpty);
@@ -701,14 +797,23 @@ void main() {
           find.byWidgetPredicate((w) => w is ActivityMark),
         );
         expect(t.widget<Text>(title).maxLines, 3);
+        // A neutral grey capsule with secondary text, never the project's colour (#4468).
         expect(
           t.widget<DecoratedBox>(tag).decoration,
-          isA<BoxDecoration>().having(
-            (d) => d.color,
-            'color',
-            superTabProjectColor('lead5701'),
-          ),
+          isA<ShapeDecoration>()
+              .having((d) => d.color, 'color', grid.AppSurface.wellFill)
+              .having((d) => d.shape, 'shape', isA<StadiumBorder>()),
         );
+        expect(
+          t
+              .widget<Text>(
+                find.descendant(of: tag, matching: find.byType(Text)),
+              )
+              .style
+              ?.color,
+          DesktopChrome.muted,
+        );
+        expect(quietCard(t, 'new'), isTrue);
         // The mark sits top right: above the title, at the card's right side.
         expect(t.getRect(mark).bottom, lessThanOrEqualTo(t.getRect(title).top));
         expect(
@@ -729,6 +834,8 @@ void main() {
         final asked = t.getRect(avatars.at(0)),
             agent = t.getRect(avatars.at(1));
         expect(t.widget<SuperTabAvatar>(avatars.at(0)).identity, 'person:6a86');
+        expect(asked.height, 18);
+        expect(agent.height, 18);
         expect(asked.left, lessThan(agent.left));
         expect(agent.right, lessThan(t.getRect(card).center.dx));
         expect(asked.top, greaterThan(t.getRect(title).bottom));
@@ -761,19 +868,43 @@ void main() {
       expect(f.commands, isEmpty);
     });
 
-    test('a project keeps its colour', () {
-      expect(
-        superTabProjectColor('lead5701'),
-        superTabProjectColor('lead5701'),
-      );
-      expect(
-        {
-          for (final id in ['a', 'b', 'c', 'd', 'e', 'f', 'g'])
-            superTabProjectColor(id),
-        }.length,
-        greaterThan(1),
-      );
-    });
+    testWidgets(
+      'a long project name stays in its capsule and a selected card is only filled',
+      (t) async {
+        f = TasksFixture()
+          ..rows = [
+            // A project the snapshot doesn't hold shows the row's own name.
+            task('new', 1, 20)
+              ..['projectId'] = 'elsewhere'
+              ..['projectName'] = 'A very long project name ' * 8,
+          ];
+        addTearDown(() => f.controller.dispose());
+        await f.controller.refresh();
+        await t.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 340,
+                child: SuperTabPersonalTasksPane(
+                  controller: f.controller,
+                  onOpenTask: (_) {},
+                  selectedId: 'new',
+                ),
+              ),
+            ),
+          ),
+        );
+        expect(t.takeException(), isNull);
+        final card = t.getRect(
+          inCard('new', find.byType(SuperTabPersonalTaskCard)),
+        );
+        final mark = t.getRect(
+          inCard('new', find.byType(SuperTabTaskStatusMark)),
+        );
+        expect(mark.right, lessThanOrEqualTo(card.right));
+        expect(quietCard(t, 'new'), isTrue);
+      },
+    );
   });
 
   testWidgets('while a change is sent, Approve and Reject are disabled', (
@@ -781,7 +912,7 @@ void main() {
   ) async {
     await mount(t);
     f.hold = Completer<void>();
-    await t.tap(inCard('new', find.text('Approve')));
+    await t.tap(inCard('new', find.text('Accept')));
     await t.pump();
     for (final id in ['new', 'old']) {
       expect(

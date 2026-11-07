@@ -6,7 +6,7 @@ import '../core/local_key_value_store.dart';
 /// key that is no account's. What the web keeps of an account beside its
 /// saved views (docs/specs/2026-10-30-web-swarm-direct.md, Caching):
 /// - `super_tab.<account>.<swarm>`: unsent drafts, selection, what is open;
-/// - `super_tab.launch.<account>.<tab>.<conversation>`: an unsent New Harness
+/// - `super_tab.launch.<account>.<tab>.<conversation>` (+ New agent's: `<tab>` is `swarm:<swarm>`): an unsent New Harness
 ///   or New Project;
 /// - `super_tab.hidden.<account>`: the Swarms hidden on this browser;
 /// - `super_tab.personal.<account>`: the Swarm last chosen in the switcher;

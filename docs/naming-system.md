@@ -188,6 +188,12 @@ task form.
 | Author a reusable Store package | **Create Harness** |
 | Start the bundled agent from the installed OS home | **Start OpenCode** |
 | Set up wireless networking | **Connect to Wi-Fi** |
+| Answer a task that waits for you, as a meeting invite | **Accept**, **Decline**; a declined task reads **Declined**. Never Approve or Reject for a task. |
+| Choose whether the tasks you ask for wait for you | **Accept all**, **Ask me** |
+
+**Auto-approve** under the Cmd-N box keeps its name: it is what an agent may do
+on the computer, not an answer to a task. Command and field names in code
+(`task.approve`, `task.reject`, `autoApprove`, `review`) stay as they are.
 
 Use the object's own name where possible: **Blender**, **Web Viewer**, or the
 person's project name. Keep task instructions in the conversation and technical
