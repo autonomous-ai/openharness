@@ -2355,7 +2355,8 @@ class NewHarnessController extends ChangeNotifier {
   /// lost has still to be checked on.
   bool get locked => busy || checking || linkingProfile;
 
-  /// + New agent's Member or Lead (task #4196), or null outside one.
+  /// + New agent's Agent (`member`) or Product Manager (`lead`) (task #4196),
+  /// or null outside one.
   String? get agentKind => integration?.agentKind;
 
   void setAgentKind(String kind) {

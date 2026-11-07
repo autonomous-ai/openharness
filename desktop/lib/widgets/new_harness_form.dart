@@ -2040,13 +2040,13 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                   child: DesktopPill(
                     key: const ValueKey('new-harness-field-agent-kind'),
                     focusNode: _kindFocus,
-                    label: kind == 'lead' ? 'Lead' : 'Member',
+                    label: kind == 'lead' ? 'Product Manager' : 'Agent',
                     semanticLabel:
-                        'Starts as, ${kind == 'lead' ? 'Lead' : 'Member'}',
+                        'Starts as, ${kind == 'lead' ? 'Product Manager' : 'Agent'}',
                     icon: kind == 'lead' ? AppIcons.crown : AppIcons.user,
                     menu: true,
                     capsule: true,
-                    tooltip: 'Start as Lead or Member',
+                    tooltip: 'Start as an agent or a Product Manager',
                     textSize: 13,
                     surfaceColor: DesktopChrome.surface,
                     onPressed:
@@ -3843,13 +3843,38 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   }
 
   // Computer selection belongs to the header, independently of repo search.
-  /// Member or Lead (task #4196): the one choice + New agent adds to Cmd-N.
+  /// Agent or Product Manager (task #4196): the one choice + New agent adds
+  /// to Cmd-N. Wire values stay `member` and `lead`.
   Widget _desktopKindMenu({required Widget child}) {
     final locked = box.locked || box.integration?.agentKindLocked == true;
+    final rows = [
+      for (final (kind, label, detail, icon) in [
+        ('member', 'Agent', 'Works with you in its own chat', AppIcons.user),
+        (
+          'lead',
+          'Product Manager',
+          'Leads a project and its crew',
+          AppIcons.crown,
+        ),
+      ])
+        AppMenuItem(
+          key: ValueKey('new-harness-agent-kind-$kind'),
+          autofocus: kind == box.agentKind,
+          selected: kind == box.agentKind,
+          icon: icon,
+          label: label,
+          detail: detail,
+          onPressed: locked ? null : () => box.setAgentKind(kind),
+        ),
+    ];
     return AppDropdown(
       controller: _kindMenu,
       childFocusNode: _kindFocus,
-      width: _machineMenuWidth,
+      // As wide as its lines need at any text size, so a detail is never cut.
+      width: math.max(
+        _machineMenuWidth,
+        AppMenuItem.fitWidth(context, rows) ?? 0,
+      ),
       onOpen: () => setState(() {}),
       onClose: () {
         if (!mounted) return;
@@ -3859,21 +3884,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         _chooserTraversal = null;
         _focusEditor();
       },
-      children: [
-        for (final (kind, label, detail, icon) in [
-          ('member', 'Member', 'Works with you in its own chat', AppIcons.user),
-          ('lead', 'Lead', 'Names and starts a project', AppIcons.crown),
-        ])
-          AppMenuItem(
-            key: ValueKey('new-harness-agent-kind-$kind'),
-            autofocus: kind == box.agentKind,
-            selected: kind == box.agentKind,
-            icon: icon,
-            label: label,
-            detail: detail,
-            onPressed: locked ? null : () => box.setAgentKind(kind),
-          ),
-      ],
+      children: rows,
       child: child,
     );
   }

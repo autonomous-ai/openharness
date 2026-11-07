@@ -20,7 +20,11 @@ import 'box_render_preview_test.dart' show loadPreviewFonts;
 /// one another account shares with them, and a Harness Team account.
 class _App extends AppNotifier {
   _App()
-    : super(config: AppConfig.dev, authSession: AuthSession(), configStore: null) {
+    : super(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+      ) {
     MachineState add(Machine machine, {bool local = false}) =>
         machineStates[machine.machineId] = MachineState(machine)
           ..localOnly = local
@@ -175,16 +179,15 @@ void main() {
       final image = await boundary.toImage(pixelRatio: 1.5);
       final data = await image.toByteData(format: ui.ImageByteFormat.png);
       final directory = Directory(renderDir)..createSync(recursive: true);
-      await File(
-        '${directory.path}/$name.png',
-      ).writeAsBytes(data!.buffer.asUint8List());
+      await File('${directory.path}/$name.png')
+          .writeAsBytes(data!.buffer.asUint8List());
       image.dispose();
     });
   }
 
   // Task #4196 (anh Dee, 11-07): + New agent is Cmd-N with one more choice.
   for (final brightness in Brightness.values) {
-    testWidgets('New agent adds a Member or Lead choice, ${brightness.name}', (
+    testWidgets('New agent: Agent or Product Manager, ${brightness.name}', (
       tester,
     ) async {
       final integration = _newAgent();
@@ -197,8 +200,10 @@ void main() {
         find.byKey(const ValueKey('new-harness-field-project')),
       );
       expect(_kind, findsOneWidget);
-      expect(find.descendant(of: _kind, matching: find.text('Member')),
-          findsOneWidget);
+      expect(
+        find.descendant(of: _kind, matching: find.text('Agent')),
+        findsOneWidget,
+      );
       final kind = tester.getRect(_kind);
       expect(
         kind.top >= project.bottom ||
@@ -207,18 +212,24 @@ void main() {
         isTrue,
         reason: 'The choice comes after the project, in reading order',
       );
-      await capture(tester, mounted.image, 'new-agent-member-${brightness.name}');
+      await capture(
+        tester,
+        mounted.image,
+        'new-agent-member-${brightness.name}',
+      );
 
       await tester.tap(_kind);
       await tester.pumpAndSettle();
-      expect(find.text('Names and starts a project'), findsOneWidget);
+      expect(find.text('Leads a project and its crew'), findsOneWidget);
       await tester.tap(
         find.byKey(const ValueKey('new-harness-agent-kind-lead')),
       );
       await tester.pumpAndSettle();
       expect(integration.agentKind, 'lead');
-      expect(find.descendant(of: _kind, matching: find.text('Lead')),
-          findsOneWidget);
+      expect(
+        find.descendant(of: _kind, matching: find.text('Product Manager')),
+        findsOneWidget,
+      );
       await capture(tester, mounted.image, 'new-agent-lead-${brightness.name}');
     });
   }
@@ -227,10 +238,7 @@ void main() {
     tester,
   ) async {
     final mounted = await _mount(tester, integration: _newAgent());
-    expect(
-      mounted.box.machineChoices.map((m) => m.id),
-      ['here', 'studio'],
-    );
+    expect(mounted.box.machineChoices.map((m) => m.id), ['here', 'studio']);
     await tester.tap(_machine);
     await tester.pumpAndSettle();
     expect(_machineOption('here'), findsOneWidget);
