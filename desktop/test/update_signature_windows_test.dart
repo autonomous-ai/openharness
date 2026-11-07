@@ -108,12 +108,19 @@ void main() {
         runningExe: running ?? signed,
       );
 
-  Future<void> writeCatalog() => _powershell(
-    "New-FileCatalog -CatalogVersion 2.0 -Path '$staged' "
-    "-CatalogFilePath '${scratch.path}\\c.cat' | Out-Null; "
-    "Move-Item -LiteralPath '${scratch.path}\\c.cat' "
-    "-Destination '$staged\\harness-desktop.cat'",
-  );
+  // As the release does: over app/<version>, which the updater unpacks
+  // as app/<version>.staging.
+  Future<void> writeCatalog() {
+    final built = p.join(p.dirname(staged), '9.9.9');
+    return _powershell(
+      "Rename-Item -LiteralPath '$staged' -NewName '9.9.9'; "
+      "New-FileCatalog -CatalogVersion 2.0 -Path '$built' "
+      "-CatalogFilePath '${scratch.path}\\c.cat' | Out-Null; "
+      "Move-Item -LiteralPath '${scratch.path}\\c.cat' "
+      "-Destination '$built\\harness-desktop.cat'; "
+      "Rename-Item -LiteralPath '$built' -NewName '9.9.9.staging'",
+    );
+  }
 
   test(
     'the report reads who signed each program and the running app',

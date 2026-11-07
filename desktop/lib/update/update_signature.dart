@@ -16,7 +16,9 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../bootstrap/environment_provisioner.dart' show windowsPowerShellPath;
 import '../core/hidden_process.dart';
+import '../core/runtime_platform.dart';
 
 /// Long enough for a cold `codesign --deep` over a 300 MB bundle or a
 /// PowerShell start on a busy PC; a check that takes longer refuses.
@@ -161,8 +163,10 @@ class WindowsSignatureReport {
   });
 
   factory WindowsSignatureReport.fromJson(Map<String, dynamic> json) {
+    // PowerShell writes a one-item list as the item itself.
     Map<String, WindowsSigner> byPath(Object? list) => {
-      for (final row in (list as List? ?? const []).cast<Map>())
+      for (final row
+          in (list is Map ? [list] : list as List? ?? const []).cast<Map>())
         row['path'] as String: WindowsSigner.fromJson(row.cast()),
     };
     final catalog = json['catalog'] as Map?;
@@ -267,6 +271,130 @@ Future<void> verifyMacUpdate({
   if (check.exitCode != 0) {
     debugPrint('UpdateSignature: refused: ${'${check.stderr}'.trim()}');
     throw notFromPublisher(signer.name);
+  }
+}
+
+/// Prints one [WindowsSignatureReport] as JSON. Paths come in through the
+/// environment, so no file name is ever parsed as PowerShell.
+const _windowsReportScript = r"""
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+function Signer($signature) {
+  $certificate = $signature.SignerCertificate
+  $identity = @()
+  if ($certificate) {
+    $identity = @($certificate.EnhancedKeyUsageList | ForEach-Object { $_.ObjectId } |
+      Where-Object { $_ -like '1.3.6.1.4.1.311.97.*' -and $_ -ne '1.3.6.1.4.1.311.97.1.0' } | Sort-Object)
+  }
+  [ordered]@{
+    status = "$($signature.Status)"
+    subject = if ($certificate) { $certificate.Subject } else { '' }
+    identity = $identity -join ' '
+  }
+}
+function Read-Signer($path) {
+  try { Signer (Get-AuthenticodeSignature -LiteralPath $path) }
+  catch { [ordered]@{ status = 'Unreadable'; subject = ''; identity = '' } }
+}
+function Programs($folder) {
+  $root = (Resolve-Path -LiteralPath $folder).Path.TrimEnd('\') + '\'
+  @(Get-ChildItem -LiteralPath $folder -Recurse -File -Force |
+    Where-Object { $_.Extension -in '.exe', '.dll' } | ForEach-Object {
+      $row = Read-Signer $_.FullName
+      $row.path = $_.FullName.Substring($root.Length).Replace('\', '/')
+      $row
+    })
+}
+$files = @(Programs $env:HARNESS_UPDATE_STAGED)
+$launcher = Read-Signer $env:HARNESS_UPDATE_LAUNCHER
+$launcher.path = 'Harness.exe'
+$files += $launcher
+$catalog = $null
+$catalogPath = Join-Path $env:HARNESS_UPDATE_STAGED 'harness-desktop.cat'
+if (Test-Path -LiteralPath $catalogPath -PathType Leaf) {
+  try {
+    $result = Test-FileCatalog -CatalogFilePath $catalogPath -Path $env:HARNESS_UPDATE_STAGED -FilesToSkip 'harness-desktop.cat' -Detailed
+    $catalog = [ordered]@{ status = "$($result.Status)"; signer = Signer $result.Signature }
+  } catch {
+    $catalog = [ordered]@{ status = 'Unreadable'; signer = (Read-Signer $catalogPath) }
+  }
+}
+[ordered]@{
+  running = Read-Signer $env:HARNESS_UPDATE_RUNNING
+  runningFolder = @(Programs (Split-Path -Parent $env:HARNESS_UPDATE_RUNNING))
+  files = $files
+  catalog = $catalog
+} | ConvertTo-Json -Depth 5 -Compress
+""";
+
+/// Asks a hidden Windows PowerShell who signed the running app, everything
+/// beside it, every staged program and the staged file catalog.
+Future<WindowsSignatureReport> readWindowsSignatureReport({
+  required String stagedFolder,
+  required String stagedLauncher,
+  required String runningExe,
+  Duration timeout = signatureCheckTimeout,
+}) async {
+  final script = _windowsReportScript.codeUnits;
+  final utf16 = Uint8List(script.length * 2);
+  for (var i = 0; i < script.length; i++) {
+    utf16[i * 2] = script[i] & 0xff;
+    utf16[i * 2 + 1] = script[i] >> 8;
+  }
+  final result = await _run(
+    windowsPowerShellPath(RuntimePlatform.environment),
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-EncodedCommand',
+      base64.encode(utf16),
+    ],
+    timeout,
+    environment: {
+      'HARNESS_UPDATE_STAGED': stagedFolder,
+      'HARNESS_UPDATE_LAUNCHER': stagedLauncher,
+      'HARNESS_UPDATE_RUNNING': runningExe,
+    },
+  );
+  try {
+    if (result.exitCode != 0) throw FormatException('exit ${result.exitCode}');
+    return WindowsSignatureReport.fromJson(
+      (jsonDecode('${result.stdout}') as Map).cast(),
+    );
+  } on Object catch (error) {
+    debugPrint(
+      'UpdateSignature: no report ($error): ${'${result.stderr}'.trim()}',
+    );
+    throw cannotCheckSignature;
+  }
+}
+
+/// Refuses the staged Windows update unless [windowsUpdateRefusal] passes it.
+Future<void> verifyWindowsUpdate({
+  required String stagedFolder,
+  required String stagedLauncher,
+  required String runningExe,
+  Duration timeout = signatureCheckTimeout,
+}) async {
+  final report = await readWindowsSignatureReport(
+    stagedFolder: stagedFolder,
+    stagedLauncher: stagedLauncher,
+    runningExe: runningExe,
+    timeout: timeout,
+  );
+  if (report.running.status == 'NotSigned') {
+    debugPrint(
+      'UpdateSignature: the running app is not signed; the update is checked by sha256 only',
+    );
+    return;
+  }
+  final refusal = windowsUpdateRefusal(report);
+  if (refusal != null) {
+    debugPrint('UpdateSignature: refused: $refusal');
+    throw notFromPublisher(report.running.name);
   }
 }
 
