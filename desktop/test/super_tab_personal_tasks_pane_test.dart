@@ -286,7 +286,11 @@ void main() {
       'conversationId': 'new',
       'reason': 'Too much scope',
     });
-    expect(find.byTooltip('Rejected'), findsOneWidget);
+    // The mark says why on hover (finding 17).
+    expect(
+      inCard('new', find.byTooltip('Rejected: Too much scope')),
+      findsOneWidget,
+    );
   });
   testWidgets('retry uses the same receipt and never displays raw error', (
     t,
