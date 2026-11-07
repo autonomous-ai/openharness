@@ -10,8 +10,11 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/harness_activity.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_type.dart';
+import 'package:harness/shared/widgets/app_icon_button.dart';
 import 'package:harness/state/harness_attachments.dart';
+import 'package:harness/super_tabs/buddy_card.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
+import 'package:harness/super_tabs/chat/agent_chat_header.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
 import 'package:harness/super_tabs/identity.dart';
@@ -20,8 +23,11 @@ import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/reply_box.dart';
 import 'package:harness/super_tabs/tasks/personal_task_card.dart';
 import 'package:harness/super_tabs/tasks/personal_tasks.dart';
+import 'package:harness/super_tabs/tasks/personal_tasks_pane.dart';
 import 'package:harness/terminal/terminal_typography.dart';
 
+import 'super_tab_personal_tasks_pane_test.dart' show TasksFixture;
+import 'support/buddy_engine_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
 /// The Swarm elements gallery (desktop-design-system.md, Swarm elements): every
@@ -78,19 +84,24 @@ void main() {
     testWidgets('every Swarm element matches its image in ${brightness.name}', (
       tester,
     ) async {
-      await _show(tester, brightness);
+      final bars = await _show(tester, brightness);
       (goldenFileComparator as _NearlyComparator).parts = _parts(tester);
       await expectLater(
         find.byKey(_Gallery.boundary),
         matchesGoldenFile('goldens/swarm-elements-${brightness.name}.png'),
       );
+      await _close(tester, bars);
     });
   }
 
   // Review of task #4461: a whole-image tolerance let a changed element pass. Ellis has Kai's colour with another
   // tilt: only its eyes and smile move.
   testWidgets('one changed face fails the gallery', (tester) async {
-    await _show(tester, Brightness.light, faces: ['Ellis', ..._faces.skip(1)]);
+    final bars = await _show(
+      tester,
+      Brightness.light,
+      faces: ['Ellis', ..._faces.skip(1)],
+    );
     final boundary = tester.renderObject<RenderRepaintBoundary>(
       find.byKey(_Gallery.boundary),
     );
@@ -105,10 +116,11 @@ void main() {
       );
     });
     expect(problem, contains('agent face Ellis'));
+    await _close(tester, bars);
   });
 }
 
-Future<void> _show(
+Future<List<SuperTabController>> _show(
   WidgetTester tester,
   Brightness brightness, {
   List<String> faces = _faces,
@@ -116,8 +128,19 @@ Future<void> _show(
   final old = grid.AppTheme.brightness.value;
   grid.AppTheme.brightness.value = brightness;
   addTearDown(() => grid.AppTheme.brightness.value = old);
+  // The top bars' chats: the reader's own Buddy, and a member agent of a project (task #4465).
+  final buddy = buddyEngineSwarm().controller(account: 'peer');
+  final member = TasksFixture().controller;
+  // A Swarm with no tasks, for the empty Tasks pane (rule 7).
+  final empty = (TasksFixture()..rows.clear()).controller;
+  for (final c in [buddy, member, empty]) {
+    addTearDown(c.dispose);
+    await c.refresh();
+  }
+  await buddy.select('swarm-buddy-peer');
+  await member.select('aeef');
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 960);
+  tester.view.physicalSize = const Size(760, 1320);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -126,12 +149,26 @@ Future<void> _show(
       // A still spinner, so the image holds one frame.
       home: MediaQuery(
         data: const MediaQueryData(disableAnimations: true),
-        child: _Gallery(brightness, faces: faces),
+        child: _Gallery(
+          brightness,
+          faces: faces,
+          bars: [buddy, member],
+          empty: empty,
+        ),
       ),
     ),
   );
   await tester.pump();
   expect(tester.takeException(), isNull);
+  return [buddy, member, empty];
+}
+
+/// Takes the gallery down and lets the bars' chats save, so no timer outlives the test.
+Future<void> _close(WidgetTester tester, List<SuperTabController> bars) async {
+  await tester.pumpWidget(const SizedBox());
+  for (final c in bars) {
+    await c.flush();
+  }
 }
 
 /// One element's area in the gallery and the share of it that may differ.
@@ -324,9 +361,20 @@ final _person = SuperTabPerson.fromJson({
 });
 
 class _Gallery extends StatelessWidget {
-  const _Gallery(this.brightness, {required this.faces});
+  const _Gallery(
+    this.brightness, {
+    required this.faces,
+    required this.bars,
+    required this.empty,
+  });
   final Brightness brightness;
   final List<String> faces;
+
+  /// Chats whose top bars the gallery draws: the reader's Buddy, then a member agent.
+  final List<SuperTabController> bars;
+
+  /// A Swarm with no tasks: the Tasks pane empty.
+  final SuperTabController empty;
   static const boundary = ValueKey('swarm-elements-gallery');
 
   @override
@@ -522,6 +570,74 @@ class _Gallery extends StatelessWidget {
                   SizedBox(width: 16),
                   SizedBox(width: 340, child: _Composer('typed', 'Ship it')),
                 ],
+              ),
+              title('Top bar: your Buddy, a member agent'),
+              for (final c in bars)
+                SizedBox(
+                  width: 720,
+                  child: SuperTabAgentChatHeader(
+                    controller: c,
+                    group: c.selected!,
+                    menu: AppIconButton(
+                      icon: AppIcons.ellipsis,
+                      tooltip: 'Chat options',
+                      onPressed: () {},
+                    ),
+                    title: c.selected!.isBuddyChat
+                        ? (name) => BuddyCardButton(
+                            controller: c,
+                            projectId: c.selected!.projectId,
+                            label: name,
+                          )
+                        : null,
+                  ),
+                ),
+              // Empty means empty (anh Dee's rule 7): each element with nothing optional, and no words for what
+              // is not there.
+              title('Empty: a row, a task card and the Tasks pane'),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 280,
+                    child: SuperTabQuietRow(
+                      leading: SuperTabAvatar.agent(
+                        _agent('Ivy'),
+                        size: SuperTabQuietRow.faceSize,
+                        engineBadge: false,
+                      ),
+                      name: 'Ivy',
+                      onTap: () {},
+                    ),
+                  ),
+                  gap(),
+                  SizedBox(
+                    width: 340,
+                    child: SuperTabPersonalTaskCard(
+                      task: SuperTabPersonalTask({
+                        'id': 't2',
+                        'version': 1,
+                        'at': 0,
+                        'projectId': 'harness',
+                        'projectName': 'harness',
+                        'title': 'A task nobody has taken',
+                        'status': 'planned',
+                      }),
+                      project: 'harness',
+                      selected: false,
+                      onOpen: () {},
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: 340,
+                height: 120,
+                child: SuperTabPersonalTasksPane(
+                  controller: empty,
+                  onOpenTask: (_) {},
+                ),
               ),
             ],
           ),

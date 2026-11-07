@@ -1177,7 +1177,7 @@ void main() {
       c.select(code.leadConversationId);
       await show(tester, f);
       expect(find.text('2 panes in this project'), findsOneWidget);
-      // Empty means empty: no line under the panes (anh Dee, 11-07, rule 7).
+      // An empty chat says nothing (rule 7, #4465).
       expect(find.textContaining('Discuss the plan'), findsNothing);
       await tester.tap(find.text('Show panes'));
       for (var i = 0; i < 20; i++) {
@@ -1223,7 +1223,7 @@ void main() {
       await show(tester, f);
       expect(find.textContaining('panes in this project'), findsNothing);
       expect(find.text('Show panes'), findsNothing);
-      // Empty means empty: no line under the panes (anh Dee, 11-07, rule 7).
+      // An empty chat says nothing (rule 7, #4465).
       expect(find.textContaining('Discuss the plan'), findsNothing);
       await close(tester, f, c);
     });

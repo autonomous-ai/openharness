@@ -142,6 +142,20 @@ project name, Enter GitHub URL, Run Blender with. Standard named destinations
 retain their names, such as Harness Store and New Tab. Avoid repeated labels,
 internal state names, decorative punctuation and implementation details.
 
+All copy is sharp, not only empty states (anh Dee, 2026-11-07, task #4465):
+
+1. **One idea per line.** No line runs past one short sentence unless someone
+   asked for an explanation.
+2. **Buttons are one or two words, verb first:** Accept, New agent, Join.
+3. **Labels and notes are a few words.**
+4. **Cut filler:** please, you can, just, simply, currently, in order to,
+   will appear here.
+5. **Say it once.** Never repeat what the screen already shows.
+6. **Errors say what happened and what to do**, in two short sentences at
+   most.
+
+An empty list or pane says nothing (Swarm elements, rule 7).
+
 ## Color and state
 
 Use semantic light/dark tokens throughout. Floating surfaces share the same
@@ -378,6 +392,50 @@ against `test/goldens/swarm-elements-{light,dark}.png`, holding each element
 to its own area: a face or ring may barely differ, an icon or letter a
 quarter of its box, and nothing else outside the words more than 38 pixels.
 
+Seven rules hold the whole Swarm screen to minimal, clear and quiet, with less
+on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
+
+1. **Grey everywhere; colour only on agent faces.** Grounds, text, rules and
+   controls take the neutral ramp. The faces and the Lead ring are the colour.
+2. **Blue only for the main action; red only for failed.** One filled blue
+   action per surface; the semantic error ink only for what failed.
+3. **Three text sizes: 14 chat, 13 names, 12 details.** Messages are 14,
+   names and controls 13 (`AppType.label`), every detail 12
+   (`AppType.caption`). In lists, bold means unread and nothing else.
+4. **Every row: face, name, one quiet detail on the right.** One detail, in
+   12-point `AppPalette.textFaint`; anything more waits for hover or a menu.
+5. **Dropdowns stay plain text until you hover.** At rest a dropdown is its
+   value in quiet text; hover, focus or an open menu brings the chevron and
+   the primary ink. The chevron's room is kept at rest, so hover moves nothing.
+6. **If it doesn't help you decide, it's gone.** A line that only describes
+   (a subscription, a machine, what an agent can read) leaves the screen; its
+   full value stays in menus, tooltips and accessibility.
+7. **Empty means empty.** An empty list or pane shows nothing, or only the
+   action that fills it (such as + New agent). Words stay only when they help
+   someone act: why something can't be used and who can fix it, or an error.
+   "None yet", "No tasks yet", "Nothing here yet", "Start the conversation."
+   and the like are not drawn. The gallery draws each element empty.
+
+- **One surface.** The left, middle and right panes share one ground,
+  `AppPalette.swarmField`, the colour the selected native tab joins. Only the
+  layout's 1-point `AppDesktop.rim` hairlines split them. `SuperTabView` paints
+  it under all three, and the Tasks pane paints it too, so no pane shows its
+  host's colour. A palette the person chose that names its own sidebar (Plum)
+  keeps it.
+- **Top bar.** Every agent's chat has the same 44-high bar
+  (`SuperTabAgentChatHeader`): at the left the 22-point face and the name in
+  13-point semibold, inset as the Buddy card button insets them, the name
+  taking at most half the bar; at the right one line
+  (`SuperTabEngineModelLine`), `Claude Code · Opus 5.5`, in 12-point
+  `textFaint`, then the ⋯ menu (`AppIcons.ellipsis`). The line gives way with
+  "…" before the name or ⋯ do. For the reader's own Swarm Buddy it is a
+  dropdown by rule 5 and opens one menu: its engines first (the one it runs on
+  takes it back from a shared model), then the models shared in the Swarm.
+  The server switches no other agent, so theirs is the same words and opens
+  nothing. A switch under way reads `Switching to Codex…`; a shared model
+  nobody serves adds `not served now`. The subscription, the machine and
+  "reads all your projects" are not in the bar. The gallery draws the bar of
+  the reader's Buddy and of a member agent.
 - **Agent face.** An agent with no chosen picture wears a face
   (`SuperTabAvatarFace`, `avatar_art.dart`) in rows, cards, chat and profile:
   a round disc with a soft top-to-bottom fill, two eyes and a small smile.

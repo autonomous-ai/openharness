@@ -1,6 +1,9 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/view.dart';
 
+import 'support/super_tab_fixture.dart';
 
 Map<String, dynamic> _agent(String id, [Map<String, dynamic>? extra]) => {
   'id': id,
@@ -95,6 +98,43 @@ void main() {
       'lead is the Product Manager of project Lamp. Delete the project first.',
     );
   });
+
+  testWidgets(
+    // Empty means empty (anh Dee's rule 7, #4465): whatever the project calls its coordinator.
+    'an empty project chat says nothing',
+    (tester) async {
+      for (final coordinator in [null, 'Coordinator']) {
+        final server = ConversationServer();
+        server.state['projects'] = [
+          {
+            ...projectFixture('lead', 'web-project', 'lead'),
+            'coordinatorName': ?coordinator,
+          },
+        ];
+        final c = server.controller();
+        await c.refresh();
+        await c.select('lead');
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SuperTabView(
+                controller: c,
+                onInvite: () {},
+                onAddAgent: (_) {},
+                onOpenTerminal: (_) {},
+                machineName: (_) => 'Team Mac',
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.textContaining('Discuss the plan'), findsNothing);
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      }
+    },
+  );
 
   test('a badge is the name, or its first 11 characters and an ellipsis', () {
     expect(superTabRoleBadge('Tester'), 'Tester');
