@@ -5191,33 +5191,49 @@ class _SuperTabViewState extends State<SuperTabView>
         !c.accessRevoked) {
       // The same + New agent as the left pane's: the Cmd-N form (task #4196).
       final newAgent = widget.board ? widget.onNewAgent : null;
+      final newProject =
+          widget.board || WorkspaceChrome.of(context).superTabRecovers
+          ? widget.onNewProject
+          : null;
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // One sentence for both ways to start (audit finding 20, #4445).
               Text(
-                'Create a project to get started.',
+                newAgent != null
+                    ? 'Start a project, or bring an agent to work with you.'
+                    : 'Create a project to get started.',
                 style: DesktopChrome.text(color: DesktopChrome.muted),
               ),
-              if ((widget.board ||
-                      WorkspaceChrome.of(context).superTabRecovers) &&
-                  widget.onNewProject != null) ...[
+              if (newProject != null || newAgent != null) ...[
                 const SizedBox(height: 12),
-                FilledButton(
-                  style: _thumb,
-                  onPressed: c.canWrite ? widget.onNewProject : null,
-                  child: const Text('New project'),
-                ),
-              ],
-              if (newAgent != null) ...[
-                const SizedBox(height: 8),
-                TextButton.icon(
-                  key: const ValueKey('super-empty-new-agent'),
-                  onPressed: c.canWrite ? newAgent : null,
-                  icon: const Icon(AppIcons.plus, size: 16),
-                  label: const Text('New agent'),
+                // Both in one style and one width, so neither reads as the lesser choice.
+                IntrinsicWidth(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (newProject != null)
+                        TextButton.icon(
+                          style: _thumb,
+                          onPressed: c.canWrite ? newProject : null,
+                          icon: const Icon(AppIcons.plus, size: 16),
+                          label: const Text('New project'),
+                        ),
+                      if (newProject != null && newAgent != null)
+                        const SizedBox(height: 8),
+                      if (newAgent != null)
+                        TextButton.icon(
+                          key: const ValueKey('super-empty-new-agent'),
+                          style: _thumb,
+                          onPressed: c.canWrite ? newAgent : null,
+                          icon: const Icon(AppIcons.plus, size: 16),
+                          label: const Text('New agent'),
+                        ),
+                    ],
+                  ),
                 ),
               ],
               if (c.operationError != null) ...[
@@ -5227,7 +5243,7 @@ class _SuperTabViewState extends State<SuperTabView>
               if (c.hasPendingAction)
                 TextButton(
                   onPressed: c.saving ? null : c.retry,
-                  child: const Text('Check pending action'),
+                  child: const Text('Check again'),
                 ),
             ],
           ),
