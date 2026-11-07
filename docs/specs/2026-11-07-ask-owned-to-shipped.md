@@ -69,9 +69,7 @@ Added to [the Naming System](../naming-system.md) by the first build task:
     Reviewer to confirm the moved head;
   - keeps its receipts on the task: the local-check receipts in the pull request body for the exact head, the review and
     test verdicts at that head, the merge commit, the release's `--wait` receipt and the version it shipped in;
-  - starts `make release-desktop ARGS="--prepare"` on its branch when it marks the pull request ready, so the release can
-    reuse that build, but never from a branch that changes `.github/` or the release scripts, and never for Team-written
-    work (Design 8); such an ask's release builds from main as usual;
+  - never starts a `--prepare` build from its branch: its release builds from main (Design 8);
   - takes the release step the server opened for its ask (section 2) and runs it from a checkout of main, at a commit
     that holds its merge with `ci/required` green; it has no right to release outside that step (Design 8);
   - sets the task done only when the release carrying it is verified, with the version and the receipts as evidence.
@@ -99,9 +97,8 @@ Added to [the Naming System](../naming-system.md) by the first build task:
 - **Nothing waits on a dependency at release time.** Main is releasable after every merge: a Desktop change works with
   the backend it may meet (AGENTS.md, compatibility), and the owner holds its own Desktop part until its backend is out.
   A late pull request holds only its own ask.
-- **Small and frequent.** Most releases carry one or two asks. The `--prepare` build started on the ask's branch is reused
-  when main's Desktop inputs still match at release time (docs/validation-and-release.md), which small releases make
-  more likely.
+- **Small and frequent.** Most releases carry one or two asks, each built from main. The speed comes from releasing
+  often, not from reusing a build made on a branch.
 - **Unchanged:** the release window (09:00–18:00 Vietnam time; an ask merged after 18:00 goes at 09:00), the urgent override
   for a P0, the verified-release rule for Shipped, CLI and web releasing after a visible merge, and the phone's own
   release flow.
@@ -203,8 +200,7 @@ Each with no content, paths or identifiers:
 - asks late, and minutes late, per day;
 - handovers per ask (target 0 beyond lost owners);
 - lines in the PM's inbox per hour, by section, before and after;
-- Desktop releases per day, and the asks each carries;
-- `--prepare` builds reused at release, out of releases.
+- Desktop releases per day, and the asks each carries.
 
 ## Design (docs/feature-design-rules.md)
 
@@ -262,14 +258,14 @@ Reviewed revision: initial spec. Reviewer: pending. Each line: answered.
    ask's owner, so the right is bound to the step: an owner may start a release workflow only through a release step the
    server opened for it, from main at a commit that holds its ask's merge with `ci/required` green. The App's right to
    start release workflows is granted for that step only, while it is open, and never to an Engineer's task access in
-   general; the server refuses any other start and says so on the card. A `--prepare` build runs the release workflow
-   from the branch's own copy, and its Mac build job gets the Apple signing secrets today (only Windows signing and
-   publishing sit behind the protected `release` environment). So a branch could change the workflow or its signing
-   action and read them. No ask prepares from a branch that changes anything under `.github/`, `scripts/` or
-   `desktop/scripts/`, and none prepares for Team-written work. `release-desktop.sh --prepare` refuses such a branch and
-   names why, and the ask's release builds from main instead. The cleaner fix, moving Mac signing behind the `release`
-   environment, is its own security task, because the exposure exists today for anyone with write access. Once it
-   ships, the path rule stays as a second guard. An owner without GitHub access for its task is refused and the ask
+   general; the server refuses any other start and says so on the card. **No ask builds from its branch with signing
+   material.** A `--prepare` build runs the release workflow from the branch's own copy, and its Mac job unlocks the
+   signing keychain before it builds; that build runs the branch's own code well outside any folder a path rule could
+   check (the Xcode project's build phases, CocoaPods files, Dart packages' build hooks). A path rule is therefore no
+   boundary. So an owner never prepares from its branch, and every ask's release builds from main, through its open
+   step. Mac signing and notarizing moving behind the protected `release` environment, so that only main or a release
+   tag ever gets signing material, is its own security task: the same exposure exists today for anyone who prepares
+   from a branch (docs/validation-and-release.md). Until it ships, this spec adds no branch builds. An owner without GitHub access for its task is refused and the ask
    goes late, never run under a machine owner's login.
 9. **Failure.** Owner lost: the ask goes to a free lane agent at once, counted as a handover, and late if none is free
    for 10 minutes. Release fails: the owner sees the failed run, fixes it as a code failure and cuts the next version;
@@ -284,34 +280,31 @@ Reviewed revision: initial spec. Reviewer: pending. Each line: answered.
 ## Build tasks, smallest first
 
 1. **Words.** Add Ask, Owner, Due, Late and With you to docs/naming-system.md. Docs only.
-2. **Prepare refuses unsafe branches.** `release-desktop.sh --prepare` refuses a branch whose diff from main touches
-   `.github/`, `scripts/` or `desktop/scripts/`, and Team-written work, naming why (Design 8). Ships before task 12, which
-   has owners prepare. Scripts, with a security review.
-3. **Desktop says its version.** Desktop sends `x-harness-client: desktop/<version>` on its requests, as the CLI does.
+2. **Desktop says its version.** Desktop sends `x-harness-client: desktop/<version>` on its requests, as the CLI does.
    Desktop, all three OSes.
-4. **The server records it.** The newest Desktop version per member: only a well-formed, bounded version, written only
+3. **The server records it.** The newest Desktop version per member: only a well-formed, bounded version, written only
    when higher, used only for "with you" (Design 7). Backend.
-5. **Ask times on the task.** Asked at, due (the PM's at Accept, else the default), stage and since, owner; sent in the
+4. **Ask times on the task.** Asked at, due (the PM's at Accept, else the default), stage and since, owner; sent in the
    task part and the Tasks feed. Backend.
-6. **The card's line.** Asked, now at, due and the late warning in the card caption; "update to …" in Shipped. Desktop,
+5. **The card's line.** Asked, now at, due and the late warning in the card caption; "update to …" in Shipped. Desktop,
    light and dark, from the existing card component.
-7. **Late, once.** The time checks raise late once per due: a line on the card, the PM's Late section, the person's Buddy
+6. **Late, once.** The time checks raise late once per due: a line on the card, the PM's Late section, the person's Buddy
    line; `work.status` takes a new due with a reason. Backend.
-8. **With you.** An ask moves to with you from the member's Desktop version, its machines' CLI versions, or a verified
+7. **With you.** An ask moves to with you from the member's Desktop version, its machines' CLI versions, or a verified
    backend or web release. Backend.
-9. **The PM's inbox narrows.** The digest kinds and stuck alerts stop going to the PM; its inbox has New asks, Decisions
+8. **The PM's inbox narrows.** The digest kinds and stuck alerts stop going to the PM; its inbox has New asks, Decisions
    and Late; settled conditions write their line on the card; the server reruns a recorded flaky check once. Backend.
-10. **An ask merges alone.** The train merges an eligible ask's pull request in a batch of one, on the pass it turns
-    eligible, asks before crew work (anh Dee's first). Backend.
-11. **A release per ask.** The release list opens the Desktop step for the owner of the oldest ask it carries, one
+9. **An ask merges alone.** The train merges an eligible ask's pull request in a batch of one, on the pass it turns
+   eligible, asks before crew work (anh Dee's first). Backend.
+10. **A release per ask.** The release list opens the Desktop step for the owner of the oldest ask it carries, one
     building at a time; an ask's backend release skips the 2-hour pace. The right to start a release workflow is granted
     for that open step only, from main at a commit holding the ask's merge with `ci/required` green (Design 8). Backend,
     with a security review.
-12. **The owner stays.** "Handed" does not free an ask's owner; the server wakes it on each event; a lost owner's ask goes
+11. **The owner stays.** "Handed" does not free an ask's owner; the server wakes it on each event; a lost owner's ask goes
     to a free lane agent with its receipts; the owner sets done at the verified release. Backend, with the CLI host's
     wake.
 
-The PM edits the instructions lines above as tasks 9, 11 and 12 ship.
+The PM edits the instructions lines above as tasks 8, 10 and 11 ship.
 
 ## Out of scope
 
