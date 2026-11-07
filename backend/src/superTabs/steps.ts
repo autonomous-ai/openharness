@@ -76,8 +76,11 @@ export function taskOwner(state: SuperTabState, step: Conversation): string | nu
 /** Whether [agentId] has held steps only, never a task, in the groups loaded, and a task one of them checks has not ended: a
  *  Reviewer or Tester the instructions keep while the work it checked is open, whatever its role is called, so its idle time
  *  is no news for the coordinator. Once each of those tasks is done or cancelled it is idle as any agent is, whether or not
- *  the task is archived yet (Diego, 2026-11-02: one sat unseen under a finished, unarchived task, holding a slot and quota). */
+ *  the task is archived yet (Diego, 2026-11-02: one sat unseen under a finished, unarchived task, holding a slot and quota).
+ *  Open tasks are always loaded; a missing parent can be dormant and must not hold idle handling. Unlike taskEnded's
+ *  archive guard, this decision needs no proof that an absent task ended (Diego, 2026-11-06). */
 export const checksOpenWork = (state: SuperTabState, groups: readonly Conversation[], agentId: string): boolean => {
   const held = groups.filter(g => g.assignment?.agentId === agentId)
-  return held.length > 0 && held.every(isStep) && held.some(step => !taskEnded(state, step))
+  return held.length > 0 && held.every(isStep) && held.some(step => state.conversations.some(task =>
+    task.id === step.reviewOf && !['done', 'cancelled'].includes(task.assignment?.status ?? '')))
 }
