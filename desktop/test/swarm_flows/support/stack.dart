@@ -20,6 +20,9 @@ import 'package:harness/ws/ws_conn.dart';
 
 import '../../swarm_state_test.dart' show MemoryStore;
 
+/// The header every control request carries the run's token in.
+const controlTokenHeader = 'x-swarm-flows-token';
+
 /// The repository's cli/ folder: set by scripts/swarm-flows.sh. Without it
 /// every flow skips, so the ordinary unit suite never boots a backend.
 final cliRoot = Platform.environment['HARNESS_SWARM_FLOWS_CLI_ROOT'];
