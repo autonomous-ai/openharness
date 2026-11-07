@@ -95,7 +95,8 @@ class ReleaseSigningTests(unittest.TestCase):
                 env = dict(os.environ, REF=ref, REF_NAME=ref.rsplit('/', 1)[-1], INPUT_VERSION='1.2.3',
                            INPUT_METADATA_PATH='', PREPARE_ONLY='false', TEST_REUSE='false', GCS_BUCKET='bucket',
                            GITHUB_OUTPUT=str(output), GITHUB_STEP_SUMMARY=str(summary), GITHUB_RUN_ID='1',
-                           GITHUB_RUN_ATTEMPT='1', **extra)
+                           GITHUB_RUN_ATTEMPT='1')
+                env.update(extra)
                 result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True, timeout=20)
                 if passes:
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
