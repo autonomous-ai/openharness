@@ -15,7 +15,8 @@ const fullColumns = [
   { id: 'proposals', title: 'Proposal' }, { id: 'nextUp', title: 'Next up' }, { id: 'working', title: 'Working' },
   { id: 'done', title: 'Done' }, { id: 'merged', title: 'Merged' }, { id: 'shipped', title: 'Shipped' },
 ]
-const simpleColumns = [{ id: 'todo', title: 'To do' }, { id: 'doing', title: 'Doing' }, { id: 'done', title: 'Done' }]
+// Simple uses the Board's own column ids (Desktop task_groups.dart SuperTabTaskColumn) under its own titles.
+const simpleColumns = [{ id: 'nextUp', title: 'To do' }, { id: 'working', title: 'Doing' }, { id: 'done', title: 'Done' }]
 
 function fixture() {
   let state = createSuperTab('swarm', 'Team', { id: 'owner', email: 'owner@example.com' }, 'test'), sequence = 0
