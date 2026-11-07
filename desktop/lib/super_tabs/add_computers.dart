@@ -40,28 +40,15 @@ class AddComputerRow {
   final String? tag, reason;
 }
 
-/// Why teammates' work does not run on a computer yet, from the Swarm's
-/// refusal code (backend superTabs/machines.ts `teamWorkRefusal`) and, for
-/// this computer, what its daemon remembers of the Team account setup: a word
-/// or two for the row, and the whole of it for its tooltip. Null when it does
-/// run there, or for a code this build does not know.
-({String tag, String reason})? _teamWhy(
-  Object? code,
-  ({String state, String? detail})? setup,
-) {
+/// Why teammates' work does not run on a computer's existing Team account,
+/// from the Swarm's refusal code (backend superTabs/machines.ts
+/// `teamWorkRefusal`): a word or two for the row, and the whole of it for its
+/// tooltip. Null when it does run there, or for a code this build does not
+/// know. A computer without one is not short of anything: Swarm v3 makes
+/// none (#4221).
+({String tag, String reason})? _teamWhy(Object? code) {
   const only = 'so only your projects run here.';
   return switch (code) {
-    'TEAM_ACCOUNT_REQUIRED' => switch (setup?.state) {
-      'failed' => (
-        tag: 'setup failed',
-        reason: 'Team account setup failed, $only',
-      ),
-      'running' => (
-        tag: 'setting up',
-        reason: 'Its Team account is being set up, $only',
-      ),
-      _ => (tag: 'not set up', reason: 'No Team account yet, $only'),
-    },
     'PRIVACY_UNCHECKED' => (
       tag: 'not checked',
       reason: 'Its Team account hasn’t passed the privacy check yet, $only',
@@ -91,7 +78,6 @@ List<AddComputerRow> addComputerRows(
   AppNotifier app,
   SuperTabController c, {
   Set<String> added = const {},
-  ({String state, String? detail})? teamSetup,
 }) {
   final snapshot = c.snapshot;
   final pools = snapshot?.machines ?? const <Map<String, dynamic>>[];
@@ -117,14 +103,8 @@ List<AddComputerRow> addComputerRows(
       final team = pools.where((p) => p['hostMachineId'] == id).firstOrNull;
       final work = (team ?? pool)?['teamWork'];
       if (work is Map && work['allowed'] == false) {
-        why = _teamWhy(work['code'], here ? teamSetup : null);
+        why = _teamWhy(work['code']);
       }
-    } else if (teamAccounts && here && teamSetup?.state == 'failed') {
-      why = (
-        tag: 'setup failed',
-        reason:
-            'Team account setup failed, so only your projects will run here.',
-      );
     }
     rows.add(
       AddComputerRow(
@@ -216,21 +196,6 @@ class _AddComputersState extends State<_AddComputers> {
   /// The computers the last Add asked for.
   var _requested = <String>{};
   bool _busy = false, _closing = false;
-  ({String state, String? detail})? _teamSetup;
-
-  @override
-  void initState() {
-    super.initState();
-    unawaited(_readTeamSetup());
-  }
-
-  /// Only this computer's own daemon is asked, and only where its Team
-  /// account can be made; one that cannot say leaves the Swarm's own line.
-  Future<void> _readTeamSetup() async {
-    if (!app.canSetUpTeamAccount) return;
-    final read = await app.teamSetupStatus();
-    if (mounted) setState(() => _teamSetup = read);
-  }
 
   bool get _sameAccount => app.currentUser?.id == _accountId;
 
@@ -238,8 +203,7 @@ class _AddComputersState extends State<_AddComputers> {
   /// may still change this Swarm.
   bool _alive() => mounted && !_closing && _sameAccount && c.canWrite;
 
-  List<AddComputerRow> get _rows =>
-      addComputerRows(app, c, added: _added, teamSetup: _teamSetup);
+  List<AddComputerRow> get _rows => addComputerRows(app, c, added: _added);
 
   bool _ticked(AddComputerRow row) =>
       row.status == AddComputerStatus.ready && (_ticks[row.id] ?? true);
