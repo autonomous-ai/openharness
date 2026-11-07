@@ -824,9 +824,12 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
       .toEqual([engineBin('claude'), '--dangerously-skip-permissions'])
     expect(buildEngineCommandArgv('codex', { permissionMode: 'readOnly' }))
       .toEqual([engineBin('codex'), '--sandbox', 'read-only', ...CODEX_SCREEN])
-    // Team-written work reads none of the branch's own settings, `settings.local.json` included (audit H2).
+    // Team-written work reads none of the branch's own settings, `settings.local.json` included (audit H2), and since v3 runs
+    // as its owner on their own computer, so it skips no permission check and no sandbox (review of #3485).
     expect(buildEngineCommandArgv('claude', { permissionMode: 'teamWritten', bypassPermission: true }))
-      .toEqual([engineBin('claude'), '--dangerously-skip-permissions', '--setting-sources', 'user', '--strict-mcp-config'])
+      .toEqual([engineBin('claude'), '--setting-sources', 'user', '--strict-mcp-config'])
+    expect(buildEngineCommandArgv('codex', { permissionMode: 'teamWritten', bypassPermission: true }))
+      .toEqual([engineBin('codex'), ...CODEX_SCREEN])
     // An older Buddy's saved mode is no mode: the registry clears it on load (task #4215).
     expect(permissionModeFlags('claude', 'buddy')).toBeNull()
     expect(permissionModeFlags('codex', 'readOnlyAsk')).toBeNull()
