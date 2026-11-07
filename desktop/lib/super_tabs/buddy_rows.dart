@@ -254,8 +254,15 @@ class SuperTabBuddyRow extends StatelessWidget {
                     ),
                   SizedBox(
                     width: _column,
-                    // Unread is drawn as a bold name and heard in words.
-                    child: Semantics(label: unread ? 'Unread messages' : null),
+                    // Unread is drawn as a bold name and heard in words. A row with no detail line has its status here,
+                    // quiet, at its end (task #4220).
+                    child: Semantics(
+                      label: unread ? 'Unread messages' : null,
+                      child: switch ((detail, status)) {
+                        (null, final status?) => Center(child: status),
+                        _ => null,
+                      },
+                    ),
                   ),
                   const SizedBox(width: _column),
                 ],
