@@ -125,9 +125,12 @@ describe('a free agent name', () => {
   })
 
   it('gives an agent named for its engine a member name', () => {
-    const agents: NamedAgent[] = [{ id: 'a', name: 'Claude Code' }, { id: 'b', name: 'Codex' }, { id: 'c', name: 'claude code' }]
+    // An agent whose engine name was already kept as its shown name (Desktop's local start, before this) gets one too.
+    const agents: NamedAgent[] = [{ id: 'a', name: 'Claude Code' }, { id: 'b', name: 'Codex' }, { id: 'c', name: 'claude code' },
+      { id: 'd', name: 'Claude Code', displayName: 'Claude Code' }]
     assignAgentDisplayNames(agents)
     for (const agent of agents) expect(AGENT_NAMES).toContain(agent.displayName)
-    expect(new Set(agents.map(a => a.displayName)).size).toBe(3)
+    expect(new Set(agents.map(a => a.displayName)).size).toBe(4)
+    expect(agentDisplayName([{ id: 'd', name: 'Codex', displayName: 'Codex' }], 'd')).not.toBe('Codex')
   })
 })
