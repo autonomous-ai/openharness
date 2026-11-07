@@ -666,13 +666,18 @@ class SuperTabProject {
       canChatIds = List.unmodifiable(
         (row['canChat'] as List? ?? const []).whereType<String>(),
       ),
-      deciderId = row['decider'] is String ? row['decider'] as String : null;
+      deciderId = row['decider'] is String ? row['decider'] as String : null,
+      about = _words(row['about']);
   final String id, name, ownerId, leadConversationId;
 
   /// The Board way of working (#3819), read as the desktop's model reads it; the phone draws it with #3821.
   final bool boardMode;
   final List<String> canChatIds;
   final String? deciderId;
+
+  /// What it is, in one line its owner set (task #4541), read as the desktop's model reads it; the phone shows it with
+  /// its Cmd-N form, after Desktop's.
+  final String? about;
 
   /// Whether [personId] may write in its chat: anyone who may write, while it is not on the Board.
   bool canChat(String personId, {bool swarmOwner = false}) =>
