@@ -858,7 +858,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
       configuration: config, lead: false })).result.agentId)
     await f.execute({ type: 'work.assign', conversationId: group, agentId: builder })
     const notice = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, conversationId: group, recipientIds: { has: agentId } } })
-    expect(notice).toMatchObject({ source: { kind: 'agent-only' }, text: expect.stringMatching(/^News for your owner: #\d+ "Offline sync", which they requested, is assigned and working\.$/) })
+    expect(notice).toMatchObject({ source: { kind: 'agent-only' }, text: expect.stringMatching(/^News for your owner: #\d+ "Offline sync", recorded as their request, is assigned and working\.$/) })
     const got = await heard()
     expect(got).toEqual([answer, followUp, tag, notice.id])
     expect(got).not.toContain(unrelated)
@@ -924,7 +924,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
       configuration: config, lead: false })).result.agentId)
     await f.execute({ type: 'work.assign', conversationId: group, agentId: builder })
     const notice = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, conversationId: group, recipientIds: { has: agentId } } })
-    expect(notice.text).toMatch(/^News for your owner: #\d+ "Offline sync", which they requested, is assigned and working\.$/)
+    expect(notice.text).toMatch(/^News for your owner: #\d+ "Offline sync", recorded as their request, is assigned and working\.$/)
     expect(await heard()).toEqual([notice.id])
   })
 

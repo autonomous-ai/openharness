@@ -998,7 +998,7 @@ export function buildWindowsRemoveScript(input: RemoveScriptInput): string {
     '  try { Remove-LocalUser -Name $TEAM } catch {',
     '    Restore-Tasks',
     '    if ($task) { Enable-ScheduledTask -TaskPath $TASK_PATH -TaskName $TASK_NAME | Out-Null; Start-ScheduledTask -TaskPath $TASK_PATH -TaskName $TASK_NAME }',
-    `    die "could not delete the account $TEAM ($($_.Exception.Message)). Its profile was removed; harness team setup makes it again" ${WINDOWS_REMOVE_REFUSED}`,
+    `    die "could not delete the account $TEAM ($($_.Exception.Message)). Its profile was removed" ${WINDOWS_REMOVE_REFUSED}`,
     '  }',
     '  say "deleted the account $TEAM"',
     '}',

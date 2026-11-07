@@ -25,9 +25,9 @@ function group(extra: Partial<Conversation> & { ledger?: GroupLedger; status?: W
   return { id, projectId: 'lead', title: `Group ${id}`, leadId: null, agentIds: [], archived: false, brief: 'Do it', checks: [], assignment,
     lastMessageSequence: 0, ...rest }
 }
-/** A request by [requesterId] asked at [askedAt] and shipped at [shippedAt] with a linked PR. */
+/** A request by [requesterId] asked at [askedAt] and shipped at [shippedAt]: its linked PR merged then. */
 const shipped = (requesterId: string, askedAt: number, shippedAt: number, extra: Partial<Conversation> = {}) =>
-  group({ requesterId, status: 'done', pullRequestUrls: ['https://github.com/o/r/pull/1'], ledger: { askedAt, shippedAt }, ...extra })
+  group({ requesterId, status: 'done', pullRequestUrls: ['https://github.com/o/r/pull/1'], ledger: { askedAt, shippedAt, mergedAt: shippedAt }, ...extra })
 const answered = (...unblocks: Array<[personId: string, at: number, waitedMs: number]>) =>
   group({ status: 'working', ledger: { unblocks: unblocks.map(([personId, at, waitedMs]) => ({ personId, at, waitedMs })) } })
 function machine(contributorId: string, lent: Array<[week: number, busyMs: number]>, machineId = `mac-${contributorId}`): ContributedMachine {
@@ -48,6 +48,11 @@ describe('Shipped: requests a person asked for, done with a linked PR, 3 points 
   it('needs a linked PR: done work without one has not landed', () => {
     const view = board(swarm(), [shipped('dee', WEEK, WEEK + HOUR, { pullRequestUrls: [] })])
     expect(person(view, 'dee').shipped.count).toBe(0)
+  })
+
+  it('needs the PR merged: work Done with a linked PR nobody merged has not shipped (task #4217)', () => {
+    const view = board(swarm(), [shipped('dee', WEEK, WEEK + HOUR, { ledger: { askedAt: WEEK, shippedAt: WEEK + HOUR } })])
+    expect(person(view, 'dee')).toMatchObject({ points: 0, shipped: { count: 0 } })
   })
 
   it('counts a request, not its review group, and never a group nobody asked for', () => {
@@ -284,7 +289,7 @@ describe('Models: temporary workers by engine, model and effort, never by agent 
     ({ assignmentId, engine: model.startsWith('gpt') ? 'codex' : 'claude', model, ...effort ? { effort } : {}, at, ...extra })
   /** A request shipped at [shippedAt] after [runs]. */
   const landed = (shippedAt: number, runs: Run[], extra: Partial<GroupLedger> = {}) =>
-    shipped('dee', runs[0]?.at ?? shippedAt, shippedAt, { ledger: { askedAt: runs[0]?.at ?? shippedAt, shippedAt, runs, ...extra } })
+    shipped('dee', runs[0]?.at ?? shippedAt, shippedAt, { ledger: { askedAt: runs[0]?.at ?? shippedAt, shippedAt, mergedAt: shippedAt, runs, ...extra } })
   const model = (view: ReturnType<typeof board>, name: string, effort: string | null = 'high') =>
     view.byModel.find(m => m.model === name && m.effort === effort)!
 
@@ -406,7 +411,7 @@ describe('Agents: the permanent agents, the PM and Buddies, by name like people 
   it('credits a group opened from a proposal with no person named as its requester (review of #2097)', () => {
     const run = { assignmentId: 'a1', engine: 'claude', model: 'opus', effort: 'high', at: WEEK }
     const fromProposal = group({ leadId: 'river', status: 'done', pullRequestUrls: ['https://github.com/o/r/pull/1'],
-      ledger: { askedAt: WEEK, shippedAt: WEEK + HOUR, runs: [run], proposal: { buddyId: 'sparky', messageId: 'm1' } } })
+      ledger: { askedAt: WEEK, shippedAt: WEEK + HOUR, mergedAt: WEEK + HOUR, runs: [run], proposal: { buddyId: 'sparky', messageId: 'm1' } } })
     const view = board(agents(swarm()), [fromProposal])
     expect(of(view, 'sparky')).toMatchObject({ points: 3, shipped: 1 })
     expect(of(view, 'river')).toMatchObject({ points: 3, shipped: 1 })
@@ -416,7 +421,7 @@ describe('Agents: the permanent agents, the PM and Buddies, by name like people 
   })
 
   it('credits the PM who led the group when it shipped, not whoever leads it now (review of #2097)', () => {
-    const ledger = (shippedLeadId: string | null) => ({ askedAt: WEEK, shippedAt: WEEK + HOUR, shippedLeadId })
+    const ledger = (shippedLeadId: string | null) => ({ askedAt: WEEK, shippedAt: WEEK + HOUR, mergedAt: WEEK + HOUR, shippedLeadId })
     const view = board(agents(swarm()), [
       shipped('dee', WEEK, WEEK + HOUR, { leadId: 'someone-else', ledger: ledger('river') }),
       shipped('dee', WEEK, WEEK + HOUR, { leadId: null, ledger: ledger('river') }),
@@ -430,7 +435,7 @@ describe('Agents: the permanent agents, the PM and Buddies, by name like people 
     const state = agents(swarm())
     state.agents = state.agents.filter(a => a.id !== 'sparky')
     state.agents.push({ ...state.agents.find(a => a.id === 'river')!, id: 'old-pm', displayName: 'Atlas' })
-    const ledger = (extra: object) => ({ askedAt: WEEK, shippedAt: WEEK + HOUR, ...extra })
+    const ledger = (extra: object) => ({ askedAt: WEEK, shippedAt: WEEK + HOUR, mergedAt: WEEK + HOUR, ...extra })
     const view = board(state, [
       shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger({ shippedLeadId: 'old-pm' }) }),
       shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger({ shippedLeadId: 'gone-pm' }) }),
@@ -448,7 +453,7 @@ describe('Agents: the permanent agents, the PM and Buddies, by name like people 
     const river = state.agents.find(a => a.id === 'river')!
     state.agents.push({ ...river, id: 'old-pm', projectId: 'secret', displayName: 'Hidden', machineId: 'mac-secret' },
       { ...river, id: 'old-buddy', projectId: 'secret', displayName: 'Whisper', machineId: 'mac-secret', buddyOf: { personId: 'tony', generation: 'g' } })
-    const ledger = (extra: object) => ({ askedAt: WEEK, shippedAt: WEEK + HOUR, ...extra })
+    const ledger = (extra: object) => ({ askedAt: WEEK, shippedAt: WEEK + HOUR, mergedAt: WEEK + HOUR, ...extra })
     const view = board(state, [
       shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger({ shippedLeadId: 'old-pm' }) }),
       shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger({ shippedLeadId: null, proposal: { buddyId: 'old-buddy', messageId: 'm1' } }) }),
@@ -460,7 +465,7 @@ describe('Agents: the permanent agents, the PM and Buddies, by name like people 
   })
 
   it('gives a Buddy 3 points per group opened from its proposal that shipped this week', () => {
-    const fromProposal = { askedAt: WEEK, shippedAt: WEEK + HOUR, proposal: { buddyId: 'sparky', messageId: 'm1' } }
+    const fromProposal = { askedAt: WEEK, shippedAt: WEEK + HOUR, mergedAt: WEEK + HOUR, proposal: { buddyId: 'sparky', messageId: 'm1' } }
     const view = board(agents(swarm()), [shipped('dee', WEEK, WEEK + HOUR, { ledger: fromProposal }), shipped('dee', WEEK, WEEK + HOUR)])
     expect(of(view, 'sparky')).toMatchObject({ points: 3, shipped: 1 })
     expect(of(view, 'river')).toMatchObject({ points: 0, shipped: 0, rank: 2 })
@@ -479,7 +484,7 @@ describe('Agents: the permanent agents, the PM and Buddies, by name like people 
         buddySession: { thread: 't', from: 1, projectId: 'lead' }, machineId: 'mac-dee' })
       return state
     }
-    const ledger = (buddyId: string) => ({ askedAt: WEEK, shippedAt: WEEK + HOUR, proposal: { buddyId, messageId: 'm1' } })
+    const ledger = (buddyId: string) => ({ askedAt: WEEK, shippedAt: WEEK + HOUR, mergedAt: WEEK + HOUR, proposal: { buddyId, messageId: 'm1' } })
     const buddies = (view: ReturnType<typeof board>) => view.agents.filter(a => a.kind === 'buddy')
 
     it('lists it in every project its person reads, with its name and person, and never its sessions', () => {

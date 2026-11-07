@@ -126,6 +126,7 @@ List<SuperTabConversation> superTabProjectTasks(
     ]))
       if (g.id != project.leadConversationId &&
           !g.isBuddyChat &&
+          !g.isAgentChat &&
           !c.hiddenByBuddies(g))
         g,
   ];

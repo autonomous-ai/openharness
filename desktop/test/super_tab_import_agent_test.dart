@@ -1271,7 +1271,8 @@ void main() {
       expect(find.text("What openharness's members will read"), findsNothing);
     }, variant: mac);
 
-    testWidgets('no Team account for this Mac says how to set one up', (
+    // Swarm v3 has no Team accounts (#4221): nothing offers to set one up.
+    testWidgets('no Team account for this Mac offers no Set up', (
       tester,
     ) async {
       final f = await roster(tester);
@@ -1282,14 +1283,7 @@ void main() {
       await openImport(tester);
       expect(find.text(kImportNeedsTeamAccount), findsOneWidget);
       expect(find.textContaining('fix-fix'), findsNothing);
-      await tester.tap(find.text('Set up Harness Team'));
-      await tester.pumpAndSettle();
-      expect(
-        find.textContaining(
-          RegExp(r'^Set up Harness Team on this (Mac|computer)$'),
-        ),
-        findsOneWidget,
-      );
+      expect(find.text('Set up Harness Team'), findsNothing);
       expect(f.server.posts, isEmpty);
     }, variant: mac);
   });
