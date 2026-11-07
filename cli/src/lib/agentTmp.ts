@@ -96,10 +96,15 @@ function markCommonJs(folder: string, deps: AgentTmpDeps): void {
   }
 }
 
-/** The package.json markCommonJs wrote, which no sweep deletes however old. Another, a tool's, is swept like any file. */
+/** The package.json markCommonJs wrote, which no sweep deletes however old. Another, a tool's, is swept like any file. Read only
+ *  when it is a file of the marker's size: this runs in the daemon, and a read through a link or at a pipe could block it. */
 function isMarker(folder: string, name: string): boolean {
   if (name !== PACKAGE) return false
-  try { return readFileSync(join(folder, name), 'utf8') === COMMONJS } catch { return false }
+  const path = join(folder, name)
+  try {
+    const stat = lstatSync(path)
+    return stat.isFile() && stat.size === COMMONJS.length && readFileSync(path, 'utf8') === COMMONJS
+  } catch { return false }
 }
 
 /** Whether anything at [path] changed since [cutoff]. Stops at the first that did. What cannot be read counts as changed. The
