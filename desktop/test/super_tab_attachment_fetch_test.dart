@@ -58,6 +58,9 @@ void main() {
     final hungUp = Completer<void>();
     raw.listen((socket) {
       socket.listen((_) {}, onDone: hungUp.complete, onError: (_) {});
+      // The reader hanging up mid-answer can fail what is still being
+      // written: on Windows as an aborted connection on this socket's sink.
+      socket.done.ignore();
       socket
         ..add(
           utf8.encode('HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\n\r\n'),

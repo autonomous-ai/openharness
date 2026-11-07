@@ -850,7 +850,9 @@ Future<bool> discardPreparedWorktree(
   // Without --force: a worktree with changes in it refuses. Ignored files
   // (what `.worktreeinclude` copied in) do not count as changes. As long as
   // `worktree add` may take: a deadline mid-delete leaves half a folder.
-  final removed = await git(folder, [
+  // From the common directory: `-C folder` would stand git inside the folder
+  // it deletes, and Windows refuses to delete a process's current folder.
+  final removed = await git(common, [
     'worktree',
     'remove',
     '--',
