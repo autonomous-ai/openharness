@@ -150,15 +150,16 @@ person's rule, or who gave it, is refused unless that person approves (`ruleGuar
 AGENTS.md and role files must not lose that, since the merge train merges on agent reviews: an agent's pull request
 could otherwise drop anh Dee's or Ken's rule, or add a rule every agent trusts, with no person approving.
 
-- The same rule holds for a pull request that changes the project's `AGENTS.md`, `CLAUDE.md` or anything in
-  `docs/roles/`: it names the person who asked for the change, and the merge train refuses it until that person
-  approves it (a GitHub approval from them, or a message of theirs the pull request names, as `ruleGuard.ts` accepts
-  today).
+- **The rule files are every `AGENTS.md` and `CLAUDE.md` at any path** (the root file and the component files, such
+  as `desktop/AGENTS.md`, which agents also follow) **and everything in `docs/roles/`.**
+- A pull request that changes any of them names the person who asked for the change, and the merge train refuses it
+  until that person approves it (a GitHub approval from them, or a message of theirs the pull request names, as
+  `ruleGuard.ts` accepts today). For a task a person asked for, the ask the task records is that message, so nobody is
+  asked anything extra; only a change with no person behind it (crew work nobody asked for) waits for a person.
 - A change that drops a rule, or who gave it (the "(Name, date)" after a rule), needs that person's approval, or the
   project's top decider's, as today.
 - The Lead writes these changes; a Member may propose one. Nobody else's pull request touching them merges without the
   approval above.
-- This is today's protection moved, not a new one: it applies only where the instructions document's rule applied.
 - It ships (build task 8) before any rule leaves the instructions document (task 9).
 
 The job pages are Harness's own code: they change only by a pull request with its review and two security reviews.
@@ -286,7 +287,8 @@ Reviewed revision: 2, after security review 2 of 76d361b (part 2 from the defaul
 member-accepted text; three shared-machine rules on the pages; an unforgeable fence; quoted words stay fenced; asks are
 requests to weigh) and security review 1 of 76d361b (the other-account limit kept on both pages and in the frame).
 Security review 1 of d7a9b23 (Ownrev1): the rule guard moves to pull
-requests that change AGENTS.md, CLAUDE.md or role files, before any rule leaves the instructions document. Review of
+requests that change AGENTS.md, CLAUDE.md or role files, before any rule leaves the instructions document; security
+review 2 of 728b78b (Ownrev4): at any path, nested component files included. Review of
 a7ca78c (Ownrev6): role procedures go to role files sent with their task or step;
 the Member page lists `work.check`. Security review 2 of 9323153 (Ownmac1): engines load no checkout files at all, Harness sends
 the default branch's copies, they are re-sent after every compaction, and the frame header is one line. Security review 1 of 9323153 (Ownrev4): outside text quoted in the server's
@@ -379,10 +381,12 @@ the default branch's copy, never a checkout's. The menu's version list is shown 
 7. **The task as part 3.** The brief, or the issue once #4533 ships, sent at assignment and on change, with the role
    file the task or step names, from the default branch. Owner area:
    `cli/src/superTabs/`, `backend/src/superTabs/`. Backend release, then CLI release.
-8. **Guard the rule files.** The merge train refuses a pull request that changes `AGENTS.md`, `CLAUDE.md` or
-   `docs/roles/` until a person approves it, by today's rule guard (`ruleGuard.ts`, #3151) applied to the diff
+8. **Guard the rule files.** The merge train refuses a pull request that changes any `AGENTS.md` or `CLAUDE.md` at any
+   path, or anything in `docs/roles/`, until a person approves it, by today's rule guard (`ruleGuard.ts`, #3151) applied to the diff
    (section "Who may change the rule files"). Owner area: `backend/src/superTabs/mergeTrain/`,
-   `backend/src/superTabs/ruleGuard.ts`, `instructionsDiff.ts`. Backend release, with two security reviews. It ships
+   `backend/src/superTabs/ruleGuard.ts`, `instructionsDiff.ts`. Its tests try a root file, a nested component file
+   (`desktop/AGENTS.md`), a nested `CLAUDE.md` and a role file, each with and without a person's approval. Backend
+   release, with two security reviews. It ships
    before task 9 moves any rule out of the instructions document.
 9. **openharness AGENTS.md and role files.** Its Lead moves the project's Roles sections into `docs/roles/` (engineer,
    reviewer, tester, integrator, guide; at most 600 words each), moves the other rules by the table above, and trims
