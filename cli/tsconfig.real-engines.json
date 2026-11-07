@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "rootDir": ".", "noEmit": true, "incremental": false },
+  "include": ["scripts/real-engine-e2e.ts", "real-e2e/**/*.ts", "vitest.real-engines.config.ts"]
+}
