@@ -123,7 +123,7 @@ Future<void> _show(
   grid.AppTheme.brightness.value = brightness;
   addTearDown(() => grid.AppTheme.brightness.value = old);
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 900);
+  tester.view.physicalSize = const Size(760, 960);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -136,6 +136,8 @@ Future<void> _show(
       ),
     ),
   );
+  await tester.pump();
+  // A fold says More a frame after it measures what it holds.
   await tester.pump();
   expect(tester.takeException(), isNull);
 }
@@ -525,12 +527,12 @@ class _Gallery extends StatelessWidget {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SizedBox(width: 220, child: _pill(context, typed: false)),
+                  SizedBox(width: 210, child: _pill(context, typed: false)),
                   gap(),
-                  SizedBox(width: 220, child: _pill(context, typed: true)),
+                  SizedBox(width: 210, child: _pill(context, typed: true)),
                   gap(),
                   const SizedBox(
-                    width: 260,
+                    width: 250,
                     child: _Composer('typed', 'Ship it'),
                   ),
                 ],
