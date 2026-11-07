@@ -167,7 +167,11 @@ class _ReviewSubscriptions extends ModelsMenuController {
       'accountKey': 'aabbccddeeff0011',
       'status': '8% remaining',
       'remainingPercent': 8.0,
-      'details': ['Limiting window: Session', 'Session — 8% remaining · resets in 30m', 'Weekly — 58% remaining · resets in 5d 10h'],
+      'details': [
+        'Limiting window: Session',
+        'Session — 8% remaining · resets in 30m',
+        'Weekly — 58% remaining · resets in 5d 10h',
+      ],
     },
     {
       'engine': 'codex',
@@ -374,7 +378,7 @@ void main() {
     final palette = await mount(tester, app: app);
     expect(palette.search.rows, isEmpty);
     expect(find.text('Loading harnesses…'), findsOneWidget);
-    expect(find.textContaining('No harnesses yet'), findsNothing);
+    expect(find.textContaining('Start one with New Harness'), findsNothing);
     await key(tester, LogicalKeyboardKey.enter);
     expect(palette.chosen, isEmpty);
 
@@ -398,7 +402,7 @@ void main() {
     app.notifyListeners();
     await tester.pumpAndSettle();
     expect(find.text('Loading harnesses…'), findsNothing);
-    expect(find.textContaining('No harnesses yet'), findsOneWidget);
+    expect(find.textContaining('Start one with New Harness'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -422,7 +426,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('Couldn’t load your harnesses'), findsOneWidget);
         expect(find.text(error), findsOneWidget);
-        expect(find.textContaining('No harnesses yet'), findsNothing);
+        expect(find.textContaining('Start one with New Harness'), findsNothing);
         await capture(tester, palette, 'inventory-error-${brightness.name}');
         final retry = find.byKey(
           const ValueKey('swarm-search-inventory-retry'),
@@ -444,7 +448,10 @@ void main() {
         expect(palette.chosen, isEmpty);
         app.finishRetry();
         await tester.pumpAndSettle();
-        expect(find.textContaining('No harnesses yet'), findsOneWidget);
+        expect(
+          find.textContaining('Start one with New Harness'),
+          findsOneWidget,
+        );
         expect(find.text(error), findsNothing);
         expect(tester.takeException(), isNull);
       },
@@ -733,7 +740,9 @@ void main() {
             expect(
               find.descendant(
                 of: preview,
-                matching: find.text('Anthropic · developer.with.a.long.email@example.com'),
+                matching: find.text(
+                  'Anthropic · developer.with.a.long.email@example.com',
+                ),
               ),
               findsOneWidget,
             );
