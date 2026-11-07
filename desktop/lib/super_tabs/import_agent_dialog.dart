@@ -82,8 +82,8 @@ class _ImportAgentDialogState extends State<_ImportAgentDialog> {
   /// The files shown whole.
   final _open = <ImportFile>{};
 
-  /// The import counted while its preview shows (ENGINEERING.md 8): ended ok
-  /// by Import, failed when left after a failed step, cancelled otherwise.
+  /// The import counted while its preview shows (AGENTS.md standard 8): ended
+  /// ok by Import, failed when left after a failed step, cancelled otherwise.
   void Function(ProductOutcome)? _counted;
 
   void _end(ProductOutcome outcome) {

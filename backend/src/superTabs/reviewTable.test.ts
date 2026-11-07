@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { SEED_RULES, type ProjectRules } from './policy.js'
-import { reviewPlan, sharedFiles, stepBrief } from './reviewTable.js'
+import { reviewPlan, sharedFiles, stepBrief, withHistoryBrief } from './reviewTable.js'
 
 const names = (files: string[] | null, rules?: ProjectRules) => reviewPlan(files, rules).map(step => step.name)
 
@@ -85,5 +85,25 @@ describe('stepBrief', () => {
       const brief = stepBrief(step, { number: 9, title: 'Fix', pulls: [{ url: 'https://github.com/acme/app/pull/7', head: null, base: null }] })
       expect(brief, step.name).toContain('at the pull request head (whole commit id) and base branch you read')
     }
+  })
+})
+
+
+describe('history brief identity', () => {
+  it('keeps reports separate and refuses a passing report from another head', () => {
+    const a = 'a'.repeat(40), b = 'b'.repeat(40)
+    const report = { head: a, planFirst: 'pass' as const, testBeforeCode: 'fail' as const,
+      productionLines: 12, totalLines: 30, commits: 4, merges: 1, missingTests: [a] }
+    const brief = withHistoryBrief('Custom instructions stay.', [
+      { url: 'https://github.com/acme/app/pull/7', head: a, history: report },
+      { url: 'https://github.com/acme/app/pull/8', head: b, history: report },
+    ])
+    expect(brief).toContain(`pull/7 at ${a}: Plan first: pass; Test before code: fail; 12 production lines`)
+    expect(brief).toContain(`pull/8 at ${b}: Plan first: unknown; Test before code: unknown; unknown production lines`)
+    expect(brief).toContain('Merge resolutions need a manual read')
+    expect(brief).toContain('aaaaaaaaaaaa')
+    expect(withHistoryBrief(brief, [])).toContain('Custom instructions stay.')
+    expect(withHistoryBrief(brief, []).match(/PR history checks/g)).toHaveLength(1)
+    expect(withHistoryBrief(brief, [])).not.toContain('12 production lines')
   })
 })

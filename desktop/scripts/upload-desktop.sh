@@ -241,21 +241,37 @@ packaging_time() {
   echo ">> packaging timing: $name start=$started end=$SECONDS status=$status" >&2
   return "$status"
 }
-# Stapling fetches the accepted ticket from Apple's CloudKit, and that lookup drops: v1.2.67 failed
-# twice, both variants, on `NSURLErrorDomain -1005 "The network connection was lost"` (Error 68)
-# with notarization already Accepted (2026-10-12). Retried a few times, spaced out; the Gatekeeper
-# assessment after it still fails closed on a bundle that did not take its ticket.
+# `stapler staple` fetches the ticket and validates it. Apple's connection can drop even after
+# notarization is Accepted: candidate 1.3.87 lost all five calls in the old 150s retry window.
+# Extend transport failures to a bounded 465s backoff window. Keep the old five attempts for
+# other failures: an Accepted ticket may not have reached CloudKit yet. Bad tickets still fail closed.
 staple() {
-  local attempt
-  for attempt in 1 2 3 4 5; do
-    xcrun stapler staple "$1" && return 0
-    [ "$attempt" -lt 5 ] || break
-    echo ">> stapling $1 failed (attempt $attempt of 5) — retrying in $((attempt * 15))s" >&2
-    sleep $((attempt * 15))
+  local attempt output status delay limit
+  for attempt in 1 2 3 4 5 6; do
+    if output="$(xcrun stapler staple "$1" 2>&1)"; then
+      printf '%s\n' "$output"
+      return 0
+    else
+      status=$?
+    fi
+    printf '%s\n' "$output" >&2
+    # Error 68 alone is ambiguous. Require an actual transport diagnostic, including Apple's
+    # NSURLErrorDomain codes for timeout, DNS, connect, connection lost and offline failures.
+    if grep -Eiq 'NSURLErrorDomain Code=-(1001|1003|1004|1005|1006|1009)([^0-9]|$)|network connection was lost|connection (reset|refused)|network is (unreachable|down)|request timed out' <<< "$output"; then
+      limit=6
+      delay=$((15 << (attempt - 1)))
+    else
+      limit=5
+      delay=$((attempt * 15))
+    fi
+    [ "$attempt" -lt "$limit" ] || break
+    echo ">> stapling failed (attempt $attempt of $limit) — retrying in ${delay}s" >&2
+    sleep "$delay" || return
   done
-  echo "error: could not staple the notarization ticket to $1" >&2
-  return 1
+  echo "error: could not staple the notarization ticket after $attempt attempts" >&2
+  return "$status"
 }
+
 if [ "$DO_NOTARIZE" -eq 1 ]; then
   # This upload is discarded after stapling. Spend less CPU compressing it;
   # the final downloadable ZIP below still uses ditto's normal compression.

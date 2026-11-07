@@ -311,7 +311,8 @@ void main() {
     expect(find.byKey(const ValueKey('swarm-store-button')), findsNothing);
     expect(
       find.byKey(const ValueKey('workspace-subscription-usage')),
-      findsOneWidget,
+      findsNothing,
+      reason: 'No CLI usage report was supplied by this fixture',
     );
     expect(
       find.byKey(const ValueKey('workspace-machine-resources')),

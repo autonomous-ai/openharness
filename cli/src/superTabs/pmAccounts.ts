@@ -15,6 +15,8 @@ const list = (value: unknown): Json[] => Array.isArray(value) ? value.map(object
 const text = (value: unknown): string | undefined => typeof value === 'string' && value ? value : undefined
 
 export const PM_ACCOUNT_NOTE = (pms: string[]) => `This account runs the PM of ${pms.join(' and ')}.`
+/** Whether [p] spends an account a project's PM runs on (withPmAccounts). */
+export const runsPm = (p: Pick<Probe, 'notes'>): boolean => p.notes.some(n => n.startsWith(PM_ACCOUNT_NOTE([]).slice(0, 'This account runs the PM of'.length)))
 
 /** The PM accounts the read carries, or, from an older backend, those of the projects the reader sees (a Swarm from before
  *  projects has one, its Lead conversation `lead`). */

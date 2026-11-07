@@ -31,11 +31,9 @@ import { readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import type { CoreApi, CorePorts, GuestLaunchInput, ServiceRequests } from '../core/api.js'
 import { createGuestAccounts, guestHomeRoot, guestWorkspaceFor, type SharedFolder } from '../lib/guestAccounts.js'
 import { guestHelperStatus, installGuestHelper, type GuestHelperInstallResult, type GuestHelperState } from '../lib/guestHelperInstall.js'
-import { createOwnerSubscriptions } from '../lib/ownerSubscriptions.js'
 import { createWindowsGuestAccounts } from '../lib/windows/windowsGuestAccounts.js'
 import { failed, type PortFailure, type ShareMember, type SharedMachinesPort, type SharePolicy,
   type SharedTrustPeer } from '../lib/sharedMachinesPort.js'
-import { startSubscriptionRelay } from '../lib/subscriptionRelay.js'
 import { createGuestLaunches, type GuestLaunches } from './guestLaunches.js'
 
 /** The request shared machines answers for the apps, declared in core/api.ts for the core to route. */
@@ -65,7 +63,7 @@ export interface SharedMachinesDeps {
   file: string
   setTimer: (fn: () => void, ms: number) => { cancel(): void }
   log: (line: string) => void
-  /** Guests' harnesses (services/guestLaunches.ts): their OS accounts and the owner's subscription relay. */
+  /** Guests' harnesses (services/guestLaunches.ts): their OS accounts, the owner's folders and the pane's command. */
   guests: GuestLaunches
   /** Whether guest access is on here (lib/guestHelperInstall.ts), and turning it on: the owner's one admin prompt. */
   guestAccess: () => Promise<GuestHelperState>
@@ -177,7 +175,6 @@ export function machineGuests(log: (line: string) => void, file: string, platfor
       : createGuestAccounts(),
     helperState: async () => (await guestHelperStatus()).state,
     folders: () => readPolicy(file).folders,
-    startRelay: () => startSubscriptionRelay({ owner: createOwnerSubscriptions(), log: (line) => log(`relay · ${line}`) }),
     ...(process.env.LANG ? { lang: process.env.LANG } : {}),
     platform,
     log: (line) => log(`guest ${line}`),
@@ -215,7 +212,7 @@ export function startSharedMachines(core: CoreApi, overrides: Partial<SharedMach
   if (overrides.ports) {
     overrides.ports.sharedMachines = {
       guestLaunch: (input) => guests.launch(input),
-      stop: async () => { timer?.cancel(); await guests.stop() },
+      stop: () => { timer?.cancel() },
     }
   }
   let timer: { cancel(): void } | null = null
@@ -252,8 +249,8 @@ export function startSharedMachines(core: CoreApi, overrides: Partial<SharedMach
       const held = await port.trust(desired)
       if (failed(held)) deps.log(`could not update the trust stores: ${held.failed.message}`)
     }
-    // A guest sharing no longer names spends nothing more of the owner's subscriptions and keeps none of the
-    // owner's folders; every guest it names has the folders the owner shares.
+    // A guest sharing no longer names keeps none of the owner's folders; every guest it names has the folders
+    // the owner shares.
     if (!failed(remote)) await syncGuests(local, remote.domain, remote.members.map((m) => m.email))
   }
 

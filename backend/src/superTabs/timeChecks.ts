@@ -1,3 +1,4 @@
+import { dueProposalCards } from './proposalDue.js'
 // The Swarm's time checks run in the singleton worker (task #3385, anh Dee's Swarm redesign, 11-05): lost and stalled work,
 // failed starts and idle agents are found and told to each project's PM whether or not the PM is up. They ran only on the
 // PM's own poll before: on 11-05 a hung PM left five people's asks unanswered for 3 to 10 hours and the board showed nothing
@@ -25,7 +26,8 @@ export async function owedAsk(db: Pick<PrismaClient, 'superTabDelivery'>, tabId:
     { $sort: { createdAt: 1 } },
     { $limit: 1 },
     { $project: { _id: 0, messageId: 1, createdAt: 1 } },
-  ] }) as unknown as Array<{ messageId: string; createdAt: { $date: string } | string }>
+  // Proposal priority must not split the chronological range used to find the oldest unanswered ask.
+  ], options: { hint: { tabId: 1, agentId: 1, status: 1, createdAt: 1 } } }) as unknown as Array<{ messageId: string; createdAt: { $date: string } | string }>
   if (!row) return null
   const at = typeof row.createdAt === 'string' ? row.createdAt : row.createdAt.$date
   return { messageId: row.messageId, since: Date.parse(at) }
@@ -33,9 +35,9 @@ export async function owedAsk(db: Pick<PrismaClient, 'superTabDelivery'>, tabId:
 
 /** A Swarm with no conversation active this long has no work for the checks: its stalls were told long ago. */
 export const TIME_CHECK_QUIET_MS = 7 * 24 * 3_600_000
-/** The most Swarms a pass checks, the most recently active first (ENGINEERING.md 4: no read grows without a bound). */
+/** The most Swarms a pass checks, the most recently active first (AGENTS.md standard 4: no read grows without a bound). */
 export const TIME_CHECK_SWARMS = 200
-/** A Swarm whose groups show no activity since its last check is checked again only this often (ENGINEERING.md 4: a timer that
+/** A Swarm whose groups show no activity since its last check is checked again only this often (AGENTS.md standard 4: a timer that
  *  wakes while nothing changed is a defect). Its stalls (30 minutes) and idle agents (15) are still told within minutes of
  *  falling due; a lost task's machine reports run the loss checks every 30 s anyway (liveness.ts sweepLiveness). */
 export const QUIET_CHECK_MS = 5 * 60_000
@@ -64,7 +66,11 @@ export type TimeCheckMemory = Map<string, { at: string; checkedAt: number }>
  *  not checked for QUIET_CHECK_MS. One Swarm's failure is logged and skips that Swarm alone, and it is checked again next pass. */
 export async function runTimeCheckPass(db: PrismaClient, store: Pick<SuperTabStore, 'runTimeChecks'>, now: number, limit = TIME_CHECK_SWARMS,
   seen: TimeCheckMemory = new Map()) {
-  const rows = await timeCheckCandidates(db, now, limit)
+  const due = await dueProposalCards(db, now, limit)
+  const dueByTab = new Map<string, string[]>()
+  for (const row of due) dueByTab.set(row.tabId, [...dueByTab.get(row.tabId) ?? [], row.key])
+  const recent = await timeCheckCandidates(db, now, limit)
+  const rows = [...[...dueByTab.keys()].map(tabId => ({ tabId, at: `due:${now}` })), ...recent.filter(r => !dueByTab.has(r.tabId))].slice(0, limit)
   const pass = { swarms: rows.length, checked: 0, written: 0, failed: 0 }
   const listed = new Set(rows.map(row => row.tabId))
   for (const tabId of seen.keys()) if (!listed.has(tabId)) seen.delete(tabId)
@@ -73,7 +79,7 @@ export async function runTimeCheckPass(db: PrismaClient, store: Pick<SuperTabSto
     if (last && last.at === at && now - last.checkedAt < QUIET_CHECK_MS) continue
     pass.checked++
     try {
-      pass.written += await store.runTimeChecks(tabId)
+      pass.written += await store.runTimeChecks(tabId, dueByTab.get(tabId))
       seen.set(tabId, { at, checkedAt: now })
     } catch (error) {
       pass.failed++
