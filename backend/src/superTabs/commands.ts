@@ -2517,7 +2517,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         effects.messages.push({ id: stableId(operationId, leadChat), conversationId: leadChat, author: sender, replyTo: null, recipients: [], source: SYSTEM_ROW,
           text: `${[...names].join(', ')} never started and will not start now.` })
       }
-      if (state.starts?.some(s => s.request.machineId === command.machineId && (!s.harnessId || (s.poolGeneration && !s.poolSettled)) && !s.error)) fail('STARTS_PENDING', 'Reconcile pending starts before changing this contribution.')
+      const pendingHere = state.starts?.filter(s => s.request.machineId === command.machineId && (!s.harnessId || (s.poolGeneration && !s.poolSettled)) && !s.error) ?? []
+      // Its person's own Buddy starting on its Buddy-only record moves with it to the listed one (task #4252): same computer,
+      // person and account, so + New agent right after Bring agent is not refused until that Buddy settles.
+      const buddyOnlyHere = state.machines.some(m => m.machineId === command.machineId && m.buddyOnly && m.contributorId === actor.userId)
+      const carried = buddyOnlyHere ? pendingHere.filter(s => s.request.buddyOf?.personId === actor.userId && s.contributorId === actor.userId) : []
+      if (pendingHere.length > carried.length) fail('STARTS_PENDING', 'Reconcile pending starts before changing this contribution.')
       // Saving settings sends the whole contribution again; only machine.pause changes its pause (review of #2084).
       const paused = mac?.paused ?? state.machines.find(m => m.machineId === command.machineId)?.paused ?? false
       // Added as its person joined (Desktop's join): teammates' work only through its Harness Team account, for as long as
@@ -2556,6 +2561,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         ...(previous?.machineSuspension ? { machineSuspension: previous.machineSuspension } : {}),
         ...(previous?.engineSuspensions ? { engineSuspensions: previous.engineSuspensions } : {}),
         ...(previous?.observation ? { observation: previous.observation } : {}) })
+      for (const start of carried) if (start.poolGeneration) start.poolGeneration = operationId
       // A Mac given other slots or a new name gives its team account the same, and its pause; its own folder, engines and grant stay.
       const added = state.machines.at(-1)!
       for (const team of teamPoolsOf(state, added)) if (!team.removal) {

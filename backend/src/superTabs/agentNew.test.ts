@@ -161,6 +161,7 @@ describe('listing your computer while your Buddy is starting there', () => {
     const listed = f.state.machines!.find(m => m.machineId === 'mate-laptop')!
     expect(listed.buddyOnly).toBeUndefined()
     expect(f.state.starts!.find(s => s.id === startId)!.poolGeneration).toBe(listed.generation)
+    listed.observation = reading // its host's next report
     f.run({ type: 'agent.startDispatch', startId }, mate, own('mate'))
     expect(f.run({ type: 'agent.started', startId, harnessId: 'h-buddy', configuration }, mate, own('mate')).result.agentId).toBeTruthy()
   })
