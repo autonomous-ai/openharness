@@ -15,6 +15,8 @@ import type { CoreApi, ServiceRequests } from '../core/api.js'
 import { readCodexRateLimits, type CodexRateLimits, type CodexWindow } from '../lib/codexRateLimits.js'
 import { accountKey, readClaudeReport, type ClaudeReport, type UsageProviderId } from '../lib/quotaReports.js'
 import { profileHome } from '../lib/claudeProfiles.js'
+import { launchCodexHome } from '../lib/engineHomes.js'
+import { warmLoginShellEnvironment } from '../lib/loginShellEnv.js'
 import { internalOnThrow } from './requestErrors.js'
 
 /** The request usage answers for the apps, declared in core/api.ts for the core to route. */
@@ -35,14 +37,16 @@ export interface UsageReading {
 }
 
 export interface UsageDeps {
-  /** Codex's own read for a CODEX_HOME, or the daemon's own. Injected so a spec starts no real codex. */
+  /** Codex's own read for a CODEX_HOME. Injected so a spec starts no real codex. */
   codex: (options: { codexHome?: string }) => Promise<CodexRateLimits>
   now: () => number
-  /** The daemon's environment: its CLAUDE_CONFIG_DIR is the default Claude account's folder. */
-  env: NodeJS.ProcessEnv
+  /** The environment a session launches with: its CLAUDE_CONFIG_DIR and CODEX_HOME are the default accounts' folders. */
+  env: () => Promise<NodeJS.ProcessEnv>
 }
 
-const DEPS: UsageDeps = { codex: readCodexRateLimits, now: Date.now, env: process.env }
+// The login shell's variables over the daemon's, as every pane launches (lib/engineHomes.ts launchEnvironment). Read
+// here and not taken from that cache: this service may run in harnessd's edge process, where nothing else warms it.
+const DEPS: UsageDeps = { codex: readCodexRateLimits, now: Date.now, env: async () => ({ ...process.env, ...await warmLoginShellEnvironment() }) }
 /** How long one Codex read stands for its home: the router asks every 3 minutes, Desktop on connect. */
 const CODEX_FRESH_MS = 3 * 60_000
 const NO_CLAUDE_REPORT = 'Claude Code has not reported its allowance on this machine yet: it does after its first reply in a session Harness started.'
@@ -69,11 +73,11 @@ function readerOf(core: CoreApi, engine: unknown, id: unknown): Wanted | null {
 
 export function startUsage(core: CoreApi, deps: UsageDeps = DEPS): ServiceRequests {
   const codexReads = new Map<string, { value: Promise<CodexRateLimits>; at: number }>()
-  const codex = (home?: string): Promise<CodexRateLimits> => {
-    const key = home ?? '', kept = codexReads.get(key), now = deps.now()
+  const codex = (home: string): Promise<CodexRateLimits> => {
+    const kept = codexReads.get(home), now = deps.now()
     if (kept && now - kept.at < CODEX_FRESH_MS) return kept.value
     const value = deps.codex({ codexHome: home })
-    codexReads.set(key, { value, at: now })
+    codexReads.set(home, { value, at: now })
     return value
   }
   return {
@@ -91,10 +95,10 @@ export function startUsage(core: CoreApi, deps: UsageDeps = DEPS): ServiceReques
         only = found
       }
       const home = (engine: UsageProviderId) => only.engine === engine ? only.home : undefined
-      return Promise.all([
-        ...(only.engine !== 'codex' ? [claudeReading(readClaudeReport(core.dataDir, home('claude') ?? deps.env.CLAUDE_CONFIG_DIR), deps.now())] : []),
-        ...(only.engine !== 'claude' ? [codex(home('codex')).then(codexReading)] : []),
-      ]).then(
+      return deps.env().then((launch) => Promise.all([
+        ...(only.engine !== 'codex' ? [claudeReading(readClaudeReport(core.dataDir, home('claude') ?? launch.CLAUDE_CONFIG_DIR), deps.now())] : []),
+        ...(only.engine !== 'claude' ? [codex(launchCodexHome(home('codex'), launch)).then(codexReading)] : []),
+      ])).then(
         (providers) => ({ providers }),
         () => ({ error: 'USAGE_READ_FAILED' }),
       )
