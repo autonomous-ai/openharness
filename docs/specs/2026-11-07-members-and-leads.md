@@ -22,13 +22,23 @@ whole-screen polish; then this flow; then the mockup's finish across the rest of
 
 ## Where this differs from the ask
 
-Anh Dee asked for "one home folder with a worktree per project and a separate session per project". The spec keeps
-one Member, one name, one face and one chat for people, but on the computer a Member has **two folders**: a home for
+Three places, each named again in its build task so anh Dee sees it there:
+
+1. **Two folders, not one.** Anh Dee asked for "one home folder with a worktree per project and a separate session per
+   project". The spec keeps one Member, one name, one face and one chat for people, but on the computer a Member has
+   two folders: a home for
 its chat with its person, and a task home holding a worktree per project. Why: the chat can carry every project its
 person reads, private ones and their decisions included, while a task can be steered by outside text (an issue, a pull
 request, a file). Kept in one folder and one session, a public task could read the person's private projects and post
 them; both security reviews of this spec asked for the split (section 2). Nobody sees the two folders or the two kinds
 of session: they are inside Harness.
+2. **Helping only in public projects.** He said "when free, it helps other projects". The spec lets a Member help only
+   public projects, and a Member whose main project is private helps nowhere else, so private files never sit beside
+   a task that outside text can reach (section 3). Helping in private projects is its own task with two security
+   reviews.
+3. **Ten minutes before sleep.** He said "it sleeps only when nothing is waiting anywhere". The spec adds a 10-minute
+   wait after its last task before the task sessions sleep, so a task that turns waiting a minute later doesn't pay a
+   resume (section 4).
 
 ## How it works today (main a1c62e12f)
 
@@ -281,9 +291,12 @@ proposals, the Board and the rights. This spec changes it in these places:
    separate task sessions that never see the chat (section 2).
 2. **"The PM never chats with people."** The Lead chats with its own person, in its project chat under My agents, as
    Swarm v3 already shows it. Everyone else still reaches it by proposals and answers on cards.
-3. **Many Buddies** become many Members: a person makes, names and removes their own, within the Swarm's existing cap
-   per person (`BUDDY_CAP`, 5 by default, up to 20), which now counts Members. The default Buddy becomes the default
-   Member (section 7).
+3. **Many Buddies** become many Members: a person makes, names and removes their own. The Swarm's cap per person
+   (`BUDDY_CAP`, 5 by default, up to 20) stays on what Buddies were, chat sessions talking with their person: at most
+   that many awake at once. When the person writes to one more, the one idle longest sleeps (it wakes again when they
+   write to it). The number of Members is not capped per person: each computer's room, by the router's existing fit,
+   decides how many run there, so a person's crew of 20 or more on one computer keeps starting agents, and section 5's
+   ask still works. The default Buddy becomes the default Member (section 7).
 4. **Sleep.** "Only crew members sleep" and the Buddy's hour-idle sleep are replaced by section 4.
 5. **"A Buddy may only post in its own chat"** (BUDDY_FORBIDDEN) still holds for a Member's chat session. Its task
    sessions post where a project's agent posts, and only in their own project.
@@ -420,7 +433,7 @@ stores a role.
    `kind`, `regular`, `agentProjectId`):
    - *Backend:* `agentKind.ts` and `read/views.ts` (send a second value, `role: lead | member`, beside `kind`; a task
      session is shown as its Member, never as an agent of its own); `buddies.ts` (`BUDDY_COMMANDS`, `refuseBuddyRouting`
-     and `BUDDY_FORBIDDEN` keep guarding the chat session; the cap counts Members, not task sessions); `sessionScope.ts`
+     and `BUDDY_FORBIDDEN` keep guarding the chat session; the cap counts awake chat sessions, never Members or task sessions); `sessionScope.ts`
      (a task session binds its project's scope; a chat session keeps the Swarm Buddy or Regular scope it has); `dispatch.ts` (`freeCrew` takes Members, `takes` and `candidatesFor` follow section 3); `crew.ts`
      (`CREW_BUDDY` still refuses a chat session; a task session may be crew); `projects.ts` (`regularMayWorkIn`, `sameProject` and `PROJECT_SESSION` follow section
      3); `crewKeep.ts` and `buddySleep.ts` (section 4); `buddyNews.ts`, `commands.ts person.tell` and `crewNeeds.ts`
@@ -446,9 +459,9 @@ stores a role.
    assigned under today's rules); its next task starts a task session. Task sessions are new records, made only by the
    new release. No
    production write and no backfill; persistence and reload are checked in the isolated integration store, and the
-   read-only anomaly queries count Buddies, Regular agents and agents over the cap on production's secondaries before
-   the backend task merges. A person who has more agents than the cap keeps them all; a new one is refused until they
-   are under it. Rolling back the backend: the previous release ignores the new fields, sees `buddyOf` and treats
+   read-only anomaly queries count Buddies, Regular agents and people with more Buddies than the cap on production's secondaries before
+   the backend task merges. A person with more awake chat sessions than the cap keeps them until they go idle; then
+   the longest idle sleeps until they are under it. Rolling back the backend: the previous release ignores the new fields, sees `buddyOf` and treats
    Buddies as Buddies again, refuses the moves it never allowed, and keeps worktrees on disk untouched. Task session
    records look to it like project agents of their project (a project id, a project scope), so they stay scoped to
    that project; it ignores `memberOf`, and they show as separate agents until the backend comes back or they are
@@ -537,20 +550,24 @@ This flow, smallest first:
    that project's scope, and keeps `projectsHeld`; the chat session keeps the Buddy's reads and commands. The CLI host
    keeps the chat home apart from the task home, a worktree and an engine session per project in the task home,
    reports `setUp` and dropped worktrees, and says `memberProjects`; the task session tells the Lead it's ready after
-   its first set-up. Backend release, then CLI release, with two security reviews.
+   its first set-up. Backend release, then CLI release, with two security reviews. Differs from anh Dee's words: two
+   folders per Member, not one ("Where this differs from the ask", 1).
    Owner area: backend/src/superTabs/ (sessionScope.ts, model.ts, machines.ts), cli/src/superTabs/ (start.ts, host.ts, agentFolder.ts, buddyHome.ts).
 7. **One task at a time, then helping.** Dispatch gives a free Member its main project's task, else a set-up project's,
    else the one that needs help most, public projects only; it goes back after its task; the change line in its chat.
    Every check in section 3's list inside `work.assign`, for a Lead's pick by name too. Backend release, with two
-   security reviews.
+   security reviews. Differs from anh Dee's words: helping only in public projects ("Where this differs from the
+   ask", 2).
    Owner area: backend/src/superTabs/ (dispatch.ts, projects.ts, commands.ts for work.assign).
 8. **Sleep only when nothing is waiting.** A Member's task sessions sleep after 10 minutes free with nothing it may
    take, and wake for any such task; replaces the crew's hour-idle rule for them. The chat session keeps the Buddy's
-   sleep. Backend release.
+   sleep. Backend release. Differs from anh Dee's words: a 10-minute wait before sleep ("Where this differs from the
+   ask", 3).
    Owner area: backend/src/superTabs/ (crewKeep.ts, crewRules.ts, buddySleep.ts); the host's existing rest and resume path is unchanged.
 9. **Buddies become Members.** Buddies and Regular agents act as Members, their old sessions as chat sessions only, never
    for tasks; each asks its person once for a main project in its chat, with the project list; the default Buddy is the
-   default Member. Backend release, then Desktop release for the project list in the chat, with two security reviews.
+   default Member. The per-person cap counts awake chat sessions only; the number of Members is the computers' room.
+   Backend release, then Desktop release for the project list in the chat, with two security reviews.
    Owner area: backend/src/superTabs/ (buddies.ts, agentKind.ts, buddySleep.ts), desktop/lib/super_tabs/ (the chat's project list), desktop/design/.
 10. **The Lead asks a computer's owner to start more.** Only an owner who can read the project; one ask per computer
     and project a day, in the owner's Tasks
