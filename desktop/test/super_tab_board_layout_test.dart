@@ -346,20 +346,28 @@ void main() {
     await end(tester, c);
   });
 
-  testWidgets(
-    'the minimum Desktop window keeps projects, Board and chat visible',
-    (tester) async {
-      final (c, _) = await show(tester, width: 880);
-      await tester.tap(_key('super-group-lead'));
-      await _settle(tester);
-      expectFixedPanes(tester);
-      expect(_key('super-tasks-lead'), findsOneWidget);
-      // The Tasks pane gives back to its minimum so the Board keeps room (#4211).
-      expect(tester.getSize(_key('super-right-pane')).width, 280);
-      expect(tester.takeException(), isNull);
-      await end(tester, c);
-    },
-  );
+  /// Under 1000 the Board folds projects into their drawer, a menu button away (audit finding 12, #4445).
+  void expectFoldedLeft(WidgetTester tester) {
+    expect(_key('super-left-pane'), findsNothing);
+    expect(find.byTooltip('Conversations'), findsOneWidget);
+    expect(tester.getSize(_key('super-right-pane')).width, greaterThan(0));
+  }
+
+  testWidgets('the minimum Desktop window keeps the Board and chat, projects in their '
+      'drawer', (tester) async {
+    final (c, _) = await show(tester, width: 880);
+    await tester.tap(_key('super-group-lead'));
+    await _settle(tester);
+    expectFoldedLeft(tester);
+    expect(_key('super-tasks-lead'), findsOneWidget);
+    // The Tasks pane gives back only what keeps the Board two columns (#4211).
+    expect(
+      tester.getSize(_key('super-right-pane')).width,
+      880 - SuperTabPaneLayout.boardCenterWidth,
+    );
+    expect(tester.takeException(), isNull);
+    await end(tester, c);
+  });
 
   testWidgets(
     'the right pane keeps its width whatever width was saved, and has no '
@@ -375,9 +383,12 @@ void main() {
       expect(_key('super-resize-right'), findsNothing);
       await tester.binding.setSurfaceSize(const Size(880, 900));
       await _settle(tester);
-      // At the window minimum the Tasks pane is at its own minimum (#4211).
-      expect(tester.getSize(_key('super-right-pane')).width, 280);
-      expectFixedPanes(tester);
+      // At the window minimum the Tasks pane gives back only what keeps the Board two columns (#4211).
+      expect(
+        tester.getSize(_key('super-right-pane')).width,
+        880 - SuperTabPaneLayout.boardCenterWidth,
+      );
+      expectFoldedLeft(tester);
       expect(tester.takeException(), isNull);
       await end(tester, c);
     },
@@ -446,16 +457,18 @@ void main() {
       );
       await tester.tap(_key('super-group-lead'));
       await _settle(tester);
-      final left = tester.getSize(_key('super-left-pane')).width;
+      // Under 1000 scaled, projects fold into their drawer.
+      final folded = width < 1000 * scale;
+      final left = folded ? 0.0 : tester.getSize(_key('super-left-pane')).width;
       final right = tester.getSize(_key('super-right-pane')).width;
       final center = tester.getSize(_key('super-center-pane')).width;
-      expect(left, greaterThanOrEqualTo(180));
+      if (!folded) expect(left, greaterThanOrEqualTo(180));
       expect(right, greaterThanOrEqualTo(SuperTabPaneLayout.rightWidth));
       expect(center, greaterThanOrEqualTo(280));
       expect(left + center + right, closeTo(width, 0.01));
       // The Board itself is drawn, not an empty centre.
       expect(_key('super-tasks-lead'), findsOneWidget);
-      expectFixedPanes(tester);
+      folded ? expectFoldedLeft(tester) : expectFixedPanes(tester);
       expect(tester.takeException(), isNull);
       await end(tester, c);
     });

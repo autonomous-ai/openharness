@@ -899,6 +899,8 @@ describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
     expect(text).toContain('Send only after your owner says yes to that proposal')
     expect(text).toContain('One offer per idea; never repeat an ignored or declined offer')
     expect(text).toContain('harness super-tab --tab TAB propose OPERATION_ID')
+    // Task #4470: a picture it drew and showed its owner goes by id, from a machine without the project's code too.
+    expect(text).toContain('"attachmentIds":["ID"] in the JSON for a file your owner sent in your chat, or one you showed them there on your own message')
     // Scholes (11-02): its one Buddy sends, naming the project, and asks which when it is unclear; never "open a session".
     expect(text).toContain('"projectId":"PROJECT"')
     expect(text).toContain('If they read several and it is unclear which one this is for, ask them first.')

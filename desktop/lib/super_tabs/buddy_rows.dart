@@ -41,6 +41,50 @@ class SuperTabCountBadge extends StatelessWidget {
   }
 }
 
+/// A sidebar row's ground: its fill and, while a key's focus is in the row, a
+/// 2 px ring over it, the fill left as it is. Focus once wore the hover fill
+/// and read as a second selection (Desktop 1.3.89 audit, finding 21).
+class SuperTabRowGround extends StatefulWidget {
+  const SuperTabRowGround({
+    super.key,
+    required this.color,
+    required this.child,
+  });
+  final Color color;
+  final Widget child;
+
+  @override
+  State<SuperTabRowGround> createState() => _SuperTabRowGroundState();
+}
+
+class _SuperTabRowGroundState extends State<SuperTabRowGround> {
+  var _focused = false;
+
+  @override
+  Widget build(BuildContext context) => Focus(
+    canRequestFocus: false,
+    skipTraversal: true,
+    onFocusChange: (focused) {
+      if (focused != _focused) setState(() => _focused = focused);
+    },
+    child: Material(
+      color: widget.color,
+      borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+      clipBehavior: Clip.antiAlias,
+      child: DecoratedBox(
+        position: DecorationPosition.foreground,
+        decoration: _focused
+            ? BoxDecoration(
+                borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+                border: Border.all(color: DesktopChrome.focusRing, width: 2),
+              )
+            : const BoxDecoration(),
+        child: widget.child,
+      ),
+    ),
+  );
+}
+
 /// A person's Buddy chat in a project, in the sidebar's Buddies: its Buddy's
 /// avatar and name ("Buddy" while none runs), with the project in brackets
 /// after it when the Swarm has several: "Wren (web-2)". New lines, the PM's
@@ -62,7 +106,7 @@ class SuperTabBuddyRow extends StatelessWidget {
     this.note,
     this.detail,
     this.status,
-    this.crown = false,
+    this.lead = false,
     this.compact = false,
   });
 
@@ -70,7 +114,7 @@ class SuperTabBuddyRow extends StatelessWidget {
   final String? agentId;
   final String name;
 
-  /// An agent in My agents: the row wears its face, picture or pattern, as
+  /// An agent in My agents: the row wears its picture or face, as
   /// its chat, cards and Tasks pane draw it (audit finding 6 of task #4211).
   final SuperTabAgent? agent;
 
@@ -90,8 +134,8 @@ class SuperTabBuddyRow extends StatelessWidget {
   /// a PM leads.
   final String? note;
 
-  /// A PM: its crown on its avatar (anh Dee 11-07, task #4421).
-  final bool crown;
+  /// A PM: the Lead ring around its avatar (anh Dee 11-07, task #4461).
+  final bool lead;
 
   /// A line under the name, such as where a Buddy runs, with [status], its
   /// activity mark, before it. Without one the mark sits at the row's right.
@@ -111,19 +155,17 @@ class SuperTabBuddyRow extends StatelessWidget {
         : grid.SidebarInk.muted(context);
     return Padding(
       padding: const EdgeInsets.only(bottom: grid.AppDesktop.listRowGap),
-      child: Material(
+      child: SuperTabRowGround(
         color: selected
             ? grid.SidebarInk.selectedFill(context)
             : Colors.transparent,
-        borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-        clipBehavior: Clip.antiAlias,
         child: Semantics(
           button: true,
           selected: selected,
           child: InkWell(
             onTap: onTap,
             hoverColor: grid.SidebarInk.hoverFill(context),
-            focusColor: grid.SidebarInk.hoverFill(context),
+            focusColor: Colors.transparent,
             borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
             child: Tooltip(
               message: tooltip,
@@ -139,7 +181,7 @@ class SuperTabBuddyRow extends StatelessWidget {
                           name: name,
                           size: 20,
                           engineBadge: false,
-                          crown: crown,
+                          lead: lead,
                         ),
                         null => SuperTabAvatar(
                           identity: agentId == null

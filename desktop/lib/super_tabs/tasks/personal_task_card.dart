@@ -34,6 +34,8 @@ class SuperTabPersonalTaskCard extends StatefulWidget {
     this.waiting = false,
     this.onApprove,
     this.onReject,
+    this.pending,
+    this.disabledReason,
   });
 
   final SuperTabPersonalTask task;
@@ -47,6 +49,12 @@ class SuperTabPersonalTaskCard extends StatefulWidget {
   /// The task waits for the reader: Approve and Reject show, disabled while [onApprove] and [onReject] are null.
   final bool waiting;
   final VoidCallback? onApprove, onReject;
+
+  /// The decision sent for this task and not yet confirmed, `approve` or `reject`: its button spins.
+  final String? pending;
+
+  /// Why Approve and Reject are disabled, as their tooltip; null when they are not, or nothing to say.
+  final String? disabledReason;
 
   @override
   State<SuperTabPersonalTaskCard> createState() => _CardState();
@@ -149,7 +157,11 @@ class _CardState extends State<SuperTabPersonalTaskCard> {
                               padding: _buttonPadding,
                               minimumSize: Size.zero,
                             ),
-                            child: const Text('Reject'),
+                            child: _label(
+                              'Reject',
+                              w.pending == 'reject',
+                              w.onReject,
+                            ),
                           ),
                           const SizedBox(width: grid.AppDesktop.listRowGap * 2),
                           FilledButton(
@@ -160,7 +172,11 @@ class _CardState extends State<SuperTabPersonalTaskCard> {
                               padding: _buttonPadding,
                               minimumSize: Size.zero,
                             ),
-                            child: const Text('Approve'),
+                            child: _label(
+                              'Approve',
+                              w.pending == 'approve',
+                              w.onApprove,
+                            ),
                           ),
                         ],
                       ],
@@ -173,6 +189,27 @@ class _CardState extends State<SuperTabPersonalTaskCard> {
         ),
       ),
     );
+  }
+
+  /// The button's word; while its decision is sent, the app's small spinner in its place (the word kept invisible so
+  /// the button keeps its width); while disabled, a tooltip that says what it waits on.
+  Widget _label(String text, bool sending, VoidCallback? onPressed) {
+    final label = sending
+        ? Stack(
+            alignment: Alignment.center,
+            children: [
+              Opacity(opacity: 0, child: Text(text)),
+              const SizedBox.square(
+                dimension: AppIcons.inlineSize,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ],
+          )
+        : Text(text);
+    final why = widget.disabledReason;
+    return onPressed == null && why != null
+        ? Tooltip(message: why, child: label)
+        : label;
   }
 }
 
@@ -204,8 +241,8 @@ class _Tag extends StatelessWidget {
   );
 }
 
-/// A task's status as the Tasks pane marks it: a proposal and a rejection by their own icons, work by its activity,
-/// each named in the task's own words, never the terminal's.
+/// A task's status as the Tasks pane marks it: a proposal, a rejection and a failure by their own icons, other work by
+/// its activity, each named in the task's own words, never the terminal's. No mark is an X: an X means close (task #4461).
 class SuperTabTaskStatusMark extends StatelessWidget {
   const SuperTabTaskStatusMark(this.status, {super.key, this.reason});
   final String status;
@@ -216,13 +253,24 @@ class SuperTabTaskStatusMark extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final label = superTabTaskStatusLabel(status);
-    if (status == 'proposal' || status == 'rejected') {
+    final activity = superTabTaskActivity(status);
+    final (icon, color) = switch (status) {
+      'proposal' => (AppIcons.lightbulb, null),
+      'rejected' => (AppIcons.thumbsDown, null),
+      _ when activity == HarnessActivity.failed => (
+        AppIcons.triangleAlert,
+        Theme.of(context).colorScheme.error,
+      ),
+      _ => (null, null),
+    };
+    if (icon != null) {
       final why = status == 'rejected' ? superTabTaskRejection(reason) : null;
       return Tooltip(
         message: why == null ? label : '$label: $why',
         child: Icon(
-          status == 'proposal' ? AppIcons.circleDashed : AppIcons.circleX,
+          icon,
           size: AppIcons.metadataSize,
+          color: color,
           semanticLabel: label,
         ),
       );
@@ -230,7 +278,7 @@ class SuperTabTaskStatusMark extends StatelessWidget {
     return Tooltip(
       message: label,
       child: ActivityMark(
-        activity: superTabTaskActivity(status),
+        activity: activity,
         color: Theme.of(context).colorScheme.onSurface,
         tooltip: false,
       ),

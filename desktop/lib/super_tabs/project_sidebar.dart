@@ -179,10 +179,8 @@ class ProjectSidebar extends StatelessWidget {
     bool? unread,
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 2),
-    child: Material(
+    child: SuperTabRowGround(
       color: selected ? grid.SidebarInk.selected : Colors.transparent,
-      borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-      clipBehavior: Clip.antiAlias,
       child: Semantics(
         button: true,
         selected: selected,
@@ -190,7 +188,7 @@ class ProjectSidebar extends StatelessWidget {
           key: ValueKey(key),
           onTap: onTap,
           hoverColor: grid.SidebarInk.hover,
-          focusColor: grid.SidebarInk.hover,
+          focusColor: Colors.transparent,
           borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
           child: Row(
             children: [
@@ -401,7 +399,7 @@ class ProjectSidebar extends StatelessWidget {
                 key: ValueKey(key ?? 'super-group-${group.id}'),
                 onTap: !tappable ? null : onTap ?? () => onSelect(group.id),
                 hoverColor: Colors.transparent,
-                focusColor: grid.SidebarInk.hover,
+                focusColor: Colors.transparent,
                 borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
                 child: Row(
                   children: [
@@ -662,7 +660,7 @@ class ProjectSidebar extends StatelessWidget {
   }
 
   /// My agents (Swarm v3, task #4118): the person's Buddy first, then the agents they brought, each with its face and name,
-  /// a PM's crowned and followed by the project it leads (task #4421), the name bold while its chat has unread, and + New agent in the heading.
+  /// a PM's in its Lead ring and followed by the project it leads (tasks #4421, #4461), the name bold while its chat has unread, and + New agent in the heading.
   List<Widget> _myAgents(
     BuildContext context,
     SuperTabSnapshot? snapshot,
@@ -716,13 +714,15 @@ class ProjectSidebar extends StatelessWidget {
           : onOpenAgentTerminal != null
           ? '$name · opens its terminal'
           : '$name · no chat yet',
-      crown: pm,
+      lead: pm,
       compact: compact,
+      // A PM's project after a separator, so it never reads as part of the name.
       note: agent.downSince != null
           ? 'offline'
-          : pm
-          ? snapshot.leadProjectForAgent(agent.id)?.name
-          : null,
+          : switch (pm ? snapshot.leadProjectForAgent(agent.id) : null) {
+              final project? => '· ${project.name}',
+              null => null,
+            },
       status: _buddyMark(agent),
       selected: _chatLit(chat),
       unread: chat != null && controller.unreadShown(chat),
@@ -733,6 +733,24 @@ class ProjectSidebar extends StatelessWidget {
       },
     );
   }
+
+  /// Open Projects over a Swarm with none, in the names' column.
+  Widget _noProjects() => Padding(
+    key: const ValueKey('super-projects-empty'),
+    padding: EdgeInsets.fromLTRB(
+      SuperTabSectionHeading.indentFor(0) + _iconColumn,
+      SwarmType.sidebarRowPadding(compact: compact),
+      grid.AppDesktop.controlGap,
+      SwarmType.sidebarRowPadding(compact: compact),
+    ),
+    child: Text(
+      'No projects yet.',
+      style: SwarmType.sidebar(
+        compact: compact,
+        color: grid.SidebarInk.inkMuted,
+      ),
+    ),
+  );
 
   /// The Buddy's activity mark, drawn as the Agents list draws an agent's.
   Widget? _buddyMark(SuperTabAgent agent) {
@@ -797,6 +815,23 @@ class ProjectSidebar extends StatelessWidget {
     SuperTabSnapshot? snapshot,
     _SidebarReading reading, {
     bool taggedOnly = false,
+  }) => [
+    for (final read in _listed(snapshot, reading, taggedOnly: taggedOnly))
+      (
+        read.project.name,
+        Column(
+          key: ValueKey('super-project-${read.project.id}'),
+          mainAxisSize: MainAxisSize.min,
+          children: [_row(read.lead!, reading: read)],
+        ),
+      ),
+  ];
+
+  /// The projects Projects lists, each with a chat, in its order; [taggedOnly] as [_channels].
+  Iterable<_ProjectReading> _listed(
+    SuperTabSnapshot? snapshot,
+    _SidebarReading reading, {
+    bool taggedOnly = false,
   }) {
     final hidden = superTabHiddenProjects(controller, app: app);
     return [
@@ -807,16 +842,19 @@ class ProjectSidebar extends StatelessWidget {
                     (attention?.chatTagsIn(read.lead!.id) ?? 0) > 0) &&
                 (!controller.unreadOnly || _hasUnread(read)) &&
                 !_paneless(project, read.lead!, hidden))
-          (
-            project.name,
-            Column(
-              key: ValueKey('super-project-${project.id}'),
-              mainAxisSize: MainAxisSize.min,
-              children: [_row(read.lead!, reading: read)],
-            ),
-          ),
+          read,
     ];
   }
+
+  /// The listed projects whose rows would be bold or carry a red number
+  /// ([_drawRow]): what a folded Projects counts.
+  int _waitingProjects(SuperTabSnapshot? snapshot, _SidebarReading reading) =>
+      _listed(snapshot, reading).where((read) {
+        final chat = read.lead!.id;
+        final muted = controller.notifyOf(chat) == SuperTabNotify.muted;
+        return (read.unread.contains(chat) && !muted) ||
+            (attention?.chatTagsIn(chat) ?? 0) > 0;
+      }).length;
 
   // The sidebar's ink scope (#3006): a theme's own sidebar ink reaches the
   // shared rows drawn in it.
@@ -850,12 +888,19 @@ class ProjectSidebar extends StatelessWidget {
               required icon,
               required onTap,
               required trailing,
-            }) => _navigationRow(
-              key: 'super-swarm-switcher',
-              label: label,
-              icon: icon,
-              onTap: onTap,
-              trailing: trailing,
+            }) => Tooltip(
+              // A long Swarm name is cut in the row; hovering reads all of it.
+              message: label,
+              excludeFromSemantics: true,
+              positionDelegate: _besideTheRow,
+              constraints: const BoxConstraints(maxWidth: 260),
+              child: _navigationRow(
+                key: 'super-swarm-switcher',
+                label: label,
+                icon: icon,
+                onTap: onTap,
+                trailing: trailing,
+              ),
             ),
       ),
       _ => null,
@@ -947,6 +992,9 @@ class ProjectSidebar extends StatelessWidget {
                   endInset: 0,
                   // The Desktop folds Projects: closed while the person has an agent (Swarm v3, #4118).
                   collapsed: board ? !controller.projectsOpen : null,
+                  waiting: board && !controller.projectsOpen
+                      ? _waitingProjects(snapshot, reading)
+                      : 0,
                   onToggleCollapsed: board
                       ? controller.toggleProjectsGroup
                       : null,
@@ -955,12 +1003,17 @@ class ProjectSidebar extends StatelessWidget {
                 // Dee, 11-05).
                 if (controller.oneBuddy && !board) ?_swarmBuddyRow(),
                 // Folded, it keeps the projects whose chat tags the reader: the Desktop has no Mentions row (task #4220).
-                for (final (_, channel) in _channels(
-                  snapshot,
-                  reading,
-                  taggedOnly: board && !controller.projectsOpen,
-                ))
-                  channel,
+                if (snapshot != null &&
+                    projects.isEmpty &&
+                    (!board || controller.projectsOpen))
+                  _noProjects()
+                else
+                  for (final (_, channel) in _channels(
+                    snapshot,
+                    reading,
+                    taggedOnly: board && !controller.projectsOpen,
+                  ))
+                    channel,
                 const SizedBox(height: 16),
                 // Buddies replaced Chat with PM in every Swarm (Ken, 10-29); where the
                 // server gives one Buddy for the whole Swarm, it is # buddy above.
@@ -1014,8 +1067,9 @@ class ProjectSidebar extends StatelessWidget {
   }
 }
 
-/// A sidebar row's ground: the selected fill, or the hover fill while the
-/// pointer is anywhere over it, one shape across the row's whole width.
+/// A project row's ground: the selected fill, or the hover fill while the
+/// pointer is anywhere over it, one shape across the row's whole width, and
+/// the focus ring ([SuperTabRowGround]).
 class _RowSurface extends StatefulWidget {
   const _RowSurface({required this.selected, required this.child});
   final bool selected;
@@ -1032,14 +1086,12 @@ class _RowSurfaceState extends State<_RowSurface> {
   Widget build(BuildContext context) => MouseRegion(
     onEnter: (_) => setState(() => _hovered = true),
     onExit: (_) => setState(() => _hovered = false),
-    child: Material(
+    child: SuperTabRowGround(
       color: widget.selected
           ? grid.SidebarInk.selected
           : _hovered
           ? grid.SidebarInk.hover
           : Colors.transparent,
-      borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-      clipBehavior: Clip.antiAlias,
       child: widget.child,
     ),
   );
