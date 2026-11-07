@@ -10,7 +10,7 @@ vi.mock('../team/config.js', async (original) => ({ ...await original<object>(),
 const started = vi.hoisted(() => ({ owner: 'peer' as string | null }))
 vi.mock('./buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => started.owner }))
 import { SWARM_TOOLS_SKILL } from './swarmTools.js'
-import { swarmToolsSheet, type ToolsRole } from './swarmToolSheets.js'
+import { TOOLS_ROLES, swarmToolsSheet, type ToolsRole } from './swarmToolSheets.js'
 import { prepareSwarmSkill, parseSwarmSkill, recordSwarmSkillNotice, refreshSwarmSkill, roleFromWire, skillFile } from './swarmSkills.js'
 import { agentLaunchArgs } from './agentAttribution.js'
 import { buildLaunchOverrides } from './launchOverrides.js'
@@ -27,6 +27,16 @@ const fixture = () => { const root = mkdtempSync(join(tmpdir(), 'swarm-skills-')
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 
 describe('built-in Swarm skills', () => {
+  it('say nothing of Team accounts, which Swarm v3 has none of (#4221): the role skills, the tools manual and every sheet', () => {
+    const team = /Team account|Team agent/i
+    for (const role of ['lead', 'dev', 'review', 'buddy'] as const) for (const mode of ['default', 'orchestration'] as const) {
+      const prepared = prepareSwarmSkill(fixture(), { role, key: `${role}-${mode}`, mode })
+      expect(readFileSync(prepared.file, 'utf8'), `${role} ${mode}`).not.toMatch(team)
+    }
+    expect(SWARM_TOOLS_SKILL).not.toMatch(team)
+    for (const role of TOOLS_ROLES) expect(swarmToolsSheet(role), role).not.toMatch(team)
+  })
+
   it('writes the tools skill beside the role\'s and sends the agent to its instructions', () => {
     for (const role of ['lead', 'dev', 'review'] as const) for (const mode of ['default', 'orchestration'] as const) {
       const workspace = fixture(), saved = { role, key: `${role}-${mode}`, mode }
