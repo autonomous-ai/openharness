@@ -156,4 +156,19 @@ describe('the Windows release workflows', () => {
     expect(action).toContain('timestamp-rfc3161: http://timestamp.acs.microsoft.com')
     expect(action).not.toMatch(/client-secret|azure-password/)
   })
+
+  // The Desktop updater (desktop/lib/update/update_signature.dart) installs a Windows version folder only when its
+  // signed catalog lists every file: data/app.so, the Dart code, has no Authenticode signature of its own.
+  it('signs a file catalog of each Desktop version folder, after its programs, and checks it', () => {
+    const sign = read('release-desktop.yml').match(/\n  sign-windows:\n([\s\S]*?)(?=\n  [\w-]+:\n|$)/)?.[1] ?? ''
+    const at = (text: string) => sign.indexOf(text)
+    expect(sign.match(/uses: \.\/\.github\/actions\/windows-signing/g)).toHaveLength(2)
+    expect(at('New-FileCatalog -CatalogVersion 2.0')).toBeGreaterThan(at('uses: ./.github/actions/windows-signing'))
+    expect(sign).toContain("Join-Path $folder 'harness-desktop.cat'")
+    expect(at('Test-FileCatalog')).toBeGreaterThan(at('name: Sign the file catalogs'))
+    expect(at('Test-FileCatalog')).toBeLessThan(at('name: Write the signed zips'))
+    expect(sign).toContain("-FilesToSkip 'harness-desktop.cat'")
+    const action = readFileSync(join(workflows, '..', 'actions', 'windows-signing', 'action.yml'), 'utf8')
+    expect(action.match(/\$_\.Extension -in '\.exe', '\.dll', '\.cat'/g)).toHaveLength(2)
+  })
 })
