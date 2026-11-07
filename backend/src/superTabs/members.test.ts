@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
 import { createSuperTab, SuperTabError, type Actor, type SuperTabState } from './model.js'
+import { memberPlan, memberQueue } from './members.js'
+import { crewSwarm } from './dispatch.test.js'
+import { dispatchPlan, DISPATCH_RULES } from './dispatch.js'
 
 // Task #4697 (anh Dee 11-07 21:20, card #4693 part A): one Member per person and project, made on their first accepted task
 // there; that project's tasks they ask for go to it one at a time; helpers only by three checks; every asked task needs
@@ -120,5 +123,95 @@ describe('the first Accept', () => {
     expect(f.state.conversations.find(c => c.id === first)).toBeTruthy()
     const said = f.run({ type: 'task.approve', conversationId: f.ask(f.state.projects!.find(p => p.name === 'lamp')!.id, 'Again') }, kai).messages
     expect(said.map(m => m.text)).toContainEqual(expect.stringContaining('no computer in this Swarm'))
+  })
+})
+
+/** Kai's Member in lamp, started and running on Kai's computer, with [count] more of Kai's tasks there accepted. */
+export function withMember(f = swarm(), count = 1) {
+  f.run({ type: 'member.approvalMode', mode: 'review' }, kai)
+  const lamp = f.project('lamp')
+  const tasks = Array.from({ length: count + 1 }, (_, i) => f.ask(lamp, `Task ${i}`))
+  for (const id of tasks) f.run({ type: 'task.approve', conversationId: id }, kai)
+  const start = f.state.starts!.find(s => s.request.member)!
+  const own = { contribution: { machineOwnerId: 'kai', contributorId: 'kai' } }
+  f.run({ type: 'agent.startDispatch', startId: start.id }, kai, own)
+  const member = f.run({ type: 'agent.started', startId: start.id, harnessId: 'h-member',
+    configuration: { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null } }, kai, own).result.agentId as string
+  return { f, lamp, tasks, member }
+}
+
+describe('the waiting queue', () => {
+  it('orders a person\'s tasks by priority, then age', () => {
+    const f = swarm()
+    f.run({ type: 'member.approvalMode', mode: 'review' }, kai)
+    const lamp = f.project('lamp')
+    const old2 = f.ask(lamp, 'Old P2', { priority: 'P2' }), p1 = f.ask(lamp, 'P1', { priority: 'P1' })
+    const new2 = f.ask(lamp, 'New P2', { priority: 'P2' }), p0 = f.ask(lamp, 'P0', { priority: 'P0' })
+    for (const id of [old2, p1, new2, p0]) f.run({ type: 'task.approve', conversationId: id }, kai)
+    expect(memberQueue(f.state, lamp, 'kai', NOW).map(g => g.id)).toEqual([p0, p1, old2, new2])
+  })
+
+  it('leaves out a task its person has not accepted', () => {
+    const f = swarm()
+    f.run({ type: 'member.approvalMode', mode: 'review' }, kai)
+    const lamp = f.project('lamp')
+    f.ask(lamp, 'Not accepted')
+    expect(memberQueue(f.state, lamp, 'kai', NOW)).toEqual([])
+  })
+})
+
+describe('the Member', () => {
+  it('is planned its person\'s next task when free, and nothing while it holds one', () => {
+    const { f, lamp, tasks, member } = withMember()
+    expect(memberPlan(f.state, lamp, NOW)).toEqual([{ kind: 'assign', conversationId: tasks[0], agentId: member }])
+    f.run({ type: 'work.assign', conversationId: tasks[0]!, agentId: member }, owner)
+    expect(memberPlan(f.state, lamp, NOW).filter(p => p.kind === 'assign')).toEqual([])
+  })
+
+  it('is asked to start for a person whose waiting task has no Member yet, as Accept all\'s tasks have none', () => {
+    const f = swarm([api])
+    f.run({ type: 'member.approvalMode', mode: 'review' }, kai)
+    f.run({ type: 'member.approvalMode', mode: 'autoApprove' }, kai)
+    const lamp = f.project('lamp')
+    const id = f.ask(lamp, 'No Accept needed')
+    expect(memberPlan(f.state, lamp, NOW)).toEqual([{ kind: 'start', conversationId: id }])
+    f.run({ type: 'member.start', conversationId: id }, owner)
+    expect(f.state.starts!.filter(s => s.request.member)).toHaveLength(1)
+    expect(memberPlan(f.state, lamp, NOW)).toEqual([])
+  })
+
+  // The host contract of #4698 (Threadland): a host that says memberSetUp reports the project set up before work comes.
+  it('waits for its set-up on a host that reports one, and is refused another agent\'s report', () => {
+    const f = swarm()
+    f.state.machines!.find(m => m.machineId === 'kai-mac')!.observation!.capabilities!.push('memberSetUp')
+    const { lamp, tasks, member } = withMember(f)
+    expect(memberPlan(f.state, lamp, NOW)).toEqual([])
+    const me: Actor = { kind: 'agent', agentId: member, machineOwnerId: 'kai' }
+    expect(code(() => f.run({ type: 'agent.setUp', projectId: lamp, ok: true, steps: ['npm ci'] } as Command, owner))).not.toBeNull()
+    f.run({ type: 'agent.setUp', projectId: lamp, ok: true, steps: ['npm ci'] } as Command, me)
+    expect(f.state.agents.find(a => a.id === member)!.setUp).toMatchObject({ projectId: lamp, steps: ['npm ci'] })
+    expect(memberPlan(f.state, lamp, NOW)).toEqual([{ kind: 'assign', conversationId: tasks[0], agentId: member }])
+  })
+
+  it('sleeps once its task ends with nothing waiting, and wakes for its next one', () => {
+    const { f, tasks, member } = withMember(swarm(), 0)
+    const assigned = f.run({ type: 'work.assign', conversationId: tasks[0]!, agentId: member }, owner)
+    const assignmentId = f.group(tasks[0]!).assignment!.id
+    const me: Actor = { kind: 'agent', agentId: member, machineOwnerId: 'kai' }
+    f.run({ type: 'work.status', conversationId: tasks[0]!, assignmentId, status: 'done', result: 'Done at abc: https://github.com/o/r/pull/1' }, me)
+    expect(f.state.agents.find(a => a.id === member)!.asleep).toEqual({ since: NOW })
+    expect(assigned).toBeTruthy()
+  })
+})
+
+describe('a crew agent', () => {
+  it('is never planned a task another person asked for, and still gets work nobody asked for', () => {
+    const s = crewSwarm(['Ada'])
+    s.run({ type: 'crew.add', agentId: s.ids.Ada!, role: 'engineer', lane: 'backend' })
+    const asked = s.task('Asked', ['backend/src/a.ts'])
+    s.state.people.push({ id: 'kai', email: kai.email, role: 'collaborator', generation: 'g' })
+    s.group(asked).requesterId = 'kai'
+    const free = s.task('Free', ['backend/src/b.ts'])
+    expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, 1000).map(p => p.conversationId)).toEqual([free])
   })
 })
