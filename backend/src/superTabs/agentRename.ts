@@ -1,4 +1,4 @@
-import { isRoleName } from './agentNames.js'
+import { assignAgentDisplayNames, freeAgentName, isEngineName, isRoleName } from './agentNames.js'
 import { fail, type Actor, type Agent, type SuperTabState } from './model.js'
 import { nameRefusal } from './personNames.js'
 import { printable } from './profile.js'
@@ -24,13 +24,18 @@ function checkedAgentName(state: SuperTabState, actor: Actor, exceptId: string |
   if (!name || [...name].length > AGENT_NAME_LENGTH || !printable(name) || HIDDEN.test(name)) {
     return { code: 'INVALID_AGENT_NAME', message: `Use 1 to ${AGENT_NAME_LENGTH} characters, with no hidden ones.`, status: 400 }
   }
+  // An engine's name reads as no name: every such agent is shown a member name (agentNames.ts, task #4568).
+  if (isEngineName(name)) return { code: 'AGENT_NAME_ROLE', message: `${name} is an engine's name. Choose another.`, status: 400 }
   const refused = nameRefusal(name)
   if (refused) return { code: refused.code === 'NAME_RESERVED' ? 'AGENT_NAME_ROLE' : 'INVALID_AGENT_NAME', message: refused.message, status: 400 }
   const key = nameKey(name)
   const usernames = swarmUsernames(state)
   const others = state.people.flatMap(p => [p.name, usernames.get(p.id), p.email])
   const agents = agentNamesSeenBy({ ...state, agents: state.agents.filter(a => a.id !== exceptId) }, actor)
-  if ([...others, ...agents].some(other => other && nameKey(other) === key)) {
+  // The person's own agents still starting, and their own agent chats, are theirs to read: two quick starts never share a name.
+  const own = actor.kind === 'person' ? [...(state.starts ?? []).filter(s => !s.harnessId && !s.error && s.contributorId === actor.userId).map(s => s.request.name),
+    ...state.conversations.filter(c => c.kind === 'agent-chat' && !(exceptId && c.agentIds.includes(exceptId)) && c.audience?.people.some(p => p.id === actor.userId)).map(c => c.title)] : []
+  if ([...others, ...agents, ...own].some(other => other && nameKey(other) === key)) {
     return { code: 'AGENT_NAME_TAKEN', message: `${name} is taken in this Swarm. Choose another.`, status: 409 }
   }
   return { name }
@@ -62,4 +67,27 @@ export function addedAgentName(state: SuperTabState, actor: Actor, input: string
   // A role's name stays as it always did: the agent is given a member name for it (agentNames.ts).
   if (isRoleName(input.normalize('NFKC'))) return input
   return 'name' in checked ? checked.name : 'Agent'
+}
+
+/**
+ * The name `agent.new` gives a person's new agent (task #4568, anh Dee: every agent has a real name): the one they chose, with
+ * the rename checks, or a free one from the agent names when they chose none, or only its engine's or a role's (Desktop's
+ * Cmd-N names every Member "Claude Code"). A free name is free across the whole Swarm, people, every agent, the starts still
+ * waiting and the names chosen in Buddy chats, so it never repeats one the person cannot read either. [seed] fixes the pick.
+ */
+export function newAgentName(state: SuperTabState, actor: Actor, input: string | undefined, seed: string): string {
+  const given = input?.normalize('NFKC').trim()
+  if (given && !isEngineName(given) && !isRoleName(given)) {
+    const checked = checkedAgentName(state, actor, null, given)
+    if ('code' in checked) fail(checked.code, checked.message, checked.status)
+    return checked.name
+  }
+  const shown = state.agents.map(a => ({ id: a.id, name: a.name, ...(a.displayName ? { displayName: a.displayName } : {}) }))
+  assignAgentDisplayNames(shown)
+  const usernames = swarmUsernames(state)
+  const taken = new Set([...state.people.flatMap(p => [p.name, usernames.get(p.id), p.email, p.email.split('@')[0]]),
+    ...shown.map(a => a.displayName), ...(state.starts ?? []).filter(s => !s.harnessId && !s.error).map(s => s.request.name),
+    ...state.conversations.map(c => c.buddyName), ...state.conversations.filter(c => c.kind === 'agent-chat').map(c => c.title)]
+    .filter((name): name is string => !!name).map(nameKey))
+  return freeAgentName(name => taken.has(nameKey(name)), seed)
 }

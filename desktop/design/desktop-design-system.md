@@ -482,6 +482,14 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   lines, and two 18 faces: who asked, then who is doing it. Only while the
   task waits for the reader: Decline as plain text and Accept as the blue
   capsule, on the right.
+- **Decision card.** One question (`SuperTabDecisionCard`, in the Buddy chat
+  and Notifications; the Decisions page row uses the same buttons): the
+  question, `Unblocks:` line, one button per option with the recommended one
+  filled and marked `· Recommended`, then quiet `Let <coordinator> decide` and
+  Not now. A person's own Buddy's question has no Let decide: only they
+  answer it. A line their Buddy waits to post as them shows its exact words,
+  whole, with Send and Not now, neither marked; its Not now answers it, so the
+  quiet Not now that only folds a card is not shown (task #4525).
 - **Adding or changing one.** A new or changed element updates this section
   and the gallery, with its images, in the same pull request.
 

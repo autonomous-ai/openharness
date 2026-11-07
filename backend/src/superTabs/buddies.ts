@@ -2,7 +2,8 @@
  *  read. When they ask, it posts one proposal in the project chat on their behalf; the PM assigns the work as usual. A Buddy
  *  reads what its person reads of its project but no private conversation (Ken, 10-29), and does nothing but post in its
  *  chat and propose. On in every Swarm: Buddies replaced Chat with PM (Ken, 10-29). */
-import { agentDisplayName, isRoleName } from './agentNames.js'
+import { agentDisplayName, freeAgentName, isOldBuddyName, isRoleName } from './agentNames.js'
+import { swarmUsernames } from './usernames.js'
 import { fail, nextConversationNumber, person, stableId, type Actor, type Agent, type AgentStartRequest, type Author, type Conversation, type MessageDraft, type Person, type SuperTabState } from './model.js'
 
 export const isBuddy = (target: Pick<Agent, 'buddyOf'>): boolean => !!target.buddyOf
@@ -55,7 +56,7 @@ export function openBuddyChat(state: SuperTabState, projectId: string, owner: Pe
   if (!chat) {
     const number = nextConversationNumber(state)
     state.groupCounter = number
-    chat = { id, kind: 'buddy', ...(state.projects ? { projectId } : {}), number, title: defaultBuddyName(owner), leadId: null,
+    chat = { id, kind: 'buddy', ...(state.projects ? { projectId } : {}), number, title: NEW_BUDDY_TITLE, leadId: null,
       agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0,
       audience: { people: [{ id: owner.id, generation: owner.generation }] } }
     state.conversations.push(chat)
@@ -76,7 +77,7 @@ export function openSwarmBuddyChat(state: SuperTabState, owner: Person): Convers
   if (!chat) {
     const number = nextConversationNumber(state)
     state.groupCounter = number
-    chat = { id, kind: 'swarm-buddy', number, title: defaultBuddyName(owner), leadId: null, agentIds: [], archived: false, brief: '',
+    chat = { id, kind: 'swarm-buddy', number, title: NEW_BUDDY_TITLE, leadId: null, agentIds: [], archived: false, brief: '',
       checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: owner.id, generation: owner.generation }] } }
     state.conversations.push(chat)
   }
@@ -173,7 +174,7 @@ export function openNewBuddyChat(state: SuperTabState, owner: Person, id: string
   const main = openSwarmBuddyChat(state, owner)
   const number = nextConversationNumber(state)
   state.groupCounter = number
-  const chat: Conversation = { id, kind: 'swarm-buddy', number, title: defaultBuddyName(owner), leadId: null, agentIds: [], archived: false, brief: '',
+  const chat: Conversation = { id, kind: 'swarm-buddy', number, title: NEW_BUDDY_TITLE, leadId: null, agentIds: [], archived: false, brief: '',
     checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: owner.id, generation: owner.generation }] } }
   state.conversations.push(chat)
   main.buddyChats = [...main.buddyChats ?? [], id]
@@ -204,8 +205,8 @@ export function dropBuddyChat(state: SuperTabState, person: Pick<Person, 'id' | 
   if (next) setDefaultBuddy(state, person, next)
 }
 
-/** What a Buddy is called until its owner names it: "ken's Buddy". */
-export const defaultBuddyName = (owner: Pick<Person, 'email'>): string => `${owner.email.split('@')[0]}'s Buddy`
+/** A Buddy chat's title until its agent has its name (task #4568: never "<person>'s Buddy"), as Desktop shows it. */
+const NEW_BUDDY_TITLE = 'Your agent'
 
 /** A Buddy's name as its owner may choose it, sized like a username (usernames are 2 to 32 characters, starting with a
  *  letter or digit) but a display name: letters of any case and language, digits, single spaces, `.`, `_`, `-` and
@@ -229,21 +230,37 @@ export interface ChosenBuddyName { conversationId: string; name: string }
  *  person's, another person's default Buddy name, or a name chosen in another Buddy chat, loaded or listed by the store in
  *  [chosen]. Two commands claiming a name never both pass: each touches the head part (parts/touches.ts). */
 function nameTaken(state: SuperTabState, chat: Conversation, name: string, chosen: readonly ChosenBuddyName[]): boolean {
+  return takenNames(state, chat, chosen).has(nameKey(name))
+}
+
+/** Every name [chat]'s Buddy may not take (nameTaken), as `nameKey`s, read once. */
+function takenNames(state: SuperTabState, chat: Conversation, chosen: readonly ChosenBuddyName[]): Set<string> {
   const owner = chat.audience?.people[0]?.id
   const others = [
     ...state.agents.filter(a => !chat.agentIds.includes(a.id)).map(a => agentDisplayName(state.agents, a.id) ?? a.name),
     // An agent still starting has its name already (review of #2094): its own Buddy's start excepted.
     ...(state.starts ?? []).filter(st => !st.harnessId && !st.error && st.request.conversationId !== chat.id).map(st => st.request.name),
-    ...state.people.map(p => p.email.split('@')[0]!),
-    ...state.people.filter(p => p.id !== owner).map(defaultBuddyName),
+    // Every name a person goes by (security review 2 of #3560): no Buddy passes as a teammate.
+    ...state.people.flatMap(p => [p.email.split('@')[0]!, ...(p.name ? [p.name] : [])]), ...swarmUsernames(state).values(),
+    // The name older Buddies of another person still go by, until they become Members (redesign part 4).
+    ...state.people.filter(p => p.id !== owner).map(p => `${p.email.split('@')[0]}'s Buddy`),
     ...state.conversations.filter(c => isBuddyChat(c) && c.id !== chat.id && c.buddyName).map(c => c.buddyName!),
     ...chosen.filter(c => c.conversationId !== chat.id).map(c => c.name),
   ]
-  const key = nameKey(name)
-  return others.some(other => nameKey(other) === key)
+  return new Set(others.map(nameKey))
 }
 
-/** `buddy.rename`: a person names their own Buddy, from its chat, or clears the name for the default (Diego, 10-29). Only
+/** A real name for [chat]'s Buddy from the agent names (task #4568, anh Dee: no more "<person>'s Buddy"): free in the Swarm by
+ *  nameTaken, never a role's or a reserved one. Kept on the chat as a chosen name is, so the Buddy keeps it when started again. */
+function freshBuddyName(state: SuperTabState, chat: Conversation, chosen: readonly ChosenBuddyName[]): string {
+  const taken = takenNames(state, chat, chosen)
+  const name = freeAgentName(candidate => taken.has(nameKey(candidate)) || isRoleName(candidate) || reserved(candidate), chat.id)
+  chat.buddyName = name
+  chat.title = name
+  return name
+}
+
+/** `buddy.rename`: a person names their own Buddy, from its chat, or clears the name for a fresh real one (task #4568). Only
  *  the chat's owner may; the Swarm owner and every agent are refused, and so is any chat that is not a Buddy chat. The name
  *  is kept on the chat, so a Buddy added again takes it (chosenBuddyName), and is shown at once by a running or starting one. */
 export function renameBuddy(state: SuperTabState, actor: Actor, chat: Conversation, input: string | null, chosen: readonly ChosenBuddyName[] = []): void {
@@ -258,27 +275,27 @@ export function renameBuddy(state: SuperTabState, actor: Actor, chat: Conversati
       fail('INVALID_BUDDY_NAME', 'Use 2 to 32 letters, digits, single spaces, dots, dashes, underscores or apostrophes, starting with a letter or digit.', 400)
     }
     if (isRoleName(name) || reserved(name)) fail('BUDDY_NAME_ROLE', `${name} is a role's name. Choose another.`, 400)
+    // The old default's shape is shown a member name instead (agentNames.ts), so a Buddy named so would never show it.
+    if (isOldBuddyName(name)) fail('BUDDY_NAME_ROLE', `${name} looks like the old default name. Choose a name of its own.`, 400)
     if (nameTaken(state, chat, name, chosen)) fail('BUDDY_NAME_TAKEN', `${name} is taken in this Swarm. Choose another.`, 409)
     chat.buddyName = name
-  } else {
-    delete chat.buddyName
+    chat.title = name
   }
-  const shown = name ?? defaultBuddyName(owner)
-  chat.title = shown
+  const shown = name ?? freshBuddyName(state, chat, chosen)
   for (const buddy of state.agents) if (isBuddy(buddy) && chat.agentIds.includes(buddy.id)) buddy.displayName = shown
   for (const start of state.starts ?? []) if (start.request.conversationId === chat.id && !start.error && !start.poolSettled) start.request.name = shown
 }
 
-/** The name [owner]'s Buddy added in [chat] starts with: the one chosen there, unless someone took it since (a new agent, a
- *  person who joined, another Buddy chat), when the chat goes back to the default rather than show two Buddies alike, and
- *  `notice` is the line that tells its owner so in their chat: nothing changes without saying (review of #2094). */
-export function chosenBuddyName(state: SuperTabState, chat: Conversation, owner: Person, chosen: readonly ChosenBuddyName[] = []): { name: string; notice?: string } {
+/** The name [chat]'s Buddy starts with: the one chosen there, else a fresh real name (task #4568), the first Buddy a person
+ *  brings when they join included. A chosen name someone took since (a new agent, a person who joined, another Buddy chat)
+ *  gives way to a fresh one rather than show two agents alike, and `notice` is the line that tells its owner so in their
+ *  chat: nothing changes without saying (review of #2094). */
+export function chosenBuddyName(state: SuperTabState, chat: Conversation, chosen: readonly ChosenBuddyName[] = []): { name: string; notice?: string } {
   const was = chat.buddyName
-  if (!was) return { name: defaultBuddyName(owner) }
+  if (!was) return { name: freshBuddyName(state, chat, chosen) }
   if (!nameTaken(state, chat, was, chosen)) return { name: was }
-  delete chat.buddyName
-  chat.title = defaultBuddyName(owner)
-  return { name: chat.title, notice: `${was} is taken now; your Buddy starts as ${chat.title}. Rename it from the ⋮ menu.` }
+  const name = freshBuddyName(state, chat, chosen)
+  return { name, notice: `${was} is taken now; your Buddy starts as ${name}. Rename it from the ⋮ menu.` }
 }
 
 /** A Buddy's measured memory (task #3738, 11-06). A Buddy is one Claude Code session that reads and talks. Measured on a Mac (macOS
@@ -299,17 +316,18 @@ export const BUDDY_REQUIREMENTS: AgentStartRequest['requirements'] = { memoryByt
 /** The line a Buddy's chat shows once its session joined. */
 export const buddyReady = (name: string): string => `${name} is ready. Tell it what you have in mind.`
 
-/** What a Buddy may send: posts in its own chat, its owner's proposals, and what its machine reports for every agent (its
- *  model, a terminal alert, its own stop). Every other command is refused, so it can never assign, start, route, ask
- *  decisions or change anything for its owner (spec constraint: PRIVACY-CRITICAL). */
-const BUDDY_COMMANDS: ReadonlySet<string> = new Set(['message.send', 'message.react', 'buddy.propose', 'agent.configuration', 'agent.alert',
+/** What a Buddy may send: posts in its own chat, its owner's proposals, its own questions to its owner and their answers in its
+ *  chat (decisions.ts checkBuddyAsker, task #4525), and what its machine reports for every agent (its model, a terminal alert,
+ *  its own stop). Every other command is refused, so it can never assign, start, route, ask anyone else or change anything for
+ *  its owner (spec constraint: PRIVACY-CRITICAL). */
+const BUDDY_COMMANDS: ReadonlySet<string> = new Set(['message.send', 'message.react', 'buddy.propose', 'decision.ask', 'decision.answer', 'agent.configuration', 'agent.alert',
   'agent.stopLease', 'agent.stopRefused', 'agent.remove', 'buddy.modelResult', 'agent.switchClaim', 'agent.switchResult', 'agent.rebind'])
 
 export function requireBuddyCommand(buddy: Agent, command: { type: string; conversationId?: unknown; agentId?: unknown }, groups: readonly Conversation[]): void {
   if (command.type === 'proposal.answer') return // The card handler checks the current sender and question before receipt replay.
   if (!BUDDY_COMMANDS.has(command.type)) fail('BUDDY_FORBIDDEN', 'A Buddy only talks with its owner and sends the proposals they ask for.', 403)
   if ('agentId' in command && command.agentId !== buddy.id) fail('BUDDY_FORBIDDEN', 'A Buddy acts only for itself.', 403)
-  if (command.type === 'message.send' || command.type === 'message.react' || command.type === 'buddy.propose') {
+  if (command.type === 'message.send' || command.type === 'message.react' || command.type === 'buddy.propose' || command.type === 'decision.ask') {
     const group = groups.find(g => g.id === command.conversationId)
     if (!group || !isBuddyChat(group) || !group.agentIds.includes(buddy.id)) {
       fail('BUDDY_FORBIDDEN', 'A Buddy posts only in its own chat. Send a proposal to reach the PM.', 403)
