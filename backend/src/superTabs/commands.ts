@@ -542,6 +542,12 @@ const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'conversation.rename': ['title'],
   'buddy.rename': ['name'],
   'proposal.close': ['reason'],
+  // A proposal's ruling reaches its people's Buddy chats, its questions and answers its card (review of #3310 at c91dc2489).
+  'proposal.decide': ['reason', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'task.review.focus', 'checks[].description'],
+  'proposal.ask': ['question', 'defaultAnswer'],
+  'proposal.answer': ['text'],
+  'proposal.merge': ['reason'],
+  'work.pause': ['reason'],
   'task.reject': ['reason'],
   'work.define': ['brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'task.review.focus', 'checks[].description'],
   'work.assign': ['overrideReason'],
@@ -578,6 +584,10 @@ const AGENT_TEXT: Partial<Record<Command['type'], readonly string[]>> = {
   'work.define': WORDS['work.define']!,
   'person.tell': ['text'],
   'decision.ask': WORDS['decision.ask']!,
+  'proposal.decide': WORDS['proposal.decide']!,
+  'proposal.ask': WORDS['proposal.ask']!,
+  'proposal.answer': WORDS['proposal.answer']!,
+  'proposal.merge': WORDS['proposal.merge']!,
 }
 
 /** The strings at [paths] in [command] (WORDS' path shape: dotted keys, `[]` for each item of a list). */
