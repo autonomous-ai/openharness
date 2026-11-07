@@ -150,6 +150,27 @@ void main() {
           _image(id, brightness).split('/').last,
     });
   });
+
+  // Review of #3582: an element across two sections, or in none, would be compared only in part, or not at all.
+  test('an element must lie wholly inside exactly one section', () {
+    final sections = {
+      'a': const Rect.fromLTWH(0, 0, 100, 50),
+      'b': const Rect.fromLTWH(0, 50, 100, 50),
+    };
+    GalleryRegion at(String name, Rect rect) =>
+        (name: name, rect: rect, limit: _art);
+    expect(
+      _unplaced([at('inside', const Rect.fromLTWH(10, 10, 20, 20))], sections),
+      isEmpty,
+    );
+    expect(
+      _unplaced([
+        at('across', const Rect.fromLTWH(10, 40, 20, 20)),
+        at('outside', const Rect.fromLTWH(10, 120, 5, 5)),
+      ], sections),
+      ['across', 'outside'],
+    );
+  });
 }
 
 /// A section's image in [brightness], relative to the test folder.
