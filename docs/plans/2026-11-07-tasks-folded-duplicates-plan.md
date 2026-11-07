@@ -3,16 +3,21 @@
 **Goal:** A proposal or task closed as a duplicate of, or folded or split into, another task leaves the person's Tasks
 feed; the real task stays; the closed one is kept and still readable, and names the real task.
 
-**Architecture:** The rule is the PM's own words (River, in the task): a task cancelled with a reason that names another
-task number ("Duplicate of #4421", "Being done inside #4445", "split… #4465 … #4468") goes on there. `work.cancel` reads
-those numbers from its reason (`tasksNamedIn`: not the task itself, not "PR #N", at most 10) and stores them on the
-conversation as `foldedInto`. The feed treats `foldedInto` as it already treats a merged proposal (`proposal.mergedInto`):
-the row's indexed `feedIds` is empty, so no page reads it, and a change poll sends its id as removed. A task cancelled
-before this ships (the existing duplicates, such as #4420 into #4421) is cancelled again by the PM with a reason naming the
-real task: it takes the link and nothing else changes. No data is deleted. A cancel whose reason names no task stays.
+**Architecture:** The rule is the PM's own words (River, in the task): a task cancelled with a reason that says its work
+goes on in another task ("Duplicate of #4421", "Being done inside #4445", "split… #4465 … #4468") points there.
+`work.cancel` reads those numbers from its reason (`tasksNamedIn`: only after a phrase such as duplicate, inside, into,
+split, folded, merged; never the task itself or "PR #N"; at most 10), keeps those that are tasks of the same project the
+Swarm holds now (`goesOnIn`: not a chat, a step or a private conversation; a mistyped number links nothing), and stores their
+ids as `foldedInto`. The feed treats `foldedInto` as it already treats a merged proposal (`proposal.mergedInto`): the row's
+indexed `feedIds` is empty, so no page reads it, and a change poll sends its id as removed. History is the project's
+archived list, which reads by project, not by the feed's keys: it still lists the task, and its view carries `foldedInto`
+for a client to open the real task. A task cancelled before this ships (the existing duplicates, such as #4420 into #4421)
+is cancelled again by the PM with a reason naming the real task: it takes the link and nothing else changes. No data is
+deleted. A cancel whose reason names no task stays.
 
-**Why numbers, not ids:** a command loads only the conversations it names; the real task may be quiet and unloaded, and the
-reason already names it by number, as people do. A number needs no lookup.
+**Limits:** a command holds only the Swarm's awake conversations, so a real task already quiet (done or cancelled and idle
+for a day) cannot be checked and links nothing; the task then stays in Tasks, as today. Opening the real task from the
+archived list is a Desktop change, proposed separately (this machine has no Flutter to test it).
 
 **Why not `proposal.merge`:** it refuses every card on Review mode (`TASK_APPROVAL_REQUIRED`) and needs an undecided
 proposal as its target, so the PM closed these with a plain cancel.
@@ -33,7 +38,7 @@ hand-off.
 
 ## Design
 
-- growth: at most 10 numbers per conversation, deleted with it.
+- growth: at most 10 ids per conversation, deleted with it.
 - concurrency: the conversation's own write, as `work.cancel` today.
 - read cost: none added; `feedIds` is recomputed on the write the command already makes.
 - scale: unchanged per Swarm; the feed reads fewer rows.

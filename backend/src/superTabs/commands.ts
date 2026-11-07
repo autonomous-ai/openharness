@@ -1059,11 +1059,22 @@ function proposalRequester(state: SuperTabState, project: SwarmProject, personId
 /** Who may cancel a lost or stopped task, and a live one (work.cancel), for the refusals that name them. */
 const WHO_CANCELS_ENDED = 'Only the person who asked for this task, its project\'s owner, the Swarm owner or an agent of this project can cancel it.'
 const WHO_CANCELS_LIVE = 'Only an agent of this project or the Swarm owner can cancel work in progress. Ask the project\'s coordinator.'
-/** The other tasks a cancel's reason names ("Duplicate of #4421", "Being done inside #4445", "Split into #4465 to #4468"): its
- *  work goes on there, so it leaves people's Tasks (task #4462). A pull request's number ("PR #12") names no task. */
+/** The task numbers a cancel's reason says its work goes on in ("Duplicate of #4421", "Being done inside #4445", "Split into
+ *  #4465 to #4468"; task #4462). A mere mention ("Waiting on #4434"), a pull request's number ("PR #12") and its own name none. */
 export function tasksNamedIn(reason: string, self: number | undefined): number[] {
+  if (!/\b(duplicates?|dup(e)?|inside|into|split|folded|merged|same as|covered by|part of|replaced by|superseded by)\b/i.test(reason)) return []
   const named = [...reason.matchAll(/(?<!\b(?:PR|pull request)\s*)#([1-9][0-9]{0,8})\b/gi)].map(m => Number(m[1])).filter(n => n !== self)
   return [...new Set(named)].slice(0, 10)
+}
+
+/** The tasks of [group]'s project its cancel's reason says its work goes on in, as the Swarm knows them now: a number that
+ *  names no task there (mistyped, a chat, a step, a private conversation) links nothing (review of #3534). */
+function goesOnIn(state: SuperTabState, group: Conversation, reason: string): string[] {
+  const isTask = (c: Conversation) => !c.kind && !c.audience && !c.reviewOf && c.id !== groupProject(state, c).leadConversationId
+  if (!isTask(group)) return []
+  const project = groupProject(state, group).id
+  return tasksNamedIn(reason, group.number).flatMap(number => state.conversations.filter(c => c.number === number && c.id !== group.id && isTask(c)
+    && groupProject(state, c).id === project).map(c => c.id))
 }
 
 function open(state: SuperTabState, conversationId: string) {
@@ -4957,13 +4968,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const assignment = group.assignment
       const project = groupProject(state, group)
       const allowed = projectAgent(state, actor, project.id) || (actor.kind === 'person' && actor.userId === state.ownerId)
-      const goesOnIn = group.kind || group.audience || group.reviewOf ? [] : tasksNamedIn(command.reason, group.number)
+      const goesOn = goesOnIn(state, group, command.reason)
       // A task cancelled before with no task named, cancelled again with the one its work goes on in, takes that link and
       // nothing else: so the duplicates closed before #4462 leave people's Tasks too.
-      if (goesOnIn.length && (assignment?.status === 'cancelled' || group.archived && !assignment)) {
+      if (goesOn.length && (assignment?.status === 'cancelled' || group.archived && !assignment)) {
         if (!allowed) fail('FORBIDDEN', WHO_CANCELS_LIVE, 403)
         if (group.foldedInto) break
-        group.foldedInto = goesOnIn
+        group.foldedInto = goesOn
         message(group.id, `${who} noted where this task's work goes on: ${command.reason.replace(/[.\s]+$/, '')}.`, [], null, SYSTEM_ROW)
         break
       }
@@ -4977,7 +4988,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         && (command.assignmentId === 'current' || command.assignmentId === assignment.id)
       if ((unassigned || reviewEnded) && allowed && group.id !== project.leadConversationId && !group.kind && !group.audience) {
         message(group.id, `${who} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.`, [], null, CANCEL_ROW)
-        if (goesOnIn.length) group.foldedInto = goesOnIn
+        if (goesOn.length) group.foldedInto = goesOn
         // Its line is a report the coordinator acknowledges first, so the sweep puts it to sleep later (sweeps.ts), as for any archive.
         group.archived = true
         endStepsOf(group, `${group.title} was archived.`, true)
@@ -5000,7 +5011,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const gone = assignment.status === 'reconciling' || lost || stopped
       assignment.status = 'cancelled'
       assignment.result = command.reason
-      if (goesOnIn.length) group.foldedInto = goesOnIn
+      if (goesOn.length) group.foldedInto = goesOn
       if (!lost && !stopped) finishWorker(state, assignment.agentId)
       // Its steps' work ends with it; finished ones stay until it archives (task steps design; final review, finding 2).
       endStepsOf(group, `${group.title} was cancelled.`, false)
