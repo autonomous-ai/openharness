@@ -649,7 +649,7 @@ void main() {
 
     final buddyRow = find.byKey(const ValueKey('super-swarm-buddy'));
     Text buddyName(WidgetTester tester) => tester.widget<Text>(
-      find.descendant(of: buddyRow, matching: find.text('Buddy')),
+      find.descendant(of: buddyRow, matching: find.text('Your agent')),
     );
 
     testWidgets('muted: greyed with its mark, never bold; first in the next '
