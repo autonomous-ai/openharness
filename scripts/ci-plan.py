@@ -142,7 +142,8 @@ NOT_READS = {
     **{source: ("path rules: the folders a review area or a release matches", {"cli/", "companions/", "daemons/", "desktop/",
                                                                                "devices/", "docs/", "installer/", "mobile/",
                                                                                "pty/", "term/", "tui/", "website/"})
-       for source in ("backend/src/superTabs/policy.ts", "backend/src/superTabs/releases.ts")},
+       for source in ("backend/src/superTabs/policy.ts", "backend/src/superTabs/releases.ts",
+                      "backend/src/superTabs/reviewTable.ts")},
     "backend/src/superTabs/policy.securityExclusions.json": (
         "file names policy.test.ts compares with git ls-files, not opened",
         {"cli/", "companions/", "desktop/", "mobile/", "os/", "provider/", "term/", "tui/", "website/"}),
