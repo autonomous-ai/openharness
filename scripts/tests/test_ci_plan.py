@@ -1029,6 +1029,20 @@ class CrossReadTests(unittest.TestCase):
         planner.NOT_READS["backend/src/fixture.test.ts"] = ("owned-code strings in a fixture", {"cli/src/lib/"})
         self.assertEqual(planner.undeclared_reads(self.root, "backend"), [])
 
+    def test_a_folder_listed_as_data_covers_the_quoted_paths_under_it_only(self):
+        # policy.securityExclusions.json names 119 files across the tree: the folders they sit in are listed, not each.
+        self.write("cli/src/lib/a.ts", "a")
+        self.write("cli/src/b.ts", "b")
+        self.write("cli/src/lib/c.ts", "c")
+        self.write("backend/src/rules.test.ts", "\n".join([
+            "held(['cli/src/lib/a.ts', 'cli/src/lib/'])", "held(['cli/src/b.ts'])",
+            "readFileSync(new URL('../../cli/src/lib/c.ts', import.meta.url))"]))
+        original = dict(planner.NOT_READS)
+        self.addCleanup(lambda: (planner.NOT_READS.clear(), planner.NOT_READS.update(original)))
+        planner.NOT_READS["backend/src/rules.test.ts"] = ("test data: paths matched against rules", {"cli/src/lib/"})
+        self.assertEqual(planner.undeclared_reads(self.root, "backend"), [
+            ("backend/src/rules.test.ts", "cli/src/b.ts"), ("backend/src/rules.test.ts", "cli/src/lib/c.ts")])
+
     def test_every_cross_read_in_this_repository_is_declared(self):
         repository = Path(__file__).resolve().parents[2]
         needs_full_checkout(self, all((repository / top).is_dir() for top in ["cli/src", "desktop/lib", "mobile/lib", "backend/src"]),
