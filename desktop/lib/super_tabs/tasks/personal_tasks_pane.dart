@@ -249,6 +249,20 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                     ],
                   ),
                 ),
+                // Offline, the rows are what was last read: said once, quietly, until the Swarm answers again.
+                if (supported && c.backendUnreachable && snapshot != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppDesktop.groupGap,
+                    ),
+                    child: Text(
+                      'May be out of date',
+                      key: const ValueKey('tasks-stale'),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
                 if (_error != null)
                   Padding(
                     padding: const EdgeInsets.symmetric(
