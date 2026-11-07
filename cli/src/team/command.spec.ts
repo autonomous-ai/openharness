@@ -90,7 +90,9 @@ describe('harness team', () => {
   it('prints its help, and refuses an unknown verb', async () => {
     const f = fake()
     expect(await teamCommand([], f.deps)).toBe(0)
-    expect(f.out[0]).toContain('Usage: harness team <status | model | logs | sign-in | remove | on | off>')
+    expect(f.out[0]).toContain('Usage: harness team <status | logs | remove | on | off>')
+    // Swarm v3 has no Team accounts (#4221): nothing signs a Team account's engines in or gives it a model.
+    expect(f.out[0]).not.toMatch(/sign-in|model/)
     expect(await teamCommand(['frobnicate'], f.deps)).toBe(2)
   })
 })
@@ -147,16 +149,15 @@ describe('harness team status', () => {
     expect(JSON.parse(json.out[0]!).purges).toEqual({ pending: 2, unreadable: false, at: 5 })
   })
 
-  it('says whether the team account\'s engines are installed and signed in, and exactly how to sign them in', async () => {
+  it('says first that its daemon stops once no agent runs in it and how to delete it, not how to sign its engines in (#4221)', async () => {
     const f = fake({ readConfig: () => config, accountExists: vi.fn(async () => true) })
     f.status.set(STATUS, { version: 1, engines: { checkedAt: 1_000_000 - 60_000, claude: { installed: true, signedIn: false }, codex: { installed: false, signedIn: null } } })
     await teamCommand(['status'], f.deps)
     const text = f.out.join('\n')
-    expect(text).toContain('engines     Claude Code ✓ installed · ✗ not signed in')
-    expect(text).toContain('Codex       ✗ not installed')
-    expect(text).toContain('(checked 60s ago)')
-    expect(text).toContain('in Harness, open a terminal on this Mac\'s Harness Team machine')
-    expect(text).toContain('    claude                      Claude Code')
+    const said = 'Swarm v3 has no Team accounts: its daemon stops once no agent runs in it. harness team remove deletes the account, its home and its daemon.'
+    expect(f.out.findIndex(line => line.includes(said))).toBeGreaterThan(-1)
+    expect(f.out.findIndex(line => line.includes(said))).toBeLessThan(f.out.findIndex(line => line.includes('  daemon  ')))
+    expect(text).not.toMatch(/sign(ed)? (them )?in|harness team sign-in|engines {5}/)
     const json = fake({ readConfig: () => config, accountExists: vi.fn(async () => true) })
     json.status.set(STATUS, { version: 1, engines: { checkedAt: 5, claude: { installed: true, signedIn: true }, codex: { installed: true, signedIn: true } } })
     await teamCommand(['status', '--json'], json.deps)
@@ -860,16 +861,14 @@ describe('harness team logs and sign-in', () => {
     expect(f.out.join('\n')).toContain('create pane open')
   })
 
-  it('refuses the sign-in where it cannot run, naming what to do instead', async () => {
-    const windows = fake({ platform: 'win32', readConfig: () => config as never })
-    expect(await teamCommand(['sign-in', 'claude'], windows.deps)).toBe(1)
-    expect(windows.err.join('\n')).toContain('On Windows, sign in from Harness')
-    const noTerminal = fake({ readConfig: () => config as never, interactive: false })
-    expect(await teamCommand(['sign-in', 'codex'], noTerminal.deps)).toBe(1)
-    expect(noTerminal.err.join('\n')).toContain('Run it in a terminal')
-    const wrong = fake({ readConfig: () => config as never, interactive: true })
-    expect(await teamCommand(['sign-in', 'vim'], wrong.deps)).toBe(1)
-    expect(wrong.err.join('\n')).toContain('Name claude or codex')
+  it('signs no engine in and sets no model: Swarm v3 has no Team accounts (#4221)', async () => {
+    for (const argv of [['sign-in', 'claude'], ['model', 'set', 'openai', '--model', 'gpt-x']]) {
+      const f = fake({ readConfig: () => config as never, interactive: true })
+      expect(await teamCommand(argv, f.deps), argv[0]).toBe(1)
+      expect(f.err.join('\n'), argv[0]).toContain('Swarm v3 has no Team accounts')
+      expect(f.admin, argv[0]).not.toHaveBeenCalled()
+    }
   })
+
 })
 
