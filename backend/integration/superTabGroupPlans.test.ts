@@ -247,6 +247,21 @@ describe('hot SwarmGroup reads name their index and read only what they return (
     }
   })
 
+  it('a cancel finds the quiet tasks its reason names by number, through the number index, reading only those (task #4480)', async () => {
+    const named = s.quietLead.slice(7, 9).map((row, i) => ({ key: row.key, number: 9007 + i }))
+    for (const { key, number } of named) {
+      const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: s.tabId, key } } })
+      await db.swarmGroup.update({ where: { id: row.id }, data: { number, data: { ...row.data as object, number } as never } })
+    }
+    let keys: string[] = []
+    const reads = await profiled(async () => { keys = await db.$transaction(tx => parts.loadGroupKeysByNumber(tx, s.tabId, [9007, 9008, 99999])) })
+    expect(keys.sort()).toEqual(named.map(n => n.key).sort())
+    expect(reads).toHaveLength(1)
+    expect(reads[0]!.plans.join(), JSON.stringify(reads)).toContain('IXSCAN { tabId: 1, number: 1 }')
+    expectIndexed(reads)
+    expectOnlyReturned(reads)
+  })
+
   it('the read cache\'s base loads the Swarm\'s open conversations through the dormancy index', async () => {
     let keys: string[] = []
     const reads = await profiled(async () => { keys = (await db.$transaction(tx => parts.loadReadBase(tx, s.tabId))).groups.map(g => g.key) })
