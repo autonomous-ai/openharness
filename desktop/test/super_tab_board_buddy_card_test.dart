@@ -371,7 +371,8 @@ void main() {
         await tester.tap(
           find.descendant(
             of: key('super-middle-chat'),
-            matching: find.byTooltip('Buddy options'),
+            // The chat's own options; the card is the Buddy's (audit finding 15 of #4436).
+            matching: find.byTooltip('Chat options'),
           ),
         );
         await settle(tester);

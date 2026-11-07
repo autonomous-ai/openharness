@@ -181,6 +181,9 @@ void main() {
     await settle(tester);
     expect(key('super-tasks'), findsNothing);
     expect((row(board) - row(title)).abs(), lessThan(4));
+    // The tabs' tooltips and the Board's settle timers run out.
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 5));
   });
 
   testWidgets('screenshots, light and dark', (tester) async {
