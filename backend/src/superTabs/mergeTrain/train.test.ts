@@ -298,6 +298,37 @@ describe('the merge train finishes batches', () => {
     expect(repo.batches()).toEqual([])
   })
 
+  it('tells a member left waiting after main moved why it waits and when the next batch starts, once', async () => {
+    const { repo, swarm, pass } = setup()
+    const rules: TrainRules = { ...ON, everyMinutes: 10 }
+    const a = repo.addPull(7, ['backend/src/a.ts']), b = repo.addPull(8, ['cli/src/b.ts'])
+    swarm.approve(a); swarm.approve(b)
+    await pass(rules)
+    const first = repo.batches()[0]!
+    repo.state.main = 'd'.repeat(40)
+    b.labels = ['hold']
+    await pass(rules)
+    expect(repo.batches().map(p => repo.state.contents.get(p.head))).toEqual([[a.head]])
+    expect(swarm.told.map(t => [t.taskId, t.key])).toEqual([['task-8', `train-moved:${first.number}:${b.head}`]])
+    expect(swarm.told[0]!.text).toMatch(/main moved/i)
+    expect(swarm.told[0]!.text).toContain('hold label')
+    expect(swarm.told[0]!.text).toContain('in about 10 minutes')
+    await pass(rules)
+    expect(swarm.told).toHaveLength(1)
+  })
+
+  it('says nothing on a member merged by hand meanwhile, often why main moved', async () => {
+    const { repo, swarm, pass } = setup()
+    const a = repo.addPull(7, ['backend/src/a.ts']), b = repo.addPull(8, ['cli/src/b.ts'])
+    swarm.approve(a); swarm.approve(b)
+    await pass()
+    repo.state.main = 'd'.repeat(40)
+    Object.assign(b, { state: 'closed', merged: true })
+    await pass()
+    expect(repo.batches().map(p => repo.state.contents.get(p.head))).toEqual([[a.head]])
+    expect(swarm.told).toEqual([])
+  })
+
   it('never merges a member pushed after its batch went green: the heads are read again first', async () => {
     const { repo, swarm, pass } = setup()
     const a = repo.addPull(7, ['backend/src/a.ts']), b = repo.addPull(8, ['backend/src/b.ts'])
