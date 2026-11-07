@@ -92,3 +92,13 @@ describe('the Swarm’s own lines in a person’s private chat', () => {
     expect(code(() => checkPrivateChat(f.state, [row(f.peerBuddy.chat, SWARM_AUTHOR)]))).toBe('PRIVATE_CHAT')
   })
 })
+
+describe('a line from a Buddy removed in the same command', () => {
+  it('keeps its own Buddy as its author: a thread session signs its own end', () => {
+    const f = fixture()
+    const before = structuredClone(f.state)
+    const after = { ...f.state, agents: f.state.agents.filter(a => a.id !== f.peerBuddy.id) }
+    const ended: MessageDraft = { ...row(f.peerBuddy.chat, as('agent', f.peerBuddy.id)), source: { kind: 'buddy-session-ended' } }
+    expect(checkPrivateChat(after, [ended], before)[0]!.author.id).toBe(f.peerBuddy.id)
+  })
+})

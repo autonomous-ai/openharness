@@ -297,7 +297,8 @@ describe('a switched project’s direct asks at their default time', () => {
     return { ...f, pm, worker, task, ask, told }
   }
 
-  it('notifies the default Buddy only once when decision.ask repeats an open question', async () => {
+  // Task #4547: the ask reaches its person's Decisions alone; the asking agent writes no line in their Buddy chat.
+  it('keeps one decision when decision.ask repeats an open question, with no line in the default Buddy chat', async () => {
     const f = await direct()
     const chat = String((await f.execute({ type: 'buddy.chat' }, peer)).result.conversationId)
     const command: Command = { type: 'decision.ask', conversationId: f.task, personId: peer.sub,
@@ -305,9 +306,8 @@ describe('a switched project’s direct asks at their default time', () => {
     const first = await f.execute(command, owner, f.worker)
     const repeated = await f.execute(command, owner, f.worker)
     expect(repeated.result.decisionIds).toEqual(first.result.decisionIds)
-    const lines = (await f.store.messages(peer, f.tab, chat, {})).messages.filter(m => (m.source as { kind?: string })?.kind === 'decision-asked')
-    expect(lines).toHaveLength(1)
-    expect(lines[0]!.source).toMatchObject({ decisionId: (first.result.decisionIds as string[])[0] })
+    expect(await db.superTabDecision.count({ where: { tabId: f.tab, personId: peer.sub, question: 'Ship this copy?' } })).toBe(1)
+    expect((await f.store.messages(peer, f.tab, chat, {})).messages).toEqual([])
   })
 
   it.each([false, true])('keeps a changed agreement requirement distinct (original mustAgree: %s)', async firstMustAgree => {

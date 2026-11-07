@@ -354,7 +354,7 @@ describe('a Buddy through the store', () => {
     await expect(f.store.messages(peer, f.tab, 'lead', { messageId: report.id }, agentId)).resolves.toMatchObject({ messages: [] })
   })
 
-  it('never reads the routing proposals asked of its person: not in its decisions, nor as the PM\'s line when its person leaves one to the PM (review of #2276)', async () => {
+  it('never reads the routing proposals asked of its person in its decisions, and nothing left to the PM lands in its chat (review of #2276)', async () => {
     const f = await swarm()
     const { agentId, chat } = await buddy(f)
     // Two proposals as the nightly reflection asks them (store.ts postReflection): of peer, by the PM, in the project chat, tagged.
@@ -373,12 +373,13 @@ describe('a Buddy through the store', () => {
     expect((await f.store.decisions(peer, f.tab, 'open', agentId)).decisions[0]).toMatchObject({ personEmail: null, personName: expect.any(String) })
     expect(JSON.stringify((await f.store.decisions(peer, f.tab, 'open', agentId)).decisions)).not.toContain(peer.email)
     expect(theirs.find(d => d.question === 'Which week?')).toMatchObject({ personEmail: peer.email })
-    // Left to the PM: the plain one's line reaches the Buddy chat, the proposal's never does, and the Buddy's answered list holds no proposal.
+    // Left to the PM: no line reaches the Buddy chat, the PM writes nothing there (task #4547), and the Buddy's answered list
+    // holds no proposal.
     await f.execute({ type: 'decision.answer', decisionId: routing[0]!.id, delegate: true }, peer)
     await f.execute({ type: 'decision.answer', decisionId: theirs.find(d => d.question === 'Which week?')!.id, delegate: true }, peer)
-    const lines = (await f.store.messages(peer, f.tab, chat, {})).messages.map(m => m.text)
-    expect(lines).toContain('PM decided: This week — Which week?')
-    expect(lines.join('\n')).not.toContain('Route parser work')
+    const lines = (await f.store.messages(peer, f.tab, chat, {})).messages.map(m => m.text).join('\n')
+    expect(lines).not.toContain('Which week?')
+    expect(lines).not.toContain('Route parser work')
     expect((await f.store.decisions(peer, f.tab, 'settled', agentId)).decisions.map(d => d.question)).toEqual(['Which week?'])
     expect((await f.store.decisions(peer, f.tab, 'settled')).decisions.map(d => d.question)).toContain(routing[0]!.question)
   })
@@ -706,65 +707,42 @@ describe('a Buddy matching agents to people (delta review 1 of #2258)', () => {
   })
 })
 
-describe('a person\'s Buddy chat before any Buddy, and the PM\'s private lines (Ken, 10-29)', () => {
+// Task #4547 (anh Dee, 11-07): a person's chat with their own agent is theirs alone, so no PM or other agent has a private line there.
+describe('a person\'s Buddy chat before any Buddy, and no private lines into it (Ken, 10-29; task #4547)', () => {
   const tell = (text: string) => ({ type: 'person.tell' as const, personId: peer.sub, text })
+  const buddyChats = async (f: Awaited<ReturnType<typeof swarm>>) => (await db.swarmGroup.findMany({ where: { tabId: f.tab, deleted: false } }))
+    .filter(row => (row.data as { kind?: string }).kind === 'buddy').map(row => row.key)
 
-  it('opens on the person\'s ask and takes the PM\'s line, which they read and the PM cannot', async () => {
+  it('opens on the person\'s ask and refuses the PM\'s line, which the PM cannot read either', async () => {
     const f = await swarm()
     const chat = String((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, peer)).result.conversationId)
-    await f.execute(tell('Your fix is merged.'), owner, f.lead)
-    expect((await f.store.messages(peer, f.tab, chat, {})).messages.map(m => m.text)).toEqual(['Your fix is merged.'])
+    await expect(f.execute(tell('Your fix is merged.'), owner, f.lead)).rejects.toMatchObject({ code: 'PRIVATE_CHAT' })
+    expect((await f.store.messages(peer, f.tab, chat, {})).messages).toEqual([])
     await expect(f.store.messages(owner, f.tab, chat, {}, f.lead)).rejects.toThrow('unavailable')
     expect(await db.superTabDelivery.count({ where: { tabId: f.tab, conversationId: chat } })).toBe(0)
   })
 
-  it('never lands for someone who stops reading the project while the line is sent (security review 2 of #2090)', async () => {
+  it('is opened by its person alone, never by a PM\'s line, and a quiet one opens again rather than a second chat', async () => {
     const f = await swarm()
+    await expect(f.execute(tell('First.'), owner, f.lead)).rejects.toMatchObject({ code: 'PRIVATE_CHAT' })
+    expect(await buddyChats(f)).toEqual([])
     const chat = String((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, peer)).result.conversationId)
-    // The line reads the Swarm with peer still a reader; just before it writes, the owner makes the project theirs alone.
-    let raced = false
-    const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
-      if (raced) return
-      raced = true
-      await f.execute({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
-    }), () => Date.now())
-    await expect(racing.execute(owner, f.tab, { operationId: randomUUID(), command: tell('Your fix is merged.') }, f.lead))
-      .rejects.toThrow('cannot read this project')
-    expect(raced).toBe(true)
-    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: chat } })).toBe(0)
-  })
-
-  it('is opened for the PM\'s first line, and a quiet one takes the next line rather than a second chat', async () => {
-    const f = await swarm()
-    await f.execute(tell('First.'), owner, f.lead)
-    const chats = async () => (await db.swarmGroup.findMany({ where: { tabId: f.tab, deleted: false } }))
-      .filter(row => (row.data as { kind?: string }).kind === 'buddy').map(row => row.key)
-    const [chat] = await chats()
     await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: chat }, data: { dormant: true } })
-    await f.execute(tell('Second.'), owner, f.lead)
+    await expect(f.execute(tell('Second.'), owner, f.lead)).rejects.toMatchObject({ code: 'PRIVATE_CHAT' })
     expect((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, peer)).result.conversationId).toBe(chat)
-    expect(await chats()).toEqual([chat])
-    expect((await f.store.messages(peer, f.tab, chat!, {})).messages.map(m => m.text)).toEqual(['First.', 'Second.'])
+    expect(await buddyChats(f)).toEqual([chat])
+    expect((await f.store.messages(peer, f.tab, chat, {})).messages).toEqual([])
   })
 
-  // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts, task #3404): another agent's line is the PM's crew need, and the
-  // PM's next line still lands in the quiet chat rather than opening a second one.
-  it('takes the PM\'s line in a quiet chat rather than opening a second one, and gives the PM another agent\'s', async () => {
+  // Another agent's private line is refused as the PM's is: nothing in the chat and no crew need, so it asks with decision.ask.
+  it('refuses another agent\'s private line as it does the PM\'s, writing nothing anywhere', async () => {
     const f = await swarm()
     const engineer = String((await f.execute({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'Engineer',
       configuration: config, lead: false })).result.agentId)
-    await f.execute(tell('First.'), owner, f.lead)
-    const chats = async () => (await db.swarmGroup.findMany({ where: { tabId: f.tab, deleted: false } }))
-      .filter(row => (row.data as { kind?: string }).kind === 'buddy').map(row => row.key)
-    const [chat] = await chats()
-    await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: chat }, data: { dormant: true } })
-    await f.execute(tell('From the Engineer.'), owner, engineer)
-    const needs = (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: 'lead' } }))
-      .filter(m => (m.source as { kind?: string } | null)?.kind === 'crew-need')
-    expect(needs).toEqual([expect.objectContaining({ recipientIds: [f.lead], source: expect.objectContaining({ crewNeed: expect.objectContaining({ agentId: engineer, personIds: [peer.sub] }) }) })])
-    await f.execute(tell('Again.'), owner, f.lead)
-    expect(await chats()).toEqual([chat])
-    expect((await f.store.messages(peer, f.tab, chat!, {})).messages.map(m => m.text)).toEqual(['First.', 'Again.'])
+    const chat = String((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, peer)).result.conversationId)
+    await expect(f.execute(tell('From the Engineer.'), owner, engineer)).rejects.toMatchObject({ code: 'PRIVATE_CHAT' })
+    expect(await db.superTabMessage.count({ where: { tabId: f.tab, text: { contains: 'From the Engineer.' } } })).toBe(0)
+    expect(await buddyChats(f)).toEqual([chat])
   })
 })
 
@@ -1396,7 +1374,8 @@ describe('Buddy input and sleep race (#3824)', () => {
 
 
 describe('a sleeping proposal sender (#3824)', () => {
-  it('wakes the card’s original Buddy for a PM question even when another Buddy is the default', async () => {
+  // Task #4547: a PM question is its person's Decision, never a notice in a Buddy chat, so no Buddy is woken for it.
+  it('leaves every Buddy asleep for a PM question on the card, which its person finds in their Decisions', async () => {
     let now = Date.now()
     const f = await swarm(() => now)
     await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
@@ -1416,11 +1395,12 @@ describe('a sleeping proposal sender (#3824)', () => {
     expect((await current(second.main)).asleep).toBeDefined()
     await f.execute(commandSchema.parse({ type: 'proposal.ask', conversationId: proposal.result.conversationId, personId: peer.sub,
       question: 'How long?', defaultAnswer: 'Seven days', deadline: now + 60_000 }), owner, f.lead)
-    expect((await current(first.main)).asleep).toBeUndefined()
+    expect((await current(first.main)).asleep).toBeDefined()
     expect((await current(second.main)).asleep).toBeDefined()
-    const waiting = (await f.store.deliveries(peer, f.tab, first.main)).find(d => d.conversationId === first.swarmChat)!
-    expect(waiting).toBeDefined()
-    const claim = await f.store.delivery(peer, f.tab, first.main, waiting.id, { type: 'claim', claimId: randomUUID() })
-    expect(claim).toMatchObject({ message: { source: { kind: 'proposal-notice' } } })
+    for (const buddy of [first, second]) {
+      expect((await f.store.deliveries(peer, f.tab, buddy.main)).filter(d => d.status === 'queued')).toEqual([])
+    }
+    expect((await f.store.decisions(peer, f.tab, 'open')).decisions).toContainEqual(expect.objectContaining({
+      conversationId: proposal.result.conversationId, question: 'Preserve drafts: How long?', options: ['Seven days'] }))
   })
 })

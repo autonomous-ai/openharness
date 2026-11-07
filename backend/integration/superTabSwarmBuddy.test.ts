@@ -106,6 +106,13 @@ async function projectSession(f: Swarm, chat: string, projectId: string | undefi
 }
 const texts = async (f: Swarm, chat: string, user: AuthUser, as?: string, cursor: Record<string, unknown> = {}) =>
   (await f.store.messages(user, f.tab, chat, cursor, as)).messages.map(m => m.text)
+/** The one Buddy [main]'s own line in its chat that it sent peer's [words] to the Secret PM, naming [goal] and marked with that
+ *  project. No PM writes in a person's chat any more (task #4547), so this is a project's line there that hides once it is lost. */
+async function secretLine(f: Swarm, chat: string, main: string, goal = 'SECRET PM LINE', words = 'Send it') {
+  const ask = String((await send(f, chat, words)).result.messageId)
+  await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: words, projectId: f.secret.projectId, goal, scope: 'S',
+    priority: 'normal' }, peer, main)
+}
 
 describe('one Buddy chat per person per Swarm', () => {
   it('opens one chat at Swarm level, the same from every project, read by its person alone', async () => {
@@ -581,22 +588,20 @@ describe('a project session', () => {
 })
 
 describe('the PM\'s lines and losing a project', () => {
-  it('puts a PM\'s private line in the one chat, marked with its project, and in the old chat for older apps', async () => {
+  // Task #4547: a person's chat with their own agent is theirs alone, so a PM's private line is refused and written nowhere.
+  it('refuses a PM\'s private line: nothing lands in the one chat, nor in the old chat for older apps', async () => {
     const f = await swarm()
-    const { chat } = await buddy(f)
-    await f.execute({ type: 'person.tell', personId: peer.sub, text: 'WEB PM LINE' }, owner, f.pms.web)
-    const rows = await db.superTabMessage.findMany({ where: { tabId: f.tab, text: 'WEB PM LINE' } })
-    const old = String((await f.execute({ type: 'buddy.chat', projectId: f.web.projectId }, peer)).result.conversationId)
-    expect(rows.map(r => r.conversationId).sort()).toEqual([chat, old].sort())
-    expect(rows.find(r => r.conversationId === chat)!.source).toMatchObject({ projectId: f.web.projectId })
+    await buddy(f)
+    await expect(f.execute({ type: 'person.tell', personId: peer.sub, text: 'WEB PM LINE' }, owner, f.pms.web)).rejects.toMatchObject({ code: 'PRIVATE_CHAT' })
+    expect(await db.superTabMessage.count({ where: { tabId: f.tab, text: 'WEB PM LINE' } })).toBe(0)
   })
 
   it('takes a lost project out of the Buddy: its sessions end, its lines hide, and the main Buddy reads it no more', async () => {
     const f = await swarm()
     const { chat, main } = await buddy(f)
     const { thread, agentId } = await projectSession(f, chat, f.secret.projectId, 'SECRET SESSION SENTINEL')
-    await f.execute({ type: 'person.tell', personId: peer.sub, text: 'SECRET PM LINE' }, owner, f.pms.secret)
-    expect(await texts(f, chat, peer)).toContain('SECRET PM LINE')
+    await secretLine(f, chat, main)
+    expect(JSON.stringify(await texts(f, chat, peer))).toContain('SECRET PM LINE')
     await f.execute({ type: 'project.sharing', projectId: f.secret.projectId, visibility: 'private', memberIds: [owner.sub] })
     const state = (await f.store.read(peer, f.tab)).state
     expect(state.agents.map(a => a.id)).not.toContain(agentId)
@@ -613,9 +618,8 @@ describe('the PM\'s lines and losing a project', () => {
 describe('the inbox (security review 1 of #2435)', () => {
   it('never previews a lost project\'s line in the one Buddy chat, nor its session threads', async () => {
     const f = await swarm()
-    const { chat } = await buddy(f)
-    await send(f, chat, 'An earlier word of mine')
-    await f.execute({ type: 'person.tell', personId: peer.sub, text: 'SECRET PM LINE' }, owner, f.pms.secret)
+    const { chat, main } = await buddy(f)
+    await secretLine(f, chat, main, 'SECRET PM LINE', 'An earlier word of mine')
     const preview = async () => JSON.stringify((await readInbox(f.store, peer, f.tab)).latest.filter(l => l.conversationId === chat))
     expect(await preview()).toContain('SECRET PM LINE')
     await f.execute({ type: 'project.sharing', projectId: f.secret.projectId, visibility: 'private', memberIds: [owner.sub] })
@@ -778,10 +782,9 @@ describe('security re-check 2 of #2435', () => {
 
   it('counts nothing of a lost project in what the person missed in # buddy', async () => {
     const f = await swarm()
-    const { chat } = await buddy(f)
-    await send(f, chat, 'Mine')
-    await f.execute({ type: 'person.tell', personId: peer.sub, text: 'SECRET PM LINE' }, owner, f.pms.secret)
-    // The PM's line is the one row by someone else: it is what they missed.
+    const { chat, main } = await buddy(f)
+    await secretLine(f, chat, main, 'SECRET PM LINE', 'Mine')
+    // The Buddy's line of the Secret project is the one row by someone else: it is what they missed.
     expect(await f.store.catchUp(peer, f.tab, chat, 0)).toMatchObject({ unread: 1 })
     await f.execute({ type: 'project.sharing', projectId: f.secret.projectId, visibility: 'private', memberIds: [owner.sub] })
     expect(await f.store.catchUp(peer, f.tab, chat, 0)).toMatchObject({ unread: 0 })

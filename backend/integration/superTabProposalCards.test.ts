@@ -161,7 +161,8 @@ describe('durable proposal cards', () => {
     expect((await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: String(partial.result.messageId) } })).map(d => d.agentId)).toEqual([worker])
   })
 
-  it('delivers a decided notice inside the sending person’s private Buddy chat', async () => {
+  // Task #4547: a person's Buddy chat is theirs and their own Buddy's alone, so the ruling stays on the card.
+  it('records a ruling on the card alone: nothing lands in, or reaches the Buddy from, the sending person’s private Buddy chat', async () => {
     const f = await fixture()
     const added = await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', setup: { name: 'Fixture Mac', cwd: '/fixture', engines: ['codex'] } })
     const startId = String(added.result.startId)
@@ -171,11 +172,11 @@ describe('durable proposal cards', () => {
     await host({ type: 'agent.startSettled', startId, warning: null })
     const id = await f.create(owner)
     await f.execute({ type: 'proposal.decide', conversationId: id, decision: 'no', reason: 'Outside positioning' }, owner, f.pm)
+    expect((await f.card(id)).proposal!.decision).toMatchObject({ kind: 'no', reason: 'Outside positioning' })
     const delivered = await f.store.deliveries(owner, f.tab, buddyId)
     const notices = await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: String(added.result.conversationId) } })
-    const decision = notices.find(m => (m.source as any)?.moment === 'decided')!
-    expect(decision).toBeDefined()
-    expect(delivered.some(d => d.messageId === decision.id)).toBe(true)
+    expect(notices.filter(m => (m.source as { moment?: string } | null)?.moment === 'decided' || m.text.includes('Outside positioning'))).toEqual([])
+    expect(delivered.filter(d => d.conversationId === String(added.result.conversationId))).toEqual([])
   })
 
   it('keeps a dormant card loaded when its person has a dormant default Buddy chat', async () => {
@@ -191,11 +192,13 @@ describe('durable proposal cards', () => {
     }
     await f.execute({ type: 'proposal.decide', conversationId: id, decision: 'no', reason: 'Outside positioning' }, owner, f.pm)
     expect((await f.card(id)).proposal!.decision).toMatchObject({ kind: 'no', reason: 'Outside positioning' })
+    // On the card alone (task #4547): the dormant default Buddy chat gets no notice.
     const notices = await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: String(second.result.conversationId) } })
-    expect(notices.some(m => (m.source as { moment?: string } | null)?.moment === 'decided')).toBe(true)
+    expect(notices.some(m => (m.source as { moment?: string } | null)?.moment === 'decided')).toBe(false)
   })
 
-  it('routes a dormant proposal overdue notice to the dormant default Buddy chat', async () => {
+  // Task #4547: the overdue line is on the card, where its people read it, never in the project owner's Buddy chat.
+  it('puts a dormant proposal’s overdue line on its card, never in the dormant default Buddy chat', async () => {
     const f = await fixture()
     await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', setup: { name: 'Fixture Mac', cwd: '/fixture', engines: ['codex'] } })
     const second = await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', name: 'Research' })
@@ -209,8 +212,10 @@ describe('durable proposal cards', () => {
     f.clock.now += 31 * 60_000
     await runTimeCheckPass(db, f.store, f.clock.now)
     expect((await f.card(id)).proposal!.overdue).toBe(true)
-    const notices = await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: String(second.result.conversationId) } })
-    expect(notices.some(m => (m.source as { kind?: string } | null)?.kind === 'proposal-overdue')).toBe(true)
+    const overdue = (conversationId: string) => db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId } })
+      .then(rows => rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'proposal-overdue'))
+    expect(await overdue(id)).toEqual([expect.objectContaining({ text: 'This proposal has waited over 30 minutes for a PM decision.' })])
+    expect(await overdue(String(second.result.conversationId))).toEqual([])
   })
 
   it('delivers urgent proposals first on both a full poll and its fast repeat', async () => {
