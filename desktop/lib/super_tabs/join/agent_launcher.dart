@@ -1,4 +1,8 @@
+import 'dart:async';
+
 import 'package:clock/clock.dart';
+
+import '../../logging/app_log.dart';
 
 /// Safe presentation text for a refused own-agent start. Never carries a raw
 /// daemon or network error, which can contain personal paths or content.
@@ -42,7 +46,32 @@ class SwarmAgentLauncher {
     }
   }
 
+  /// Fails only with a [SwarmAgentLaunchFailure]: a timeout or a raw error
+  /// becomes a sentence naming the computer, never its text.
   Future<Map<String, dynamic>> create(String engine, String operationId) async {
+    try {
+      return await _create(engine, operationId);
+    } on SwarmAgentLaunchFailure {
+      rethrow;
+    } on TimeoutException {
+      throw SwarmAgentLaunchFailure(
+        '$machineName didn’t answer in time. Check that Harness is running there, then try again.',
+      );
+    } catch (failure) {
+      appLog.info(
+        'super-tabs',
+        'own-agent start failed: ${failure.runtimeType}',
+      );
+      throw SwarmAgentLaunchFailure(
+        'Couldn’t reach Harness on $machineName. Check that it’s running, then try again.',
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> _create(
+    String engine,
+    String operationId,
+  ) async {
     _guard();
     // A computer the Swarm does not list yet is recorded Buddy-only with its
     // folder and engines (backend buddy.create setup).

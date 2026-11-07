@@ -47,8 +47,14 @@ class HarnessLaunchIntegration {
     this.agentKind,
     this.ownMachinesOnly = false,
     this.startBuddy,
+    this.heading,
+    this.intro,
   });
   final String creationId, actionLabel;
+
+  /// What the form is for and one sentence on it, above its pickers, where
+  /// the form alone doesn't say: Join's Bring agent (#4442). Null shows none.
+  final String? heading, intro;
   String? swarmRole;
   String? swarmSkillMode;
 

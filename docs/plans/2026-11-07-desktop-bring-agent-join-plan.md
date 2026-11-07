@@ -68,17 +68,16 @@ its button by what it will do.
 - Modify: `desktop/lib/state/harness_launch_integration.dart` (add `heading`, `intro`)
 - Modify: `desktop/lib/widgets/new_harness_form.dart` (show them; Not now beside the action for a Buddy)
 - Modify: `desktop/lib/super_tabs/join/bring_agent.dart`, `desktop/lib/super_tabs/join/agent_launcher.dart`,
-  `desktop/lib/super_tabs/join_dialog.dart` (pass the Swarm's name)
 - Test: `desktop/test/swarm_first_join_widget_test.dart`, `desktop/test/swarm_v3_agent_launcher_test.dart`
 
 **Interfaces:**
 - `HarnessLaunchIntegration({String? heading, String? intro})`: null shows nothing, as today.
-- `showBringAgentForm(..., required String swarmName)`.
+- The Swarm's name is the controller's snapshot name; `showBringAgentForm` keeps its signature.
 
 Copy, exact:
 - Heading: `Bring your agent to <Swarm>`.
-- Intro: `Your Buddy runs on this computer, under your own sign-in, and works with you in <Swarm>. You can also start
-  it later from your Buddy chat.`
+- Intro: `Your Buddy is your own agent in <Swarm>: it runs on your computer, under your sign-in, and you can also
+  start it later from your Buddy chat.`
 - Not now: `Not now`.
 - Timeout: `<computer> didn’t answer in time. Check that Harness is running there, then try again.`
 - Any other raw failure: `Couldn’t reach Harness on <computer>. Check that it’s running, then try again.`

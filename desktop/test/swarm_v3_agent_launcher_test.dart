@@ -134,7 +134,14 @@ void main() {
         Object? failure;
         launcher
             .create('claude', 'op')
-            .then((r) => result = r, onError: (Object e) => failure = e);
+            .then<void>(
+              (r) {
+                result = r;
+              },
+              onError: (Object e) {
+                failure = e;
+              },
+            );
         async.elapse(const Duration(seconds: 5));
         expect(failure, isNull);
         expect(result?['startId'], 'one');

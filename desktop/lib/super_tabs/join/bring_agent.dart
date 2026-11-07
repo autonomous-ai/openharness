@@ -46,7 +46,7 @@ Future<Map<String, dynamic>?> showBringAgentForm(
       builder: (context) => AlertDialog(
         title: const Text('Connect this computer'),
         content: const Text(
-          'Wait for this computer’s Harness connection, then try bringing your agent again.',
+          'Wait for this computer’s Harness connection, then start your Buddy from your Buddy chat.',
         ),
         actions: [
           TextButton(
@@ -96,13 +96,25 @@ Future<Map<String, dynamic>?> showBringAgentForm(
       final pending = controller.pendingCommand;
       if (pending != null && jsonEncode(pending) != jsonEncode(command)) {
         throw const SwarmAgentLaunchFailure(
-          'Finish or retry the pending action in this org first.',
+          'Finish or retry the pending action in this Swarm first.',
         );
       }
       final result = pending == null
           ? await controller.command(command, operationId: operation)
           : await controller.retry();
       if (result != null) return result;
+      final refusal = controller.operationError;
+      if (controller.pendingCommand == null &&
+          refusal != null &&
+          !const {
+            'INVALID_COMMAND',
+            'VALIDATION_ERROR',
+            'UPDATE_REQUIRED',
+          }.contains(controller.operationErrorCode)) {
+        // Refused, with nothing kept to retry: the server's own sentence
+        // (a full or paused computer, say).
+        throw SwarmAgentLaunchFailure(refusal);
+      }
       if (const {
         'INVALID_COMMAND',
         'VALIDATION_ERROR',
@@ -119,9 +131,15 @@ Future<Map<String, dynamic>?> showBringAgentForm(
   );
   Map<String, dynamic>? started;
   String? startedOn;
+  final swarm = controller.snapshot?.name ?? 'this Swarm';
   final integration = HarnessLaunchIntegration(
     creationId: superTabOperationId(),
     actionLabel: 'Bring agent',
+    heading: 'Bring your agent to $swarm',
+    intro:
+        'Your Buddy is your own agent in $swarm: it runs on your computer, '
+        'under your sign-in, and you can also start it later from your Buddy '
+        'chat.',
     engines: const ['claude', 'codex'],
     ownMachinesOnly: true,
     prepare: (_, task, _) async => task,
@@ -157,6 +175,9 @@ Future<Map<String, dynamic>?> showBringAgentForm(
       context: context,
       transitionDuration: Duration.zero,
       veilBlur: 0,
+      // The offer doesn't come back by itself: only ×, Not now or Esc, each
+      // a choice, close it; a stray click outside doesn't (#4442).
+      barrierDismissible: false,
       builder: (dialog) => Padding(
         padding: const EdgeInsets.all(DesktopChrome.panelPadding),
         child: NewHarnessForm(
