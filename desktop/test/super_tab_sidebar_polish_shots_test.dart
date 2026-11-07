@@ -121,6 +121,14 @@ void main() {
             await tester.pump(const Duration(milliseconds: 50));
           }
           if (scene == 'polish') {
+            // At 880 the Board folds the left pane into its drawer (finding 12): open it as a person would.
+            if (find
+                .byKey(const ValueKey('super-swarm-switcher'))
+                .evaluate()
+                .isEmpty) {
+              await tester.tap(find.byTooltip('Conversations'));
+              await tester.pump(const Duration(milliseconds: 300));
+            }
             // The pointer on the cut Swarm name: its tooltip reads all of it.
             final mouse = await tester.createGesture(
               kind: PointerDeviceKind.mouse,
