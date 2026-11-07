@@ -17,7 +17,7 @@ export interface TeamConfig {
   owner: string
   ownerHome: string
   /** Windows: the owner's SID, read by the owner's own process before User Account Control, which may run setup as
-   *  another administrator. It names the owner in the handover folder's and the relay folder's ACLs. */
+   *  another administrator. It names the owner in the handover folder's ACL. */
   ownerSid?: string
   /** The world-readable file in the owner's home that only the home folder's mode protects. */
   sentinel: string

@@ -19,7 +19,7 @@ vi.mock('../lib/prisma.js', () => ({ prisma: mocks.prisma, machineAlive: { OR: [
 vi.mock('../lib/bus.js', () => ({ getAgentPresenceMany: mocks.presence, publishShareChanged: mocks.changed,
   publishDeviceMachineListChanged: mocks.listChanged }))
 vi.mock('../lib/ssoAuth.js', async original => ({ ...await original<typeof import('../lib/ssoAuth.js')>(), authenticateAccessToken: mocks.auth }))
-import { harnessShareRoutes, recipientShare } from './harnessShares.js'
+import { harnessShareRoutes, recipientShare, SHARES_TOLD_MS } from './harnessShares.js'
 import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
 import { logger } from '../utils/logger.js'
@@ -190,6 +190,25 @@ describe('account-bound harness invitations', () => {
     expect(mocks.listChanged).toHaveBeenCalledWith('ken', { reason: 'harness_shares' })
     // Named in the log, so a burst of `machines_changed` on someone's app can be traced to the invitation behind it.
     expect(info).toHaveBeenCalledWith('harness share: told the recipient it changed', { shareId: id, recipientId: 'ken' })
+  })
+  // Task #3925 (Ken's scan, 11-06): a Swarm's agent restarts made a share per new agent for each member, and each one told every
+  // app of theirs to read its shares again: a burst of starts was a burst of share-list reads. A recipient is told at once, then
+  // at most once more a window, so the last change is never lost.
+  it('tells a recipient once for a burst of changes, then once more when the burst is over', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      mocks.prisma.user.findUnique.mockResolvedValue({ id: 'ken' })
+      for (let i = 0; i < 5; i++) {
+        const id = randomUUID()
+        mocks.prisma.harnessShare.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce({ id, recipientEmail: 'ken@example.com' })
+        expect((await put({ ...input(), agentId: `agent-${i}` }, id)).statusCode).toBe(200)
+      }
+      expect(mocks.listChanged).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(SHARES_TOLD_MS)
+      expect(mocks.listChanged).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(SHARES_TOLD_MS * 2)
+      expect(mocks.listChanged).toHaveBeenCalledTimes(2)
+    } finally { vi.useRealTimers() }
   })
   it('tells the invited account when the owner takes the invitation back', async () => {
     const id = randomUUID()

@@ -1,16 +1,12 @@
-import 'claude_usage_source.dart';
-import 'codex_usage_source.dart';
+import 'claude_usage_report.dart';
+import 'codex_usage_report.dart';
 import 'usage_source.dart';
 import 'usage_window.dart';
 
 /// One remote machine's `usage_read_result`, as readings the rail can draw.
 ///
-/// The machine answered with its vendors' replies exactly as they came — HTTP
-/// status and body (`autonomous-harness/cli/src/lib/accountUsage.ts`) — so they
-/// are read here by the SAME mappers that read this computer's own
-/// ([claudeUsageFromAnswer], [codexUsageFromAnswer]). A window cannot be named
-/// one way for this Mac and another way for a machine across the relay, because
-/// there is only one place that names it.
+/// Only the CLI supplies readings. Desktop maps reported windows and never
+/// opens a vendor session or reads a credential.
 ///
 /// Never throws: an entry this build cannot read is dropped rather than failing
 /// the machine's whole answer, and an answer with no readable entry is empty —

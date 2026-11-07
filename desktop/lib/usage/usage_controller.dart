@@ -3,16 +3,13 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../core/test_run.dart';
-import '../core/viewer_mode.dart';
-import 'claude_usage_source.dart';
-import 'codex_usage_source.dart';
 import 'usage_accounts.dart';
 import 'usage_source.dart';
 import 'usage_window.dart';
 
 /// What each agent account has spent, kept current for the status rail.
 ///
-/// Polling, because neither vendor pushes,
+/// Polling the connected CLIs, which own their own rate-limit reports,
 /// and neither figure moves fast enough to be worth a socket. A minute is also
 /// the granularity the countdowns are printed at, so a faster poll would redraw
 /// the same minute.
@@ -27,14 +24,7 @@ class UsageController extends ChangeNotifier {
     this.remote,
     this.interval = const Duration(seconds: 60),
     bool autoStart = true,
-    bool? readsThisComputer,
-  }) : _sources =
-           sources ??
-           // A viewer build (a browser) runs no agent CLI, so it has no tokens of its own to
-           // read: its figures are the account's computers' ([remote]).
-           ((readsThisComputer ?? !kViewerMode)
-               ? [ClaudeUsageSource(), CodexUsageSource()]
-               : const []) {
+  }) : _sources = sources ?? const [] {
     for (final source in _sources) {
       _readings[source.provider] = ProviderUsage.loading(source.provider);
     }
@@ -46,9 +36,8 @@ class UsageController extends ChangeNotifier {
 
   final List<UsageSource> _sources;
 
-  /// Asks every connected remote machine what ITS accounts have spent
-  /// (`AppNotifier.readRemoteUsage`). Null reads this computer only — every
-  /// test, and anything that has no machines to ask.
+  /// Asks connected computers for their CLI reports, including this computer.
+  /// Null leaves only explicitly injected sources (used by tests).
   final Future<List<MachineUsage>> Function()? remote;
 
   List<MachineUsage> _remote = const [];
@@ -83,6 +72,8 @@ class UsageController extends ChangeNotifier {
   /// Every provider's reading, in the order the sources were given.
   List<ProviderUsage> get readings => [
     for (final source in _sources) _readings[source.provider]!,
+    for (final machine in _remote.where((machine) => machine.isLocal))
+      ...machine.readings,
   ];
 
   /// The providers with figures worth printing on the rail.
@@ -94,7 +85,10 @@ class UsageController extends ChangeNotifier {
   /// One figure per ACCOUNT, this computer's first — see [groupUsageAccounts].
   ///
   /// [readings] stays this computer's alone; this is the grouped view.
-  List<UsageAccount> get accounts => groupUsageAccounts(readings, _remote);
+  List<UsageAccount> get accounts => groupUsageAccounts(
+    readings,
+    _remote.where((machine) => !machine.isLocal).toList(),
+  );
 
   /// Whether the rail has anything at all to say — figures, or a reason there
   /// are none. False only before the first cycle resolves.
@@ -125,11 +119,22 @@ class UsageController extends ChangeNotifier {
       answers = await ask();
     } catch (_) {
       // Keep the last good answer, the same rule the local half follows.
+      if (!_disposed && request == _remoteRequest && _sources.isEmpty) {
+        _landed = true;
+        stale = true;
+        notifyListeners();
+      }
       return;
     }
     // A slower, older answer must not overwrite a newer one.
     if (_disposed || request != _remoteRequest) return;
     _remote = answers;
+    if (_sources.isEmpty) {
+      _landed = true;
+      stale = !answers.any(
+        (machine) => machine.readings.any((r) => r.hasFigures),
+      );
+    }
     notifyListeners();
   }
 
@@ -145,6 +150,10 @@ class UsageController extends ChangeNotifier {
 
   Future<void> _refreshLocal() async {
     _started = true;
+    if (_sources.isEmpty) {
+      if (remote == null) _landed = true;
+      return;
+    }
     final request = ++_request;
     final results = await Future.wait(_sources.map((s) => s.read()));
     // A refresh that finished after a newer one started is thrown away: its

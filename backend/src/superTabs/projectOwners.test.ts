@@ -159,12 +159,13 @@ describe('a project whose owner leaves or is removed', () => {
 
 describe('a private project left with no member', () => {
   const configuration = { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null }
-  /** P's private X, with a task worked by an agent on D's machine, and P removed by the Swarm's owner. */
+  /** P's private X, with a task worked by P's own agent on P's machine (Swarm v3: an agent works only on projects its person
+   *  reads, task #4120), and P removed by the Swarm's owner. */
   function ownerless() {
     const f = setup(), x = f.create(p)
     const task = f.run({ type: 'conversation.create', projectId: x.projectId, title: 'Secret task', brief: 'Secret', checks: [] }, p).conversationId as string
-    const agentId = f.run({ type: 'agent.add', conversationId: task, harnessId: 'h', machineId: 'd-mac', name: 'Worker', configuration, lead: false }, p,
-      { contribution: { machineOwnerId: 'd', contributorId: 'd' } }).agentId as string
+    const agentId = f.run({ type: 'agent.add', conversationId: task, harnessId: 'h', machineId: 'p-mac', name: 'Worker', configuration, lead: false }, p,
+      { contribution: { machineOwnerId: 'p', contributorId: 'p' } }).agentId as string
     f.run({ type: 'work.assign', conversationId: task, agentId }, p)
     f.run({ type: 'member.remove', userId: 'p' })
     return { f, x, task, agentId }
@@ -187,7 +188,10 @@ describe('a private project left with no member', () => {
     const { f, x } = ownerless()
     expect(visibleState(f.state, owner).ownerlessProjects).toEqual([{ id: x.projectId, name: 'X', conversations: 2 }])
     expect(visibleState(f.state, c).ownerlessProjects).toBeUndefined()
-    const agent: Actor = { kind: 'agent', agentId: f.state.agents[0]!.id, machineOwnerId: 'd' }
+    // Another member's agent, in the Swarm's own project: it sees nothing of X either.
+    const other = f.run({ type: 'agent.add', conversationId: 'lead', harnessId: 'other', machineId: 'd-mac', name: 'Other', configuration, lead: false }, owner,
+      { contribution: { machineOwnerId: 'd', contributorId: 'd' } }).agentId as string
+    const agent: Actor = { kind: 'agent', agentId: other, machineOwnerId: 'd' }
     expect(visibleState(f.state, agent).ownerlessProjects).toBeUndefined()
   })
 
@@ -271,8 +275,8 @@ describe('every way in and out of the Swarm', () => {
   it('places work on a machine as its owner\'s own only for its owner now, not the same account at a later membership', () => {
     const f = setup(), x = f.create(p)
     f.state.machines = [{ machineId: 'p-mac', contributorId: 'p', buddyOnly: true } as unknown as ContributedMachine]
-    expect(teamWorkCheck(f.state, 'p-mac', 'p', projectOf(f.state, x.projectId), 1000)).toBeNull()
+    expect(teamWorkCheck(f.state, 'p-mac', 'p', projectOf(f.state, x.projectId))).toBeNull()
     f.state.people.find(person => person.id === 'p')!.generation = 'p-second'
-    expect(teamWorkCheck(f.state, 'p-mac', 'p', projectOf(f.state, x.projectId), 1000)).toMatchObject({ code: 'NOT_SWARM_MACHINE' })
+    expect(teamWorkCheck(f.state, 'p-mac', 'p', projectOf(f.state, x.projectId))).toMatchObject({ code: 'NOT_SWARM_MACHINE' })
   })
 })
