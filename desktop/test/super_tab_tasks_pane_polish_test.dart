@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/pull_request_icon.dart';
@@ -16,12 +17,13 @@ import 'super_tab_parts_test.dart' show recorded;
 import 'super_tab_personal_tasks_pane_test.dart' show TasksFixture, inCard;
 import 'super_tab_personal_tasks_test.dart' show task;
 import 'support/memory_key_value_store.dart';
+import 'support/real_fonts.dart';
 
-const _pr = 'https://github.com/autonomous-ai/openharness/pull/3464';
+const taskHeaderPr = 'https://github.com/autonomous-ai/openharness/pull/3464';
 const _waiting = 'Waiting for the last change to be confirmed';
 
 /// A controller whose Swarm holds task `aeef` with its pull request's card, merged or not.
-SuperTabController _headerController({required bool merged}) {
+SuperTabController taskHeaderController({required bool merged}) {
   final store = MemoryKeyValueStore();
   return SuperTabController(
     tabId: 'c51479bd73b59e58176ad9e4',
@@ -39,7 +41,7 @@ SuperTabController _headerController({required bool merged}) {
         if (part['key'] != 'aeef') continue;
         (part['data'] as Map)['cards'] = {
           'pullRequests': [
-            {'url': _pr, 'messageId': 'm1', if (merged) 'mergedAt': 1},
+            {'url': taskHeaderPr, 'messageId': 'm1', if (merged) 'mergedAt': 1},
           ],
         };
       }
@@ -57,7 +59,10 @@ Finder _prIcon(String state) => find.byWidgetPredicate(
 );
 
 void main() {
-  setUpAll(superTabLoadZones);
+  setUpAll(() async {
+    await loadRealFonts();
+    await superTabLoadZones();
+  });
   late TasksFixture f;
 
   Future<void> pumpPane(WidgetTester t) => t.pumpWidget(
@@ -142,16 +147,17 @@ void main() {
       expect(find.byType(DropdownButton<String>), findsNothing);
       await t.tap(mode);
       await t.pumpAndSettle();
-      expect(
-        find.text('Tasks you ask for start without waiting for you.'),
-        findsOneWidget,
-      );
-      expect(
-        find.text(
-          'Tasks you ask for wait for your Approve before work starts.',
-        ),
-        findsOneWidget,
-      );
+      // Each says what it does, whole, in the pane's 340.
+      for (final detail in [
+        'Tasks you ask for start right away.',
+        'Tasks you ask for wait until you approve them.',
+      ]) {
+        expect(
+          t.renderObject<RenderParagraph>(find.text(detail)).didExceedMaxLines,
+          isFalse,
+          reason: detail,
+        );
+      }
       await t.tap(find.text('Review').last);
       await t.pumpAndSettle();
       expect(f.commands.single, {
@@ -184,7 +190,7 @@ void main() {
     testWidgets(
       'the task header draws the ${merged ? 'merged' : 'open'} pull request icon',
       (t) async {
-        final c = _headerController(merged: merged);
+        final c = taskHeaderController(merged: merged);
         addTearDown(c.dispose);
         await c.refresh();
         expect(c.snapshot?.conversation('aeef'), isNotNull);
@@ -197,7 +203,7 @@ void main() {
                   task('aeef', 1, 20)
                     ..['status'] = 'done'
                     ..['canApprove'] = false
-                    ..['pullRequestUrl'] = _pr,
+                    ..['pullRequestUrl'] = taskHeaderPr,
                 ),
               ),
             ),

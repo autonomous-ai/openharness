@@ -238,18 +238,18 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                                 labels: const ['Auto approve', 'Review'],
                                 textStyle: DesktopChrome.metadata(),
                               ),
-                              menuWidth: 280,
+                              menuWidth: 300,
                               menuAlignedToEnd: true,
                               options: const [
                                 SelectOption(
                                   value: 'autoApprove',
                                   label: 'Auto approve',
-                                  detail: 'Tasks you ask for start without waiting for you.',
+                                  detail: 'Tasks you ask for start right away.',
                                 ),
                                 SelectOption(
                                   value: 'review',
                                   label: 'Review',
-                                  detail: 'Tasks you ask for wait for your Approve before work starts.',
+                                  detail: 'Tasks you ask for wait until you approve them.',
                                 ),
                               ],
                               onChanged: (value) {
