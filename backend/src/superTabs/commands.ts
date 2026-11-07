@@ -4488,7 +4488,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       const chatPost = actor.kind === 'agent' && !command.agentOnly && isProjectChat(state, group)
       const chatAsk = chatPost ? requireChatPost(group, command, context.reply) : null
-      const chatAnswer = chatPost ? requireChatAnswer(group, command, context.reply) : null
+      const owedByPoster = actor.kind === 'agent' && !!group.owed?.some(ask => ask.id === context.reply?.id
+        && (leadsGroup(state, group, actor.agentId) || ask.delegatedTo === actor.agentId))
+      const chatAnswer = chatPost ? requireChatAnswer(group, command, context.reply, owedByPoster) : null
       if (chatPost && inMainChat(command, context.reply)) {
         requireChatContent(state, group, command.text)
       }
@@ -4572,7 +4574,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         handoffAsk(state, group, poster?.id ?? null, command.handoff, addressed)
       }
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
-      const postText = command.handoff ? `${text}\n\nAnswer message ${command.handoff} in ${groupProject(state, group).leadConversationId} in its thread.` : text
+      const postText = command.handoff ? `${text}\n\nAnswer message ${command.handoff} in ${groupProject(state, group).leadConversationId}.` : text
       message(group.id, postText, recipients, command.replyTo, command.agentOnly ? { ...AGENT_ONLY, ...command.notice ? { notice: command.notice } : {} } : undefined, attachments, tagged,
         tagged.length ? command.mentionsIfNoWorker : undefined)
       if (!command.agentOnly) effects.messages.at(-1)!.post = true

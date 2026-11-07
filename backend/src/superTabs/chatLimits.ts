@@ -85,11 +85,13 @@ export function recordChatPost(group: Conversation, askId: string | null, messag
   if (askId) group.chatLimits!.asks.find(ask => ask.id === askId)!.main.push(messageId)
 }
 
-/** Explicit answer links and person replies mirrored into main are answers; plain thread replies are discussion. */
-export function requireChatAnswer(group: Conversation, command: Send, reply: Reply): string | null {
+/** Explicit answer links and person replies mirrored into main are answers; plain thread replies are discussion. [owedByPoster]:
+ *  the ask is still owed by the poster, its PM or the agent the PM entrusted (pulse.ts): another agent's answer does not settle it,
+ *  so it does not stop theirs (task #4555, now that every agent's reply shows in the chat). */
+export function requireChatAnswer(group: Conversation, command: Send, reply: Reply, owedByPoster = false): string | null {
   if (!reply || reply.agentOnly || !(command.answers || command.answer || (command.replyTo && inMainChat(command, reply) && reply.author.kind === 'person'))) return null
   const ask = group.chatLimits?.asks.find(ask => ask.id === reply.id)
-  requireUnanswered(group, reply.id, ask?.answer)
+  requireUnanswered(group, reply.id, owedByPoster ? undefined : ask?.answer)
   if (!ask) {
     if (group.chatLimits?.closedThrough !== undefined && reply.createdAt <= group.chatLimits.closedThrough) return closedAsk()
   }
