@@ -53,7 +53,7 @@ Affected widget files on macOS with Flutter 3.47.9; changed-file analysis; `pyth
 
 Implemented the Manage-only presentation and regression coverage. Targeted macOS widget checks passed: 29 across mockups, standard, screenshots and Manage navigation; 81 existing Machines tests (110 total). Changed-file Flutter analysis, UI style gate and diff whitespace checks passed. Red tests were committed before implementation; replay against the original presentation produced the expected failures.
 
-Light/dark captures and side-by-side reference comparisons are attached to task #3974. Fixture values and alphabetical ordering differ from the reference. Native Windows/Linux windows and OS accessibility/theme switching remain unverified; independent Team-account testing is offscreen.
+Light/dark captures and side-by-side reference comparisons are attached to task #3974. Fixture values and alphabetical ordering differ from the reference. Native Windows/Linux windows and OS accessibility/theme switching remain unverified.
 
 Same 16-machine debug/offscreen redraw workload (100 updates): base median 2840µs / p95 4595µs; current median 3098µs / p95 4533µs. Reusing sorted views removed a repeated grouping pass. This is a widget microbenchmark, not native production latency; median increased 258µs while p95 decreased 62µs.
 
@@ -62,7 +62,7 @@ Final delivery goes through independent Integrator review/test and ready-PR Linu
 
 ## Independent review fixes
 
-- Restored local Team Set up / Restart / Retry in Manage's contextual menu, sharing the existing compact-row handler. Regression committed at 8a17a35e1, then observed red; fixture targeting refined before implementation at 85a42644e.
+- Restored local Team Set up / Restart / Retry in Manage's contextual menu (8a17a35e1, 85a42644e). Dropped at the main merge for Swarm v3 (#4188): v3 removes Team accounts, so Manage offers no Team setup; the compact row keeps main's.
 - Added the local endpoint port and monospace machine ID/port; b7b9ce375 failed before the implementation in 4b0b1ad74.
 - Updated legacy Manage crew-line assertions to inspect crew chips, expanded asleep states and disk columns. Project-disk priority, missing-reading behavior and stale-reading age remain covered. Three legacy expectations were observed failing before adjustment.
 - After these fixes: 33 passed across crew, Team machine, mockup and screenshot files; earlier affected Machines and account-move checks passed (81 + 6). Changed-file analysis and UI style gate passed. Regenerated light/dark captures include port 18473.

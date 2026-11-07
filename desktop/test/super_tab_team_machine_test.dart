@@ -4,8 +4,6 @@
 // words are one line when teammates' agents cannot run there.
 import 'dart:io';
 
-import 'package:flutter/gestures.dart';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/agent_details.dart';
@@ -126,12 +124,14 @@ String? _problemText(WidgetTester tester, String id) =>
 
 void main() {
   setUpAll(() => loadCaptureFonts(Platform.environment['TEAM_RESTART_SHOTS']));
-  testWidgets('Manage menu preserves local Team setup and restart flows', (
+  testWidgets('Manage names this computer by its local port, in mono', (
     tester,
   ) async {
-    final daemon = _TeamDaemon();
-    final app = createApp(connectionForTest: (_) => daemon, connected: true)
-      ..teamAccountHereForTest = true;
+    final app = createApp(
+      connectionForTest: (_) => _TeamDaemon(),
+      connected: true,
+    );
+    addTearDown(app.dispose);
     app.machineStates['m']!.localOnly = true;
     app.machineStates['m']!.localEndpoint = LocalCliEndpoint(
       computerId: 'test-computer',
@@ -139,76 +139,36 @@ void main() {
       protocolVersion: 1,
       terminalProtocolVersion: 1,
     );
-    for (final restart in [false, true]) {
-      daemon.status = {'ok': true, 'state': restart ? 'exists' : 'none'};
-      final server = _swarm();
-      server.state['machines'] = [
-        _pool(
-          'm',
-          contributor: 'owner',
-          teamWork: _refused('TEAM_ACCOUNT_REQUIRED'),
-        ),
-        if (restart)
-          _pool(
-            'm-team',
-            contributor: 'owner',
-            host: 'm',
-            age: _offlineAge,
-            teamWork: _refused('MACHINE_OFFLINE'),
-          ),
-      ];
-      final c = server.controller();
-      await c.refresh();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: SuperTabMachines(
-              controller: c,
-              app: app,
-              manage: true,
-              ticks: false,
-              onAddAgent: (_) {},
-            ),
+    final server = _swarm();
+    server.state['machines'] = [_pool('m', contributor: 'owner')];
+    final c = server.controller();
+    await c.refresh();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SuperTabMachines(
+            controller: c,
+            app: app,
+            manage: true,
+            ticks: false,
+            onAddAgent: (_) {},
           ),
         ),
-      );
-      await tester.pumpAndSettle();
-      final metadata = tester.widget<Text>(
-        find.byKey(const ValueKey('machines-metadata-m')),
-      );
-      expect(
-        metadata.textSpan!.toPlainText(),
-        contains('This machine · m · port 18473'),
-      );
-      final identity = (metadata.textSpan! as TextSpan).children!
-          .whereType<TextSpan>()
-          .first;
-      expect(identity.style!.fontFamily, grid.AppType.monoFamily);
-      await tester.tap(
-        find.byKey(const ValueKey('super-machine-m')),
-        buttons: kSecondaryMouseButton,
-      );
-      await tester.pumpAndSettle();
-      final action = find.byKey(
-        const ValueKey('super-machine-menu-team-setup'),
-      );
-      expect(action, findsOneWidget);
-      expect(
-        find.descendant(
-          of: action,
-          matching: find.text(restart ? 'Restart' : 'Set up'),
-        ),
-        findsOneWidget,
-      );
-      await tester.tap(action);
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const Key('team-account-setup-continue')),
-        findsOneWidget,
-      );
-      await _unmount(tester, c);
-    }
-    app.dispose();
+      ),
+    );
+    await tester.pumpAndSettle();
+    final metadata = tester.widget<Text>(
+      find.byKey(const ValueKey('machines-metadata-m')),
+    );
+    expect(
+      metadata.textSpan!.toPlainText(),
+      contains('This machine · m · port 18473'),
+    );
+    final identity = (metadata.textSpan! as TextSpan).children!
+        .whereType<TextSpan>()
+        .first;
+    expect(identity.style!.fontFamily, grid.AppType.monoFamily);
+    await _unmount(tester, c);
   });
 
   testWidgets(
