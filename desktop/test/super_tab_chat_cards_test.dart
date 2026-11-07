@@ -143,7 +143,6 @@ void main() {
     }
 
     testWidgets('View brief opens with Enter', (tester) async {
-      final c = await showView(tester, ConversationServer());
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -159,7 +158,6 @@ void main() {
       );
       await press(tester, 'View brief');
       expect(find.text('Give every agent a face.'), findsOneWidget);
-      await c.flush();
     });
 
     testWidgets('More opens with Enter', (tester) async {

@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
 import '../../shared/theme/app_theme.dart' as grid;
-import '../../widgets/desktop_chrome.dart';
 import '../swarm_type.dart';
+import 'chat_link.dart';
 
 /// A long message folded after about [lines] lines, with More to read it all
 /// (anh Dee's mockup, 11-07, #4529): no walls of text in the chat.
@@ -41,22 +41,11 @@ class _SwarmFoldState extends State<SwarmFold> {
           child: widget.child,
         ),
         if (_overflows)
-          MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: GestureDetector(
-              onTap: () => setState(() => _open = true),
-              child: Semantics(
-                button: true,
-                child: Padding(
-                  padding: const EdgeInsets.only(
-                    top: grid.AppDesktop.bubbleNoteGap,
-                  ),
-                  child: Text(
-                    'More',
-                    style: SwarmType.body(context, color: DesktopChrome.accent),
-                  ),
-                ),
-              ),
+          Padding(
+            padding: const EdgeInsets.only(top: grid.AppDesktop.bubbleNoteGap),
+            child: SwarmChatLink(
+              label: 'More',
+              onPressed: () => setState(() => _open = true),
             ),
           ),
       ],

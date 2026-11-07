@@ -3521,6 +3521,31 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
+  /// A decision asked of a person, or the one made, as a card (anh Dee's
+  /// mockup, 11-07, #4529): Decision or Decided, its question, and View for
+  /// the rest; null for any other message.
+  Widget? _decisionCard(SuperTabMessage message) {
+    final kind = message.source['kind'];
+    if (!_decisionKinds.contains(kind)) return null;
+    final first = message.text.trim().split('\n').first;
+    // "River asks dee (#12): Ship it?" reads as its question.
+    final asks = kind == 'decision-asked' ? first.indexOf(': ') : -1;
+    return SwarmChatCard(
+      icon: AppIcons.flag,
+      label: kind == 'decision-delegated' ? 'Decided' : 'Decision',
+      title: asks < 0 ? first : first.substring(asks + 2),
+      action: 'View',
+      details: SuperTabMessageText(message.text),
+    );
+  }
+
+  /// The backend's decision lines (superTabs/decisions.ts).
+  static const _decisionKinds = {
+    'decision-asked',
+    'decision-delegated',
+    'decision-must-agree',
+  };
+
   /// Whether [message] is said between the two parties of a one-on-one chat
   /// (a Buddy chat, an agent chat): the reader and that chat's own agent. Its
   /// bubble carries no name or face (#4529); a line from anyone else there,
@@ -4962,7 +4987,9 @@ class _SuperTabViewState extends State<SuperTabView>
       message: message,
       joinsBelow: joinsBelow,
       oneOnOne: _oneOnOne(message),
-      brief: card?.task == true ? _briefCard(group!, message) : null,
+      brief: card?.task == true
+          ? _briefCard(group!, message)
+          : _decisionCard(message),
       card: card == null
           ? null
           : SuperTabLiveCard(
