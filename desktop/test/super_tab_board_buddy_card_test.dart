@@ -87,7 +87,6 @@ void main() {
         'accountId': 'owner',
         'selectedId': 'lead',
         // v3 folds Projects while the person has an agent.
-        'projectsGroupOpen': true,
       },
     );
     await tester.runAsync(c.refresh);
@@ -109,6 +108,9 @@ void main() {
       ),
     );
     await settle(tester);
+    // A project's Board opens from the Projects grid (task #4466).
+    await tester.tap(find.byKey(const ValueKey('super-projects')));
+    await tester.pump();
     await tester.tap(key('super-group-lead'));
     await settle(tester);
     return c;

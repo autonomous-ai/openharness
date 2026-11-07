@@ -67,12 +67,7 @@ void main() {
     server.append('What shall we work on?', conversationId: 'buddy-owner-lead');
     final c = server.controller(
       account: 'owner',
-      initial: {
-        'tabId': 'tab',
-        'projectsGroupOpen': true,
-        'accountId': 'owner',
-        'selectedId': selected,
-      },
+      initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': selected},
     );
     await tester.runAsync(c.refresh);
     await tester.pumpWidget(
@@ -110,6 +105,9 @@ void main() {
   testWidgets('opening a project shows its Board, and the right pane is the '
       "person's Buddy, not the project chat", (tester) async {
     final (c, _) = await show(tester);
+    // A project's Board opens from the Projects grid (task #4466).
+    await tester.tap(find.byKey(const ValueKey('super-projects')));
+    await tester.pump();
     await tester.tap(_key('super-group-lead'));
     await _settle(tester);
     expect(_key('super-tasks-lead'), findsOneWidget);
@@ -122,6 +120,9 @@ void main() {
   testWidgets("a card's chat opens on the right beside the Board, and its "
       'header goes back to the Buddy', (tester) async {
     final (c, _) = await show(tester);
+    // A project's Board opens from the Projects grid (task #4466).
+    await tester.tap(find.byKey(const ValueKey('super-projects')));
+    await tester.pump();
     await tester.tap(_key('super-group-lead'));
     await _settle(tester);
     // The wider chat leaves the Board narrower: it scrolls sideways to the card.
@@ -147,6 +148,9 @@ void main() {
     server.append('A reply in its thread.', conversationId: 'offline');
     server.messages.last['thread'] = root;
     await tester.runAsync(c.refresh);
+    // A project's Board opens from the Projects grid (task #4466).
+    await tester.tap(find.byKey(const ValueKey('super-projects')));
+    await tester.pump();
     await tester.tap(_key('super-group-lead'));
     await _settle(tester);
     // The wider chat leaves the Board narrower: it scrolls sideways to the card.
@@ -171,6 +175,9 @@ void main() {
   testWidgets('the project Chat tab opens its chat in the middle, with its '
       'header, and the Board tab brings back the three panes', (tester) async {
     final (c, _) = await show(tester);
+    // A project's Board opens from the Projects grid (task #4466).
+    await tester.tap(find.byKey(const ValueKey('super-projects')));
+    await tester.pump();
     await tester.tap(_key('super-group-lead'));
     await _settle(tester);
     expect(_key('super-tasks-lead'), findsOneWidget);
@@ -247,6 +254,9 @@ void main() {
             width: width,
             brightness: brightness,
           );
+          // A project's Board opens from the Projects grid (task #4466).
+          await tester.tap(find.byKey(const ValueKey('super-projects')));
+          await tester.pump();
           await tester.tap(_key('super-group-lead'));
           await _settle(tester);
           expect(tester.getSize(_key('super-right-pane')).width, 340);
@@ -270,10 +280,14 @@ void main() {
         ..values['swarm_right_pane_hidden'] = '1';
       for (var mount = 0; mount < 2; mount++) {
         final (c, _) = await show(tester, store: store, brightness: brightness);
+        // A project's Board opens from the Projects grid (task #4466).
+        await tester.tap(find.byKey(const ValueKey('super-projects')));
+        await tester.pump();
         await tester.tap(_key('super-group-lead'));
         await _settle(tester);
         expectFixedPanes(tester);
-        expect(_key('super-group-lead'), findsOneWidget);
+        // The left pane is back: its Projects row, lit for the Board.
+        expect(_key('super-projects'), findsOneWidget);
         expect(_key('super-tasks-lead'), findsOneWidget);
         expect(find.text('What shall we work on?'), findsOneWidget);
         if (mount == 0) {
@@ -301,6 +315,9 @@ void main() {
         findsOneWidget,
       );
       await captureWindow(tester, shots, 'fixed-empty-${brightness.name}');
+      // A project's Board opens from the Projects grid (task #4466).
+      await tester.tap(find.byKey(const ValueKey('super-projects')));
+      await tester.pump();
       await tester.tap(_key('super-group-lead'));
       await _settle(tester);
       expect(
@@ -335,6 +352,9 @@ void main() {
     tester,
   ) async {
     final (c, server) = await show(tester);
+    // A project's Board opens from the Projects grid (task #4466).
+    await tester.tap(find.byKey(const ValueKey('super-projects')));
+    await tester.pump();
     await tester.tap(_key('super-group-lead'));
     await _settle(tester);
     server.state['projects'] = <dynamic>[];
@@ -356,6 +376,9 @@ void main() {
   testWidgets('the minimum Desktop window keeps the Board and chat, projects in their '
       'drawer', (tester) async {
     final (c, _) = await show(tester, width: 880);
+    // A project's Board opens from the Projects grid (task #4466).
+    await tester.tap(find.byKey(const ValueKey('super-projects')));
+    await tester.pump();
     await tester.tap(_key('super-group-lead'));
     await _settle(tester);
     expectFoldedLeft(tester);
@@ -377,6 +400,9 @@ void main() {
         ..values[SuperTabPaneLayout.storageKey] =
             '{"left":300,"right":280,"rightChosen":true}';
       final (c, _) = await show(tester, store: store);
+      // A project's Board opens from the Projects grid (task #4466).
+      await tester.tap(find.byKey(const ValueKey('super-projects')));
+      await tester.pump();
       await tester.tap(_key('super-group-lead'));
       await _settle(tester);
       expect(tester.getSize(_key('super-right-pane')).width, 340);
@@ -458,6 +484,9 @@ void main() {
         textScale: scale,
         selected: 'buddy-owner-lead',
       );
+      // A project's Board opens from the Projects grid (task #4466).
+      await tester.tap(find.byKey(const ValueKey('super-projects')));
+      await tester.pump();
       await tester.tap(_key('super-group-lead'));
       await _settle(tester);
       // Under 1000 scaled, projects fold into their drawer.
@@ -480,6 +509,9 @@ void main() {
   if (Platform.environment['HARNESS_LAYOUT_BENCH'] == '1') {
     testWidgets('Board divider drag benchmark', (tester) async {
       final (c, _) = await show(tester);
+      // A project's Board opens from the Projects grid (task #4466).
+      await tester.tap(find.byKey(const ValueKey('super-projects')));
+      await tester.pump();
       await tester.tap(_key('super-group-lead'));
       await _settle(tester);
       final drag = await tester.startGesture(
