@@ -9,12 +9,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
+import 'package:harness/super_tabs/decisions.dart';
+import 'package:harness/super_tabs/decisions_view.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/tasks/personal_task_card.dart';
 import 'package:harness/super_tabs/tasks/personal_tasks.dart';
 import 'package:harness/terminal/terminal_typography.dart';
+
+import 'support/super_tab_fixture.dart';
 
 /// The Swarm elements gallery (desktop-design-system.md, Swarm elements): every
 /// element drawn in light and dark against its checked-in image. A new or
@@ -109,8 +113,11 @@ Future<void> _show(
   grid.AppTheme.brightness.value = brightness;
   addTearDown(() => grid.AppTheme.brightness.value = old);
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 500);
+  tester.view.physicalSize = const Size(760, 680);
   addTearDown(tester.view.reset);
+  // The decision cards read their answers' state from a reader's Decisions.
+  final reader = ConversationServer().controller(account: 'peer');
+  addTearDown(reader.dispose);
   await tester.pumpWidget(
     MaterialApp(
       debugShowCheckedModeBanner: false,
@@ -118,7 +125,11 @@ Future<void> _show(
       // A still spinner, so the image holds one frame.
       home: MediaQuery(
         data: const MediaQueryData(disableAnimations: true),
-        child: _Gallery(brightness, faces: faces),
+        child: _Gallery(
+          brightness,
+          faces: faces,
+          decisions: SuperTabDecisions.of(reader),
+        ),
       ),
     ),
   );
@@ -307,10 +318,35 @@ final _person = SuperTabPerson.fromJson({
   'role': 'owner',
 });
 
+/// A person's own Buddy's question, and a line it waits to post as them
+/// (task #4525), as the backend lists them.
+SuperTabDecision _decision(
+  String id,
+  String question,
+  List<String> options,
+  String unblocks, {
+  bool send = false,
+}) => SuperTabDecision.fromJson({
+  'id': id,
+  'conversationId': 'buddy',
+  'askerName': 'Buddy',
+  'question': question,
+  'options': options,
+  'recommended': send ? 0 : 1,
+  'unblocks': unblocks,
+  'fromBuddy': true,
+  'send': send,
+});
+
 class _Gallery extends StatelessWidget {
-  const _Gallery(this.brightness, {required this.faces});
+  const _Gallery(
+    this.brightness, {
+    required this.faces,
+    required this.decisions,
+  });
   final Brightness brightness;
   final List<String> faces;
+  final SuperTabDecisions decisions;
   static const boundary = ValueKey('swarm-elements-gallery');
 
   @override
@@ -443,6 +479,37 @@ class _Gallery extends StatelessWidget {
                         engineBadge: false,
                       ),
                       waiting: true,
+                    ),
+                  ),
+                ],
+              ),
+              title('Decision card: a Buddy question and a send line'),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 340,
+                    child: SuperTabDecisionCard(
+                      decisions: decisions,
+                      decision: _decision('d1', 'Keep the old flag a week?', [
+                        'Keep it',
+                        'Drop it',
+                      ], 'The cleanup'),
+                      onNotNow: () {},
+                    ),
+                  ),
+                  SizedBox(
+                    width: 340,
+                    child: SuperTabDecisionCard(
+                      decisions: decisions,
+                      decision: _decision(
+                        'd2',
+                        'Drop the old --legacy-sync flag from the CLI.',
+                        ['Send', 'Not now'],
+                        'Posts this in the harness chat as you.',
+                        send: true,
+                      ),
+                      onNotNow: () {},
                     ),
                   ),
                 ],

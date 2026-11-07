@@ -288,7 +288,8 @@ class SuperTabDecisionCard extends StatelessWidget {
               ? null
               : () => unawaited(decisions.delegate(decision)),
         ),
-      if (onNotNow != null)
+      // A send line's own Not now answers it: no second one that only folds it.
+      if (onNotNow != null && !decision.send)
         quietDecisionAction(
           key: ValueKey('super-decision-${decision.id}-later'),
           label: 'Not now',
@@ -312,7 +313,7 @@ class SuperTabDecisionCard extends StatelessWidget {
   }
 
   Widget _option(int index, String option) {
-    final recommended = index == decision.recommended;
+    final recommended = index == decision.marked;
     final busy = decisions.answering.contains(decision.id);
     final onPressed = busy
         ? null
