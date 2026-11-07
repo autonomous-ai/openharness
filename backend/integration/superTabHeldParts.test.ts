@@ -61,8 +61,13 @@ async function write(tabId: string, pick: (all: parts.SwarmParts) => parts.PartW
 
 const liveOf = <T>(list: parts.Part<T>[]) => list.filter(p => !p.deleted)
 const observed = (tabId: string, held: HeldParts) => db.$transaction(tx => parts.loadObserved(tx, tabId, 'host', held))
-/** A command's load (store.ts loadRow), naming one quiet conversation as a command naming it does. */
-const commanded = (tabId: string, held: HeldParts | null, groupIds: string[] = []) => db.$transaction(tx => parts.loadActive(tx, tabId, { groupIds }, held))
+/** A command's load (store.ts loadRow), naming one quiet conversation as a command naming it does. Agents, machines, members
+ *  and progress in key order: a whole read comes in its plan's order, which no reader depends on (shape.ts orders by ordinal). */
+const commanded = async (tabId: string, held: HeldParts | null, groupIds: string[] = []) => {
+  const loaded = await db.$transaction(tx => parts.loadActive(tx, tabId, { groupIds }, held))
+  const sorted = <T extends { key: string }>(list: T[]) => [...list].sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+  return { ...loaded, agents: sorted(loaded.agents), machines: sorted(loaded.machines), members: sorted(loaded.members), progress: sorted(loaded.progress) }
+}
 
 describe('a full report\'s held parts (B3, #2597)', () => {
   it('load what a server holding nothing loads, after every kind of write', { timeout: 120_000 }, async () => {

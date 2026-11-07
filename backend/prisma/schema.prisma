@@ -2032,8 +2032,10 @@ model SwarmAgent {
   @@unique([tabId, key])
   @@index([tabId, changedAt])
   /// A Swarm's live agents (parts/light.ts, load.ts, read/host.ts): without it the read planned on [tabId, changedAt] and
-  /// examined every tombstone too (prod 2026-11-02: 1,070 examined for 40 returned). A command lists them by the columns a
-  /// held part is compared by (parts/held.ts), reading no document (task #4368).
+  /// examined every tombstone too (prod 2026-11-02: 1,070 examined for 40 returned). The held index below has it as its prefix;
+  /// it stays until a prod scan shows that one in use (task #4368).
+  @@index([tabId, deleted])
+  /// A command's live parts by the columns a held part is compared by (parts/held.ts): the listing reads no document (task #4368).
   @@index([tabId, deleted, key, version, changedAt])
   @@index([machineId, deleted])
   @@index([tabId, contributorId])
