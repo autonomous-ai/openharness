@@ -86,7 +86,8 @@ gets. So the server decides before it creates an issue, and these tasks never ge
 - **On a public repository, a brief that names someone.** Before publishing, the server runs the title and brief through
   `redactCredentials`, and checks them for any email address and any person, machine or account name from the Swarm's
   roster. On a match the task stays in Harness, and the PM is told which kind of name stopped it (never the name
-  itself). Editing the brief clears the hold, and the issue is created then.
+  itself). On any repository, a credential found by `redactCredentials` also holds the task: the redacted text is never
+  published in its place, and the PM is told to remove the secret. Editing the brief clears the hold, and the issue is created then.
 - **Every later write is checked the same way, not only the first.** Before the sync pass writes a title or body to an
   existing issue (a rename or `work.define`), it runs the same checks again: the name check on a public repository,
   and the never-published rule everywhere. A write that fails them isn't sent to GitHub. The Harness edit stays in
@@ -372,6 +373,9 @@ Order:
   - Changing either side so the pair stops matching stops sync at once. Nothing more is published, and no later edit
     comes into Harness. The project owner is told in one line which side to change. Making a linked private project
     public is refused with `REPOSITORY_AUDIENCE_MISMATCH`, which names why.
+  - Turning a linked private repository public makes every issue Harness wrote public at once, and Harness can't
+    take them back. So Project details warns the project owner of that when the project links a private repository,
+    and again in the one line sent when the `publicized` webhook stops sync.
   - Project details shows a mismatch as the missing condition, for example "Tasks stay in Harness: the repository is
     public and this project is private."
 - **Who reads a GitHub task's copy:** the existing `canReadProject` / `canReadGroup` predicate, the one every read path
