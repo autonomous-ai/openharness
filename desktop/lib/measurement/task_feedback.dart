@@ -42,7 +42,7 @@ Future<void> showTaskFeedback(
                         )
                       : snapshot.data?['enabled'] != true
                       ? const Text(
-                          'Product usage sharing is off. You can change it in Settings → Privacy.',
+                          'Product usage sharing is off. Change it in Settings → Privacy.',
                         )
                       : Column(
                           crossAxisAlignment: CrossAxisAlignment.start,

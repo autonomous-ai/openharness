@@ -83,7 +83,7 @@ class _ProductFeedbackState extends State<ProductFeedback> {
     } catch (_) {
       if (mounted) {
         setState(() {
-          _status = 'Couldn’t confirm receipt. You can retry the same answer.';
+          _status = 'Couldn’t confirm receipt. Try again.';
         });
       }
     } finally {
