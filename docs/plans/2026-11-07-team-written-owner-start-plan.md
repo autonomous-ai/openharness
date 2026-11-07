@@ -20,13 +20,13 @@ This plan is implemented by its Engineer, task by task, test first.
 ## Global Constraints
 
 - CLI only; `cli/src/superTabs/start.ts` and its spec.
-- Never read a Claude or ChatGPT login: the sign-in file is linked, never opened or copied.
+- Never read a Claude or ChatGPT login, nor name its file (`loginReads.spec.ts`).
 - No other start path changes: a Team daemon's starts and every normal start are as before.
 
 ## Review Focus
 
 - The branch's own project settings, hooks and trust never load for Team-written code, on Claude Code or Codex.
-- The linked sign-in is the person's own Codex home's (the start's profile when it names one), on their own computer.
+- Team-written code skips no permission check and no sandbox off a Team daemon.
 - A refused start creates nothing and says why.
 
 ## Task 1: Team-written starts off a Team daemon

@@ -311,7 +311,7 @@ export function createAgentCreator({
     // The Swarm starts its agents in full mode, so a machine that never accepted full mode's warning stops each one there
     // before its first turn (Claude Code's "Yes, I accept", the Mac Studio, 2026-10-26). The Swarm's owner chose that mode
     // for it; recorded the way the engine records the person's own yes, in the home this launch reads.
-    if (input.swarmRole && (permissionMode === 'full' || permissionMode === 'teamWritten')) {
+    if (input.swarmRole && permissionMode === 'full') {
       try { acceptFullMode(engine, native ? { ...native.environment, ...gridLaunch?.env, ...dshEnv } : undefined) }
       catch (error) { console.warn(`[agent] full mode acceptance · ${error instanceof Error ? error.message : error}`) }
     }
