@@ -8,7 +8,9 @@ This is the audit: every rule a Lead or a Member is given today, marked by wheth
 the four-part instructions spec (#4537, `docs/specs/2026-11-07-agent-instructions.md`, PR #3556). That spec says where
 each judgment rule goes (job page, AGENTS.md or removed). This audit says which rules become code, and in which task.
 There is no second map. The standing rule is in AGENTS.md, code standard 13: a rule in a prompt says why it can't be
-code, and its prompt line goes once its code ships.
+code, and its prompt line goes once its code fully enforces it. A safety rule (secrets, outside text, other accounts,
+production writes, processes) keeps its line even with code behind it, as the #4537 job pages do: code such as
+`redactCredentials` catches only the secrets it recognises, so it is a backstop, not the rule.
 
 ## What was read
 
@@ -28,7 +30,7 @@ enforces it, found in the code, not assumed.
 
 | Class | Means | Rows |
 |---|---|---|
-| `code` | Already enforced by code; the prompt line can go now (#4537 task 9) | 190 |
+| `code` | Already enforced by code; the prompt line can go now (#4537 task 9), unless it is a safety rule, which keeps its line | 190 |
 | `building` | Being made code in an open task (list below) | 90 |
 | `new` | Code can enforce it; nothing does yet | 125 |
 | `judgment` | Needs judgment no program can make; stays in a prompt, with why | 163 |
@@ -46,7 +48,8 @@ By source:
 
 ## New code: one task per family of rules
 
-Each task names its rows here, and removes their prompt lines once its code ships. The Lead gives each an owner.
+Each task names its rows here, and removes their prompt lines once its code fully enforces them; a safety rule's line
+stays (#4591, #4598, #4604 among them). The Lead gives each an owner.
 
 | Task | Rules it makes code | Check it adds |
 |---|---|---|
