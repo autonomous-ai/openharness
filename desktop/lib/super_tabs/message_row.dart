@@ -34,18 +34,16 @@ Widget superTabMessageAvatar(
   SuperTabPerson? person,
   double size = SuperTabMessageRow.avatarSize,
 }) {
-  const radius = grid.AppDesktop.messageAvatarRadius;
   if (agent != null) {
     return SuperTabAvatar.agent(
       agent,
       name: author,
       size: size,
       engineBadge: false,
-      radius: radius,
     );
   }
   if (person != null && !message.fromAgent) {
-    return SuperTabAvatar.person(person, size: size, radius: radius);
+    return SuperTabAvatar.person(person, size: size);
   }
   // Someone no longer in the Swarm keeps the face their recorded name gives.
   return SuperTabAvatar(
@@ -53,7 +51,6 @@ Widget superTabMessageAvatar(
     name: message.fromAgent ? author : superTabPersonName(message.authorName),
     size: size,
     pattern: message.fromAgent,
-    radius: radius,
   );
 }
 
