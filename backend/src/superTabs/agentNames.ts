@@ -36,10 +36,11 @@ const reviewer = /^reviewer(?:[\s#-]+\d+)?$/i
 const unnamed = (name: string): boolean => defaults.test(name) || reviewer.test(name) || automatic.test(name) || engine.test(name)
 
 function chosen(agent: NamedAgent): string | undefined {
-  // Every Reviewer kept "Reviewer" as its member name until 2026-10-30: that one stored name is given a real one.
+  // Every Reviewer kept "Reviewer" as its member name until 2026-10-30, and a local Cmd-N Member its engine's until task
+  // #4568: those stored names are given real ones.
   // Any other stored name stays, even one that reads like a role (a Buddy may be named so).
   const shown = agent.displayName?.trim()
-  if (shown && !reviewer.test(shown)) return agent.displayName
+  if (shown && !reviewer.test(shown) && !engine.test(shown)) return agent.displayName
   const name = agent.name.trim()
   return name && !unnamed(name) ? name : undefined
 }
@@ -79,7 +80,7 @@ export function freeAgentName(taken: (name: string) => boolean, seed: string): s
 export function agentDisplayName(agents: readonly NamedAgent[], id: string): string | undefined {
   const member = agents.find(agent => agent.id === id)
   if (!member) return undefined
-  if (member.displayName && !reviewer.test(member.displayName.trim())) return member.displayName
+  if (member.displayName && !reviewer.test(member.displayName.trim()) && !engine.test(member.displayName.trim())) return member.displayName
   const named = agents.map(agent => ({ ...agent }))
   assignAgentDisplayNames(named)
   return named.find(agent => agent.id === id)!.displayName
