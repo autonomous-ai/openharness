@@ -3,8 +3,8 @@ import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
 import { createSuperTab, SuperTabError, type Actor, type SuperTabState } from './model.js'
 import { memberPlan, memberQueue } from './members.js'
-import { crewSwarm } from './dispatch.test.js'
 import { dispatchPlan, DISPATCH_RULES } from './dispatch.js'
+import { touchesFor } from './parts/touches.js'
 
 // Task #4697 (anh Dee 11-07 21:20, card #4693 part A): one Member per person and project, made on their first accepted task
 // there; that project's tasks they ask for go to it one at a time; helpers only by three checks; every asked task needs
@@ -101,9 +101,22 @@ describe('the first Accept', () => {
     const [start] = memberStarts(f)
     expect(memberStarts(f)).toHaveLength(1)
     expect(start).toMatchObject({ contributorId: 'kai', machineOwnerId: 'kai', hostGrant: null })
-    expect(start!.request).toMatchObject({ machineId: 'kai-mac', regular: true, mainProjectId: lamp, member: { projectId: lamp }, worktree: true })
+    expect(start!.request).toMatchObject({ machineId: 'kai-mac', regular: true, mainProjectId: lamp, member: { projectId: lamp } })
     expect(start!.request.name).toMatch(/^[A-Z][a-z]+ · lamp$/)
     expect(f.group(start!.request.conversationId)).toMatchObject({ kind: 'agent-chat', title: start!.request.name })
+  })
+
+  // Two Accepts at once never take one free name or one slot: the start meets others on the head and its computer's ledger.
+  it('meets other starts on the head and on its computer\'s slots', () => {
+    const f = swarm()
+    f.run({ type: 'member.approvalMode', mode: 'review' }, kai)
+    const lamp = f.project('lamp')
+    const id = f.ask(lamp, 'Fix the boot logo')
+    const before = f.state
+    const command: Command = { type: 'task.approve', conversationId: id }
+    const effects = f.run(command, kai)
+    const touches = touchesFor(command, kai, before, effects)
+    expect(touches).toEqual(expect.arrayContaining([{ kind: 'head', key: 'head' }, { kind: 'machine', key: 'kai-mac' }]))
   })
 
   it('starts none for a later Accept in the same project', () => {
@@ -137,6 +150,7 @@ export function withMember(f = swarm(), count = 1) {
   f.run({ type: 'agent.startDispatch', startId: start.id }, kai, own)
   const member = f.run({ type: 'agent.started', startId: start.id, harnessId: 'h-member',
     configuration: { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null } }, kai, own).result.agentId as string
+  f.run({ type: 'agent.startSettled', startId: start.id, warning: null }, kai, own)
   return { f, lamp, tasks, member }
 }
 
@@ -175,7 +189,7 @@ describe('the Member', () => {
     const lamp = f.project('lamp')
     const id = f.ask(lamp, 'No Accept needed')
     expect(memberPlan(f.state, lamp, NOW)).toEqual([{ kind: 'start', conversationId: id }])
-    f.run({ type: 'member.start', conversationId: id }, owner)
+    f.run({ type: 'member.start', conversationId: id }, kai)
     expect(f.state.starts!.filter(s => s.request.member)).toHaveLength(1)
     expect(memberPlan(f.state, lamp, NOW)).toEqual([])
   })
@@ -206,12 +220,17 @@ describe('the Member', () => {
 
 describe('a crew agent', () => {
   it('is never planned a task another person asked for, and still gets work nobody asked for', () => {
-    const s = crewSwarm(['Ada'])
-    s.run({ type: 'crew.add', agentId: s.ids.Ada!, role: 'engineer', lane: 'backend' })
-    const asked = s.task('Asked', ['backend/src/a.ts'])
-    s.state.people.push({ id: 'kai', email: kai.email, role: 'collaborator', generation: 'g' })
-    s.group(asked).requesterId = 'kai'
-    const free = s.task('Free', ['backend/src/b.ts'])
-    expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, 1000).map(p => p.conversationId)).toEqual([free])
+    const f = swarm()
+    const config = { engine: 'claude' as const, model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
+    const add = (name: string, lead = false) => f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: name, name,
+      configuration: config, lead }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).result.agentId as string
+    add('PM', true)
+    const ada = add('Ada')
+    f.run({ type: 'crew.add', agentId: ada, role: 'engineer', lane: 'backend' })
+    const task = (title: string, extra: Record<string, unknown>) => f.run({ type: 'conversation.create', title, brief: 'Do it.',
+      task: { goal: title, changes: 'Change it.', constraints: 'None.', owns: ['backend/src/a.ts'] }, checks: [], ...extra } as unknown as Command).result.conversationId as string
+    task('Asked', { requesterId: 'kai' })
+    const free = task('Free', {})
+    expect(dispatchPlan(f.state, 'lead', DISPATCH_RULES, NOW).map(p => p.conversationId)).toEqual([free])
   })
 })
