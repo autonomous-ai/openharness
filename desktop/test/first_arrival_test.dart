@@ -379,16 +379,10 @@ void main() {
       await arrival.restore();
       arrival.index.complete([]);
       expect(await arrival.run(app), isFalse);
-      expect(
-        arrival.error,
-        'The harness has not opened yet. Try again to check it.',
-      );
+      expect(arrival.error, 'The harness has not opened yet. Try again.');
       // Still not shown: the same answer again, and still no second create.
       expect(await arrival.retry(app), isFalse);
-      expect(
-        arrival.error,
-        'The harness has not opened yet. Try again to check it.',
-      );
+      expect(arrival.error, 'The harness has not opened yet. Try again.');
       app.activeSwarm.panes.add(
         TerminalPane(id: 1, machineId: 'local', agentId: 'first'),
       );

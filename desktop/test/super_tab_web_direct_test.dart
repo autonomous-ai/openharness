@@ -334,8 +334,8 @@ void main() {
             .having(
               (f) => f.message,
               'message',
-              'The Swarm service needs an update before you can create a '
-                  'project. Your draft is saved.',
+              'The Swarm service needs an update to create projects. Your '
+                  'draft is saved.',
             ),
       ),
     );
