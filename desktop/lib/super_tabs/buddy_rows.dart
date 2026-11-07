@@ -5,6 +5,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import 'buddy_chat.dart';
 import 'identity.dart';
+import 'model.dart';
 import 'section_heading.dart';
 
 /// A sidebar count of what is for the reader, such as the tags waiting in
@@ -50,6 +51,7 @@ class SuperTabBuddyRow extends StatelessWidget {
     required this.name,
     required this.tooltip,
     required this.onTap,
+    this.agent,
     this.project,
     this.selected = false,
     this.unread = false,
@@ -64,6 +66,10 @@ class SuperTabBuddyRow extends StatelessWidget {
   /// The Buddy, for its avatar; null while none runs.
   final String? agentId;
   final String name;
+
+  /// An agent in My agents: the row wears its face, picture or pattern, as
+  /// its chat, cards and Tasks pane draw it (audit finding 6 of task #4211).
+  final SuperTabAgent? agent;
 
   /// The project's name, shown when the Swarm has several.
   final String? project;
@@ -120,13 +126,21 @@ class SuperTabBuddyRow extends StatelessWidget {
                   SizedBox(
                     width: _column,
                     child: Center(
-                      child: SuperTabAvatar(
-                        identity: agentId == null
-                            ? 'buddy:$name'
-                            : 'agent:$agentId',
-                        name: name,
-                        size: 20,
-                      ),
+                      child: switch (agent) {
+                        final agent? => SuperTabAvatar.agent(
+                          agent,
+                          name: name,
+                          size: 20,
+                          engineBadge: false,
+                        ),
+                        null => SuperTabAvatar(
+                          identity: agentId == null
+                              ? 'buddy:$name'
+                              : 'agent:$agentId',
+                          name: name,
+                          size: 20,
+                        ),
+                      },
                     ),
                   ),
                   Expanded(
