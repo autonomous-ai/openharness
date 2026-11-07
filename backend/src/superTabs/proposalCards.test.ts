@@ -298,16 +298,15 @@ describe('credentials in proposal words', () => {
     const id = f.create(peer, { title: `Rotate ${token}`, text: `Calls fail with ${token}`, goal: `Drop ${token}`, why: `Leaked ${token}`,
       doneWhen: `No ${token} left`, evidence: [`Log shows ${token}`] }).result.conversationId
     f.card(id).proposal!.senders[0]!.buddyId = f.buddy
-    const sent = [f.run(ask(id, { question: `Is ${token} yours?`, defaultAnswer: `Rotate ${token}` }), f.pm)]
-    sent.push(f.run({ type: 'proposal.answer', conversationId: id, questionId: sent[0]!.result.questionId, text: `Yes, ${token}` }, buddy))
-    sent.push(f.run({ type: 'proposal.merge', conversationId: f.create(owner).result.conversationId, intoConversationId: id, reason: `Same as ${token}` }, f.pm))
-    const ruled = f.run(decide(id, 'accept', { reason: `Rotate ${token} first`, task: { ...acceptedTask, changes: `Remove ${token}` },
-      checks: [{ description: `No ${token} in logs`, independent: false }] }), f.pm)
+    // The PM's and the Buddy's own words with a token in them are refused, not redacted ('an agent's credential in proposal
+    // text', #3310): here they carry none, and the person's words they quote stay cleaned through the ruling.
+    const sent = [f.run(ask(id, { question: 'Is it yours?', defaultAnswer: 'Rotate it' }), f.pm)]
+    sent.push(f.run({ type: 'proposal.answer', conversationId: id, questionId: sent[0]!.result.questionId, text: 'Yes' }, buddy))
+    sent.push(f.run({ type: 'proposal.merge', conversationId: f.create(owner).result.conversationId, intoConversationId: id, reason: 'Same request' }, f.pm))
+    const ruled = f.run(decide(id, 'accept', { reason: 'Rotate it first' }), f.pm)
     // Both proposers hear the ruling in their Buddy chats, in its cleaned words.
     const notices = ruled.messages.filter(m => m.source?.kind === 'proposal-notice')
-    expect(notices.map(m => m.text)).toEqual([0, 1].map(() => `Rotate ${CREDENTIAL_MARKER}: accept. Rotate ${CREDENTIAL_MARKER} first`))
-    expect(f.card(id).proposal!.decision!.reason).toBe(`Rotate ${CREDENTIAL_MARKER} first`)
-    expect(f.card(id).proposal!.questions[0]!.answer!.text).toBe(`Yes, ${CREDENTIAL_MARKER}`)
+    expect(notices.map(m => m.text)).toEqual([0, 1].map(() => `Rotate ${CREDENTIAL_MARKER}: accept. Rotate it first`))
     expect(JSON.stringify([...sent, ruled].map(e => e.messages))).not.toContain(token)
     expect(JSON.stringify(f.state)).not.toContain(token)
   })
