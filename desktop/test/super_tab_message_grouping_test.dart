@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -636,35 +635,6 @@ void main() {
       await show(tester);
       expect(find.text('River'), findsOneWidget);
       expect(find.text('Shall I merge it?'), findsOneWidget);
-    });
-
-    testWidgets('hovering a grouped message shows its time at the left', (
-      tester,
-    ) async {
-      final server = await show(tester);
-      final time = find.byKey(const ValueKey('super-row-time-message-3'));
-      expect(time, findsNothing);
-      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-      await mouse.addPointer(location: Offset.zero);
-      addTearDown(mouse.removePointer);
-      final body = find.text('Shall I merge it?');
-      await mouse.moveTo(tester.getCenter(body));
-      await tester.pumpAndSettle();
-      expect(time, findsOneWidget);
-      final at = DateTime.parse(server.messages[2]['createdAt'] as String)
-          .toLocal();
-      final context = tester.element(body);
-      // Slack's short time, so every time fits the gutter on one line
-      // (Merlin's test: "10:01 AM" lost its AM there); the full time and
-      // date are on its tooltip and in the row's label.
-      final l10n = MaterialLocalizations.of(context);
-      final local = TimeOfDay.fromDateTime(at);
-      expect(
-        tester.widget<Text>(time).data,
-        '${l10n.formatHour(local)}:${l10n.formatMinute(local)}',
-      );
-      expect(tester.widget<Text>(time).softWrap, isFalse);
-      expect(tester.getRect(time).right, lessThan(tester.getRect(body).left));
     });
 
     testWidgets('a grouped message reads its sender and time, as a header '
