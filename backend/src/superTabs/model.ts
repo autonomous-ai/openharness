@@ -1173,6 +1173,9 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   }
   // Rows by day and project that only the leaderboard read uses, and it takes them from the Swarm itself.
   for (const pool of visible.machines ?? []) delete pool.lentDays
+  // Where teammates' work ran was a Team-account choice; Swarm v3 runs every agent as its own person (#4120, #4289). It stays
+  // stored for teamWorkRefusal until the Team entries go (#4290), and no reader gets it.
+  for (const pool of visible.machines ?? []) delete pool.ownAccountChoice
   // A Mac's Harness Team account is stored under its Mac's name (machines.ts followAccountName), and read so it named two
   // entries alike: a lamp start picked the Team account's thinking it was the Mac (task #3060). Every read tells them apart;
   // the stored name, which renames and the server's own sentences read, stays the Mac's.

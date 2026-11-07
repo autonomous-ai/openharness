@@ -23,7 +23,7 @@ import 'import_agent.dart';
 import 'model.dart';
 
 /// Whether Add agent offers Import: Harness on a Mac or a Windows PC, where its
-/// daemon and a Harness Team account are; never the web or Linux.
+/// daemon is; never the web or Linux.
 bool get superTabImportOffered =>
     !kIsWeb &&
     (defaultTargetPlatform == TargetPlatform.macOS ||
