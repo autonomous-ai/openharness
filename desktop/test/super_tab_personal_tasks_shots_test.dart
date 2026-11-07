@@ -95,7 +95,7 @@ void main() {
       await t.pumpAndSettle();
       expect(t.takeException(), isNull);
       await captureWindow(t, shots, 'tasks-review-${brightness.name}');
-      await t.tap(find.text('Reject'));
+      await t.tap(find.text('Decline'));
       await t.pumpAndSettle();
       await t.enterText(
         find.byKey(const ValueKey('task-reject-reason')),
@@ -169,7 +169,7 @@ void main() {
         'The suggested agent changed. Read the task again.',
         statusCode: 409,
       );
-      await t.tap(find.text('Approve'));
+      await t.tap(find.text('Accept'));
       await t.pumpAndSettle();
       expect(t.takeException(), isNull);
       await captureWindow(t, shots, 'tasks-refused-${brightness.name}');

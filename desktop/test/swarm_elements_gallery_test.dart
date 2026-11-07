@@ -20,6 +20,7 @@ import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/tasks/personal_task_card.dart';
 import 'package:harness/super_tabs/tasks/personal_tasks.dart';
+import 'package:harness/super_tabs/tasks/tasks_pane_header.dart';
 import 'package:harness/super_tabs/tasks/personal_tasks_pane.dart';
 import 'package:harness/super_tabs/project_choices.dart';
 import 'package:harness/widgets/new_harness_form.dart'
@@ -139,7 +140,7 @@ Future<List<SuperTabController>> _show(
   await buddy.select('swarm-buddy-peer');
   await member.select('aeef');
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 1340);
+  tester.view.physicalSize = const Size(760, 1540);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -359,6 +360,32 @@ final _person = SuperTabPerson.fromJson({
   'role': 'owner',
 });
 
+/// A Tasks pane card as the pane draws it: the project's capsule, the mark, the title and two 18 faces.
+Widget _card(
+  String title,
+  String status, {
+  bool waiting = false,
+  bool selected = false,
+}) => SuperTabPersonalTaskCard(
+  task: SuperTabPersonalTask({
+    'id': title,
+    'version': 1,
+    'at': 0,
+    'projectId': 'harness',
+    'projectName': 'harness',
+    'title': title,
+    'status': status,
+  }),
+  project: 'harness',
+  selected: selected,
+  onOpen: () {},
+  requester: SuperTabAvatar.person(_person, size: 18),
+  agent: SuperTabAvatar.agent(_agent('Quinn'), size: 18, engineBadge: false),
+  waiting: waiting,
+  onApprove: waiting ? () {} : null,
+  onReject: waiting ? () {} : null,
+);
+
 class _Gallery extends StatelessWidget {
   const _Gallery(
     this.brightness, {
@@ -455,7 +482,7 @@ class _Gallery extends StatelessWidget {
                     ),
                 ],
               ),
-              title('Left pane rows and task card'),
+              title('Left pane rows'),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -520,29 +547,45 @@ class _Gallery extends StatelessWidget {
                       ],
                     ),
                   ),
+                ],
+              ),
+              title(
+                'Tasks pane: header, a waiting, a working and a selected card',
+              ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 340,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        SuperTabTasksPaneHeader(
+                          mode: 'autoApprove',
+                          onChanged: (_) {},
+                        ),
+                        _card(
+                          'Friendly agent faces and a gold Lead ring',
+                          'proposal',
+                          waiting: true,
+                        ),
+                      ],
+                    ),
+                  ),
                   gap(),
                   SizedBox(
                     width: 340,
-                    child: SuperTabPersonalTaskCard(
-                      task: SuperTabPersonalTask({
-                        'id': 't1',
-                        'version': 1,
-                        'at': 0,
-                        'projectId': 'harness',
-                        'projectName': 'harness',
-                        'title': 'Friendly agent faces and a gold Lead ring',
-                        'status': 'proposal',
-                      }),
-                      project: 'harness',
-                      selected: false,
-                      onOpen: () {},
-                      requester: SuperTabAvatar.person(_person, size: 20),
-                      agent: SuperTabAvatar.agent(
-                        _agent('Quinn'),
-                        size: 20,
-                        engineBadge: false,
-                      ),
-                      waiting: true,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _card('Quiet cards in the Tasks pane', 'working'),
+                        const SizedBox(height: 8),
+                        _card(
+                          'Round faces in the chat',
+                          'done',
+                          selected: true,
+                        ),
+                      ],
                     ),
                   ),
                 ],

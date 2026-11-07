@@ -460,15 +460,28 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   diameter, gap 7%, drawn outside the avatar's box so no row moves. Its
   accessible label says Lead. The crown is only number one's on the
   leaderboard.
-- **Task status marks.** Proposal is Lucide `lightbulb`, Rejected
+- **Task status marks.** Proposal is Lucide `lightbulb`, Declined
   `thumbs-down`, Failed (Stuck) `triangle-alert` in the semantic error ink.
   The check, question mark and spinner stay, from the shared activity
   vocabulary. No status in Flutter draws an X: an X means close. Terminal text
   and native tab marks may keep `✗`.
-- **Task card and row.** The Tasks pane card (`SuperTabPersonalTaskCard`) and
-  the left pane's row (`SuperTabQuietRow`, [Swarm left pane](#swarm-left-pane))
-  carry the elements above at their
-  shipped sizes; their size and layout do not change when an element does.
+- **Left pane row.** The left pane's row (`SuperTabQuietRow`,
+  [Swarm left pane](#swarm-left-pane)) carries the elements above at its
+  shipped size; its size and layout do not change when an element does.
+- **Tasks pane header** (`SuperTabTasksPaneHeader`). "Tasks" in 13 semibold
+  on the left. The Accept all or Ask me choice on the right is plain 12
+  secondary text; its chevron and a faint fill show only on hover, focus or
+  while its menu is open, and the chevron's room is held at rest so the text
+  never moves. The menu is the app's one dropdown, with a check on the stored
+  choice.
+- **Tasks pane card** (`SuperTabPersonalTaskCard`). A card surface with one
+  hairline (`DesktopChrome.rim`), radius 10 and no shadow; a selected card
+  differs by its fill alone. On top, the project's name in a neutral grey
+  capsule (`AppSurface.wellFill`, secondary text), never a project colour, and
+  the status mark at the right. Then the title in 13 medium, up to three
+  lines, and two 18 faces: who asked, then who is doing it. Only while the
+  task waits for the reader: Decline as plain text and Accept as the blue
+  capsule, on the right.
 - **Main project.** + New agent and Join's Bring agent pick a main project in the Cmd-N form (task #4541, anh Dee's
   first-day mockup 11-07), where the folder, worktree and branch pickers and the Member or Lead pill were. A pill
   beside the agent and computer names the pick (`NewHarnessMainProject`); its menu (`newHarnessProjectRows`) lists
