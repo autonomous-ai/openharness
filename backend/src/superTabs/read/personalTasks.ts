@@ -77,7 +77,8 @@ function summary(part: Part, reader: Reader): PersonalTask | 'gone' | null {
   // reader's login, closed since (read/feedIds.ts).
   const worker = group.assignment?.agentId ?? approval?.suggestedAgentId
   const own = asked || (!!worker && reader.agents.has(worker)) || group.assignment?.execution?.contributorId === member.id
-  if (part.deleted || group.proposal?.mergedInto || group.foldedInto || !own) return 'gone'
+  // Nothing cancelled stays in a person's Tasks (task #4538), as a merged or folded card does not.
+  if (part.deleted || group.proposal?.mergedInto || group.foldedInto || group.assignment?.status === 'cancelled' || !own) return 'gone'
   const agent = view.parts.agents.find(a => a.key === worker)?.data
   const asker = group.requesterId ? view.state.people.find(p => p.id === group.requesterId) : undefined
   const askerName = asker && (asker.name ?? asker.username)

@@ -50,7 +50,7 @@ describe('a person\'s ask is one card from Proposal to shipped', () => {
 
   it('refuses the Lead\'s cancel of the card when its reason names another task, and says what to use instead', () => {
     const f = fixture(), id = f.propose(), other = f.state.conversations.find(c => c.id === f.web)!
-    for (const reason of [`Duplicate of #${other.number}`, `Work goes on in #${other.number}.`]) {
+    for (const reason of [`Duplicate of #${other.number}`, `Being done inside #${other.number}.`]) {
       expect(() => f.run({ type: 'work.cancel', conversationId: id, assignmentId: 'current', reason }, f.pm))
         .toThrow(expect.objectContaining({ code: 'USE_PROPOSAL_COMMAND', message: expect.stringMatching(/proposal\.decide.*proposal\.merge/) }))
     }

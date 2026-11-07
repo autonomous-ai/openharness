@@ -11,10 +11,10 @@ export const askedKey = (personId: string, generation: string): string => `${per
  * reader's: who asked (the approver or proposal senders at their membership, else the requester), the login its agent runs
  * under, which outlives the agent, and the agent doing it or suggested for it. Stored as the conversation's indexed `feedIds`
  * on every write (parts/write.ts extracted), so a page is one read of the reader's keys and own agents. A conversation that
- * is no task, a proposal merged into another, and a task closed into another (foldedInto), names nobody.
+ * is no task, a proposal merged into another, a task closed into another (foldedInto) and a cancelled one name nobody.
  */
 export function feedIdsOf(group: FeedFields): string[] {
-  if (group.kind || group.audience || group.reviewOf || group.proposal?.mergedInto || group.foldedInto) return []
+  if (group.kind || group.audience || group.reviewOf || group.proposal?.mergedInto || group.foldedInto || group.assignment?.status === 'cancelled') return []
   const approval = group.taskApproval
   const asked = approval ? [askedKey(approval.personId, approval.generation)]
     : group.proposal ? group.proposal.senders.map(s => askedKey(s.personId, s.generation)) : [group.requesterId]
