@@ -132,6 +132,7 @@ abstract final class AppIcons {
   static const link2 = LucideIcons.link2400;
   static const listFilter = LucideIcons.listFilter400;
   static const loaderCircle = LucideIcons.loaderCircle400;
+
   /// A task that is a proposal (task #4461).
   static const lightbulb = LucideIcons.lightbulb400;
   static const lock = LucideIcons.lock400;
@@ -205,6 +206,7 @@ abstract final class AppIcons {
   static const starHalf = LucideIcons.starHalf400;
   static const sun = LucideIcons.sun400;
   static const terminal = LucideIcons.terminal400;
+
   /// A task someone rejected (task #4461).
   static const thumbsDown = LucideIcons.thumbsDown400;
   static const trash2 = LucideIcons.trash2400;

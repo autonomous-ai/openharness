@@ -97,8 +97,7 @@ class SuperTabAvatarFace extends StatelessWidget {
     null => ClipOval(child: child),
   };
 
-  Widget _fallback(BuildContext context) =>
-      face ? _face() : _initial(context);
+  Widget _fallback(BuildContext context) => face ? _face() : _initial(context);
 
   Widget _disc(BuildContext context, Widget child, [Color? color]) => Container(
     width: size,

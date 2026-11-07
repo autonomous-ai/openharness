@@ -818,7 +818,11 @@ void main() {
         isFalse,
         reason: status,
       );
-      expect(find.textContaining(RegExp('[✗✕×]')), findsNothing, reason: status);
+      expect(
+        find.textContaining(RegExp('[✗✕×]')),
+        findsNothing,
+        reason: status,
+      );
     }
   });
 }

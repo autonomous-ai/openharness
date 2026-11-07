@@ -126,7 +126,9 @@ class SuperTabAvatar extends StatelessWidget {
                   maxHeight: double.infinity,
                   child: CustomPaint(
                     key: const ValueKey('super-lead-ring'),
-                    size: Size.square(size * (1 + 2 * (_ringGap + _ringStroke))),
+                    size: Size.square(
+                      size * (1 + 2 * (_ringGap + _ringStroke)),
+                    ),
                     painter: _LeadRingPainter(
                       stroke: size * _ringStroke,
                       gap: size * _ringGap,

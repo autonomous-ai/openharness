@@ -954,25 +954,26 @@ void main() {
         expect((older.kind, older.chatId), (null, null));
       });
 
-      testWidgets('a PM by kind has the Lead ring and opens the chat it names', (
-        tester,
-      ) async {
-        final selected = <String>[];
-        final c = await show(
-          tester,
-          agents: [
-            {..._agent('zed', 'Zed'), 'kind': 'pm', 'chatId': 'offline'},
-            {..._agent('amy', 'Amy'), 'kind': 'regular', 'chatId': null},
-          ],
-          selected: selected,
-        );
-        expect(ring('zed'), findsOneWidget);
-        expect(ring('amy'), findsNothing);
-        await tester.tap(key('super-agent-zed'));
-        await tester.pump();
-        expect(selected, ['offline']);
-        await tester.runAsync(c.flush);
-      });
+      testWidgets(
+        'a PM by kind has the Lead ring and opens the chat it names',
+        (tester) async {
+          final selected = <String>[];
+          final c = await show(
+            tester,
+            agents: [
+              {..._agent('zed', 'Zed'), 'kind': 'pm', 'chatId': 'offline'},
+              {..._agent('amy', 'Amy'), 'kind': 'regular', 'chatId': null},
+            ],
+            selected: selected,
+          );
+          expect(ring('zed'), findsOneWidget);
+          expect(ring('amy'), findsNothing);
+          await tester.tap(key('super-agent-zed'));
+          await tester.pump();
+          expect(selected, ['offline']);
+          await tester.runAsync(c.flush);
+        },
+      );
 
       testWidgets('its kind wins over the project it once led', (tester) async {
         await show(
