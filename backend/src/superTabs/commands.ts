@@ -31,7 +31,7 @@ import { noteWriter } from './stuck.js'
 import { reviewPlan, refreshStepBrief, stepOs, stepOsRefusal, type PlannedStep, type StepKind } from './reviewTable.js'
 import { openReviewStep, type StepPull } from './stepOpen.js'
 import { stopWaiting, testsOn, WAIT_LINE, waitFor, waits } from './osSteps.js'
-import { builtBy, reviewerCandidates, STRENGTH_RULE } from './reviewerPick.js'
+import { builtBy, otherSecurityReviewers, reviewerCandidates, stepCandidates, STRENGTH_RULE } from './reviewerPick.js'
 import { checkedPullRequest, deriveCheck, recordCheckVerdict } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
@@ -1944,6 +1944,20 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
     pausedTask(group)
     if (activeWork(group)) fail('WORK_ACTIVE', 'The current assignment must finish or be reconciled before reassignment.')
+    // A review step is never its task's builder's, and a security review never the other one's reviewer, by any path (task
+    // #4534: #3542 and #3545 each waited 20-30 minutes on a refused step). The refusal says who may take it now.
+    const task = isReview(group) ? state.conversations.find(c => c.id === group.reviewOf) : undefined
+    if (task) {
+      const name = worker.displayName ?? worker.name
+      const free = () => {
+        const names = stepCandidates(state, group, context.now).slice(0, 3).map(a => a.displayName ?? a.name)
+        return names.length ? ` Free to take it now: ${names.join(', ')}.` : ' No other Reviewer is free now: start one.'
+      }
+      if (builtBy(task).has(worker.id)) fail('STEP_BUILDER', `${name} built this task, so it does not review it.${free()}`)
+      if (/security/i.test(stepName(group)) && otherSecurityReviewers(state, task, group.id).has(worker.id)) {
+        fail('REVIEW_NOT_INDEPENDENT', `${name} reviewed this task's other security review, and the two are independent.${free()}`)
+      }
+    }
     // Before anything changes: a task given to a closed session is lost at once, and its agent then stays listed until the
     // task is handed on (closedAgents.ts removeClosedAgents). Without a task it leaves on its machine's next report.
     // A crew member on its way to another machine takes work once there; an asleep one wakes for it, in place (crewKeep.ts),
@@ -2093,7 +2107,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         && (check.verdicts ?? []).some(verdict => verdict.passed && (verdict as { head?: string }).head === read.head))) continue
       step ??= openStep(task, planned, pulls)
       const previous = step.assignment?.agentId
-      const ranked = reviewerCandidates(state, task, planned.kind, read.head, context.now, planned.os)
+      const ranked = reviewerCandidates(state, task, planned.kind, read.head, context.now, planned.os, step.id)
       const ordered = [...ranked.filter(a => a.id === previous), ...ranked.filter(a => a.id !== previous)]
       const target = step
       const worker = ordered.find(candidate => {
@@ -4825,6 +4839,19 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       projectChatWork(command.conversationId)
       const group = open(state, command.conversationId)
       const worker = agent(state, command.agentId)
+      // A security review stuck on a reviewer of the other one moves on without a cancel (task #4534): that reviewer may not take
+      // it and said so, so its attempt ends here, its reviewer told and freed, and assignRefusal holds the new one to the rule.
+      const stuck = group.assignment
+      const reviewed = stuck && ['blocked', 'needs_human'].includes(stuck.status) && isReview(group) && /security/i.test(stepName(group))
+        ? state.conversations.find(c => c.id === group.reviewOf) : undefined
+      if (stuck && reviewed && stuck.agentId !== worker.id && otherSecurityReviewers(state, reviewed, group.id).has(stuck.agentId)) {
+        const to = worker.displayName ?? worker.name
+        stuck.status = 'cancelled'
+        stuck.result = `Moved to ${to}: its reviewer did this task's other security review.`
+        finishWorker(state, stuck.agentId)
+        message(group.id, `This security review moved to ${to}: you did this task's other one, and the two are independent. Stop working on it.`,
+          [stuck.agentId], null, forRecipients(SYSTEM_ROW), undefined, undefined, undefined, stableId(operationId, 'step-moved'))
+      }
       assignRefusal(group, worker)
       const home = groupProject(state, group)
       // An older client assigns in a custom role: kept for older readers, and the role name it means for a worker without
