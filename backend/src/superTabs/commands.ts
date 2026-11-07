@@ -8,7 +8,7 @@ import { crewMoveFailed, takeOverCrewMember, wakeCrewMember } from './crewKeep.j
 import { moveTimingRow, startWake } from './crewTimes.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from './repositoryReach.js'
-import { isMember, memberRefusal, sessionAssigned, startTaskSession, taskSessionFailed, taskSessionJoined, taskSessionOf, taskSessionStartId } from './taskSessions.js'
+import { besidePrivate, heldFor, isMember, memberRefusal, privateStartRefusal, sessionAssigned, startTaskSession, taskSessionFailed, taskSessionJoined, taskSessionOf, taskSessionStartId } from './taskSessions.js'
 import { admitByRoom, admitMachineStart, notePrivateOnDisk, AGENT_MEMORY_BYTES, noRepositoryStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamAccountPool, teamPoolsOf, teamWorkCheck, TEAM_ACCOUNTS_GONE, NOT_YOUR_COMPUTER, type ContributedMachine } from './machines.js'
 import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
@@ -1954,6 +1954,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if (!worker.asleep && sessionClosed(state, worker, context.now)) {
       fail('AGENT_CLOSED', `${worker.displayName ?? worker.name}'s session was closed. Start a new agent for this task.`)
     }
+    // A Member's task session, named by its own id, picked for a step or given its held task, meets its Member's checks
+    // (taskSessions.ts; security reviews 1 and 2 of #3553).
+    if (worker.memberOf) memberRefusal(state, state.agents.find(a => a.id === worker.memberOf) ?? fail('MEMBER_GONE', 'This task session\'s Member has left.', 409), group)
     projectChatJoin(group, worker.id, worker.displayName ?? worker.name)
     assignable(worker)
     sameProject(state, group, worker, true)
@@ -3884,7 +3887,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         }
         admitMachineStart(state, start.request, context.now, start, context.teamMachines, context.otherWorkspaceMachines)
         if (start.dispatched || start.error || start.harnessId) fail('START_CLAIMED', 'This native start was already requested. Read its creation status; do not start another.')
-        // What it puts on that computer counts from now: a private project there keeps every Member's public task off it.
+        // What it puts on that computer counts from now: a private project there keeps every Member's public task off it, and
+        // it waits for any of them still running there to stop first (liveness.ts endBesidePrivate).
+        privateStartRefusal(state, start)
         notePrivateOnDisk(state, start)
         start.dispatched = true
         start.dispatchedAt = context.now
@@ -3910,6 +3915,21 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           : start.request.buddyOf ? buddyReady(start.request.name) : `${start.request.name} is ready for an assignment.`, [], null,
           command.warning ? SYSTEM_ROW : bookkeeping(start.request.conversationId, SYSTEM_ROW))
         start.poolSettled = true
+        // A Member's task session, settled, takes the task held for it, by every check an assignment meets now: what it was
+        // queued under may have changed while it started (security review 1 of #3553).
+        const session = start.request.memberOf && state.agents.find(a => a.machineId === start.request.machineId && a.harnessId === start.harnessId)
+        const held = session && heldFor(state, start)
+        if (session && held) {
+          try {
+            assignRefusal(held, session)
+            assignTo(held, session, stableId(start.id, 'task-session-assign'))
+          } catch (error) {
+            if (!(error instanceof SuperTabError)) throw error
+            message(held.id, `${session.displayName ?? session.name} could not take this task: ${error.message}`, [], null, SYSTEM_ROW,
+              undefined, undefined, undefined, stableId(start.id, 'task-session-refused'))
+            if (besidePrivate(state, session)) session.workDecision = 'stop'
+          }
+        }
         break
       }
       if (command.type === 'agent.startFailed') {
@@ -4021,11 +4041,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       start.harnessId = command.harnessId
       noteStartSucceeded(state, start)
       result.agentId = agentId
-      // A Member's task session: its Member's in this project, and it takes the task held for it (taskSessions.ts).
-      if (start.request.memberOf) {
-        const held = taskSessionJoined(state, start, state.agents.find(a => a.id === agentId)!)
-        if (held) assignTo(held, state.agents.find(a => a.id === agentId)!, stableId(start.id, 'task-session-assign'))
-      }
+      // A Member's task session: its Member's in this project; it takes the task held for it once settled (taskSessions.ts).
+      if (start.request.memberOf) taskSessionJoined(state, start, state.agents.find(a => a.id === agentId)!)
       // A crew member's move: its new session becomes the same member, and the old one is retired (crewKeep.ts).
       if (start.request.crewMoveOf) {
         const move = state.agents.find(a => a.id === start.request.crewMoveOf)?.movedTo

@@ -84,7 +84,7 @@ import { tasksHoldingMoves } from './ruleGuard.js'
 import { candidatesFor, dispatchRules, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type DispatchLookup, type DispatchRules, type Skip } from './dispatch.js'
 import { buddySleepCandidates, sleepBuddies } from './buddySleep.js'
 import { openWaitingSteps } from './osSteps.js'
-import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, recordTaskState, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
+import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, recordTaskState, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice, endBesidePrivate } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
 import { owedAsk } from './timeChecks.js'
 import { ledgerGroupIds, settleReleases, type ReleaseFacts, type ReleaseRules, type SettledReleases } from './releases.js'
@@ -4542,7 +4542,9 @@ export class SuperTabStore {
         // A woken crew member this reading shows running again: its wake's timing row (crewTimes.ts, task #3462).
         ...finishedWakes(state, now),
         // A Member's projects its host reports set up, and the Lead hearing it is ready in a new one (taskSessions.ts, task #4543).
-        ...applyMemberSetUp(state, machineId, observation.memberSetUp, now)]
+        ...applyMemberSetUp(state, machineId, observation.memberSetUp, now),
+        // Its Members' task sessions beside a private project's files there stop (security reviews of #3553).
+        ...endBesidePrivate(state, machineId, now)]
       const sleepy = observation.idleBuddyHarnessIds?.length ? buddySleepCandidates(state, now).filter(a => a.machineId === machineId) : []
       const busy = new Set<string>()
       for (const agent of sleepy) {

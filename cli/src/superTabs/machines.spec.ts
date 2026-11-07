@@ -3314,6 +3314,14 @@ describe('a Member\'s task sessions on this machine', () => {
     const posted = (g: typeof m.f) => g.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
     // A machine for one project holds that project's folder, 'lead', besides its Members' worktrees.
     expect(posted(m.f)[0]).toMatchObject({ memberSetUp: { 'member-1': ['p-old'] }, projectsOnDisk: ['lead', 'p-old'] })
+    expect(posted(m.f)[0]).not.toHaveProperty('otherSwarms')
+    // In another Swarm too: this one is told so, as it cannot see that one's projects.
+    const both = member()
+    const second = { ...both.f.pool, tabId: 'tab-2' }
+    Object.assign(both.f.pool, { capabilitiesWanted: true, memberProjectsWanted: true, starts: [] })
+    both.f.backend.mockImplementation(async (_core, _method, path) => String(path).includes('/hosts/host/changes') ? hostForm([], { pools: [both.f.pool, { ...second, starts: [] }] }) : { revision: 1 })
+    await both.f.machine.tick()
+    expect(posted(both.f).find(b => !!b.memberSetUp)).toMatchObject({ otherSwarms: true })
     const older = member()
     Object.assign(older.f.pool, { capabilitiesWanted: true, starts: [] })
     await older.f.machine.tick()

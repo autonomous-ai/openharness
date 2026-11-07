@@ -30,7 +30,7 @@ export function swarm(capabilities = ['regularAgent', 'swarmBuddy', 'memberProje
   state.machines = [{ machineId: 'mate-mac', name: 'mate-mac', contributorId: 'mate', membershipGeneration: person.generation, generation: 'g1',
     cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 8, paused: false,
     observation: { generation: 'g1', receivedAt: NOW, sessionKind: 'computer', resources, tools: {}, quotas: [], runningHarnessIds: ['h-buddy'],
-      stoppedHarnessIds: [], capabilities } } as ContributedMachine]
+      stoppedHarnessIds: [], capabilities, projectsOnDisk: [] } } as ContributedMachine]
   // Mate's main Swarm Buddy, running in mate's Buddy chat.
   const buddy = { id: 'buddy', machineId: 'mate-mac', harnessId: 'h-buddy', machineOwnerId: 'mate', contributorId: 'mate',
     membershipGeneration: person.generation, name: 'Bo', configuration: config, buddyOf: { personId: 'mate', generation: person.generation },

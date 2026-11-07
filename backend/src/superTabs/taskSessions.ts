@@ -11,7 +11,7 @@
  * person's own login and could open them.
  */
 import { BUDDY_REQUIREMENTS, isSwarmBuddy } from './buddies.js'
-import { admitMachineStart, AGENT_MEMORY_BYTES, machineContribution, MEMBER_PROJECTS_CAPABILITY, noRepositoryStart, projectFolder } from './machines.js'
+import { admitMachineStart, AGENT_MEMORY_BYTES, machineContribution, MEMBER_PROJECTS_CAPABILITY, noRepositoryStart, projectFolder, startPrivateIds } from './machines.js'
 import { agentDisplayName } from './agentNames.js'
 import { activeWork, fail, stableId, type Agent, type AgentStart, type AgentStartRequest, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { canReadProject, groupProject, projectsOf } from './projects.js'
@@ -41,14 +41,45 @@ export function memberRefusal(state: SuperTabState, member: Agent, group: Conver
   }
   if (project.visibility === 'private') fail('MEMBER_PRIVATE', `${name} works only in public projects for now. Assign one of this project's agents.`, 403)
   const pool = machineContribution(state, member.machineId)
-  if (pool?.privateOnDisk?.length) {
-    fail('MEMBER_PRIVATE_ON_DISK', `${pool.name} holds a private project's files, so ${name} takes no task from another project there.`, 403)
+  // Until its host has said what is on its disk, nothing says it holds no private files (security review 1 of #3553).
+  if (!pool?.observation?.projectsOnDisk) fail('MEMBER_DISK_UNREAD', `${pool?.name ?? 'This computer'} hasn't said what's on its disk yet. Try again in a minute.`, 409)
+  if (privateHere(state, member.machineId).length) {
+    fail('MEMBER_PRIVATE_ON_DISK', `${pool.name} holds files of a private project or of another Swarm, so ${name} takes no task from another project there.`, 403)
   }
   const sessions = new Set(state.agents.filter(a => a.memberOf === member.id).map(a => a.id))
   if (state.conversations.some(c => activeWork(c) && sessions.has(c.assignment!.agentId)
     || c.sessionStart?.memberId === member.id && pendingStart(state, c.sessionStart.startId))) {
     fail('MEMBER_BUSY', `${name} is on another task. Assign it when that one is done.`, 409)
   }
+}
+
+/** The private projects whose files are on [machineId], or on their way there in a start not yet running. */
+function privateHere(state: SuperTabState, machineId: string): string[] {
+  const pool = machineContribution(state, machineId)
+  const pending = (state.starts ?? []).filter(s => s.request.machineId === machineId && !s.harnessId && !s.error).flatMap(s => startPrivateIds(state, s))
+  // A private project's own folder is on this computer (its repository was recorded here), or this machine serves one project
+  // only and its folder is that project's (machines.ts projectFolder): files no start of the Swarm's put there.
+  const own = projectsOf(state).filter(p => p.visibility === 'private' && (p.repository?.machineId === machineId || (!!pool && pool.scope !== 'swarm' && p.id === 'lead')))
+  return [...new Set([...pool?.privateOnDisk ?? [], ...pending, ...own.map(p => p.id), ...pool?.observation?.otherSwarms ? [OTHER_SWARM] : []])]
+}
+/** Stands for another Swarm's projects on this computer, whose privacy this Swarm cannot read. */
+const OTHER_SWARM = 'another-swarm'
+
+/** Why a task session's work ends (liveness.ts lostReason). */
+export const PRIVATE_BESIDE = 'its computer holds another, private project\'s files'
+
+/** Whether [session], a Member's task session, is on a computer with a private project's files other than its own project's,
+ *  there or on their way: it takes no work there (security review 2 of #3553). */
+export const besidePrivate = (state: SuperTabState, session: Agent): boolean =>
+  !!session.memberOf && privateHere(state, session.machineId).some(id => id !== session.projectId)
+
+/** Refuses [start], which puts a private project's files on its computer, while a Member's task session of another project still
+ *  runs there: it waits for them to stop (liveness.ts endBesidePrivate), then its host dispatches it again. */
+export function privateStartRefusal(state: SuperTabState, start: AgentStart): void {
+  const privateIds = startPrivateIds(state, start)
+  if (!privateIds.length) return
+  const live = state.agents.some(a => a.memberOf && a.machineId === start.request.machineId && !a.downSince && !privateIds.includes(a.projectId!))
+  if (live) fail('PRIVATE_WAITS', 'This computer is first stopping a Member\'s work in another project. It starts in a moment.', 409)
 }
 
 /** Moves [projectId] to the end of [member]'s held projects, the most recently used last, dropping [drop]; at most five. */
@@ -91,7 +122,7 @@ export function startTaskSession(state: SuperTabState, member: Agent, group: Con
  * [start]'s task session [session] runs: it is its Member's in its project, the Member holds that project (and no longer the one
  * its host dropped for it, whose session stops), and it takes the task held for it, unless someone else took it meanwhile.
  */
-export function taskSessionJoined(state: SuperTabState, start: AgentStart, session: Agent): Conversation | null {
+export function taskSessionJoined(state: SuperTabState, start: AgentStart, session: Agent): void {
   const member = state.agents.find(a => a.id === start.request.memberOf)
   session.memberOf = start.request.memberOf!
   if (member) hold(member, session.projectId!, start.request.dropProjectId)
@@ -99,6 +130,10 @@ export function taskSessionJoined(state: SuperTabState, start: AgentStart, sessi
     if (old.memberOf !== session.memberOf || old.id === session.id) continue
     if (old.projectId === session.projectId || old.projectId === start.request.dropProjectId) old.workDecision = 'stop'
   }
+}
+
+/** The task held for [start]'s task session, once it settled: no longer held, and to assign unless someone took it meanwhile. */
+export function heldFor(state: SuperTabState, start: AgentStart): Conversation | null {
   const group = state.conversations.find(c => c.id === start.request.conversationId)
   if (!group || group.sessionStart?.startId !== start.id) return null
   delete group.sessionStart
@@ -124,7 +159,10 @@ export function applyMemberSetUp(state: SuperTabState, machineId: string, report
   const rows: MessageDraft[] = []
   const projects = projectsOf(state)
   for (const member of state.agents.filter(a => a.machineId === machineId && isSwarmBuddy(a) && !a.buddySession && report[a.id])) {
-    const listed = [...new Set(report[member.id])].filter(id => projects.some(p => p.id === id)).slice(0, MEMBER_PROJECTS_MAX)
+    // Public projects only: a public project's Lead reads this record (projects.ts canReadAgent).
+    // And only its own task sessions' projects: a host can't put another project on it (security review 1 of #3553).
+    const listed = [...new Set(report[member.id])].filter(id => projects.some(p => p.id === id && p.visibility === 'public')
+      && state.agents.some(a => a.memberOf === member.id && a.projectId === id)).slice(0, MEMBER_PROJECTS_MAX)
     const before = member.setUp ?? []
     const next = listed.map(id => before.find(e => e.projectId === id) ?? { projectId: id, at: now })
     for (const entry of next.filter(e => !before.some(b => b.projectId === e.projectId))) {

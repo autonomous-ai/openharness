@@ -214,6 +214,9 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
   projectsOnDisk: z.array(z.string().min(1).max(160)).max(200).optional(),
   /** Per Member (its chat session's agent id, which its task sessions' starts name), the projects its task home holds a set-up
    *  worktree of (task #4543). A project it leaves out was dropped. */
+  /** Whether this host also serves another Swarm, whose projects' privacy this one cannot see: a Member here takes none of this
+   *  Swarm's public tasks (task #4543, security review 1 of #3553). */
+  otherSwarms: z.boolean().optional(),
   memberSetUp: z.record(z.string().max(160), z.array(z.string().min(1).max(160)).max(5)).refine(v => Object.keys(v).length <= 1000).optional(),
   /** What this host can launch beyond workers: `leadStart`, a project's Product Manager (leadStart.ts). Absent from hosts
    *  before it, which are never given one. */
@@ -288,7 +291,8 @@ export function readingOnly(previous: StoredReading | undefined, next: StoredRea
     || !sameSet(previous.closedHarnessIds ?? [], next.closedHarnessIds ?? [])
     || !sameSet(previous.preparingStartIds, next.preparingStartIds)
     || !sameSet(previous.idleBuddyHarnessIds, next.idleBuddyHarnessIds)
-    || !sameSet(previous.projectsOnDisk, next.projectsOnDisk) || !sameSetUp(previous.memberSetUp, next.memberSetUp)) return false
+    || !sameSet(previous.projectsOnDisk, next.projectsOnDisk) || !sameSetUp(previous.memberSetUp, next.memberSetUp)
+    || !!previous.otherSwarms !== !!next.otherSwarms) return false
   if (!previous.harnessProgress || !next.harnessProgress) return !previous.harnessProgress && !next.harnessProgress
   const before = previous.harnessProgress, after = next.harnessProgress
   return sameSet(Object.keys(before), Object.keys(after)) && Object.entries(before).every(([id, at]) => after[id]! >= at)
@@ -548,7 +552,7 @@ export const MEMBER_PROJECTS_CAPABILITY = 'memberProjects'
 
 /** The project whose files [request] puts on its computer, if any: a task session's, a Lead's, a project session's, or its
  *  conversation's project. A Regular agent's chat and a Swarm Buddy's chat have none of their own (admitMachineStart). */
-function startProjectId(state: SuperTabState, request: AgentStartRequest): string | undefined {
+export function startProjectId(state: SuperTabState, request: AgentStartRequest): string | undefined {
   if (request.memberProject) return request.memberProject.id
   if (request.leadFor) return request.leadFor.projectId
   const group = state.conversations.find(c => c.id === request.conversationId)
@@ -560,9 +564,13 @@ function startProjectId(state: SuperTabState, request: AgentStartRequest): strin
  *  Called as the server sends it (agent.startDispatch). Only ever adds: a removal waits for the host's own list. */
 export function notePrivateOnDisk(state: SuperTabState, start: AgentStart): void {
   const pool = machineContribution(state, start.request.machineId)
-  if (!pool) return
+  if (pool) addPrivate(state, pool, startPrivateIds(state, start))
+}
+
+/** The private projects [start] puts on its computer: its own project's, and a Buddy home's private copies. */
+export function startPrivateIds(state: SuperTabState, start: AgentStart): string[] {
   const ids = [startProjectId(state, start.request), ...(start.request.buddyProjects ?? []).map(p => p.id)]
-  addPrivate(state, pool, ids)
+  return [...new Set(ids.filter((id): id is string => !!id && projectsOf(state).some(p => p.id === id && p.visibility === 'private')))]
 }
 
 const addPrivate = (state: SuperTabState, pool: ContributedMachine, ids: Array<string | undefined>) => {

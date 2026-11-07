@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { Command } from './commands.js'
 import type { Actor } from './model.js'
 import { canReadGroup, agentProjectId } from './projects.js'
-import { applyMemberSetUp, endBesidePrivate } from './taskSessions.js'
+import { applyMemberSetUp } from './taskSessions.js'
+import { endBesidePrivate } from './liveness.js'
 import { applyDiskReport } from './machines.js'
 import { code, config, mate, NOW, own, swarm, type Swarm } from './taskSessions.test-support.js'
 
@@ -212,7 +213,7 @@ describe('a task session beside a private project\'s files', () => {
     const rows = endBesidePrivate(f.state, 'mate-mac', NOW)
     expect(f.group(next).assignment!.status).toBe('lost')
     expect(f.agent(session).workDecision).toBe('stop')
-    expect(rows.some(r => r.conversationId === next)).toBe(true)
+    expect(rows.some((r: { conversationId: string }) => r.conversationId === next)).toBe(true)
   })
 
   it('makes a private project\'s start there wait until its public task sessions are down, which stop for it', () => {
@@ -238,9 +239,22 @@ describe('a task session beside a private project\'s files', () => {
     expect(f.agent(session).workDecision).toBe('stop')
   })
 
-  it('tells nobody of a private project in its Member\'s set-up', () => {
+  it('tells nobody of a private project, or one it has no task session in, in its Member\'s set-up', () => {
     const { f, app, secret } = beside()
-    applyMemberSetUp(f.state, 'mate-mac', { [f.buddy]: [app.projectId, secret.projectId] }, NOW)
+    const docs = f.project('docs')
+    applyMemberSetUp(f.state, 'mate-mac', { [f.buddy]: [app.projectId, secret.projectId, docs.projectId] }, NOW)
     expect(f.agent(f.buddy).setUp!.map(e => e.projectId)).toEqual([app.projectId])
+  })
+
+  it('takes no task until its host said what is on its disk, nor where a private project\'s own folder or another Swarm is', () => {
+    const { f, app, secret } = beside()
+    delete f.machine().observation!.projectsOnDisk
+    expect(code(() => assign(f, app.newTask('unread'), app.asPm))).toBe('MEMBER_DISK_UNREAD')
+    f.machine().observation!.projectsOnDisk = []
+    f.state.projects!.find(p => p.id === secret.projectId)!.repository = { machineId: 'mate-mac', cwd: '/Users/mate/secret' } as never
+    expect(code(() => assign(f, app.newTask('own folder'), app.asPm))).toBe('MEMBER_PRIVATE_ON_DISK')
+    delete f.state.projects!.find(p => p.id === secret.projectId)!.repository
+    f.machine().observation!.otherSwarms = true
+    expect(code(() => assign(f, app.newTask('other swarm'), app.asPm))).toBe('MEMBER_PRIVATE_ON_DISK')
   })
 })

@@ -18,7 +18,10 @@ function queued(f: Swarm, conversationId: string, extra: Partial<AgentStart['req
   f.state.starts = [...f.state.starts ?? [], start]
   return start
 }
-const reading = (f: Swarm, projectsOnDisk?: string[]): StoredReading => ({ ...f.machine().observation!, ...(projectsOnDisk ? { projectsOnDisk } : {}) })
+const reading = (f: Swarm, projectsOnDisk?: string[]): StoredReading => {
+  const { projectsOnDisk: _listed, ...older } = f.machine().observation!
+  return { ...older, ...(projectsOnDisk ? { projectsOnDisk } : {}) }
+}
 
 describe('the private projects whose files Harness put on a computer', () => {
   it('gains a private project when the server sends that computer a start in it, and never a public one', () => {

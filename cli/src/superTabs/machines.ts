@@ -413,15 +413,18 @@ export class ContributedMachines {
   }
   /**
    * What this machine holds of the Swarm's projects (task #4543): each Member's set-up projects here, and every project whose
-   * files Harness put on this computer, its clones, Buddy homes' copies and Members' worktrees, in any Swarm. The backend keeps
+   * files Harness put on this computer, its clones, Buddy homes' copies and Members' worktrees, in any Swarm, and whether it serves
+   * another Swarm too. The backend keeps
    * Members' public tasks off a computer that holds a private one's. Its clones not read yet, the list is left out, so it never
    * says less than is there.
    */
-  private memberReport(tabId: string, pool: Record<string, unknown>): { memberSetUp: Record<string, string[]>; projectsOnDisk?: string[] } {
+  private memberReport(tabId: string, pool: Record<string, unknown>, otherSwarms: boolean): { memberSetUp: Record<string, string[]>; projectsOnDisk?: string[]; otherSwarms?: true } {
     const rows = readMemberWorktrees(memberWorktreesFile(this.core.dataDir, this.machineId))
     const clones = pool.scope === 'swarm' ? this.checkoutReadiness(String(pool.cwd))?.map(c => c.folder) ?? null : ['lead']
     const onDisk = clones && [...new Set([...clones, ...buddyHomesProjectIds(join(projectsRoot(), 'worktrees', BUDDY_HOMES)), ...memberProjectIds(rows)])]
-    return { memberSetUp: memberSetUp(rows, tabId), ...(onDisk ? { projectsOnDisk: onDisk.filter(identifier).slice(0, 200) } : {}) }
+    // Another Swarm's projects here are files this Swarm cannot judge private or not, so it is told they are there.
+    return { memberSetUp: memberSetUp(rows, tabId), ...(onDisk ? { projectsOnDisk: onDisk.filter(identifier).slice(0, 200) } : {}),
+      ...(otherSwarms ? { otherSwarms: true as const } : {}) }
   }
   /** This pass's privacy reading, read once a pass (the check itself runs at most every five minutes). */
   private privacy(): PrivacyObservation | null {
@@ -718,7 +721,7 @@ export class ContributedMachines {
           ...(idleBuddies ? { idleBuddyHarnessIds: running.filter(id => idleBuddies[id] === 'idle').slice(0, 1000) } : {}),
           ...(profiles.length ? { profiles } : {}),
           ...(row.capabilitiesWanted === true ? { capabilities: CAPABILITIES } : {}),
-          ...(row.memberProjectsWanted === true ? this.memberReport(String(row.tabId), pool) : {}),
+          ...(row.memberProjectsWanted === true ? this.memberReport(String(row.tabId), pool, pools.some(other => other.tabId !== row.tabId)) : {}),
           ...(preparing.length ? { preparingStartIds: preparing } : {}),
           ...(refusedStarts.length ? { refusedStarts } : {}),
           ...(Object.keys(uncommitted).length ? { harnessUncommitted: uncommitted } : {}),

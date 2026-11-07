@@ -1223,7 +1223,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // #4543): no reader gets it, nor the host's lists it is made from.
   for (const pool of visible.machines ?? []) {
     delete pool.privateOnDisk
-    if (pool.observation) { delete pool.observation.projectsOnDisk; delete pool.observation.memberSetUp }
+    if (pool.observation) { delete pool.observation.projectsOnDisk; delete pool.observation.memberSetUp; delete pool.observation.otherSwarms }
   }
   // Where teammates' work ran was a Team-account choice; Swarm v3 runs every agent as its own person (#4120, #4289). It stays
   // stored for teamWorkRefusal until the Team entries go (#4290), and no reader gets it.
