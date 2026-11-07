@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { personalTasksFor, personalTasksPage } from './personalTasks.js'
-import { feedIdsOf } from './feedIds.js'
+import { allTasksPage, personalTasksFor, personalTasksPage } from './personalTasks.js'
+import { feedIdsOf, projectKey, waitingKey } from './feedIds.js'
 import { groupView, readerView } from './views.js'
 import { fullSwarm, NOW, owner, peer, outsider } from './fixture.test-support.js'
 import * as parts from '../parts/index.js'
@@ -180,5 +180,49 @@ describe('personal Tasks summaries', () => {
     expect(personalTasksFor([row], s.view(), peer)!.upserts[0]!.status).toBe('proposal')
     row.data!.proposal.mergedInto = 'prepared-task'
     expect(personalTasksFor([row], s.view(), peer)!.removed).toEqual([row.key])
+  })
+})
+
+describe('all tasks: Desktop\'s Activity (task #4689)', () => {
+  it('sends every changed task of a project I read, another person\'s too, and never one of a private project I am not in', () => {
+    const s = scene(), web = s.stored.groups.find(g => g.key === s.f.web)!, secret = s.stored.groups.find(g => g.key === s.f.secretGroup)!
+    const theirs = { ...web, data: { ...web.data!, requesterId: owner.userId, taskApproval: undefined } }
+    expect(personalTasksFor([theirs], s.view(), peer)).toMatchObject({ upserts: [], removed: [web.key] })
+    expect(personalTasksFor([theirs], s.view(), peer, 'everyone')).toMatchObject({ upserts: [{ id: web.key, canApprove: false }], removed: [] })
+    expect(personalTasksFor([secret], s.view(), peer, 'everyone')!.upserts.map(r => r.id)).toEqual([secret.key])
+    s.stored.head.data!.projects!.find(p => p.id === s.f.secret)!.members = []
+    // Not even its removal: an id of a private project's task never reaches a non-member.
+    expect(personalTasksFor([secret, { ...secret, deleted: true }], s.view(), peer, 'everyone')).toMatchObject({ upserts: [], removed: [] })
+    expect(personalTasksFor([{ ...theirs, deleted: true }], s.view(), peer, 'everyone')).toMatchObject({ upserts: [], removed: [web.key] })
+    const lead = s.stored.groups.find(g => g.key === 'lead')
+    if (lead) expect(personalTasksFor([lead], s.view(), peer, 'everyone')!.upserts).toEqual([])
+  })
+
+  it('keys every task by its project, and by who it waits on only while it waits', () => {
+    const s = scene(), web = s.stored.groups.find(g => g.key === s.f.web)!.data!
+    const generation = s.f.state.people.find(p => p.id === peer.userId)!.generation
+    expect(feedIdsOf(web)).toContain(projectKey('lead'))
+    expect(feedIdsOf({ ...web, projectId: s.f.secret })).toContain(projectKey(s.f.secret))
+    expect(feedIdsOf(web).some(id => id.startsWith('w:'))).toBe(false)
+    const waiting = { ...web, assignment: null, taskApproval: { ...web.taskApproval!, state: 'proposal' as const } }
+    expect(feedIdsOf(waiting)).toContain(waitingKey(peer.userId, generation))
+    expect(feedIdsOf({ ...waiting, reviewOf: web.id } as never)).toEqual([])
+  })
+
+  it('reads by the keys of the projects I read, then once by my waiting key on a first page only', async () => {
+    const s = scene(), generation = s.f.state.people.find(p => p.id === peer.userId)!.generation
+    const keys: string[][] = []
+    const read = async (ids: string[]) => { keys.push(ids); return [] }
+    await allTasksPage(read, s.view(), peer)
+    expect(keys).toEqual([[projectKey('lead'), projectKey(s.f.secret)], [waitingKey(peer.userId, generation)]])
+    keys.length = 0
+    await allTasksPage(read, s.view(), peer, Buffer.from(JSON.stringify({ la: NOW, k: 'x' })).toString('base64url'))
+    expect(keys).toEqual([[projectKey('lead'), projectKey(s.f.secret)]])
+    s.stored.head.data!.projects!.find(p => p.id === s.f.secret)!.members = []
+    keys.length = 0
+    await allTasksPage(read, s.view(), peer)
+    expect(keys[0]).toEqual([projectKey('lead')])
+    const agent: Actor = { kind: 'agent', agentId: s.f.lead, machineOwnerId: `${owner.userId}-machine` }
+    expect(await allTasksPage(read, s.view(agent), agent)).toBeUndefined()
   })
 })

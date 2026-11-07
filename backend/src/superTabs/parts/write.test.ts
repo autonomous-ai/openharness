@@ -89,15 +89,16 @@ describe('the feed ids a conversation write stores (read/feedIds.ts, task #4203)
   const ids = (data: GroupData) => (extracted('group', data, 1).feedIds as string[]).sort()
 
   it('names who asked as the feed checks it: the approver or the proposal senders at their membership, else the requester', () => {
-    expect(ids(task())).toEqual(['asker', 'runner', 'worker'])
+    // Every task also carries its project's key, for Activity (task #4689).
+    expect(ids(task())).toEqual(['asker', 'p:p', 'runner', 'worker'])
     expect(ids(task({ taskApproval: { personId: 'asker', generation: 'g1', state: 'approved', createdAt: 1, suggestedAgentId: 'suggested' }, proposal })))
-      .toEqual(['asker:g1', 'runner', 'worker'])
-    expect(ids(task({ proposal }))).toEqual(['asker:g2', 'proposer:g1', 'runner', 'worker'])
+      .toEqual(['asker:g1', 'p:p', 'runner', 'worker'])
+    expect(ids(task({ proposal }))).toEqual(['asker:g2', 'p:p', 'proposer:g1', 'runner', 'worker'])
   })
 
   it('names the agent about to do it, and the login its agent ran under, which outlives the agent', () => {
     expect(ids(task({ requesterId: undefined, assignment: null, taskApproval: { personId: 'approver', generation: 'g1', state: 'proposal', createdAt: 1,
-      suggestedAgentId: 'suggested' } }))).toEqual(['approver:g1', 'suggested'])
+      suggestedAgentId: 'suggested' } }))).toEqual(['approver:g1', 'p:p', 'suggested', 'w:approver:g1'])
   })
 
   it('names nobody for a conversation that is no task, or a proposal merged into another', () => {

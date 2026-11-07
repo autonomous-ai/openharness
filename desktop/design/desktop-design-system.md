@@ -469,12 +469,18 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
 - **Left pane row.** The left pane's row (`SuperTabQuietRow`,
   [Swarm left pane](#swarm-left-pane)) carries the elements above at its
   shipped size; its size and layout do not change when an element does.
-- **Tasks pane header** (`SuperTabTasksPaneHeader`). "Tasks" in 13 semibold
-  on the left. The Accept all or Ask me choice on the right is plain 12
-  secondary text; its chevron and a faint fill show only on hover, focus or
-  while its menu is open, and the chevron's room is held at rest so the text
-  never moves. The menu is the app's one dropdown, with a check on the stored
-  choice.
+- **Tasks pane header** (`SuperTabTasksPaneHeader`, task #4689). "Activity"
+  in 13 semibold on the left. On the right, two 16 icons in 28-point targets,
+  muted at rest, primary ink and a faint fill on hover or focus, the fill held
+  while their menu is open. The people icon picks Everyone or Mine and shows a
+  single person for Mine; the double check picks Accept all or Ask me and
+  shows a hand for Ask me. Each opens the app's one dropdown: each choice with
+  its icon, and a check on the current one. Tooltips: "Who you see", "Your
+  tasks".
+- **Activity order** (`superTabActivity`). Cards waiting on the reader's
+  Accept are pinned on top, oldest first, with no heading; then every other
+  task of Everyone (every project the reader may read) or Mine (the reader's
+  tasks and their agents'), newest activity first, each card once.
 - **Tasks pane card** (`SuperTabPersonalTaskCard`). A card surface with one
   hairline (`DesktopChrome.rim`), radius 10 and no shadow; a selected card
   differs by its fill alone. On top, the project's name in a neutral grey

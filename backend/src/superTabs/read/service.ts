@@ -1,4 +1,4 @@
-import { personalTasksFor, personalTasksPage, type PersonalTasks } from './personalTasks.js'
+import { allTasksPage, personalTasksFor, personalTasksPage, type PersonalTasks } from './personalTasks.js'
 /**
  * The read API by parts (design section 4; shapes in contract.ts). Every read takes its time `T0` before any query and
  * makes the next cursor from it, so a write that commits late, inside the overlap, is still seen by the next poll.
@@ -131,7 +131,8 @@ export class SwarmReads {
   /** The small format/deletion row for each Swarm, held briefly per process. */
   private readonly swarmRows = new Map<string, SwarmRowRead>()
 
-  async firstLoad(user: AuthUser, tabId: string, asAgentId?: string): Promise<FirstLoad> {
+  /** `allTasks`: the reader's client shows Activity (Desktop, task #4689), so its feed comes too; no other client is sent it. */
+  async firstLoad(user: AuthUser, tabId: string, asAgentId?: string, options: { allTasks?: boolean } = {}): Promise<FirstLoad> {
     const t0 = this.now()
     return this.read(user, tabId, async (tx, cached) => {
       const read = await this.load(tx, cached, user, tabId, asAgentId, t0, { includeRecentStarts: true })
@@ -140,7 +141,8 @@ export class SwarmReads {
         // This backend opens steps (task steps design): a newer CLI sends `step` only to a backend that says so.
         ...(this.options.githubApp ? { githubApp: true as const } : {}), steps: true as const, ...view.parts,
         // The feed's newest page (task #4203): its history is read by its own index, not from the loaded working set.
-        ...read.actor.kind === 'person' ? { personalTasks: await personalTasksPage(feedRead(tx, cached, tabId), view, read.actor) } : {},
+        ...read.actor.kind === 'person' ? { personalTasks: await personalTasksPage(feedRead(tx, cached, tabId), view, read.actor),
+          ...options.allTasks ? { allTasks: await allTasksPage(feedRead(tx, cached, tabId), view, read.actor) } : {} } : {},
         ...stamped({ ...await this.withAvatars(view, t0), ...readableMarks(read, await this.marksOf(tx, tabId, read.actor),
           await this.threadMarksOf(tx, tabId, read.actor), await this.settingsOf(tx, tabId, read.actor)) }) }
     })
@@ -193,7 +195,7 @@ export class SwarmReads {
   /** `derivedEtag`: the etag of the summary the client holds (derivedEtag.ts); while it still matches, the reply leaves the
    *  summary out and sends only the reader's moved marks. */
   async changes(user: AuthUser, tabId: string, cursor: string, asAgentId?: string,
-    options: { lightMachines?: boolean; derivedEtag?: string } = {}): Promise<Changes> {
+    options: { lightMachines?: boolean; derivedEtag?: string; allTasks?: boolean } = {}): Promise<Changes> {
     const t0 = this.now()
     return this.read(user, tabId, async (tx, cached) => {
       // Light (parts/light.ts): changed parts come whole from the change feed; the rest is read only to check visibility and
@@ -227,7 +229,8 @@ export class SwarmReads {
       if (!asAgentId) sent.groups = await this.servedTops.served(tabId, read.view.state, sent.groups)
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
         epoch: read.parts.visibilityEpoch, ...sent,
-        ...read.actor.kind === 'person' ? { personalTasks: personalTasksFor(changed, read.view, read.actor) } : {},
+        ...read.actor.kind === 'person' ? { personalTasks: personalTasksFor(changed, read.view, read.actor),
+          ...options.allTasks ? { allTasks: personalTasksFor(changed, read.view, read.actor, 'everyone') } : {} } : {},
         ...stamped({ ...await this.withAvatars(read.view, t0), ...readableMarks(read, marks, threadMarks, settings) }, options.derivedEtag) }
     })
   }
@@ -235,6 +238,15 @@ export class SwarmReads {
   /** The person's Tasks feed page older than `before`, a first load's or an earlier page's `olderCursor` (task #4203). A person's
    *  read only: an agent has no feed. */
   async personalTasks(user: AuthUser, tabId: string, before?: string): Promise<PersonalTasks> {
+    return this.feed(user, tabId, personalTasksPage, before)
+  }
+
+  /** Desktop's Activity page older than `before`: every task of every project the person reads (task #4689). */
+  async allTasks(user: AuthUser, tabId: string, before?: string): Promise<PersonalTasks> {
+    return this.feed(user, tabId, allTasksPage, before)
+  }
+
+  private async feed(user: AuthUser, tabId: string, page: typeof personalTasksPage, before?: string): Promise<PersonalTasks> {
     const t0 = this.now()
     return this.read(user, tabId, async (tx, cached) => {
       const loaded = await readParts(tx, cached, tabId)
@@ -243,7 +255,7 @@ export class SwarmReads {
       author(state, actor)
       const [teamMachines, otherWorkspaceMachines, machineVersions] = await this.machineLookups(state)
       const view = readerView(loaded, actor, t0, { teamMachines, otherWorkspaceMachines, machineVersions, teamAccountsIdle: this.store.teamAccountsIdle })
-      return await personalTasksPage(feedRead(tx, cached, tabId), view, actor, before)
+      return await page(feedRead(tx, cached, tabId), view, actor, before)
         ?? fail('NOT_FOUND', 'Only a member has a Tasks feed.', 404)
     })
   }

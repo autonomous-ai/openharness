@@ -41,6 +41,8 @@ void main() {
         'title': 'Task number $i',
         'projectName': i.isEven ? 'Harness' : 'Desktop',
         'status': 'proposal',
+        // Only the newest waits on the reader: pinned on top, the rest in newest-first order (#4689).
+        'canApprove': i == 0,
         'suggested': false,
         if (i % 3 == 1) 'agent': null,
       },

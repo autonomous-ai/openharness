@@ -604,7 +604,7 @@ class _Gallery extends StatelessWidget {
                 ],
               ),
               title(
-                'Tasks pane: header, a waiting, a working and a selected card',
+                'Activity: header, a waiting, a working and a selected card',
               ),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -615,6 +615,8 @@ class _Gallery extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         SuperTabTasksPaneHeader(
+                          mine: false,
+                          onMine: (_) {},
                           mode: 'autoApprove',
                           onChanged: (_) {},
                         ),

@@ -20,7 +20,7 @@ class _Daemon {
     Map<String, dynamic>? body,
   }) {
     if (method == 'GET' &&
-        (path == '/api/super-tabs/tab/parts' ||
+        (path == '/api/super-tabs/tab/parts?allTasks=1' ||
             path.startsWith('/api/super-tabs/tab/changes?'))) {
       states++;
     }
