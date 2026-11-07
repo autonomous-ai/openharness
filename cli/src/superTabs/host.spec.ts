@@ -1058,10 +1058,10 @@ describe('Super Tab native delivery handoff', () => {
         const [line] = replyLines(await delivered(t))
         expect(line).toMatch(/ --answers 'message' --to 'pm'$/)
       })
-      it('keeps --reply-to in a thread when the coordinator asks the reader a question', async () => {
+      it('answers in the chat, a reply in an older thread too, when the coordinator asks the reader a question (task #4555)', async () => {
         const { t } = wired({ author: PM, text: 'Which file is it in?', thread: 'root', replyTo: 'root' })
         const [line] = replyLines(await delivered(t))
-        expect(line).toMatch(/ --reply-to 'message' --to 'pm'$/)
+        expect(line).toMatch(/ --answers 'message' --to 'pm'$/)
       })
       it('keeps the named form for an agent that is not the coordinator, a task the reader does not hold, and the project chat', async () => {
         const reviewer = wired({ author: { kind: 'agent', id: 'rev', name: 'Rev1' }, text: 'Two findings.', thread: 'message' })

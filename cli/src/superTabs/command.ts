@@ -223,7 +223,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     for (let i = 4; i < positional.length; i += 2) {
       const [flag, value] = [positional[i], positional[i + 1]]
       if (flag === '--reply-to' && identifier(value) && replyTo === null && answers === null) replyTo = value
-      // The answer right below a message, in the main flow (task #2929); a reply to it goes in its thread.
+      // The answer to a message, shown in the chat quoting it (task #4555); --reply-to is a Buddy thread session's, in its thread.
       else if (flag === '--answers' && identifier(value) && answers === null && replyTo === null) answers = value
       // The agents it reaches, any agent of this project; the server adds @Name, a reply's author and a task's assignee (#2963).
       else if (flag === '--to' && identifier(value) && (to.includes(value) || to.length < 16)) { if (!to.includes(value)) to.push(value) }
@@ -239,7 +239,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     Object.assign(payload, { action: 'command', operationId: third, ...(attach.length ? { attach } : {}),
       command: { type: 'message.send', conversationId: first, text, replyTo, ...(answers ? { answers } : {}), recipientIds: to, ...(mentions.length ? { mentions } : {}) } })
   } else if (action === 'answer' && identifier(first) && identifier(second) && typeof third === 'string' && identifier(positional[4])) {
-    // The answer to the message [second] (task #3403): the server puts it in that message's thread, or right below it, and
+    // The answer to the message [second] (task #3403): the server shows it right below that message, quoting it, and
     // refuses a second answer saying where the first is.
     const to: string[] = []
     for (let i = 5; i < positional.length; i += 2) {

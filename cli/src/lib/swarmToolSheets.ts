@@ -66,15 +66,15 @@ const ENTRIES: readonly SheetEntry[] = [
   T('- `costs', '`costs [--days N]`: what routed attempts cost.', 'pm', 'p'),
   T('- `screen AGENT', '`screen AGENT [--scrollback N]` reads, and `type AGENT [TEXT] [--key K]...` types into, an agent\'s terminal in your project; ask the owner before approving anything risky.', 'pm', 'p'),
   OFF('- `type AGENT', 'pm'),
-  T('`post GROUP TEXT', '`post GROUP TEXT OPERATION_ID [--to AGENT]... [--answers ID | --reply-to ID] [--attach PATH]... [--mention PERSON]...`', 'core', 'pertg', '`post GROUP TEXT OPERATION_ID [--to AGENT]... [--answers ID | --reply-to ID] [--attach PATH]... [--mention PERSON]...`: answer once, where asked (`--answers` below a main-chat message, `--reply-to` in a thread); `--to` names the agents a post reaches, a post naming no one reaches none (except in a task); tag a person only when they must act, by username. `react GROUP ID EMOJI OPERATION_ID`: eyes when you start, check when done, rocket when merged; react instead of acknowledging.'),
-  T('- Answer a message once', 'Answer once, where asked: `answer GROUP ID TEXT OPERATION_ID` goes in its thread if in one, else below it, and a second is refused, naming where the first is; `--answers` right below a main-chat message, `--reply-to` inside a thread.'),
+  T('`post GROUP TEXT', '`post GROUP TEXT OPERATION_ID [--to AGENT]... [--answers ID] [--attach PATH]... [--mention PERSON]...`', 'core', 'pertg', '`post GROUP TEXT OPERATION_ID [--to AGENT]... [--answers ID] [--attach PATH]... [--mention PERSON]...`: answer once, with `--answers` (your reply shows in the chat, quoting it; never open a thread); `--to` names the agents a post reaches, a post naming no one reaches none (except in a task); tag a person only when they must act, by username. `react GROUP ID EMOJI OPERATION_ID`: eyes when you start, check when done, rocket when merged; react instead of acknowledging.'),
+  T('- Answer a message once', 'Answer once, where asked: `answer GROUP ID TEXT OPERATION_ID` or `post --answers` shows right below it in the chat, quoting it, and a second is refused, naming where the first is. Never open a thread.'),
   OFF('- `--attach PATH`'),
   T('- `--mention PERSON`', '`--mention PERSON` tags a person (a username from status, never an email) when they must act.'),
   OFF('- Never type a person\'s email'),
   OFF('- Quote TEXT'),
   T('- `--to AGENT`', '`--to AGENT` (an id from status) is how a post reaches an agent: exactly who it names.'),
   OFF('- `@Name`'),
-  OFF('- A reply (`--reply-to`)'),
+  OFF('- An answer (`--answers`)'),
   T('- A post that names no one', 'A post naming no one reaches no agent, except in a task or step: there it reaches the assigned agent.'),
   T('- A post naming an agent that may not join', 'A post naming an agent that may not join its task is delivered without it and says notReached.', 'engineer', 'ert'),
   T('- The coordinator gets a post only', 'The PM hears your work through work.status: never post it a result, verdict or acknowledgement.'),
@@ -147,7 +147,7 @@ export const sheetEntries = (): readonly SheetEntry[] => ENTRIES
 /** The what-changed note for PMs the PM sheet was last announced with (backend superTabs/processNotes.ts, task #3581), and the
  *  sheet's fingerprint then. A change to the PM sheet fails swarmToolSheets.spec.ts until a new note is added there and pinned
  *  here, so every running PM hears what changed. */
-export const PM_SHEET_NOTE = { id: '2026-11-07-mktemp', sheet: '8d58b0265cf5' } as const
+export const PM_SHEET_NOTE = { id: '2026-11-07-no-threads', sheet: '12f5740793b3' } as const
 
 /** The role a session's sheet is for: the coordinator is the PM; an agent by its project role's name (anything unknown is an
  *  Engineer, whose sheet points to the full manual); a Reviewer started as the fallback role is a Reviewer. */
@@ -196,15 +196,15 @@ const SOURCE: Readonly<Record<string, string>> = {
   "- `costs": "7e8e68f58e6a",
   "- `screen AGENT": "c0b349e28fe9",
   "- `type AGENT": "53560193a01c",
-  "`post GROUP TEXT": "e7afba2818b6",
-  "- Answer a message once": "6ca4d627931c",
+  "`post GROUP TEXT": "3895a271fe17",
+  "- Answer a message once": "cd3e27653a18",
   "- `--attach PATH`": "73eb9eb9bc03",
   "- `--mention PERSON`": "c423463e5075",
   "- Never type a person's email": "e4a9eaf93b1c",
   "- Quote TEXT": "ea4d592e3e16",
   "- `--to AGENT`": "7a8e2576c22e",
   "- `@Name`": "768716eccb0b",
-  "- A reply (`--reply-to`)": "55b20de01505",
+  "- An answer (`--answers`)": "e8241c9e9362",
   "- A post that names no one": "d9ebfaef9d01",
   "- A post naming an agent that may not join": "76f81e8e9b0c",
   "- The coordinator gets a post only": "e8ee266e21c4",
@@ -255,7 +255,7 @@ const SOURCE: Readonly<Record<string, string>> = {
   "- A lost or stalled task": "414a8a377356",
   "- A task lost to a usage limit": "7a1c05643ae5",
   "- After a restart": "dea210ac457d",
-  "Many people talk at once.": "021d79f77b50",
+  "Many people talk at once.": "6824cc085fa3",
   "- The Swarm's people are its members": "271a685f8a32",
   "- An agent a person started": "cb328a6bd255",
   "- A tool missing on a machine": "367aec14ceec",

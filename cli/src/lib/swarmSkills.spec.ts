@@ -148,7 +148,7 @@ describe('built-in Swarm skills', () => {
   // The thread line (Dee's threads, 2026-10-29): the Lead answers inside the thread of the message it answers. The Lead's
   // alone, in both modes, right after its write-like-a-colleague line.
   // Answers go right below, not in a thread (anh Dee, 2026-11-04; task #2929).
-  const thread = '- Answer a message where it was asked: one in the main chat right below it, with post --answers that message; one in a thread inside that thread, with post --reply-to it. Open a thread yourself only for a back-and-forth on one topic, or to answer something far up the chat. Post with neither only to start a new topic.\n'
+  const thread = '- Answer a message where it was asked, with post --answers that message: your reply shows in the chat, quoting it. Never open a thread. Post with no --answers only to start a new topic.\n'
   // The Next-up line (Tasks view, #2569): the Lead's alone, in both modes, where it keeps work moving.
   const queue = '- Keep the project\'s Next up in the order work should start: work.queue with after (null for the top) moves a task, and notBefore (YYYY-MM-DD) marks a promise such as removing a route after a date.\n'
   const limit = '- A task lost to a usage limit resumes by itself in the same session when the limit resets (its wake-up says when). Hand it on at once only to another account or engine with allowance now, with its pushed branch and last progress note.\n'

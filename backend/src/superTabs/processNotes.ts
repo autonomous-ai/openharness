@@ -42,6 +42,13 @@ export const PROCESS_NOTES: readonly ProcessNote[] = [
       + 'so the shell guard turns it away. Your tool sheet says it.',
     schedule: '52cb6172d956',
   },
+  {
+    // #4555 (anh Dee 11-07): every chat is one flat conversation.
+    id: '2026-11-07-no-threads',
+    text: 'No chat has threads now: a reply shows in the chat, quoting the message it is about, and the thread setting is gone. '
+      + 'Never open a thread. Your tool sheet says it.',
+    schedule: '52cb6172d956',
+  },
 ]
 
 export const latestProcessNote = (): ProcessNote | undefined => PROCESS_NOTES.at(-1)

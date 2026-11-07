@@ -460,8 +460,8 @@ export const commandSchema = z.discriminatedUnion('type', [
     // The message this post answers right below it, in the main flow (anh Dee, 2026-11-04: "every message is a thread"). It
     // settles and routes as a reply to that message does, and opens no thread. Never with replyTo.
     answers: id.optional(),
-    // The answer to the message in `answers` (answers.ts, task #3403): placed in that message's thread when it is a reply in
-    // one, else right below it, and refused when it was answered already. Only with `answers`.
+    // The answer to the message in `answers` (answers.ts, task #3403): right below it, quoting it, and refused when it was
+    // answered already. Only with `answers`.
     answer: z.literal(true).optional(),
     // An agent's own skills notice (instructions changed, skills replaced): the coordinator's goes in its digest
     // (noticeDigest.ts gatheredNotice). Only with `agentOnly`, which keeps it to the agent itself.
