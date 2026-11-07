@@ -15,7 +15,8 @@
 #   bash scripts/release-desktop.sh --notes-file f.md  # hand-written release notes instead of the
 #                                                      # generated commit list
 #   bash scripts/release-desktop.sh --wait             # finish when this tag is live and verified
-#   bash scripts/release-desktop.sh --prepare          # package the pushed PR head during final checks; no publication
+#   bash scripts/release-desktop.sh --prepare          # build the pushed head during final checks; no publication
+#                                                      # (unsigned on a branch, a reusable candidate on main)
 #   bash scripts/release-desktop.sh --allow-older      # a rollback: older code under a higher version
 #
 # THE NEXT VERSION COMES FROM TWO SOURCES, AND BOTH MATTER. Git tags alone are not enough: this repo
@@ -310,7 +311,12 @@ fi
 if [ "$PREPARE" -eq 1 ]; then
   gh workflow run release-desktop.yml --ref "$BRANCH" -f version="$VER" -f prepare_only=true
   echo "  Candidate $VER started on $HEAD_SHA. No tag or product manifest was published."
-  echo "  Continue validation/review, merge, then release $VER normally; matching packages are reused automatically."
+  if [ "$BRANCH" = main ]; then
+    echo "  Release $VER normally; matching packages are reused automatically."
+  else
+    # Signing runs only in the release environment, which takes main and v*_desktop tags.
+    echo "  On $BRANCH this is an unsigned build check: nothing is kept for reuse, and the release builds and signs from its tag."
+  fi
   exit 0
 fi
 

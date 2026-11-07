@@ -157,7 +157,9 @@ gcs_refuse_republish() {
   fi
 }
 command -v python3 >/dev/null 2>&1 || { echo "error: python3 not found" >&2; exit 1; }
-command -v flutter >/dev/null 2>&1 || { echo "error: flutter not found" >&2; exit 1; }
+if [ "$DO_BUILD" -eq 1 ]; then
+  command -v flutter >/dev/null 2>&1 || { echo "error: flutter not found" >&2; exit 1; }
+fi
 if [ "$DO_NOTARIZE" -eq 1 ]; then
   command -v xcrun >/dev/null 2>&1 || { echo "error: xcrun not found — install Xcode command line tools" >&2; exit 1; }
 fi
@@ -224,6 +226,11 @@ fi
 # never actually receives.
 STAMPED="$(plutil -extract CFBundleShortVersionString raw "$APP_BUNDLE/Contents/Info.plist" 2>/dev/null || true)"
 [ "$STAMPED" = "$VER" ] || { echo "error: bundle CFBundleShortVersionString is '$STAMPED', expected '$VER'" >&2; exit 1; }
+
+# --- Step 2b: sign ---
+# Builds carry an ad-hoc signature (scripts/publish-macos-variant.sh); this is where the app gets
+# SIGN_IDENTITY, so the release job that holds the certificate never has to build.
+SIGN_IDENTITY="$SIGN_IDENTITY" bash "$APP_DIR/scripts/sign-macos-app.sh" "$APP_BUNDLE"
 
 # --- Step 3: package ---
 mkdir -p "$OUTPUT_DIR"

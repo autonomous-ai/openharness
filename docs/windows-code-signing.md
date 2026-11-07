@@ -91,11 +91,10 @@ The remaining steps wait for the organisation's permission grant:
    | `SIGNING_PROFILE` | the certificate profile name |
    | `WINDOWS_SIGNING_PUBLISHER` | optional: the certificate's common name, `AUTONOMOUS INC.` when unset |
 
-2. **Deployment branches and tags.** `release` allows branch `main` and tags `v*`, which covers `v*_desktop` and
-   `v*_cli` tag releases and runs dispatched from `main`. A Desktop candidate prepared from a PR branch
-   (`make release-desktop ARGS="--prepare"`) is refused by the environment while signing is required: its
-   `sign-windows` fails and the candidate is not made. Either prepare candidates from `main` after the merge, or add
-   a branch pattern for candidate branches to the environment.
+2. **Deployment branches and tags.** `release` allows branch `main` and tags `v*_desktop` and `v*_cli`, nothing
+   else: the Apple and Windows signing material is reachable only there (#4434). Never add a branch pattern for
+   candidates. A Desktop candidate prepared from a PR branch (`make release-desktop ARGS="--prepare"`) skips
+   `sign-windows` and `sign-macos` and is an unsigned build check; the release signs from its tag.
 
    Do not add required reviewers. A signing job that waits for approval holds the release run.
 3. **Switch.** Settings → Secrets and variables → Actions → **Variables** (repository, not environment):
@@ -144,7 +143,7 @@ unsigned again. Files already published stay validly signed, because each signat
 - **Identity:** a dedicated app registration with a federated credential. No person's login and no long-lived secret.
 - **Failure:** a signing or verification failure fails the job, and with signing required that stops the Windows
   publish. Nothing ships unsigned silently.
-- **Platforms:** Windows x64 and arm64, both signed on an x64 runner. macOS signing (`macos-signing`) is unchanged.
+- **Platforms:** Windows x64 and arm64, both signed on an x64 runner. macOS signs in its own `sign-macos` job in the same environment (#4434).
 
 ## Not covered yet
 

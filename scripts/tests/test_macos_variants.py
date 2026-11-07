@@ -63,6 +63,7 @@ while not Path(other+"-started").exists():
     if time.monotonic()>deadline:raise RuntimeError("publication did not overlap")
     time.sleep(.01)
 record={key:os.environ[key] for key in ("APP_BUNDLE","OUTPUT_DIR","OTA_KEY","DMG_KEY","GCS_PATH","DMG_GCS_PATH","METADATA_PATH")}
+record["options"]=sys.argv[3:]
 Path(variant+"-publication.json").write_text(json.dumps(record))
 if os.environ.get("COORDINATOR_FAIL")==variant:sys.exit(7)
 for extension in ("zip","dmg"):
@@ -133,7 +134,7 @@ print("published fixture")
         self.assertEqual(result, 0, receipt)
         intel = json.loads((self.desktop / "intel-publication.json").read_text())
         arm = json.loads((self.desktop / "apple-silicon-publication.json").read_text())
-        for field in intel:
+        for field in set(intel) - {"options"}:
             self.assertNotEqual(intel[field], arm[field], field)
         self.assertEqual(intel["GCS_PATH"], "harness/desktop/1.2.3/Harness-macos.zip")
         self.assertEqual(arm["GCS_PATH"], "harness/desktop/1.2.3/Harness-macos-arm64.zip")
@@ -176,6 +177,42 @@ print("published fixture")
                 self.assertEqual(error.exception.code, 2)
         self.assertFalse((self.desktop / "compile-count").exists())
 
+
+    def built_bundles(self):
+        for variant in variants.VARIANTS:
+            app = self.output / variant / "Harness.app"
+            app.mkdir(parents=True)
+            app.joinpath("version").write_text("1.2.3")
+            app.joinpath("renderer").write_text(variant)
+            app.joinpath("payload").write_text("bytes built by another job")
+
+    def test_no_build_publishes_existing_bundles_without_compiling(self):
+        self.built_bundles()
+        result, receipt = self.run_build("--no-build", "--metadata-prefix", "harness/desktop/.ci/123")
+        self.assertEqual(result, 0, receipt)
+        self.assertFalse((self.desktop / "compile-count").exists())
+        self.assertEqual([check["name"] for check in receipt["checks"]], ["publish-intel", "publish-apple-silicon"])
+        for variant in variants.VARIANTS:
+            self.assertTrue((self.desktop / f"{variant}-publication.json").exists())
+
+    def test_no_build_requires_both_bundles_and_a_metadata_prefix(self):
+        with mock.patch.object(variants, "DESKTOP", self.desktop), self.assertRaises(SystemExit) as error:
+            variants.main(["1.2.3", "--no-build"])
+        self.assertEqual(error.exception.code, 2)
+        self.built_bundles()
+        import shutil
+        shutil.rmtree(self.output / "intel")
+        result, receipt = self.run_build("--no-build", "--metadata-prefix", "harness/desktop/.ci/123")
+        self.assertEqual(result, 1)
+        self.assertIn("intel", receipt["error"])
+        self.assertFalse(list(self.desktop.glob("*-publication.json")))
+
+    def test_no_notarize_is_forwarded_to_both_publications(self):
+        result, receipt = self.run_build("--metadata-prefix", "harness/desktop/.ci/123", "--no-notarize")
+        self.assertEqual(result, 0, receipt)
+        for variant in variants.VARIANTS:
+            record = json.loads((self.desktop / f"{variant}-publication.json").read_text())
+            self.assertEqual(record["options"], ["--no-notarize"])
 
 if __name__ == "__main__":
     unittest.main()

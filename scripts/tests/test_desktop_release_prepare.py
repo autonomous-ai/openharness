@@ -67,6 +67,13 @@ class DesktopPrepareTests(unittest.TestCase):
         self.assertEqual(self.git('ls-remote', '--tags', 'origin'), before)
         self.assertNotIn('v1.2.55_desktop', self.git('tag', '-l'))
 
+    def test_prepare_on_a_branch_says_it_is_an_unsigned_build_check(self):
+        result = self.run_script('--prepare')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('unsigned build check', result.stdout)
+        self.assertIn('builds and signs from its tag', result.stdout)
+        self.assertNotIn('reused automatically', result.stdout)
+
     def test_prepare_dry_run_has_no_dispatch_or_tag(self):
         result = self.run_script('--prepare', '--dry-run', '1.3.1')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
