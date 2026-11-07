@@ -61,16 +61,23 @@ void main() {
           await tester.tap(find.text('Bring agent'));
           await pumpEventQueue();
         });
-        await tester.pumpAndSettle();
-        // The machine prepares its Buddy folder on the first ask, as a real
-        // one may; the person tries again.
-        if (find.textContaining('still being prepared').evaluate().isNotEmpty) {
-          await tester.runAsync(() async {
-            await tester.tap(find.text('Bring agent'));
-            await pumpEventQueue();
-          });
-          await tester.pumpAndSettle();
+        // The computer answers its first ask "preparing", as a real one does
+        // for a Swarm that doesn't list it yet: one click still starts the
+        // Buddy (audit finding 2, #4442).
+        // The ask again is a second later, in real time: wait for the form
+        // to close, up to ten seconds.
+        for (
+          var i = 0;
+          i < 100 && find.byType(NewHarnessForm).evaluate().isNotEmpty;
+          i++
+        ) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 100)),
+          );
+          await tester.pump();
         }
+        await tester.pumpAndSettle();
+        expect(find.textContaining('still being prepared'), findsNothing);
         expect(find.byType(NewHarnessForm), findsNothing);
         await tester.runAsync(() => joining);
         final starts = f.connection.server.posts.where(

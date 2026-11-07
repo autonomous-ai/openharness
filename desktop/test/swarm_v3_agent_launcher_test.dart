@@ -1,38 +1,36 @@
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/join/agent_launcher.dart';
 
 // The Buddy a person brings as they join starts through the Swarm on their own
 // computer (buddy.create), whichever form chose its engine (task #4196).
 void main() {
-  test(
-    'a Buddy uses this computer and owner command without a login or Team setup',
-    () async {
-      final sent = <Map<String, dynamic>>[];
-      final launcher = SwarmAgentLauncher(
-        machineId: 'local',
-        machineName: 'My computer',
-        inSwarm: false,
-        isCurrent: () => true,
-        prepare: (operation) async => {
-          'name': 'My computer',
-          'cwd': '/work',
-          'engines': ['codex', 'pi'],
-        },
-        command: (command, operation) async {
-          sent.add(command);
-          return {'startId': 'start', 'conversationId': 'chat'};
-        },
-      );
-      final result = await launcher.create('codex', 'operation');
-      expect(result['startId'], 'start');
-      expect(sent, hasLength(1));
-      expect(sent.single['type'], 'buddy.create');
-      expect(sent.single['machineId'], 'local');
-      expect(sent.single['setup'], containsPair('cwd', '/work'));
-      expect((sent.single['setup'] as Map)['engines'], ['codex']);
-      expect(sent.toString(), isNot(contains('teamSetup')));
-    },
-  );
+  test('a Buddy uses this computer and owner command without a login or Team setup', () async {
+    final sent = <Map<String, dynamic>>[];
+    final launcher = SwarmAgentLauncher(
+      machineId: 'local',
+      machineName: 'My computer',
+      inSwarm: false,
+      isCurrent: () => true,
+      prepare: (operation) async => {
+        'name': 'My computer',
+        'cwd': '/work',
+        'engines': ['codex', 'pi'],
+      },
+      command: (command, operation) async {
+        sent.add(command);
+        return {'startId': 'start', 'conversationId': 'chat'};
+      },
+    );
+    final result = await launcher.create('codex', 'operation');
+    expect(result['startId'], 'start');
+    expect(sent, hasLength(1));
+    expect(sent.single['type'], 'buddy.create');
+    expect(sent.single['machineId'], 'local');
+    expect(sent.single['setup'], containsPair('cwd', '/work'));
+    expect((sent.single['setup'] as Map)['engines'], ['codex']);
+    expect(sent.toString(), isNot(contains('teamSetup')));
+  });
 
   test('a computer already in the Swarm sends no setup', () async {
     final sent = <Map<String, dynamic>>[];
@@ -98,5 +96,76 @@ void main() {
       launcher.create('claude', 'op'),
       throwsA(isA<SwarmAgentLaunchFailure>()),
     );
+  });
+
+  // Audit finding 2 (#4442): a computer the Swarm doesn't list yet answers its
+  // first ask "preparing"; the start waits for it, as Add computer does.
+  test(
+    'a computer still preparing is asked again until ready, and starts once',
+    () {
+      fakeAsync((async) {
+        final asks = <String>[];
+        final sent = <Map<String, dynamic>>[];
+        final launcher = SwarmAgentLauncher(
+          machineId: 'local',
+          machineName: 'Mac',
+          inSwarm: false,
+          isCurrent: () => true,
+          prepare: (op) async {
+            asks.add(op);
+            return asks.length < 3
+                ? {'state': 'preparing'}
+                : {
+                    'cwd': '/work',
+                    'engines': ['claude'],
+                  };
+          },
+          command: (command, op) async {
+            sent.add(command);
+            return {'startId': 'one'};
+          },
+        );
+        Map<String, dynamic>? result;
+        Object? failure;
+        launcher
+            .create('claude', 'op')
+            .then((r) => result = r, onError: (Object e) => failure = e);
+        async.elapse(const Duration(seconds: 5));
+        expect(failure, isNull);
+        expect(result?['startId'], 'one');
+        expect(asks, ['op-prepare', 'op-prepare', 'op-prepare']);
+        expect(sent.single['setup'], containsPair('cwd', '/work'));
+        expect((sent.single['setup'] as Map).containsKey('state'), isFalse);
+      });
+    },
+  );
+
+  test('a computer that never finishes preparing gives up in plain words', () {
+    fakeAsync((async) {
+      final launcher = SwarmAgentLauncher(
+        machineId: 'local',
+        machineName: 'Mac',
+        inSwarm: false,
+        isCurrent: () => true,
+        prepare: (op) async => {'state': 'preparing'},
+        command: (command, op) async => throw StateError('must not send'),
+      );
+      Object? failure;
+      launcher.create('claude', 'op').catchError((Object e) {
+        failure = e;
+        return <String, dynamic>{};
+      });
+      async.elapse(const Duration(minutes: 4));
+      expect(failure, isNull);
+      async.elapse(const Duration(minutes: 2));
+      expect(
+        failure,
+        isA<SwarmAgentLaunchFailure>().having(
+          (f) => f.message,
+          'message',
+          'Mac is still preparing your agent’s folder. Try again in a minute.',
+        ),
+      );
+    });
   });
 }
