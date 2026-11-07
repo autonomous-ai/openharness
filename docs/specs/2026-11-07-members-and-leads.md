@@ -33,8 +33,9 @@ request, a file). Kept in one folder and one session, a public task could read t
 them; both security reviews of this spec asked for the split (section 2). Nobody sees the two folders or the two kinds
 of session: they are inside Harness.
 2. **Helping only in public projects.** He said "when free, it helps other projects". The spec lets a Member help only
-   public projects, and a Member whose main project is private helps nowhere else, so private files never sit beside
-   a task that outside text can reach (section 3). Helping in private projects is its own task with two security
+   public projects, only on a computer where Harness has put no private project's files, and a Member whose main
+   project is private helps nowhere else, so a task that outside text can reach never runs beside private files
+   (section 3). Helping in private projects is its own task with two security
    reviews.
 3. **Ten minutes before sleep.** He said "it sleeps only when nothing is waiting anywhere". The spec adds a 10-minute
    wait after its last task before the task sessions sleep, so a task that turns waiting a minute later doesn't pay a
@@ -150,7 +151,9 @@ Member's good behaviour.
   computer reads that one set, kept in the home of the person's first Member there (their old Buddy's, for a migrated
   one). So a person with several Members uses the disk one Buddy uses today. The copies follow their default branch
   and leave when the person no longer reads the project (`refreshBuddyHome`, `pruneBuddyHome`), and the set goes when
-  the person's last Member on that computer stops. Task sessions never read it.
+  the person's last Member on that computer stops. Nothing stops an engine under the same login from opening these
+  copies, so the help check counts them (section 3): a computer that holds a private project's copy runs no task
+  session outside that project.
 - **The task sessions**, one per project, do the work. Each is its own agent record, tied to its Member and bound to
   that one project's session scope (`sessionScope.ts bindSession`), as a project's agent is today. The server lets it
   read and post only inside its project: that project's tasks, threads, chat and instructions. It reads no person's
@@ -188,21 +191,28 @@ Member's good behaviour.
   task first). The Lead may still assign a task to a Member by name; a Lead's pick beats the order.
 - **A Lead leads.** It takes no task and helps no other project; it decides, routes and asks, by its project's
   instructions.
-- **Where it may help:** only public projects its person can read, and only while its task home holds no private
-  project's worktree. A private project is helped only by Members whose main project it is, and such a Member helps
-  nowhere else. A Member whose main project changed from private to public still holds that worktree, so it helps
-  nowhere else until its host has dropped it (clean and pushed) and said so. Why: today a Regular agent that worked in a
+- **Where it may help:** only public projects its person can read, and only on a computer where Harness has put no
+  private project's files: no clone in the computer's clone folder, no copy in a chat home, no worktree in any task
+  home. A private project is helped only by Members whose main project it is, and such a Member helps nowhere else. A
+  Member whose main project changed from private to public still has those files on its computer, so it helps nowhere
+  else until its host has dropped them (clean and pushed) and said so. Why: today a Regular agent that worked in a
   private project stays there for good, because what it learned would leak (#4116, security review 2). Separate sessions
-  keep what it learned apart, but sibling worktrees sit in one task home, and a session on a public project's task,
-  which outside text can reach, could read a private project's files. Relaxing this is its own task with two security
-  reviews.
+  keep what it learned apart, but every task session runs under its person's own login and settings, and an engine
+  there can open any file that login can. A session on a public project's task, which outside text can reach, could
+  read a private project's files anywhere Harness put them on that computer. So the check counts the whole computer,
+  not one folder. Keeping task sessions out of other folders inside each engine (a deny rule per engine, with a test
+  per engine) would let more Members help; that is its own task with two security reviews.
+- **Files people keep outside Harness's folders** are their own: an engine under their login reads them as their own
+  CLI does today. This spec adds no sandbox for them.
 - **What `work.assign` checks** for a Member's task session, on what it reads inside the command, for dispatch's
   picks and for a Lead's pick by name alike (a Lead's pick beats the order, never the checks):
   - the Member's person can read the task's project (`canReadProject`);
   - the project is the Member's main project, or it is public;
-  - the Member's task home holds no private project's worktree other than this task's own project. The server keeps
-    that list itself, written at each assignment (`projectsHeld`), and removes a project only when the host reports
-    its worktree dropped; it never takes the host's word for what was added;
+  - the Member's computer holds no private project's files other than this task's own project: its clone, a chat
+    copy, or a task worktree. The server keeps that list itself, per computer (`privateOnDisk` on the machine), adding a
+    project whenever it sends that computer a start that clones it, copies it into a chat home (`buddyProjects`) or
+    makes a worktree of it. It removes a project only when the host reports every one of those dropped; it never takes
+    the host's word for what was added;
   - the Member's main project is not private, unless this task is in it;
   - the Member holds no other task;
   - the host says `memberProjects` for any project other than the main one.
@@ -296,7 +306,9 @@ proposals, the Board and the rights. This spec changes it in these places:
    that many awake at once. When the person writes to one more, the one idle longest sleeps (it wakes again when they
    write to it). The number of Members is not capped per person: each computer's room, by the router's existing fit,
    decides how many run there, so a person's crew of 20 or more on one computer keeps starting agents, and section 5's
-   ask still works. The default Buddy becomes the default Member (section 7).
+   ask still works. One fixed limit bounds the records: at most 50 Members per person in a Swarm (with their task
+   sessions, at most 300 agent records); a 51st start is refused with "You have 50 agents in this Swarm. Remove one
+   to start another." The default Buddy becomes the default Member (section 7).
 4. **Sleep.** "Only crew members sleep" and the Buddy's hour-idle sleep are replaced by section 4.
 5. **"A Buddy may only post in its own chat"** (BUDDY_FORBIDDEN) still holds for a Member's chat session. Its task
    sessions post where a project's agent posts, and only in their own project.
@@ -344,9 +356,11 @@ Each with no content, paths or identifiers:
 
 ## Design (docs/feature-design-rules.md)
 
-Reviewed revision: 2, after security reviews 1 and 2 of 2b4558e (a Member's chat and task sessions kept apart; the
-private-folder check in `work.assign`; migrated sessions never do tasks; the ask only to owners who can read the
-project; attachment checks in the CLI). Reviewer: pending. Each line: answered.
+Reviewed revision: 3. Security reviews 1 and 2 of 2b4558e: a Member's chat and task sessions kept apart, the
+private-folder check in `work.assign`, migrated sessions never doing tasks, the ask only to owners who can read the
+project, attachment checks in the CLI. Security review 2 of 81687b4: the private check counts every private file
+Harness put on the computer, chat copies included, and Members are limited to 50 per person in a Swarm. Each line:
+answered.
 
 New data, all small and replaced in place, nothing appended per event:
 
@@ -354,6 +368,8 @@ New data, all small and replaced in place, nothing appended per event:
   of its current or last task, for the change line), `setUp` (up to 5 `{ projectId, at }`, from its host's report),
   `projectsHeld` (the projects whose worktree its task home holds, written by the server at each assignment, at most 5),
   `mainAsked` (when it asked its person for a main project);
+- on each machine: `privateOnDisk` (the private projects whose clone, chat copy or task worktree Harness put on that
+  computer, written by the server, at most the Swarm's 100 projects);
 - a task session: an agent record like a project's agent (`projectId`, its session scope), plus `memberOf` (its
   Member's id); at most one per Member and project, so at most 5 per Member;
 - on each project: `about` (plain text, at most 80 characters), `moreAsked` (per computer, when its Lead last asked
@@ -366,7 +382,8 @@ Roles stay derived, as today: an agent is a Lead when a project's chat names it 
 stores a role.
 
 1. **Growth.** Every field is bounded by what it hangs on: one per agent, one per project, `setUp` at 5, `moreAsked` at
-   the Swarm's machines. Lifecycle:
+   the Swarm's machines, `privateOnDisk` at the Swarm's 100 projects per machine, and Members at 50 per person in a Swarm.
+   Lifecycle:
 
    | Record | Created | Updated | Finished | Lost | Cancelled | Leave and rejoin | Deleted, purged | Recreated under the same key |
    |---|---|---|---|---|---|---|---|---|
@@ -375,6 +392,7 @@ stores a role.
    | `setUp` | from the host's report after a set-up | replaced on each report; capped at 5 | n/a | on a move, the new machine reports its own (empty) | n/a | with the agent | with the agent; a deleted project's entry leaves on the next report | n/a |
    | Chat project copies (host), one set per person per computer | at the first Member's start there, from existing checkouts | refreshed to the default branch at most hourly | a project the person no longer reads leaves before the next turn (`pruneBuddyHome`) | stay with the old machine's set; the new machine's set is made from its own checkouts | n/a | the person's last Member on that computer stopping removes the set | with that last Member | a new first Member makes a new set |
    | `projectsHeld` entry | at an assignment in a project not yet held | n/a (ids only) | removed when the host reports that worktree dropped | kept on a move until the old host reports it dropped; the new machine's task home starts empty and adds its own | n/a | with the agent | with the agent; a deleted project's entry stays until its worktree is dropped | n/a |
+   | `privateOnDisk` entry | when the server sends that computer a start that clones a private project, copies it into a chat home or makes a worktree of it | n/a (ids only) | removed when the host reports every clone, copy and worktree of it there dropped | the machine leaving the Swarm removes its list | n/a | n/a (a machine, not a member) | with the machine; a deleted project's entry stays until its files are dropped | a machine that rejoins starts empty and adds again from the starts it receives |
    | Task session record | at a Member's first task in a project | its engine session id, by the host | closed when its worktree is dropped | today's lost-work path; the next task starts it again | n/a | removed with its Member | with its Member or its project | a new task session for the same pair is a new record, scoped again |
    | `mainAsked` | when the Member asks | never (asked once) | cleared when answered | kept | n/a | with the agent | with the agent | n/a |
    | `about` | set by the owner or Lead | replaced | n/a | n/a | n/a | n/a | with the project | n/a |
@@ -392,7 +410,8 @@ stores a role.
      and the other picking again on the next pass.
    - *Help only where allowed:* every check in section 3's list runs inside `work.assign`, on what it reads, not on
      the pick, for dispatch and a Lead's pick by name alike. `projectsHeld` is read and written in that same agent-part
-     write, so two assignments can't both pass the private-folder check.
+     write, and the machine's `privateOnDisk` is read under the machine part's version: a start that adds a private
+     project to that computer bumps it, so an assignment that read the older list retries and finds it.
    - *A task session reads only its project:* its session scope is bound once, to its project, at its start
      (`bindSession`), and every read and command it sends is checked against that scope, as for a project's agent today.
    - *Goes back:* the same pass that frees a Member puts its main project's waiting task first, inside the assignment.
@@ -479,9 +498,10 @@ stores a role.
    - *the project list* shows only projects the reader can read;
    - *a Member's change line* goes only to its own chat; it names the task only when the person can read that project,
      else "Helping another project";
-   - *worktrees on a computer:* a Member helps only public projects, and only while its task home holds no private
-     project's worktree (`projectsHeld`, written by the server); a migrated Buddy's home, which holds copies of
-     private projects, is never used for tasks;
+   - *private files on a computer:* a Member helps only public projects, and only on a computer where Harness put no
+     private project's clone, chat copy or task worktree (`privateOnDisk`, written by the server); the shared chat
+     copies are counted, since an engine under the same login could open them; a migrated Buddy's home is never used
+     for tasks;
    - *the ask to start more* goes only to a computer owner who can read the project, in their own Tasks pane and chat,
      and names only the project and the count;
    - *attachments in a task thread* follow the thread's readers, and the CLI refuses files outside the project's
@@ -547,7 +567,7 @@ This flow, smallest first:
    project take their place; joining shows the same form after Bring agent. Desktop release (macOS, Windows, Linux).
    Owner area: desktop/lib/widgets/new_harness_form.dart, desktop/lib/state/new_harness.dart, desktop/lib/super_tabs/launch.dart, desktop/lib/super_tabs/join/, desktop/design/.
 6. **A Member's two kinds of session.** The backend makes a task session per project, tied to its Member and bound to
-   that project's scope, and keeps `projectsHeld`; the chat session keeps the Buddy's reads and commands. The CLI host
+   that project's scope, and keeps `projectsHeld` and each machine's `privateOnDisk`; the chat session keeps the Buddy's reads and commands. The CLI host
    keeps the chat home apart from the task home, a worktree and an engine session per project in the task home,
    reports `setUp` and dropped worktrees, and says `memberProjects`; the task session tells the Lead it's ready after
    its first set-up. Backend release, then CLI release, with two security reviews. Differs from anh Dee's words: two
@@ -566,7 +586,8 @@ This flow, smallest first:
    Owner area: backend/src/superTabs/ (crewKeep.ts, crewRules.ts, buddySleep.ts); the host's existing rest and resume path is unchanged.
 9. **Buddies become Members.** Buddies and Regular agents act as Members, their old sessions as chat sessions only, never
    for tasks; each asks its person once for a main project in its chat, with the project list; the default Buddy is the
-   default Member. The per-person cap counts awake chat sessions only; the number of Members is the computers' room.
+   default Member. The per-person cap counts awake chat sessions only; the number of Members is the computers' room,
+   up to 50 per person in a Swarm.
    Backend release, then Desktop release for the project list in the chat, with two security reviews.
    Owner area: backend/src/superTabs/ (buddies.ts, agentKind.ts, buddySleep.ts), desktop/lib/super_tabs/ (the chat's project list), desktop/design/.
 10. **The Lead asks a computer's owner to start more.** Only an owner who can read the project; one ask per computer
@@ -588,7 +609,8 @@ Project settings; the join and invite screens. Desktop releases.
 
 ## Out of scope
 
-- Members helping in private projects (section 3), until its own security-reviewed task.
+- Members helping in private projects, or on computers that hold a private project's files (section 3), until a
+  per-engine deny rule with a test per engine ships in its own security-reviewed task.
 - Phone and web screens for the Cmd-N form; they show Members and Leads with today's screens.
 - Changing what a project's instructions say about review, test, merge and release.
 - New approvals or gates for people: the ask to start more and the private repo offer hold nothing up.
