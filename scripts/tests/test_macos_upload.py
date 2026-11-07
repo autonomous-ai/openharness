@@ -20,6 +20,9 @@ mode = os.environ.get("UPLOAD_FAILURE", "")
 notarize = os.environ.get("UPLOAD_NOTARIZE", "1") == "1"
 def mark(name):
     (root / name).touch()
+def event(name):
+    with open(root / "events", "a") as log:
+        log.write(name + "\n")
 def wait_for(name):
     end = time.monotonic() + 4
     while not (root / name).exists():
@@ -30,8 +33,13 @@ if tool == "curl":
     print('{}')
 elif tool == "plutil":
     print('1.2.3')
+elif tool == "codesign":
+    if "--entitlements" in args:
+        event("sign-app " + args[args.index("--sign") + 1])
 elif tool == "ditto":
     source, target = map(Path, args[-2:])
+    if "-c" in args:
+        event("zip")
     if "-c" not in args:
         if notarize:
             assert (source / 'ticket').exists()
@@ -101,7 +109,7 @@ elif tool == "gcloud":
         uploads.mkdir(exist_ok=True)
         destination = uploads / target.rsplit('/', 1)[-1]
         shutil.copyfile(source, destination)
-elif tool not in ('flutter', 'codesign'):
+elif tool != 'flutter':
     raise AssertionError('unexpected tool: ' + tool)
 '''
 
@@ -119,7 +127,7 @@ class MacOSUploadTests(unittest.TestCase):
             path.write_text(f"#!{sys.executable}\n" + TOOL)
             path.chmod(0o755)
         self.app = self.root / "Harness.app"
-        self.app.mkdir()
+        (self.app / "Contents").mkdir(parents=True)
         self.output = self.root / "output"
         self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
                         APP_BUNDLE=str(self.app), OUTPUT_DIR=str(self.output),
@@ -187,6 +195,18 @@ class MacOSUploadTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse((self.root / "dmg-notary-started").exists())
         self.assertEqual((self.root / "uploads/Harness.zip").read_text(), "signed zip")
+
+    def test_publishing_a_built_bundle_needs_no_flutter(self):
+        (self.bin / "flutter").unlink()
+        result = self.upload()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_the_app_is_signed_before_its_notarization_zip(self):
+        result = self.upload()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        events = (self.root / "events").read_text().splitlines()
+        self.assertIn("sign-app Developer ID Application", events)
+        self.assertLess(events.index("sign-app Developer ID Application"), events.index("zip"))
 
 
 if __name__ == "__main__":
