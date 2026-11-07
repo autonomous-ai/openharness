@@ -74,10 +74,15 @@ void main() {
     final c = activity.controller;
     final AppNotifier app = createApp();
     addTearDown(app.dispose);
+    // The design tokens follow the app's brightness, which main.dart sets from the theme.
+    final previous = grid.AppTheme.brightness.value;
+    grid.AppTheme.brightness.value = brightness;
+    addTearDown(() => grid.AppTheme.brightness.value = previous);
     await tester.binding.setSurfaceSize(Size(width, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       MaterialApp(
+        debugShowCheckedModeBanner: false,
         theme: grid.buildAppTheme(brightness: brightness),
         home: Scaffold(
           // The view rebuilds the sidebar as the controller changes.
@@ -317,6 +322,7 @@ void main() {
     });
 
     testWidgets('screenshots of My agents, light and dark', (tester) async {
+      await tester.runAsync(() => loadCaptureFonts(shots));
       for (final (brightness, name) in [
         (Brightness.light, 'light'),
         (Brightness.dark, 'dark'),
