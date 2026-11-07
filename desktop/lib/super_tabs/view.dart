@@ -6299,10 +6299,8 @@ class _SuperTabViewState extends State<SuperTabView>
                     : !boardLayout && thread == null && !chatBeside
                     ? SuperTabPaneLayout.rightWidth
                     : SuperTabPaneLayout.threadWidth,
-                // The Desktop's right pane is a fixed 340, the Tasks pane's: the middle takes the rest (River, Swarm v3).
-                rightMinimum: boardLayout
-                    ? SuperTabPaneLayout.boardRightWidth
-                    : SuperTabPaneLayout.rightWidth,
+                // The Desktop's right pane is the Tasks pane's 340, giving back only to keep two Board columns
+                // in a small window (River, Swarm v3; #4211).
                 rightFixed: boardLayout,
                 // Over the chat, beside an open thread, as in Slack.
                 over: wide ? viewer : null,
