@@ -3387,6 +3387,53 @@ class _SuperTabViewState extends State<SuperTabView>
     // height gets the squeezed row, which beats a composer that overflows.
     final target = _phone ? kFingerTarget : grid.AppControl.height;
     final row = composerRowInsets(target: target);
+    // Desktop's composer is one pill row (anh Dee's mockup, 11-07, #4529):
+    // the paperclip, the text, and at its end the mic while there is nothing
+    // to send, send once there is.
+    // Files still come by a drop or a paste; the mockup has no paperclip.
+    if (!_phone && voice == null) {
+      return Row(
+        key: const ValueKey('super-message-composer-actions'),
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Expanded(
+            child: DecoratedBox(
+              key: const ValueKey('super-message-composer-surface'),
+              decoration: _composerPill,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: grid.AppDesktop.composerSide,
+                ),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minHeight: grid.AppControl.heightFieldScaled,
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(child: field),
+                      ...options,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: grid.AppDesktop.controlGap),
+          SizedBox(
+            height: grid.AppControl.heightFieldScaled,
+            child: Center(
+              child: ListenableBuilder(
+                listenable: Listenable.merge([_composer, _files]),
+                builder: (context, _) =>
+                    _composer.text.trim().isNotEmpty || !_files.isEmpty
+                    ? send
+                    : Row(mainAxisSize: MainAxisSize.min, children: trailing),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
     if (_phone && room < _phoneComposerTwoRowsFrom && voice == null) {
       return Padding(
         padding: EdgeInsets.only(
@@ -3444,11 +3491,19 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
+  /// The composer's rounded pill: a hairline and the faint fill.
+  BoxDecoration get _composerPill => BoxDecoration(
+    color: DesktopChrome.field,
+    borderRadius: BorderRadius.circular(grid.AppDesktop.composerRadius),
+    border: Border.all(color: DesktopChrome.rim),
+  );
+
   /// A task's brief as a card (anh Dee's mockup, 11-07, #4529): who it went
   /// to and the task's title; View brief shows the whole brief in place.
   Widget _briefCard(SuperTabConversation group, SuperTabMessage message) {
     final agentId = group.assignment?['agentId'] as String?;
     return SwarmChatCard(
+      icon: AppIcons.send,
       label: agentId == null
           ? 'Brief'
           : 'Sent to ${c.snapshot!.agentName(agentId, fallback: 'its agent')}',
@@ -6076,14 +6131,13 @@ class _SuperTabViewState extends State<SuperTabView>
                 return KeyEventResult.handled;
               },
               child: DecoratedBox(
-                key: const ValueKey('super-message-composer-surface'),
-                decoration: BoxDecoration(
-                  color: DesktopChrome.field,
-                  borderRadius: BorderRadius.circular(
-                    grid.AppDesktop.composerRadius,
-                  ),
-                  border: Border.all(color: DesktopChrome.rim),
-                ),
+                // Desktop's pill is drawn around the text alone, with
+                // the mic or send beside it (#4529); a phone's box holds
+                // its whole row.
+                key: _phone
+                    ? const ValueKey('super-message-composer-surface')
+                    : null,
+                decoration: _phone ? _composerPill : const BoxDecoration(),
                 child: NewHarnessDropZone(
                   attachments: _files,
                   enabled: writable && !busy,

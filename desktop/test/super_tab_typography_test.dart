@@ -52,7 +52,7 @@ void main() {
   });
 
   testWidgets(
-    'another sender is named over their bubble at 13 px in semibold, in '
+    'another sender is named over their bubble at 13 px, plain, in '
     'secondary ink; your own bubble carries no name',
     (tester) async {
       final server = ConversationServer()
@@ -68,7 +68,7 @@ void main() {
       expect(texts.where((t) => t.data == 'You'), isEmpty);
       final name = texts.firstWhere((t) => t.data == 'Lead');
       expect(name.style!.fontSize, 13);
-      expect(name.style!.fontWeight, FontWeight.w600);
+      expect(name.style!.fontWeight, FontWeight.w400);
       expect(name.style!.color, DesktopChrome.muted);
     },
   );

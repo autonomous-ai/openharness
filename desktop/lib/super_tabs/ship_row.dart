@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_icons.dart';
 import '../widgets/desktop_chrome.dart';
 import 'chat/chat_card.dart';
 import 'confetti.dart';
@@ -80,6 +81,7 @@ class _SuperTabShipRowState extends State<SuperTabShipRow> {
           widthFactor: SuperTabMessageRow.bubbleShare,
           alignment: Alignment.centerLeft,
           child: SwarmChatCard(
+            icon: AppIcons.circleCheck,
             label: 'Shipped',
             title: title,
             action: 'What changed',

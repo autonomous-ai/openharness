@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/theme/app_icons.dart';
 import '../../widgets/desktop_chrome.dart';
 import '../swarm_type.dart';
 import 'bubble.dart';
@@ -10,12 +11,14 @@ import 'bubble.dart';
 class SwarmChatCard extends StatefulWidget {
   const SwarmChatCard({
     super.key,
+    required this.icon,
     required this.label,
     required this.title,
     required this.action,
     required this.details,
   });
 
+  final IconData icon;
   final String label, title, action;
   final Widget details;
 
@@ -40,7 +43,21 @@ class _SwarmChatCardState extends State<SwarmChatCard> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(widget.label, style: SwarmType.time(context)),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                widget.icon,
+                size: AppIcons.metadataSize,
+                color: DesktopChrome.muted,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                widget.label,
+                style: SwarmType.time(context, color: DesktopChrome.muted),
+              ),
+            ],
+          ),
           const SizedBox(height: 2),
           Text(
             widget.title,
@@ -57,9 +74,23 @@ class _SwarmChatCardState extends State<SwarmChatCard> {
               onTap: () => setState(() => _open = !_open),
               child: Semantics(
                 button: true,
-                child: Text(
-                  _open ? 'Hide' : widget.action,
-                  style: SwarmType.body(context, color: DesktopChrome.accent),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _open ? 'Hide' : widget.action,
+                      style: SwarmType.body(
+                        context,
+                        color: DesktopChrome.accent,
+                      ),
+                    ),
+                    if (!_open)
+                      Icon(
+                        AppIcons.chevronRight,
+                        size: AppIcons.metadataSize,
+                        color: DesktopChrome.accent,
+                      ),
+                  ],
                 ),
               ),
             ),

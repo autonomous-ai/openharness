@@ -72,3 +72,19 @@ class SwarmBubble extends StatelessWidget {
     ),
   );
 }
+
+/// Which side of the chat a message's parts sit on, for the parts drawn as
+/// their own bubble, such as a voice message: blue on your side.
+class SwarmBubbleSide extends InheritedWidget {
+  const SwarmBubbleSide({super.key, required this.own, required super.child});
+
+  final bool own;
+
+  /// Whether [context] is inside one of your own messages.
+  static bool ownOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<SwarmBubbleSide>()?.own ??
+      false;
+
+  @override
+  bool updateShouldNotify(SwarmBubbleSide old) => old.own != own;
+}

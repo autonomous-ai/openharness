@@ -1561,9 +1561,9 @@ abstract final class AppDesktop {
 
   /// The Swarm composer's box, as the phone draws it (Huy, 11-04): the text
   /// [composerTop] below the top and [composerSide] in from each side, and
-  /// [composerRowGap] between the text and the row of actions under it. Its
-  /// corners are Cmd-N's field's (anh Dee, 11-07, #4467).
-  static const double composerRadius = 12;
+  /// [composerRowGap] between the text and the row of actions under it. A
+  /// rounded pill, as iMessage's (anh Dee's mockup, 11-07, #4529).
+  static const double composerRadius = 20;
   static const double composerTop = 12;
   static const double composerSide = groupGap;
   static const double composerRowGap = 12;

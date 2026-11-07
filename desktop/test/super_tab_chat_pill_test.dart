@@ -1,18 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/fake_voice_recorder.dart';
 import 'support/super_tab_fixture.dart';
 
-/// Task #4529 (anh Dee's mockup, 11-07): the composer is one rounded pill:
-/// the paperclip, the text, and the mic while there is nothing to send; send
-/// takes the mic's place once there is.
+/// Task #4529 (anh Dee's mockup, 11-07): the composer is a rounded pill
+/// holding the text, and beside it the mic while there is nothing to send;
+/// send takes the mic's place once there is. No paperclip: a drop or a paste
+/// attaches.
 void main() {
   Finder key(String value) => find.byKey(ValueKey(value));
 
-  Future<void> show(WidgetTester tester, Brightness brightness) async {
+  Future<SuperTabController> show(
+    WidgetTester tester,
+    Brightness brightness,
+  ) async {
     final c = ConversationServer().controller();
     addTearDown(c.dispose);
     await c.refresh();
@@ -36,16 +41,13 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    addTearDown(() async {
-      await tester.pumpWidget(const SizedBox());
-      await c.flush();
-    });
+    return c;
   }
 
   for (final brightness in Brightness.values) {
-    testWidgets('one pill row: paperclip, text, then the mic or send '
+    testWidgets('a pill of text, the mic or send beside it '
         '(${brightness.name})', (tester) async {
-      await show(tester, brightness);
+      final c = await show(tester, brightness);
       const surface = 'super-message-composer-surface';
       final box = tester.widget<DecoratedBox>(key(surface)).decoration;
       expect(
@@ -53,16 +55,17 @@ void main() {
         BorderRadius.circular(grid.AppDesktop.composerRadius),
       );
       expect(grid.AppDesktop.composerRadius, 20);
+      final pill = tester.getRect(key(surface));
       final field = tester.getRect(key('super-message-composer'));
-      final attach = tester.getRect(
-        find.descendant(of: key(surface), matching: key('new-harness-attach')),
-      );
       final mic = tester.getRect(key('super-composer-mic'));
-      // One row: the paperclip and the mic beside the text, not under it.
-      expect(attach.right, lessThanOrEqualTo(field.left));
-      expect(mic.left, greaterThanOrEqualTo(field.right));
-      expect(attach.center.dy, closeTo(field.center.dy, 2));
-      expect(mic.center.dy, closeTo(field.center.dy, 2));
+      expect(
+        find.descendant(of: key(surface), matching: key('new-harness-attach')),
+        findsNothing,
+      );
+      // The text inside the pill, the mic outside it on the same line.
+      expect(pill.contains(field.center), isTrue);
+      expect(mic.left, greaterThanOrEqualTo(pill.right));
+      expect(mic.center.dy, closeTo(pill.center.dy, 2));
       expect(find.byTooltip('Send message'), findsNothing);
 
       await tester.enterText(key('super-message-composer'), 'Ship it');
@@ -74,6 +77,9 @@ void main() {
       await tester.pump();
       expect(key('super-composer-mic'), findsOneWidget);
       expect(find.byTooltip('Send message'), findsNothing);
+      // The draft's save waits on a timer: let it run.
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
     });
   }
 }
