@@ -29,7 +29,7 @@ import { closeMerged } from './mergedTasks.js'
 import { noteWriter } from './stuck.js'
 import { reviewPlan, refreshStepBrief, stepOsRefusal, type PlannedStep, type StepKind } from './reviewTable.js'
 import { openReviewStep, type StepPull } from './stepOpen.js'
-import { LINUX_WAIT_LINE, testsOnLinux, waitForLinux } from './linuxSteps.js'
+import { stopWaiting, testsOn, WAIT_LINE, waitFor, waits } from './osSteps.js'
 import { builtBy, reviewerCandidates, STRENGTH_RULE } from './reviewerPick.js'
 import { checkedPullRequest, deriveCheck, recordCheckVerdict } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
@@ -2014,14 +2014,16 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         taken.add(step.id)
         step.brief = refreshStepBrief(step.brief ?? '', planned, { number: task.number!, title: task.title, pulls })
       }
-      // A new Linux step opens only where the project can test on Linux (linuxSteps.ts, task #4278): else it waits, and the
-      // task says once that CI's Linux runs stand in. A step the PM closed is not open, so a later head never brings it back.
-      if (!step && planned.os === 'linux') {
-        if (!testsOnLinux(state, groupProject(state, task), context.now)) {
-          if (waitForLinux(task, planned, pulls)) message(task.id, LINUX_WAIT_LINE, [], null, SYSTEM_ROW, undefined, undefined, undefined, stableId(operationId, 'linux-wait'))
+      // A new Linux or Windows step opens only where the project can test on that OS (osSteps.ts, tasks #4278, #4410): else it
+      // waits, and the task says once why (for Linux CI's runs stand in; for Windows a person's check is owed). A step the PM
+      // closed is not open, so a later head never brings it back.
+      const os = planned.os
+      if (!step && waits(os)) {
+        if (!testsOn(state, groupProject(state, task), context.now, os)) {
+          if (waitFor(task, { ...planned, os }, pulls)) message(task.id, WAIT_LINE[os], [], null, SYSTEM_ROW, undefined, undefined, undefined, stableId(operationId, `${os}-wait`))
           continue
         }
-        delete task.waitingLinuxStep
+        stopWaiting(task, os)
       }
       if (step && activeWork(step)) continue
       // A step whose every check passed at this very head keeps its verdict: a repeated Ready (a CI rerun) asks nothing again.

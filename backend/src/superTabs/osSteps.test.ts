@@ -3,7 +3,7 @@ import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { SEED_RULES, type ProjectRules } from './policy.js'
 import { stepsOf } from './steps.js'
-import { openWaitingSteps } from './linuxSteps.js'
+import { openWaitingSteps } from './osSteps.js'
 
 // Task #4278: since v3 (#4120) a Tester starts only on its own person's computer, and no own-account Linux machine could take
 // harness's Linux test steps, yet every new head opened one and the PM closed it by hand (#4204, #4215, #4216, #4217, #4252,
