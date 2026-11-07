@@ -1,4 +1,7 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/super_tabs/chat/chat_card.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/ship_row.dart';
 
@@ -96,6 +99,77 @@ void main() {
       final server = ConversationServer()..append(long);
       await showView(tester, server);
       expect(find.text('More'), findsNothing);
+    });
+  });
+
+  group('a decision', () {
+    testWidgets('is a card: Decision, its question, and View for the rest', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      server.append(
+        'River asks owner (#12): Ship it tonight?\n\nOptions: Yes, No\n',
+        agent: true,
+      );
+      server.messages.last['source'] = {
+        'kind': 'decision-asked',
+        'decisionId': 'd1',
+      };
+      await showView(tester, server);
+      final row = find.byType(SuperTabMessageRow);
+      Finder inRow(String text) =>
+          find.descendant(of: row, matching: find.textContaining(text));
+      expect(inRow('Decision'), findsOneWidget);
+      expect(inRow('Ship it tonight?'), findsOneWidget);
+      expect(inRow('Options: Yes, No'), findsNothing);
+      await tester.tap(inRow('View'));
+      await tester.pumpAndSettle();
+      expect(inRow('Options: Yes, No'), findsOneWidget);
+    });
+  });
+
+  group('by keyboard', () {
+    /// Focuses the control drawing [label] and presses Enter on it.
+    Future<void> press(WidgetTester tester, String label) async {
+      Focus.of(tester.element(find.text(label))).requestFocus();
+      await tester.pump();
+      expect(
+        Focus.of(tester.element(find.text(label))).hasPrimaryFocus,
+        isTrue,
+        reason: '$label takes focus',
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('View brief opens with Enter', (tester) async {
+      final c = await showView(tester, ConversationServer());
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SwarmChatCard(
+              icon: Icons.send,
+              label: 'Sent to Kai',
+              title: 'Faces',
+              action: 'View brief',
+              details: const Text('Give every agent a face.'),
+            ),
+          ),
+        ),
+      );
+      await press(tester, 'View brief');
+      expect(find.text('Give every agent a face.'), findsOneWidget);
+      await c.flush();
+    });
+
+    testWidgets('More opens with Enter', (tester) async {
+      final long = [for (var i = 1; i <= 14; i++) 'Line $i of the plan.']
+          .join('\n\n');
+      final server = ConversationServer()..append(long, agent: true);
+      await showView(tester, server);
+      await press(tester, 'More');
+      expect(find.text('More'), findsNothing);
+      expect(find.text('Line 14 of the plan.').hitTestable(), findsOneWidget);
     });
   });
 }
