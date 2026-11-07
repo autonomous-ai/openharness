@@ -1887,6 +1887,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         .lastOrNull;
     // A guest starts in its workspace or a folder the owner shares (NewHarnessController.asGuest).
     if (box.project.newRepository case final ask?) return '${ask.slug} · new';
+    // Not its generated name (claude-2026-11-07-13-54): Start creates it.
+    if (box.project.generated != null) return 'New folder';
     return box.asGuest
         ? lastPart ?? 'My workspace'
         : box.project.name ??
