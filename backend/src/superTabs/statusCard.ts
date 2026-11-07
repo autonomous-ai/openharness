@@ -3,28 +3,29 @@
  * to reread task messages and rewrite one line per task: the largest steady token cost found. The state the lines say is
  * already stored, so the server builds them: where each active task is, what it waits on, who owns it, and since when.
  *
- * Kept like the pulse (pulse.ts recordPulse): after each command, where every open group is loaded, written onto the project's
- * chat only when a line changed. The PM's own lines (project.report) follow them.
+ * Each task keeps its own line on its own part (task #4419): after each command, where every open group is loaded (pulse.ts
+ * recordPulse), a task's line is written only when its text changed. A card kept on the project chat (#3302) moved the chat's
+ * part with every line, and the next command read the chat whole: 6-7 KB over #4368's per-command budgets. Readers get the card
+ * built from the lines (projectCard, model.ts visibleState). The PM's own lines (project.report) follow them.
  */
 import { agentDisplayName } from './agentNames.js'
-import { holdOf, type PulseIndex } from './pulse.js'
-import type { Conversation, SuperTabState } from './model.js'
-import type { SwarmProject } from './projects.js'
+import { holdOf, pulseIndex, type PulseIndex } from './pulse.js'
+import { pullRequestLinks, type Conversation, type SuperTabState } from './model.js'
+import { groupRepositoryUrl, type SwarmProject } from './projects.js'
 import { stepName } from './steps.js'
+import { isBuddyChat } from './buddies.js'
 import { usernameOf } from './usernames.js'
 
-/** One active task's line without its time: `id` its conversation, `since` when the line last changed. */
-export interface CardLine { id: string; text: string; since: number }
-/** What the project's chat keeps: the lines (at most CARD_LINES_MAX) and how many more tasks were left out. */
-export interface StatusCard { lines: CardLine[]; more?: number
-  /** The lines as readers see them, with their times (cardText without the coordinator's own lines): the part a light read keeps, so a
-   *  change poll's read of a project chat costs this text and not every line (parts/light.ts, task #3593). */
-  text: string
-  /** When a line last changed (the command's time): a change poll sends the head, where readers get the card, only for a chat whose
-   *  card moved since the reader's cursor (read/changes.ts). */
-  changedAt?: number }
+/** A task's own line as it keeps it (Conversation.statusLine): its text without its time, and when it last changed. An empty text
+ *  is a task whose line left the card at `since`: a change poll tells a live reader so (read/changes.ts). */
+export interface StatusLine { text: string; since: number }
+/** One active task's line: `id` its conversation; no `since` for a task that keeps no line yet (projectCard). */
+export interface CardLine { id: string; text: string; since?: number }
+/** A project's card as readers get it (projectCard): the lines (at most CARD_LINES_MAX), how many more tasks were left out, the
+ *  lines' text with their times, and when a line last changed. Built on read, never stored. */
+export interface StatusCard { lines: CardLine[]; more?: number; text: string; changedAt?: number }
 
-/** A growth bound on the chat's part: far above the tasks a project has open at once. */
+/** A growth bound on the card: far above the tasks a project has open at once. */
 export const CARD_LINES_MAX = 50
 const ENDED = new Set(['done', 'stopped', 'cancelled'])
 const DONE_STEP = new Set(['done', 'stopped', 'cancelled'])
@@ -57,7 +58,11 @@ function lineOf(state: SuperTabState, project: SwarmProject, task: Conversation,
   const owner = assignment ? agentDisplayName(state.agents, assignment.agentId) ?? 'an agent that left' : 'none'
   const steps = openSteps(state, task)
   const stepsText = steps.length ? `${steps.length > 1 ? 'steps' : 'step'} ${steps.join(', ')}` : null
-  const prs = [...new Set([...task.pullRequestUrls ?? []])]
+  // Its linked pull requests, and those its builder's result names: the store links those right after the command (store.ts), so a
+  // line written by the command says them already, as the card built after says them.
+  const unlinked = new Set(task.unlinkedPullRequests?.map(entry => entry.url))
+  const prs = [...new Set([...task.pullRequestUrls ?? [],
+    ...pullRequestLinks(assignment?.result ?? '', groupRepositoryUrl(state, task)).filter(url => !unlinked.has(url))])]
   const prText = prs.length ? ` (${prs.slice(-2).map(pullRequest).join(', ')})` : ''
   let status: string, waits: string
   if (merged && (waiting || !assignment || assignment.status !== 'done')) {
@@ -89,20 +94,58 @@ function lineOf(state: SuperTabState, project: SwarmProject, task: Conversation,
   return `${name}: ${status}. Waits on: ${waits}. Owner: ${owner}.`
 }
 
-/** [project]'s lines now, one per active task by number; a line keeps its `since` while its text is the same as in [previous]. */
-export function projectCard(state: SuperTabState, project: SwarmProject, index: PulseIndex, previous: StatusCard | undefined, now: number, today: string): StatusCard {
-  const before = new Map((previous?.lines ?? []).map(l => [l.id, l]))
-  const tasks = (index.work.get(project.id) ?? []).filter(g => !g.reviewOf && !g.kind && !g.audience)
-    .sort((a, b) => (a.number ?? Infinity) - (b.number ?? Infinity))
-  const lines: CardLine[] = []
-  for (const task of tasks) {
-    const text = lineOf(state, project, task, today)
-    if (text === null) continue
-    const was = before.get(task.id)
-    lines.push({ id: task.id, text, since: was && was.text === text ? was.since : now })
+const lineNow = (state: SuperTabState, project: SwarmProject, task: Conversation, today: string): string | null =>
+  task.dormant || task.archived ? null : lineOf(state, project, task, today)
+/** Each open task's line (null: none, its work ended) before a pass changes anything, by task: what noteTaskLines compares with. */
+export type LinesBefore = ReadonlyMap<string, string | null>
+
+/** The lines of [state]'s open tasks at [now] (of project [only], or every project): taken before a command or a sweep changes
+ *  anything, so noteTaskLines writes only the lines that pass moved. */
+export function linesOf(state: SuperTabState, now: number, only?: string): LinesBefore {
+  const index = pulseIndex(state, undefined, only), today = new Date(now).toISOString().slice(0, 10), lines = new Map<string, string | null>()
+  for (const project of state.projects ?? []) for (const task of index.work.get(project.id) ?? []) {
+    if (!task.reviewOf) lines.set(task.id, lineNow(state, project, task, today))
   }
+  return lines
+}
+
+/**
+ * Writes each of [project]'s open tasks' own line ([index], the pulse's: every open group loaded) where this pass moved it, dated
+ * [now]: its line in [before] is another, or it was not there (a task the command made). A task whose line ended keeps it empty,
+ * dated when it ended, so a reader learns the card dropped it. The text is only what the time goes with: the card builds every
+ * line from task state (projectCard). Comparing with each task's stored text instead would write every open task at once
+ * whenever those go stale (tasks stored before #4419, or a release that rewords the lines): ~200 parts in one transaction, and
+ * the Swarm answers busy.
+ */
+export function noteTaskLines(state: SuperTabState, project: SwarmProject, index: PulseIndex, now: number, today: string, before: LinesBefore): void {
+  for (const task of index.work.get(project.id) ?? []) {
+    if (task.reviewOf) continue
+    const text = lineNow(state, project, task, today)
+    const old = before.has(task.id) ? before.get(task.id)! : undefined
+    if (old === text || (old === undefined && text === null)) continue
+    task.statusLine = { text: text ?? '', since: now }
+  }
+}
+
+/** [project]'s card at [now], one line per active task by number, each built from task state: what readers get (model.ts
+ *  visibleState). A line's time is the one its task keeps while that is for the same text; none otherwise (a task stored before
+ *  #4419 and not moved since, or a line a release reworded). A task archived, dormant, a step or with an audience of its own is
+ *  not on it. */
+export function projectCard(state: SuperTabState, project: SwarmProject, now: number): StatusCard {
+  const today = new Date(now).toISOString().slice(0, 10)
+  const lines: CardLine[] = state.conversations
+    .filter(task => (task.projectId ?? 'lead') === project.id && task.id !== project.leadConversationId
+      && !task.reviewOf && !task.kind && !task.audience && !isBuddyChat(task) && !task.archived && !task.dormant)
+    .sort((a, b) => (a.number ?? Infinity) - (b.number ?? Infinity))
+    .flatMap(task => {
+      const text = lineOf(state, project, task, today)
+      if (text === null) return []
+      return [{ id: task.id, text, ...task.statusLine?.text === text ? { since: task.statusLine.since } : {} }]
+    })
   const kept = lines.slice(0, CARD_LINES_MAX), more = lines.length - kept.length
-  return { lines: kept, ...(more ? { more } : {}), text: cardText(kept, null, more) }
+  const times = kept.flatMap(line => line.since === undefined ? [] : [line.since])
+  const changedAt = times.length ? Math.max(...times) : undefined
+  return { lines: kept, ...(more ? { more } : {}), text: cardText(kept, null, more), ...(changedAt !== undefined ? { changedAt } : {}) }
 }
 
 const clock = (at: number): string => new Date(at).toISOString().slice(11, 16)
@@ -127,7 +170,7 @@ function linesText(lines: readonly CardLine[], more: number): string {
   const shown: string[] = []
   let used = 0
   for (const line of lines) {
-    const text = `${line.text} Since ${clock(line.since)} UTC.`
+    const text = line.since === undefined ? line.text : `${line.text} Since ${clock(line.since)} UTC.`
     // Keep room for the "N more tasks." line, which is at most this long.
     if (used + text.length + 1 + 24 > LINES_ROOM) break
     shown.push(text)

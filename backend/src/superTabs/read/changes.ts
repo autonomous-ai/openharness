@@ -53,10 +53,10 @@ export function changesFor(view: ReaderView, changed: Part[], actor: Actor, ligh
         else if (groupReadable(part.data as Conversation)) {
           const group = part.data as Conversation
           out.groups.push(envelope(part, visibleGroupView(buddy ? groupForBuddy(group) : group, visibleAgents, seenMachines)))
-          // A project chat whose status card moved since the reader's cursor (statusCard.ts): readers get its lines in the head's project, so
-          // the head goes with it, or a live reader keeps the old card until something else moves the head (task #3593). Only then: a
-          // chat changes with every message, and the head is large. A reader with no cursor to compare gets it.
-          if (group.card && !out.head && (cursor === undefined || group.card.changedAt === undefined || group.card.changedAt >= cursor - CARD_SKEW_MS)) out.head = seen.head
+          // A task whose status line moved since the reader's cursor (statusCard.ts, tasks #3593, #4419): readers get the card in the
+          // head's project, so the head goes with it, or a live reader keeps the old card until something else moves the head. Only
+          // then: a task changes with every message, and the head is large. A reader with no cursor to compare gets it.
+          if (group.statusLine && !out.head && (cursor === undefined || group.statusLine.since >= cursor - CARD_SKEW_MS)) out.head = seen.head
         }
         break
       }

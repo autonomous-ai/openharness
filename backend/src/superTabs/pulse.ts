@@ -12,7 +12,7 @@ import { heldView, type HeldReason } from './heldReason.js'
 import { isLeads, type Author, type Conversation, type SuperTabState } from './model.js'
 import { agentProjectId, groupProject, type SwarmProject } from './projects.js'
 import { unconfirmedNote } from './processNotes.js'
-import { projectCard } from './statusCard.js'
+import { noteTaskLines, type LinesBefore } from './statusCard.js'
 import { switched } from './boardRights.js'
 
 /** One person's message to the PM not settled yet: its id, who wrote it, when, and the root of the thread it is in (its own
@@ -212,7 +212,7 @@ export const PULSE_LIST_MAX = 50
  * and on the PM's sweep, so the board reddens on time without anyone's poll. Writes only on a change. When Working fell to 0
  * while work waits is kept in it (`idleSince`) from one run to the next.
  */
-export function recordPulse(state: SuperTabState, now: number, only?: string): void {
+export function recordPulse(state: SuperTabState, now: number, only?: string, before?: LinesBefore): void {
   // The asks of a person who left the Swarm are owed to nobody, however they left.
   const people = new Set(state.people.map(p => p.id))
   for (const group of state.conversations) if (group.owed?.some(ask => !people.has(ask.personId))) settle(group, ask => !people.has(ask.personId))
@@ -225,12 +225,9 @@ export function recordPulse(state: SuperTabState, now: number, only?: string): v
     if (!chat) continue
     const pulse = projectPulse(state, project, now, PULSE_LIMITS, index, chat.pulse?.idleSince ?? null)
     if (JSON.stringify(pulse) !== JSON.stringify(chat.pulse)) chat.pulse = pulse
-    // The status card's lines (statusCard.ts), written only when one changed; a project with no active task keeps none.
-    const card = projectCard(state, project, index, chat.card, now, dayOf(now))
-    if (card.lines.length || chat.card) {
-      const { changedAt: _changedAt, ...held } = chat.card ?? {}
-      if (JSON.stringify(card) !== JSON.stringify(chat.card ? held : undefined)) chat.card = { ...card, changedAt: now }
-    }
+    // Each task's status line (statusCard.ts), on the task, written only where this pass moved it (task #4419): a command and the
+    // Lead's sweep give the lines from before they changed anything.
+    if (before) noteTaskLines(state, project, index, now, dayOf(now), before)
   }
 }
 

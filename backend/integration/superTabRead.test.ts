@@ -797,14 +797,10 @@ describe('a real command through the store by parts (design 4.7)', () => {
     expect(written.version).toBeGreaterThan(R)
     clock = Date.now()
     const seen = (await get(`/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, peer)).body.data
-    // The task's message in its project chat is never edited (plain chat, task #2294): the task is written, and the project's chat, whose
-    // status card names the task by its title (task #3593).
-    const chatPart = reply.parts.find(p => p.kind === 'group' && p.key === 'lead')!
-    expect(reply.parts.filter(p => p.kind === 'group').map(p => [p.key, p.version]).sort())
-      .toEqual([['lead', chatPart.version], [s.web, written.version]].sort())
-    expect(seen.groups.map((g: { key: string; version: number; data: { title: string } }) => [g.key, g.version]).sort())
-      .toEqual([['lead', chatPart.version], [s.web, written.version]].sort())
-    expect(seen.groups.find((g: { key: string }) => g.key === s.web).data.title).toBe('Renamed for real')
+    // The task's message in its project chat is never edited (plain chat, task #2294): only the task is written.
+    expect(reply.parts.filter(p => p.kind === 'group').map(p => [p.key, p.version])).toEqual([[s.web, written.version]])
+    expect(seen.groups.map((g: { key: string; version: number; data: { title: string } }) => [g.key, g.version, g.data.title]))
+      .toEqual([[s.web, written.version, 'Renamed for real']])
     expect(seen.lastChangedAt).toBe(reply.lastChangedAt)
   })
 })
@@ -1574,11 +1570,6 @@ describe('what a read costs the database (group 3b)', () => {
   it('after one post it loads about what changed', async () => {
     const s = await scene(f => bulky(f))
     clock = Date.now()
-    // The scene was stored before status cards: a first post makes its project's card (task #3593), which sends the head once. The
-    // cost measured is the next post's, with the card as it is.
-    await new SuperTabStore(db).execute(owner, s.tabId, { operationId: randomUUID(),
-      command: { type: 'message.send', conversationId: s.web, text: 'First post', replyTo: null, recipientIds: [] } })
-    clock = Date.now()
     const cursor = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data.cursor
     await new SuperTabStore(db).execute(owner, s.tabId, { operationId: randomUUID(),
       command: { type: 'message.send', conversationId: s.web, text: 'One post', replyTo: null, recipientIds: [] } })
@@ -1589,9 +1580,7 @@ describe('what a read costs the database (group 3b)', () => {
     })
     // The task, and its project's chat: the post is an ask the PM now owes, which the board's pulse there counts (task #3384).
     expect(groups.sort()).toEqual([s.web, 'lead'].sort())
-    // Measured 24,650 before the status card. The card's text (at most 1,500 characters, here a full 50 tasks) rides on the project chat
-    // every light read of it takes, about four times in this poll: +6.5 KB (task #3593). A bigger rise is a regression.
-    expect(bytes).toBeLessThan(32_000)
+    expect(bytes).toBeLessThan(30_000)
   })
 
   it('the host form answers "unchanged" after a post in its agent\'s group without loading conversation bodies', async () => {

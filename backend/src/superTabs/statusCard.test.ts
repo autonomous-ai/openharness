@@ -13,7 +13,7 @@ const PR = 'https://github.com/acme/app/pull/7'
 function cardFixture() {
   const f = stepsFixture()
   const chat = () => f.group('lead')
-  const lines = () => projectCard(f.state, projectOf(f.state, 'lead')).lines
+  const lines = () => projectCard(f.state, projectOf(f.state, 'lead'), f.now).lines
   const line = (id = f.task) => lines().find(l => l.id === id)
   const text = () => visibleState(f.state, owner).projects!.find(p => p.id === 'lead')!.status?.text
   const assignment = () => f.group(f.task).assignment!.id
@@ -87,7 +87,7 @@ describe('the status card the server writes (#3593)', () => {
     expect(f.line()!.since).toBe(first)
     f.tick(60_000)
     f.work('review', `Ready for review: ${PR} at abc1234`)
-    expect(f.line()!.since).toBe(first + 120_000)
+    expect(f.line()!.since).toBe(first! + 120_000)
   })
 
   it('shows readers the lines and the PM\'s extra text, in the card\'s own text', () => {

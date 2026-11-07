@@ -119,7 +119,7 @@ describe('the project report a Lead is shown how to send', () => {
     const { help } = await swarm().ask({ action: 'help' }, owner) as { help: { commands: Json[] } }
     const report = help.commands.find(c => c.type === 'project.report')
     expect(report).toEqual({ type: 'project.report', projectId: 'PROJECT', through: { GROUP: 214031 },
-      text: 'Your own lines for the status card only (the Swarm writes the line of every active task): they follow the lines the Swarm wrote, replace your last ones and post nothing. Use null to leave them as they are.' })
+      text: 'The whole status card, one short line per active task; it replaces the last one and posts nothing. Use null when the card is still right.' })
     expect(JSON.stringify(help)).not.toContain('throughRevision')
   })
 })
