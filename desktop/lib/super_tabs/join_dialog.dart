@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
@@ -302,10 +303,16 @@ class _SwarmJoinDialogState extends State<SwarmJoinDialog> {
             ),
           ],
           const SizedBox(height: 12),
-          Text(widget.accountEmail, style: DesktopChrome.metadata()),
+          Text(
+            'Signed in as ${widget.accountEmail}',
+            style: DesktopChrome.metadata(),
+          ),
           if (_error != null) ...[
             const SizedBox(height: 12),
-            Text(_error!, style: DesktopChrome.text()),
+            Text(
+              _error!,
+              style: DesktopChrome.text(color: grid.AppPalette.dangerFill),
+            ),
           ],
         ],
       ),
