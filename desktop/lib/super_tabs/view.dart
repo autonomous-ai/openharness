@@ -3565,8 +3565,10 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   /// A task's chat, opened from its card: read first when it is one of the
-  /// shipped tasks only the Tasks view holds.
+  /// shipped tasks only the Tasks view holds. With the Tasks pane on the right the chat has no room beside the Board,
+  /// so it opens in the middle as a Tasks card's does (audit of 1.3.89, #4441: the card only turned grey).
   Future<void> _openTask(String id) async {
+    if (_hasTasksPane) return _openPersonalTask(id);
     if (!await _readTask(id)) return;
     _openConversation(id);
   }
@@ -3590,6 +3592,10 @@ class _SuperTabViewState extends State<SuperTabView>
     _openAgentChat(id);
     setState(() => _taskInMiddle = id);
   }
+
+  /// Whether the right pane is the Tasks slot (Swarm v3), so no chat sits beside the Board.
+  bool get _hasTasksPane =>
+      widget.rightPane != null || c.personalTasks?.supported == true;
 
   /// The task opened from its Tasks card, shown under the task's header while it stays the selected chat; the same
   /// chat chosen another way is under its agent's header.
@@ -6288,9 +6294,7 @@ class _SuperTabViewState extends State<SuperTabView>
       final agentChat =
           widget.board && _agentChatId != null && c.selectedId == _agentChatId;
       // The chat is in the middle, by the reader's choice of an agent or once the right pane is the Tasks slot.
-      final hasTasksPane =
-          widget.rightPane != null || c.personalTasks?.supported == true;
-      final chatInMiddle = agentChat || hasTasksPane;
+      final chatInMiddle = agentChat || _hasTasksPane;
       final boardLayout =
           widget.board &&
           (!_projectChatOnly || chatInMiddle) &&
@@ -6306,7 +6310,7 @@ class _SuperTabViewState extends State<SuperTabView>
       // side (task #4220).
       final tasksStay =
           widget.board &&
-          hasTasksPane &&
+          _hasTasksPane &&
           thread == null &&
           !_rosterOpen &&
           !_terminalsVisible;
@@ -6331,7 +6335,7 @@ class _SuperTabViewState extends State<SuperTabView>
           c.snapshot?.projects.isEmpty != true;
       // With the Tasks slot, a project that is selected shows its Board first, though its chat is the selected
       // conversation (Swarm v3, task #4118).
-      final impliedBoard = hasTasksPane && !agentChat
+      final impliedBoard = _hasTasksPane && !agentChat
           ? c.snapshot?.projects
                 .where((p) => p.leadConversationId == c.selectedId)
                 .firstOrNull
