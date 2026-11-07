@@ -67,7 +67,7 @@ async function fixture() {
   const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: tab, key: theirs } } })
   await db.swarmGroup.update({ where: { id: row.id }, data: { archived: true, dormant: true,
     data: { ...row.data as object, archived: true, dormant: true } as never } })
-  return { store, tab, now: () => now, theirs, asked, proposal, ownersOwn, secret, peerAgent }
+  return { store, tab, execute, now: () => now, theirs, asked, proposal, ownersOwn, secret, peerAgent, ownerAgent }
 }
 
 type Fixture = Awaited<ReturnType<typeof fixture>>
@@ -145,13 +145,36 @@ describe('the person\'s Tasks feed (task #4203)', () => {
     }
   })
 
-  it('sets the column at startup on rows written before it, as a write would', async () => {
+  it('keeps a task of my agent after that agent is closed, by the login it ran under', async () => {
     const f = await fixture()
-    await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { tabId: f.tab }, u: { $unset: { feedIds: '' } }, multi: true }] })
+    await f.execute({ type: 'agent.remove', agentId: f.peerAgent }, peer)
+    const feed = (await new SwarmReads(f.store).firstLoad(peer, f.tab)).personalTasks!
+    expect(ids(feed.upserts)).toContain(f.theirs)
+    expect(feed.upserts.find(r => r.id === f.theirs)!.agent).toBeNull()
+  })
+
+  it('skips tasks I can no longer read inside the database: a page is one or two reads however many there are', async () => {
+    const f = await fixture()
+    await copies(f, f.asked, 300, f.now() + 100 * MINUTE, f.secret)
+    const reads = new SwarmReads(f.store)
+    let page: Awaited<ReturnType<typeof reads.personalTasks>> | undefined
+    const entries = await profiled(db, async () => { page = await reads.personalTasks(peer, f.tab) })
+    expect(ids(page!.upserts)).toEqual([f.proposal, f.asked, f.theirs])
+    const feed = plan(readsOf(entries))
+    expect(feed.length).toBeLessThanOrEqual(2)
+    for (const read of feed) expect(read.returned).toBeLessThanOrEqual(50)
+  })
+
+  it('sets the column at startup on rows written before it, with the login of an assignment\'s agent from before it was stored', async () => {
+    const f = await fixture()
+    await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { tabId: f.tab }, u: { $unset: { feedIds: '', 'data.assignment.execution.contributorId': '' } }, multi: true }] })
     expect(await markFeedIds(db)).toBeGreaterThan(0)
     const rows = await db.swarmGroup.findMany({ where: { tabId: f.tab } })
-    for (const row of rows) expect([...row.feedIds].sort(), row.key).toEqual(feedIdsOf(row.data as unknown as Conversation).sort())
-    expect(rows.find(r => r.key === f.theirs)!.feedIds.sort()).toEqual([owner.sub, f.peerAgent].sort())
+    const column = (key: string) => [...rows.find(r => r.key === key)!.feedIds].sort()
+    expect(column(f.theirs)).toEqual([owner.sub, f.peerAgent, peer.sub].sort())
+    expect(column(f.ownersOwn)).toEqual([owner.sub, f.ownerAgent].sort())
+    for (const row of rows.filter(r => !(r.data as unknown as Conversation).assignment))
+      expect([...row.feedIds].sort(), row.key).toEqual(feedIdsOf(row.data as unknown as Conversation).sort())
     expect(await markFeedIds(db)).toBe(0)
   })
 })

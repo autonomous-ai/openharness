@@ -97,6 +97,10 @@ describe('personal Tasks summaries', () => {
     const mineToApprove = { ...soon, data: { ...soon.data, taskApproval: { ...soon.data.taskApproval, personId: peer.userId, generation } } }
     expect(personalTasksFor([mineToApprove], view, peer)!.upserts).toEqual([expect.objectContaining({ id: row.key, canApprove: true })])
     expect(personalTasksFor([{ ...did, data: { ...did.data, assignment: work(lent.id) } }], view, peer)).toMatchObject({ upserts: [], removed: [row.key] })
+    // Its agent closed since: the task stays, by the login the agent ran under (code review of #3465).
+    const closed = { ...did, data: { ...did.data, assignment: { ...work('closed-agent'), execution: { ...work('closed-agent').execution, contributorId: peer.userId } } } }
+    expect(personalTasksFor([closed], view, peer)!.upserts).toEqual([expect.objectContaining({ id: row.key, status: 'done', agent: null })])
+    expect(personalTasksFor([closed], view, owner)!.upserts.map(r => r.id)).toEqual([row.key])
   })
 
   it('carries who asked and the newest linked pull request', () => {
