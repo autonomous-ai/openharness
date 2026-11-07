@@ -100,9 +100,7 @@ class _CodingMemoryViewState extends State<CodingMemoryView> {
               style: AppType.title(color: AppPalette.textPrimary),
             ),
             const SizedBox(height: 8),
-            _text(
-              'Useful things learned as you work. Read the evidence, correct a detail, or let something go.',
-            ),
+            _text('Learned from your coding work.'),
             const SizedBox(height: 16),
             Wrap(
               spacing: 8,
@@ -176,12 +174,6 @@ class _CodingMemoryViewState extends State<CodingMemoryView> {
                   onOpen: (id) => _open(id: id),
                 )
               else ...[
-                if (library.items.isEmpty &&
-                    !library.busy &&
-                    library.error == null)
-                  _text(
-                    'A place for your coding preferences. Your companion can learn from new, included sessions while learning is on.',
-                  ),
                 ..._memoryRows(
                   library.items,
                   busy: library.busy,
@@ -256,12 +248,12 @@ class _CodingMemoryViewState extends State<CodingMemoryView> {
         ),
         if (gaps > 0)
           _text(
-            '$gaps ${gaps == 1 ? 'segment expired' : 'segments expired'} before learning finished. Those gaps are not counted as learned.',
+            '$gaps ${gaps == 1 ? 'segment expired' : 'segments expired'} before review.',
             small: true,
           ),
         const SizedBox(height: 12),
         _text(
-          'Memories are kept on this computer and separated by account and project. Switching the companion’s character keeps the same collection memory.',
+          'Memories stay on this computer, separate per account and project. Switching character keeps them.',
           small: true,
         ),
       ],
@@ -325,7 +317,7 @@ class _CodingMemoryViewState extends State<CodingMemoryView> {
   final learning = memoryMap(runtime['learning']);
   if (!library.learn || learning['state'] == 'learning_off') {
     return (
-      message: 'Learning is paused. Your existing memories are still here.',
+      message: 'Learning is paused. Memories are kept.',
       captureIssue: null,
       needsAttention: false,
     );
@@ -334,7 +326,7 @@ class _CodingMemoryViewState extends State<CodingMemoryView> {
     return (
       message: runtime['state'] == 'off'
           ? 'Your companion is paused. Resume it to continue learning.'
-          : 'Waiting for your companion’s memory service to be ready.',
+          : 'Waiting for the memory service.',
       captureIssue: null,
       needsAttention: true,
     );
@@ -343,28 +335,27 @@ class _CodingMemoryViewState extends State<CodingMemoryView> {
   final captureIssue = capture['state'] != 'unavailable'
       ? null
       : capture['reason'] == 'memory_backlog_full'
-      ? 'The learning queue is full. Some new work could not be added. Capture can retry as reviews free space; queued work may expire before it is reviewed.'
-      : 'Some recent work could not be read for learning. Your existing memories are still available.';
+      ? 'The learning queue is full, so some new work was not added. It retries as reviews free space.'
+      : 'Some recent work could not be read for learning.';
   final state = learning['state'];
   final message = switch (state) {
     'waiting_for_model' => _modelWaitMessage(learning['reason']),
     'foreground_busy' =>
       'Your companion is working. Learning waits until it is free.',
-    'waiting_for_quiet' =>
-      'Giving your latest request a moment before reviewing completed work.',
-    'budget_deferred' =>
-      'Waiting for the next learning allowance before reviewing more work.',
+    'waiting_for_quiet' => 'Waiting for your latest request to settle.',
+    'budget_deferred' => 'Waiting for the next learning allowance.',
     'failed' => 'The last memory review could not finish. Queued work can be retried while learning is on.',
     'source_incomplete' =>
       'Some work has incomplete source evidence and cannot yet be reviewed.',
-    'idle' => 'No work is ready for review right now. Learning is on for new, included coding sessions.',
-    'learned' => 'The latest review saved new memories. You can read their evidence in your library.',
+    'idle' => 'No work is ready for review. Learning is on.',
+    'learned' => 'The latest review saved new memories.',
     'no_useful_memory' =>
       'The latest review found no useful memory to save. Learning is still on.',
-    'notebook_updated' => 'A project notebook was updated from saved memories. Its sources and conditions are available in Project knowledge.',
-    'notebook_empty' => 'The latest notebook review found no supported explanation to add. Individual memories are still available.',
+    'notebook_updated' =>
+      'A project notebook was updated. See Project knowledge.',
+    'notebook_empty' => 'The latest notebook review found nothing to add.',
     'stale' => 'The source memories or learning settings changed during review. That result was not saved.',
-    _ => 'Learning is on. Completed coding work is reviewed when your companion is available.',
+    _ => 'Learning is on. Work is reviewed when your companion is free.',
   };
   return (
     message: message,
@@ -380,19 +371,21 @@ class _CodingMemoryViewState extends State<CodingMemoryView> {
 }
 
 String _modelWaitMessage(Object? reason) => switch (reason) {
-  'companion_unopened' => 'Start your companion in the terminal beside this viewer to begin learning. Saved memories remain available.',
-  'companion_stopped' => 'Your companion is stopped. Reopen its conversation to continue learning. Saved memories remain available.',
+  'companion_unopened' =>
+    'Start your companion in the terminal beside this viewer to learn.',
+  'companion_stopped' =>
+    'Your companion is stopped. Reopen its conversation to keep learning.',
   'companion_starting' => 'Waiting for your companion’s agent to finish starting. Complete any setup shown in its terminal.',
   'companion_model_unavailable' => 'Choose a model in the companion terminal so it can review your coding work.',
-  'companion_connection_unavailable' => 'Waiting for the companion’s current model connection. Check its terminal and complete any connection or sign-in setup shown there.',
-  'companion_account_unavailable' => 'Harness could not verify the selected agent’s sign-in for background learning. Check the companion terminal and complete sign-in if needed.',
-  'companion_configuration_unsupported' => 'Background learning is unavailable for this agent or provider configuration. Choose a supported agent in the companion terminal. Saved memories remain available.',
+  'companion_connection_unavailable' => 'Waiting for the companion’s current model connection. Finish any sign-in shown in its terminal.',
+  'companion_account_unavailable' => 'Harness could not verify the agent’s sign-in. Sign in from the companion terminal.',
+  'companion_configuration_unsupported' => 'Background learning is unavailable for this agent or provider configuration. Choose a supported agent in the companion terminal.',
   'claude_version_uncertified' ||
   'codex_version_uncertified' ||
-  'opencode_version_uncertified' => 'Background learning is not yet supported with this version of your selected agent. Choose a supported agent in the companion terminal, or wait for a Harness update. Saved memories remain available.',
+  'opencode_version_uncertified' => 'Learning does not support this version of your selected agent. Choose another agent in the companion terminal, or wait for a Harness update.',
   'inference_context_changed' => 'Your companion’s model or connection changed. Learning will check the new selection before reviewing more work.',
-  'inference_provider_restricted' => 'Your selected model’s provider declined background learning. Choose another model in the companion terminal to continue. Existing memories are still available.',
-  _ => 'Waiting for your companion’s model. Check that its terminal beside this viewer is running with a model selected, and complete any setup shown there.',
+  'inference_provider_restricted' => 'Your selected model’s provider declined background learning. Choose another model in the companion terminal.',
+  _ => 'Waiting for your companion’s model. Check that its terminal beside this viewer is running with a model selected.',
 };
 
 Widget _text(String value, {bool small = false}) => Text(
