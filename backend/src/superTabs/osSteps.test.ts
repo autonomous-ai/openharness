@@ -25,7 +25,7 @@ const bothRules = cliTestedOn('The CLI on a Mac, on a Linux machine and on a Win
 /** Each OS whose test step waits for its machine: what the machine reports, its step, the task's line, its waiting field. */
 const OSES = {
   linux: { reports: 'Linux', step: 'Test on a Linux machine', line: 'No Linux machine: CI\'s Linux runs stand in.', field: 'waitingLinuxStep', rules: undefined },
-  windows: { reports: 'Windows', step: 'Test on a Windows machine', line: 'No Windows machine: a person\'s Windows check is owed.', field: 'waitingWindowsStep',
+  windows: { reports: 'Windows', step: 'Test on Windows', line: 'No Windows machine: a person\'s Windows check is owed.', field: 'waitingWindowsStep',
     rules: windowsRules },
 } as const
 
