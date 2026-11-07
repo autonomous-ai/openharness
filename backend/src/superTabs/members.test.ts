@@ -48,8 +48,9 @@ export function swarm(quotas: Quota[] = [subscription()]) {
 }
 
 describe('Accept', () => {
-  it('stages every task a person asks for, whatever their mode was', () => {
+  it('stages the task of a person who asks to accept each one', () => {
     const f = swarm()
+    f.run({ type: 'member.approvalMode', mode: 'review' }, kai)
     const lamp = f.project('lamp')
     expect(f.group(f.ask(lamp, 'Fix the boot logo')).taskApproval).toMatchObject({ personId: 'kai', state: 'proposal' })
   })
@@ -67,6 +68,7 @@ describe('Accept', () => {
 
   it('allows Accept all for API accounts alone, and then does not stage their tasks', () => {
     const f = swarm([api])
+    f.run({ type: 'member.approvalMode', mode: 'review' }, kai)
     f.run({ type: 'member.approvalMode', mode: 'autoApprove' }, kai)
     const lamp = f.project('lamp')
     expect(f.group(f.ask(lamp, 'Fix the boot logo')).taskApproval).toBeUndefined()

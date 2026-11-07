@@ -63,9 +63,9 @@ describe('personal approval enforced before work', () => {
     expect(() => f.runCommand({ type: 'agent.add', conversationId: id, machineId: 'host', harnessId: 'external', name: 'External',
       configuration: { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null }, lead: false }, owner,
       { contribution: { machineOwnerId: owner.userId, contributorId: owner.userId } })).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
-    f.mode('autoApprove')
+    // Accept all stays off without an API account (task #4697; members.test.ts covers one with): the task still waits.
+    expect(() => f.mode('autoApprove')).toThrow(expect.objectContaining({ code: 'ACCEPT_ALL_SUBSCRIPTION' }))
     expect(f.card(id).taskApproval?.state).toBe('proposal')
-    expect(f.card(f.create()).taskApproval).toBeUndefined()
   })
   it('lets the PM suggest, lets the requester change it, and assigns only their approved choice', () => {
     const f = fixture(); f.mode('review'); const id = f.create()

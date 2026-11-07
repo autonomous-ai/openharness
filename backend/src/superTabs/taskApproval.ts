@@ -1,4 +1,5 @@
 import { author, fail, type Actor, type Conversation, type SuperTabState } from './model.js'
+import { mayAcceptAll } from './members.js'
 import { groupProject, ledProject, readConversation } from './projects.js'
 
 export type ApprovalMode = 'autoApprove' | 'review'
@@ -18,7 +19,11 @@ export const personalApprovalCommand = (type: string): boolean =>
 export function stageTaskApproval(state: SuperTabState, group: Conversation, now: number): void {
   if (group.taskApproval || group.kind || group.audience || group.reviewOf) return
   const member = state.people.find(p => p.id === group.requesterId)
-  if (member?.approvalMode === 'review') group.taskApproval = {
+  // Ask me stages it; so does an Accept all chosen on a subscription account (task #4697: it stays off there until the vendors
+  // confirm in writing, members.ts mayAcceptAll).
+  const review = member?.approvalMode === 'review' || (member?.approvalMode === 'autoApprove' && !mayAcceptAll(state, member.id))
+  if (!member || !review) return
+  group.taskApproval = {
     personId: member.id, generation: member.generation, state: 'proposal', createdAt: now,
   }
 }
