@@ -10,6 +10,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, type SuperTabStoreHooks } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { SEED_RULES } from '../src/superTabs/policy.js'
+import { poolRows } from './hostRows.test-support.js'
 
 // Task #3401: a task's Ready reads its pull request's files from GitHub, outside the command's transaction, and the server
 // opens its review steps from them. A fresh loopback replica set, created here.
@@ -45,8 +46,14 @@ async function swarm(hooks: SuperTabStoreHooks) {
   const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
   await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
   await execute({ type: 'machine.contribute', machineId: 'review-host', name: 'Review Mac', cwd: '/repo', engines: ['claude'], maxAgents: 8 }, host)
+  // It reports as a live machine does, so its own agents can take steps (reviewSeats.ts canStart): they are its person's own (task #4120).
+  const generation = (await poolRows(store, host, 'review-host')).find(p => p.tabId === tab)!.machine.generation
+  await store.observeMachine(host, tab, 'review-host', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
+    diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+    quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
+    readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] } } as never)
   const add = async (conversationId: string, name: string, lead = false, roleName?: string) => String((await execute({ type: 'agent.add',
-    conversationId, machineId: 'review-host', harnessId: randomUUID(), name, configuration: opus, lead, ...roleName ? { roleName } : {} } as Command)).result.agentId)
+    conversationId, machineId: 'review-host', harnessId: randomUUID(), name, configuration: opus, lead, ...roleName ? { roleName } : {} } as Command, host)).result.agentId)
   const lead = await add('lead', 'PM', true)
   const task = String((await execute({ type: 'conversation.create', title: 'Fix sign-in', brief: 'Sign in works offline.', checks: [] })).result.conversationId)
   const dev = await add(task, 'Dev', false, 'Engineer')
@@ -73,6 +80,22 @@ describe('a Ready through the store', () => {
     const listed = ((await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, key: task } })).data as { stepIds?: string[] }).stepIds
     const opened = (await db.swarmGroup.findMany({ where: { tabId: tab } })).filter(row => (row.data as { reviewOf?: string }).reviewOf === task).map(row => row.key)
     expect([...listed ?? []].sort()).toEqual(opened.sort())
+  })
+
+  it('persists history evidence in every review brief on Ready', async () => {
+    const head = 'a'.repeat(40)
+    const { tab, execute, task, dev, assignment } = await swarm({ pullRequestFiles: async (_repository, urls) => ({ urls, head,
+      files: ['backend/src/routes/auth.ts'], heads: [{ url: `${REPO}/pull/7`, head, base: 'main', history: { head,
+        planFirst: 'pass', testBeforeCode: 'fail', productionLines: 42, totalLines: 64, commits: 3, merges: 0, missingTests: ['b'.repeat(40)] } }] }) })
+    await execute({ type: 'work.status', conversationId: task, assignmentId: assignment, status: 'review', result: `Ready: ${REPO}/pull/7` }, host, dev)
+    const rows = await db.swarmGroup.findMany({ where: { tabId: tab } })
+    const steps = rows.map(row => row.data as { reviewOf?: string; brief?: string }).filter(group => group.reviewOf === task)
+    expect(steps).toHaveLength(2)
+    for (const step of steps) {
+      expect(step.brief).toContain('Plan first: pass')
+      expect(step.brief).toContain('Test before code: fail')
+      expect(step.brief).toContain('42 production lines')
+    }
   })
 
   it('plans by the project\'s saved rules record', async () => {

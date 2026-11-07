@@ -13,7 +13,7 @@ export const TRAIN_CI_CHECK = 'ci/required'
 export const TRAIN_HOLD_LABELS = ['hold']
 /** A batch whose CI has not finished in this long is closed and built again. */
 export const TRAIN_CI_TIMEOUT_MS = 90 * 60_000
-/** The most projects one pass walks, the most recently active first (ENGINEERING.md 4: no read grows without a bound). */
+/** The most projects one pass walks, the most recently active first (AGENTS.md standard 4: no read grows without a bound). */
 export const TRAIN_PROJECTS = 50
 
 /** Paths that change nothing a build or test runs: their pull requests merge on their own, with no batch. Not scripts/: it

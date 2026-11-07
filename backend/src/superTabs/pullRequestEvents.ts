@@ -17,6 +17,8 @@ export interface PullRequestWatch {
   url: string
   number: number
   state: 'open' | 'closed'
+  /** True once GitHub says it merged: a closed pull request without it was closed unmerged (task #3953). */
+  merged?: true
   draft: boolean
   /** The head commit's SHA. */
   head: string
@@ -42,6 +44,22 @@ const PASSED = new Set(['success', 'neutral', 'skipped'])
 export const SEEN_KEPT = 50
 const QUOTE = 300
 
+/** Whether every check run of [watch]'s head is done and passed, and every suite that has runs is done: nothing left to wait for. */
+const settledGreen = (watch: PullRequestWatch): boolean => {
+  const suites = watch.checkSuites.filter(suite => suite.runs > 0)
+  return watch.checkRuns.length > 0 && suites.length > 0 && suites.every(suite => suite.status === 'completed')
+    && watch.checkRuns.every(run => run.status === 'completed' && !!run.conclusion && PASSED.has(run.conclusion))
+}
+
+/** What a task's pull request shows the board (Conversation.pullRequestChecks, task #3827): `red` once a check failed, `green`
+ *  when everything is done and passed (the rule that posts "CI passed"), else `running`: a draft, checks still going, or none read. */
+export type ChecksState = 'green' | 'red' | 'running'
+export function checksStateOf(watch: PullRequestWatch): ChecksState {
+  if (watch.draft) return 'running'
+  if (watch.checkRuns.some(run => !!run.conclusion && FAILED.has(run.conclusion))) return 'red'
+  return settledGreen(watch) ? 'green' : 'running'
+}
+
 const short = (sha: string) => sha.slice(0, 7)
 const quoted = (body: string) => {
   const text = body.trim().replace(/\s+/g, ' ')
@@ -49,7 +67,7 @@ const quoted = (body: string) => {
 }
 const REVIEWED: Record<string, string> = { CHANGES_REQUESTED: 'asked for changes on', APPROVED: 'approved' }
 /** Whose words reach the Engineer: the repository's own people. Anyone can comment on a public pull request, and the line
- *  reaches an agent as its Lead's, so anyone else's text stays on GitHub behind the link (ENGINEERING.md 7, review of #2750). */
+ *  reaches an agent as its Lead's, so anyone else's text stays on GitHub behind the link (AGENTS.md standard 7, review of #2750). */
 const QUOTED = new Set(['OWNER', 'MEMBER', 'COLLABORATOR'])
 const said = (association: string, body: string, url: string) => {
   if (!body.trim()) return `. ${url}`
@@ -83,9 +101,7 @@ export function pullRequestEvents(watch: PullRequestWatch, seen: readonly string
     const failed = watch.checkRuns.filter(run => failing(run) && (run.completedAt ?? now) >= since)
     const stale = watch.checkRuns.some(run => failing(run) && (run.completedAt ?? now) < since)
     if (failed.length) add(`ci-red:${head}`, `CI failed on your pull request #${number} (head ${short(head)}): ${failed.map(run => run.name).join(', ')}. ${url}`)
-    const suites = watch.checkSuites.filter(suite => suite.runs > 0)
-    if (!failed.length && !stale && watch.checkRuns.length && suites.length && suites.every(suite => suite.status === 'completed')
-      && watch.checkRuns.every(run => run.status === 'completed' && run.conclusion && PASSED.has(run.conclusion))) {
+    if (!failed.length && !stale && settledGreen(watch)) {
       add(`ci-green:${head}`, `CI passed on your pull request #${number} (head ${short(head)}). ${url}`)
     }
   }
@@ -127,7 +143,7 @@ export interface PullRequestReader {
 const PULL = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9][0-9]*)$/
 /** A task quiet this long is not watched: its Engineer is not waiting on its pull request. */
 export const WATCH_QUIET_MS = 7 * 24 * 3_600_000
-/** The most tasks a pass reads, the most recently active first (ENGINEERING.md 4: no read grows without a bound). */
+/** The most tasks a pass reads, the most recently active first (AGENTS.md standard 4: no read grows without a bound). */
 export const WATCH_GROUPS = 200
 /** The most done tasks a pass also reads for their heads (#3394): done before the PM merges, their verdicts must still go
  *  stale on a push, however long the pull request stays open. Production had 31 with links, 11 quiet over a week, of 51
@@ -135,6 +151,13 @@ export const WATCH_GROUPS = 200
 export const WATCH_DONE_GROUPS = 100
 /** A head whose patch GitHub could not give is asked again after this long, not every pass. */
 export const PATCH_RETRY_MS = 15 * 60_000
+
+/** Whether a pass reads [watch]'s patch id: a head new to the task, or one GitHub could not give a patch for PATCH_RETRY_MS ago.
+ *  A new base branch is read again like a new head (security review of #3218, round 3): the id names the branch. */
+const patchNeeded = (known: PullRequestHead | undefined, watch: PullRequestWatch, now: number) =>
+  known?.head !== watch.head || known.base !== watch.base || (known.patch === null && now - known.at >= PATCH_RETRY_MS)
+  // Open again after it was read closed: the task's steps are loaded to count their verdicts at it once more (task #3953).
+  || known.closed === true
 
 /** Reads with the Harness GitHub App: one read-only token per repository for the whole pass, revoked when it is done (as the
  *  archive pass's, archive.ts). A repository the app is not installed on, or any GitHub failure, reads as null. */
@@ -185,9 +208,9 @@ export function appPullRequestWatch(app: GitHubApp): PullRequestReader {
  * One pass: open tasks (not steps) active in the last [WATCH_QUIET_MS] that link a pull request, at most [limit] of them, the
  * most recently active first, have each open one read once, and what is new goes to its Engineer (store.ts
  * pullRequestSeen). One group's failure is logged and skips that group alone. A pass that posted, or could not read a pull
- * request, says so in one line: the measure of this feature (ENGINEERING.md 6 and 8). The messages posted.
+ * request, says so in one line: the measure of this feature (AGENTS.md standards 6 and 8). The messages posted.
  */
-export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabStore, 'pullRequestSeen' | 'pullRequestHeadsWatched'>, reader: PullRequestReader, now: number,
+export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabStore, 'pullRequestSeen' | 'pullRequestHeadsWatched' | 'pullRequestClosed'>, reader: PullRequestReader, now: number,
   limit = WATCH_GROUPS, doneLimit = WATCH_DONE_GROUPS): Promise<number> {
   try {
     // The finished mark's index, [workFinished, archived, lastActivityAt]: equality, equality, then the range, which also
@@ -215,9 +238,6 @@ export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabSt
       if (!patches.has(key)) patches.set(key, reader.patch(url, head, base).catch(() => null))
       return patches.get(key)!
     }
-    // A new base branch is read again like a new head (security review of #3218, round 3): the id names the branch.
-    const patchNeeded = (known: PullRequestHead | undefined, watch: PullRequestWatch) =>
-      known?.head !== watch.head || known.base !== watch.base || (known.patch === null && now - known.at >= PATCH_RETRY_MS)
     // Each task's newest links (watchedLinks), with their pull request as GitHub has it now and a patch where one is needed.
     // A head new to a task is asked whether it is git's own merge of another head and main (#3553), once a pass.
     const merges = new Map<string, Promise<string | null>>()
@@ -227,12 +247,15 @@ export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabSt
       return merges.get(key)!
     }
     const seen: Array<{ row: typeof rows[number]; watch: PullRequestWatch; patch: string | null | undefined; merged: string | null | undefined }> = []
+    const closed: Array<{ row: typeof rows[number]; url: string }> = []
     for (const row of rows) {
       for (const url of watchedLinks(row.urls)) {
         const watch = await watchOf(url)
+        // A pull request the watch read before and GitHub now shows closed unmerged stops capturing the task's checks (task #3953).
+        if (watch?.state === 'closed' && !watch.merged && row.heads?.[url] && !row.heads[url]!.closed) closed.push({ row, url })
         if (watch?.state !== 'open') continue
         const known = row.heads?.[url] ?? undefined, newHead = known?.head !== watch.head || known.base !== watch.base
-        seen.push({ row, watch, patch: patchNeeded(known, watch) ? await patchOf(url, watch.head, watch.base) : undefined,
+        seen.push({ row, watch, patch: patchNeeded(known, watch, now) ? await patchOf(url, watch.head, watch.base) : undefined,
           merged: newHead ? await mergeOf(url, watch.head, watch.base) : undefined })
       }
     }
@@ -243,12 +266,20 @@ export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabSt
       return Object.keys(row.heads ?? {}).some(url => !window.has(url))
     })
     // A task from before steps were listed, at a new head or dropping one: its dormant steps are looked up once, then listed.
-    const unlisted = [...seen.filter(s => s.patch !== undefined).map(s => s.row), ...moved].filter(row => !Array.isArray(row.steps))
+    const unlisted = [...seen.filter(s => s.patch !== undefined).map(s => s.row), ...moved, ...closed.map(c => c.row)].filter(row => !Array.isArray(row.steps))
     const listed = await listedSteps(db, unlisted)
     for (const row of moved) {
       try {
         const lookedUp = listed.get(`${row.tabId}:${row.key}`)
         await store.pullRequestHeadsWatched(row.tabId, row.key, row.steps ?? lookedUp ?? [], lookedUp !== undefined)
+      } catch (error) {
+        logger.warn('[swarm-pr-events] group skipped', { tabId: row.tabId, group: row.key, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+    for (const { row, url } of closed) {
+      try {
+        const lookedUp = listed.get(`${row.tabId}:${row.key}`)
+        await store.pullRequestClosed(row.tabId, row.key, url, row.steps ?? lookedUp ?? [], lookedUp !== undefined)
       } catch (error) {
         logger.warn('[swarm-pr-events] group skipped', { tabId: row.tabId, group: row.key, error: error instanceof Error ? error.message : String(error) })
       }
@@ -272,6 +303,37 @@ export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabSt
   } finally { await reader.done() }
 }
 
+/** A task whose pull requests a command needs read now (store.ts headsReadNow): its key, its heads as recorded, its steps. */
+export interface TaskHeads { key: string; heads?: Record<string, PullRequestHead> | null; steps?: string[] | null }
+
+/**
+ * Reads [urls], pull requests the task [task] links, now, as a pass reads them, and records what GitHub says (store.ts
+ * pullRequestSeen) before the command that needs it is judged (task #3628): a verdict at the pull request's real head was not
+ * counted while the minute's pass had not read the push yet (#3561). The pass's own reads, its own write: the head, its patch
+ * when new, whether it is git's own main merge, and the events, each posted once whichever read sees it first. A closed pull
+ * request is left to the pass. The pull requests GitHub could not say anything of.
+ */
+export async function readPullRequestsNow(db: PrismaClient, store: Pick<SuperTabStore, 'pullRequestSeen'>, reader: PullRequestReader, tabId: string,
+  task: TaskHeads, urls: readonly string[], now: number): Promise<string[]> {
+  try {
+    const unread: string[] = []
+    let bot: string | null | undefined, listed: string[] | undefined
+    for (const url of urls) {
+      const watch = await reader.watch(url).catch(() => null)
+      if (!watch) unread.push(url)
+      if (watch?.state !== 'open') continue
+      const known = task.heads?.[url] ?? undefined, newHead = known?.head !== watch.head || known.base !== watch.base
+      const patch = patchNeeded(known, watch, now) ? await reader.patch(url, watch.head, watch.base).catch(() => null) : undefined
+      const merged = newHead ? await reader.merge(url, watch.head, watch.base).catch(() => null) : null
+      // A task from before steps were listed looks its dormant steps up once, as the pass does at a new head.
+      if (patch !== undefined && !Array.isArray(task.steps) && listed === undefined) listed = (await listedSteps(db, [{ tabId, key: task.key }])).get(`${tabId}:${task.key}`)
+      if (bot === undefined) bot = await reader.botLogin().catch(() => null)
+      await store.pullRequestSeen(tabId, task.key, watch, bot, patch, task.steps ?? listed ?? [], listed !== undefined, merged)
+    }
+    return unread
+  } finally { await reader.done() }
+}
+
 /** The dormant steps of [tasks] that list none (Conversation.stepIds absent: tasks from before steps were listed), by
  *  `tabId:key`, an empty list for one with none: one read for the pass, by the awake-groups index's tabId, dormant and
  *  deleted, examining a Swarm's dormant groups once (production's largest Swarm had 3,060 groups, 2026-11-05). Each task then
@@ -290,7 +352,7 @@ export async function listedSteps(db: PrismaClient, tasks: ReadonlyArray<{ tabId
 }
 
 /** Runs the pass every minute in the singleton worker, one at a time. */
-export function startPullRequestWatch(db: PrismaClient, store: Pick<SuperTabStore, 'pullRequestSeen' | 'pullRequestHeadsWatched'>, reader: () => PullRequestReader, everyMs = 60_000): () => void {
+export function startPullRequestWatch(db: PrismaClient, store: Pick<SuperTabStore, 'pullRequestSeen' | 'pullRequestHeadsWatched' | 'pullRequestClosed'>, reader: () => PullRequestReader, everyMs = 60_000): () => void {
   let running = false
   const run = () => {
     if (running) return

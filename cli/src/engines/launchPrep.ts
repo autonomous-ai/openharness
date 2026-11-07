@@ -18,8 +18,9 @@ import type { AgentEngine } from './types.js'
 export interface FolderTrust {
   /** Whether the engine already trusts `path`. */
   trusts(path: string): boolean
-  /** Record trust in `path`: never removes anything, and leaves a file it cannot safely extend alone. */
-  record(path: string): 'trusted' | 'already' | 'skipped'
+  /** Record trust in `path`: never removes anything, and leaves a file it cannot safely extend alone. `create`: also on a
+   *  computer where the engine never ran, making the file (a JSON one) with this folder alone. */
+  record(path: string, options?: { create?: boolean }): 'trusted' | 'already' | 'skipped'
 }
 
 /**
@@ -37,9 +38,9 @@ export function folderTrust(engine: AgentEngine, profile?: string | null, enviro
   const network = (): boolean => homeIsNetworkOrDevice(home())
   return {
     trusts: (path) => !network() && trustsIn(trust, file(), path),
-    record: (path) => {
+    record: (path, options) => {
       if (network()) return 'skipped'
-      const recorded = recordTrustIn(trust, file(), path)
+      const recorded = recordTrustIn(trust, file(), path, options)
       // The folder's other question, asked as the engine starts there: the MCP servers it inherits from above. A folder
       // Harness trusts for its agent is one whose questions are Harness's, so it is answered here too, by its default.
       const mcp = contract.inheritedMcp

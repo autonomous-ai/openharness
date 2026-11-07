@@ -13,6 +13,8 @@ import 'package:harness_mobile/swarm/swarm_buddy.dart';
 /// until the file leaves this list on purpose.
 const _copies = {
   'lib/swarm/parts.dart': 'lib/super_tabs/parts.dart',
+  'lib/swarm/tasks/personal_tasks.dart':
+      'lib/super_tabs/tasks/personal_tasks.dart',
   'lib/swarm/profile_model.dart': 'lib/super_tabs/profile_model.dart',
   // Live cards (Slack parity, #2212): which messages are cards, and the
   // linked tasks a card shows. The phone reads no GitHub yet (Lead, 10-29:

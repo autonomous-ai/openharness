@@ -445,6 +445,7 @@ export function buildSetupScript(input: SetupScriptInput): string {
     `SHARED_MARK=${sh(TEAM_SHARED_MARK)}`,
     `CONFIG=${sh(TEAM_CONFIG_FILE)}`,
     `STATUS_DIR=${sh(TEAM_STATUS_DIR)}`,
+    `RELAY_DIR=${sh(teamLayout('darwin')!.relayDir(owner))}`,
     `LABEL=${sh(TEAM_LABEL)}`,
     `PLIST=${sh(TEAM_PLIST)}`,
     `SENTINEL=${sh(`${ownerHome}/${SENTINEL_NAME}`)}`,
@@ -554,6 +555,10 @@ export function buildSetupScript(input: SetupScriptInput): string {
     '[ -d "$STATUS_DIR" ] || mkdir "$STATUS_DIR"',
     'chown "$TEAM:staff" "$STATUS_DIR"',
     'chmod 755 "$STATUS_DIR"',
+    // An older setup's owner subscription relay left its grant in the owner's folder for the team account to read. The relay
+    // is gone (#4137): the grant goes, and the folder once empty, never through a link (security review 2 of #3451).
+    '[ -L "$RELAY_DIR" ] || rm -f "$RELAY_DIR/relay.json"',
+    '[ -L "$RELAY_DIR" ] || rmdir "$RELAY_DIR" 2>/dev/null || :',
     '',
     'step sign-in',
     '# 7. Sign-in: a single-use code minted from the owner\'s own sign-in now, so its 90 seconds start here, and',
@@ -921,12 +926,10 @@ export function buildLinuxSetupScript(input: SetupScriptInput): string {
     '[ -d "$STATUS_DIR" ] || mkdir "$STATUS_DIR"',
     'chown "$TEAM:$TEAM_GROUP" "$STATUS_DIR"',
     'chmod 755 "$STATUS_DIR"',
-    // Nobody but root can make a folder in $STATE, so setup makes the owner's: the owner's daemon then lets the team account
-    // read it with an ACL (./relay.ts).
-    '[ ! -L "$RELAY_DIR" ] || die "$RELAY_DIR is a symbolic link" 6',
-    '[ -d "$RELAY_DIR" ] || mkdir "$RELAY_DIR"',
-    'chown "$owner_uid:$owner_gid" "$RELAY_DIR"',
-    'chmod 700 "$RELAY_DIR"',
+    // An older setup's owner subscription relay left its grant in the owner's folder for the team account to read. The relay
+    // is gone (#4137): the grant goes, and the folder once empty, never through a link (security review 2 of #3451).
+    '[ -L "$RELAY_DIR" ] || rm -f "$RELAY_DIR/relay.json"',
+    '[ -L "$RELAY_DIR" ] || rmdir "$RELAY_DIR" 2>/dev/null || :',
     '',
     'step sign-in',
     '# 7. Sign-in: a single-use code minted from the owner\'s own sign-in now, so its 90 seconds start here, and',

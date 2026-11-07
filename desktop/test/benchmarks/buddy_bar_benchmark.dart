@@ -12,7 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/buddies.dart';
 
-import '../support/buddy_fixture.dart';
+import '../support/buddy_engine_fixture.dart';
 
 const sizes = [100, 2000, 10000];
 const rebuilds = 300;
@@ -22,8 +22,7 @@ void main() {
     for (final refusalLast in [true, false]) {
       final label = refusalLast ? 'refusal last' : 'no Buddy line';
       testWidgets('Buddy bar rebuild, $size held, $label', (tester) async {
-        final server = oneBuddySwarm();
-        giveSwarmBuddy(server);
+        final server = buddyEngineSwarm();
         for (var i = 0; i < size - 1; i++) {
           server.append('message $i', conversationId: 'swarm-buddy-peer');
           server.messages.last['author'] = {

@@ -45,7 +45,7 @@ interface Owed { at: number; tries: number; typed: string | null }
  *
  * It reads no screen of its own for a freeze: the terminal watch records when each whole screen last changed
  * (terminal.ts stillSince), and this asks the engines' activity once a minute for all its crew in one call (review of #3222,
- * ENGINEERING.md 4: the daemon's idle work).
+ * AGENTS.md standard 4: the daemon's idle work).
  *
  * Never a close where it deletes what the reopen needs: a confidential session's data, and on a Team daemon any session's
  * (inCore/teamPurge.ts deletes a Team-written Codex session's own engine home, security review 1 of #3222).

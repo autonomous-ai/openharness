@@ -1,5 +1,6 @@
 import { checksOpenWork, isStep, taskEnded } from './steps.js'
-import { isBuddy } from './buddies.js'
+import { isBuddy, isSwarmBuddy } from './buddies.js'
+import { buddyEngineChat } from './buddyEngine.js'
 import { isCrew } from './crew.js'
 import { expiredModelRequests, unservedBuddyModels } from './buddyModel.js'
 import { agentDisplayName } from './agentNames.js'
@@ -29,10 +30,12 @@ export const groupsOf = (state: SuperTabState, target: Agent): Conversation[] =>
  *  groups. An agent the Swarm started that never had an assignment (no task of its own, never lost one) only sits in its
  *  groups, whose messages are about others' work: it is idle from its start or keep (Swarm autonomous-harness, 2026-10-29:
  *  one sat idle 18+ minutes, its time renewed by every message in a busy chat). One a person added by hand has no start of
- *  record, so its groups' messages count, from the one it joined in. Undefined when nothing tells when. */
+ *  record, so its groups' messages count, from the one it joined in. A person talking with it counts either way: an agent
+ *  a person is chatting with is never idle (hieule, 11-06, task #3816). Undefined when nothing tells when. */
 export function idleSince(target: Agent, groups: Conversation[]): number | undefined {
   const worked = !!target.lostTask || groups.some(g => g.assignment?.agentId === target.id) || !target.startedSession
-  const seen = [time(target.startedSession?.createdAt), target.keptAt, ...(worked ? groups : []).flatMap(g => [time(g.lastActivityAt),
+  const seen = [time(target.startedSession?.createdAt), target.keptAt, ...groups.flatMap(g => [g.talkedAt?.[target.id]?.person, g.talkedAt?.[target.id]?.answer]),
+    ...(worked ? groups : []).flatMap(g => [time(g.lastActivityAt),
     ...g.assignment?.agentId === target.id ? [g.assignment.progressAt, g.assignment.lost?.at] : []])]
     .filter((t): t is number => t !== undefined && Number.isFinite(t))
   return seen.length ? Math.max(...seen) : undefined
@@ -105,12 +108,13 @@ export function staleSwitches(state: SuperTabState, now: number): MessageDraft[]
   const rows: MessageDraft[] = []
   for (const pm of state.agents) {
     const request = pm.switchRequest, project = request && ledProject(state, pm.id)
-    if (!request || !project) continue
+    const chat = isSwarmBuddy(pm) && !pm.buddySession ? buddyEngineChat(state, pm) : project?.leadConversationId
+    if (!request || !chat) continue
     if (!switchExpired(request, now)) continue
     delete pm.switchRequest
-    rows.push({ id: stableId('switch-stale', pm.id, request.id), conversationId: project.leadConversationId, replyTo: null, recipients: [],
+    rows.push({ id: stableId('switch-stale', pm.id, request.id), conversationId: chat, replyTo: null, recipients: [],
       author: { kind: 'agent', id: pm.id, name: pm.name, displayName: agentDisplayName(state.agents, pm.id), membershipGeneration: pm.membershipGeneration },
-      text: "Couldn't switch the PM: its machine did not answer.", source: { kind: 'switch', agentId: pm.id } })
+      text: `Couldn't switch ${isBuddy(pm) ? 'your Buddy' : 'the PM'}: its machine did not answer.`, source: { kind: 'switch', agentId: pm.id } })
   }
   return rows
 }

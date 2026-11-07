@@ -11,8 +11,8 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { instructionsHash } from '../src/superTabs/instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from '../src/superTabs/instructionsTemplate.js'
-import { attributedRules, droppedRules } from '../src/superTabs/instructionsDiff.js'
-import { rebasedDocument } from '../src/superTabs/instructionsRebase.js'
+import { attributedRules, droppedRules, removedLines } from '../src/superTabs/instructionsDiff.js'
+import { rebasedDocument as rebase } from '../src/superTabs/instructionsRebase.js'
 import { rebaseAll, rebaseDone, rebaseUntilDone, REBASE_SUMMARY, REBASE_SWARMS } from '../src/superTabs/migration/rebase.js'
 import { logger } from '../src/utils/logger.js'
 
@@ -26,6 +26,8 @@ const owner: AuthUser = { sub: '100000000000000000000001', email: 'owner@example
 /** Who asked for the move, named per Swarm: never its owner by default (review round 2 of #3300). */
 const DEE = '6a8fe4fcf1a6b5972eed0103'
 const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
+/** The document a project of this Swarm's own words moves to: every line kept (task #3679); the template alone moves in rules mode. */
+const rebasedDocument = (before: string, facts = '') => rebase(before, facts, before === INSTRUCTIONS_TEMPLATE ? 'rules' : 'everything')
 const run = (tab: string, command: Command, asAgentId?: string) => store.execute(owner, tab, { operationId: randomUUID(), command }, asAgentId)
 
 const BEFORE = `# Project instructions
@@ -95,12 +97,15 @@ describe('every project on the new base, once, by itself', () => {
     // The one check that must be right: no person's rule dropped, reworded or left without its person.
     expect(droppedRules(BEFORE, after.text)).toEqual([])
     for (const rule of attributedRules(BEFORE)) expect(after.text.replace(/\s+/g, ' ')).toContain(rule.text)
-    expect(after.text).not.toContain('Talks with people in the project chat')
+    // Every line is kept, named or not (task #3679): the process lines too, filed in People notes under their sections.
+    expect(after.text).toContain('- Talks with people in the project chat.')
+    expect(removedLines(BEFORE, after.text)).toEqual([])
     // The run's record: the before and after both readable in the History, the lines that went listed, written by the Swarm.
     expect((await store.instructionRevision(owner, tab, 'lead', 2)).text).toBe(BEFORE)
     const revision = await store.instructionRevision(owner, tab, 'lead', 3)
     expect(revision).toMatchObject({ text: after.text, summary: REBASE_SUMMARY, writtenBy: { kind: 'system', id: 'rebase' }, askedBy: DEE })
-    expect(JSON.stringify(revision)).toContain('Talks with people in the project chat')
+    // Nothing went, so the History lists no dropped line (task #3679).
+    expect(JSON.stringify((revision as { dropped?: unknown }).dropped ?? [])).not.toContain('Talks with people in the project chat')
     expect((await store.instructions(owner, tab, app)).text).toBe(rebasedDocument(INSTRUCTIONS_TEMPLATE).text)
     // The new revision and hash on the head are what every agent's host compares: its PM is told the instructions changed and
     // reads them again (cli swarmInstructionsSkill.ts), as for any save.
@@ -145,6 +150,26 @@ describe('every project on the new base, once, by itself', () => {
     expect((await store.instructions(owner, tab, 'lead')).text).toBe(BEFORE)
     // The other project went on as planned.
     expect(head.find(p => p.id === app)).toMatchObject({ instructionsRevision: 2, instructionsBase: 1 })
+  })
+
+  // Task #3679: the first run lost the lines no person's name guarded. The job's own check refuses them too.
+  it('holds back a project whose new document would lose a line no person gave, an unnamed safety rule, writes nothing of it', async () => {
+    const { tab } = await swarm()
+    await run(tab, { type: 'instructions.save', projectId: 'lead', baseRevision: 2, text: `${BEFORE}\n## Rules for every agent\n\n- Never run a test that signs the Mac out of the real CLI.\n`, summary: 'Safety.' })
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => logger)
+    // The builder of the first run: only what a person's name guards.
+    const rulesOnly = (before: string) => rebase(before, '', 'rules')
+    const report = await rebaseAll(db, { now: () => now, build: rulesOnly, swarms: [{ tabId: tab, askedBy: DEE }] })
+    expect(report.held.filter(h => h.tabId === tab)).toEqual([expect.objectContaining({ projectId: 'lead', why: expect.stringContaining('lose') ,
+      rules: expect.arrayContaining(['Never run a test that signs the Mac out of the real CLI.']) })])
+    expect(rebaseDone(report)).toBe(false)
+    error.mockRestore()
+    expect((await projects(tab)).find(p => p.id === 'lead')).toMatchObject({ instructionsRevision: 3 })
+    expect((await store.instructions(owner, tab, 'lead')).text).toContain('Never run a test that signs the Mac out of the real CLI.')
+    // With the builder that keeps every line, it moves.
+    const moved = await rebaseAll(db, { now: () => now, swarms: [{ tabId: tab, askedBy: DEE }] })
+    expect(moved.held).toEqual([])
+    expect((await store.instructions(owner, tab, 'lead')).text).toContain('- Never run a test that signs the Mac out of the real CLI.')
   })
 
   // Review of #3300, Critical: Dee's "ALL OF THEM" is this Swarm's projects. Another team's Swarm is never touched.
