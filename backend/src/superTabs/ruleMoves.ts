@@ -23,7 +23,7 @@ export async function pullRequestMerges(urls: readonly string[], get: PullGet): 
     const answer = await get(repository, number)
     const body = answer.body as { merged_at?: unknown } | null
     if (answer.status !== 200 || !body) {
-      // Its rule's line stays as for a task not merged: said here, so a person told it waits can be told why (ENGINEERING.md 6).
+      // Its rule's line stays as for a task not merged: said here, so a person told it waits can be told why (AGENTS.md standard 6).
       logger.warn('[swarm-instructions] merge time not read; the moved rule stays', { repository: repository.fullName, number, status: answer.status })
       return null
     }
@@ -53,7 +53,7 @@ export function appPullRequestMerges(app: GitHubApp): (urls: readonly string[]) 
     } finally {
       for (const [repository, granted] of tokens) {
         const value = await granted
-        // Never the token: which repository's, and that it lives on until GitHub expires it (ENGINEERING.md 6).
+        // Never the token: which repository's, and that it lives on until GitHub expires it (AGENTS.md standard 6).
         if (value) await app.revoke(value).catch(() => logger.warn('[swarm-instructions] GitHub token not revoked; it expires by itself within the hour', { repository }))
       }
     }

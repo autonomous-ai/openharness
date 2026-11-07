@@ -58,6 +58,7 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RestartDep
       byAgent: vi.fn(() => refreshed ?? undefined),
       updateProcessIdentity: vi.fn(),
       setActive: vi.fn(),
+      setLaunchArgs: vi.fn(() => true),
     } as unknown as RestartDeps['registry'],
     purgeBusy: vi.fn(() => false),
     stopJobs: new Map(),
@@ -253,6 +254,76 @@ describe('restarting an agent', () => {
     expect(run.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
   })
 
+  describe('with new launch words', () => {
+    const WORDS = ['--chrome']
+
+    it('builds the relaunch with them and saves them on the record only after the engine is back', async () => {
+      const order: string[] = []
+      const run = setup(agent(), {
+        relaunchOverrides: vi.fn(async () => { order.push('build'); return { ok: true as const, overrides: { env: {}, extraArgs: [], clearEnv: [] } } }),
+      })
+      vi.mocked(run.deps.registry.setLaunchArgs).mockImplementation(() => { order.push('save'); return true })
+      vi.mocked(restartAgent).mockImplementationOnce(async () => { order.push('restart'); return { ok: true, resumed: true, processIdentity: newProcess } })
+      expect(await run.restart('a1', WORDS)).toMatchObject({ ok: true })
+      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ agentId: 'a1', launchArgs: WORDS }), expect.any(Function), undefined)
+      expect(order).toEqual(['build', 'restart', 'save'])
+      expect(run.deps.registry.setLaunchArgs).toHaveBeenCalledExactlyOnceWith('a1', WORDS)
+      // Asked as its own variant of a restart, so another ask with other words is not answered by this launch.
+      expect(run.deps.restartJobs.run).toHaveBeenCalledWith('a1', expect.any(Function), 'restart', JSON.stringify(WORDS))
+    })
+
+    it('clears them with an empty list: built without, and removed from the record once the engine is back', async () => {
+      const run = setup(agent({ launchArgs: ['--old'] } as Partial<RegisteredSession>))
+      expect(await run.restart('a1', [])).toMatchObject({ ok: true })
+      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ launchArgs: [] }), expect.any(Function), undefined)
+      expect(run.deps.registry.setLaunchArgs).toHaveBeenCalledExactlyOnceWith('a1', [])
+    })
+
+    it('without them, relaunches from the row itself and never writes the record', async () => {
+      const row = agent({ launchArgs: ['--saved'] } as Partial<RegisteredSession>)
+      const run = setup(row)
+      expect(await run.restart('a1')).toMatchObject({ ok: true })
+      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(row, row, expect.any(Function), undefined)
+      expect(run.deps.registry.setLaunchArgs).not.toHaveBeenCalled()
+      expect(run.deps.restartJobs.run).toHaveBeenCalledWith('a1', expect.any(Function), 'restart', undefined)
+    })
+
+    // Every way a restart can end without the engine back saves nothing: the record keeps the flags that last worked.
+    it.each([
+      ['busy', () => setup(agent(), { purgeBusy: () => true })],
+      ['no live process', () => setup(agent({ processIdentity: undefined } as Partial<RegisteredSession>))],
+      ['the agent changed under it', () => setup(agent(), { sameRestartTarget: vi.fn(() => false) })],
+      ['launch preparation refused', () => setup(agent(), { relaunchOverrides: vi.fn(async () => ({ ok: false as const, error: 'GRID_UNAVAILABLE', detail: 'x' })) })],
+      ['the engine did not start', () => {
+        vi.mocked(restartAgent).mockResolvedValueOnce({ ok: false, error: 'RESTART_FAILED', detail: 'did not come up' } as never)
+        return setup(agent())
+      }],
+    ])('saves nothing when the restart ends %s', async (_why, make) => {
+      const run = make()
+      expect(await run.restart('a1', WORDS)).toMatchObject({ ok: false })
+      expect(run.deps.registry.setLaunchArgs).not.toHaveBeenCalled()
+    })
+
+    // The coordinator joins asks of the same words and refuses the others, so the record is what the one launch used.
+    it('two overlapping restarts with different words: one launches and is saved, the other is refused and saves nothing', async () => {
+      let release!: () => void
+      vi.mocked(restartAgent).mockImplementationOnce(async () => {
+        await new Promise<void>((resolve) => { release = resolve })
+        return { ok: true, resumed: true, processIdentity: newProcess }
+      })
+      const run = setup(agent(), { restartJobs: new AgentRestartCoordinator() })
+      const first = run.restart('a1', ['--first'])
+      await vi.waitFor(() => expect(release).toBeDefined())
+      expect(await run.restart('a1', ['--second'])).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
+      const joined = run.restart('a1', ['--first'])
+      release()
+      expect(await first).toMatchObject({ ok: true })
+      expect(await joined).toMatchObject({ ok: true })
+      expect(run.deps.registry.setLaunchArgs).toHaveBeenCalledExactlyOnceWith('a1', ['--first'])
+      expect(restartAgent).toHaveBeenCalledOnce()
+    })
+  })
+
   describe('refusals before anything is touched', () => {
     it('for an agent being purged, stopped or answered, and for one that is not there', async () => {
       expect(await setup(agent(), { purgeBusy: () => true }).restart('a1')).toEqual({ ok: false, error: 'AGENT_BUSY' })
@@ -376,10 +447,10 @@ describe('restarting an agent', () => {
     it('keyed by the agent a session id resolves to, or by the id as given when nothing resolves', async () => {
       const run = setup(agent())
       await run.restart('s1')
-      expect(run.deps.restartJobs.run).toHaveBeenCalledWith('a1', expect.any(Function))
+      expect(run.deps.restartJobs.run).toHaveBeenCalledWith('a1', expect.any(Function), 'restart', undefined)
       const missing = setup(null)
       await missing.restart('ghost')
-      expect(missing.deps.restartJobs.run).toHaveBeenCalledWith('ghost', expect.any(Function))
+      expect(missing.deps.restartJobs.run).toHaveBeenCalledWith('ghost', expect.any(Function), 'restart', undefined)
     })
 
     it('so a second restart of the same agent joins the first through the real coordinator', async () => {

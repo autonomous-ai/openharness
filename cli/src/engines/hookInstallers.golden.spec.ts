@@ -328,6 +328,9 @@ beforeAll(async () => {
   const messages = messagesCommand(join(root, 'home', '.harness', 'agent-messages'))
   for (const timeout of [5, 30]) hashes.push([reviewHash(codex.settings.reviewed!, 'PostToolUse', undefined, { command: messages, timeout }), `<hash PostToolUse messages${timeout === 5 ? '' : ` timeout ${timeout}`}>`])
   hashes.push([messages, '<messages command>'])
+  // The Swarm's shell guard (task #3596): one record, a session flag's, whose hash names this machine's Node and CLI.
+  const { sessionReviewRecords } = await import('./kit/hookReview.js')
+  for (const [, hash] of sessionReviewRecords(codex.settings.reviewed!)) hashes.push([hash, '<hash shell guard>'])
   // The real path first: on macOS the temporary folder is reached through /var, and Codex keys by /private/var.
   tokens = [...hashes, ...commands, [notify.HOOK_SCRIPT, '<script>'], [process.execPath, '<node>'], [realpathSync(root), '<root>'], [root, '<root>'], [`.${process.pid}.`, '.<pid>.']]
 })

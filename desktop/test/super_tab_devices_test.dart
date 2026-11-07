@@ -149,8 +149,10 @@ void main() {
       expect(c.devicesSelected, isFalse);
       expect(f.app.activeSwarm, same(tab));
       expect(find.byType(DevicesScreen), findsNothing);
-      // A project's row leaves Manage for its chat.
+      // A project's row leaves Manage for its Board (task #3787); its chat, with the draft kept, is the Chat tab.
       expect(find.byType(SuperTabManageTabs), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('super-board-tab-chat')));
+      await tester.pumpAndSettle();
       expect(find.text('An unfinished project message'), findsOneWidget);
       expect(
         f.connection.calls.where(

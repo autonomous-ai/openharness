@@ -5,9 +5,10 @@
  * is the Swarm's built-in PM text. It runs in the singleton worker, a Swarm per transaction, guarded by the head's version as
  * migration/instructions.ts writes: a command in between wins, and the Swarm is tried again on the next pass.
  *
- * The one check that must be right: no person's rule is lost. The job reads that itself with the rule guard's reader
- * (instructionsDiff.ts droppedRules) on the document it would write, never trusting the builder; a project that would lose
- * one is held back, unwritten and unmarked, and logged as an error on every pass until someone acts.
+ * The one check that must be right: no line is lost, a person's rule or not (task #3679). The job reads that itself with the rule
+ * guard's reader (instructionsDiff.ts droppedRules) and the line reader (removedLines) on the document it would write, never
+ * trusting the builder; a project that would lose one is held back, unwritten and unmarked, and logged as an error on every pass
+ * until someone acts.
  *
  * Its record is the project's Instructions history: the revision before (the old document) and the new one, written by the
  * Swarm, with every line that went (ruleGuard.ts droppedLines). The new revision and hash on the head are what every agent's
@@ -30,7 +31,7 @@ import { projectsOf } from '../projects.js'
 import { instructionsHash, MAX_INSTRUCTIONS_BYTES } from '../instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from '../instructionsTemplate.js'
 import { instructionsId, writeInstructions } from '../instructionsStore.js'
-import { droppedRules } from '../instructionsDiff.js'
+import { droppedRules, removedLines } from '../instructionsDiff.js'
 import { droppedLines } from '../ruleGuard.js'
 import { BASE_VERSION, rebasedDocument, type RebasedDocument } from '../instructionsRebase.js'
 import { logger } from '../../utils/logger.js'
@@ -95,6 +96,14 @@ async function rebaseSwarm(tx: Transaction, { tabId, askedBy }: RebaseSwarm, now
       held.push({ tabId, projectId: project.id, why: `its new document would lose ${lost.length} of its people's rules`, rules: lost.map(rule => rule.text) })
       continue
     }
+    // And any other line, read here too and never trusted to the builder (task #3679: the safety rules and schedule items no person's
+    // name guarded were lost by the first run, because only people's rules were checked).
+    // The Swarm's own template is process by definition, dropped by design: a project still on it carries none of it.
+    const gone = before === INSTRUCTIONS_TEMPLATE ? [] : removedLines(before, text)
+    if (gone.length) {
+      held.push({ tabId, projectId: project.id, why: `its new document would lose ${gone.length} of its lines`, rules: gone })
+      continue
+    }
     if (Buffer.byteLength(text) > MAX_INSTRUCTIONS_BYTES) { held.push({ tabId, projectId: project.id, why: 'its people\'s rules alone pass 64 KB' }); continue }
     marked.add(project.id)
     // Asked by the member named for this Swarm (anh Dee), never its owner or a project's owner (review rounds 1 and 2 of #3300).
@@ -123,7 +132,7 @@ async function rebaseSwarm(tx: Transaction, { tabId, askedBy }: RebaseSwarm, now
 
 /** One pass over the named Swarms: each project not on the base yet is moved, or held back and said why. A Swarm not on this
  *  server (a test or staging database) has nothing to move. */
-export async function rebaseAll(db: PrismaClient, { now = Date.now, build = before => rebasedDocument(before), swarms = REBASE_SWARMS }: RebaseOptions = {}): Promise<RebaseReport> {
+export async function rebaseAll(db: PrismaClient, { now = Date.now, build = before => rebasedDocument(before, '', before === INSTRUCTIONS_TEMPLATE ? 'rules' : 'everything'), swarms = REBASE_SWARMS }: RebaseOptions = {}): Promise<RebaseReport> {
   const report: RebaseReport = { swarms: 0, written: [], unchanged: 0, held: [], failed: [], skipped: [] }
   for (const swarm of swarms) {
     const row = await db.superTab.findUnique({ where: { id: swarm.tabId }, select: { id: true, format: true } })

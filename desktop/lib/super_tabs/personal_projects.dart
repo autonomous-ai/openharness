@@ -826,7 +826,8 @@ class PersonalProjects extends ChangeNotifier {
       error is SuperTabFailure ? error.code : '${error.runtimeType}';
 
   /// Waits before [key] is asked again, and says why in the log: the
-  /// failure's code, never the repo's or the tab's name (ENGINEERING.md 6, 7).
+  /// failure's code, never the repo's or the tab's name (AGENTS.md standards 6
+  /// and 7).
   void _failed(String key, String what, Object error) {
     final count = _failures[key] = (_failures[key] ?? 0) + 1;
     final wait = Duration(seconds: 5 << count.clamp(1, 6));

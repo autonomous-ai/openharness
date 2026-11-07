@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -61,9 +62,11 @@ class SuperTabTasksView extends StatefulWidget {
   final LocalKeyValueStore? storage;
   final DateTime Function() now;
 
-  /// A Board column's width: about a card and a half of title per line, so
-  /// five fit a wide window and a narrow one scrolls sideways (task #2948).
+  /// A Members column's width: about a card and a half of title per line (task #2948).
   static const columnWidth = 280.0;
+
+  /// The least a Board column takes (task #3869): the columns share the pane's width, and below this the Board scrolls.
+  static const minColumnWidth = 240.0;
 
   static String storageKey(String accountId) =>
       'super-tab-tasks-view/$accountId';
@@ -92,6 +95,19 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   /// goes back.
   bool _droppedOnNextUp = false;
   final _nextUpKey = GlobalKey();
+
+  /// The Board's sideways scroll, shared with its scrollbar.
+  final _boardScroll = ScrollController();
+
+  /// The Search field's text, so Show all can empty it.
+  final _search = TextEditingController();
+
+  @override
+  void dispose() {
+    _boardScroll.dispose();
+    _search.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -207,11 +223,13 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
         key: value.where(_keeps).toList(),
     };
     final empty = board.values.every((entries) => entries.isEmpty);
+    final hidden = shown.values.every((entries) => entries.isEmpty);
     final pulse = c.snapshot?.pulseOf(project.id);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _bar(context),
+        if (project.boardMode) ?_needsYou(board),
         // What waits for the PM and who works (task #3384); none from a
         // server before it.
         if (pulse != null)
@@ -242,6 +260,8 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
                     style: DesktopChrome.control(color: DesktopChrome.muted),
                   ),
                 )
+              : hidden
+              ? _noMatch()
               : _layout == _Layout.list
               ? _listView(shown, now)
               : _boardView(shown, now),
@@ -250,88 +270,187 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     );
   }
 
-  /// The view's own bar: Board, List or Members, Mine and Search, nothing
-  /// else.
-  Widget _bar(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(
-      grid.AppDesktop.groupGap,
-      grid.AppDesktop.controlGap,
-      grid.AppDesktop.groupGap,
-      grid.AppDesktop.controlGap,
-    ),
-    child: Row(
-      children: [
-        Text('Tasks', style: DesktopChrome.text(medium: true)),
-        if (_moveError case final error?) ...[
-          const SizedBox(width: grid.AppDesktop.groupGap),
-          Flexible(
-            child: Text(
-              error,
-              key: const ValueKey('super-tasks-move-error'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: DesktopChrome.metadata(),
-            ),
+  /// What Mine and Search hid, so a filtered board never reads as an empty
+  /// project (Dee, task #3869); Show all lifts both.
+  Widget _noMatch() {
+    final filters = [if (_mine) 'Mine', if (_query.isNotEmpty) '“$_query”'];
+    return Center(
+      key: const ValueKey('super-tasks-no-match'),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'No cards match ${filters.join(' and ')}',
+            style: DesktopChrome.control(color: DesktopChrome.muted),
+          ),
+          const SizedBox(height: grid.AppDesktop.controlGap),
+          DesktopPill(
+            key: const ValueKey('super-tasks-show-all'),
+            label: 'Show all',
+            onPressed: () {
+              _search.clear();
+              setState(() => _query = '');
+              _choose(mine: false);
+            },
           ),
         ],
-        const Spacer(),
-        DesktopPill(
-          key: const ValueKey('super-tasks-layout-board'),
-          label: 'Board',
-          selected: _layout == _Layout.board,
-          onPressed: () => _choose(layout: _Layout.board),
-        ),
-        const SizedBox(width: grid.AppDesktop.listRowGap),
-        DesktopPill(
-          key: const ValueKey('super-tasks-layout-list'),
-          label: 'List',
-          selected: _layout == _Layout.list,
-          onPressed: () => _choose(layout: _Layout.list),
-        ),
-        const SizedBox(width: grid.AppDesktop.listRowGap),
-        DesktopPill(
-          key: const ValueKey('super-tasks-layout-members'),
-          label: 'Members',
-          selected: _layout == _Layout.members,
-          tooltip: 'Tasks by crew member',
-          onPressed: () => _choose(layout: _Layout.members),
-        ),
-        const SizedBox(width: grid.AppDesktop.groupGap),
-        DesktopPill(
-          key: const ValueKey('super-tasks-mine'),
-          label: 'Mine',
-          selected: _mine,
-          tooltip: 'Only the tasks you asked for',
-          onPressed: () => _choose(mine: !_mine),
-        ),
-        const SizedBox(width: grid.AppDesktop.controlGap),
-        SizedBox(
-          width: _searchWidth,
-          child: TextField(
-            key: const ValueKey('super-tasks-search'),
-            onChanged: (query) => setState(() => _query = query.trim()),
-            textInputAction: TextInputAction.search,
-            style: grid.kFieldTextStyle,
-            decoration: InputDecoration(
-              hintText: 'Search',
-              isDense: true,
-              prefixIcon: Icon(
-                AppIcons.search,
-                size: grid.kFieldIconSize,
-                color: grid.AppPalette.textFaint,
+      ),
+    );
+  }
+
+  /// Over a switched project's Board (#3820): everything in it that waits on the reader, each opening its card's
+  /// chat; null when nothing does.
+  Widget? _needsYou(Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> board) {
+    final waiting = [
+      for (final entry in board.values.expand((entries) => entries))
+        if (entry.needsYou && entry.task != null) entry.task!,
+    ];
+    if (waiting.isEmpty) return null;
+    return Padding(
+      key: const ValueKey('super-board-needs-you'),
+      padding: const EdgeInsetsDirectional.only(
+        start: grid.AppDesktop.groupGap,
+        end: grid.AppDesktop.groupGap,
+        bottom: grid.AppDesktop.controlGap,
+      ),
+      child: Wrap(
+        spacing: grid.AppDesktop.listRowGap,
+        runSpacing: grid.AppDesktop.listRowGap,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Semantics(
+            header: true,
+            child: Text(
+              'Needs you · ${waiting.length}',
+              style: DesktopChrome.control(color: DesktopChrome.foreground)
+                  .copyWith(fontWeight: grid.AppFont.semibold),
+            ),
+          ),
+          for (final task in waiting)
+            TextButton(
+              key: ValueKey('super-board-needs-you-${task.id}'),
+              style: TextButton.styleFrom(
+                backgroundColor: grid.AppSurface.wellFill,
+                shape: const StadiumBorder(),
               ),
+              onPressed: () => widget.onOpenTask(task.id),
+              child: Text(
+                superTabTitlePriority(task.title).title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// The view's own bar: Board, List or Members, Mine and Search, nothing
+  /// else.
+  Widget _bar(BuildContext context) {
+    final title = Text('Tasks', style: DesktopChrome.text(medium: true));
+    final error = _moveError == null
+        ? null
+        : Text(
+            _moveError!,
+            key: const ValueKey('super-tasks-move-error'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: DesktopChrome.metadata(),
+          );
+    // Keep controls stable while a divider changes only their layout.
+    final controls = <Widget>[
+      // The Board is the project's Board tab above (or the view itself): List and Members are toggles back to it.
+      DesktopPill(
+        key: const ValueKey('super-tasks-layout-list'),
+        label: 'List',
+        selected: _layout == _Layout.list,
+        onPressed: () => _choose(
+          layout: _layout == _Layout.list ? _Layout.board : _Layout.list,
+        ),
+      ),
+      const SizedBox(width: grid.AppDesktop.listRowGap),
+      DesktopPill(
+        key: const ValueKey('super-tasks-layout-members'),
+        label: 'Members',
+        selected: _layout == _Layout.members,
+        tooltip: 'Tasks by crew member',
+        onPressed: () => _choose(
+          layout: _layout == _Layout.members ? _Layout.board : _Layout.members,
+        ),
+      ),
+      const SizedBox(width: grid.AppDesktop.groupGap),
+      DesktopPill(
+        key: const ValueKey('super-tasks-mine'),
+        label: 'Mine',
+        selected: _mine,
+        tooltip: 'Only the tasks you asked for',
+        onPressed: () => _choose(mine: !_mine),
+      ),
+      const SizedBox(width: grid.AppDesktop.controlGap),
+      SizedBox(
+        width: _searchWidth,
+        child: TextField(
+          key: const ValueKey('super-tasks-search'),
+          controller: _search,
+          onChanged: (query) => setState(() => _query = query.trim()),
+          textInputAction: TextInputAction.search,
+          style: grid.kFieldTextStyle,
+          decoration: InputDecoration(
+            hintText: 'Search',
+            isDense: true,
+            prefixIcon: Icon(
+              AppIcons.search,
+              size: grid.kFieldIconSize,
+              color: grid.AppPalette.textFaint,
             ),
           ),
         ),
-      ],
-    ),
-  );
+      ),
+    ];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        grid.AppDesktop.groupGap,
+        grid.AppDesktop.controlGap,
+        grid.AppDesktop.groupGap,
+        grid.AppDesktop.controlGap,
+      ),
+      // These render objects reflow the controls without rebuilding them on
+      // every divider movement. Wide windows keep the title left and controls right.
+      child: OverflowBar(
+        alignment: MainAxisAlignment.spaceBetween,
+        overflowAlignment: OverflowBarAlignment.start,
+        overflowSpacing: grid.AppDesktop.controlGap,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              title,
+              if (error != null) ...[
+                const SizedBox(width: grid.AppDesktop.groupGap),
+                Flexible(child: error),
+              ],
+            ],
+          ),
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            runSpacing: grid.AppDesktop.controlGap,
+            children: controls,
+          ),
+        ],
+      ),
+    );
+  }
 
   static const _searchWidth = 220.0;
   static const _columnGap = grid.AppDesktop.groupGap;
 
   Widget _heading(SuperTabTaskColumn column, int count, {bool? folded}) {
-    final style = DesktopChrome.control(medium: true);
+    // A Board lane's name is its bold title, as Trello's (task #3787).
+    final style = folded == null
+        ? DesktopChrome.control(color: DesktopChrome.foreground)
+              .copyWith(fontWeight: grid.AppFont.semibold)
+        : DesktopChrome.control(medium: true);
     final row = Row(
       children: [
         if (folded != null)
@@ -373,7 +492,20 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   /// The caption under a card's title: who asked, the agent on it and its
   /// state, joined by middle dots; a proposal's says who asked and how long
   /// ago. No task numbers, machines or models.
-  String _caption(SuperTabTaskEntry entry, DateTime now) {
+  String _caption(SuperTabTaskEntry entry, DateTime now, {bool tile = false}) {
+    // A tile names no one: its avatars do, and its chips say what its state says (task #3869).
+    if (tile) {
+      if (entry.proposal case final proposal?) {
+        return superTabAgoShort(now.difference(proposal.at));
+      }
+      // Who waits is the "Needs you" chip's to say, not the line's.
+      final waitingOnReader =
+          entry.needsYou &&
+          !superTabTaskShipped(entry.task!) &&
+          (entry.task!.assignment?['status'] == 'needs_human' ||
+              entry.task!.liveness?['why'] == 'person');
+      return waitingOnReader ? '' : superTabQuietState(entry.state) ?? '';
+    }
     final snapshot = widget.controller.snapshot;
     if (entry.proposal case final proposal?) {
       return [
@@ -392,7 +524,8 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
         (task.assignment?['status'] == 'needs_human' ||
             task.liveness?['why'] == 'person');
     return [
-      ?_person(task.requesterId),
+      // A proposal's card names who proposed it (#3817).
+      ?_person(task.requesterId ?? task.proposal?.senderIds.firstOrNull),
       if (agentId is String && snapshot != null)
         if (agent.isNotEmpty)
           agent
@@ -401,6 +534,60 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       if (entry.needsYou) 'Needs you',
       if (!waitingOnReader) ?entry.state,
     ].join(' · ');
+  }
+
+  /// A Board card's second line (#3820), on a project on the Board only: who paused it, else the question it waits
+  /// on with its default and time, else the PM's decision and its reason.
+  String? _note(SuperTabTaskEntry entry, DateTime now) {
+    final task = entry.task;
+    final project =
+        widget.controller.snapshot?.projectById(widget.project.id) ??
+        widget.project;
+    if (task == null || !project.boardMode) return null;
+    String reasoned(String head, String? reason) =>
+        reason == null ? head : '$head: $reason';
+    if (task.paused case final paused?) {
+      return reasoned(
+        'Paused by ${_person(paused.by) ?? 'someone'}',
+        paused.reason,
+      );
+    }
+    final proposal = task.proposal;
+    if (proposal == null) return null;
+    if (proposal.openQuestion case final q?) {
+      final who = q.personId == widget.controller.accountId
+          ? 'you'
+          : _person(q.personId) ?? 'someone';
+      return 'Asks $who: ${q.question} '
+          'If no answer by ${_when(q.deadline, now)}: ${q.defaultAnswer}';
+    }
+    final decision = proposal.decision;
+    if (decision == null) return null;
+    return reasoned(switch (decision.kind) {
+      'accept' => 'Accepted',
+      'reshape' => 'Reshaped',
+      'later' => switch (decision.revisitAt) {
+        final at? => 'Later, ${_day(at)}',
+        null => 'Later',
+      },
+      _ => 'No',
+    }, decision.reason);
+  }
+
+  static const _monthNames = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', //
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+
+  static String _day(DateTime at) => '${_monthNames[at.month - 1]} ${at.day}';
+
+  /// A deadline as the card says it: its time today, else its day and time.
+  static String _when(DateTime at, DateTime now) {
+    final time =
+        '${at.hour.toString().padLeft(2, '0')}:${at.minute.toString().padLeft(2, '0')}';
+    final today =
+        at.year == now.year && at.month == now.month && at.day == now.day;
+    return today ? time : '${_day(at)}, $time';
   }
 
   HarnessActivity _activity(SuperTabTaskEntry entry) {
@@ -433,7 +620,8 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     return HarnessActivity.working;
   }
 
-  /// [entry]'s card; [lane] leads its caption (Members' Unassigned).
+  /// [entry]'s card; [lane] is its label (Members' Unassigned), else its
+  /// task's hand-out lane.
   Widget _card(
     SuperTabTaskEntry entry,
     DateTime now, {
@@ -442,78 +630,159 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   }) {
     final task = entry.task;
     final id = task?.id ?? entry.proposal!.messageId;
-    final caption = _caption(entry, now);
+    final caption = _caption(entry, now, tile: !list);
+    final snapshot = widget.controller.snapshot;
+    final agentId = task?.assignment?['agentId'];
+    // A proposal's card names who proposed it (#3817), here as its requester avatar.
+    final requesterId =
+        task?.requesterId ??
+        task?.proposal?.senderIds.firstOrNull ??
+        entry.proposal?.personId;
     return SuperTabTaskCard(
       key: ValueKey('super-task-card-$id'),
       // A legacy marker is the badge now: the title drops it.
       title: task == null
           ? entry.proposal!.title
           : superTabTitlePriority(task.title).title,
-      caption: [?lane, if (caption.isNotEmpty) caption].join(' · '),
+      caption: list
+          ? [?lane, if (caption.isNotEmpty) caption].join(' · ')
+          : caption,
+      // A tile wears its lane as a label on top (task #3787).
+      lane: list ? null : lane ?? task?.handOutLane,
       priority: superTabEntryPriority(entry),
       needsYou: entry.needsYou,
       unread: task != null && widget.controller.unreadShown(task),
       activity: _activity(entry),
       titleLines: list ? 1 : 3,
-      // A merged task's release parts are what the card is for: they wrap
-      // however long, never cut off (task #3452).
-      captionLines: task != null && superTabTaskReleasing(task) ? null : 1,
+      // What a merged task waits on, and how long a done one has waited, are
+      // what the card is for: they wrap however long, never cut off (tasks
+      // #3452, #3812).
+      captionLines:
+          task != null &&
+              (superTabTaskReleasing(task) ||
+                  task.assignment?['status'] == 'done' &&
+                      !superTabTaskShipped(task))
+          ? null
+          : 1,
       tile: !list,
+      chips: list ? const [] : superTabStateChips(entry),
+      facts: list || task == null ? const SuperTabCardFacts() : _facts(task),
+      agent: list || agentId is! String ? null : snapshot?.agent(agentId),
+      requester: list
+          ? null
+          : snapshot?.people.where((p) => p.id == requesterId).firstOrNull,
+      note: _note(entry, now),
+      noteKey: ValueKey('super-task-card-note-$id'),
+      warn: task != null && superTabMergeOverdue(task, now),
       selected: id == widget.selectedId,
       onOpen: () =>
           task == null ? widget.onOpenProposal(id) : widget.onOpenTask(task.id),
     );
   }
 
-  /// The Board: each column a neutral panel of a fixed width (Huy, task
-  /// #2948), side by side in one row that scrolls sideways when the window is
-  /// narrower than all five; each column scrolls its own cards.
+  /// The footer uses only facts the snapshot provides. A message sequence
+  /// includes the tab's baseline, so it cannot serve as a comment count.
+  SuperTabCardFacts _facts(SuperTabConversation task) {
+    final url =
+        task.cards.pullRequests.firstOrNull?.url ??
+        task.pullRequestUrls.firstOrNull;
+    final number = url == null
+        ? null
+        : int.tryParse(Uri.tryParse(url)?.pathSegments.last ?? '');
+    return SuperTabCardFacts(
+      pullRequest: number == null ? null : '#$number',
+      checks: task.checks.isEmpty
+          ? null
+          : (
+              done: task.checks.where((c) => c['passedBy'] != null).length,
+              total: task.checks.length,
+            ),
+    );
+  }
+
+  /// The Board: each column a neutral panel, all of one width that shares the
+  /// pane (task #3869), never under [SuperTabTasksView.minColumnWidth]. Below
+  /// it the row scrolls sideways under a scrollbar that stays in view, which a
+  /// mouse drags; a trackpad swipe and shift with the wheel scroll it too. Each
+  /// column scrolls its own cards.
   Widget _boardView(
     Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> shown,
     DateTime now,
-  ) => SingleChildScrollView(
-    key: const ValueKey('super-tasks-board'),
-    scrollDirection: Axis.horizontal,
-    padding: const EdgeInsets.only(
-      left: grid.AppDesktop.groupGap,
-      right: grid.AppDesktop.groupGap,
-      bottom: grid.AppDesktop.groupGap,
-    ),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        for (final column in SuperTabTaskColumn.values) ...[
-          if (column != SuperTabTaskColumn.values.first)
-            const SizedBox(width: _columnGap),
-          SizedBox(
-            width: SuperTabTasksView.columnWidth,
-            child: _panel(column, shown[column]!, now),
+  ) => LayoutBuilder(
+    builder: (context, box) {
+      const edge = grid.AppDesktop.groupGap;
+      final count = SuperTabTaskColumn.values.length;
+      final share =
+          (box.maxWidth - 2 * edge - (count - 1) * _columnGap) / count;
+      final width = math.max(SuperTabTasksView.minColumnWidth, share);
+      return Scrollbar(
+        key: const ValueKey('super-tasks-board-scrollbar'),
+        controller: _boardScroll,
+        thumbVisibility: share < SuperTabTasksView.minColumnWidth,
+        child: SingleChildScrollView(
+          key: const ValueKey('super-tasks-board'),
+          controller: _boardScroll,
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.only(
+            left: edge,
+            right: edge,
+            bottom: grid.AppDesktop.groupGap,
           ),
-        ],
-      ],
-    ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final column in SuperTabTaskColumn.values) ...[
+                if (column != SuperTabTaskColumn.values.first)
+                  const SizedBox(width: _columnGap),
+                SizedBox(
+                  width: width,
+                  child: _panel(column, shown[column]!, now),
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+    },
   );
 
-  /// One column of the Board or of Members: card material with its hairline
-  /// rim at the card radius, and no shadow, which is for floating content
-  /// only; [heading] over [body], which fills the rest.
+  /// A lane's tint, as Trello's lists (anh Dee, task #3787): a step off the
+  /// page, darker in light under white cards and darker in dark under lifted
+  /// ones, with no rim or shadow.
+  static Color get _laneFill =>
+      grid.AppTheme.pick(grid.AppSurface.wellFill, grid.AppPalette.panelBg);
+
+  /// Inside a lane, around its cards: inside the scroll view, so a card's
+  /// shadow is never cut at the lane's edge.
+  static const _laneInset = EdgeInsets.fromLTRB(
+    grid.AppDesktop.controlGap,
+    grid.AppDesktop.listRowGap,
+    grid.AppDesktop.controlGap,
+    0,
+  );
+
+  /// One column of the Board or of Members: a tinted lane at the card radius
+  /// ([_laneFill]); [heading] over [body], which fills the rest.
   Widget _framed(Key key, Widget heading, Widget body) => DecoratedBox(
     key: key,
     decoration: BoxDecoration(
-      color: grid.AppCard.base,
+      color: _laneFill,
       borderRadius: BorderRadius.circular(grid.AppCard.radius),
-      border: Border.all(color: grid.AppCard.hair),
     ),
-    child: Padding(
-      padding: const EdgeInsets.all(grid.AppDesktop.controlGap),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          heading,
-          const SizedBox(height: grid.AppDesktop.listRowGap),
-          Expanded(child: body),
-        ],
-      ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            SuperTabTaskCard.tilePadding,
+            grid.AppDesktop.controlGap,
+            SuperTabTaskCard.tilePadding,
+            grid.AppDesktop.listRowGap,
+          ),
+          child: heading,
+        ),
+        Expanded(child: body),
+      ],
     ),
   );
 
@@ -541,6 +810,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
         : column == SuperTabTaskColumn.nextUp
         ? _nextUp(entries, now)
         : LaidOutListView.builder(
+            padding: _laneInset,
             itemCount: entries.length,
             itemBuilder: (context, i) => Padding(
               padding: const EdgeInsets.only(
@@ -584,6 +854,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
         key,
         heading,
         LaidOutListView.builder(
+          padding: _laneInset,
           itemCount: rows.length,
           itemBuilder: (context, i) => rows[i],
         ),
@@ -803,6 +1074,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
             (Offset.zero & box.size).contains(event.localPosition);
       },
       child: ReorderableListView.builder(
+        padding: _laneInset,
         buildDefaultDragHandles: false,
         itemCount: ordered.length,
         onReorderItem: (from, to) {

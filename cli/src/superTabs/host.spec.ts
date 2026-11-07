@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // Whether this process runs as a Harness Team account, which a Buddy is never prepared in (lib/swarmSkills.ts prepareBuddyFolder).
 // The tests set it, so they pass the same in an owner account, a Team account and CI: it reports an owner account unless a test says.
 const team = vi.hoisted(() => ({ value: false }))
+vi.mock('./teamDaemon.js', async original => ({ ...await original<typeof import('./teamDaemon.js')>(), isTeamDaemon: () => team.value }))
 vi.mock('../team/config.js', async original => ({ ...await original<typeof import('../team/config.js')>(), isTeamAccount: () => team.value }))
 vi.mock('./buddyHome.js', async original => {
   const real = await original<typeof import('./buddyHome.js')>()
@@ -32,6 +33,7 @@ import type { attachedFiles as attachedFilesType } from './attachments.js'
 import { backend, writeJournal, removeStaleJournalTemps, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
 import { ADDED_MAX } from './deliveryContext.js'
 import { SWITCH_ADOPT_MS, SWITCH_HOLD_MS } from './leadSwitch.js'
+import { switchChangeId } from './leadSwitchRequest.js'
 import { TerminalHost } from './terminal.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { CREW_CONTINUE } from './crew.js'
@@ -1130,7 +1132,7 @@ describe('Super Tab native delivery handoff', () => {
         expect(added).toContain('> Hawthorn the Third of Many Names: 3 y')
         expect(added.length).toBeLessThanOrEqual(ADDED_MAX)
       })
-      // Review 1 of #3114 (Heron11, ENGINEERING.md section 4): the thread's read waits on no other read, so a PM's reply in a
+      // Review 1 of #3114 (Heron11, AGENTS.md standard 4): the thread's read waits on no other read, so a PM's reply in a
       // task's thread waits on two reads in a row at most, as before this task: the Swarm read then the page read, beside it.
       it('reads the thread without waiting for the Swarm read', async () => {
         const root = { ...ROOT, sequence: 1, author: DEV }
@@ -1152,7 +1154,7 @@ describe('Super Tab native delivery handoff', () => {
         expect(prompt).toContain('> Hawthorn3: Not yet')
         expect(prompt).toContain('In a thread Hawthorn3 started')
       })
-      // Review 1 of #3114 (ENGINEERING.md section 4): a later delivery in a task the PM already had one in reads its messages
+      // Review 1 of #3114 (AGENTS.md standard 4): a later delivery in a task the PM already had one in reads its messages
       // beside the Swarm read, so it waits on one read in a row, as before #3114.
       it('reads a known task\'s messages beside the Swarm read', async () => {
         const { t } = led()
@@ -4404,6 +4406,19 @@ describe('a Buddy\'s model request', () => {
     expect(serve).toHaveBeenCalledWith(expect.objectContaining({ agent: expect.objectContaining({ id: 'buddy' }) }),
       [expect.objectContaining({ agent: expect.objectContaining({ id: 'session' }) })])
   })
+
+  // Task #3818: a person with several Buddies switches one; only that Buddy's own sessions, in its own chat, move with it.
+  it('moves only the sessions in the switching Buddy\'s own chat, when the backend names each one\'s chat', async () => {
+    const serve = vi.fn(async () => {})
+    const main = { ...buddyRow({ id: 'buddy', harnessId: 'h-main', modelRequest: { id: 'req1', gridModel: 'm' } }), buddyChatId: 'chat-1' }
+    const mine = { ...buddyRow({ id: 'session', harnessId: 'h-session', buddySession: { thread: 't', from: 0 } }), buddyChatId: 'chat-1' }
+    const theirs = { ...buddyRow({ id: 'research-session', harnessId: 'h-research', buddySession: { thread: 'r', from: 0 } }), buddyChatId: 'chat-2' }
+    const t = lifeFixture([main, mine, theirs], { buddyModels: { serve } })
+    await t.poll()
+    await vi.waitFor(() => expect(serve).toHaveBeenCalledTimes(1))
+    expect(serve).toHaveBeenCalledWith(expect.objectContaining({ agent: expect.objectContaining({ id: 'buddy' }) }),
+      [expect.objectContaining({ agent: expect.objectContaining({ id: 'session' }) })])
+  })
 })
 
 // Spec 2026-10-30-buddy-thread-sessions: a Buddy's thread session never stays on its person's machine once its thread is done
@@ -4418,6 +4433,16 @@ describe('ending a Buddy\'s thread sessions', () => {
   afterEach(() => { progress?.mockRestore(); progress = undefined })
   /** Time passing as the host sees it awake: a look each minute, never a gap it would take for sleep. */
   const awake = async (t: ReturnType<typeof lifeFixture>, ms: number) => { for (let left = ms; left > 0; left -= 60_000) await t.poll(Math.min(60_000, left)) }
+
+  // Task #3818: a session of a person's second Buddy is in that Buddy's chat, which the backend names on its row.
+  it('names the chat the backend gives its row, a second Buddy\'s own', async () => {
+    const t = lifeFixture([sessionRow({ buddyChatId: 'research-chat' })])
+    t.live(true)
+    await t.poll()
+    await awake(t, BUDDY_SESSION_IDLE_MS)
+    await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
+    expect(ends(t)[0]!.command).toMatchObject({ type: 'buddy.sessionEnd', conversationId: 'research-chat', thread: 'root-1' })
+  })
 
   it('ends one idle for 30 minutes, once, naming its own chat and thread, as the backend computes the chat', async () => {
     const t = lifeFixture([sessionRow()])
@@ -4519,7 +4544,7 @@ describe('ending a Buddy\'s thread sessions', () => {
       await t.poll()
       await awake(t, BUDDY_SESSION_IDLE_MS + 60_000)
       expect(ends(t)).toEqual([])
-      t.core.agents.activity = vi.fn(async () => ({ harness: 'idle' })) as never
+      t.core.agents.activity = vi.fn(async () => ({ harness: 'idle' as const })) as never
       await awake(t, 5 * 60_000)
       await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
     })
@@ -4743,12 +4768,31 @@ describe('keeping a Swarm Lead alive', () => {
   // Dee, 11-01: its owner switches a Product Manager's engine from its pane. The host holds off reopening the old session while
   // the new one takes its place, and reopens the old one on its old engine when none started in time; a restart keeps the
   // hold, so a project never has two, and never none for long (superTabs/leadSwitch.ts).
-  const switched = (t: ReturnType<typeof lifeFixture>, at = 0) => {
+  const switched = (t: ReturnType<typeof lifeFixture>, at = 0, changeId = 'f'.repeat(32)) => {
     const folder = join(t.dir, 'super-tabs', 'lead-switch')
     mkdirSync(folder, { recursive: true, mode: 0o700 })
     writeFileSync(join(folder, `${createHash('sha256').update('harness').digest('hex')}.json`),
-      JSON.stringify({ version: 1, agentId: 'harness', changeId: 'f'.repeat(32), targetEngine: 'codex', at }), { mode: 0o600 })
+      JSON.stringify({ version: 1, agentId: 'harness', changeId, targetEngine: 'codex', at }), { mode: 0o600 })
   }
+
+  it('reports a Buddy switch after the backend replaces its request with the landed receipt', async () => {
+    const buddy = { tabId: 'tab', active: true, buddyConversationId: 'private-chat', agent: {
+      id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyScope: 'swarm',
+      buddyOf: { personId: 'peer', generation: 'g' },
+      switchRequest: { id: 'buddy-switch', engine: 'codex', requestedBy: 'peer' },
+    } }
+    const t = lifeFixture([buddy])
+    switched(t, 0, switchChangeId('buddy-switch'))
+    await t.poll()
+    const results = () => t.commands.map(body => body.command as Record<string, unknown>)
+      .filter(command => command.type === 'agent.switchResult')
+    expect(results()).toEqual([])
+    // Same-machine agent.rebind keeps this receipt, without the cross-machine candidateAgentId.
+    t.rows.splice(0, 1, { ...buddy, agent: { ...buddy.agent, harnessId: 'replacement', switchRequest: undefined,
+      switchLanded: { id: 'buddy-switch', requestedBy: 'peer' } } })
+    await t.poll(5_000)
+    expect(results()).toEqual([{ type: 'agent.switchResult', agentId: 'agent', switchId: 'buddy-switch', ok: true }])
+  })
   /** The switch's new session [id], running here when [runs] says so, by its creation receipt. */
   const replacement = (t: ReturnType<typeof lifeFixture>, runs: () => boolean, old: () => boolean = () => false, id = 'new-session') => {
     t.core.agents.byAgent = vi.fn((agentId: string) => (agentId === id ? runs() : agentId === 'harness' && old()) ? { agentId } : undefined) as never
@@ -4823,6 +4867,78 @@ describe('keeping a Swarm Lead alive', () => {
     await u.poll(SWITCH_HOLD_MS + 1)
     await vi.waitFor(() => expect(u.keepLeadAlive).toHaveBeenCalledTimes(1))
     expect(u.closeMember).not.toHaveBeenCalled()
+  })
+
+  it('recovers a switching Buddy across restart and closes a late replacement before the original stays alone', async () => {
+    const buddy = { ...leadRow({ lead: false, buddyConversationId: 'private-chat' }), agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyOf: { personId: 'peer', generation: 'g' } } }
+    const t = lifeFixture([buddy])
+    switched(t)
+    await t.poll()
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    t.host.stop()
+    const again = t.open()
+    t.wait(SWITCH_HOLD_MS + 1)
+    await again.tick()
+    await vi.waitFor(() => expect(t.keepLeadAlive).toHaveBeenCalledWith('harness'))
+    replacement(t, () => true, () => true)
+    t.wait(5_000)
+    await again.tick()
+    await vi.waitFor(() => expect(t.closeMember).toHaveBeenCalledWith('new-session', 'f'.repeat(32)))
+  })
+
+  it('does not reopen the original Buddy until an unadopted replacement is confirmed closed', async () => {
+    const buddy = { ...leadRow({ lead: false }), agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyOf: { personId: 'peer', generation: 'g' } } }
+    const t = lifeFixture([buddy])
+    switched(t)
+    replacement(t, () => true)
+    t.closeMember.mockResolvedValue({ error: 'AGENT_CHANGED' })
+    await t.poll(SWITCH_ADOPT_MS + 1)
+    expect(t.closeMember).toHaveBeenCalledWith('new-session', 'f'.repeat(32))
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    t.closeMember.mockResolvedValue({ closed: true })
+    await t.poll(5_000)
+    await vi.waitFor(() => expect(t.keepLeadAlive).toHaveBeenCalledWith('harness'))
+  })
+
+  it('wakes a managed Buddy after switch rollback, without reopening an explicit Stop', async () => {
+    const buddy = { ...leadRow({ lead: false, buddySleepManaged: true }), agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyOf: { personId: 'peer', generation: 'g' } } }
+    const t = lifeFixture([buddy])
+    t.keepLeadAlive.mockResolvedValue({ ok: true })
+    switched(t)
+    await t.poll(SWITCH_HOLD_MS + 1)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+    t.live(true)
+    Object.assign(buddy.agent, { asleep: { since: 1 } })
+    await t.poll(1_000)
+    expect(t.closeMember).toHaveBeenCalledTimes(1)
+    t.live(false)
+    delete (buddy.agent as Record<string, unknown>).asleep
+    t.host.stop()
+    const again = t.open()
+    t.wait(60_000)
+    await again.tick()
+    await vi.waitFor(() => expect(t.keepLeadAlive).toHaveBeenCalledTimes(2))
+    Object.assign(buddy, { stopRequested: true })
+    t.wait(60_000)
+    await again.tick()
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps Stop Harness effective after Buddy rollback, across host restart, while removing a late replacement', async () => {
+    const buddy = { ...leadRow({ lead: false }), agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyOf: { personId: 'peer', generation: 'g' } } }
+    const t = lifeFixture([buddy])
+    t.keepLeadAlive.mockResolvedValue({ ok: true })
+    switched(t)
+    await t.poll(SWITCH_HOLD_MS + 1)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+    t.host.stop()
+    // The person's Stop happens after recovery; the host restarts with the original stopped again.
+    const again = t.open()
+    replacement(t, () => true)
+    t.wait(5_000)
+    await again.tick()
+    await vi.waitFor(() => expect(t.closeMember).toHaveBeenCalledWith('new-session', 'f'.repeat(32)))
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
   })
 
   it('waits a minute after a reopen it asked for before asking again', async () => {
@@ -6328,5 +6444,74 @@ describe('the PM\'s turn on its list read', () => {
     state = 'idle'
     t.wait(1_000); await host.tick()
     expect(reads(t)).toEqual(['?turn=busy', '?turn=idle'])
+  })
+})
+
+
+describe('a managed main Buddy sleeps and wakes (#3824)', () => {
+  const buddyRow = (agent: Record<string, unknown> = {}, row: Record<string, unknown> = {}) => ({ tabId: 'tab', active: true, buddySleepManaged: true,
+    agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyOf: { personId: 'peer', generation: 'g' }, ...agent }, ...row })
+  it('closes once without dropping its home and reopens that harness on wake without continuation text', async () => {
+    const rows = [buddyRow({ asleep: { since: 1 } })]
+    const t = lifeFixture(rows)
+    const drop = vi.spyOn(CrewFolders.prototype, 'drop'), restore = vi.spyOn(CrewFolders.prototype, 'restore')
+    try {
+      t.live(true)
+      await t.poll()
+      await t.poll(1_000)
+      expect(t.closeMember).toHaveBeenCalledTimes(1)
+      expect(t.keepLeadAlive).not.toHaveBeenCalled()
+      t.live(false)
+      delete (rows[0]!.agent as Record<string, unknown>).asleep
+      await t.poll(1_000)
+      expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
+      expect(drop).not.toHaveBeenCalled()
+      expect(restore).not.toHaveBeenCalled()
+      expect(t.core.turns.deliver).not.toHaveBeenCalled()
+    } finally { drop.mockRestore(); restore.mockRestore() }
+  })
+  it.each(['working', 'unknown'])('refuses to close a live Buddy that now reads %s', async activity => {
+    const t = lifeFixture([buddyRow({ asleep: { since: 1 } })])
+    t.live(true)
+    t.core.agents.activity = vi.fn(async () => ({ harness: activity })) as never
+    await t.poll()
+    await t.poll(1_000)
+    expect(t.closeMember).not.toHaveBeenCalled()
+    t.core.agents.activity = vi.fn(async () => ({ harness: 'idle' as const }))
+    await t.poll(1_000)
+    expect(t.closeMember).toHaveBeenCalledTimes(1)
+  })
+  it('leaves unmanaged and thread Buddies and Team sessions awake', async () => {
+    for (const row of [buddyRow({ asleep: { since: 1 } }, { buddySleepManaged: undefined }),
+      buddyRow({ asleep: { since: 1 }, buddySession: { thread: 'root', from: 0 } }),
+      buddyRow({ asleep: { since: 1 }, teamAccount: true })]) {
+      const t = lifeFixture([row])
+      t.live(true)
+      await t.poll()
+      expect(t.closeMember).not.toHaveBeenCalled()
+    }
+  })
+  it('resumes the recorded managed harness after a host restart, with existing retry backoff', async () => {
+    const t = lifeFixture([buddyRow()])
+    await t.poll()
+    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
+    await t.poll(1_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+    const old = lifeFixture([buddyRow({}, { buddySleepManaged: undefined })])
+    await old.poll()
+    expect(old.keepLeadAlive).not.toHaveBeenCalled()
+  })
+  it('does not finish an in-flight idle check after a newer awake roster', async () => {
+    const rows = [buddyRow({ asleep: { since: 1 } })], t = lifeFixture(rows)
+    t.live(true)
+    let finish!: (value: Record<string, 'idle'>) => void
+    t.core.agents.activity = vi.fn(() => new Promise<Record<string, 'idle'>>(resolve => { finish = resolve }))
+    await t.poll()
+    delete (rows[0]!.agent as Record<string, unknown>).asleep
+    await t.poll(1_000)
+    expect(t.core.agents.activity).toHaveBeenCalledWith(['harness'])
+    finish({ harness: 'idle' })
+    await new Promise(resolve => setImmediate(resolve))
+    expect(t.closeMember).not.toHaveBeenCalled()
   })
 })
