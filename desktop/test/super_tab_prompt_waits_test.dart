@@ -156,7 +156,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(_key('super-activity-row-prompt:wren'), findsNothing);
       expect(activity.needsCount, 0);
-      expect(find.text('All clear'), findsOneWidget);
+      // Empty means empty (rule 7, #4465).
+      expect(find.text('All clear'), findsNothing);
     });
   });
 

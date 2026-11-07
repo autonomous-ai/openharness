@@ -275,7 +275,8 @@ void main() {
       }
       await withClock(Clock.fixed(_now), () async {
         await show(tester, await loaded(tester, server));
-        expect(find.text('All clear'), findsOneWidget);
+        // Empty means empty (rule 7, #4465).
+        expect(find.text('All clear'), findsNothing);
         expect(
           find.text('Product Manager handled 2 for you today'),
           findsOneWidget,
@@ -447,13 +448,12 @@ void main() {
     });
 
     for (final brightness in Brightness.values) {
-      testWidgets('says nothing needs you when nothing is new ($brightness)', (
-        tester,
-      ) async {
+      testWidgets('is empty when nothing is new ($brightness)', (tester) async {
         final server = swarm()..followedThreads = null;
         final activity = await loaded(tester, server);
         await show(tester, activity, brightness: brightness);
-        expect(find.text('All clear'), findsOneWidget);
+        // Empty means empty (rule 7, #4465).
+        expect(find.text('All clear'), findsNothing);
         expect(_key('super-activity-decide-all'), findsNothing);
       });
     }
