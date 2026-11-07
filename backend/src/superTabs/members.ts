@@ -5,8 +5,10 @@
  */
 import { openTasks } from './dispatch.js'
 import { agentProjectId } from './projects.js'
-import { downSince, type ContributedMachine } from './machines.js'
-import { occupiesAgent, type Agent, type AgentStart, type Conversation, type SuperTabState } from './model.js'
+import { QUOTA_FLOOR_PERCENT } from './crewRules.js'
+import { availableSlots, downSince, machineSlots, type ContributedMachine } from './machines.js'
+import { ownedPath, pathsOverlap } from './ownedPaths.js'
+import { activeWork, occupiesAgent, type Agent, type AgentStart, type Conversation, type SuperTabState } from './model.js'
 
 /** Whether [personId] may choose Accept all: off for Claude and ChatGPT subscriptions until Anthropic and OpenAI confirm it in
  *  writing (anh Dee). Every engine on their own computers must be an API key, a known quota with no windows
@@ -73,24 +75,75 @@ export function setUpReady(state: SuperTabState, agent: Agent, projectId: string
 const ownCrewIn = (state: SuperTabState, personId: string, projectId: string): boolean =>
   state.agents.some(a => a.crew && a.contributorId === personId && a.workDecision !== 'stop' && agentProjectId(state, a) === projectId)
 
-export type MemberPick = { kind: 'assign'; conversationId: string; agentId: string } | { kind: 'start'; conversationId: string }
+export type MemberPick = { kind: 'assign'; conversationId: string; agentId: string } | { kind: 'start' | 'helper'; conversationId: string }
 
-/** What [projectId]'s dispatch pass does for the people whose tasks wait there (store.ts): each person's free, set-up Member
- *  is handed their next task; a person with none yet gets one started (their first task may need no Accept). */
+export type HelperCheck = { ok: true } | { ok: false; reason: 'overlap' | 'room' | 'quota' }
+export const HELPER_REFUSALS: Record<'overlap' | 'room' | 'quota', string> = {
+  overlap: 'This task touches code its Member\'s work is on, or names none to tell: it waits for the Member.',
+  room: 'Its Member\'s computer has no room for another agent under its limit: it waits.',
+  quota: 'Its Member\'s quota is at the floor, or not known: it waits.',
+}
+
+/** The paths owned by the work [member] and its helpers have running, or null when one names none to compare. */
+function runningPaths(state: SuperTabState, member: Agent): string[] | null {
+  const team = new Set(state.agents.filter(a => a.id === member.id || a.helperOf === member.id).map(a => a.id))
+  const paths = state.conversations.filter(c => activeWork(c) && team.has(c.assignment!.agentId)).map(c => (c.task?.owns ?? []).map(ownedPath))
+  return paths.some(p => !p.length || p.includes(null)) ? null : paths.flat() as string[]
+}
+
+/** Whether a helper may start for [task] while [member] is busy (anh Dee, task #4697), all three: the task's code overlaps none of
+ *  the work running (a task naming no code to compare cannot be told apart, so it waits), the Member's computer has room under
+ *  its limit, and its engine's quota there is known with every window above the floor. [planned]: what this pass already plans. */
+export function helperCheck(state: SuperTabState, member: Agent, task: Conversation, now: number,
+  planned: { paths: string[]; slots: number } = { paths: [], slots: 0 }): HelperCheck {
+  const mine = (task.task?.owns ?? []).map(ownedPath)
+  const running = runningPaths(state, member)
+  if (!mine.length || mine.includes(null) || running === null
+    || mine.some(p => [...running, ...planned.paths].some(r => pathsOverlap(p!, r)))) return { ok: false, reason: 'overlap' }
+  const pool = (state.machines ?? []).find(m => m.machineId === member.machineId)
+  if (!pool || availableSlots(state, pool, machineSlots(state, pool)) - planned.slots <= 0) return { ok: false, reason: 'room' }
+  const quota = pool.observation?.quotas.find(q => q.engine === member.configuration.engine)
+  if (!quota?.known || quota.windows.some(w => 100 - w.usedPercent <= QUOTA_FLOOR_PERCENT)) return { ok: false, reason: 'quota' }
+  return { ok: true }
+}
+
+const ownPaths = (task: Conversation): string[] => (task.task?.owns ?? []).map(ownedPath).filter((p): p is string => !!p)
+
+/** What [projectId]'s dispatch pass does for the people whose tasks wait there (store.ts), each person's tasks in queue order: a
+ *  helper in a task's own conversation takes it; else the free, set-up Member takes the first; while it is busy, a free helper
+ *  takes one touching no running code, or a helper is started where helperCheck allows; a person with no Member yet gets one
+ *  started (their first task may need no Accept). Anything else waits. */
 export function memberPlan(state: SuperTabState, projectId: string, now: number): MemberPick[] {
   const people = new Set(openTasks(state, projectId, now).filter(g => !g.reviewOf && g.requesterId && state.people.some(p => p.id === g.requesterId))
     .map(g => g.requesterId!))
   const out: MemberPick[] = []
   for (const personId of people) {
-    const [next] = memberQueue(state, projectId, personId, now)
-    if (!next) continue
+    const queue = memberQueue(state, projectId, personId, now)
+    if (!queue.length) continue
     const member = memberOf(state, personId, projectId)
     // A person whose own crew agent works in this project keeps it taking their asks (crew.ts), until the migration
     // (#4693 part D) makes it their Member: never two agents of theirs racing for one task.
     if (!member && ownCrewIn(state, personId, projectId)) continue
-    if (!member) out.push({ kind: 'start', conversationId: next.id })
-    else if (member.agent && freeAgent(state, member.agent, now) && setUpReady(state, member.agent, projectId)) {
-      out.push({ kind: 'assign', conversationId: next.id, agentId: member.agent.id })
+    if (!member) { out.push({ kind: 'start', conversationId: queue[0]!.id }); continue }
+    const lead = member.agent
+    if (!lead) continue
+    const helpers = state.agents.filter(a => a.helperOf === lead.id && a.workDecision !== 'stop')
+    const used = new Set<string>(), planned = { paths: [] as string[], slots: 0 }
+    const take = (task: Conversation, agent: Agent) => { out.push({ kind: 'assign', conversationId: task.id, agentId: agent.id }); used.add(agent.id); planned.paths.push(...ownPaths(task)) }
+    const memberFree = freeAgent(state, lead, now) && setUpReady(state, lead, projectId)
+    // Helpers are only for while the Member holds a task: one still setting up, or asleep, is not busy.
+    const memberBusy = state.conversations.some(c => c.assignment?.agentId === lead.id && occupiesAgent(c))
+    for (const task of queue) {
+      // Its helper is starting: it takes this task once it runs.
+      if ((state.starts ?? []).some(s => s.request.helperOf && s.request.conversationId === task.id && !s.error && (!s.harnessId || !s.poolSettled))) continue
+      const own = helpers.find(h => !used.has(h.id) && task.agentIds.includes(h.id) && freeAgent(state, h, now))
+      if (own) { take(task, own); continue }
+      if (memberFree && !used.has(lead.id)) { take(task, lead); continue }
+      const idle = helpers.find(h => !used.has(h.id) && freeAgent(state, h, now))
+      if (idle && memberBusy && helperCheck(state, lead, task, now, planned).ok) { take(task, idle); continue }
+      if (!idle && memberBusy && helperCheck(state, lead, task, now, planned).ok) {
+        out.push({ kind: 'helper', conversationId: task.id }); planned.slots++; planned.paths.push(...ownPaths(task))
+      }
     }
   }
   return out

@@ -11,7 +11,8 @@ import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from 
 import { admitByRoom, admitMachineStart, AGENT_MEMORY_BYTES, noRepositoryStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamAccountPool, teamPoolsOf, teamWorkCheck, TEAM_ACCOUNTS_GONE, NOT_YOUR_COMPUTER, type ContributedMachine } from './machines.js'
 import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
-import { ACCEPT_ALL_REFUSAL, mayAcceptAll, memberMachine, memberOf, memberQueue } from './members.js'
+import { ACCEPT_ALL_REFUSAL, HELPER_REFUSALS, helperCheck, mayAcceptAll, memberMachine, memberOf, memberQueue } from './members.js'
+import { ownedPath, pathsOverlap } from './ownedPaths.js'
 import { addedAgentName, newAgentName, renameAgentTo } from './agentRename.js'
 import { addCrew, CREW_ROLE_MAX, removeCrew } from './crew.js'
 import { noteIndex } from './processNotes.js'
@@ -421,6 +422,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
   // A Member for a waiting task's requester (members.ts, task #4697): sent by the dispatch pass as the project's coordinator.
   z.object({ type: z.literal('member.start'), conversationId: id }).strict(),
+  // A helper for a waiting task while its Member is busy, only by the three checks (members.ts helperCheck): the dispatch pass's.
+  z.object({ type: z.literal('member.helper'), conversationId: id }).strict(),
   // A Member's own host reports its project set up, with the commands it ran for a helper to repeat, or why it failed (#4698).
   // ok true with its steps, ok false with its reason (checked in its handler).
   z.object({ type: z.literal('agent.setUp'), projectId: id, ok: z.boolean(), steps: z.array(z.string().trim().min(1).max(300)).max(10).optional(),
@@ -853,12 +856,6 @@ export function mayResumeStart(state: SuperTabState, actor: Actor, start: AgentS
   return !!group && !isLeads(group) && !isSwarmBuddyChat(group) && ledProject(state, actor.agentId)?.id === groupProject(state, group).id
 }
 
-/** The repo path an owns entry names, or null for anything else (a phrase, a glob), which is never compared. */
-function ownedPath(entry: string): string | null {
-  const path = entry.trim().replace(/^\.\//, '').replace(/\/+$/, '')
-  return /^[\w.@-]+(\/[\w.@-]+)*$/.test(path) ? path : null
-}
-const pathsOverlap = (a: string, b: string) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)
 
 /** A project's Lead (Product Manager) leaves only with its project: every other removal path refuses it. */
 function protectLead(state: SuperTabState, agentId: string, actor: Actor): void {
@@ -4082,6 +4079,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           : state.projects ? { projectId: groupProject(state, group).id } : {}),
         ...(start.request.buddyScope ? { buddyScope: start.request.buddyScope } : {}),
         ...(start.request.regular ? { regular: true as const } : {}),
+        ...(start.request.helperOf ? { helperOf: start.request.helperOf.agentId } : {}),
         ...(start.request.mainProjectId ? { mainProjectId: start.request.mainProjectId } : {}),
         ...(start.request.buddyNarrow ? { buddyNarrow: true as const } : {}),
         machineOwnerId: start.machineOwnerId, contributorId: start.contributorId, membershipGeneration: start.membershipGeneration,
@@ -5095,8 +5093,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A Member sleeps between its person's tasks (members.ts, task #4697): its next assignment wakes it.
       if (!activeWork(group)) {
         const worker = state.agents.find(a => a.id === assignment.agentId)
-        if (worker?.regular && worker.mainProjectId && !worker.helperOf && !memberQueue(state, worker.mainProjectId, worker.contributorId, context.now).length) {
-          worker.asleep = { since: context.now }
+        if (worker?.regular && worker.mainProjectId && !memberQueue(state, worker.mainProjectId, worker.contributorId, context.now).length) {
+          // A helper ends once nothing waits; its host closes it and drops its worktree (#4698).
+          if (worker.helperOf) { worker.workDecision = 'stop'; worker.releaseId = operationId } else worker.asleep = { since: context.now }
         }
       }
       break
@@ -5110,6 +5109,41 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (!lead && !(actor.kind === 'person' && actor.userId === requester.id)) fail('FORBIDDEN', 'Only the project\'s coordinator or the task\'s requester starts its Member.', 403)
       if (group.taskApproval && group.taskApproval.state !== 'approved') fail('TASK_APPROVAL_REQUIRED', 'Its person accepts this task first.', 409)
       startMember(group, requester.id)
+      break
+    }
+    case 'member.helper': {
+      const group = open(state, command.conversationId)
+      const project = groupProject(state, group)
+      const requester = state.people.find(p => p.id === group.requesterId) ?? fail('NO_REQUESTER', 'This task has no person to help.', 409)
+      const lead = actor.kind === 'agent' && ledProject(state, actor.agentId)?.id === project.id
+      if (!lead && !(actor.kind === 'person' && actor.userId === requester.id)) fail('FORBIDDEN', 'Only the project\'s coordinator or the task\'s requester asks for a helper.', 403)
+      if (group.taskApproval && group.taskApproval.state !== 'approved') fail('TASK_APPROVAL_REQUIRED', 'Its person accepts this task first.', 409)
+      if (activeWork(group)) fail('WORK_ACTIVE', 'This task already has its agent.', 409)
+      const member = memberOf(state, requester.id, project.id)?.agent ?? fail('NO_MEMBER', 'Its person has no Member in this project yet.', 409)
+      // One helper per task: a second ask while it starts, or once it runs here, changes nothing.
+      if ((state.starts ?? []).some(s => s.request.helperOf && s.request.conversationId === group.id && !s.error && !s.poolSettled)
+        || state.agents.some(a => a.helperOf === member.id && group.agentIds.includes(a.id) && a.workDecision !== 'stop')) {
+        ignored()
+        break
+      }
+      const check = helperCheck(state, member, group, context.now)
+      if (!check.ok) fail(`HELPER_${check.reason.toUpperCase()}`, HELPER_REFUSALS[check.reason], 409)
+      // On the Member's own computer and account, as the Member itself (v3: an agent starts only on its own person's computer).
+      const pool = memberMachine(state, requester.id, REGULAR_AGENT_CAPABILITY)
+      if (!pool || pool.machineId !== member.machineId) fail('HELPER_ROOM', HELPER_REFUSALS.room, 409)
+      const name = `${newAgentName(state, actor, undefined, stableId(operationId, 'helper'))} · ${project.name}`
+      const request: AgentStartRequest = { conversationId: group.id, machineId: pool.machineId, engine: member.configuration.engine, name,
+        cwd: projectFolder(pool, project), worktree: true, requirements: { ...BUDDY_REQUIREMENTS, memoryBytes: AGENT_MEMORY_BYTES },
+        regular: true, mainProjectId: project.id, helperOf: { agentId: member.id, harnessId: member.harnessId },
+        ...(member.setUp?.steps ? { setUpSteps: member.setUp.steps } : {}) }
+      const admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)!
+      state.starts ??= []
+      if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')
+      const id = stableId(operationId, 'helper')
+      state.starts.push({ poolGeneration: admitted.generation, id, creationId: `super-${id}`, actorKey: actorKey(actor), contributorId: requester.id,
+        membershipGeneration: requester.generation, machineOwnerId: requester.id, hostGrant: null, request, harnessId: null, dispatched: false, error: null,
+        requestedAt: context.now })
+      result.startId = id
       break
     }
     case 'agent.setUp': {

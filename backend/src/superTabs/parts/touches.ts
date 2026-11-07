@@ -31,7 +31,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
    *  and its computer's slots counted as any start's. */
   const newMemberStarts = () => {
     for (const start of effects.state.starts ?? []) {
-      if (start.request.member && !(before.starts ?? []).some(s => s.id === start.id)) { head(); slots(start.request.machineId) }
+      if ((start.request.member || start.request.helperOf) && !(before.starts ?? []).some(s => s.id === start.id)) { head(); slots(start.request.machineId) }
     }
   }
   const slots = (machineId: string) => {
@@ -132,7 +132,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'agent.new':
       head()
       break
-    case 'member.start':
+    case 'member.start': case 'member.helper':
       newMemberStarts()
       break
     case 'project.report': case 'project.repository':

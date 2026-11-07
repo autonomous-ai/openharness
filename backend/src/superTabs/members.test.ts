@@ -277,7 +277,7 @@ describe('a helper', () => {
   })
 
   it('waits when the task touches the running work\'s code, or names no code to tell them apart', () => {
-    for (const paths of [['src/a/b.ts'], ['src'], []]) {
+    for (const paths of [['src/a/b.ts'], ['src'], ['the login screen']]) {
       const { f, lamp, waiting, agent } = busy(paths)
       expect(helperCheck(f.state, agent(), f.group(waiting), NOW)).toEqual({ ok: false, reason: 'overlap' })
       expect(memberPlan(f.state, lamp, NOW)).toEqual([])
@@ -301,8 +301,8 @@ describe('a helper', () => {
 
   it('starts once, on the Member\'s computer and account, in its task\'s conversation', () => {
     const { f, lamp, waiting, member } = busy(['src/b/'])
-    f.run({ type: 'member.helper', conversationId: waiting }, owner)
-    f.run({ type: 'member.helper', conversationId: waiting }, owner)
+    f.run({ type: 'member.helper', conversationId: waiting }, kai)
+    f.run({ type: 'member.helper', conversationId: waiting }, kai)
     const helpers = f.state.starts!.filter(s => s.request.helperOf)
     expect(helpers).toHaveLength(1)
     expect(helpers[0]).toMatchObject({ contributorId: 'kai', machineOwnerId: 'kai', hostGrant: null })
@@ -313,12 +313,14 @@ describe('a helper', () => {
 
   it('refuses a helper the checks refuse, whoever asks', () => {
     const { f, waiting } = busy(['src/a/'])
-    expect(code(() => f.run({ type: 'member.helper', conversationId: waiting }, owner))).toBe('HELPER_OVERLAP')
+    expect(code(() => f.run({ type: 'member.helper', conversationId: waiting }, kai))).toBe('HELPER_OVERLAP')
+    // Nobody else asks for one.
+    expect(code(() => f.run({ type: 'member.helper', conversationId: waiting }, owner))).toBe('FORBIDDEN')
   })
 
   it('takes its task, and stops once it ends with nothing waiting', () => {
     const { f, lamp, waiting } = busy(['src/b/'])
-    f.run({ type: 'member.helper', conversationId: waiting }, owner)
+    f.run({ type: 'member.helper', conversationId: waiting }, kai)
     const start = f.state.starts!.find(s => s.request.helperOf)!
     const own = { contribution: { machineOwnerId: 'kai', contributorId: 'kai' } }
     f.run({ type: 'agent.startDispatch', startId: start.id }, kai, own)

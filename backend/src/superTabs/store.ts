@@ -2760,7 +2760,7 @@ export class SuperTabStore {
         for (const pick of memberPlan(state, project.id, now)) {
           const group = state.conversations.find(c => c.id === pick.conversationId)!
           const command = pick.kind === 'assign' ? { type: 'work.assign' as const, conversationId: group.id, agentId: pick.agentId }
-            : { type: 'member.start' as const, conversationId: group.id }
+            : { type: pick.kind === 'start' ? 'member.start' as const : 'member.helper' as const, conversationId: group.id }
           try {
             await this.executeOnce(memberUser, tabId, { operationId: stableId('member-dispatch', pick.kind, group.id, roundOf(group)), command },
               undefined, undefined, false, { asProjectPm: lead.id })
