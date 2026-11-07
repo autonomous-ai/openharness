@@ -158,7 +158,9 @@ void main() {
         isCurrent: () => open,
       );
       addTearDown(() => open = false);
-      await tester.pumpAndSettle();
+      // The box's spinner never settles: pump its opening alone.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
       expect(find.text('Connect this computer'), findsOneWidget);
       return (app, result);
     }
