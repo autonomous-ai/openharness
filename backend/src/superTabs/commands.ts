@@ -1560,7 +1560,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       return { inSession: true, to: null, ...(self.buddySession.projectId ? { project: self.buddySession.projectId } : {}) }
     }
     if (self) {
-      if (entry || context.reply?.sessionThread) fail('BUDDY_SESSION_THREAD', 'That thread has its own session. Answer in the main chat or a thread without one.', 403)
+      if (entry || context.reply?.sessionThread) fail('BUDDY_SESSION_THREAD', 'That thread has its own session. Answer in the chat instead.', 403)
       if (command.newSession) fail('BUDDY_SESSION_CHAT', 'Only the chat\'s person starts a session.', 403)
       return { inSession: false, to: null }
     }
@@ -4453,7 +4453,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // An answer below a message is read as its reply is (store.ts): context.reply is the message it answers.
       if (command.answers && (command.replyTo || !context.reply || context.reply.id !== command.answers || context.reply.conversationId !== group.id)) {
-        fail('INVALID_ANSWER', command.replyTo ? 'Answer a message right below it or reply in its thread, not both.' : 'Answer a message in this conversation.', 400)
+        fail('INVALID_ANSWER', command.replyTo ? 'Name the message you answer once, with --answers.' : 'Answer a message in this conversation.', 400)
       }
       const chatPost = actor.kind === 'agent' && !command.agentOnly && isProjectChat(state, group)
       const chatAsk = chatPost ? requireChatPost(group, command, context.reply) : null

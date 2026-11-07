@@ -1,4 +1,5 @@
-/** Deterministic project-chat limits (Dee 11-04/11-05, task #3598). Threads carry work details; main carries decisions/results. */
+/** Deterministic project-chat limits (Dee 11-04/11-05, task #3598): the chat carries decisions and results, its tasks the work's
+ *  details. No chat has threads (task #4555): a thread reply only an older app still sends is discussion outside these limits. */
 import type { Command, CommandContext } from './commands.js'
 import { fail, type Conversation, type SuperTabState } from './model.js'
 import { requireUnanswered, type AnsweredAsk } from './answers.js'
@@ -15,7 +16,7 @@ const STATUS = /^(?:status(?: update)?|progress(?: update)?|on it|working|ready 
 const plain = (text: string) => text.trim().replace(/[.!。]+$/, '').trim()
 
 export function requireChatContent(state: SuperTabState, group: Conversation, text: string): void {
-  if (STATUS.test(text)) fail('CHAT_STATUS', 'Keep status lines in the task status or the ask’s thread, not the main chat.', 400)
+  if (STATUS.test(text)) fail('CHAT_STATUS', 'Keep status lines in your task status, not the project chat.', 400)
   const line = plain(text)
   const pr = line.match(/^(?:PR\s*#\d+\s*:?\s*)?(https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+)\/?$/i)?.[1]
   const prNumber = line.match(/^PR\s*#(\d+)$/i)?.[1]
@@ -24,7 +25,7 @@ export function requireChatContent(state: SuperTabState, group: Conversation, te
   const repeatedTask = task && state.conversations.some(g => g.number === Number(task[1]) && g.cards?.line?.conversationId === group.id
     && (!task[2] || plain(task[2]).toLowerCase() === plain(g.title).toLowerCase()))
   if (repeatedPr || repeatedTask) {
-    fail('CHAT_CARD_REPEAT', 'This card is already in the chat. Add new details in its thread instead of repeating it.', 400)
+    fail('CHAT_CARD_REPEAT', 'This card is already in the chat. Add new details in its task instead of repeating it.', 400)
   }
 }
 
@@ -57,7 +58,7 @@ export function recordChatAsk(group: Conversation, id: string, at: number): void
 }
 
 function closedAsk(): never {
-  fail('CHAT_ASK_CLOSED', 'This older ask’s main-chat budget is closed. Continue the discussion under its existing response in the thread.', 409)
+  fail('CHAT_ASK_CLOSED', 'This ask is too old to answer here. Answer a newer message, or post a plain line.', 409)
 }
 
 /** Returns the main-budget owner, or null for thread-only posts and unlinked announcements. */
@@ -76,7 +77,7 @@ export function requireChatPost(group: Conversation, command: Send, reply: Reply
     ask = remember(group, askId, personAsk.createdAt)
   }
   if (!ask) return closedAsk()
-  if (ask.main.length >= 2) fail('CHAT_MAIN_LIMIT', 'At most two agent posts per ask in the main chat. Put follow-ups in its thread.', 409)
+  if (ask.main.length >= 2) fail('CHAT_MAIN_LIMIT', 'At most two agent posts answer one ask in the project chat. Put more in its task, or edit your earlier post.', 409)
   return ask.id
 }
 
