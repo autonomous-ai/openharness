@@ -29,7 +29,7 @@ Map<String, dynamic> _agent(String id, String name) => {
 /// Swarm v3's left pane and middle (task #4118), in both appearances: My agents with the Buddy first, a PM's Lead ring and an
 /// unread name in bold; the chat of a selected agent in the middle; a project's Board with Projects open. Task #4192: no
 /// arrows under the org switcher, the Buddy's own avatar, only the server's My agents, and My agents folded. Task #4220:
-/// folded Projects keeps a project that tags you, and Decisions in the middle keeps Tasks on the right.
+/// Decisions in the middle keeps Tasks on the right.
 void main() {
   setUpAll(() async {
     await loadCaptureFonts(shots);
@@ -41,17 +41,20 @@ void main() {
     }
   });
 
+  // Task #4466: the quiet left pane and the Projects grid, at 880 and wide.
   for (final brightness in Brightness.values) {
-    for (final scene in [
-      'agent-chat',
-      'no-agents',
-      'board',
-      'folded',
-      'tagged',
-      'decisions',
+    for (final (scene, width) in [
+      ('agent-chat', 1440.0),
+      ('no-agents', 1440.0),
+      ('board', 1440.0),
+      ('board-880', 880.0),
+      ('folded', 1440.0),
+      ('projects', 1440.0),
+      ('projects-880', 880.0),
+      ('decisions', 1440.0),
     ]) {
       testWidgets('$scene (${brightness.name})', (tester) async {
-        await tester.binding.setSurfaceSize(const Size(1500, 800));
+        await tester.binding.setSurfaceSize(Size(width, 800));
         addTearDown(() => tester.binding.setSurfaceSize(null));
         final before = grid.AppTheme.brightness.value;
         grid.AppTheme.brightness.value = brightness;
@@ -126,15 +129,49 @@ void main() {
           };
         }
         server.append('Working on the fix.', conversationId: 'offline');
-        if (scene == 'tagged') server.tag('message-1', conversationId: 'lead');
+        // Humans: the board's people with their points.
+        (server.state['people'] as List).addAll([
+          for (final id in ['dee', 'ken15'])
+            {'id': id, 'email': '$id@example.com', 'role': 'collaborator'},
+        ]);
+        server.leaderboard = {
+          'projectId': 'lead',
+          'week': 0,
+          'people': [
+            for (final (i, (id, points)) in [
+              ('dee', 120),
+              ('ken15', 80),
+              ('owner', 12),
+            ].indexed)
+              {'personId': id, 'points': points, 'rank': i + 1},
+          ],
+        };
+        (server.state['projects'] as List)
+          ..first['repository'] = {
+            'repositoryUrl': 'https://github.com/autonomous-ai/openharness',
+          }
+          ..addAll(<Map<String, dynamic>>[
+            projectFixture('site', 'website', 'site-lead'),
+            projectFixture('docs', 'docs', 'docs-lead', visibility: 'private'),
+          ]);
+        groups.addAll(<Map<String, dynamic>>[
+          {
+            ...conversationFixture('site-lead', 'website'),
+            'projectId': 'site',
+            'lastMessageSequence': 1,
+          },
+          {
+            ...conversationFixture('docs-lead', 'docs'),
+            'projectId': 'docs',
+            'lastMessageSequence': 0,
+          },
+        ]);
         final c = server.controller(
           account: 'owner',
           initial: {
             'tabId': 'tab',
             'accountId': 'owner',
             'selectedId': 'lead',
-            if (scene == 'board' || scene == 'folded')
-              'projectsGroupOpen': true,
             if (scene == 'folded') 'agentsGroupOpen': false,
           },
         );
@@ -176,10 +213,24 @@ void main() {
         }
 
         await settle();
+        // Under 1000 the Board folds the left pane into its drawer (#4445): its header opens it.
+        Future<void> openProjects() async {
+          if (find.byKey(const ValueKey('super-projects')).evaluate().isEmpty) {
+            await tester.tap(find.byTooltip('Conversations').first);
+            await settle();
+          }
+          await tester.tap(find.byKey(const ValueKey('super-projects')));
+          await settle();
+        }
+
         if (scene == 'agent-chat') {
           await tester.tap(find.byKey(const ValueKey('super-agent-kestrel')));
           await settle();
-        } else if (scene == 'board') {
+        } else if (scene.startsWith('projects')) {
+          await openProjects();
+        } else if (scene.startsWith('board')) {
+          // A project's Board opens from the Projects grid (task #4466).
+          await openProjects();
           await tester.tap(find.byKey(const ValueKey('super-group-lead')));
           await settle();
         } else if (scene == 'decisions') {
