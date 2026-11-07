@@ -377,7 +377,7 @@ against `test/goldens/swarm-elements-{light,dark}.png`, holding each element
 to its own area: a face or ring may barely differ, an icon or letter a
 quarter of its box, and nothing else outside the words more than 38 pixels.
 
-Six rules hold the whole Swarm screen to minimal, clear and quiet, with less
+Seven rules hold the whole Swarm screen to minimal, clear and quiet, with less
 on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
 
 1. **Grey everywhere; colour only on agent faces.** Grounds, text, rules and
@@ -395,6 +395,11 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
 6. **If it doesn't help you decide, it's gone.** A line that only describes
    (a subscription, a machine, what an agent can read) leaves the screen; its
    full value stays in menus, tooltips and accessibility.
+7. **Empty means empty.** An empty list or pane shows nothing, or only the
+   action that fills it (such as + New agent). Words stay only when they help
+   someone act: why something can't be used and who can fix it, or an error.
+   "None yet", "No tasks yet", "Nothing here yet", "Start the conversation."
+   and the like are not drawn. The gallery draws each element empty.
 
 - **One surface.** The left, middle and right panes share one ground,
   `AppPalette.swarmField`, the colour the selected native tab joins. Only the

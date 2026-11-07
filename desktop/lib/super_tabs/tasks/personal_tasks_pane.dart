@@ -288,8 +288,9 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                   )
                 else
                   Expanded(
+                    // Empty means empty (anh Dee's rule 7, task #4465).
                     child: tasks!.rows.isEmpty
-                        ? const Center(child: Text('No tasks yet'))
+                        ? const SizedBox.shrink()
                         : NotificationListener<ScrollNotification>(
                             onNotification: _onScroll,
                             child: LaidOutListView.builder(

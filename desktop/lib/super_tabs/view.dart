@@ -5557,28 +5557,30 @@ class _SuperTabViewState extends State<SuperTabView>
                     _personalPaneCount(group) > 0
               ? _panesWaiting(group)
               : messages.isEmpty && outgoing.isEmpty
-              ? Padding(
-                  // The pane's side padding, as the composer has: a long line
-                  // wraps inside it, centered.
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: grid.AppDesktop.panelPadding,
-                  ),
-                  child: Center(
-                    child: Text(
-                      c.accessRevoked
-                          ? 'Conversation unavailable.'
-                          : group == null
-                          ? 'Loading conversation…'
-                          : c.snapshot!.isProjectLead(group.id)
-                          ? 'Discuss the plan with ${c.snapshot!.coordinatorNameOf(group.projectId)}.'
-                          : _buddyName(group) != null
-                          ? "Only you and ${_buddyName(group)} read this chat. Say what you want to build; say 'send to the ${c.snapshot!.coordinatorNameOf(group.projectId)}' when it's ready."
-                          : 'Start the conversation.',
-                      textAlign: TextAlign.center,
-                      style: DesktopChrome.text(color: DesktopChrome.muted),
+              ? switch (c.accessRevoked
+                    ? 'Conversation unavailable.'
+                    : group == null
+                    ? 'Loading conversation…'
+                    : _buddyName(group) != null
+                    ? "Only you and ${_buddyName(group)} read this chat. Say what you want to build; say 'send to the ${c.snapshot!.coordinatorNameOf(group.projectId)}' when it's ready."
+                    // Empty means empty (anh Dee's rule 7, task #4465): no words for a chat with nothing in it.
+                    : null) {
+                  final words? => Padding(
+                    // The pane's side padding, as the composer has: a long line
+                    // wraps inside it, centered.
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: grid.AppDesktop.panelPadding,
+                    ),
+                    child: Center(
+                      child: Text(
+                        words,
+                        textAlign: TextAlign.center,
+                        style: DesktopChrome.text(color: DesktopChrome.muted),
+                      ),
                     ),
                   ),
-                )
+                  null => const SizedBox.expand(),
+                }
               : Column(
                   children: [
                     // Above the list, never over a message.
