@@ -5,14 +5,14 @@ feed; the real task stays; the closed one is kept and still readable, and names 
 
 **Architecture:** The rule is the PM's own words (River, in the task): a task cancelled with a reason that says its work
 goes on in another task ("Duplicate of #4421", "Being done inside #4445", "split… #4465 … #4468") points there.
-`work.cancel` reads those numbers from its reason (`tasksNamedIn`: only after a phrase such as duplicate, inside, into,
-split, folded, merged; never the task itself or "PR #N"; at most 10), keeps those that are tasks of the same project the
+`work.cancel` reads those numbers from its reason (`tasksNamedIn`: only after a phrase such as duplicate, inside, into
+or split in the same sentence; never the task itself or "PR #N"; at most 10), keeps those that are tasks of the same project the
 Swarm holds now (`goesOnIn`: not a chat, a step or a private conversation; a mistyped number links nothing), and stores their
 ids as `foldedInto`. The feed treats `foldedInto` as it already treats a merged proposal (`proposal.mergedInto`): the row's
 indexed `feedIds` is empty, so no page reads it, and a change poll sends its id as removed. History is the project's
 archived list, which reads by project, not by the feed's keys: it still lists the task, and its view carries `foldedInto`
 for a client to open the real task. A task cancelled before this ships (the existing duplicates, such as #4420 into #4421)
-is cancelled again by the PM with a reason naming the real task: it takes the link and nothing else changes. No data is
+is cancelled again by the PM with a reason naming the real task: it takes the link and nothing else changes; a number it cannot find is refused by name. No data is
 deleted. A cancel whose reason names no task stays.
 
 **Limits:** a command holds only the Swarm's awake conversations, so a real task already quiet (done or cancelled and idle

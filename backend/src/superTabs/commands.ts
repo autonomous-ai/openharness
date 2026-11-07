@@ -1062,19 +1062,23 @@ const WHO_CANCELS_LIVE = 'Only an agent of this project or the Swarm owner can c
 /** The task numbers a cancel's reason says its work goes on in ("Duplicate of #4421", "Being done inside #4445", "Split into
  *  #4465 to #4468"; task #4462). A mere mention ("Waiting on #4434"), a pull request's number ("PR #12") and its own name none. */
 export function tasksNamedIn(reason: string, self: number | undefined): number[] {
-  if (!/\b(duplicates?|dup(e)?|inside|into|split|folded|merged|same as|covered by|part of|replaced by|superseded by)\b/i.test(reason)) return []
-  const named = [...reason.matchAll(/(?<!\b(?:PR|pull request)\s*)#([1-9][0-9]{0,8})\b/gi)].map(m => Number(m[1])).filter(n => n !== self)
+  // Each sentence or clause on its own: its numbers count once its phrase came before them (review 2 of #3534).
+  const named = reason.split(/;|[.!?]\s+/).flatMap(clause => {
+    const phrase = /\b(duplicates?|dup(e)?|inside|into|split|same as|covered by|part of|replaced by|superseded by)\b/i.exec(clause)
+    return phrase ? [...clause.slice(phrase.index).matchAll(/(?<!\b(?:PR|pull request)\s*)#([1-9][0-9]{0,8})\b/gi)].map(m => Number(m[1])) : []
+  }).filter(n => n !== self)
   return [...new Set(named)].slice(0, 10)
 }
 
 /** The tasks of [group]'s project its cancel's reason says its work goes on in, as the Swarm knows them now: a number that
  *  names no task there (mistyped, a chat, a step, a private conversation) links nothing (review of #3534). */
-function goesOnIn(state: SuperTabState, group: Conversation, reason: string): string[] {
+function goesOnIn(state: SuperTabState, group: Conversation, reason: string): { ids: string[]; unknown: number[] } {
   const isTask = (c: Conversation) => !c.kind && !c.audience && !c.reviewOf && c.id !== groupProject(state, c).leadConversationId
-  if (!isTask(group)) return []
+  if (!isTask(group)) return { ids: [], unknown: [] }
   const project = groupProject(state, group).id
-  return tasksNamedIn(reason, group.number).flatMap(number => state.conversations.filter(c => c.number === number && c.id !== group.id && isTask(c)
-    && groupProject(state, c).id === project).map(c => c.id))
+  const found = tasksNamedIn(reason, group.number).map(number => ({ number, task: state.conversations.find(c => c.number === number && c.id !== group.id
+    && isTask(c) && groupProject(state, c).id === project) }))
+  return { ids: found.flatMap(f => f.task ? [f.task.id] : []), unknown: found.flatMap(f => f.task ? [] : [f.number]) }
 }
 
 function open(state: SuperTabState, conversationId: string) {
@@ -4968,12 +4972,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const assignment = group.assignment
       const project = groupProject(state, group)
       const allowed = projectAgent(state, actor, project.id) || (actor.kind === 'person' && actor.userId === state.ownerId)
-      const goesOn = goesOnIn(state, group, command.reason)
+      const { ids: goesOn, unknown } = goesOnIn(state, group, command.reason)
       // A task cancelled before with no task named, cancelled again with the one its work goes on in, takes that link and
       // nothing else: so the duplicates closed before #4462 leave people's Tasks too.
-      if (goesOn.length && (assignment?.status === 'cancelled' || group.archived && !assignment)) {
+      const closed = assignment?.status === 'cancelled' || group.archived && !assignment
+      if (closed && (goesOn.length || unknown.length)) {
         if (!allowed) fail('FORBIDDEN', WHO_CANCELS_LIVE, 403)
         if (group.foldedInto) break
+        // Its whole point is the link: one it cannot make is said, by number (review 2 of #3534).
+        if (!goesOn.length) fail('FOLD_TARGET', `No task ${unknown.map(n => `#${n}`).join(', ')} of this project is open to link to: check the number. A task quiet for a day cannot be checked.`, 400)
         group.foldedInto = goesOn
         message(group.id, `${who} noted where this task's work goes on: ${command.reason.replace(/[.\s]+$/, '')}.`, [], null, SYSTEM_ROW)
         break
