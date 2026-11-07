@@ -268,3 +268,62 @@ describe('a task session beside a private project\'s files', () => {
     expect(f.agent(session).workDecision).toBe('stop')
   })
 })
+
+// Review of a3456fd (#3553 merging #4534): a Member's task sessions are one worker to the review rules, whichever session did
+// the work and whether or not it still runs, and a stuck security review can move to a Member as to any Reviewer.
+describe('a Member and its task\'s review steps', () => {
+  /** mate's Member built app's task in a session that has since gone down; the task's steps are open. */
+  function built() {
+    const f = swarm()
+    const app = f.project('app')
+    const session = host(f, assign(f, app.task, app.asPm).result.startId as string, 'h-app')
+    finish(f, app.task, session)
+    f.agent(session).downSince = new Date(NOW).toISOString()
+    const step = (name: string) => f.run({ type: 'conversation.create', title: name, reviewOf: app.task, step: name, brief: 'Read it.', checks: [] } as Command,
+      app.asPm).result.conversationId as string
+    const reviewer = (name: string) => f.run({ type: 'agent.add', conversationId: app.conversationId, machineId: 'app-mac', harnessId: `h-${name}`, name,
+      configuration: config, lead: false, roleName: 'Reviewer' } as Command, { kind: 'person', userId: 'owner', email: 'owner@example.com' }, own('owner')).result.agentId as string
+    return { f, app, session, step, reviewer }
+  }
+
+  it('never reviews a task one of its sessions built, refused before any session starts', () => {
+    const { f, app, step } = built()
+    const review = step('Review')
+    const starts = f.state.starts!.length
+    expect(code(() => f.run({ type: 'work.assign', conversationId: review, agentId: f.buddy }, app.asPm))).toBe('STEP_BUILDER')
+    expect(f.state.starts!.length).toBe(starts)
+  })
+
+  it('never does both security reviews, whichever of its sessions did the first', () => {
+    const { f, app, session, step } = built()
+    // Not the builder here: another agent built it.
+    f.group(app.task).ledger!.runs = []
+    Object.assign(f.group(app.task).assignment!, { agentId: 'someone-else', execution: { ...f.group(app.task).assignment!.execution, memberOf: undefined } })
+    const one = step('Security review 1'), two = step('Security review 2')
+    delete f.agent(session).downSince
+    f.run({ type: 'work.assign', conversationId: one, agentId: f.buddy }, app.asPm)
+    expect(f.group(one).assignment).toMatchObject({ agentId: session })
+    finish(f, one, session)
+    f.agent(session).downSince = new Date(NOW).toISOString()
+    const starts = f.state.starts!.length
+    expect(code(() => f.run({ type: 'work.assign', conversationId: two, agentId: f.buddy }, app.asPm))).toBe('REVIEW_NOT_INDEPENDENT')
+    expect(f.state.starts!.length).toBe(starts)
+  })
+
+  it('takes a security review stuck on the other one\'s reviewer, which moves without a cancel', () => {
+    const { f, app, step, reviewer } = built()
+    f.group(app.task).ledger!.runs = []
+    Object.assign(f.group(app.task).assignment!, { agentId: 'someone-else', execution: { ...f.group(app.task).assignment!.execution, memberOf: undefined } })
+    const one = step('Security review 1'), two = step('Security review 2')
+    const other = reviewer('rev-two')
+    f.run({ type: 'work.assign', conversationId: two, agentId: other }, app.asPm)
+    f.run({ type: 'work.status', conversationId: two, assignmentId: f.group(two).assignment!.id, status: 'done', result: 'Done.' } as Command,
+      { kind: 'agent', agentId: other, machineOwnerId: 'owner' })
+    const held = { ...f.group(two).assignment!, id: 'held-one', status: 'blocked' as const, agentId: other }
+    f.group(one).assignment = held
+    const moved = f.run({ type: 'work.assign', conversationId: one, agentId: f.buddy }, app.asPm)
+    expect(moved.result.startId).toBeDefined()
+    expect(f.group(one).assignment!.status).toBe('cancelled')
+    expect(f.group(one).sessionStart).toMatchObject({ memberId: f.buddy })
+  })
+})
