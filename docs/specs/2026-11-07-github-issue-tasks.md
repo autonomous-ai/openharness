@@ -36,9 +36,14 @@ this spec). Code review stays a pull request review on GitHub, tied to a commit,
   would be a GitHub call, which runs into GitHub's rate limits and goes down whenever GitHub does. An older release
   couldn't roll back either, since it would show empty tasks. The copy is never the truth: only GitHub's answers and
   webhooks write it, and GitHub replaces it whenever the two differ (A, and Design 2).
-- **Some tasks never become issues** (confidential tasks, steps, and public-repository briefs that name people), and on a
+- **Some tasks never become issues** (tasks not marked for publishing, steps, and public-repository briefs that name people;
+  on a public repository nothing is published until it is marked), and on a
   public repository the issue is created at Accept, not at creation. An issue can't be unpublished, and these protect
   security work and people's names. Ownrev6's review asked for this.
+- **On a public repository, nothing is published until it is marked.** The PM or the requester marks each task
+  publishable, and P0 and security work are never published. openharness is public, so its tasks need that mark to
+  reach GitHub. The server can't tell security work from a brief, and an issue can't be taken back, so the default
+  fails closed (Ownrev2's security review). Private repositories publish by default.
 
 ## Product spec
 
@@ -61,14 +66,19 @@ line: for example "Tasks stay in Harness: the app can't write issues here. An ow
 Harness can't take an issue back once it's published, since deleting one needs `administration`, which the app never
 gets. So the server decides before it creates an issue, and these tasks never get one:
 
-- **Confidential tasks**, on any repository, public or private. `conversation.create` takes an optional
-  `confidential: true`, set only at creation. The PM sets it for security work (an unfixed hole, an incident's details)
-  and for any brief that quotes a person's private chat; the PM's skill text says so. Setting it on a task whose issue
-  already exists is refused with `ISSUE_ALREADY_PUBLISHED`, and the PM is told that only a repository admin can delete
-  the issue.
-  - **On a public repository, it is on by default** for a P0 task and for a task whose brief asks for a security review
-    (its constraints or review name one). An unmarked security task therefore fails closed: it stays in Harness. The PM
-    publishes such a task only by sending `confidential: false` explicitly. A false match only keeps a task in Harness.
+- **Tasks not marked for publishing.** `conversation.create` takes an optional `publish`, and its default depends on
+  the repository:
+  - **Private repository: `publish` defaults to true.** The PM sends `publish: false` for security work (an unfixed
+    hole, an incident's details) and for any brief that quotes a person's private chat; the PM's skill text says so.
+  - **Public repository: `publish` defaults to false.** A task stays in Harness until the PM or its requester marks it
+    publishable (`task.publish`, allowed only for those two). The server can't tell security work reliably on a public
+    repository, so forgetting the mark keeps a task in Harness rather than putting an unfixed hole on GitHub. A
+    withheld task shows no issue number, so the gap is visible.
+  - **Public repository, never published:** a P0 task, and a task whose brief asks for a security review or that has a
+    security review step, refuse `publish` for their whole life (`PUBLISH_REFUSED_SECURITY`). A security review step
+    added after the issue exists can't unpublish it, so the PM is told at once to ask a repository admin.
+  - Turning `publish` off once the issue exists is refused with `ISSUE_ALREADY_PUBLISHED`, and the PM is told that only
+    a repository admin can delete the issue.
 - **On a public repository, a brief that names someone.** Before publishing, the server runs the title and brief through
   `redactCredentials`, and checks them for any email address and any person, machine or account name from the Swarm's
   roster. On a match the task stays in Harness, and the PM is told which kind of name stopped it (never the name
@@ -129,8 +139,9 @@ Harness acts on these changes made on GitHub:
 | --- | --- |
 | Title or body edited | The copy updates. The agent on it is sent a message in the task's chat: "The issue changed on GitHub:" with what changed. |
 | Status label changed by hand | Tasks shows GitHub's status. The PM is told. No agent is started or stopped. |
-| Closed by a person | The agent on it is told to push and stop, and the task shows Done or Declined from `state_reason`. The PM is told. |
-| Reopened | The task returns to Next up. The PM is told. |
+| Closed by a person with write access | The agent on it is told to push and stop, and the task shows Done or Declined from `state_reason`. The PM is told. |
+| Closed or reopened by someone with less than write access (GitHub lets triage do both) | Tasks shows GitHub's state, and the PM is told who changed it. No agent is stopped or restarted, and no quota is spent, until the PM acts. |
+| Reopened by a person with write access | The task returns to Next up. The PM is told. |
 | Assignee changed | Tasks shows the new assignee as the owner if they have linked their GitHub account, and "Owner not in Harness" otherwise. Accept and Decline stay with the task's requester in Harness, so write access on GitHub never approves a task. Work in progress goes on; the PM is told. |
 | `agent:` label changed by hand | Shown on GitHub only. Harness keeps its own record of the agent and changes the label only when the agent changes. |
 | Deleted or transferred | The link is removed. The task stays in Harness with its last copy, and the PM is told. |
@@ -278,11 +289,10 @@ of the code:
 
 - An older Desktop against the new backend shows GitHub tasks as ordinary tasks, without the number.
 - A newer Desktop against an older backend sees no `issue` field and shows no number.
-- Command schemas are `.strict()`. The one new input, `confidential` on `conversation.create`, ships with the backend
-  before the PM's skill text names it. Agents send command JSON as written, so no CLI release is needed for it. An agent
-  that leaves it out on a public repository is still caught by the server's name check. The skill text tells the PM to
-  set it for security work. On a public repository, P0 and security-review tasks are confidential by default, so leaving
-  it off fails closed there.
+- Command schemas are `.strict()`. The new inputs (`publish` on `conversation.create`, and `task.publish`) ship with
+  the backend before the PM's skill text names them. Agents send command JSON as written, so no CLI release is needed.
+  An older PM that never sends `publish` gets the repository's default: published on a private repository, withheld on
+  a public one, so leaving it off fails closed where the world could read it.
 
 ### 6. Migration and rollback
 
@@ -296,9 +306,9 @@ Order:
 
 **Migration:**
 
-- On a **private** repository, a worker job takes each open task (not done, merged, archived, confidential or a step)
+- On a **private** repository, a worker job takes each open task (not done, merged, archived, a step, or marked `publish: false`)
   and creates its issue at the task's current status, within the write budget. It is a dry run first. The dry run lists
-  per project what it would create, so the PM can mark tasks confidential before the run.
+  per project what it would create, so the PM can mark tasks `publish: false` before the run.
 - On a **public** repository, nothing is migrated. Open tasks finish in Harness, and only new tasks get issues, under the
   checks in "Tasks that stay in Harness".
 - The job is idempotent by the marker line and the bot's issue list.
@@ -353,11 +363,15 @@ Order:
   - A rolled-back release shows the copy only to the same predicate.
 - **What leaves Harness for GitHub:** the title and details of tasks that aren't withheld ("Tasks that stay in Harness"),
   status and agent labels, the assignee (only for a person who linked their account), and the close note (PR link and
-  check names). Confidential tasks and steps never leave. On a public repository, a brief naming a person, machine or
+  check names). Tasks not marked for publishing, and steps, never leave; on a public repository nothing leaves until it is marked. On a public repository, a brief naming a person, machine or
   account from the roster, or holding an email, is held back by the server. No chat text leaves.
 - **Whose edits on GitHub direct agents:** GitHub lets only an issue's author (the app's bot) and people with write access
   edit its body. So the people who can change a task's brief on GitHub are the people who can already push to the
   repository. Comments are never read, so outside people on a public repository can't reach an agent through an issue.
+- **Whose close or reopen moves work:** only someone with write access. For a close or reopen, the receiver reads the
+  webhook's sender's permission (`GET /repos/{owner}/{repo}/collaborators/{user}/permission`, with the sync token,
+  cached 10 minutes). Below write, the change is shown and the PM is told, but nothing starts or stops. If the read
+  fails, it is treated as below write.
 - **The webhook route** (`POST /api/github/webhook`) is the only new unauthenticated route:
   - It checks `X-Hub-Signature-256` with a constant-time compare before parsing.
   - It takes at most 1 MB.
@@ -394,7 +408,7 @@ Order:
 | Issue deleted or transferred | Receiver | PM, and the task loses its number | The task goes on in Harness |
 | Rate budget full | Sync pass | "Syncing to GitHub"; the wait histogram rises | Writes drain in order as the budget allows |
 | Brief names a person, machine or account, or holds an email (public repository) | Server, before creating the issue | PM: which kind of name held it back (never the name) | Edit the brief; the issue is created then. Until then the task works in Harness |
-| `confidential` set after the issue exists | The command | `ISSUE_ALREADY_PUBLISHED`: only a repository admin can delete the issue | The PM asks the repository's admin |
+| `publish` turned off after the issue exists, or a security review step added to a published task | The command | `ISSUE_ALREADY_PUBLISHED`: only a repository admin can delete the issue | The PM asks the repository's admin |
 
 ### 10. Platforms
 
@@ -432,8 +446,8 @@ spec.
    - The GitHub-project predicate, with the audience-match rule, the visibility read before each create, and the `repository` events.
    - `issueKey` index.
    - Creating the issue for a new task (marker, adopt on retry).
-   - What stays in Harness: `confidential`, steps, and the public-repository name check. The PM's skill text names
-     `confidential`.
+   - What stays in Harness: `publish` with its per-repository default, `task.publish`, the never-published rule for
+     security work on public repositories, steps, and the name check. The PM's skill text names `publish`.
    - Applying `issues` webhooks to the copy, with the newer-`updated_at` rule.
    - "The issue changed on GitHub" messages.
    - Two security reviews (server token permissions; private repositories). This must ship before any issue content
