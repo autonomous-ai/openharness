@@ -337,7 +337,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                                                 SuperTabAvatarPicture.fromJson(
                                                   task.agent['avatar'],
                                                 ),
-                                            pattern: true,
+                                            face: true,
                                           ),
                                     waiting: waiting,
                                     onApprove: waiting && enabled

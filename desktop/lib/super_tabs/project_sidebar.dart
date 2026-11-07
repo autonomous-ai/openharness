@@ -578,6 +578,7 @@ class ProjectSidebar extends StatelessWidget {
       key: ValueKey('super-buddy-${project.id}'),
       agentId: agent?.id,
       name: name,
+      compact: compact,
       project: named ? project.name : null,
       tooltip: 'Your Buddy · ${project.name}',
       // Where it runs, as the Agents list once showed every Buddy: only its
@@ -626,11 +627,17 @@ class ProjectSidebar extends StatelessWidget {
     if (board) {
       final muted =
           chat != null && controller.notifyOf(chat.id) == SuperTabNotify.muted;
+      // Its own name and face, as the header draws it (audit finding 8 of #4436).
       return SuperTabBuddyRow(
         key: const ValueKey('super-swarm-buddy'),
         agentId: agent?.id,
-        name: 'Buddy',
+        agent: agent,
+        name: agent == null
+            ? chat?.buddyName ?? 'Buddy'
+            : controller.snapshot!.agentName(agent.id, fallback: agent.name),
         tooltip: 'Your Buddy',
+        compact: compact,
+        note: agent?.downSince != null ? 'offline' : null,
         status: agent == null ? null : _buddyMark(agent),
         selected: _chatLit(chat),
         unread: chat != null && !muted && controller.unreadShown(chat),
@@ -655,7 +662,7 @@ class ProjectSidebar extends StatelessWidget {
   }
 
   /// My agents (Swarm v3, task #4118): the person's Buddy first, then the agents they brought, each with its face and name,
-  /// a PM's crowned and followed by the project it leads (task #4421), the name bold while its chat has unread, and + New agent in the heading.
+  /// a PM's in its Lead ring and followed by the project it leads (tasks #4421, #4461), the name bold while its chat has unread, and + New agent in the heading.
   List<Widget> _myAgents(
     BuildContext context,
     SuperTabSnapshot? snapshot,
@@ -709,8 +716,13 @@ class ProjectSidebar extends StatelessWidget {
           : onOpenAgentTerminal != null
           ? '$name · opens its terminal'
           : '$name · no chat yet',
-      crown: pm,
-      note: pm ? snapshot.leadProjectForAgent(agent.id)?.name : null,
+      lead: pm,
+      compact: compact,
+      note: agent.downSince != null
+          ? 'offline'
+          : pm
+          ? snapshot.leadProjectForAgent(agent.id)?.name
+          : null,
       status: _buddyMark(agent),
       selected: _chatLit(chat),
       unread: chat != null && controller.unreadShown(chat),

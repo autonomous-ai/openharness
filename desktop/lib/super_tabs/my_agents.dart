@@ -22,7 +22,7 @@ List<SuperTabAgent> superTabMyAgents(
   });
 }
 
-/// Whether [agent] is a PM, to wear the crown: the backend's kind when it sends one (#4116), else whether it leads a
+/// Whether [agent] is a PM, to wear the Lead ring: the backend's kind when it sends one (#4116), else whether it leads a
 /// project, as before.
 bool superTabAgentIsPm(SuperTabSnapshot snapshot, SuperTabAgent agent) =>
     agent.kind != null ? agent.kind == 'pm' : snapshot.isLead(agent.id);

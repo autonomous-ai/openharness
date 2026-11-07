@@ -1,8 +1,16 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/buddy_card.dart';
 import 'package:harness/super_tabs/launch_flags_field.dart';
+
+import 'support/capture.dart';
+
+final shots = Platform.environment['HARNESS_SUPER_TAB_CAPTURE'];
 
 /// The Buddy card's launch flags as chips (spec 2026-11-06-board-buddy-card).
 void main() {
@@ -173,5 +181,87 @@ void main() {
 
     expect(rim(1), grid.AppPalette.dangerFill);
     expect(rim(0), isNot(grid.AppPalette.dangerFill));
+  });
+
+  group('a long flag in the Buddy card (#4444)', () {
+    setUpAll(() async {
+      await loadCaptureFonts(shots);
+      if (shots == null || !Platform.isMacOS) return;
+      // A flag is set in the terminal's mono face, which the capture fonts leave out.
+      for (final (family, path) in [
+        ('.AppleSystemUIFontMonospaced', '/System/Library/Fonts/SFNSMono.ttf'),
+        ('Menlo', '/System/Library/Fonts/Menlo.ttc'),
+      ]) {
+        final bytes = ByteData.sublistView(await File(path).readAsBytes());
+        await (FontLoader(family)..addFont(Future.value(bytes))).load();
+      }
+    });
+
+    testWidgets('ends in … inside the field, whole in a tooltip, and its × '
+        'removes it', (tester) async {
+      final word = '--add-dir=/Users/${'a' * 300}'.substring(0, 200);
+      final changes = <List<String>>[];
+      for (final (brightness, mode) in [
+        (Brightness.light, 'light'),
+        (Brightness.dark, 'dark'),
+      ]) {
+        // The design tokens follow the app's brightness, which main.dart sets from the theme.
+        final previous = grid.AppTheme.brightness.value;
+        grid.AppTheme.brightness.value = brightness;
+        addTearDown(() => grid.AppTheme.brightness.value = previous);
+        await tester.binding.setSurfaceSize(
+          const Size(BuddyCardButton.cardWidth, 160),
+        );
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        await tester.pumpWidget(
+          MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: grid.buildAppTheme(brightness: brightness),
+            home: Scaffold(
+              body: Padding(
+                // The card's inner width: its padding on both sides.
+                padding: const EdgeInsets.all(grid.AppDesktop.groupGap),
+                child: LaunchFlagsField(
+                  words: ['--chrome', word],
+                  onChanged: changes.add,
+                ),
+              ),
+            ),
+          ),
+        );
+        // The theme animates from the last pump's brightness.
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        final field = tester.getRect(find.byType(LaunchFlagsField));
+        final remove = tester.getRect(
+          find.byKey(const ValueKey('launch-flag-remove-1')),
+        );
+        expect(
+          field.left <= remove.left && remove.right <= field.right,
+          isTrue,
+          reason: 'the × $remove is outside the field $field',
+        );
+        expect(
+          tester
+              .renderObject<RenderParagraph>(
+                find.descendant(
+                  of: find.text(word),
+                  matching: find.byType(RichText),
+                ),
+              )
+              .didExceedMaxLines,
+          isTrue,
+          reason: 'the flag has no …',
+        );
+        expect(
+          find.byWidgetPredicate((w) => w is Tooltip && w.message == word),
+          findsOneWidget,
+        );
+        await captureWindow(tester, shots, '07-long-launch-flag-$mode');
+      }
+      await tester.tap(find.byKey(const ValueKey('launch-flag-remove-1')));
+      await tester.pump();
+      expect(changes.single, ['--chrome']);
+    });
   });
 }

@@ -367,6 +367,51 @@ leaderboard) share four rules.
   (`mai@example.com` shows as `mai`); full identity stays available to
   tooltips and accessibility.
 
+## Swarm elements
+
+Goal: every element in a Swarm looks like it came from one hand, Apple-quality
+and never random (anh Dee, 2026-11-07, task #4461). Each element below has one
+implementation; a screen uses it and never draws its own. The gallery
+(`test/swarm_elements_gallery_test.dart`) draws every one in light and dark
+against `test/goldens/swarm-elements-{light,dark}.png`, holding each element
+to its own area: a face or ring may barely differ, an icon or letter a
+quarter of its box, and nothing else outside the words more than 38 pixels.
+
+- **Agent face.** An agent with no chosen picture wears a face
+  (`SuperTabAvatarFace`, `avatar_art.dart`) in rows, cards, chat and profile:
+  a round disc with a soft top-to-bottom fill, two eyes and a small smile.
+  Everything comes from the FNV-1a hash of the trimmed, lowercased name, so a
+  name draws the same face on every computer. The fill is
+  `SwarmPalette.faces[hash % 8]`, top to bottom: coral hsl(14 86% 72%) to
+  hsl(10 76% 62%); apricot hsl(38 92% 70%) to hsl(32 84% 59%); sage
+  hsl(146 46% 64%) to hsl(150 42% 52%); teal hsl(178 44% 60%) to
+  hsl(182 48% 48%); sky hsl(206 82% 70%) to hsl(212 72% 59%); periwinkle
+  hsl(238 72% 76%) to hsl(242 60% 65%); lilac hsl(274 60% 76%) to
+  hsl(278 48% 64%); rose hsl(334 76% 76%) to hsl(338 66% 65%). On a 100-unit
+  disc, in ink `#221F29` (`SwarmPalette.faceInk`): eyes are ellipses at
+  (36,45) and (64,45) with radii 5.2 and 7; the mouth is a quadratic curve
+  from (37,62) through (50,74) to (63,62), stroke 5.6, round caps. Eyes and
+  mouth shift sideways by `[-3,0,3][(hash>>9)%3]` units and tilt around the
+  centre by `[-9,-4,0,5,10][(hash>>5)%5]` degrees. The face is artwork: the
+  same in light and dark, and always a disc. A chosen picture still wins.
+- **Person avatar.** A person keeps their photo, preset or initial; a person
+  never wears an agent face.
+- **Lead ring.** A Lead (a PM) wears a thin gold ring, hsl(42 92% 58%)
+  (`SwarmPalette.leadRing`), around its avatar: stroke 5% of the face's
+  diameter, gap 7%, drawn outside the avatar's box so no row moves. Its
+  accessible label says Lead. The crown is only number one's on the
+  leaderboard.
+- **Task status marks.** Proposal is Lucide `lightbulb`, Rejected
+  `thumbs-down`, Failed (Stuck) `triangle-alert` in the semantic error ink.
+  The check, question mark and spinner stay, from the shared activity
+  vocabulary. No status in Flutter draws an X: an X means close. Terminal text
+  and native tab marks may keep `✗`.
+- **Task card and row.** The Tasks pane card (`SuperTabPersonalTaskCard`) and
+  the sidebar row (`SuperTabBuddyRow`) carry the elements above at their
+  shipped sizes; their size and layout do not change when an element does.
+- **Adding or changing one.** A new or changed element updates this section
+  and the gallery, with its images, in the same pull request.
+
 ## Phone
 
 The phone app speaks the same language at a thumb's scale. It uses the same
@@ -666,6 +711,9 @@ UI checklist (desktop/design/desktop-design-system.md)
 - [ ] Phone: Phone table sizes, 44-point targets, differences from Desktop listed
 - [ ] Copy follows the Naming System
 - [ ] Keyboard, focus return and hand cursor (Desktop)
+- [ ] A new or changed element updates Swarm elements and the gallery
+      (test/swarm_elements_gallery_test.dart) in this pull request, or it
+      doesn't merge
 ```
 
 `scripts/check-ui-style.py` runs in CI for `desktop/lib/super_tabs` and

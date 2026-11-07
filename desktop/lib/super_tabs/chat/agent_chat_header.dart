@@ -59,28 +59,23 @@ class SuperTabAgentChatHeader extends StatelessWidget {
     Widget label(String text) => Text(
       text,
       maxLines: 1,
+      overflow: TextOverflow.ellipsis,
       style: DesktopChrome.metadata(color: DesktopChrome.foreground),
     );
-    return SizedBox(
-      key: const ValueKey('super-agent-chat-header'),
-      height: 44,
-      child: Row(
-        children: [
-          const SizedBox(width: grid.AppDesktop.controlGap),
-          if (title case final title?)
-            Expanded(
-              child: Align(alignment: Alignment.centerLeft, child: title(name)),
-            )
-          else if (agent != null) ...[
-            SuperTabAvatar.agent(
-              agent,
-              size: SuperTabAvatar.rowSize,
-              engineBadge: false,
-            ),
-            const SizedBox(width: grid.AppDesktop.menuInset),
-          ],
-          if (title == null)
-            Expanded(
+    final left =
+        title?.call(name) ??
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (agent != null) ...[
+              SuperTabAvatar.agent(
+                agent,
+                size: SuperTabAvatar.rowSize,
+                engineBadge: false,
+              ),
+              const SizedBox(width: grid.AppDesktop.menuInset),
+            ],
+            Flexible(
               child: Text(
                 name,
                 maxLines: 1,
@@ -90,23 +85,48 @@ class SuperTabAgentChatHeader extends StatelessWidget {
                 ),
               ),
             ),
-          if (buddy != null && group.isSwarmBuddyChat)
-            BuddyModelLine(
-              controller: c,
-              agent: buddy,
-              machine: buddyMachineName(c, buddy.machineId, app: app),
-            )
-          else if (agent != null) ...[
-            label(engineIdentity(agent.engine).label),
-            if (model != null) ...[
-              const SizedBox(width: grid.AppDesktop.controlGap),
-              label(model),
-            ],
           ],
-          const SizedBox(width: grid.AppDesktop.menuInset),
-          ?menu,
-          const SizedBox(width: grid.AppDesktop.menuInset),
-        ],
+        );
+    final right = buddy != null && group.isSwarmBuddyChat
+        ? BuddyModelLine(
+            controller: c,
+            agent: buddy,
+            machine: buddyMachineName(c, buddy.machineId, app: app),
+          )
+        : agent != null
+        ? Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              label(engineIdentity(agent.engine).label),
+              if (model != null) ...[
+                const SizedBox(width: grid.AppDesktop.controlGap),
+                Flexible(child: label(model)),
+              ],
+            ],
+          )
+        : null;
+    return SizedBox(
+      key: const ValueKey('super-agent-chat-header'),
+      height: 44,
+      // The name comes first, up to half the row; the engine and model take the rest, the model giving way with
+      // "…", so a long model id never pushes the name or ⋮ out (#4444).
+      child: LayoutBuilder(
+        builder: (context, box) => Row(
+          children: [
+            const SizedBox(width: grid.AppDesktop.controlGap),
+            ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: box.maxWidth / 2),
+              child: left,
+            ),
+            const SizedBox(width: grid.AppDesktop.controlGap),
+            Expanded(
+              child: Align(alignment: Alignment.centerRight, child: right),
+            ),
+            const SizedBox(width: grid.AppDesktop.menuInset),
+            ?menu,
+            const SizedBox(width: grid.AppDesktop.menuInset),
+          ],
+        ),
       ),
     );
   }
