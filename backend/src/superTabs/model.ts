@@ -308,7 +308,9 @@ export interface Assignment {
   agentId: string
   status: WorkStatus
   configuration: AgentConfiguration
-  execution: { machineId: string; harnessId: string; machineOwnerId: string }
+  /** `contributorId`: whose login its agent runs under (Agent.contributorId), so the person's Tasks feed keeps it after the agent
+   *  is closed (read/feedIds.ts). Absent on assignments made before 2026-11-07. */
+  execution: { machineId: string; harnessId: string; machineOwnerId: string; contributorId?: string }
   result: string | null
   /** Explicit progress fences delayed recording gaps; absent on older backends. */
   recordingProgress?: { at: number; revision: number }
@@ -919,7 +921,8 @@ export const groupForBuddy = <T extends Pick<Conversation, 'assignment' | 'lostA
 }
 export const groupWithoutMachines = <T extends Pick<Conversation, 'assignment' | 'lostAttempt'>>(group: T): T => {
   const assignment = group.assignment && { ...group.assignment,
-    ...(group.assignment.execution ? { execution: { ...group.assignment.execution, machineId: '', harnessId: '', machineOwnerId: '' } } : {}),
+    ...(group.assignment.execution ? { execution: { ...group.assignment.execution, machineId: '', harnessId: '', machineOwnerId: '',
+      ...group.assignment.execution.contributorId !== undefined ? { contributorId: '' } : {} } } : {}),
     ...(group.assignment.lost ? { lost: { ...group.assignment.lost, reason: lostReasonWithoutMachine(group.assignment.lost.reason) } } : {}) }
   return { ...group, ...(assignment ? { assignment } : {}),
     ...(group.lostAttempt ? { lostAttempt: { id: group.lostAttempt.id, agentId: group.lostAttempt.agentId } } : {}) }

@@ -1,7 +1,6 @@
 import { projectPm } from './crewNeeds.js'
 import { agentDisplayName } from './agentNames.js'
 import { isBuddyChat } from './buddies.js'
-import { shippedNotice } from './buddyNews.js'
 import { activeWork, isLeads, stableId, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { groupProject, projectsOf } from './projects.js'
 import type { Reaction } from './reactions.js'
@@ -138,11 +137,6 @@ export function syncTaskLines(before: SuperTabState, effects: CommandEffects, se
 function moved(state: SuperTabState, effects: CommandEffects, group: Conversation, previous: Conversation | undefined, sender: Author | undefined,
   operationId: string): void {
   if (group.cards?.line || group.ledger?.proposal) inThread(state, effects, group, previous, sender, operationId)
-  // Only its first recorded merge is news to the Buddy, as the Shipped line was: a merge recorded again tells nobody again.
-  if (group.ledger?.mergedAt != null && previous?.ledger?.mergedAt == null) {
-    const news = sender && shippedNotice(state, group, sender, operationId)
-    if (news) effects.messages.push(news)
-  }
 }
 
 /** [group]'s replies in the thread of the message that asked for it: its name when it opens there (several tasks may share one
