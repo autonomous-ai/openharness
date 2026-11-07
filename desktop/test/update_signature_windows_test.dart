@@ -159,6 +159,13 @@ void main() {
       expect(found.files['extra.dll']!.status, 'NotSigned');
       expect(found.files.keys, isNot(contains('data/app.so')));
       expect(found.catalog, isNull);
+      // The staged app's own version, which must be the manifest's.
+      final productVersion = await _powershell(
+        "(Get-Item -LiteralPath '${p.join(staged, 'harness-desktop.exe')}')"
+        '.VersionInfo.ProductVersion',
+      );
+      expect(productVersion, isNotEmpty);
+      expect(found.stagedVersion, productVersion);
     },
     skip: _windowsOnly,
   );
@@ -207,6 +214,7 @@ void main() {
           stagedFolder: staged,
           stagedLauncher: launcher,
           runningExe: signed,
+          version: '9.9.9',
         ),
         throwsA(
           isA<UpdateRefused>().having(
@@ -232,6 +240,7 @@ void main() {
           stagedFolder: staged,
           stagedLauncher: launcher,
           runningExe: signed,
+          version: '9.9.9',
         ),
         throwsA(isA<UpdateRefused>()),
       ),
@@ -250,6 +259,7 @@ void main() {
         stagedFolder: staged,
         stagedLauncher: launcher,
         runningExe: unsigned,
+        version: '9.9.9',
       );
     },
     skip: _windowsOnly,
@@ -261,6 +271,7 @@ void main() {
         stagedFolder: staged,
         stagedLauncher: launcher,
         runningExe: signed,
+        version: '9.9.9',
         timeout: Duration.zero,
       ),
       throwsA(

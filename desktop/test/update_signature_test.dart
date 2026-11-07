@@ -43,7 +43,14 @@ const _microsoft = WindowsSigner(
 const _unsigned = WindowsSigner(status: 'NotSigned', subject: '', identity: '');
 
 /// The 1.3.89 package's shape, with the catalog the release now signs.
+/// The version the manifest names; the staged app says it with its build number.
+const _version = '1.3.91';
+
+String? _refusal(WindowsSignatureReport report) =>
+    windowsUpdateRefusal(report, version: _version);
+
 WindowsSignatureReport _report({
+  String? stagedVersion = '1.3.91+42',
   WindowsSigner running = _ours,
   Map<String, WindowsSigner>? files,
   WindowsCatalog? catalog = const WindowsCatalog(
@@ -66,6 +73,7 @@ WindowsSignatureReport _report({
         'WebView2Loader.dll': _microsoft,
       },
   catalog: catalog,
+  stagedVersion: stagedVersion,
 );
 
 void main() {
@@ -117,20 +125,54 @@ void main() {
   });
 
   group('the Windows rule', () {
+    // Security review 2 of #3524: a manifest someone else wrote could serve a
+    // genuine older signed build, one with a known hole, as a newer version.
+    // The staged app's own version must be the manifest's, as on macOS.
+    test(
+      'a genuine older build served as a newer version refuses, naming both',
+      () {
+        final why = _refusal(_report(stagedVersion: '1.3.80+7'));
+        expect(why, contains('1.3.80'));
+        expect(why, contains(_version));
+      },
+    );
+
+    test('a staged app whose version cannot be read refuses', () {
+      expect(_refusal(_report(stagedVersion: null)), isNotNull);
+      expect(_refusal(_report(stagedVersion: '')), isNotNull);
+    });
+
+    test('the build number after + is not part of the version', () {
+      expect(_refusal(_report(stagedVersion: '1.3.91')), isNull);
+      expect(
+        windowsUpdateRefusal(
+          _report(stagedVersion: '1.3.91-rc.2+40'),
+          version: '1.3.91-rc.2',
+        ),
+        isNull,
+      );
+      expect(_refusal(_report(stagedVersion: '1.3.910+1')), isNotNull);
+    });
+
+    test('the report reads the staged app\'s version', () {
+      final report = WindowsSignatureReport.fromJson({
+        'running': {'status': 'NotSigned', 'subject': '', 'identity': ''},
+        'stagedVersion': '1.3.91+42',
+      });
+      expect(report.stagedVersion, '1.3.91+42');
+    });
+
     test('the released shape passes: our files, Microsoft\'s WebView2 loader, a valid catalog', () {
-      expect(windowsUpdateRefusal(_report()), isNull);
+      expect(_refusal(_report()), isNull);
     });
 
     test('a running app that is itself unsigned has no signer to match', () {
-      expect(
-        windowsUpdateRefusal(_report(running: _unsigned, catalog: null)),
-        isNull,
-      );
+      expect(_refusal(_report(running: _unsigned, catalog: null)), isNull);
     });
 
     test('a running app whose signature is broken refuses', () {
       expect(
-        windowsUpdateRefusal(
+        _refusal(
           _report(
             running: const WindowsSigner(
               status: 'HashMismatch',
@@ -145,7 +187,7 @@ void main() {
 
     test('an extra unsigned DLL refuses, naming it', () {
       expect(
-        windowsUpdateRefusal(
+        _refusal(
           _report(
             files: const {
               'Harness.exe': _ours,
@@ -162,7 +204,7 @@ void main() {
       'the app signed by someone else refuses, even a trusted publisher',
       () {
         expect(
-          windowsUpdateRefusal(
+          _refusal(
             _report(
               files: const {
                 'Harness.exe': _ours,
@@ -182,7 +224,7 @@ void main() {
         identity: '1.3.6.1.4.1.311.97.1.2.3.4',
       );
       expect(
-        windowsUpdateRefusal(
+        _refusal(
           _report(
             files: const {
               'Harness.exe': lookalike,
@@ -196,17 +238,15 @@ void main() {
 
     test('a missing launcher or app refuses', () {
       expect(
-        windowsUpdateRefusal(
-          _report(files: const {'harness-desktop.exe': _ours}),
-        ),
+        _refusal(_report(files: const {'harness-desktop.exe': _ours})),
         contains('Harness.exe'),
       );
     });
 
     test('no catalog, a changed file or an unsigned catalog refuses', () {
-      expect(windowsUpdateRefusal(_report(catalog: null)), contains('catalog'));
+      expect(_refusal(_report(catalog: null)), contains('catalog'));
       expect(
-        windowsUpdateRefusal(
+        _refusal(
           _report(
             catalog: const WindowsCatalog(
               status: 'ValidationFailed',
@@ -217,7 +257,7 @@ void main() {
         contains('catalog'),
       );
       expect(
-        windowsUpdateRefusal(
+        _refusal(
           _report(
             catalog: const WindowsCatalog(status: 'Valid', signer: _unsigned),
           ),
@@ -225,7 +265,7 @@ void main() {
         contains('catalog'),
       );
       expect(
-        windowsUpdateRefusal(
+        _refusal(
           _report(
             catalog: const WindowsCatalog(status: 'Valid', signer: _microsoft),
           ),

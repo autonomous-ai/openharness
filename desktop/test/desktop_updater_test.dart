@@ -160,7 +160,11 @@ Uint8List _windowsZip(String version) {
 
 /// The fixtures here are not signed; update_signature_*_test.dart checks real
 /// signatures, and these tests check what the updater does with the verdict.
-Future<void> _signedByUs(String staged, {String? launcher}) async {}
+Future<void> _signedByUs(
+  String staged, {
+  String? launcher,
+  required String version,
+}) async {}
 
 void main() {
   late Directory scratch;
@@ -299,12 +303,14 @@ void main() {
       releaseMode: true,
       windowsInstallRoot: root,
       dio: Dio()..httpClientAdapter = _MemoryAdapter(bytes),
-      verifySignature: (staged, {launcher}) async {
+      verifySignature: (staged, {launcher, required version}) async {
         expect(
           File(p.join(staged, 'harness-desktop.exe')).existsSync(),
           isTrue,
         );
         expect(File(launcher!).readAsStringSync(), 'launcher 1.3.0');
+        // The staged app's own version is checked against the manifest's.
+        expect(version, '1.3.0');
         checked.add((staged, launcher));
         throw const UpdateRefused('it is not signed by AUTONOMOUS INC.');
       },
@@ -680,7 +686,7 @@ void main() {
       enabled: true,
       dio: Dio(),
       isLinux: false,
-      verifySignature: (staged, {launcher}) async {
+      verifySignature: (staged, {launcher, required version}) async {
         expect(File('$staged/Contents/Info.plist').existsSync(), isTrue);
         checked.add(staged);
         throw const UpdateRefused('it is not signed by Autonomous Inc.');
