@@ -825,7 +825,10 @@ class Agent {
       namedAgent: _safeNamedAgent(j['namedAgent']),
       cloud: j['location'] == 'cloud' ? AgentCloud.fromJson(j['cloud']) : null,
       launchArgs: j['launchArgs'] is List
-          ? [for (final w in j['launchArgs'] as List) if (w is String) w]
+          ? [
+              for (final w in j['launchArgs'] as List)
+                if (w is String) w,
+            ]
           : const [],
     );
   }
@@ -940,9 +943,10 @@ class Agent {
     return RegExp(r'^[a-zA-Z0-9._-]+$').hasMatch(raw) ? raw : null;
   }
 
+  // A profile folder as the agent's own machine spells it, which may not be this one's: `/…`, or `C:\…` on Windows (#4183).
   static String? _safeCodexHome(Object? raw) {
     if (raw is! String ||
-        !raw.startsWith('/') ||
+        !(raw.startsWith('/') || RegExp(r'^[A-Za-z]:\\').hasMatch(raw)) ||
         raw.length > 4096 ||
         RegExp(r'[\x00-\x1f\x7f]').hasMatch(raw)) {
       return null;

@@ -15,6 +15,7 @@ import type { BackendSocket } from '../../backendSocket.js'
 import type { Asker, SwarmLaunch } from '../api.js'
 import { installedDsh } from '../../dsh/installed.js'
 import { DSH_ID_RE, dshSupportedEngines } from '../../dsh/manifest.js'
+import { homeIsAbsolute } from '../../engines/kit/homeAdoption.js'
 import { folderTrust } from '../../engines/launchPrep.js'
 import type { NativeLaunchResult, NativeLaunchSource } from '../../engines/nativeLaunch.js'
 import * as opencodeLaunch from '../../engines/launchControl.js'
@@ -388,11 +389,11 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       const missing = await unsupportedLaunchModelFlag(engine, launchModel.launchModel)
       if (missing) { reply({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: `The ${engine} on this machine does not support ${missing}; update ${engine} to launch it with a model.` }); return }
     }
-    // Same validation the desktop app already applies client-side (`Agent._safeCodexHome`) —
-    // repeated here because a client's own check is not a guarantee about what actually
-    // arrives on the wire.
+    // Checked here whatever the client checked (`Agent._safeCodexHome` in the desktop app), because a client's own check is
+    // not a guarantee about what arrives on the wire. Absolute as this platform spells it: on Windows a drive-letter path,
+    // which a leading-'/' check refused, so a linked profile's agent ran on the default account (#4183).
     const rawCodexHome = typeof payload.codexHome === 'string' ? payload.codexHome : null
-    const codexHome = rawCodexHome && rawCodexHome.startsWith('/') && rawCodexHome.length <= 4096
+    const codexHome = rawCodexHome && homeIsAbsolute(rawCodexHome) && rawCodexHome.length <= 4096
       && !/[\x00-\x1f\x7f]/.test(rawCodexHome)
       ? rawCodexHome
       : null
@@ -402,7 +403,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     }
     // Claude profiles (CLAUDE_CONFIG_DIR) follow the same rule: Claude only, without a grid.
     const rawClaudeHome = typeof payload.claudeHome === 'string' ? payload.claudeHome : null
-    const claudeHome = rawClaudeHome && rawClaudeHome.startsWith('/') && rawClaudeHome.length <= 4096
+    const claudeHome = rawClaudeHome && homeIsAbsolute(rawClaudeHome) && rawClaudeHome.length <= 4096
       && !/[\x00-\x1f\x7f]/.test(rawClaudeHome)
       ? rawClaudeHome
       : null
