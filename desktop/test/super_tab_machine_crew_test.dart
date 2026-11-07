@@ -1,7 +1,7 @@
 // Machine rows show crew sessions, free disk and idle hours (#3412, anh Dee 11-05). Everything is in the Swarm state
 // already (#3398 plan, Decisions): the crew are the agents on the machine with a crew record; asleep is the agent's
 // asleep record, idle hours run from its `since`; moving is its movedTo; free disk is the machine's own reading. The
-// row says "3 crew · 1 asleep · 42 GB free" under its name; its details list each member. Memory store, no sign-in.
+// Manage separates crew chips and disk columns; its details list each member. Memory store, no sign-in.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/machines.dart';
@@ -129,10 +129,10 @@ void main() {
     'a machine row shows its crew sessions, how many are asleep and its free disk',
     (tester) async {
       final c = await _mount(tester, _pool(), _crew());
-      expect(
-        _text(tester, 'super-machine-crew-m'),
-        '4 crew · 2 asleep · 42 GB free',
-      );
+      expect(find.text('4 crew'), findsOneWidget);
+      expect(find.text('42 GB free'), findsOneWidget);
+      await _expand(tester);
+      expect(find.textContaining('asleep · idle'), findsNWidgets(2));
       await _unmount(tester, c);
     },
   );
@@ -178,21 +178,26 @@ void main() {
     final c = await _mount(tester, _pool(), [
       _agent('a5', 'Engineer 9', crew: false),
     ]);
-    expect(_text(tester, 'super-machine-crew-m'), isNull);
+    expect(find.text('0 crew'), findsOneWidget);
     await _expand(tester);
     expect(find.textContaining('Crew'), findsNothing);
     await _unmount(tester, c);
   });
 
   testWidgets(
-    'an offline machine keeps its crew count but drops its old free disk figure',
+    'an offline Manage machine keeps crew and stale disk with last-seen age',
     (tester) async {
       final c = await _mount(
         tester,
         _pool(observedAt: DateTime.now().subtract(const Duration(hours: 3))),
         _crew(),
       );
-      expect(_text(tester, 'super-machine-crew-m'), '4 crew · 2 asleep');
+      expect(find.text('4 crew'), findsOneWidget);
+      expect(find.text('42 GB free'), findsOneWidget);
+      expect(
+        find.textContaining('last seen', findRichText: true),
+        findsOneWidget,
+      );
       await _unmount(tester, c);
     },
   );
@@ -201,13 +206,22 @@ void main() {
     "free disk is the project's disk when the machine reports one, and a crew line with no reading says no disk",
     (tester) async {
       var c = await _mount(tester, _pool(projectDiskFree: 18e9), _crew());
+      expect(find.text('4 crew'), findsOneWidget);
+      expect(find.text('18 GB free'), findsOneWidget);
+      expect(find.text('42 GB free'), findsNothing);
       expect(
-        _text(tester, 'super-machine-crew-m'),
-        '4 crew · 2 asleep · 18 GB free',
+        tester
+            .widget<LinearProgressIndicator>(
+              find.byKey(const ValueKey('machines-disk-bar-m')),
+            )
+            .value,
+        .09,
       );
       await _unmount(tester, c);
       c = await _mount(tester, _pool(diskFree: null), [_agent('a2', 'Keeper')]);
-      expect(_text(tester, 'super-machine-crew-m'), '1 crew');
+      expect(find.text('1 crew'), findsOneWidget);
+      expect(find.text('Disk unavailable'), findsOneWidget);
+      expect(find.byKey(const ValueKey('machines-disk-bar-m')), findsNothing);
       await _unmount(tester, c);
     },
   );
