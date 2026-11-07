@@ -88,6 +88,14 @@ void main() {
       'every Swarm element matches its own image in ${brightness.name}',
       (tester) async {
         final bars = await _show(tester, brightness);
+        // Every element is compared in exactly one section, whole: none between sections, none across an edge.
+        expect(
+          _unplaced(_regions(tester), {
+            for (final id in _Gallery.sections.keys)
+              id: tester.getRect(find.byKey(_Gallery.section(id))),
+          }),
+          isEmpty,
+        );
         for (final id in _Gallery.sections.keys) {
           final section = find.byKey(_Gallery.section(id));
           (goldenFileComparator as _NearlyComparator).parts = _parts(
@@ -172,6 +180,16 @@ void main() {
     );
   });
 }
+
+/// The elements of [regions] not wholly inside exactly one of [sections]: each would be compared in part, or not at all.
+List<String> _unplaced(
+  List<GalleryRegion> regions,
+  Map<String, Rect> sections,
+) => [
+  for (final r in regions)
+    if (sections.values.where((s) => s.intersect(r.rect) == r.rect).length != 1)
+      r.name,
+];
 
 /// A section's image in [brightness], relative to the test folder.
 String _image(String id, Brightness brightness) =>
