@@ -1,7 +1,8 @@
 /**
  * The agents' private temporary folders. Each Swarm agent has its own (task #4395): since #4215 an agent starts in its owner's
  * own settings, which can block reads outside the working directories, so its folder is added to the engine's working
- * directories as well as given as its TMPDIR, which `mktemp` uses. A person's own session gets the shared folder, beside a
+ * directories as well as given as its TMPDIR, which `mktemp` uses on Linux. macOS's mktemp ignores TMPDIR, so there the
+ * account's own temporary folder is added as well (macMktempFolders). A person's own session gets the shared folder, beside a
  * Harness Team account only (audit M1, docs/plans/2026-11-02-team-private-temp-and-status-plan.md).
  *
  * The daemon runs with no TMPDIR on a Mac (launchd sets none here), so agents and their tools wrote to /private/tmp, which
@@ -13,6 +14,7 @@
  * agents' temporary files here. A Buddy has its own folder beside the data folder, one per Buddy, since its files come from a
  * person's private work and must not reach another person's Buddy (buddyTmpOf; docs/plans/2026-11-02-buddy-private-temp-plan.md).
  */
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { lstat, readdir, rm, rmdir } from 'node:fs/promises'
@@ -38,13 +40,27 @@ export interface AgentTmpDeps {
   config(): TeamConfig | null
   /** The account this process runs as. */
   user(): string
+  /** macOS: the account's own temporary folder, where mktemp writes whatever TMPDIR says; null when it is not known. */
+  userTemp(): string | null
   log(line: string): void
   now(): number
 }
 
 const realDeps: AgentTmpDeps = {
   platform: process.platform, dataDir: env.ADAPTER_DATA_DIR, config: () => readTeamConfig(), user: () => userInfo().username,
+  userTemp: () => darwinUserTemp(),
   log: (line) => console.log(`[agent-tmp] ${line}`), now: () => Date.now(),
+}
+
+let userTempDir: string | null | undefined
+
+/** `getconf DARWIN_USER_TEMP_DIR`, asked once per process: it is the account's for as long as the account exists. */
+function darwinUserTemp(): string | null {
+  if (userTempDir !== undefined) return userTempDir
+  try {
+    userTempDir = execFileSync('getconf', ['DARWIN_USER_TEMP_DIR'], { encoding: 'utf8', timeout: 5_000 }).trim().replace(/\/+$/, '') || null
+  } catch { userTempDir = null }
+  return userTempDir
 }
 
 export const agentTmpFolder = (dataDir: string = env.ADAPTER_DATA_DIR): string => join(dataDir, 'agent-tmp')
@@ -199,6 +215,21 @@ export function agentTmpOf(cwd: string, deps: AgentTmpDeps = realDeps): string |
   return null
 }
 
+/** On a Mac, the folder mktemp writes to whatever TMPDIR says (`mktemp`, `-d` and `-t` all do: the Mac test of #3506), by
+ *  the name it prints and by its real path, as one folder named two ways. It is the account's own, 0700, so this adds nothing
+ *  another account can write in; whatever runs as the owner could already write the owner's own settings. GNU mktemp follows
+ *  TMPDIR, so Linux needs none. */
+function macMktempFolders(deps: AgentTmpDeps): string[] {
+  if (deps.platform !== 'darwin') return []
+  const named = deps.userTemp()
+  if (!named) {
+    deps.log('macOS\'s own temporary folder is not known, so this agent may be asked before reading its mktemp files')
+    return []
+  }
+  const real = realOfFolder(named)
+  return real === named ? [named] : [named, real]
+}
+
 /**
  * What gives an agent its private folder: the variables, and the arguments that add the folder to the engine's working
  * directories, or none. A Swarm agent (not a Buddy, which has its own) gets its own folder, both. A person's own session
@@ -215,7 +246,9 @@ export function agentTmpLaunch(engine: AgentEngine, role: string | undefined, cw
   if (isTerminalEngine(engine) || role === 'buddy') return none
   if (role) {
     const folder = cwd ? agentTmpOf(cwd, deps) : null
-    return folder ? { env: { TMPDIR: folder }, args: ADDED_FOLDER[engine]?.(folder) ?? [] } : none
+    if (!folder) return none
+    const add = ADDED_FOLDER[engine]
+    return { env: { TMPDIR: folder }, args: add ? [folder, ...macMktempFolders(deps)].flatMap(add) : [] }
   }
   if (!ownerOfTeamComputer(deps)) return none
   if (!prepareAgentTmp(shared)) {
