@@ -63,9 +63,11 @@ void main() {
       'name': 'Claude Code',
       'local': true,
     });
-    final chatId = f.connection.server.state['conversations']
-        .cast<Map>()
-        .firstWhere((g) => g['kind'] == 'agent-chat')['id'] as String;
+    final chatId =
+        f.connection.server.state['conversations'].cast<Map>().firstWhere(
+              (g) => g['kind'] == 'agent-chat',
+            )['id']
+            as String;
     final create = f.connection.calls
         .firstWhere((c) => c.$1 == 'agent_create')
         .$2;
@@ -104,7 +106,10 @@ void main() {
     expect(await box.create(), NewHarnessOutcome.failed);
     expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
     expect(_commands(f).where((c) => c['type'] == 'agent.new'), hasLength(1));
-    expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), hasLength(1));
+    expect(
+      f.connection.calls.where((c) => c.$1 == 'agent_create'),
+      hasLength(1),
+    );
     final joins = f.connection.joins.map((j) => j['operationId']).toSet();
     expect(joins, hasLength(1));
   });
@@ -115,32 +120,81 @@ void main() {
     expect(await box.create(), NewHarnessOutcome.failed);
     f.connection.failCreation = false;
     final again = await _newAgent(f);
-    expect(await again.create(), NewHarnessOutcome.created, reason: again.error);
+    expect(
+      await again.create(),
+      NewHarnessOutcome.created,
+      reason: again.error,
+    );
     expect(_commands(f).where((c) => c['type'] == 'agent.new'), hasLength(1));
     expect(f.connection.joins, hasLength(1));
   });
 
-  test('Discard of a start that never ran archives the Member’s chat', () async {
-    final f = SuperTabLaunchFixture()..connection.loseCreate = true;
-    f.connection.creationRecovery = (type, payload) async => {
-      'creationId': payload['creationId'],
-      'state': type == 'agent_create_cancel' ? 'cancelled' : 'missing',
-    };
-    final box = await _newAgent(f);
-    expect(await box.create(), NewHarnessOutcome.failed);
-    final chatId = f.connection.server.state['conversations']
-        .cast<Map>()
-        .firstWhere((g) => g['kind'] == 'agent-chat')['id'];
-    final recovered = await _newAgent(f);
-    expect(recovered.integration!.agentKindLocked, isTrue);
-    expect(await recovered.integration!.discard!(), isNull);
-    final archive = _commands(
-      f,
-    ).singleWhere((c) => c['type'] == 'conversation.archive');
-    expect(archive, {
-      'type': 'conversation.archive',
-      'conversationId': chatId,
-      'archived': true,
+  test(
+    'Discard of a start that never ran archives the Member’s chat',
+    () async {
+      final f = SuperTabLaunchFixture()..connection.loseCreate = true;
+      f.connection.creationRecovery = (type, payload) async => {
+        'creationId': payload['creationId'],
+        'state': type == 'agent_create_cancel' ? 'cancelled' : 'missing',
+      };
+      final box = await _newAgent(f);
+      expect(await box.create(), NewHarnessOutcome.failed);
+      final chatId = f.connection.server.state['conversations']
+          .cast<Map>()
+          .firstWhere((g) => g['kind'] == 'agent-chat')['id'];
+      final recovered = await _newAgent(f);
+      expect(recovered.integration!.agentKindLocked, isTrue);
+      expect(await recovered.integration!.discard!(), isNull);
+      final archive = _commands(f)
+          .singleWhere((c) => c['type'] == 'conversation.archive');
+      expect(archive, {
+        'type': 'conversation.archive',
+        'conversationId': chatId,
+        'archived': true,
+      });
+    },
+  );
+
+  // Hotfix #4647 (anh Dee 19:55): New agent stopped with "This project is no longer available. Discard this request,
+  // then create a new project." The check before the start looked for the Member's new chat in a fresh read of the
+  // Swarm, and a read can leave a quiet chat out; a Member has no project to create, either.
+  group('a Member whose chat the Swarm\'s read leaves out', () {
+    test('still starts and joins its chat', () async {
+      final f = SuperTabLaunchFixture();
+      f.connection.server.newAgentChatsDormant = true;
+      final box = await _newAgent(f);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      final chatId =
+          f.connection.server.state['conversations'].cast<Map>().firstWhere(
+                (g) => g['kind'] == 'agent-chat',
+              )['id']
+              as String;
+      final join = f.connection.joins.single['command'] as Map;
+      expect(join, containsPair('conversationId', chatId));
+      expect(_commands(f).where((c) => c['type'] == 'agent.new'), hasLength(1));
+    });
+
+    test('a saved attempt whose chat is gone opens a fresh chat, never a dead '
+        'end', () async {
+      final f = SuperTabLaunchFixture()..connection.failCreation = true;
+      final first = await _newAgent(f);
+      expect(await first.create(), NewHarnessOutcome.failed);
+      final chats = f.connection.server.state['conversations'] as List;
+      chats.removeWhere((g) => (g as Map)['kind'] == 'agent-chat');
+      f.connection.failCreation = false;
+      final again = await _newAgent(f);
+      expect(
+        await again.create(),
+        NewHarnessOutcome.created,
+        reason: again.error,
+      );
+      expect(again.error ?? '', isNot(contains('project')));
+      expect(_commands(f).where((c) => c['type'] == 'agent.new'), hasLength(2));
+      final chatId =
+          chats.cast<Map>().firstWhere((g) => g['kind'] == 'agent-chat')['id']
+              as String;
+      final join = f.connection.joins.single['command'] as Map;
+      expect(join, containsPair('conversationId', chatId));
     });
   });
 }

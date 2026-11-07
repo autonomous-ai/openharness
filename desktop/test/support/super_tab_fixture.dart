@@ -595,6 +595,10 @@ class ConversationServer {
 
   /// The leaderboard read's answer; reads of it are listed in [leaderboardReads].
   Map<String, dynamic>? leaderboard;
+
+  /// A Member's own chat that agent.new opens is left out of a Swarm's first load, as a big Swarm's read can leave out
+  /// a quiet chat (hotfix #4647): only a read of the chat itself finds it.
+  bool newAgentChatsDormant = false;
   final leaderboardReads = <String>[];
 
   /// Answers by the read's path instead of [leaderboard], as a server does.
@@ -1762,6 +1766,7 @@ class ConversationServer {
               {'id': 'owner', 'generation': 'g'},
             ],
           },
+          if (newAgentChatsDormant) 'dormant': true,
         });
         output['conversationId'] = id;
       } else if (command['type'] == 'project.create') {
