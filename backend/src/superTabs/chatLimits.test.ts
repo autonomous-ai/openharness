@@ -142,14 +142,15 @@ describe('two main posts per linked ask', () => {
 })
 
 describe('one answer across main and thread', () => {
-  it.each(['main', 'thread'] as const)('refuses a plain second answer after the first in %s, even by another agent', place => {
+  // The PM's answer settles the ask; another agent's no longer stops the PM's, which it still owes (task #4555, #3421).
+  it.each(['main', 'thread'] as const)('refuses a plain second answer after the PM\'s in %s, even by another agent', place => {
     const { f, send, ask } = setup()
     const question = ask()
-    const first = send('Login works offline.', { by: f.dev,
+    const first = send('Login works offline.', {
       extra: place === 'main' ? { answers: question.id } : { answers: question.id, answer: true }, reply: place === 'main' ? question : { ...question, thread: 'topic-root' } })
     const messageId = first.result.messageId
     for (const extra of [{ answers: question.id }, { replyTo: question.id, alsoSend: true }]) {
-      expect(() => send('Yes, it works offline.', { reply: question, extra }))
+      expect(() => send('Yes, it works offline.', { by: f.dev, reply: question, extra }))
         .toThrow(expect.objectContaining({ code: 'ALREADY_ANSWERED', message: expect.stringContaining(String(messageId)) }))
     }
   })
@@ -162,8 +163,8 @@ describe('one answer across main and thread', () => {
     expect(() => send('The phone build includes it too.', { reply, extra: { replyTo: reply.id } })).not.toThrow()
     const next = send('Does it handle expired tokens?', { person: true, reply, extra: { replyTo: reply.id } })
     const followup = { ...question, id: String(next.result.messageId) }
-    expect(() => send('Expired tokens are refreshed.', { by: f.dev, reply: followup, extra: { answers: followup.id, answer: true } })).not.toThrow()
-    expect(() => send('They are refreshed automatically.', { reply: followup, extra: { answers: followup.id, answer: true } }))
+    expect(() => send('Expired tokens are refreshed.', { reply: followup, extra: { answers: followup.id, answer: true } })).not.toThrow()
+    expect(() => send('They are refreshed automatically.', { by: f.dev, reply: followup, extra: { answers: followup.id, answer: true } }))
       .toThrow(expect.objectContaining({ code: 'ALREADY_ANSWERED' }))
   })
 

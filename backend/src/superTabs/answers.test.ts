@@ -98,13 +98,18 @@ describe('the PM\'s answer', () => {
     expect(refusal(() => answer(f.lead, question, 'Again.'))?.code).toBe(ALREADY_ANSWERED)
   })
 
-  it('by an Engineer leaves PM owed settlement alone but blocks a second answer', () => {
+  // Every agent's reply shows in the chat now (task #4555), so another agent's answer no longer takes the PM's, which it still
+  // owes (#3421): the PM answers once, and then nobody else does.
+  it('by an Engineer leaves the ask owed by the PM, who still answers it once; then nobody else does', () => {
     const { f, ask, answer, owed, refusal } = setup()
     const question = ask('Is the fix in?')
     // The Engineer has work in the project, so it posts in its chat without joining it.
     answer(f.dev, question, 'I pushed it.')
     expect(owed()).toEqual([question.id])
-    expect(refusal(() => answer(f.lead, question, 'Merged at 21:00.'))?.code).toBe(ALREADY_ANSWERED)
+    answer(f.lead, question, 'Merged at 21:00.')
+    expect(owed()).toEqual([])
+    // A third agent post on one ask is past its two in the chat, before it is a second answer.
+    for (const by of [f.lead, f.dev]) expect(refusal(() => answer(by, question, 'In the next build.'))?.code).toBe('CHAT_MAIN_LIMIT')
   })
 
   it('needs the message it answers', () => {

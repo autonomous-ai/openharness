@@ -44,14 +44,15 @@ describe('an ask entrusted to a project agent', () => {
     expect(lines()).not.toContain(`message ${id} `)
   })
 
-  it('leaves the owed list and Board only when the named agent answers in its thread', () => {
+  // No chat has threads (task #4555): the named agent answers the ask in the chat, quoting it.
+  it('leaves the owed list and Board only when the named agent answers it', () => {
     const { f, ask, handoff, reply, owes, count, lines } = setup()
     const first = ask()
     f.tick(60_000)
     const other = ask()
     const routed = handoff(first)
     expect(routed.messages.find(m => m.id === routed.result.messageId)?.recipients).toEqual([f.dev])
-    expect(routed.messages.find(m => m.id === routed.result.messageId)?.text).toContain(`Answer message ${first} in lead in its thread.`)
+    expect(routed.messages.find(m => m.id === routed.result.messageId)?.text).toContain(`Answer message ${first} in lead.`)
     expect(owes()).toEqual([first, other])
     expect(count()).toBe(2)
     expect(f.group('lead').answered).toBeUndefined()
@@ -61,7 +62,7 @@ describe('an ask entrusted to a project agent', () => {
     expect(lines()).not.toContain(`message ${first} `)
     expect(lines()).toContain(`message ${other} `)
     expect(f.group('lead').pulse!.asks.oldestAt).toBe(f.now)
-    expect(f.group('lead').answered).toContainEqual({ id: first, answerId: answer, thread: first, at: f.now })
+    expect(f.group('lead').answered).toContainEqual({ id: first, answerId: answer, thread: null, at: f.now })
   })
 
   it('keeps a member ask answered only by a Guide owed until the PM answers', () => {
@@ -94,17 +95,19 @@ describe('an ask entrusted to a project agent', () => {
     expect(owes()).toEqual([id])
   })
 
-  it('requires the entrusted agent, the ask thread, and a public thread reply', () => {
+  it('requires the entrusted agent, its own ask, and a public answer: inline, or an older host\'s reply', () => {
     const { f, ask, handoff, reply, owes, anotherGuide } = setup()
     const otherAgent = anotherGuide()
-    const id = ask(), otherAsk = ask()
+    const id = ask(), otherAsk = ask(), third = ask()
     handoff(id)
+    handoff(third)
     reply(otherAgent, id)
     reply(f.dev, otherAsk)
-    reply(f.dev, id, { answers: true })
     expect(() => reply(f.dev, id, { agentOnly: true })).toThrow('The project chat holds only its coordinator among agents')
-    expect(owes()).toEqual([id, otherAsk])
-    reply(f.dev, id)
+    expect(owes()).toEqual([id, otherAsk, third])
+    reply(f.dev, id, { answers: true })
+    expect(owes()).toEqual([otherAsk, third])
+    reply(f.dev, third)
     expect(owes()).toEqual([otherAsk])
   })
 
