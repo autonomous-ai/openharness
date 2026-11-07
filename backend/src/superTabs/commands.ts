@@ -8,7 +8,7 @@ import { crewMoveFailed, takeOverCrewMember, wakeCrewMember } from './crewKeep.j
 import { moveTimingRow, startWake } from './crewTimes.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from './repositoryReach.js'
-import { admitByRoom, admitMachineStart, noRepositoryStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamAccountPool, teamPoolsOf, teamWorkCheck, TEAM_ACCOUNTS_GONE, NOT_YOUR_COMPUTER, type ContributedMachine } from './machines.js'
+import { admitByRoom, admitMachineStart, AGENT_MEMORY_BYTES, noRepositoryStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamAccountPool, teamPoolsOf, teamWorkCheck, TEAM_ACCOUNTS_GONE, NOT_YOUR_COMPUTER, type ContributedMachine } from './machines.js'
 import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { addedAgentName, renameAgentTo } from './agentRename.js'
@@ -1566,7 +1566,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // Sessions have no count of their own (Scholes, 11-02): idle ones close themselves. The one limit is the machine's, which
       // its owner set to protect it (Lead, 11-02), said in words a person can act on. A Buddy-only machine has none (below).
-      if (!pool.buddyOnly) admitByRoom(state, pool, machineSlots(state, pool), BUDDY_REQUIREMENTS.memoryBytes)
+      if (!pool.buddyOnly) admitByRoom(state, pool, machineSlots(state, pool), BUDDY_REQUIREMENTS.memoryBytes, 'a Buddy')
       const contributor = person(state, main.contributorId)
       // In the one Buddy chat a session works in one project its person reads, or, with none named, as the main Buddy does
       // (spec: The model). A project's own chat has its project.
@@ -3753,7 +3753,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (!pool.observation?.capabilities?.includes(REGULAR_AGENT_CAPABILITY)) fail('HOST_OUTDATED', `Update Harness on ${pool.name ?? 'your computer'} to start this agent there.`, 409)
       const chatId = openAgentChat(me, name)
       const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
-        ...(command.model ? { model: command.model } : {}), name, cwd: buddyHomeFolder(pool, me), worktree: false, requirements: BUDDY_REQUIREMENTS, regular: true }
+        ...(command.model ? { model: command.model } : {}), name, cwd: buddyHomeFolder(pool, me), worktree: false,
+        // A Buddy's smaller memory is for a session that only reads and talks (#3738); a Regular agent takes tasks.
+        requirements: { ...BUDDY_REQUIREMENTS, memoryBytes: AGENT_MEMORY_BYTES }, regular: true }
       const admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)!
       state.starts ??= []
       if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')
