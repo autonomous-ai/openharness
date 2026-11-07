@@ -239,7 +239,11 @@ export async function trainPass(input: { projectId: string; github: TrainGitHub;
   const groups = (memory.splits.length ? memory.splits.map(urls => code.filter(m => urls.includes(m.url))) : [code])
     .map(group => {
       const kept = disjoint(group)
-      for (const member of group) if (!kept.includes(member)) skipped.push({ member, skip: leftOut(member, kept) })
+      for (const member of group) if (!kept.includes(member)) {
+        const skip = leftOut(member, kept)
+        skipped.push({ member, skip })
+        waits.set(member.url, skip.text)
+      }
       return kept
     }).filter(group => group.length)
   memory.splits = []
