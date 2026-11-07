@@ -97,6 +97,22 @@ describe('in a switched project, an agent’s ask reaches the person through the
     expect(() => f.run({ type: 'decision.ask', conversationId: f.group, personId: 'peer', questions: [{ question: 'Ship how?', ...choices }] },
       asAgent(f.worker))).toThrow(/defaultAt/)
   })
+
+  it('keeps the person’s rights: one who cannot read the task is not asked, and only the person asked answers', () => {
+    const f = fixture(true)
+    // A private project peer is no member of: its worker reads the task, peer does not.
+    const project = f.state.projects!.find(p => p.id === f.app.projectId)!
+    project.visibility = 'private'
+    expect(() => f.run({ type: 'decision.ask', conversationId: f.group, personId: 'peer', questions: [{ question: 'Ship how?', ...choices, defaultAt }] },
+      asAgent(f.worker))).toThrow(/^peer cannot read this conversation\.$/)
+    project.visibility = 'public'
+    const asked = f.run({ type: 'decision.ask', conversationId: f.group, personId: 'peer', questions: [{ question: 'Ship how?', ...choices, defaultAt }] }, asAgent(f.worker))
+    const draft = asked.decisions![0]!
+    const decision = { ...draft, answeredAt: null, defaultAt: Date.parse(defaultAt), createdAt: NOW }
+    const answer = (actor: Actor) => f.run({ type: 'decision.answer', decisionId: draft.id, choice: 0 }, actor, { decision })
+    expect(() => answer(owner)).toThrow('unavailable')
+    expect(answer(peer).decisionAnswer).toEqual({ id: draft.id, choice: 0, note: null })
+  })
 })
 
 describe('in a project not switched, an agent’s ask still goes to the PM', () => {
