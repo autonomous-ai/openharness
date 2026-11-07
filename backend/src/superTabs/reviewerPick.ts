@@ -15,11 +15,16 @@ import { canStart, standing } from './reviewSeats.js'
 import { stepName, stepsOf } from './steps.js'
 import { reportsOs, stepOs, type StepKind, type StepOs } from './reviewTable.js'
 
-/** The agents that built [task]: its assignee and every agent its ledger says ran it. */
+/** Whether [agent] is one of [ids]: by its own id, or as its Member, whose every task session is one worker to these rules
+ *  (taskSessions.ts; review of #3553): a session that went and came back with a new id built and reviewed what the old one did. */
+export const oneOf = (ids: Set<string>, agent: Pick<Agent, 'id' | 'memberOf'>): boolean => ids.has(agent.id) || (!!agent.memberOf && ids.has(agent.memberOf))
+
+/** The agents that built [task], and the Members whose sessions did: its assignee and every agent its ledger says ran it. */
 export function builtBy(task: Conversation): Set<string> {
   const ids = new Set<string>()
   if (task.assignment) ids.add(task.assignment.agentId)
-  for (const run of task.ledger?.runs ?? []) if (run.agentId) ids.add(run.agentId)
+  if (task.assignment?.execution?.memberOf) ids.add(task.assignment.execution.memberOf)
+  for (const run of task.ledger?.runs ?? []) for (const id of [run.agentId, run.memberOf]) if (id) ids.add(id)
   return ids
 }
 
@@ -29,8 +34,14 @@ export function otherSecurityReviewers(state: SuperTabState, task: Conversation,
   const ids = new Set<string>()
   for (const step of stepsOf(state, task.id)) {
     if (step.id === stepId || !/security/i.test(stepName(step))) continue
-    if (step.assignment && (activeWork(step) || step.assignment.status === 'done')) ids.add(step.assignment.agentId)
-    for (const check of step.checks) for (const verdict of check.verdicts ?? []) if (verdict.by.startsWith('agent:')) ids.add(verdict.by.slice('agent:'.length))
+    if (step.assignment && (activeWork(step) || step.assignment.status === 'done')) {
+      ids.add(step.assignment.agentId)
+      if (step.assignment.execution?.memberOf) ids.add(step.assignment.execution.memberOf)
+    }
+    for (const check of step.checks) for (const verdict of check.verdicts ?? []) {
+      if (verdict.by.startsWith('agent:')) ids.add(verdict.by.slice('agent:'.length))
+      if (verdict.member) ids.add(verdict.member)
+    }
   }
   return ids
 }
@@ -92,14 +103,14 @@ export function reviewerCandidates(state: SuperTabState, task: Conversation, kin
   const bar = kind === 'test' ? TEST_STRENGTH : (engineer && strengthOf(state, engineer)) ?? TOP_STRENGTH
   const steps = stepsOf(state, task.id)
   const holding = new Set(steps.filter(step => activeWork(step)).map(step => step.assignment!.agentId))
-  const judged = new Set([task, ...steps].flatMap(group => group.checks.flatMap(check => check.verdicts ?? []))
-    .filter(verdict => atHead(verdict, head)).map(verdict => verdict.by))
+  const atThisHead = [task, ...steps].flatMap(group => group.checks.flatMap(check => check.verdicts ?? [])).filter(verdict => atHead(verdict, head))
+  const judged = new Set(atThisHead.flatMap(verdict => [verdict.by, ...verdict.member ? [`agent:${verdict.member}`] : []]))
   const otherSecurity = kind === 'security' ? otherSecurityReviewers(state, task, stepId) : new Set<string>()
   const ranked = state.agents.flatMap(agent => {
-    if (built.has(agent.id) || index.leaders.has(agent.id) || index.working.has(agent.id) || holding.has(agent.id)) return []
+    if (oneOf(built, agent) || index.leaders.has(agent.id) || index.working.has(agent.id) || holding.has(agent.id)) return []
     // Nor a Team account's agent, which takes no new work (task #4120).
     if (isBuddy(agent) || agent.workDecision === 'stop' || onTeamAccount(state, agent) || agentProjectId(state, agent) !== projectId) return []
-    if (judged.has(`agent:${agent.id}`) || otherSecurity.has(agent.id)) return []
+    if (judged.has(`agent:${agent.id}`) || (!!agent.memberOf && judged.has(`agent:${agent.memberOf}`)) || oneOf(otherSecurity, agent)) return []
     const role = roleNameOf(state, agent)
     if (NEVER.test(role) || NEVER_NAMED.test(agent.name) || NEVER_NAMED.test(agent.displayName ?? '')) return []
     // Only the step's own role, Reviewer or Tester, with no other agent standing in (task #3602: #3576's Test went to an Engineer).

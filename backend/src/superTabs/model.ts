@@ -302,6 +302,8 @@ export interface Check {
 }
 /** One checker's verdict on a check: its actor key (`agent:ID` or `person:ID`), what it found and when. */
 export interface CheckVerdict { by: string; passed: boolean; evidence: string; at: number
+  /** The Member whose task session gave it (taskSessions.ts): another of its sessions is the same checker to review rules. */
+  member?: string
   /** The checker's name when it gave the verdict: once it leaves the Swarm, the line that clears its failure still names it
    *  (#2656). Absent on verdicts given before. */
   name?: string
@@ -338,7 +340,8 @@ export interface Assignment {
   configuration: AgentConfiguration
   /** `contributorId`: whose login its agent runs under (Agent.contributorId), so the person's Tasks feed keeps it after the agent
    *  is closed (read/feedIds.ts). Absent on assignments made before 2026-11-07. */
-  execution: { machineId: string; harnessId: string; machineOwnerId: string; contributorId?: string }
+  /** `memberOf`: the Member whose task session ran it (taskSessions.ts), kept so review rules know it after that session goes. */
+  execution: { machineId: string; harnessId: string; machineOwnerId: string; contributorId?: string; memberOf?: string }
   result: string | null
   /** Explicit progress fences delayed recording gaps; absent on older backends. */
   recordingProgress?: { at: number; revision: number }
