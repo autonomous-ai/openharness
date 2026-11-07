@@ -309,9 +309,10 @@ proposals, the Board and the rights. This spec changes it in these places:
    that many awake at once. When the person writes to one more, the one idle longest sleeps (it wakes again when they
    write to it). The number of Members is not capped per person: each computer's room, by the router's existing fit,
    decides how many run there, so a person's crew of 20 or more on one computer keeps starting agents, and section 5's
-   ask still works. One fixed limit bounds the records: at most 50 Members per person in a Swarm (with their task
-   sessions, at most 300 agent records); a 51st start is refused with "You have 50 agents in this Swarm. Remove one
-   to start another." The default Buddy becomes the default Member (section 7).
+   ask still works. One fixed limit bounds the records, for the whole Swarm, not per person: at most 1,000 Members in a
+   Swarm (with their task sessions, at most 6,000 agent records). Today's openharness Swarm has about 60 agents, one
+   person running 25 of them, so the limit is about 16 times today's. Past it, a start is refused with "This Swarm has
+   1,000 agents. Remove one to start another." The default Buddy becomes the default Member (section 7).
 4. **Sleep.** "Only crew members sleep" and the Buddy's hour-idle sleep are replaced by section 4.
 5. **"A Buddy may only post in its own chat"** (BUDDY_FORBIDDEN) still holds for a Member's chat session. Its task
    sessions post where a project's agent posts, and only in their own project.
@@ -362,8 +363,8 @@ Each with no content, paths or identifiers:
 Reviewed revision: 3. Security reviews 1 and 2 of 2b4558e: a Member's chat and task sessions kept apart, the
 private-folder check in `work.assign`, migrated sessions never doing tasks, the ask only to owners who can read the
 project, attachment checks in the CLI. Security review 2 of 81687b4: the private check counts every private file
-Harness put on the computer, chat copies included (also any the host reports present), and Members are limited to
-50 per person in a Swarm. Each line:
+Harness put on the computer, chat copies included (also any the host reports present), and Members are bounded
+per Swarm (1,000), with each computer's room deciding how many a person runs. Each line:
 answered.
 
 New data, all small and replaced in place, nothing appended per event:
@@ -387,7 +388,7 @@ Roles stay derived, as today: an agent is a Lead when a project's chat names it 
 stores a role.
 
 1. **Growth.** Every field is bounded by what it hangs on: one per agent, one per project, `setUp` at 5, `moreAsked` at
-   the Swarm's machines, `privateOnDisk` at the Swarm's 100 projects per machine, and Members at 50 per person in a Swarm.
+   the Swarm's machines, `privateOnDisk` at the Swarm's 100 projects per machine, and Members at 1,000 per Swarm.
    Lifecycle:
 
    | Record | Created | Updated | Finished | Lost | Cancelled | Leave and rejoin | Deleted, purged | Recreated under the same key |
@@ -443,7 +444,7 @@ stores a role.
    - *The host's `setUp` report* rides the machine report it already sends, about 60 bytes per Member, written only
      when the list changes.
 4. **Scale.** Today's openharness Swarm has about 60 agents, 45 people and one project; 10x is 600 agents across up to
-   100 projects, and up to 3,000 task session records beside them (5 per Member, most of them asleep). On one computer,
+   100 projects (the Swarm's limit of 1,000 Members is above that), and up to 3,000 task session records beside them (5 per Member, most of them asleep). On one computer,
    a person with N Members holds one set of chat project copies (at most 50 detached worktrees, as one Buddy does
    today) plus at most 5N task worktrees. Dispatch's work per free Member is bounded by waiting tasks in projects it may help, already loaded;
    at 10x that is at most a few thousand comparisons per pass, measured on a synthetic 600-agent, 100-project state
@@ -451,7 +452,8 @@ stores a role.
    computer. The metrics that
    warn first are the dispatch pass's time (p95, already timed), the Swarm's first-load bytes (task session parts), and
    the measure *idle-while-waiting* above; set-ups per
-   day shows clone and install load before disk runs out.
+   day shows clone and install load before disk runs out. Members per Swarm against the 1,000 limit is reported with
+   the Swarm's figures, and a design review starts when it is less than 10 times away.
 5. **Compatibility.** Backend first; every field is optional and `kind` keeps its values (`buddy`, `pm`, `regular`)
    for clients from the last 30 days, until 2026-12-07. Readers found in the code (a search for `isBuddy`, `buddyOf`,
    `kind`, `regular`, `agentProjectId`):
@@ -592,7 +594,7 @@ This flow, smallest first:
 9. **Buddies become Members.** Buddies and Regular agents act as Members, their old sessions as chat sessions only, never
    for tasks; each asks its person once for a main project in its chat, with the project list; the default Buddy is the
    default Member. The per-person cap counts awake chat sessions only; the number of Members is the computers' room,
-   up to 50 per person in a Swarm.
+   up to 1,000 per Swarm.
    Backend release, then Desktop release for the project list in the chat, with two security reviews.
    Owner area: backend/src/superTabs/ (buddies.ts, agentKind.ts, buddySleep.ts), desktop/lib/super_tabs/ (the chat's project list), desktop/design/.
 10. **The Lead asks a computer's owner to start more.** Only an owner who can read the project; one ask per computer
