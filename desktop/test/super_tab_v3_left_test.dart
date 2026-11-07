@@ -245,6 +245,46 @@ void main() {
       expect(pages, [SwarmPage.projects]);
     });
 
+    // Task #4220 kept a project that tags you in folded Projects, the Desktop having no Mentions row; with no project
+    // rows (task #4466) the tags are Projects' own detail, and it is bold while any waits.
+    testWidgets('a tag of you in a project\'s chat shows on Projects, with its '
+        'count', (tester) async {
+      await show(
+        tester,
+        setup: (server) => server.tag('message-1', conversationId: 'lead'),
+      );
+      final row = key('super-projects');
+      expect(
+        find.descendant(of: row, matching: find.text('1')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<Text>(
+              find.descendant(of: row, matching: find.text('Projects')),
+            )
+            .style
+            ?.fontWeight,
+        grid.AppFont.semibold,
+      );
+      await tester.pumpWidget(const SizedBox());
+      await show(tester);
+      expect(find.descendant(of: row, matching: find.text('1')), findsNothing);
+    });
+
+    // Review of #3539: the Desktop has no unread filter to turn off, so one saved on must hide nothing there.
+    testWidgets('a saved unread filter hides no Buddy row on the Desktop', (
+      tester,
+    ) async {
+      final c = await show(tester);
+      expect(key('super-buddy-lead'), findsOneWidget);
+      c.toggleUnreadOnly();
+      await tester.pump();
+      expect(c.unreadOnly, isTrue);
+      expect(key('super-buddy-lead'), findsOneWidget);
+      await tester.runAsync(c.flush);
+    });
+
     testWidgets('Projects is the lit row while the grid or a Board is open', (
       tester,
     ) async {
