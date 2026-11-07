@@ -11,7 +11,8 @@ import { storeOldLeads } from './oldLeads.test-support.js'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { SuperTabStore } from '../src/superTabs/store.js'
+import { SuperTabStore, transaction } from '../src/superTabs/store.js'
+import type { Author, MessageDraft, SuperTabState } from '../src/superTabs/model.js'
 import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import { sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
 import { commandSchema, type Command } from '../src/superTabs/commands.js'
@@ -168,6 +169,30 @@ function openPng(bytes: Buffer): { width: number; height: number; pixel: number[
   }
   return { width, height, pixel: [...inflateSync(Buffer.concat(data)).subarray(1, 5)] }
 }
+
+describe('a person\'s private chat at the store\'s write (security review of #3557)', () => {
+  // The command's rows are checked in applyCommand; the store checks every write again, so a notice written off that path with
+  // the wrong author still never puts a Lead in a person's chat with their own agent.
+  type Write = (tx: unknown, tabId: string, state: SuperTabState, rows: MessageDraft[], sequences: Map<string, number>) => Promise<unknown>
+  const write = (f: Swarm, author: (state: SuperTabState) => Author, chat: string) => transaction(db, async tx => {
+    const { state } = await f.store.load(tx, peer, f.tab, { groupIds: [chat] })
+    const row: MessageDraft = { id: randomUUID(), conversationId: chat, author: author(state), text: 'A line', replyTo: null, recipients: [] }
+    return (f.store as unknown as { writeMessages: Write }).writeMessages.call(f.store, tx, f.tab, state, [row], new Map([[row.id, 1_000_000]]))
+  })
+  const asAgent = (id: string) => (state: SuperTabState): Author => {
+    const a = state.agents.find(x => x.id === id)!
+    return { kind: 'agent', id: a.id, name: a.name, membershipGeneration: a.membershipGeneration }
+  }
+
+  it('refuses any agent but the person\'s own, a Lead included, and writes their own agent\'s line', async () => {
+    const f = await swarm()
+    const { swarmChat, main } = await swarmBuddy(f)
+    await expect(write(f, asAgent(f.lead), swarmChat)).rejects.toMatchObject({ code: 'PRIVATE_CHAT' })
+    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: swarmChat, text: 'A line' } })).toBe(0)
+    await write(f, asAgent(main), swarmChat)
+    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: swarmChat, text: 'A line' } })).toBe(1)
+  })
+})
 
 describe('a Buddy through the store', () => {
   it('starts on its owner\'s machine from a list older hosts do not read, and joins its owner\'s one Buddy chat', async () => {
