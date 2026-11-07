@@ -332,7 +332,9 @@ void main() {
       ];
       final stray = personalProjectTabId('gone');
       _tab(f.app, stray, [_pane('m', 'a')], name: 'old');
-      _tab(f.app, 'desk-code', [_pane('m', 'b')], name: 'code');
+      _tab(f.app, 'c0de0000000000000000000000000001', [
+        _pane('m', 'b'),
+      ], name: 'code');
       final before = _commands(f).length;
       await PersonalProjects.of(f.app).sync(api.c);
       final created = _commands(f).skip(before).toList();
@@ -340,7 +342,7 @@ void main() {
       expect(
         PersonalProjects.of(f.app).knownForTest('owner', tabId).keys,
         allOf(
-          contains(personalTabKey('desk-code')),
+          contains(personalTabKey('c0de0000000000000000000000000001')),
           isNot(contains(personalTabKey(stray))),
         ),
       );
@@ -661,7 +663,10 @@ void main() {
     ];
     final web = _tab(f.app, 'desk-web', [_pane('m', 'w')], name: 'web');
     _tab(f.app, 'desk-api', [_pane('m', 'a')], name: 'api');
-    _tab(f.app, 'desk-notes', [_pane('m', 'n')], name: 'notes');
+    // A no-repo tab gets its project only under a real desk id.
+    _tab(f.app, '0a7e5000000000000000000000000001', [
+      _pane('m', 'n'),
+    ], name: 'notes');
     final c = await _personal(f);
     final personal = PersonalProjects.of(f.app);
     await personal.sync(c);
