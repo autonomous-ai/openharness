@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/widgets/desktop_chrome.dart';
@@ -14,6 +17,7 @@ import 'package:harness/super_tabs/view.dart';
 import 'package:harness/widgets/harness_activity_mark.dart' show ActivityMark;
 
 import 'super_tab_activity_lists_test.dart' show load, swarm;
+import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show createApp;
 
@@ -34,8 +38,16 @@ Map<String, dynamic> _agent(
   'configuration': {'engine': 'codex'},
 };
 
+final shots = Platform.environment['HARNESS_SUPER_TAB_CAPTURE'];
+
 void main() {
   Finder key(String k) => find.byKey(ValueKey(k));
+  Finder crown(String agent) => find.descendant(
+    of: key('super-agent-$agent'),
+    matching: find.byIcon(AppIcons.crown),
+  );
+  Finder text(String agent, String text) =>
+      find.descendant(of: key('super-agent-$agent'), matching: find.text(text));
 
   Future<void> settle(WidgetTester tester) async {
     for (var i = 0; i < 3; i++) {
@@ -54,6 +66,8 @@ void main() {
     List<String>? selected,
     List<String>? created,
     List<String>? terminals,
+    double width = 300,
+    Brightness brightness = Brightness.light,
   }) async {
     final server = swarm();
     if (agents != null) server.state['agents'] = agents;
@@ -62,11 +76,16 @@ void main() {
     final c = activity.controller;
     final AppNotifier app = createApp();
     addTearDown(app.dispose);
-    await tester.binding.setSurfaceSize(const Size(300, 900));
+    // The design tokens follow the app's brightness, which main.dart sets from the theme.
+    final previous = grid.AppTheme.brightness.value;
+    grid.AppTheme.brightness.value = brightness;
+    addTearDown(() => grid.AppTheme.brightness.value = previous);
+    await tester.binding.setSurfaceSize(Size(width, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.light),
+        debugShowCheckedModeBanner: false,
+        theme: grid.buildAppTheme(brightness: brightness),
         home: Scaffold(
           // The view rebuilds the sidebar as the controller changes.
           body: ListenableBuilder(
@@ -303,22 +322,65 @@ void main() {
       }
     });
 
-    testWidgets('a PM has a crown right after its name, a Regular agent '
-        'none', (tester) async {
+    // Task #4421 (anh Dee 11-07): "let's just put a leader crown on the avatar. it's too much." and "let's put the project
+    // name next to the one that it leads".
+    testWidgets('a PM wears its crown on its avatar and names the project it '
+        'leads after its name; a Regular agent neither', (tester) async {
       await show(tester, agents: mine, setup: agents);
-      expect(key('super-agent-crown-orion'), findsOneWidget);
-      expect(key('super-agent-crown-kestrel'), findsNothing);
-      final name = find.descendant(
-        of: key('super-agent-orion'),
-        matching: find.text('Orion'),
+      expect(crown('orion'), findsOneWidget);
+      final avatar = tester.getRect(
+        find.descendant(
+          of: key('super-agent-orion'),
+          matching: find.byType(SuperTabAvatar),
+        ),
       );
-      final crown = tester.getRect(key('super-agent-crown-orion'));
-      expect(crown.left - tester.getRect(name).right, inInclusiveRange(0, 12));
+      final badge = tester.getRect(crown('orion'));
+      // On the avatar's top right corner, not after the name.
+      expect(badge.center.dx, greaterThan(avatar.center.dx));
+      expect(badge.center.dy, lessThan(avatar.center.dy));
+      expect(badge.left, lessThan(avatar.right));
+      final name = tester.getRect(text('orion', 'Orion'));
+      expect(badge.right, lessThan(name.left));
+      final project = tester.getRect(text('orion', 'web-project'));
+      expect(project.left, greaterThan(name.right));
+      expect((project.center.dy - name.center.dy).abs(), lessThan(4));
       expect(
-        (crown.center.dy - tester.getRect(name).center.dy).abs(),
-        lessThan(4),
+        tester.widget<Text>(text('orion', 'web-project')).style?.color,
+        grid.SidebarInk.muted(tester.element(key('super-agent-orion'))),
       );
+      expect(crown('kestrel'), findsNothing);
+      expect(text('kestrel', 'web-project'), findsNothing);
     });
+
+    testWidgets('in a narrow pane the project name is cut before the agent\'s '
+        'name', (tester) async {
+      await show(
+        tester,
+        agents: [
+          buddy,
+          {..._agent('orion', 'Orion Lead'), 'kind': 'pm'},
+        ],
+        setup: agents,
+        width: 280,
+      );
+      bool cut(String shown) => tester
+          .renderObject<RenderParagraph>(text('orion', shown))
+          .didExceedMaxLines;
+      expect(cut('web-project'), isTrue);
+      expect(cut('Orion Lead'), isFalse);
+    });
+
+    testWidgets('screenshots of My agents, light and dark', (tester) async {
+      await tester.runAsync(() => loadCaptureFonts(shots));
+      for (final (brightness, name) in [
+        (Brightness.light, 'light'),
+        (Brightness.dark, 'dark'),
+      ]) {
+        await show(tester, agents: mine, setup: agents, brightness: brightness);
+        await captureWindow(tester, shots, 'my-agents-pm-crown-$name');
+        await tester.pumpWidget(const SizedBox());
+      }
+    }, skip: shots == null);
 
     testWidgets('unread is a bold name, with no dot and no number', (
       tester,
@@ -492,10 +554,13 @@ void main() {
     });
   });
 
-  group('the view offers + New agent only with an app', () {
+  // Task #4196: + New agent opens the workspace's Cmd-N form, so the view
+  // offers it only when its workspace can open one.
+  group('the view offers + New agent only with Cmd-N to open', () {
     Future<SuperTabController> view(
       WidgetTester tester, {
       required bool withApp,
+      VoidCallback? onNewAgent,
     }) async {
       final server = swarm()..state['agents'] = [_agent('kestrel', 'Kestrel')];
       final c = server.controller(
@@ -521,6 +586,7 @@ void main() {
               app: app,
               onInvite: () {},
               onAddAgent: (_) {},
+              onNewAgent: onNewAgent,
               onOpenTerminal: (_) {},
               machineName: (_) => 'Mac Studio',
               board: true,
@@ -532,17 +598,22 @@ void main() {
       return c;
     }
 
-    testWidgets('with an app the last row of My agents is + New agent', (
+    testWidgets('the last row of My agents is + New agent, which opens Cmd-N', (
       tester,
     ) async {
-      final c = await view(tester, withApp: true);
+      var opened = 0;
+      final c = await view(tester, withApp: true, onNewAgent: () => opened++);
       expect(key('super-new-agent-row'), findsOneWidget);
+      await tester.tap(key('super-new-agent-row'));
+      await tester.pump();
+      expect(opened, 1);
+      expect(find.text('Create agent'), findsNothing);
       await tester.pumpWidget(const SizedBox());
       c.dispose();
     });
 
-    testWidgets('without one it has none', (tester) async {
-      final c = await view(tester, withApp: false);
+    testWidgets('without Cmd-N to open it has none', (tester) async {
+      final c = await view(tester, withApp: true);
       expect(key('super-new-agent-row'), findsNothing);
       await tester.pumpWidget(const SizedBox());
       c.dispose();
@@ -874,8 +945,8 @@ void main() {
           ],
           selected: selected,
         );
-        expect(key('super-agent-crown-zed'), findsOneWidget);
-        expect(key('super-agent-crown-amy'), findsNothing);
+        expect(crown('zed'), findsOneWidget);
+        expect(crown('amy'), findsNothing);
         await tester.tap(key('super-agent-zed'));
         await tester.pump();
         expect(selected, ['offline']);
@@ -893,7 +964,7 @@ void main() {
                       .firstWhere((g) => g['id'] == 'lead')['leadId'] =
                   'orion',
         );
-        expect(key('super-agent-crown-orion'), findsNothing);
+        expect(crown('orion'), findsNothing);
       });
     },
   );

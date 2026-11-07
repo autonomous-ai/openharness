@@ -2,20 +2,24 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
+import '../../logging/app_log.dart';
 import '../../shared/widgets/app_dialog.dart';
 import '../../state/app_state.dart';
-import '../../logging/app_log.dart';
+import '../../state/harness_launch_integration.dart';
+import '../../state/new_harness.dart';
+import '../../widgets/desktop_chrome.dart';
+import '../../widgets/new_harness_form.dart';
 import '../controller.dart';
-import 'agent_dialog.dart';
 import 'agent_launcher.dart';
 
-/// Shared entry for the left pane and the post-join Buddy prompt. The local
-/// transport's identity is used directly; a remote machine is never a fallback.
-Future<Map<String, dynamic>?> showSwarmNewAgentDialog(
+/// Join's "bring your agent" (task #4196): the Cmd-N form, its agent and
+/// computer, for the person's Buddy, which the Swarm starts as before. The
+/// local transport's identity is used directly; a remote machine is never a
+/// fallback for this computer.
+Future<Map<String, dynamic>?> showBringAgentForm(
   BuildContext context, {
   required SuperTabController controller,
   required AppNotifier app,
-  bool bringing = false,
   bool Function()? isCurrent,
 }) async {
   final accountId = app.currentUser?.id;
@@ -44,20 +48,11 @@ Future<Map<String, dynamic>?> showSwarmNewAgentDialog(
         builder: (_) => _ConnectThisComputer(app: app, find: thisComputer),
       );
   if (here == null || !context.mounted || !current()) return null;
-  final machineId = here.machine.machineId;
-  // Probe executables through the existing hidden native path; do not inspect
-  // a sign-in or read settings here. Those belong to the owner's actual CLI.
-  await app
-      .probeEngines(machineId, force: true)
-      .timeout(const Duration(seconds: 20), onTimeout: () {});
-  if (!current()) return null;
-  final engines = [
-    for (final e in ['claude', 'codex'])
-      if (here.engines[e]?.installed == true) e,
-  ];
-  final launcher = SwarmAgentLauncher(
+  // One start per computer chosen, each keeping its receipt across retries.
+  final launchers = <String, (SwarmAgentLauncher, String)>{};
+  SwarmAgentLauncher launcherFor(String machineId) => SwarmAgentLauncher(
     machineId: machineId,
-    machineName: here.machine.displayName,
+    machineName: app.stateOf(machineId)?.machine.displayName ?? machineId,
     inSwarm:
         controller.snapshot?.machines.any(
           (m) => m['machineId'] == machineId && m['buddyOnly'] != true,
@@ -75,7 +70,7 @@ Future<Map<String, dynamic>?> showSwarmNewAgentDialog(
           .timeout(const Duration(seconds: 20));
       if (prepared['state'] == 'preparing') {
         throw const SwarmAgentLaunchFailure(
-          'Your agent’s folder is still being prepared. Retry to check it.',
+          'Your agent’s folder is still being prepared. Try again to check it.',
         );
       }
       if (prepared['state'] != 'ready' ||
@@ -86,7 +81,7 @@ Future<Map<String, dynamic>?> showSwarmNewAgentDialog(
         );
       }
       return {
-        'name': here.machine.displayName,
+        'name': app.stateOf(machineId)?.machine.displayName ?? machineId,
         'cwd': prepared['cwd'],
         'engines': prepared['engines'],
       };
@@ -108,24 +103,68 @@ Future<Map<String, dynamic>?> showSwarmNewAgentDialog(
         'UPDATE_REQUIRED',
       }.contains(controller.operationErrorCode)) {
         throw const SwarmAgentLaunchFailure(
-          'Update Harness to use this agent flow.',
+          'Update Harness to bring your agent.',
         );
       }
       throw const SwarmAgentLaunchFailure(
-        'The agent start is not confirmed. Retry to check it.',
+        'Your agent’s start is not confirmed. Try again to check it.',
       );
     },
   );
-  if (!context.mounted || !current()) return null;
-  final result = await showAppDialog<Map<String, dynamic>>(
-    context: context,
-    builder: (_) => SwarmAgentDialog(
-      bringing: bringing,
-      engines: engines,
-      create: launcher.create,
-      isCurrent: current,
-    ),
+  Map<String, dynamic>? started;
+  String? startedOn;
+  final integration = HarnessLaunchIntegration(
+    creationId: superTabOperationId(),
+    actionLabel: 'Bring agent',
+    engines: const ['claude', 'codex'],
+    ownMachinesOnly: true,
+    prepare: (_, task, _) async => task,
+    complete: (_, _) async {},
+    beforeSubmit: (_, _) async {},
+    startBuddy: (machineId, engine) async {
+      final (launcher, operation) = launchers[machineId] ??= (
+        launcherFor(machineId),
+        superTabOperationId(),
+      );
+      final result = await launcher.create(engine, operation);
+      if (result['agentId'] is! String && result['startId'] is! String) {
+        throw const SwarmAgentLaunchFailure(
+          'Your agent’s start is not confirmed. Try again to check it.',
+        );
+      }
+      started = result;
+      startedOn = machineId;
+    },
   );
+  final box = NewHarnessController(
+    app,
+    machineId: here.machine.machineId,
+    integration: integration,
+  );
+  if (!context.mounted || !current()) {
+    box.dispose();
+    return null;
+  }
+  try {
+    // No transition: the form's controller is disposed as the route closes.
+    await showAppDialog<void>(
+      context: context,
+      transitionDuration: Duration.zero,
+      veilBlur: 0,
+      builder: (dialog) => Padding(
+        padding: const EdgeInsets.all(DesktopChrome.panelPadding),
+        child: NewHarnessForm(
+          controller: box,
+          desktop: true,
+          onCreated: () => Navigator.pop(dialog),
+          onClose: () => Navigator.pop(dialog),
+        ),
+      ),
+    );
+  } finally {
+    box.dispose();
+  }
+  final result = started;
   if (!current() || result == null) return null;
   final conversation = result['conversationId'];
   if (conversation is String) await controller.select(conversation);
@@ -134,7 +173,7 @@ Future<Map<String, dynamic>?> showSwarmNewAgentDialog(
     // into a second start. Host liveness is still visible through existing UI.
     try {
       await app
-          .wakeSuperTabHost(machineId)
+          .wakeSuperTabHost(startedOn!)
           .timeout(const Duration(seconds: 10));
     } catch (_) {
       appLog.info(

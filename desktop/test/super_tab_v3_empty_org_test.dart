@@ -64,6 +64,7 @@ void main() {
             app: app,
             onNewSwarm: () {},
             onNewProject: onNewProject,
+            onNewAgent: () {},
             onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},

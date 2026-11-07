@@ -2,7 +2,6 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import 'buddy_chat.dart';
@@ -62,7 +61,7 @@ class SuperTabBuddyRow extends StatelessWidget {
     this.note,
     this.detail,
     this.status,
-    this.crownKey,
+    this.crown = false,
   });
 
   /// The Buddy, for its avatar; null while none runs.
@@ -85,11 +84,12 @@ class SuperTabBuddyRow extends StatelessWidget {
   /// What hovering says: "Your Buddy · openharness".
   final String tooltip;
 
-  /// A quiet word after the name, such as a Buddy's "offline".
+  /// A quiet word after the name, such as a Buddy's "offline" or the project
+  /// a PM leads.
   final String? note;
 
-  /// Set on a PM: its crown, right after the name (Swarm v3, task #4118).
-  final Key? crownKey;
+  /// A PM: its crown on its avatar (anh Dee 11-07, task #4421).
+  final bool crown;
 
   /// A line under the name, such as where a Buddy runs, with [status], its
   /// activity mark, before it.
@@ -134,6 +134,7 @@ class SuperTabBuddyRow extends StatelessWidget {
                           name: name,
                           size: 20,
                           engineBadge: false,
+                          crown: crown,
                         ),
                         null => SuperTabAvatar(
                           identity: agentId == null
@@ -167,9 +168,6 @@ class SuperTabBuddyRow extends StatelessWidget {
                                       maxWidth: math.max(
                                         0,
                                         box.maxWidth -
-                                            (crownKey == null
-                                                ? 0
-                                                : 4 + AppIcons.metadataSize) -
                                             8 * [project, note].nonNulls.length,
                                       ),
                                     ),
@@ -189,15 +187,6 @@ class SuperTabBuddyRow extends StatelessWidget {
                                           ),
                                     ),
                                   ),
-                                  if (crownKey case final crownKey?) ...[
-                                    const SizedBox(width: 4),
-                                    Icon(
-                                      AppIcons.crown,
-                                      key: crownKey,
-                                      size: AppIcons.metadataSize,
-                                      color: color,
-                                    ),
-                                  ],
                                   if (project case final project?) ...[
                                     const SizedBox(width: 8),
                                     Flexible(
