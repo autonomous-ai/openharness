@@ -29,6 +29,8 @@ export const isRoleName = (name: string): boolean => defaults.test(name.trim())
 const automatic = /^(?:claude|codex|pi|agent)-\d{4}-\d{2}-\d{2}(?:[-T].*)?$/i
 /** Only its engine's name, which Desktop's local Cmd-N start gave every Member (launch.dart, task #4568): no member's. */
 const engine = /^(?:claude(?: code)?|codex|opencode|pi)$/i
+/** Whether [name] is only an engine's ("Claude Code", "Codex"), which names no agent. */
+export const isEngineName = (name: string): boolean => engine.test(name.trim())
 /** The Reviewer role's name is no member's either (Dee, 2026-10-30: three "Reviewer" rows). Kept out of isRoleName, whose
  *  Buddy check reserves it on its own (buddies.ts BUDDY_RESERVED). */
 const reviewer = /^reviewer(?:[\s#-]+\d+)?$/i

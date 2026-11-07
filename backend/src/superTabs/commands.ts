@@ -11,7 +11,7 @@ import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from 
 import { admitByRoom, admitMachineStart, AGENT_MEMORY_BYTES, noRepositoryStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamAccountPool, teamPoolsOf, teamWorkCheck, TEAM_ACCOUNTS_GONE, NOT_YOUR_COMPUTER, type ContributedMachine } from './machines.js'
 import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
-import { addedAgentName, renameAgentTo } from './agentRename.js'
+import { addedAgentName, newAgentName, renameAgentTo } from './agentRename.js'
 import { addCrew, CREW_ROLE_MAX, removeCrew } from './crew.js'
 import { noteIndex } from './processNotes.js'
 import { ownsBoard, readsProject, requireCanChat, requirePriorityRight, steers } from './boardRights.js'
@@ -3757,7 +3757,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A slot for its person's Buddy there and its sessions: it takes nothing else.
       if (pool.buddyOnly) pool.maxAgents = machineSlots(state, pool) + 1
       const contributor = person(state, grant.contributorId)
-      const named = chosenBuddyName(state, chat, me, context.buddyNames)
+      const named = chosenBuddyName(state, chat, context.buddyNames)
       // Never moved to the Mac's Team account, as a teammate's project otherwise is (machines.ts teamStartRequest).
       const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
         ...(command.model ? { model: command.model } : {}), name: named.name, cwd: buddyHomeFolder(pool, me), worktree: false,
@@ -3791,8 +3791,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // computer nor a host that runs Regular starts is needed; agent.add then brings the running session into the chat.
       if (command.local) {
         if (command.kind !== 'regular') fail('LOCAL_MEMBER_ONLY', 'A Lead started on your computer starts its project with project.create.', 400)
-        const name = command.name ?? fail('AGENT_NAME_REQUIRED', 'Name your agent.', 400)
-        result.conversationId = openAgentChat(me, name)
+        result.conversationId = openAgentChat(me, newAgentName(state, actor, command.name, operationId))
         break
       }
       // A Buddy-only record is not the computer in the Swarm: its person adds it first (Desktop does, with no screen).
@@ -3810,7 +3809,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         break
       }
       // A Regular agent: in no project, in a chat of its own with its person, which nobody else reads (projects.ts readsAgentChat).
-      const name = command.name ?? fail('AGENT_NAME_REQUIRED', 'Name your agent.', 400)
+      // Its own name, or a real one picked for it (task #4568).
+      const name = newAgentName(state, actor, command.name, operationId)
       // Only a host that says it runs one gets its start (read/hostRows.ts regularStarts): an older one would leave it waiting.
       if (!pool.observation?.capabilities?.includes(REGULAR_AGENT_CAPABILITY)) fail('HOST_OUTDATED', `Update Harness on ${pool.name ?? 'your computer'} to start this agent there.`, 409)
       const chatId = openAgentChat(me, name)

@@ -5,7 +5,7 @@ import { createSuperTab, stableId, visibleState, type Actor, type Conversation }
 import { canReadGroup, canWatchAgent, isConfidential, readsRecordsIn, wordsOf } from './projects.js'
 import { CLOSED_CHAT_ANSWERED_NOTICE } from './decisions.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, defaultBuddy, defaultBuddyChat, shownBefore, swarmBuddyChatId } from './buddies.js'
-import { isRoleName } from './agentNames.js'
+import { AGENT_NAMES, isRoleName } from './agentNames.js'
 import { buddiesTold } from './buddyNews.js'
 import { sweepLiveness } from './liveness.js'
 import { hostTab } from './read/hostRows.js'
@@ -327,7 +327,9 @@ describe('adding a Buddy', () => {
     const start = f.state.starts!.find(s => s.id === added.result.startId)!
     expect(start).toMatchObject({ contributorId: 'peer', machineOwnerId: 'peer', poolGeneration: 'g1', dispatched: false, error: null })
     expect(start.request).toMatchObject({ conversationId: chat.id, machineId: 'peer-mac', engine: 'claude', cwd: '/swarm/.buddy-peer',
-      worktree: false, buddyScope: 'swarm', name: 'peer\'s Buddy', buddyOf: { personId: 'peer', generation: 'first' } })
+      worktree: false, buddyScope: 'swarm', name: chat.buddyName, buddyOf: { personId: 'peer', generation: 'first' } })
+    // A real name from the list, kept on its chat (task #4568): never "peer's Buddy".
+    expect(AGENT_NAMES).toContain(chat.buddyName)
     expect(start.request.buddyProjects).toEqual(f.state.projects!.map(p => ({ id: p.id, name: p.name, cwd: `/swarm/${p.id}` })))
     expect(start.request.buddyProjects!.map(p => p.id)).toEqual(expect.arrayContaining([f.app.projectId, f.web.projectId]))
     expect(start.request.role).toBeUndefined()
@@ -433,7 +435,8 @@ describe('adding a Buddy', () => {
     expect(group(f, added.result.conversationId as string).agentIds).toEqual([buddy.id])
     expect(joined.messages).toEqual([])
     const settled = f.run({ type: 'agent.startSettled', startId: added.result.startId as string, warning: null }, peer, host)
-    expect(settled.messages.map(m => [m.conversationId, m.text, m.recipients])).toEqual([[added.result.conversationId, 'peer\'s Buddy is ready. Tell it what you have in mind.', []]])
+    expect(settled.messages.map(m => [m.conversationId, m.text, m.recipients])).toEqual([[added.result.conversationId, `${buddy.name} is ready. Tell it what you have in mind.`, []]])
+    expect(AGENT_NAMES).toContain(buddy.name)
   })
 
   it('is one per person per Swarm, while it starts or runs, whichever project an older app names; another person may have their own', () => {
@@ -1449,11 +1452,12 @@ describe('naming a Buddy (Diego, 10-29)', () => {
 
   it('is refused for anyone else, the Swarm owner and the PM too, and changes nothing', () => {
     const { f, chat, agentId, rename } = named()
+    const was = shown(f, peer, agentId)
     expect(() => rename('Mine now', owner)).toThrow('unavailable')
     expect(() => rename('Mine now', agentActor(f.pm))).toThrow()
     expect(() => rename('Mine now', agentActor(agentId))).toThrow()
-    expect(shown(f, peer, agentId)).toBe('peer\'s Buddy')
-    expect(group(f, chat).buddyName).toBeUndefined()
+    expect(shown(f, peer, agentId)).toBe(was)
+    expect(group(f, chat).buddyName).toBe(was)
   })
 
   it('renames only a Buddy: a project chat or a workgroup is refused', () => {
@@ -1463,14 +1467,15 @@ describe('naming a Buddy (Diego, 10-29)', () => {
     expect(group(f, f.group).title).toBe('Offline')
   })
 
-  it('goes back to the default when cleared, empty or null', () => {
+  // Task #4568: a cleared name is a fresh real one, never "peer's Buddy".
+  it('takes a fresh real name when cleared, empty or null', () => {
     const { f, chat, agentId, rename } = named()
     for (const cleared of [null, '   ']) {
       rename('Sparky')
       rename(cleared)
-      expect(shown(f, peer, agentId)).toBe('peer\'s Buddy')
-      expect(group(f, chat).title).toBe('peer\'s Buddy')
-      expect(group(f, chat).buddyName).toBeUndefined()
+      const name = shown(f, peer, agentId)
+      expect(AGENT_NAMES).toContain(name)
+      expect(group(f, chat)).toMatchObject({ title: name, buddyName: name })
     }
   })
 
@@ -1551,19 +1556,19 @@ describe('naming a Buddy (Diego, 10-29)', () => {
     expect(isRoleName('Reviewer')).toBe(false)
   })
 
-  it('falls back to the default when its chosen name was taken by the time a Buddy is added again', () => {
+  it('takes a fresh real name when its chosen one was taken by the time a Buddy is added again', () => {
     const { f, chat, rename } = named()
     rename('Sparky')
     f.run({ type: 'buddy.remove' }, peer)
     f.state.agents.push({ id: 'later', projectId: f.web.projectId, machineId: 'machine', harnessId: 'later-harness', machineOwnerId: 'host',
       contributorId: 'owner', membershipGeneration: 'test', name: 'Sparky', configuration })
     const again = addBuddy(f, peer, f.app.projectId)
-    expect(f.state.starts!.find(s => s.id === again.result.startId)!.request.name).toBe('peer\'s Buddy')
-    expect(group(f, chat)).toMatchObject({ title: 'peer\'s Buddy' })
-    expect(group(f, chat).buddyName).toBeUndefined()
+    const name = f.state.starts!.find(s => s.id === again.result.startId)!.request.name
+    expect(AGENT_NAMES).toContain(name)
+    expect(group(f, chat)).toMatchObject({ title: name, buddyName: name })
     // Nothing fails silently: its owner reads why in their chat, and how to name it again.
     expect(again.messages.map(m => [m.conversationId, m.text, m.recipients])).toEqual([[chat,
-      'Sparky is taken now; your Buddy starts as peer\'s Buddy. Rename it from the ⋮ menu.', []]])
+      `Sparky is taken now; your Buddy starts as ${name}. Rename it from the ⋮ menu.`, []]])
   })
 
   it('also falls back when another Buddy chat, quiet or loaded, chose the name meanwhile', () => {
@@ -1572,8 +1577,9 @@ describe('naming a Buddy (Diego, 10-29)', () => {
     f.run({ type: 'buddy.remove' }, peer)
     const again = f.run({ type: 'buddy.create', projectId: f.app.projectId, machineId: 'peer-mac', engine: 'claude' }, peer,
       { contribution: { machineOwnerId: 'peer', contributorId: 'peer' }, buddyNames: [{ conversationId: 'quiet-chat', name: 'sparky' }] })
-    expect(f.state.starts!.find(s => s.id === again.result.startId)!.request.name).toBe('peer\'s Buddy')
-    expect(group(f, chat).buddyName).toBeUndefined()
+    const name = f.state.starts!.find(s => s.id === again.result.startId)!.request.name
+    expect(AGENT_NAMES).toContain(name)
+    expect(group(f, chat).buddyName).toBe(name)
   })
 })
 

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { SEED_SETTLE_MS } from '../src/superTabs/proposals.js'
+import { AGENT_NAMES } from '../src/superTabs/agentNames.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
@@ -178,7 +179,10 @@ describe('a Buddy through the store', () => {
     const read = await f.store.read(peer, f.tab)
     expect(read.state.agents.find(a => a.id === agentId)).toMatchObject({ buddyOf: { personId: peer.sub } })
     const messages = await f.store.messages(peer, f.tab, chat, {})
-    expect(messages.messages.map(m => m.text)).toEqual(['peer\'s Buddy is ready. Tell it what you have in mind.'])
+    // A real name from the list (task #4568), never "peer's Buddy".
+    const name = read.state.agents.find(a => a.id === agentId)!.name
+    expect(AGENT_NAMES).toContain(name)
+    expect(messages.messages.map(m => m.text)).toEqual([`${name} is ready. Tell it what you have in mind.`])
   })
 
   it('is read by its owner and its Buddy alone: neither the Swarm owner nor the PM reads its chat, the one Buddy\'s or an older one', async () => {
@@ -789,10 +793,11 @@ describe('naming a Buddy through the store (Diego, 10-29)', () => {
   it('is refused for the Swarm owner, the PM and the Buddy itself', async () => {
     const f = await swarm()
     const { chat, agentId } = await buddy(f)
+    const was = await shown(f, owner, agentId)
     await expect(rename(f, chat, 'Mine now', owner)).rejects.toThrow('unavailable')
     await expect(rename(f, chat, 'Mine now', owner, f.lead)).rejects.toThrow()
     await expect(rename(f, chat, 'Mine now', peer, agentId)).rejects.toThrow('A Buddy only talks with its owner')
-    expect(await shown(f, owner, agentId)).toBe('peer\'s Buddy')
+    expect(await shown(f, owner, agentId)).toBe(was)
   })
 
   it('renamed while it starts, it joins and says it is ready under the new name', async () => {
@@ -847,12 +852,12 @@ describe('naming a Buddy through the store (Diego, 10-29)', () => {
     expect(named.filter(g => (g.data as { buddyName?: string }).buddyName === 'Sparky')).toHaveLength(1)
   })
 
-  it('goes back to the default when cleared, and is kept when the Buddy is removed and added again', async () => {
+  it('takes a fresh real name when cleared, and is kept when the Buddy is removed and added again', async () => {
     const f = await swarm()
     const first = await swarmBuddy(f)
     await rename(f, first.swarmChat, 'Sparky')
     await rename(f, first.swarmChat, null)
-    expect(await shown(f, peer, first.main)).toBe('peer\'s Buddy')
+    expect(AGENT_NAMES).toContain(await shown(f, peer, first.main))
     await rename(f, first.swarmChat, 'Sparky')
     await f.execute({ type: 'buddy.remove' }, peer)
     expect(await shown(f, peer, first.main)).toBeUndefined()

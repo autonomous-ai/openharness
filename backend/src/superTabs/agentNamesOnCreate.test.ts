@@ -121,5 +121,8 @@ describe('renaming an agent', () => {
     expect(code(() => f.run({ type: 'agent.rename', agentId, name: 'Codex' }, person(0)))).toBe('AGENT_NAME_ROLE')
     f.run({ type: 'agent.rename', agentId, name: 'Sunrise' }, person(0))
     expect(f.state.agents.find(a => a.id === agentId)!.displayName).toBe('Sunrise')
+    // Back to the name it started with, which its own chat still shows.
+    f.run({ type: 'agent.rename', agentId, name: 'Moonbeam' }, person(0))
+    expect(f.state.agents.find(a => a.id === agentId)!.displayName).toBe('Moonbeam')
   })
 })

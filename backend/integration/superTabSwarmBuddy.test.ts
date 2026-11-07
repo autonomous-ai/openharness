@@ -829,7 +829,7 @@ describe('a phone\'s message no Buddy can answer', () => {
     await send(f, old, 'Second outage')
     await send(f, old, 'Still out')
     expect((await rows(f, old)).map(m => m.text)).toEqual(['First outage', line('Peer Mac is paused'), 'Back',
-      expect.stringMatching(/^Could not start peer's Buddy/), 'Second outage', line('Peer Mac is paused'), 'Still out'])
+      expect.stringMatching(/^Could not start /), 'Second outage', line('Peer Mac is paused'), 'Still out'])
   })
 })
 
