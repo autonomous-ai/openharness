@@ -198,7 +198,7 @@ void main() {
     expect(pill('messages'), findsOneWidget);
     expect(pill('people'), findsOneWidget);
     expect(pill('tasks'), findsOneWidget);
-    expect(find.text('No messages yet. Agents in this tab send them with `harness send`.'), findsOneWidget);
+    expect(find.textContaining('No messages'), findsNothing);
     expect(find.text('Update Harness on this computer to share tabs.'), findsNothing);
   });
 
