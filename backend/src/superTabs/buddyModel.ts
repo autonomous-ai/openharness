@@ -226,9 +226,14 @@ export function expiredModelRequests(state: SuperTabState, now: number): Array<{
   return out
 }
 
-/** [buddy]'s thread sessions a move home left on a shared model (task #3810). */
-const owedHome = (state: SuperTabState, buddy: Agent): Agent[] => state.agents.filter(a => a.buddySession && a.homeOwed && a.gridModel
-  && a.buddyOf?.personId === buddy.buddyOf!.personId && a.buddyOf.generation === buddy.buddyOf!.generation)
+/** [buddy]'s thread sessions a move home left on a shared model (task #3810): those in its own chat, as buddyModelResult moves
+ *  them (task #3818: a person may have several Buddies), else all of its owner's. */
+function owedHome(state: SuperTabState, buddy: Agent): Agent[] {
+  const chat = buddyChatOf(state, buddy)
+  const sessions = chat ? sessionAgentsOf(state, chat)
+    : state.agents.filter(a => a.buddySession && a.buddyOf?.personId === buddy.buddyOf!.personId && a.buddyOf.generation === buddy.buddyOf!.generation)
+  return sessions.filter(a => a.homeOwed && a.gridModel)
+}
 /** One more try at moving [session] home; true when that was the last, and its follow-up is dropped. */
 function countTry(session: Agent): boolean {
   const tries = session.homeOwed!.tries + 1

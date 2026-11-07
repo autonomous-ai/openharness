@@ -492,4 +492,19 @@ describe('switching one of several Buddies', () => {
     expect(f.agent().modelRequest).toBeUndefined()
     expect(code(() => f.run({ type: 'buddy.model', gridModel: MODEL, conversationId: 'lead' } as Command))).toBe('NOT_FOUND')
   })
+
+  // Task #3810 with #3818: a thread session a move home left on a shared model is moved by its own Buddy's machine request, never
+  // by another of its owner's Buddies, whose chat does not hold it.
+  it('asks only the Buddy whose thread session stayed on a shared model to move it home', () => {
+    const { f, second, agent } = two()
+    f.run({ type: 'buddy.model', gridModel: MODEL })
+    f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId: f.agent().modelRequest!.id, ok: true }, f.buddy())
+    const session = addSession(f, 'session', 'h-session', MODEL)
+    f.run({ type: 'agent.alert', agentId: f.buddyId, alert: 'limit', active: true }, f.buddy())
+    f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId: f.agent().modelRequest!.id, ok: true, stayed: ['h-session'] }, f.buddy())
+    expect(session().homeOwed).toEqual({ reason: 'limit', tries: 1 })
+    unservedBuddyModels(f.state, NOW, buddy => `follow-up-${buddy.id}`)
+    expect(f.agent().modelRequest).toMatchObject({ gridModel: null, sessionsOnly: true })
+    expect(agent(second).modelRequest).toBeUndefined()
+  })
 })
