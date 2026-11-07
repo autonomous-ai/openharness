@@ -25,6 +25,9 @@ class TasksFixture {
   final store = MemoryKeyValueStore();
   bool supported = true, fail = false;
 
+  /// Every read of the Swarm fails, as when the backend or this computer's Harness is gone.
+  bool offline = false;
+
   /// The server's answer to the next command: refused, as a 4xx.
   SuperTabFailure? refuse;
 
@@ -51,6 +54,13 @@ class TasksFixture {
     pollInterval: Duration.zero,
     save: (value) => store.write('controller', value.toString()),
     request: (method, path, {body}) async {
+      if (offline) {
+        throw const SuperTabFailure(
+          'BACKEND_UNREACHABLE',
+          'Could not reach the Harness backend.',
+          statusCode: 502,
+        );
+      }
       if (path.contains('/messages')) {
         return {'messages': <dynamic>[], 'next': null};
       }
