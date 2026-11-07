@@ -37,8 +37,7 @@ const _ours = WindowsSigner(
 );
 const _microsoft = WindowsSigner(
   status: 'Valid',
-  subject:
-      'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US',
+  subject: 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US',
   identity: '',
 );
 const _unsigned = WindowsSigner(status: 'NotSigned', subject: '', identity: '');
@@ -47,7 +46,10 @@ const _unsigned = WindowsSigner(status: 'NotSigned', subject: '', identity: '');
 WindowsSignatureReport _report({
   WindowsSigner running = _ours,
   Map<String, WindowsSigner>? files,
-  WindowsCatalog? catalog = const WindowsCatalog(status: 'Valid', signer: _ours),
+  WindowsCatalog? catalog = const WindowsCatalog(
+    status: 'Valid',
+    signer: _ours,
+  ),
 }) => WindowsSignatureReport(
   running: running,
   runningFolder: const {
@@ -91,21 +93,27 @@ void main() {
       expect(() => parseMacSigner(''), throwsA(isA<UpdateRefused>()));
     });
 
-    test('the requirement pins Developer ID, the team, the app and notarization', () {
-      final requirement = macUpdateRequirement(parseMacSigner(_released)!);
-      expect(requirement, startsWith('anchor apple generic'));
-      expect(
-        requirement,
-        contains('certificate 1[field.1.2.840.113635.100.6.2.6]'),
-      );
-      expect(
-        requirement,
-        contains('certificate leaf[field.1.2.840.113635.100.6.1.13]'),
-      );
-      expect(requirement, contains('certificate leaf[subject.OU] = "54DJVWMJCC"'));
-      expect(requirement, contains('identifier "ai.autonomous.harness"'));
-      expect(requirement, endsWith('and notarized'));
-    });
+    test(
+      'the requirement pins Developer ID, the team, the app and notarization',
+      () {
+        final requirement = macUpdateRequirement(parseMacSigner(_released)!);
+        expect(requirement, startsWith('anchor apple generic'));
+        expect(
+          requirement,
+          contains('certificate 1[field.1.2.840.113635.100.6.2.6]'),
+        );
+        expect(
+          requirement,
+          contains('certificate leaf[field.1.2.840.113635.100.6.1.13]'),
+        );
+        expect(
+          requirement,
+          contains('certificate leaf[subject.OU] = "54DJVWMJCC"'),
+        );
+        expect(requirement, contains('identifier "ai.autonomous.harness"'));
+        expect(requirement, endsWith('and notarized'));
+      },
+    );
   });
 
   group('the Windows rule', () {
@@ -150,28 +158,36 @@ void main() {
       );
     });
 
-    test('the app signed by someone else refuses, even a trusted publisher', () {
-      expect(
-        windowsUpdateRefusal(
-          _report(
-            files: const {'Harness.exe': _ours, 'harness-desktop.exe': _microsoft},
+    test(
+      'the app signed by someone else refuses, even a trusted publisher',
+      () {
+        expect(
+          windowsUpdateRefusal(
+            _report(
+              files: const {
+                'Harness.exe': _ours,
+                'harness-desktop.exe': _microsoft,
+              },
+            ),
           ),
-        ),
-        contains('harness-desktop.exe'),
-      );
-    });
+          contains('harness-desktop.exe'),
+        );
+      },
+    );
 
     test('the same company name under another identity refuses', () {
       const lookalike = WindowsSigner(
         status: 'Valid',
-        subject:
-            'CN=AUTONOMOUS INC., O=AUTONOMOUS INC., L=Redlands, S=California, C=US',
+        subject: 'CN=AUTONOMOUS INC., O=AUTONOMOUS INC., L=Redlands, S=California, C=US',
         identity: '1.3.6.1.4.1.311.97.1.2.3.4',
       );
       expect(
         windowsUpdateRefusal(
           _report(
-            files: const {'Harness.exe': lookalike, 'harness-desktop.exe': _ours},
+            files: const {
+              'Harness.exe': lookalike,
+              'harness-desktop.exe': _ours,
+            },
           ),
         ),
         contains('Harness.exe'),
@@ -222,10 +238,20 @@ void main() {
       final report = WindowsSignatureReport.fromJson({
         'running': {'status': 'Valid', 'subject': 'CN=A', 'identity': '1.2'},
         'runningFolder': [
-          {'path': 'a.dll', 'status': 'Valid', 'subject': 'CN=B', 'identity': ''},
+          {
+            'path': 'a.dll',
+            'status': 'Valid',
+            'subject': 'CN=B',
+            'identity': '',
+          },
         ],
         'files': [
-          {'path': 'Harness.exe', 'status': 'NotSigned', 'subject': '', 'identity': ''},
+          {
+            'path': 'Harness.exe',
+            'status': 'NotSigned',
+            'subject': '',
+            'identity': '',
+          },
         ],
         'catalog': {
           'status': 'Valid',
