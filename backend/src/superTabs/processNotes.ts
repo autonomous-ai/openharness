@@ -35,6 +35,13 @@ export const PROCESS_NOTES: readonly ProcessNote[] = [
     // Diego 11-06 (#4097): the v2 text replaces process lines only where the instructions moved onto the base.
     rebasedOnly: true,
   },
+  {
+    // #4459: on a Mac, macOS mktemp ignores TMPDIR, so the shell guard now refuses a bare mktemp (#3506).
+    id: '2026-11-07-mktemp',
+    text: 'Make temp folders with mktemp -d "${TMPDIR:-/tmp}/name.XXXXXX". On a Mac a bare mktemp ignores your temp folder, '
+      + 'so the shell guard turns it away. Your tool sheet says it.',
+    schedule: '52cb6172d956',
+  },
 ]
 
 export const latestProcessNote = (): ProcessNote | undefined => PROCESS_NOTES.at(-1)
