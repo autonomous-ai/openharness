@@ -45,11 +45,9 @@ export interface LeaderboardInput {
   allProjects?: string[]
   /** People's profile names by id, read with the board (read.ts profileNames); absent ones go by their email. */
   names?: ReadonlyMap<string, string>
-  /** Agents the authenticated reader may see, before presentation redaction. */
-  visibleAgents?: Agent[]
 }
 
-export function leaderboard({ state, groups, machines: visibleMachines, projectId, week, now, period, allProjects, names, visibleAgents = state.agents }: LeaderboardInput): Leaderboard {
+export function leaderboard({ state, groups, machines: visibleMachines, projectId, week, now, period, allProjects, names }: LeaderboardInput): Leaderboard {
   const weeklyOrg = !!allProjects && !period
   const project = projectOf(state, projectId)
   // The Lead conversation is where plans are approved: its answers count, though nothing there is a request that ships.
@@ -68,9 +66,10 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
   const landedBy = byKey(landed, g => g.requesterId!)
   const acceptedBy = weeklyOrg ? byKey(requests.filter(g => g.requesterId && firstAssignedAt(g.ledger ?? {}) != null), g => g.requesterId!) : new Map<string, Conversation[]>()
   const generations = new Map(state.people.map(p => [p.id, p.generation]))
-  // An idle v3 Regular agent and a Swarm Buddy have no project; visibility is resolved by the caller.
+  // Counted before visibility, so every reader sees one number (task #4252): an idle v3 Regular agent has no project and only its
+  // person sees it. A count of the readable projects' agents and project-less ones names none of them.
   const agentProjects = new Set([...projectIds, NO_PROJECT])
-  const agentsBy = weeklyOrg ? byKey(visibleAgents.filter(a => !a.teamAccount && !a.buddySession
+  const agentsBy = weeklyOrg ? byKey(state.agents.filter(a => !a.teamAccount && !a.buddySession
     && generations.get(a.contributorId) === a.membershipGeneration
     && agentProjects.has(agentProjectId(state, a))), a => a.contributorId) : new Map<string, Agent[]>()
   const answersBy = byKey(visible.flatMap(group => (group.ledger?.unblocks ?? []).map(unblock => ({ ...unblock, group }))), u => u.personId)

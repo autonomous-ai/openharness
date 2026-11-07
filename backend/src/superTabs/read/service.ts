@@ -522,12 +522,9 @@ export class SwarmReads {
         // Names change rarely and show on a board: read on the secondary (task #2970).
         const names = await profileNames(this.store.replica, state.people.map(p => p.id))
         const visible = visibleState(state, actor, now)
-        // Count only agents this reader sees, keeping ownership before presentation redaction (Buddy rows).
-        const agentIds = new Set(visible.agents.map(a => a.id))
-        const visibleAgents = state.agents.filter(a => agentIds.has(a.id))
         const machines = (visible.machines ?? [])
           .map(m => ({ ...m, lentDays: state.machines?.find(own => own.machineId === m.machineId)?.lentDays }))
-        return leaderboard({ state, groups, machines, visibleAgents, projectId, week: start, now, period, allProjects: readable, names })
+        return leaderboard({ state, groups, machines, projectId, week: start, now, period, allProjects: readable, names })
       }
       // Access is resolved afresh above, even when the aggregate is held. Include the current audience in the key.
       return allProjects && !period
