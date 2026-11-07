@@ -613,15 +613,15 @@ describe('buildLaunchOverrides — the owner\'s private temporary folder (audit 
   it('reaches a relaunch, resume, fork and swap, which all pass here', async () => {
     told({ TMPDIR: '/data/agent-tmp' })
     expect(await buildLaunchOverrides(deps().d, 'claude', {}, 'a')).toMatchObject({ ok: true, overrides: { env: { TMPDIR: '/data/agent-tmp' } } })
-    expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', undefined, undefined)
+    expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', undefined)
   })
 
   // Task #4395: a relaunch rebuilds the engine's arguments, so the agent's own folder is added again, with its TMPDIR.
-  it('names the saved role and workspace of an agent, and adds its own folder again', async () => {
+  it('names the saved Swarm skill of an agent, whose key names its folder, and adds its own folder again', async () => {
     const swarm = { args: () => [], prepare: () => ({ instructions: 'x' }) }
     told({ TMPDIR: '/data/agent-tmp/one' }, ['--add-dir=/data/agent-tmp/one'])
     const result = await buildLaunchOverrides(deps({ swarm } as never).d, 'claude', { cwd: '/w', swarmSkill: { role: 'agent', key: 'k' } as never }, 'a')
-    expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', 'agent', '/w')
+    expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', { role: 'agent', key: 'k' })
     expect(result).toMatchObject({ ok: true, overrides: { env: { TMPDIR: '/data/agent-tmp/one' } } })
     expect((result as { overrides: { extraArgs: string[] } }).overrides.extraArgs).toContain('--add-dir=/data/agent-tmp/one')
   })

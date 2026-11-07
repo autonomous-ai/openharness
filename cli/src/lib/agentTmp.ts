@@ -21,6 +21,7 @@ import { basename, dirname, join } from 'node:path'
 import { env } from '../config/env.js'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { readTeamConfig, type TeamConfig } from '../team/config.js'
+import type { SwarmSkill } from './savedSkill.js'
 
 /** Nothing changed in this long, and a top-level entry is deleted: longer than a task runs, as /tmp's own cleaners are. */
 const KEEP_MS = 7 * 24 * 60 * 60_000
@@ -181,12 +182,13 @@ const ADDED_FOLDER: Partial<Record<AgentEngine, (folder: string) => string[]>> =
   codex: folder => [`--add-dir=${folder}`],
 }
 
-/** The private folder of the Swarm agent that works in [cwd], made and closed, by its real path, or null when it cannot be,
- *  which the log says. One per agent workspace, so a relaunch finds it: Claude Code reads an added folder's own skills and
- *  settings, so one folder all agents shared would let an agent plant them for the others. */
-export function agentTmpOf(cwd: string, deps: AgentTmpDeps = realDeps): string | null {
+/** The private folder of the Swarm agent whose creation key is [key], made and closed, by its real path, or null when it cannot
+ *  be, which the log says. Named by the key, which every relaunch carries, so a relaunch finds it; never by the workspace, as a
+ *  person's Regular agents all start in that person's home folder. Claude Code reads an added folder's own skills and settings,
+ *  so a folder two agents shared would let one plant them for the other. */
+export function agentTmpOf(key: string, deps: AgentTmpDeps = realDeps): string | null {
   const parent = agentTmpFolder(deps.dataDir)
-  const folder = join(parent, createHash('sha256').update(realOfFolder(cwd)).digest('hex').slice(0, 16))
+  const folder = join(parent, createHash('sha256').update(key).digest('hex').slice(0, 16))
   // The parent first: making the folder through a link in the parent's place would make it where that link points.
   // The marker in the parent covers every agent's folder, which stays free to empty out and go (#4356).
   try {
@@ -205,16 +207,16 @@ export function agentTmpOf(cwd: string, deps: AgentTmpDeps = realDeps): string |
  * gets the shared folder as TMPDIR beside a Team account only, as before. A folder that cannot be made private does not stop
  * the agent: it starts on the system's folder, the daemon's log says why, and `harness team status` shows ✗.
  */
-export function agentTmpLaunch(engine: AgentEngine, role: string | undefined, cwd: string | null | undefined,
+export function agentTmpLaunch(engine: AgentEngine, skill: Pick<SwarmSkill, 'role' | 'key'> | undefined,
   deps: AgentTmpDeps = realDeps): { env: Record<string, string>; args: string[] } {
   const none = { env: {}, args: [] }
   if (deps.platform === 'win32') return none
   const shared = agentTmpFolder(deps.dataDir)
   // Whoever launches, and with the Team account gone too: what is left here must still go.
   sweepWhenDue(shared, deps)
-  if (isTerminalEngine(engine) || role === 'buddy') return none
-  if (role) {
-    const folder = cwd ? agentTmpOf(cwd, deps) : null
+  if (isTerminalEngine(engine) || skill?.role === 'buddy') return none
+  if (skill) {
+    const folder = agentTmpOf(skill.key, deps)
     return folder ? { env: { TMPDIR: folder }, args: ADDED_FOLDER[engine]?.(folder) ?? [] } : none
   }
   if (!ownerOfTeamComputer(deps)) return none

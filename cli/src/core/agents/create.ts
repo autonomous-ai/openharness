@@ -393,7 +393,7 @@ export function createAgentCreator({
     const machineMcp = machineMcpLaunchArgs(engine, cwd)
     // The agent's private temporary folder: its TMPDIR, and, for a Swarm agent, its one added working directory, so its owner's
     // own settings ask nothing for its mktemp files (lib/agentTmp.ts, task #4395). A Buddy has its own folder.
-    const tmp = swarmSkill?.role === 'buddy' ? { env: buddyTmpEnv(engine, cwd), args: [] } : agentTmpLaunch(engine, swarmSkill?.role, cwd)
+    const tmp = swarmSkill?.role === 'buddy' ? { env: buddyTmpEnv(engine, cwd), args: [] } : agentTmpLaunch(engine, swarmSkill)
     const extraArgs = joinedInstructions(engine, [...tmp.args, ...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...(swarmLaunch && swarmSkill ? swarmLaunch.args(engine) : []), ...told])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).

@@ -24,7 +24,7 @@ describe('who gets the private temporary folder', () => {
   // working directories: Claude Code reads an added folder's own skills and settings, so one shared folder would let an
   // agent plant them for the others.
   it('a Swarm agent, with no Team account here: a 0700 folder of its own as TMPDIR, added to Claude Code\'s and Codex\'s working directories', () => {
-    const data = scratch(), workspace = scratch(), other = scratch()
+    const data = scratch()
     const launch = agentTmpLaunch('claude', { role: 'agent', key: 'one' }, deps(data, { config: () => null }))
     const folder = launch.env.TMPDIR!
     expect(folder.startsWith(`${realpathSync(agentTmpFolder(data))}/`)).toBe(true)
@@ -43,14 +43,14 @@ describe('who gets the private temporary folder', () => {
   })
 
   it('an engine that takes no such folder gets the folder alone', () => {
-    const data = scratch(), workspace = scratch()
+    const data = scratch()
     const launch = agentTmpLaunch('opencode', { role: 'agent', key: 'one' }, deps(data, { config: () => null }))
     expect(launch.args).toEqual([])
     expect(launch.env.TMPDIR!.startsWith(`${realpathSync(agentTmpFolder(data))}/`)).toBe(true)
   })
 
   it('nobody else gets an added folder: a Buddy, whose guard closes the data folder; a terminal; a person\'s own session; Windows', () => {
-    const data = scratch(), workspace = scratch()
+    const data = scratch()
     expect(agentTmpLaunch('claude', { role: 'buddy', key: 'one' }, deps(data))).toEqual(none)
     expect(agentTmpLaunch('terminal', { role: 'agent', key: 'one' }, deps(data))).toEqual(none)
     expect(agentTmpLaunch('claude', undefined, deps(data, { config: () => null }))).toEqual(none)
@@ -187,7 +187,7 @@ describe('what deletes it', () => {
   // Task #4395: each agent's folder is its TMPDIR while it runs, however quiet, as a Buddy's is: what is in it goes after 7
   // days, the folder itself only once it has been empty for 30.
   it('keeps a quiet agent\'s own folder, sweeping what is in it', async () => {
-    const data = scratch(), workspace = scratch()
+    const data = scratch()
     const mine = agentTmpLaunch('claude', { role: 'agent', key: 'one' }, deps(data, { config: () => null })).env.TMPDIR!
     writeFileSync(join(mine, 'stale'), 'x')
     await sweepTmpFolders(agentTmpFolder(data), Date.now() + 8 * DAY)

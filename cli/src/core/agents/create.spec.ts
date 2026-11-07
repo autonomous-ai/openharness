@@ -259,13 +259,13 @@ describe('creating an agent', () => {
     const extraArgs = () => (vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1] as { extraArgs?: string[] }).extraArgs ?? []
     vi.mocked(agentTmpLaunch).mockReturnValueOnce({ env: { TMPDIR: '/data/agent-tmp' }, args: [] })
     expect(await setup().create(request({}))).toMatchObject({ ok: true })
-    expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', undefined, expect.any(String))
+    expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', undefined)
     expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ TMPDIR: '/data/agent-tmp' })
     expect(extraArgs().some(arg => arg.startsWith('--add-dir'))).toBe(false)
     vi.mocked(agentTmpLaunch).mockReturnValueOnce({ ...tmp, env: { HARNESS_DSH: 'mine', ...tmp.env } })
     vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
     expect(await setup().create(request({ dsh: 'blender', swarmRole: 'agent' }))).toMatchObject({ ok: true })
-    expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', 'agent', expect.any(String))
+    expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', expect.objectContaining({ role: 'agent', key: expect.any(String) }))
     expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ HARNESS_DSH: 'blender', TMPDIR: '/data/agent-tmp/one' })
     expect(extraArgs().filter(arg => arg.startsWith('--add-dir'))).toEqual(['--add-dir=/data/agent-tmp/one'])
     // Team-written work gets its folder too, and keeps its project settings off: the mode still carries its own flags.
