@@ -371,3 +371,18 @@ describe('a task its requester never accepted', () => {
     expect(f.state.starts ?? []).toEqual([])
   })
 })
+
+// Security review 2 of #3575 (Secrev7): the rule holds for an assignment by hand too, not only for the dispatch pass.
+describe('an accepted ask assigned by hand', () => {
+  it('is refused to another person\'s agent, and taken by its person\'s own', () => {
+    const { f, lamp, tasks, member } = withMember()
+    const config = { engine: 'claude' as const, model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
+    // Another person's agent in the same project: only the new check can refuse it.
+    const chat = f.state.projects!.find(p => p.id === lamp)!.leadConversationId
+    const other = f.run({ type: 'agent.add', conversationId: chat, machineId: 'owner-mac', harnessId: 'owner-agent', name: 'Owner agent',
+      configuration: config, lead: false }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).result.agentId as string
+    expect(code(() => f.run({ type: 'work.assign', conversationId: tasks[0]!, agentId: other }, owner))).toBe('ASKED_BY_ANOTHER')
+    f.run({ type: 'work.assign', conversationId: tasks[0]!, agentId: member }, owner)
+    expect(f.group(tasks[0]!).assignment?.agentId).toBe(member)
+  })
+})
