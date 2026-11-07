@@ -204,7 +204,9 @@ export async function trainPass(input: { projectId: string; github: TrainGitHub;
       await swarm.merged(member.taskId, member.url, now)
       line.merged++
     }
-    if (reads.some(r => r.lane === 'fast')) main = await github.mainHead()
+    // Main again, right before building: reading the candidates takes minutes, and a hand merge meanwhile would leave the batch
+    // on an older main, closed again at the next pass (#3496 on 11-07, built 46 s after main moved).
+    main = await github.mainHead()
   } catch (error) {
     if (!(error instanceof TrainReadError)) throw error
     line.unreadable++
