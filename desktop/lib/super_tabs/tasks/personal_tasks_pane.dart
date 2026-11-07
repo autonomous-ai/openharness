@@ -27,8 +27,8 @@ class SuperTabPersonalTasksPane extends StatefulWidget {
   State<SuperTabPersonalTasksPane> createState() => _TasksPaneState();
 }
 
-/// Who asked, a step smaller than the agent beside it, as on a Board tile.
-const _requesterSize = 18.0;
+/// Who asked and who is doing it, both at 18 (anh Dee, 11-07).
+const _faceSize = 18.0;
 
 class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
   String? _error, _operationId;
@@ -320,7 +320,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                                         : person != null
                                         ? SuperTabAvatar.person(
                                             person,
-                                            size: _requesterSize,
+                                            size: _faceSize,
                                           )
                                         : SuperTabAvatar(
                                             identity:
@@ -329,7 +329,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                                                 task.requester['name']
                                                     as String? ??
                                                 'Person',
-                                            size: _requesterSize,
+                                            size: _faceSize,
                                             picture:
                                                 SuperTabAvatarPicture.fromJson(
                                                   task.requester['avatar'],
@@ -344,7 +344,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                                                 agent?.name ??
                                                 task.agent['name'] as String? ??
                                                 'Agent',
-                                            size: SuperTabAvatar.rowSize,
+                                            size: _faceSize,
                                             picture:
                                                 agent?.avatar ??
                                                 SuperTabAvatarPicture.fromJson(
