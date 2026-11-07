@@ -277,4 +277,22 @@ void main() {
       expect(_ours.name, 'AUTONOMOUS INC.');
     });
   });
+
+  // Windows CI run 42350030998: a PowerShell 7 step (and a PowerShell 7
+  // window that starts Harness) hands Windows PowerShell 5.1 a PSModulePath
+  // with 7's modules first, and 5.1 then cannot autoload
+  // Microsoft.PowerShell.Security: Get-AuthenticodeSignature is "found in the
+  // module ... but the module could not be loaded", and every update would be
+  // refused. The report loads 5.1's own module by path before using it.
+  test('the Windows report loads Windows PowerShell\'s own Security module first', () {
+    const load =
+        r"Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1')";
+    final script = windowsReportScript;
+    expect(script, contains(load));
+    expect(
+      script.indexOf(load),
+      lessThan(script.indexOf('Get-AuthenticodeSignature')),
+    );
+    expect(script.indexOf(load), lessThan(script.indexOf('Test-FileCatalog')));
+  });
 }

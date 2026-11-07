@@ -26,12 +26,17 @@ const _candidates = [
   r'Microsoft.NET\Framework\v4.0.30319\csc.exe',
 ];
 
+const _loadSecurity =
+    r"Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1')";
+
 Future<String> _powershell(String script) async {
   final result = await runHidden(windowsPowerShellPath(Platform.environment), [
     '-NoProfile',
     '-NonInteractive',
     '-EncodedCommand',
-    base64.encode(_utf16le(script)),
+    // As the report does: 5.1's own Security module, whatever PSModulePath
+    // this process hands on (a PowerShell 7 step in CI).
+    base64.encode(_utf16le('$_loadSecurity\n$script')),
   ]);
   expect(result.exitCode, 0, reason: '${result.stderr}');
   return '${result.stdout}'.trim();

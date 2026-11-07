@@ -276,7 +276,8 @@ Future<void> verifyMacUpdate({
 
 /// Prints one [WindowsSignatureReport] as JSON. Paths come in through the
 /// environment, so no file name is ever parsed as PowerShell.
-const _windowsReportScript = r"""
+@visibleForTesting
+const windowsReportScript = r"""
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
@@ -336,7 +337,7 @@ Future<WindowsSignatureReport> readWindowsSignatureReport({
   required String runningExe,
   Duration timeout = signatureCheckTimeout,
 }) async {
-  final script = _windowsReportScript.codeUnits;
+  final script = windowsReportScript.codeUnits;
   final utf16 = Uint8List(script.length * 2);
   for (var i = 0; i < script.length; i++) {
     utf16[i * 2] = script[i] & 0xff;
