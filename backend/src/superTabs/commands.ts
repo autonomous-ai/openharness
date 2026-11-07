@@ -1,4 +1,4 @@
-import { authorizeTaskApproval, pendingTaskApproval, personalApprovalCommand, requireTaskApproval, stageTaskApproval, undecidedProposal } from './taskApproval.js'
+import { authorizeTaskApproval, pendingTaskApproval, personalApprovalCommand, reopenTaskApproval, requireTaskApproval, stageTaskApproval, undecidedProposal } from './taskApproval.js'
 import type { PullRequestFilesRead } from './pullRequestFiles.js'
 import { legacyProposalId, migrateLegacyProposals, type LegacyProposalAsk, pmAcceptsMessage, applyProposalAction, authorizeProposalAction, authorizePersonProposal, cardPriority, createPersonProposal, createProposalCard, proposalCreateSchema, proposalFields, proposalRoot } from './proposalCards.js'
 import { pulseProjectOf, recordPulse, owe, settleDeleted, settleReaction, settleReply, settleRequest } from './pulse.js'
@@ -4564,6 +4564,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       group.briefAt = context.now
       stampLane(group, (context.projectRules?.rules ?? SEED_RULES).lanes)
       group.checks = storedChecks(command.checks, operationId)
+      reopenTaskApproval(group)
       message(group.id, group.brief, [], null, SYSTEM_ROW)
       bindTaskCard(group, effects.messages.at(-1)!)
       break
