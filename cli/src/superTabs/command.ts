@@ -507,7 +507,7 @@ async function proposalFiles(paths: string[], operationId: string, command: Reco
   if (!wide && command.projectId && command.projectId !== projectId) throw new Error('A session sends only to its own project\'s PM: leave the project out.')
   if (typeof home !== 'string') throw new Error(wide ? 'Name the project to send this to, from your status.' : 'Name your own chat: a proposal comes from there.')
   const inside = wide ? buddyProjectFolder(folder, String(projectId)) : folder
-  if (!inside) throw new Error('That project\'s code is not on this machine: attach only a file your owner sent in your chat.')
+  if (!inside) throw new Error('That project\'s code is not on this machine: name by its id a file your owner sent in your chat, or one you showed them there.')
   const files = readInsideFolder(paths, inside)
   const uploaded = await uploadAttachments(files, operationId, { ...target, sentIn: home }, scoped, deps.fetch)
   return [...new Set([...named, ...uploaded])]

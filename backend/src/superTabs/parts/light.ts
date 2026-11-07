@@ -77,6 +77,7 @@ export const GROUP_FIELDS = {
     'chatLimits',
     'checks',
     'codePullRequestUrls',
+    'foldedInto',
     'handOutLane',
     'heardAt',
     'hold',
