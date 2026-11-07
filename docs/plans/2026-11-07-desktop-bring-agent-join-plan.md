@@ -81,7 +81,10 @@ Copy, exact:
 - Not now: `Not now`.
 - Timeout: `<computer> didn’t answer in time. Check that Harness is running there, then try again.`
 - Any other raw failure: `Couldn’t reach Harness on <computer>. Check that it’s running, then try again.`
-- No local computer: `Wait for this computer’s Harness connection, then start your Buddy from your Buddy chat.`
+- No local computer: main's waiting box from task #4220 (`Waiting for this computer’s Harness connection. This goes on
+  by itself once it is up.`) stays as it is.
+- Closing while the computer prepares (×, Esc or Not now) stops the wait at once: nothing exists before `buddy.create`
+  is sent (review of #3530).
 - Pending action: `Finish or retry the pending action in this Swarm first.`
 - A refused start: the server's sentence as the controller keeps it (`operationError`).
 

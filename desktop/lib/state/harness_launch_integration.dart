@@ -47,6 +47,7 @@ class HarnessLaunchIntegration {
     this.agentKind,
     this.ownMachinesOnly = false,
     this.startBuddy,
+    this.stopBuddy,
     this.heading,
     this.intro,
   });
@@ -89,6 +90,10 @@ class HarnessLaunchIntegration {
   /// [engine], as before; the form only chooses them. Set, the form shows no
   /// project and takes no first message.
   final Future<void> Function(String machineId, String engine)? startBuddy;
+
+  /// Stops [startBuddy] while it only waits for the computer, so the form
+  /// closes at once; false once the start is sent (#4442).
+  final bool Function()? stopBuddy;
 
   /// A new project in a Swarm: the Swarm's machines its Product Manager may
   /// start on, best first. The form then shows only the task, repo and

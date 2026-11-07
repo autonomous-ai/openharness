@@ -121,6 +121,7 @@ Future<Map<String, dynamic>?> showBringAgentForm(
   );
   Map<String, dynamic>? started;
   String? startedOn;
+  SwarmAgentLauncher? starting;
   final swarm = controller.snapshot?.name ?? 'this Swarm';
   final integration = HarnessLaunchIntegration(
     creationId: superTabOperationId(),
@@ -140,7 +141,13 @@ Future<Map<String, dynamic>?> showBringAgentForm(
         launcherFor(machineId),
         superTabOperationId(),
       );
-      final result = await launcher.create(engine, operation);
+      starting = launcher;
+      final Map<String, dynamic> result;
+      try {
+        result = await launcher.create(engine, operation);
+      } finally {
+        starting = null;
+      }
       if (result['agentId'] is! String && result['startId'] is! String) {
         throw const SwarmAgentLaunchFailure(
           'Your agent’s start is not confirmed. Try again to check it.',
@@ -149,6 +156,7 @@ Future<Map<String, dynamic>?> showBringAgentForm(
       started = result;
       startedOn = machineId;
     },
+    stopBuddy: () => starting?.stop() ?? false,
   );
   final box = NewHarnessController(
     app,

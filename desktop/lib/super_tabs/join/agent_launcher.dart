@@ -37,8 +37,23 @@ class SwarmAgentLauncher {
   command;
   final bool _listed;
   Map<String, dynamic>? _prepared;
+  bool _sent = false, _stopped = false;
+
+  /// The person closed the form before the start was sent: nothing exists
+  /// yet, so the wait for the computer ends here (#4442). False once
+  /// buddy.create is on its way, which only its answer settles.
+  bool stop() {
+    if (_sent) return false;
+    _stopped = true;
+    return true;
+  }
 
   void _guard() {
+    if (_stopped) {
+      throw const SwarmAgentLaunchFailure(
+        'You closed the form before your Buddy started.',
+      );
+    }
     if (!isCurrent()) {
       throw const SwarmAgentLaunchFailure(
         'Your account changed. Close this form and try again.',
@@ -86,6 +101,7 @@ class SwarmAgentLauncher {
       };
     }
     _guard();
+    _sent = true;
     final result = await command({
       'type': 'buddy.create',
       'machineId': machineId,
@@ -112,6 +128,7 @@ class SwarmAgentLauncher {
         );
       }
       await Future<void>.delayed(const Duration(seconds: 1));
+      _guard();
     }
   }
 }

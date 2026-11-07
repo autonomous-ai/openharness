@@ -2671,11 +2671,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       if (box.bringsBuddy && !widget.embedded)
         TextButton(
           key: const ValueKey('new-harness-not-now'),
-          onPressed: box.busy
-              ? null
-              : () {
-                  if (box.requestDismiss()) widget.onClose();
-                },
+          onPressed: () {
+            if (box.requestDismiss()) widget.onClose();
+          },
           child: const Text('Not now'),
         ),
       _desktopStartButton(),
