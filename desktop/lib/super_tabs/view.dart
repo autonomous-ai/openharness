@@ -3441,6 +3441,19 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
+  /// Whether [message] is said between the two parties of a one-on-one chat
+  /// (a Buddy chat, an agent chat): the reader and that chat's own agent. Its
+  /// bubble carries no name or face (#4529); a line from anyone else there,
+  /// such as the PM's to the reader, keeps its name.
+  bool _oneOnOne(SuperTabMessage message) =>
+      switch (c.snapshot?.conversation(message.conversationId)) {
+        final group? when group.isBuddyChat || group.isAgentChat =>
+          message.fromAgent
+              ? group.agentIds.contains(message.authorId)
+              : message.authorId == c.accountId,
+        _ => false,
+      };
+
   /// Whether ⋮ carries the views a wider header draws as icons.
   bool get _menuNamesViews =>
       _phone && !_devicesVisible && !_listViewHoldsThePane;
@@ -4710,6 +4723,7 @@ class _SuperTabViewState extends State<SuperTabView>
     SuperTabOutgoing sent,
     Map<String, SuperTabMessage> byId, {
     required bool grouped,
+    bool joinsBelow = false,
   }) {
     final message = _outgoingMessage(sent);
     final person = c.snapshot?.people
@@ -4725,6 +4739,8 @@ class _SuperTabViewState extends State<SuperTabView>
         person: person,
         member: _member,
         grouped: grouped,
+        joinsBelow: joinsBelow,
+        oneOnOne: _oneOnOne(message),
         reply: reply,
         replyAuthor: reply == null ? null : _shownAuthor(c, reply),
         onReturnToComposer: _focus.requestFocus,
@@ -4796,6 +4812,7 @@ class _SuperTabViewState extends State<SuperTabView>
     Map<String, SuperTabMessage> byId, {
     bool showReceipt = false,
     bool inThread = false,
+    bool joinsBelow = false,
   }) {
     _index();
     if (SuperTabShipRow.shows(message)) {
@@ -4863,6 +4880,8 @@ class _SuperTabViewState extends State<SuperTabView>
         '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
       ),
       message: message,
+      joinsBelow: joinsBelow,
+      oneOnOne: _oneOnOne(message),
       card: card == null
           ? null
           : SuperTabLiveCard(
@@ -5361,6 +5380,12 @@ class _SuperTabViewState extends State<SuperTabView>
       final joined =
           grouped.contains(message.id) &&
           previous?.conversationId == message.conversationId;
+      final next = index + 1 < messages.length ? messages[index + 1] : null;
+      final joinsBelow =
+          next != null &&
+          grouped.contains(next.id) &&
+          next.conversationId == message.conversationId &&
+          next.id != _unread.lineAt(c.selectedId);
       final time = message.createdAt;
       return SuperTabDayMark(
         key: ValueKey(_rowKey(c.messageIdentity(message.id))),
@@ -5391,12 +5416,14 @@ class _SuperTabViewState extends State<SuperTabView>
                           pendingById[message.id]!,
                           byId,
                           grouped: joined,
+                          joinsBelow: joinsBelow,
                         )
                       : _message(
                           message,
                           joined,
                           byId,
                           showReceipt: message.id == latestOwn?.id,
+                          joinsBelow: joinsBelow,
                         ),
                 ),
               ),

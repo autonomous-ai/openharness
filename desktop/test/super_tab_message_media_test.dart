@@ -388,13 +388,18 @@ void main() {
         );
         expect(asked.map((p) => (p.fileId, p.side)).toSet(), {('a1', 360.0)});
 
+        final before = asked.length;
         await tester.tap(
           find.byKey(const ValueKey('super-attachment-inline:a1')),
         );
         await tester.pumpAndSettle();
 
-        expect(asked.last.fileId, 'a1');
-        expect(asked.last.side, isNull);
+        // The viewer asks for the original; the chat's own copy may be asked
+        // again at its size as the row lays out under it (#4529).
+        expect(
+          asked.skip(before).where((p) => p.fileId == 'a1' && p.side == null),
+          isNotEmpty,
+        );
         await close(tester, c);
       },
     );

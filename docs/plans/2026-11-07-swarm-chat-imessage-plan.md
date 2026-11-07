@@ -47,7 +47,7 @@ pull request, one independent review.
 
 ## Review Focus
 
-- Your own message that an agent posted for you (a task line, a proposal) is the agent's, on the left.
+- A task line or proposal sent in your name is your own bubble, on the right.
 - A grouped run broken by a reply, a thread or a day line: the corner joins only bubbles that touch.
 - An outgoing (not yet sent) message is your bubble, dimmed, with its status under it.
 - A long message being edited never folds; one tagged you still shows its bar.

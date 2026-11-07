@@ -87,7 +87,7 @@ void main() {
   );
 
   testWidgets('a quick line under my own line joins it while it sends and '
-      'after, at one height apart from its delivery line', (tester) async {
+      'after, its bubble the same height', (tester) async {
     final server = ConversationServer()..append('Earlier line');
     server.messages.last['createdAt'] = DateTime.now()
         .toUtc()
@@ -98,16 +98,20 @@ void main() {
 
     await type(tester, 'Quick follow-up');
     expect(grouped(tester, 'Quick follow-up'), isTrue);
-    final height = tester.getSize(rowOf('Quick follow-up')).height;
+    Finder bubble() => find.ancestor(
+      of: find.text('Quick follow-up'),
+      matching: find.byKey(const ValueKey('swarm-bubble')),
+    );
+    final height = tester.getSize(bubble()).height;
 
     post.complete();
     await tester.pumpAndSettle();
     expect(c.outgoing('lead'), isEmpty);
     expect(grouped(tester, 'Quick follow-up'), isTrue);
-    // The confirmed latest line of mine adds its delivery line below; the
-    // line itself, with no avatar or name, keeps the height it had.
-    final receipt = tester.getSize(find.byType(SuperTabMessageReceipt)).height;
-    expect(tester.getSize(rowOf('Quick follow-up')).height - receipt, height);
+    // Its status line under the bubble becomes the delivery line; the bubble
+    // keeps its height (#4529).
+    expect(find.byType(SuperTabMessageReceipt), findsOneWidget);
+    expect(tester.getSize(bubble()).height, height);
     await close(tester, c);
   });
 

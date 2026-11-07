@@ -6,7 +6,6 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -106,10 +105,10 @@ void main() {
     await unmountPhoneSuperTab(tester, controller);
   });
 
-  testWidgets('a phone\'s taller author keeps the name and avatar in place', (
+  testWidgets('a phone\'s taller author keeps the name in place', (
     tester,
   ) async {
-    Future<(double, double)> tops({required bool desktop}) async {
+    Future<double> tops({required bool desktop}) async {
       final (_, controller) = await mountPhoneSuperTab(
         tester,
         const Size(390, 844),
@@ -124,7 +123,7 @@ void main() {
       double top(Finder f) =>
           tester.getTopLeft(find.descendant(of: row, matching: f)).dy -
           tester.getTopLeft(row).dy;
-      final result = (top(find.text('Lark')), top(find.byType(SuperTabAvatar)));
+      final result = top(find.text('Lark'));
       await unmountPhoneSuperTab(tester, controller);
       return result;
     }

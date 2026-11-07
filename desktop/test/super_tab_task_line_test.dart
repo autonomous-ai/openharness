@@ -287,7 +287,7 @@ void main() {
     }
 
     for (final (ask, tag) in [('proposal', '✋ Proposal')]) {
-      testWidgets('$ask shows $tag after the time, in its muted style', (
+      testWidgets('$ask shows $tag after the name, in its muted style', (
         tester,
       ) async {
         final server = _server('buddy-proposal')..threadAsks['root'] = ask;
@@ -301,17 +301,9 @@ void main() {
           tester.widget<Text>(shown).style,
           SwarmType.time(tester.element(shown)),
         );
-        final time = find.descendant(
-          of: _row('root'),
-          matching: find.textContaining(RegExp(r'^\d+:\d\d')),
-        );
-        expect(
-          tester.getTopLeft(time).dx,
-          lessThan(tester.getTopLeft(shown).dx),
-        );
         expect(
           tester.getTopLeft(find.text('dee')).dx,
-          lessThan(tester.getTopLeft(time).dx),
+          lessThan(tester.getTopLeft(shown).dx),
         );
       });
     }

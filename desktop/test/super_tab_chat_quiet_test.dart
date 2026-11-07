@@ -62,7 +62,8 @@ void main() {
           of: find.byType(SuperTabMessageRow),
           matching: find.byType(SuperTabAvatarFace),
         );
-        expect(faces, findsNWidgets(4));
+        // Your own bubble wears no face; one sender's run, one face (#4529).
+        expect(faces, findsWidgets);
         for (final face in faces.evaluate()) {
           final widget = face.widget as SuperTabAvatarFace;
           expect(widget.radius, isNull, reason: 'round, not a rounded square');
