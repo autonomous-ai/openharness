@@ -3574,11 +3574,19 @@ class _SuperTabViewState extends State<SuperTabView>
   );
 
   /// Above the Board: the project's name and its Board / Chat navigation.
-  Widget _boardHeader(SuperTabProject project) => SizedBox(
+  Widget _boardHeader(SuperTabProject project, bool narrow) => SizedBox(
+    key: const ValueKey('super-board-header'),
     height: 44,
     child: Row(
       children: [
         const SizedBox(width: 8),
+        // The left pane folded into its drawer: the chat header's button opens it.
+        if (narrow)
+          AppIconButton(
+            icon: AppIcons.menu,
+            tooltip: 'Conversations',
+            onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
+          ),
         // The name and its tabs take the room left, so what follows sits at the right edge: a Flexible name beside a
         // Spacer split the free space, and the name's unused half left the controls mid-bar (#3846).
         Expanded(
@@ -6232,11 +6240,6 @@ class _SuperTabViewState extends State<SuperTabView>
           !_terminalsVisible &&
           !_showPullRequests &&
           _pageShown == null;
-      // The fixed layout never drops a side pane; every other surface keeps
-      // its own width rules.
-      final narrow =
-          !boardLayout &&
-          constraints.maxWidth < MediaQuery.textScalerOf(context).scale(720);
       // Wide enough for a right column beside the chat; it shows only an
       // open thread or Members, closed at rest (Quiet Swarm, 2026-11-02).
       final wide =
@@ -6266,6 +6269,14 @@ class _SuperTabViewState extends State<SuperTabView>
       final boardProject = boardLayout
           ? c.snapshot?.projectById(_boardProjectId ?? impliedBoard ?? '')?.id
           : null;
+      // The left pane folds into its drawer in a small window. With the Board in the middle that is under 1000, its
+      // header then opening the drawer, so the Board keeps two columns (audit finding 12, #4445); the fixed layout's
+      // other middles have no menu button and keep both side panes.
+      final narrow = boardLayout
+          ? boardProject != null &&
+                constraints.maxWidth <
+                    MediaQuery.textScalerOf(context).scale(1000)
+          : constraints.maxWidth < MediaQuery.textScalerOf(context).scale(720);
       // The chat alone in the middle, under its one-row header (#4204); a project's own chat keeps the full view.
       final fullView =
           !boardLayout ||
@@ -6365,7 +6376,10 @@ class _SuperTabViewState extends State<SuperTabView>
                     : Column(
                         children: [
                           if (boardProject != null)
-                            _boardHeader(c.snapshot!.projectById(boardProject)!)
+                            _boardHeader(
+                              c.snapshot!.projectById(boardProject)!,
+                              narrow,
+                            )
                           else ...[
                             if (widget.board &&
                                 !_manageVisible &&
