@@ -65,7 +65,7 @@ describe('a question for a person', () => {
     const f = fixture()
     const asked = f.post('Can we have quiet hours?', peer).result.messageId as string
     const reply = { id: asked, conversationId: 'lead', author: { kind: 'person' as const, id: 'peer', name: peer.email, membershipGeneration: f.state.people.find(p => p.id === 'peer')!.generation },
-      source: null, replyTo: null }
+      source: null, replyTo: null, createdAt: NOW }
     expect(code(() => f.post('Which hours do you mean?', f.asPm, { replyTo: asked, mentions: ['peer'] }, { reply } as Partial<CommandContext>))[0]).toBe('passed')
   })
 })
