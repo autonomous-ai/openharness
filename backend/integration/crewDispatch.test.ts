@@ -349,7 +349,29 @@ describe('the crew dispatch pass', () => {
     await s.execute({ type: 'work.status', conversationId: id, assignmentId, status: 'working', result: 'Halfway.' }, s.crew.Ash)
     expect(s.store.dispatchScheduled(s.tab)).toBe(false)
     await s.execute({ type: 'work.status', conversationId: id, assignmentId, status: 'review', result: 'Ready at abc1234.' }, s.crew.Ash)
+    // Nothing waits to be handed out: the pass would find nothing, and its whole-Swarm read is not taken (#3661).
+    expect(s.store.dispatchScheduled(s.tab)).toBe(false)
+    // A task for the member its Ready freed: one pass.
+    await s.execute({ type: 'conversation.create', title: 'Web', checks: [],
+      task: { goal: 'Web.', changes: 'The change.', constraints: 'None.', owns: ['backend/src/b.ts'] } })
     expect(s.store.dispatchScheduled(s.tab)).toBe(true)
+
+    // Every worker busy: a new task waits for the sweep, and no write schedules a pass (#3661).
+    const busy = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' }, true)
+    await vi.waitFor(async () => expect(await busy.holders()).toEqual({ Api: 'Ash' }), { timeout: 5_000, interval: 200 })
+    await vi.waitFor(() => expect(busy.store.dispatchScheduled(busy.tab)).toBe(false), { timeout: 5_000, interval: 100 })
+    await busy.execute({ type: 'conversation.create', title: 'Web', checks: [],
+      task: { goal: 'Web.', changes: 'The change.', constraints: 'None.', owns: ['backend/src/b.ts'] } })
+    expect(busy.store.dispatchScheduled(busy.tab)).toBe(false)
+
+    // A project's own lanes decide the pick, as the pass reads them: a task for a member of a lane only its rules name, one pass.
+    const own = await swarm({ Ash: null }, {}, true)
+    await save(own, 0, { lanes: [{ name: 'firmware', owns: ['devices/'] }] })
+    await own.execute({ type: 'crew.add', agentId: own.crew.Ash!, lane: 'firmware', role: 'Engineer' })
+    await vi.waitFor(() => expect(own.store.dispatchScheduled(own.tab)).toBe(false), { timeout: 5_000, interval: 100 })
+    await own.execute({ type: 'conversation.create', title: 'Board', checks: [],
+      task: { goal: 'Board.', changes: 'The change.', constraints: 'None.', owns: ['devices/main.c'] } })
+    expect(own.store.dispatchScheduled(own.tab)).toBe(true)
 
     // With only a PM, no write schedules one.
     const plain = await swarm({}, {}, true)

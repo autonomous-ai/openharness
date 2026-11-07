@@ -135,6 +135,7 @@ import { answerable, askDecisions, MAX_OPEN_DECISIONS, REFLECTION_DECISION, refl
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
 import { recordMessageReach } from './messageReachStats.js'
+import { recordCommand } from './commandStats.js'
 import { DEFAULT_ROUTING_POLICY, type RoutingPolicy } from './routingPolicy.js'
 import { catalogRead } from './catalog.js'
 import { invitedSwarms } from './invitedSwarms.js'
@@ -1657,8 +1658,11 @@ export class SuperTabStore {
 
   async execute(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
     client?: DeclaredClient) {
+    // Its time by type, and its write's attempts, for `commands by type` (commandStats.ts, task #3661).
+    const started = performance.now(), counted = { attempts: 0 }
+    let refused = false
     try {
-      const done = await this.executeOnce(user, tabId, input, asAgentId, hostMachineId)
+      const done = await this.executeOnce(user, tabId, input, asAgentId, hostMachineId, false, { counted })
       // Buddy thread sessions' first warning (spec Design 4): starts, refusals by code and ends by reason, ids only, in the
       // server log that prod watch reads.
       if (input.command?.type === 'message.send' && input.command.newSession && done.result.startId) logger.info('Buddy session started', { tabId, startId: done.result.startId })
@@ -1666,6 +1670,7 @@ export class SuperTabStore {
     } catch (error) {
       // Its code and type, and whose: the Swarm, the agent and the client, never the command's words. A Swarm refusing a machine
       // went unseen (MACHINES_FULL, Ken, 2026-11-04), then 615 refusals in 32 minutes that nobody could attribute (#2675).
+      refused = error instanceof SuperTabError
       if (error instanceof SuperTabError && input.command?.type) {
         logger.warn('Swarm command refused', refusalLogFields(tabId, input.command, error.code, { asAgentId, client, machineId: hostMachineId }))
       }
@@ -1693,7 +1698,20 @@ export class SuperTabStore {
         }
       }
       throw error
+    } finally {
+      recordCommand(typeof input.command?.type === 'string' ? input.command.type : 'other', performance.now() - started, { attempts: counted.attempts, refused })
     }
+  }
+
+  /**
+   * The Swarm's head and the conversations [command] names (factsLoad, task #4368), loaded once for all of the command's reads outside its transaction (push
+   * origin, repository reach, review files), on the first that needs it (task #3661): each loaded it in its own transaction
+   * before, so an assignment loaded the Swarm three times and a Ready four, and Ken's scan on v1.4.20 put POST commands p95 at
+   * 683 ms. A refusal is each read's as before: it reads nothing.
+   */
+  private preReader(user: AuthUser, tabId: string, command: Command): () => Promise<SuperTabState> {
+    let loading: Promise<SuperTabState> | undefined
+    return () => loading ??= transaction(this.db, async tx => (await this.factsLoad(tx, user, tabId, command)).state)
   }
 
   /**
@@ -1702,7 +1720,7 @@ export class SuperTabStore {
    * nothing to read, or this reader cannot read that task: the command then refuses as it would. `pulls` are the pull requests
    * it read (none for a branch): a clean read clears only a mark it covered (teamWritten.ts applyPushOrigin, #3304).
    */
-  private async pushOriginFor(user: AuthUser, tabId: string, command: unknown): Promise<{ origin: PushOrigin; pulls: string[]; task?: { origin: PushOrigin; pulls: string[] } } | undefined> {
+  private async pushOriginFor(user: AuthUser, tabId: string, command: unknown, preRead: () => Promise<SuperTabState>): Promise<{ origin: PushOrigin; pulls: string[]; task?: { origin: PushOrigin; pulls: string[] } } | undefined> {
     const hook = this.hooks.pushOrigin
     const asked = command as { type?: unknown; conversationId?: unknown; status?: unknown; result?: unknown; present?: unknown; projectId?: unknown; branchRef?: unknown;
       request?: { branchRef?: unknown; conversationId?: unknown } } | null
@@ -1712,18 +1730,18 @@ export class SuperTabStore {
     try {
       if (typeof ref === 'string' && this.hooks.branchPushOrigin) {
         const branch = ref.replace(/^refs\/(heads|remotes\/origin)\//, '')
-        const repositoryUrl = await transaction(this.db, async tx => {
-          const { state } = await this.factsLoad(tx, user, tabId, command)
+        const repositoryUrl = await (async () => {
+          const state = await preRead()
           if (asked.type === 'lead.start') return projectsOf(state).find(p => p.id === asked.projectId)?.repository?.repositoryUrl ?? null
           const group = state.conversations.find(c => c.id === asked.request?.conversationId)
           return group ? groupProject(state, group).repository?.repositoryUrl ?? null : undefined
-        })
+        })()
         return repositoryUrl === undefined ? undefined : { origin: await this.hooks.branchPushOrigin(repositoryUrl, branch), pulls: [] }
       }
       const reads = asked.type === 'work.assign' || asked.type === 'work.teamWritten' || (asked.type === 'conversation.agent' && asked.present === true) || (asked.type === 'work.status' && asked.status === 'review')
       if (!hook || typeof asked.conversationId !== 'string' || !reads) return undefined
-      const facts = await transaction(this.db, async tx => {
-        const { state } = await this.factsLoad(tx, user, tabId, command)
+      const facts = await (async () => {
+        const state = await preRead()
         const group = state.conversations.find(c => c.id === asked.conversationId)
         if (!group) return null
         const task = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
@@ -1735,7 +1753,7 @@ export class SuperTabStore {
         // A step's own pull requests (its brief, its agent's results) are read apart: they mark the step, not its task.
         const stepOnly = task ? [...new Set([...codeOf(group), ...named])].filter(url => !own.includes(url)) : []
         return { repositoryUrl, own, stepOnly, step: !!group.reviewOf }
-      })
+      })()
       if (!facts) return undefined
       // Only what the reader reads covers a mark: the project's own repository's pull requests (pushOrigin.ts projectPushOrigin),
       // which answers clean for none of them (security review 2 of #3304).
@@ -1764,7 +1782,7 @@ export class SuperTabStore {
    * #3266), read outside the command's transaction as GitHub may take seconds. It can only refuse earlier than the machine
    * would: undefined, refusing nothing, when there is nothing to read or the read fails.
    */
-  private async repositoryReachFor(user: AuthUser, tabId: string, command: unknown): Promise<RepositoryReach | undefined> {
+  private async repositoryReachFor(user: AuthUser, tabId: string, command: unknown, preRead: () => Promise<SuperTabState>): Promise<RepositoryReach | undefined> {
     const hook = this.hooks.repositoryReach
     const asked = command as { type?: unknown; conversationId?: unknown; request?: { conversationId?: unknown } } | null
     // A task's Ready assigns its review steps (task #3401), so it reads the reach as an assignment does.
@@ -1772,11 +1790,11 @@ export class SuperTabStore {
     const conversationId = asked?.type === 'agent.start' ? asked.request?.conversationId : assigns ? asked!.conversationId : undefined
     if (!hook || typeof conversationId !== 'string') return undefined
     try {
-      const project = await transaction(this.db, async tx => {
-        const { state } = await this.factsLoad(tx, user, tabId, command)
+      const project = await (async () => {
+        const state = await preRead()
         const group = state.conversations.find(c => c.id === conversationId)
         return group ? groupProject(state, group) : undefined
-      })
+      })()
       const repositoryUrl = project?.repository?.repositoryUrl
       if (!project || !repositoryUrl || !githubRepository(repositoryUrl)) return undefined
       return await hook(user.autonomousEnv, tabId, project.id, repositoryUrl)
@@ -1791,21 +1809,21 @@ export class SuperTabStore {
    * transaction as GitHub may take seconds, as pushOriginFor reads. Undefined for a step's Ready, a task naming no pull
    * request, or no hook: no step opens then. A read that throws gives files null: the strictest steps open, never none.
    */
-  private async pullRequestFilesFor(user: AuthUser, tabId: string, command: unknown): Promise<PullRequestFilesRead | undefined> {
+  private async pullRequestFilesFor(user: AuthUser, tabId: string, command: unknown, preRead: () => Promise<SuperTabState>): Promise<PullRequestFilesRead | undefined> {
     const hook = this.hooks.pullRequestFiles
     const asked = command as { type?: unknown; conversationId?: unknown; status?: unknown; result?: unknown } | null
     if (!hook || asked?.type !== 'work.status' || asked.status !== 'review' || typeof asked.conversationId !== 'string') return undefined
     let facts: { repositoryUrl: string | null; urls: string[] } | null = null
     try {
-      facts = await transaction(this.db, async tx => {
-        const { state } = await this.factsLoad(tx, user, tabId, command)
+      facts = await (async () => {
+        const state = await preRead()
         const group = state.conversations.find(c => c.id === asked.conversationId)
         if (!group || group.reviewOf || taskProcess(groupProject(state, group), group) === 'simple') return null
         const repositoryUrl = groupProject(state, group).repository?.repositoryUrl ?? null
         const urls = [...group.pullRequestUrls ?? [], ...[typeof asked.result === 'string' ? asked.result : '', group.brief]
           .flatMap(text => text ? pullRequestsIn(text, repositoryUrl) : [])]
         return { repositoryUrl, urls: [...new Set(urls)] }
-      })
+      })()
       if (!facts?.urls.length) return undefined
       return await hook(facts.repositoryUrl, facts.urls) ?? undefined
     } catch (error) {
@@ -1847,17 +1865,20 @@ export class SuperTabStore {
   }
 
   /** [only]: what the store alone may give a command: `overdue`/`defaulted` for decision.answer (leaveOverdueDecisions), `movedTo` for
-   *  machine.moved (computerSignedIn). */
+   *  machine.moved (computerSignedIn). `counted`: its write's attempts, counted here for `commands by type` (task #3661). */
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
-    workspaceLeave = false, only: { overdue?: boolean; defaulted?: boolean; movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string } = {}) {
+    workspaceLeave = false, only: { overdue?: boolean; defaulted?: boolean; movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string; counted?: { attempts: number } } = {}) {
     const { operationId, command } = operationSchema.parse(input)
-    const [pushOrigin, repositoryReach, pullRequestFiles, pullRequestMerges] = await Promise.all([this.pushOriginFor(user, tabId, command),
-      this.repositoryReachFor(user, tabId, command), this.pullRequestFilesFor(user, tabId, command), this.pullRequestMergesFor(user, tabId, command),
+    // The pre-reads share one load of the Swarm, taken only if one needs it (task #3661).
+    const preRead = this.preReader(user, tabId, command)
+    const [pushOrigin, repositoryReach, pullRequestFiles, pullRequestMerges] = await Promise.all([this.pushOriginFor(user, tabId, command, preRead),
+      this.repositoryReachFor(user, tabId, command, preRead), this.pullRequestFilesFor(user, tabId, command, preRead), this.pullRequestMergesFor(user, tabId, command),
       this.verdictHeadRead(user, tabId, command)])
     let ended: WorkHold[] = [], started: WorkHold[] = []
-    // With only PMs and Buddies, no dispatch pass can hand out work.
-    let hasWorkers = false
+    // Whether the crew dispatch has a pick after this write: only then does its pass read the whole Swarm (task #3661).
+    let dispatches = false
     const done = await transaction(this.db, async tx => {
+      if (only.counted) only.counted.attempts++
       // A retried attempt starts again: only the attempt that commits says which tasks ended or started.
       ended = []
       started = []
@@ -2199,7 +2220,19 @@ export class SuperTabStore {
       if (decisionId) context.routeDecision = await readDecision(tx, tabId, decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
       if (command.type === 'project.boardMode' && command.on) context.legacyProposals = await this.legacyProposalBodies(tx, original, command.projectId)
       const effects = applyCommand(original, actor, command, context)
-      hasWorkers = effects.state.agents.some(a => !isBuddy(a) && !ledProject(effects.state, a.id))
+      // As the 30-second sweep decides (sweep, below): a free worker with a task for it, under its project's own rules, in a
+      // project whose PM is not waiting. Before, every freeing write in a Swarm with any worker started a pass, which read the
+      // whole Swarm on the primary to find nothing when nobody was free or nothing waited (Ken's scan on v1.4.20). Only a project
+      // with an open task reads its rules: one indexed read. What it skips, the sweep still sees.
+      dispatches = false
+      if (this.hooks.dispatch && freesOrOpens(command)) {
+        const skip = this.refusedSkip(tabId, effects.state, context.now)
+        for (const p of projectsOf(effects.state)) {
+          if (this.pmWaiting(tabId, effects.state, p, context.now) || !openTasks(effects.state, p.id, context.now).length) continue
+          const rules = await this.dispatchPolicy(tx, tabId, p.id)
+          if (rules && dispatchPlan(effects.state, p.id, rules, context.now, skip).length) { dispatches = true; break }
+        }
+      }
       // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
       const shown = effects.messages.filter(message => !agentOnly(message.source, message.recipients))
       for (const group of effects.state.conversations) {
@@ -2530,7 +2563,7 @@ export class SuperTabStore {
     this.endWork(tabId, ended)
     this.startWork(tabId, started)
     // A write that may free a worker or open a task hands out work at once, not at the next 30-second sweep (dispatch.ts).
-    if (hasWorkers && freesOrOpens(command)) this.dispatchSoon(tabId)
+    if (dispatches) this.dispatchSoon(tabId)
     // A task's Ready records its pull request's head as GitHub has it now, for the Reviewers it hands over to (task #3628).
     if (command.type === 'work.status' && command.status === 'review') await this.readyHeadRead(user, tabId, command)
     return done

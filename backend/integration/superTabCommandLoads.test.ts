@@ -13,6 +13,7 @@ import { logger } from '../src/utils/logger.js'
 import type { Conversation } from '../src/superTabs/model.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
 import { profiled } from './plans.test-support.js'
+import { startCommandStats } from '../src/superTabs/commandStats.js'
 
 // Ken's prod DB profile, 2026-11-02: a command naming the PM read every group the PM was ever in, 1,628 of them and growing with
 // every task, up to 1.66 s a read. Those that write its groups need them; those that only ask about it do not.
@@ -197,5 +198,44 @@ describe('what still reads an agent\'s dormant groups', () => {
     const after = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.group } })
     expect((after.data as unknown as Conversation).agentIds).not.toContain(f.worker)
     expect(after.agentIds).not.toContain(f.worker)
+  })
+})
+
+// Ken's 10:45 VN prod scan, 2026-11-06 (task #3661): POST commands p95 683 ms on v1.4.20 (11-05: 374). The common commands
+// read what they read on 11-05; an assignment and a Ready loaded the Swarm once per pre-read added since (push origin,
+// repository reach #3266, review files #3401), each in its own transaction, before the command loaded it again.
+describe('a command\'s reads outside its transaction (#3661)', () => {
+  /** What production gives the store (routes/superTabs.ts): every pre-read reader, answering at once. */
+  const hooks = { pushOrigin: async () => 'clean' as const, branchPushOrigin: async () => 'clean' as const, repositoryReach: async () => undefined,
+    pullRequestFiles: async () => null, pullRequestMerges: async () => ({}) }
+  /** The Swarm's head part reads [run] sends: one per load of the Swarm. */
+  const loads = async (run: () => Promise<unknown>) => (await profiled(db, run)).filter(e => e.ns.endsWith('.SwarmHead')).length
+
+  it('an assignment and a Ready load the Swarm once for all their pre-reads (5 and 6 head reads before)', async () => {
+    const f = await swarm(0, 20)
+    const store = new SuperTabStore(db, Date.now, undefined, hooks)
+    const execute = (command: Command, asAgentId?: string) => store.execute(owner, f.tab, { operationId: randomUUID(), command }, asAgentId)
+    // A command with nothing to read before its write reads the head once.
+    expect(await loads(() => execute({ type: 'message.send', conversationId: f.group, text: 'hello', replyTo: null, recipientIds: [] } as Command, f.worker))).toBe(1)
+    let assignmentId = ''
+    expect(await loads(async () => { assignmentId = String((await execute({ type: 'work.assign', conversationId: f.group, agentId: f.worker })).result.assignmentId) })).toBe(4)
+    expect(await loads(() => execute({ type: 'work.status', conversationId: f.group, assignmentId, status: 'review',
+      result: 'Ready for review: https://github.com/acme/app/pull/1' } as Command, f.worker))).toBe(4)
+  })
+})
+
+describe('commands by type (#3661)', () => {
+  it('records each command through the store by its type, with one attempt, and a refused one as refused', async () => {
+    const f = await swarm()
+    const log = vi.fn()
+    const stop = startCommandStats({ log })
+    try {
+      await f.execute({ type: 'message.send', conversationId: f.group, text: 'hello', replyTo: null, recipientIds: [] } as Command, f.worker)
+      await expect(f.execute({ type: 'conversation.rename', conversationId: 'missing', title: 'x' })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    } finally { stop() }
+    expect(log).toHaveBeenCalledWith('commands by type', expect.objectContaining({ commands: {
+      'message.send': expect.objectContaining({ n: 1 }), 'conversation.rename': expect.objectContaining({ n: 1, refused: 1 }) } }))
+    const { commands } = log.mock.calls[0]![1] as { commands: Record<string, { retried?: number }> }
+    expect(commands['message.send']!.retried).toBeUndefined()
   })
 })
