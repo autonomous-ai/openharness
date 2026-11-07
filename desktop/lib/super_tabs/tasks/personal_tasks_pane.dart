@@ -448,6 +448,10 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                                                         'type': 'task.approve',
                                                         'conversationId':
                                                             task.id,
+                                                        // The agent shown, null for none: a suggestion changed
+                                                        // since is refused (task #4217).
+                                                        'suggestedAgentId':
+                                                            task.agentId,
                                                       })
                                                     : null,
                                                 child: const Text('Approve'),

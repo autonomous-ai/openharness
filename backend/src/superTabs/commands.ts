@@ -443,7 +443,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('member.status'), status: statusSchema.nullable() }).strict(),
   z.object({ type: z.literal('member.approvalMode'), mode: z.enum(['autoApprove', 'review']) }).strict(),
   z.object({ type: z.literal('task.suggest'), conversationId: id, agentId: id }).strict(),
-  z.object({ type: z.literal('task.approve'), conversationId: id }).strict(),
+  // The suggested agent the person was shown, null for none (task #4217): compared, never read. Optional only for Desktops
+  // from before it, until 2026-12-07.
+  z.object({ type: z.literal('task.approve'), conversationId: id, suggestedAgentId: id.nullable().optional() }).strict(),
   z.object({ type: z.literal('task.reject'), conversationId: id, reason: z.string().trim().min(1).max(2000) }).strict(),
   z.object({ type: z.literal('member.timeZone'), timeZone: z.string().min(1).max(64).nullable() }).strict(),
   z.object({ type: z.literal('member.avatar'), avatar: avatarChoice }).strict(),
@@ -1931,6 +1933,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       execution: { machineId: worker.machineId, harnessId: worker.harnessId, machineOwnerId: worker.machineOwnerId }, result: null }
     renewLease(group.assignment, context.now)
     leadActed(group.id, 'assign')
+    // Its requester's Buddy hears of the task's first assignment only: a replacement agent is no news (task #4217).
+    const firstAssignment = group.ledger?.firstAssignedAt == null && !group.ledger?.runs?.length
     recordRun(state, group, group.assignment, worker, context.now)
     const others = othersWorkNotice(state, group, worker, context.now, ENGINE_NAMES[worker.configuration.engine] ?? worker.configuration.engine)
     if (others) effects.messages.push({ id: stableId(assignmentId, 'others-work-notice'), conversationId: others.conversationId, author: sender,
@@ -1943,7 +1947,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       ...recovery ? [recovery] : [],
       ...group.checks.length ? [`Acceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`] : [],
       ...requestedBy ? [requestedBy] : []].join('\n\n'), [worker.id], null, SYSTEM_ROW, undefined, undefined, undefined, assignmentId)
-    const news = assignedNotice(state, group, sender, assignmentId)
+    const news = firstAssignment && assignedNotice(state, group, sender, assignmentId)
     if (news) effects.messages.push(news)
   }
   /** The kind of a step already open on a task, by its name, so a step its Engineer opened is reused, not doubled. */
@@ -4591,6 +4595,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         approval.state = 'proposal'
         delete approval.decidedAt
       } else {
+        // A suggestion that moved between the person's look and their tap is not what they approved.
+        if (command.type === 'task.approve' && command.suggestedAgentId !== undefined && command.suggestedAgentId !== (approval.suggestedAgentId ?? null)) {
+          fail('TASK_SUGGESTION_CHANGED', 'The suggested agent changed since you looked. Read the task again and approve the agent it names now.', 409)
+        }
         approval.state = command.type === 'task.approve' ? 'approved' : 'rejected'
         approval.decidedAt = context.now
         if (command.type === 'task.reject') approval.reason = command.reason
