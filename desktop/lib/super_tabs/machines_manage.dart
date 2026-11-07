@@ -55,185 +55,218 @@ extension _ManageMachines on _SuperTabMachinesState {
     final machines = _machines(views);
     return ColoredBox(
       color: MachinesStyle.background,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: MachinesStyle.toolbarInset,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final narrow = constraints.maxWidth < 760;
-                final title = Wrap(
-                  spacing: 12,
-                  crossAxisAlignment: WrapCrossAlignment.center,
+      child: LayoutBuilder(
+        builder: (context, page) => Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // In a short window or at a large text size the header scrolls on its own within half the page, so the
+            // machines below it always keep room.
+            ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: page.maxHeight / 2),
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Text('Machines', style: MachinesStyle.title()),
-                    Text(summary, style: MachinesStyle.body()),
-                  ],
-                );
-                final actions = SizedBox(
-                  height: 36,
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          key: const ValueKey('machines-search'),
-                          onChanged: (value) {
-                            _machineSearch = value;
-                            _changed();
-                          },
-                          style: MachinesStyle.body(color: MachinesStyle.ink),
-                          decoration: InputDecoration(
-                            hintText: 'Search machines',
-                            hintStyle: MachinesStyle.body(
-                              color: MachinesStyle.label,
+                    Padding(
+                      padding: MachinesStyle.toolbarInset,
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          // A larger text size needs the room sooner: search and Add machine go under the title.
+                          final narrow =
+                              constraints.maxWidth <
+                              MediaQuery.textScalerOf(context).scale(760);
+                          final title = Wrap(
+                            spacing: 12,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              Text('Machines', style: MachinesStyle.title()),
+                              Text(summary, style: MachinesStyle.body()),
+                            ],
+                          );
+                          final actions = SizedBox(
+                            height: 36,
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: TextField(
+                                    key: const ValueKey('machines-search'),
+                                    onChanged: (value) {
+                                      _machineSearch = value;
+                                      _changed();
+                                    },
+                                    style: MachinesStyle.body(
+                                      color: MachinesStyle.ink,
+                                    ),
+                                    decoration: InputDecoration(
+                                      hintText: 'Search machines',
+                                      hintStyle: MachinesStyle.body(
+                                        color: MachinesStyle.label,
+                                      ),
+                                      prefixIcon: Icon(
+                                        AppIcons.search,
+                                        size: 16,
+                                        color: MachinesStyle.label,
+                                      ),
+                                      filled: true,
+                                      fillColor: MachinesStyle.field,
+                                      isDense: true,
+                                      contentPadding:
+                                          MachinesStyle.fieldPadding,
+                                      enabledBorder: OutlineInputBorder(
+                                        borderRadius: MachinesStyle.radius,
+                                        borderSide: BorderSide(
+                                          color: MachinesStyle.line,
+                                        ),
+                                      ),
+                                      focusedBorder: OutlineInputBorder(
+                                        borderRadius: MachinesStyle.radius,
+                                        borderSide: BorderSide(
+                                          color: MachinesStyle.accent,
+                                          width: 2,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                FilledButton(
+                                  key: const ValueKey(
+                                    'super-manage-add-machine',
+                                  ),
+                                  onPressed: add,
+                                  style: FilledButton.styleFrom(
+                                    backgroundColor: MachinesStyle.accent,
+                                    foregroundColor: MachinesStyle.onAccent,
+                                    textStyle: MachinesStyle.body(),
+                                    shape: const RoundedRectangleBorder(
+                                      borderRadius: MachinesStyle.radius,
+                                    ),
+                                  ),
+                                  child: const Text('Add machine'),
+                                ),
+                              ],
                             ),
-                            prefixIcon: Icon(
-                              AppIcons.search,
-                              size: 16,
-                              color: MachinesStyle.label,
-                            ),
-                            filled: true,
-                            fillColor: MachinesStyle.field,
-                            isDense: true,
-                            contentPadding: MachinesStyle.fieldPadding,
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: MachinesStyle.radius,
-                              borderSide: BorderSide(color: MachinesStyle.line),
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: MachinesStyle.radius,
-                              borderSide: BorderSide(
-                                color: MachinesStyle.accent,
-                                width: 2,
+                          );
+                          return narrow
+                              ? Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    title,
+                                    const SizedBox(height: 16),
+                                    actions,
+                                  ],
+                                )
+                              : Row(
+                                  children: [
+                                    Expanded(child: title),
+                                    const SizedBox(width: 16),
+                                    SizedBox(width: 320, child: actions),
+                                  ],
+                                );
+                        },
+                      ),
+                    ),
+                    Divider(height: 1, color: MachinesStyle.line),
+                    Padding(
+                      padding: MachinesStyle.filterInset,
+                      child: Wrap(
+                        alignment: WrapAlignment.spaceBetween,
+                        runSpacing: 8,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              for (final (id, label, total) in [
+                                ('all', 'All', views.length),
+                                ('online', 'Online', count('online')),
+                                ('asleep', 'Asleep', count('asleep')),
+                                ('offline', 'Offline', count('offline')),
+                                if (count('unknown') > 0)
+                                  (
+                                    'unknown',
+                                    'Status unknown',
+                                    count('unknown'),
+                                  ),
+                              ])
+                                ChoiceChip(
+                                  key: ValueKey('machines-filter-$id'),
+                                  label: Text('$label $total'),
+                                  selected: _machineFilter == id,
+                                  showCheckmark: false,
+                                  materialTapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                  visualDensity: VisualDensity.compact,
+                                  padding: EdgeInsets.zero,
+                                  onSelected: (_) {
+                                    _machineFilter = id;
+                                    _changed();
+                                  },
+                                  labelStyle: MachinesStyle.small(
+                                    color: _machineFilter == id
+                                        ? MachinesStyle.background
+                                        : MachinesStyle.metadata,
+                                  ),
+                                  selectedColor: MachinesStyle.ink,
+                                  backgroundColor: MachinesStyle.background,
+                                  side: BorderSide(color: MachinesStyle.line),
+                                  shape: const RoundedRectangleBorder(
+                                    borderRadius: MachinesStyle.pillRadius,
+                                  ),
+                                ),
+                            ],
+                          ),
+                          Text(
+                            'Sorted by status, then name',
+                            style: MachinesStyle.small(),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (c.backendUnreachable)
+                      Padding(
+                        padding: MachinesStyle.side,
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                "Couldn't refresh machines. Showing last known readings.",
+                                style: MachinesStyle.body(),
                               ),
                             ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      FilledButton(
-                        key: const ValueKey('super-manage-add-machine'),
-                        onPressed: add,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: MachinesStyle.accent,
-                          foregroundColor: MachinesStyle.onAccent,
-                          textStyle: MachinesStyle.body(),
-                          shape: const RoundedRectangleBorder(
-                            borderRadius: MachinesStyle.radius,
-                          ),
-                        ),
-                        child: const Text('Add machine'),
-                      ),
-                    ],
-                  ),
-                );
-                return narrow
-                    ? Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [title, const SizedBox(height: 16), actions],
-                      )
-                    : Row(
-                        children: [
-                          Expanded(child: title),
-                          const SizedBox(width: 16),
-                          SizedBox(width: 320, child: actions),
-                        ],
-                      );
-              },
-            ),
-          ),
-          Divider(height: 1, color: MachinesStyle.line),
-          Padding(
-            padding: MachinesStyle.filterInset,
-            child: Wrap(
-              alignment: WrapAlignment.spaceBetween,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final (id, label, total) in [
-                      ('all', 'All', views.length),
-                      ('online', 'Online', count('online')),
-                      ('asleep', 'Asleep', count('asleep')),
-                      ('offline', 'Offline', count('offline')),
-                      if (count('unknown') > 0)
-                        ('unknown', 'Status unknown', count('unknown')),
-                    ])
-                      ChoiceChip(
-                        key: ValueKey('machines-filter-$id'),
-                        label: Text('$label $total'),
-                        selected: _machineFilter == id,
-                        showCheckmark: false,
-                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        visualDensity: VisualDensity.compact,
-                        padding: EdgeInsets.zero,
-                        onSelected: (_) {
-                          _machineFilter = id;
-                          _changed();
-                        },
-                        labelStyle: MachinesStyle.small(
-                          color: _machineFilter == id
-                              ? MachinesStyle.background
-                              : MachinesStyle.metadata,
-                        ),
-                        selectedColor: MachinesStyle.ink,
-                        backgroundColor: MachinesStyle.background,
-                        side: BorderSide(color: MachinesStyle.line),
-                        shape: const RoundedRectangleBorder(
-                          borderRadius: MachinesStyle.pillRadius,
+                            TextButton(
+                              onPressed: () => unawaited(c.refresh()),
+                              child: const Text('Retry'),
+                            ),
+                          ],
                         ),
                       ),
                   ],
                 ),
-                Text(
-                  'Sorted by status, then name',
-                  style: MachinesStyle.small(),
-                ),
-              ],
+              ),
             ),
-          ),
-          if (c.backendUnreachable)
-            Padding(
-              padding: MachinesStyle.side,
-              child: Row(
+            Expanded(
+              child: LaidOutListView(
+                padding: MachinesStyle.side,
                 children: [
-                  Expanded(
-                    child: Text(
-                      "Couldn't refresh machines. Showing last known readings.",
-                      style: MachinesStyle.body(),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: () => unawaited(c.refresh()),
-                    child: const Text('Retry'),
-                  ),
+                  if (_ids.isEmpty)
+                    _stateNote(MachinesStyle.headerInset)!
+                  else if (machines.isEmpty)
+                    Padding(
+                      padding: MachinesStyle.headerInset,
+                      child: Text(
+                        'No machines match your search and filter.',
+                        style: MachinesStyle.body(),
+                      ),
+                    )
+                  else
+                    ...machines,
                 ],
               ),
             ),
-          Expanded(
-            child: LaidOutListView(
-              padding: MachinesStyle.side,
-              children: [
-                if (_ids.isEmpty)
-                  _stateNote(MachinesStyle.headerInset)!
-                else if (machines.isEmpty)
-                  Padding(
-                    padding: MachinesStyle.headerInset,
-                    child: Text(
-                      'No machines match your search and filter.',
-                      style: MachinesStyle.body(),
-                    ),
-                  )
-                else
-                  ...machines,
-              ],
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -279,7 +312,8 @@ class _ManageMachineLine extends StatelessWidget {
     ].join(' · ');
     return Container(
       key: ValueKey('machines-line-${view.id}'),
-      height: 56,
+      // 56pt at the normal text size; a larger text size grows the row with its two lines.
+      height: MediaQuery.textScalerOf(context).scale(56),
       padding: MachinesStyle.rowInset,
       decoration: BoxDecoration(
         border: own
@@ -507,6 +541,8 @@ class _MachineDisk extends StatelessWidget {
           total == null
               ? 'No reading'
               : 'of ${total >= 1000000000000 ? '${(total / 1000000000000).toStringAsFixed(total % 1000000000000 == 0 ? 0 : 1)} TB' : resourceBytes(total)}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
           style: MachinesStyle.small().copyWith(
             fontFeatures: MachinesStyle.tabular,
           ),
