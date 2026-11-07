@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { groupProject } from './projects.js'
 import { storeOldLeads } from './leads.test-support.js'
-import { applyCommand, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, WORDS, type Command, type CommandContext } from './commands.js'
+import { applyCommand, tasksNamedIn, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, WORDS, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { readsRawReason } from './startFailure.js'
 import { sweepLiveness } from './liveness.js'
@@ -20,6 +20,7 @@ import { NOW, owner as richOwner, peer as richPeer, richSwarm } from './read/fix
 import { groupView } from './read/views.js'
 import { weekStart } from './leaderboard/week.js'
 import { lentIn, weekSpan } from './leaderboard/rolling.js'
+import { giveOwnBuddy } from './ownBuddy.test-support.js'
 
 const HOLD = { kind: 'person', personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' } as const
 
@@ -1126,6 +1127,46 @@ describe('the last action of the project\'s agents on a task', () => {
     const startId = f.run({ type: 'agent.start', request, ...via }, f.leadActor, { contribution: f.contribution, ...decisionIn(group) }).result.startId as string
     f.run({ type: 'agent.startFailed', startId, error: 'Could not prepare the worktree' }, f.leadActor, { contribution: f.contribution, now: 7000 })
     expect(task().liveness).toEqual({ state: 'orphaned', why: 'start-failed', since: 7000 })
+  })
+
+  // Task #3861: a start stayed Queued for hours with its machine's fault only in that machine's log. Its host reports why it waits.
+  describe('a start its machine reports waiting', () => {
+    const FOLDER = 'CREATION_STORAGE_FAILED: The creation folder ~/.harness/cli/data/agent-creations is not usable by this account (permissions). It must belong to this account with mode 700; the owner of this computer fixes that, Harness does not change it.'
+    const started = () => {
+      const f = routed(), group = f.group()
+      f.define(group)
+      const request = { conversationId: group, machineId: 'machine', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
+        requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
+      const startId = f.run({ type: 'agent.start', request, ...via }, f.leadActor, { contribution: f.contribution, ...decisionIn(group) }).result.startId as string
+      const start = () => f.state.starts!.find(s => s.id === startId)!
+      return { f, startId, start, wait: (reason: string, now = 5000) => f.run({ type: 'agent.startWaiting', startId, reason }, f.leadActor, { contribution: f.contribution, now }) }
+    }
+
+    it('keeps the reason and when it was first told, on the start', () => {
+      const { start, wait } = started()
+      wait(FOLDER, 5000)
+      expect(start().waiting).toEqual({ reason: FOLDER, at: 5000 })
+      wait(FOLDER, 9000)
+      expect(start().waiting).toEqual({ reason: FOLDER, at: 5000 })
+      wait('CREATION_STORAGE_FAILED: other', 9500)
+      expect(start().waiting).toEqual({ reason: 'CREATION_STORAGE_FAILED: other', at: 9500 })
+    })
+    it('is read whole by its coordinator and as what it means by anyone else', () => {
+      const { f, start, wait } = started()
+      f.invite()
+      wait(FOLDER)
+      expect(visibleState(f.state, f.leadActor).starts!.find(s => s.id === start().id)!.waiting!.reason).toBe(FOLDER)
+      expect(visibleState(f.state, peer).starts!.find(s => s.id === start().id)!.waiting!.reason).toContain("Its machine's creation folder ~/.harness/cli/data/agent-creations is not usable")
+    })
+    it('ends with the start: failed or started', () => {
+      const { f, startId, start, wait } = started()
+      wait(FOLDER)
+      f.run({ type: 'agent.startFailed', startId, error: FOLDER }, f.leadActor, { contribution: f.contribution, now: 6000 })
+      expect(start().waiting).toBeUndefined()
+      // A report that arrives after the start ended changes nothing.
+      wait(FOLDER, 7000)
+      expect(start().waiting).toBeUndefined()
+    })
   })
 })
 
@@ -2416,16 +2457,13 @@ describe('any agent of the project', () => {
   })
 
   // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts, task #3404): another agent's line is the PM's crew need.
-  it('lets the PM tell a person of its project, and turns another agent\'s line into a crew need', () => {
+  it('refuses the PM\'s private line to a person, and turns another agent\'s line into a crew need', () => {
     const { f, E } = project(), pm = f.leadActor
     f.invite()
     expect(f.run({ type: 'person.tell', personId: 'peer', text: 'Your fix is merged.' }, E).messages.map(m => m.source?.kind)).toEqual(['crew-need'])
-    const told = f.run({ type: 'person.tell', personId: 'peer', text: 'Your fix is merged.' }, pm)
-    // In their one Buddy chat, marked with its project, and in their older chat there for older apps (Dee, 10-31).
-    const swarm = f.state.conversations.find(c => c.kind === 'swarm-buddy')!, chat = f.state.conversations.find(c => c.kind === 'buddy')!
-    expect(told.messages).toEqual([
-      expect.objectContaining({ conversationId: swarm.id, text: 'Your fix is merged.', recipients: [], source: { kind: 'pm-line', projectId: chat.projectId } }),
-      expect.objectContaining({ conversationId: chat.id, text: 'Your fix is merged.', recipients: [] })])
+    // Only the person and their own agent post in their private chat (anh Dee, 11-07, task #4558): the PM tags them in the project chat.
+    expect(() => f.run({ type: 'person.tell', personId: 'peer', text: 'Your fix is merged.' }, pm)).toThrow(expect.objectContaining({ code: 'PRIVATE_CHAT' }))
+    expect(f.state.conversations.filter(c => c.kind === 'swarm-buddy' || c.kind === 'buddy')).toEqual([])
     expect(() => f.run({ type: 'person.tell', personId: 'peer', text: 'Hello.' })).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
   })
 
@@ -2803,6 +2841,76 @@ describe('cancelling work', () => {
       const { f, leadActor, cancel } = unassigned()
       expect(() => f.run({ ...cancel, conversationId: 'lead' } as Command, leadActor)).toThrow('no longer the active assignment')
       expect(f.state.conversations.find(c => c.id === 'lead')!.archived).toBe(false)
+    })
+  })
+
+  // A duplicate, or work folded or split into others, names those tasks in its reason: it leaves people's Tasks and is kept
+  // (task #4462).
+  describe('naming where its work goes on', () => {
+    const task = (f: ReturnType<typeof fixture>, id: string) => f.state.conversations.find(c => c.id === id)!
+    it('reads the task numbers a reason says the work goes on in, never itself, a pull request or a mere mention', () => {
+      expect(tasksNamedIn('Duplicate of #4421', 4420)).toEqual([4421])
+      expect(tasksNamedIn('Being done inside #4445.', 4455)).toEqual([4445])
+      expect(tasksNamedIn('Accepted and split by area: #4465, #4466 to #4468', 4464)).toEqual([4465, 4466, 4468])
+      expect(tasksNamedIn('Folded into #12 and #12 (this is #7)', 7)).toEqual([12])
+      expect(tasksNamedIn('Duplicate: merged in PR #3529 and pull request #3530', 1)).toEqual([])
+      for (const reason of ['Not needed', 'Waiting on #4434', 'Not needed; see #4400 for context']) expect(tasksNamedIn(reason, 1)).toEqual([])
+      expect(tasksNamedIn(`Split into ${Array.from({ length: 20 }, (_, i) => `#${i + 100}`).join(' ')}`, 1)).toHaveLength(10)
+      // The phrase goes with the numbers after it in its own sentence (review 2 of #3534).
+      expect(tasksNamedIn('Duplicate of #4421; waiting on #4434', 1)).toEqual([4421])
+      expect(tasksNamedIn('A duplicate. Waiting on #4434 anyway', 1)).toEqual([])
+      expect(tasksNamedIn('Merged #3471', 1)).toEqual([])
+    })
+    it('links an unassigned proposal or live work to the real tasks it names, and keeps it', () => {
+      const f = fixture(), dup = f.group(), real = f.group(), plain = f.group(), other = f.group()
+      f.run({ type: 'work.cancel', conversationId: dup, assignmentId: 'current', reason: `Split into #${task(f, real).number} and #${task(f, other).number}` })
+      f.run({ type: 'work.cancel', conversationId: plain, assignmentId: 'current', reason: `Waiting on #${task(f, real).number}` })
+      expect(task(f, dup)).toMatchObject({ foldedInto: [real, other], archived: true })
+      expect(task(f, plain).foldedInto).toBeUndefined()
+      const { f: g, group, leadActor, cancel } = active(), inside = g.group()
+      g.run({ ...cancel, reason: `Being done inside #${task(g, inside).number}` } as Command, leadActor)
+      expect(task(g, group)).toMatchObject({ foldedInto: [inside], assignment: { status: 'cancelled' } })
+    })
+    it('names only a task the Swarm knows in its project: never one missing, the project chat, a step or a private chat', () => {
+      const f = fixture(), dup = f.group(), step = f.group(), secret = f.group()
+      Object.assign(task(f, step), { reviewOf: secret })
+      Object.assign(task(f, secret), { audience: { people: [] } })
+      const numbers = [task(f, step).number, task(f, secret).number, task(f, 'lead').number, 999].filter(n => n != null).map(n => `#${n}`)
+      f.run({ type: 'work.cancel', conversationId: dup, assignmentId: 'current', reason: `Duplicate of ${numbers.join(', ')}` })
+      expect(task(f, dup)).toMatchObject({ archived: true })
+      expect(task(f, dup).foldedInto).toBeUndefined()
+    })
+    it('links a task cancelled before, once, changing nothing else', () => {
+      const f = fixture(), dup = f.group(), real = f.group(), later = f.group()
+      f.run({ type: 'work.cancel', conversationId: dup, assignmentId: 'current', reason: 'Duplicate' })
+      const before = structuredClone(task(f, dup))
+      const link = { type: 'work.cancel', conversationId: dup, assignmentId: 'current', reason: `Duplicate of #${task(f, real).number}` } as Command
+      const effects = f.run(link)
+      expect(task(f, dup)).toEqual({ ...before, foldedInto: [real] })
+      expect(effects.messages.map(m => [m.text, m.source])).toEqual([[`owner noted where this task's work goes on: Duplicate of #${task(f, real).number}.`, { kind: 'system' }]])
+      expect(f.run({ ...link, reason: `Duplicate of #${task(f, later).number}` } as Command).messages).toHaveLength(0)
+      expect(task(f, dup).foldedInto).toEqual([real])
+      // Naming no task, a closed one stays closed, as before.
+      expect(() => f.run({ ...link, reason: 'Duplicate' } as Command)).toThrow(expect.objectContaining({ code: 'ARCHIVED' }))
+      // Naming one the Swarm does not hold now (mistyped, or quiet for a day), it says which (review 2 of #3534).
+      const unknown = f.group()
+      f.run({ type: 'work.cancel', conversationId: unknown, assignmentId: 'current', reason: 'Duplicate' })
+      expect(() => f.run({ ...link, conversationId: unknown, reason: 'Duplicate of #999' } as Command))
+        .toThrow(expect.objectContaining({ code: 'FOLD_TARGET', message: expect.stringContaining('#999') }))
+      expect(task(f, unknown).foldedInto).toBeUndefined()
+      const { f: g, group, leadActor, cancel } = active(), other = g.group()
+      g.run(cancel, leadActor)
+      g.run({ ...cancel, reason: `Duplicate of #${task(g, other).number}` } as Command, leadActor)
+      expect(task(g, group)).toMatchObject({ foldedInto: [other], assignment: { status: 'cancelled', result: 'Duplicate of another task' } })
+    })
+    it('never marks finished work, and lets only who may cancel work link it', () => {
+      const { f, group, leadActor, assignmentId, cancel } = active(), real = f.group()
+      const reason = `Duplicate of #${task(f, real).number}`
+      expect(() => f.run({ ...cancel, reason } as Command, peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+      expect(task(f, group).foldedInto).toBeUndefined()
+      Object.assign(task(f, group), { archived: true, assignment: { ...task(f, group).assignment!, status: 'done' } })
+      expect(() => f.run({ type: 'work.cancel', conversationId: group, assignmentId, reason }, leadActor)).toThrow()
+      expect(task(f, group).foldedInto).toBeUndefined()
     })
   })
 })
@@ -5783,6 +5891,25 @@ describe('lead.switch', () => {
     expect(result.messages.at(-1)!.text).toContain('PM moved to Codex')
   })
 
+  // Security review of #4558: the account a moved PM lands on would be the destination machine's owner's. No person moves a PM
+  // onto another member's computer at all (Swarm v3, #4120), Buddy or not, so no member's account runs it without their knowing.
+  it('refuses moving the PM onto another member\'s computer, whether or not they have a Buddy', () => {
+    for (const buddy of [false, true]) {
+      const s = setup()
+      const destination = structuredClone(s.f.state.machines![0]!)
+      Object.assign(destination, { machineId: 'destination', name: 'Peer Mac', generation: 'g2', contributorId: 'peer',
+        membershipGeneration: s.f.state.people.find(p => p.id === 'peer')!.generation })
+      destination.observation!.generation = 'g2'
+      destination.observation!.capabilities = ['leadSwitch', 'leadStart']
+      s.f.state.machines!.push(destination)
+      if (buddy) giveOwnBuddy(s.f.state, 'peer')
+      for (const profileId of [WORK, 'default']) {
+        expect(code(() => s.f.run({ ...s.request, profileId, machineId: 'destination', model: 'gpt-5.1' }))).toBe('NOT_YOUR_COMPUTER')
+      }
+      expect(s.agent().switchRequest).toBeUndefined()
+    }
+  })
+
   it('keeps the source lead and posts one safe line when the destination candidate fails', () => {
     const s = setup()
     const destination = structuredClone(s.f.state.machines![0]!)
@@ -5849,14 +5976,27 @@ describe('lead.switch', () => {
     expect(team.agent().switchRequest).toBeDefined()
   })
 
-  it('tells the machine owner, in their Buddy chat, when another person moves the PM onto one of their other accounts', () => {
-    const lent = () => { const s = setup(['leadSwitch'], 'peer'); s.agent().machineOwnerId = 'peer'; return s }
+  it('has the machine owner\'s own Buddy tell them, in their Buddy chat, when another person moves the PM onto one of their other accounts', () => {
+    const lent = () => { const s = setup(['leadSwitch'], 'peer'); s.agent().machineOwnerId = 'peer'; giveOwnBuddy(s.f.state, 'peer'); return s }
     const done = (s: ReturnType<typeof setup>) => s.f.run({ type: 'agent.switchResult', agentId: s.pm, switchId: s.sid(), ok: true }, { ...s.as, machineOwnerId: 'peer' })
     const s = lent()
     s.f.run(s.request)
     const told = done(s).messages.filter(m => (m.source as { kind?: string } | undefined)?.kind === 'pm-switch-notice')
     expect(told).toEqual([expect.objectContaining({ conversationId: s.f.state.conversations.find(c => c.kind === 'swarm-buddy')!.id,
+      author: expect.objectContaining({ kind: 'agent', id: 'peer-buddy' }),
       text: 'owner moved the PM of Pilot on Studio to your Codex account "Work".', source: { kind: 'pm-switch-notice', machineId: 'host' } })])
+    // Without a Buddy of theirs nobody could tell them (only they and their own agent post in their private chat, task #4558), so
+    // another person's move onto their other account is refused, saying why; on its default account, or their own move, it goes.
+    const bare = setup(['leadSwitch'], 'peer')
+    bare.agent().machineOwnerId = 'peer'
+    expect(() => bare.f.run(bare.request)).toThrow(expect.objectContaining({ code: 'OWNER_NOT_TOLD', message: expect.stringContaining('peer') }))
+    expect(bare.agent().switchRequest).toBeUndefined()
+    bare.f.run({ ...bare.request, profileId: 'default' })
+    expect(bare.agent().switchRequest).toBeDefined()
+    const theirs = setup(['leadSwitch'], 'peer')
+    theirs.agent().machineOwnerId = 'peer'
+    theirs.f.run(theirs.request, peer)
+    expect(theirs.agent().switchRequest).toMatchObject({ requestedBy: 'peer' })
     // The owner's Buddy reads it: never an email, even one the asker took as their name (review of #2954).
     const named = lent()
     named.f.state.people.find(p => p.id === 'owner')!.name = 'owner@example.com'
@@ -5984,6 +6124,7 @@ describe('lead.switch', () => {
   it('tells the machine owner after a real switch, where the rebind lands before the result', () => {
     const s = setup(['leadSwitch'], 'peer')
     s.agent().machineOwnerId = 'peer'
+    giveOwnBuddy(s.f.state, 'peer')
     s.f.run(s.request)
     const switchId = s.sid(), requester = s.agent().switchRequest!.requestedBy
     s.f.run({ type: 'agent.rebind', agentId: s.pm, machineId: 'host', projectId: 'lead', previousHarnessId: 'pm', harnessId: 'pm-2', profileId: WORK,

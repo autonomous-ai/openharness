@@ -51,6 +51,17 @@ class WindowsUpdateSwap {
   bool get launcherNeedsRepair =>
       !_ordinaryFile(p.join(installRoot, launcherExe));
 
+  /// The staged version folder and launcher, for the signature check; null
+  /// until [stage] succeeds.
+  String? get stagedFolder => switch ((_attemptRoot, _stagedVersion)) {
+    (final attempt?, final version?) => _staging(attempt, version),
+    _ => null,
+  };
+  String? get stagedLauncher => switch (_attemptRoot) {
+    final attempt? => p.join(attempt, '$launcherExe.new'),
+    null => null,
+  };
+
   String get _app => p.join(installRoot, 'app');
   String _staging(String attempt, String version) =>
       p.join(attempt, 'app', '$version.staging');

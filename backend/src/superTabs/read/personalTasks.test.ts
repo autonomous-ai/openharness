@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { personalTasksFor, personalTasksPage } from './personalTasks.js'
-import { readerView } from './views.js'
+import { feedIdsOf } from './feedIds.js'
+import { groupView, readerView } from './views.js'
 import { fullSwarm, NOW, owner, peer, outsider } from './fixture.test-support.js'
 import * as parts from '../parts/index.js'
 import type { Actor } from '../model.js'
@@ -138,6 +139,17 @@ describe('personal Tasks summaries', () => {
     expect(personalTasksFor([declined], s.view(), peer)!.upserts).toEqual([expect.objectContaining({ id: row.key, status: 'rejected', reason: 'Out of scope' })])
     const merged = { ...declined, data: { ...declined.data!, proposal: { ...proposal, mergedInto: 'other' } } } as typeof row
     expect(personalTasksFor([merged], s.view(), peer)).toMatchObject({ upserts: [], removed: [row.key] })
+  })
+  it('leaves out a proposal or task folded into another, and keeps the real task (task #4462)', () => {
+    const s = scene(), row = s.stored.groups.find(g => g.key === s.f.web)!, real = s.stored.groups.find(g => g.key === s.f.secretGroup)!
+    const folded = { ...row, data: { ...row.data!, assignment: null, archived: true, foldedInto: [real.key] } }
+    expect(personalTasksFor([folded, real], s.view(), peer)).toMatchObject({ upserts: [{ id: real.key }], removed: [row.key] })
+    // No page reads it: its stored keys name nobody (read/feedIds.ts).
+    expect(feedIdsOf(folded.data)).toEqual([])
+    expect(feedIdsOf(real.data!)).not.toEqual([])
+    // History still finds it: the project's archived list reads by project, not by these keys, and its view names the real
+    // task, for its card to open (review of #3534).
+    expect(groupView(folded.data, new Set())).toMatchObject({ id: row.key, archived: true, foldedInto: [real.key] })
   })
   it('never leaks a hidden project, private chat, hidden agent or stale membership proposal', () => {
     const s = scene(), row = s.stored.groups.find(g => g.key === s.f.secretGroup)!

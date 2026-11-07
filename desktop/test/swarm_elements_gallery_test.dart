@@ -7,6 +7,8 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/state/harness_activity.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
@@ -115,7 +117,7 @@ Future<void> _show(
   grid.AppTheme.brightness.value = brightness;
   addTearDown(() => grid.AppTheme.brightness.value = old);
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 800);
+  tester.view.physicalSize = const Size(760, 960);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -170,6 +172,7 @@ List<GalleryRegion> _regions(WidgetTester tester) {
     of: find.byType(SuperTabTaskStatusMark),
     matching: find.byType(Icon),
   );
+  final agentMarks = find.byType(SuperTabAgentMark);
   return [
     for (var i = 0; i < faces.evaluate().length; i++)
       if (tester.widget<SuperTabAvatarFace>(faces.at(i)) case final face)
@@ -197,6 +200,13 @@ List<GalleryRegion> _regions(WidgetTester tester) {
       (
         name: 'status mark ${tester.widget<Icon>(marks.at(i)).semanticLabel}',
         rect: tester.getRect(marks.at(i)),
+        limit: _glyph,
+      ),
+    for (var i = 0; i < agentMarks.evaluate().length; i++)
+      (
+        name:
+            'agent mark ${tester.widget<SuperTabAgentMark>(agentMarks.at(i)).activity.name}',
+        rect: tester.getRect(agentMarks.at(i)),
         limit: _glyph,
       ),
   ];
@@ -398,7 +408,7 @@ class _Gallery extends StatelessWidget {
                     ),
                 ],
               ),
-              title('Row and task card'),
+              title('Left pane rows and task card'),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -406,21 +416,58 @@ class _Gallery extends StatelessWidget {
                     width: 280,
                     child: Column(
                       children: [
-                        SuperTabBuddyRow(
-                          agentId: 'id-River',
-                          agent: _agent('River', kind: 'pm'),
-                          name: 'River',
-                          note: 'harness',
-                          tooltip: 'River',
-                          lead: true,
+                        // The Desktop left pane (task #4466).
+                        SuperTabQuietHeading.org('autonomous.ai', onTap: () {}),
+                        SuperTabQuietRow(
+                          leading: const Icon(
+                            AppIcons.inbox,
+                            size: AppIcons.inlineSize,
+                          ),
+                          name: 'Decisions',
+                          detail: '3',
+                          unread: true,
                           onTap: () {},
                         ),
-                        SuperTabBuddyRow(
-                          agentId: 'id-Quinn',
-                          agent: _agent('Quinn'),
-                          name: 'Quinn',
-                          tooltip: 'Quinn',
-                          selected: true,
+                        SuperTabQuietHeading(
+                          'My agents',
+                          collapsed: false,
+                          onTap: () {},
+                        ),
+                        for (final (name, lead, detail, mark, selected) in [
+                          ('River', true, 'harness', null, false),
+                          ('Quinn', false, null, null, true),
+                          ('Kai', false, null, HarnessActivity.working, false),
+                          (
+                            'Sage',
+                            false,
+                            'offline',
+                            HarnessActivity.needsInput,
+                            false,
+                          ),
+                          ('Lark', false, null, HarnessActivity.failed, false),
+                        ])
+                          SuperTabQuietRow(
+                            leading: SuperTabAvatar.agent(
+                              _agent(name, kind: lead ? 'pm' : null),
+                              size: SuperTabQuietRow.faceSize,
+                              engineBadge: false,
+                              lead: lead,
+                            ),
+                            name: name,
+                            detail: detail,
+                            selected: selected,
+                            mark: mark == null ? null : SuperTabAgentMark(mark),
+                            markColumn: true,
+                            onTap: () {},
+                          ),
+                        SuperTabQuietHeading('Humans', onTap: () {}),
+                        SuperTabQuietRow(
+                          leading: SuperTabAvatar.person(
+                            _person,
+                            size: SuperTabQuietRow.faceSize,
+                          ),
+                          name: 'dee',
+                          detail: '120',
                           onTap: () {},
                         ),
                       ],

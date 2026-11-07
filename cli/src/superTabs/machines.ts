@@ -59,6 +59,10 @@ const BEAT_LIMIT_MS = 3 * 60_000
  *  busy CPU or memory may pass, and routing saw this machine able a moment ago. A refusal no one reported left starts
  *  "Queued" for hours (DESKTOP-0TFH0OJ, 2026-10-23). */
 const START_REFUSED_MS = 60_000
+/** How long a fault of this machine (its creation folder cannot be used, say) may hold an undispatched start before it fails with the
+ *  fault's reason, so the Lead starts it elsewhere: longer than a refusal, since a person may fix the machine meanwhile. stone7890's
+ *  Mac held one for four hours with only the host log to say why (task #3861). */
+const START_FAULT_MS = 5 * 60_000
 /** What a start answers while its launch may already have happened or is under way: never failed from here, or an agent
  *  could run with no start to show for it. The failures already reported say so themselves. */
 const NOT_REFUSED = new Set(['START_UNCERTAIN', 'START_PENDING', 'START_REFUSED', 'START_FAILED', 'SWARM_ENGINE'])
@@ -233,6 +237,8 @@ export class ContributedMachines {
   private readonly toolCache = new Map<string, { value: boolean | null; detail?: string; until: number }>()
   /** Per waiting start, why it was last not started, so the log says it once per reason, not every pass. */
   private readonly waiting = new Map<string, string>()
+  /** Per waiting start, the fault reason the Swarm has been told, so it hears each once (agent.startWaiting). */
+  private readonly told = new Map<string, string>()
   /** Per tab, why its last reading did not reach the backend, so the log says it once per error and once when it clears. */
   private readonly readingFailures = new Map<string, string>()
   /** Per waiting start, since when this machine has refused it without a break. */
@@ -428,6 +434,18 @@ export class ContributedMachines {
     this.waiting.set(startId, reason)
     this.log(`Swarm start ${startId} is waiting: ${reason}`)
   }
+  /** Tells the Swarm why a start waits on this machine, once per reason: the PM sees it on the start and in the route instead of
+   *  only "Queued". A server that does not know the report (an older backend) is not asked again; any other failure is retried. */
+  private async tell(scoped: ScopedRequest, startId: string, reason: string) {
+    if (this.told.get(startId) === reason) return
+    try {
+      await scoped({ action: 'command', operationId: `waiting-${startId}-${createHash('sha256').update(reason).digest('hex').slice(0, 12)}`,
+        command: { type: 'agent.startWaiting', startId, reason } })
+    } catch (error) {
+      if (!(error instanceof SuperTabHostError && error.status >= 400 && error.status < 500)) return
+    }
+    this.told.set(startId, reason)
+  }
   private async reportStartFailure(startId: string, path: string, input: Record<string, unknown>): Promise<void> {
     let report = this.failureReports.get(startId)
     if (!report) {
@@ -526,6 +544,7 @@ export class ContributedMachines {
     const pendingIds = new Set(pools.flatMap(row => startsOf(row).map(start => start.id)))
     for (const id of this.failureReports.keys()) if (!pendingIds.has(id)) this.failureReports.delete(id)
     for (const id of this.waiting.keys()) if (!pendingIds.has(id)) this.waiting.delete(id)
+    for (const id of this.told.keys()) if (!pendingIds.has(id)) this.told.delete(id)
     for (const id of this.refusedSince.keys()) if (!pendingIds.has(id)) this.refusedSince.delete(id)
     for (const id of this.preparing) if (!pendingIds.has(id)) this.preparing.delete(id)
     for (const id of this.refused.keys()) if (!pendingIds.has(id)) this.refused.delete(id)
@@ -851,9 +870,11 @@ export class ContributedMachines {
               } else if (result.ok !== true) {
                 const reason = String(result.detail ?? (Array.isArray(result.reasons) ? result.reasons.join(' ') : result.error))
                 this.noteWaiting(start.id, reason)
+                const fault = result.error === 'START_MACHINE_FAULT'
+                if (fault) await this.tell(scoped, start.id, reason)
                 const since = this.refusedSince.get(start.id) ?? began
                 if (refused) this.refusedSince.set(start.id, since)
-                if (refused && began - since >= START_REFUSED_MS) {
+                if (refused && began - since >= (fault ? START_FAULT_MS : START_REFUSED_MS)) {
                   await scoped({ action: 'command', operationId: `refused-${start.id}`, command: { type: 'agent.startFailed', startId: start.id, error: reason } })
                 }
               }

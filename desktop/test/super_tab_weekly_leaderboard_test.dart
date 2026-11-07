@@ -179,7 +179,8 @@ void main() {
         shots,
         'weekly-board-tasks-${brightness.name}',
       );
-      await tester.tap(find.byKey(const ValueKey('super-leaderboard')));
+      // Humans opens the whole board (task #4466).
+      await tester.tap(find.byKey(const ValueKey('project-sidebar-humans')));
       await tester.pumpAndSettle();
       expect(find.text('This week'), findsOneWidget);
       expect(find.byKey(const ValueKey('weekly-person-peer')), findsOneWidget);

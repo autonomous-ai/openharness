@@ -48,6 +48,21 @@ export function stepOsRefusal(state: SuperTabState, group: Pick<Conversation, 'r
   return `${stepName(group)} runs only on a ${OS_NAME[os]} machine, and ${pool?.name ?? 'this machine'} reports ${reported ? reported : 'no OS'}.`
 }
 
+/** Windows runs shared Desktop/CLI source and its native runner, not the Mac's Team-account implementation. Keep this
+ *  alongside the planner so existing saved rules gain the Windows check without a rules migration (task #3778). */
+const WINDOWS_TESTS = [
+  { where: 'Desktop on Windows', paths: ['desktop/lib/**', 'desktop/windows/**', 'desktop/pubspec.yaml', 'desktop/pubspec.lock'] },
+  { where: 'The CLI on Windows', paths: ['cli/src/**'] },
+]
+const MAC_TEAM_FILES = new Set(['cli/src/team/script.ts', 'cli/src/team/nodeTools.ts', 'cli/src/team/tmux.ts'])
+// Match platform names, not names beginning with "mac" such as machineResources. Shared Team setup must still run on Windows.
+const OTHER_PLATFORM = /\/(?:macos|darwin|linux)(?:[A-Z_./]|$)|\/mac_/
+function windowsTests(files: readonly string[] | null, rules: ProjectRules): string[] {
+  return testsFor({ ...rules, reviews: { ...rules.reviews, test: WINDOWS_TESTS,
+    untested: [...SEED_RULES.reviews.untested, ...rules.reviews.untested] } },
+  files?.filter(file => !MAC_TEAM_FILES.has(file) && !OTHER_PLATFORM.test(file)) ?? null)
+}
+
 /**
  * The steps a change to [files] needs by the project's [rules], reads first: as many reads as requiredReads asks, each a
  * security review when a sensitive row is touched; then a test step naming where testsFor says it runs. Files that could not
@@ -67,8 +82,10 @@ export function reviewPlan(files: readonly string[] | null, rules: ProjectRules 
   // A test that must run on more than one OS is one step per OS, each for a Tester on that OS (task #3602: #3576's went to a
   // Mac only when its check needed a Mac and a Linux machine); one OS named is that step's.
   const oses = osesIn(where)
-  if (where.length && oses.length > 1) for (const os of oses) steps.push({ name: `Test on ${OS_PLACE[os]}`, kind: 'test', areas: [], where, os })
-  else if (where.length) steps.push({ name: 'Test', kind: 'test', areas: [], where, ...oses.length ? { os: oses[0]! } : {} })
+  if (where.length && oses.length > 1) for (const os of oses) steps.push({ name: os === 'windows' ? 'Test on Windows' : `Test on ${OS_PLACE[os]}`, kind: 'test', areas: [], where, os })
+  else if (where.length) steps.push({ name: oses[0] === 'windows' ? 'Test on Windows' : 'Test', kind: 'test', areas: [], where, ...oses.length ? { os: oses[0]! } : {} })
+  const windows = windowsTests(files, rules)
+  if (windows.length && !oses.includes('windows')) steps.push({ name: 'Test on Windows', kind: 'test', areas: [], where: windows, os: 'windows' })
   return steps
 }
 
@@ -96,6 +113,7 @@ export function stepBrief(step: PlannedStep, task: BriefTask): string {
   const what = step.kind === 'test'
     ? `Test ${pulls} for task #${task.number} "${task.title}" as a user would, where it changes: ${step.where!.join('; ')}.`
       + (step.os && step.name !== 'Test' ? ` This step runs it on ${OS_PLACE[step.os]}.` : '')
+      + (step.os === 'windows' ? ` Read docs/windows-rules.md first: no unwanted window may flash, even for a moment. Prove the flow with a recording in the person's Windows session on the signed build; SSH or session 0 cannot prove it.` : '')
     : `${step.kind === 'security' ? 'Security-review' : 'Review'} ${pulls} for task #${task.number} "${task.title}".`
   const why = step.unread ? ' Its changed files could not be read, so it is reviewed as strictly as the review table goes.'
     : step.kind === 'security' ? ` It changes ${step.areas.join(', ')}: two independent security reviews before merge.` : ''

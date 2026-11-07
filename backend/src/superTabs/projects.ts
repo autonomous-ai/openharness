@@ -33,6 +33,9 @@ export const roleVersion = (text: string): string => createHash('sha256').update
 export interface SwarmProject {
   id: string
   name: string
+  /** What the project is, in one line (at most 80 characters), set by its owner or Lead (project.about, task #4540): the Cmd-N
+   *  and join project list shows it. Absent shows the repository's name. */
+  about?: string
   /** The owner's id; '' for a private project whose owner left with no member left to take it (settleOwners): nobody's. */
   ownerId: string
   /** The owner's membership generation when they became its owner (task #3073): the same account at a later membership
@@ -475,16 +478,18 @@ export function canReadAgent(state: SuperTabState, actor: Actor, target: Agent):
 
 /** A session that reads people's private messages: its project's Lead (the Product Manager each person chats with privately),
  *  or any agent in a private conversation, so a replaced Lead's earlier screen stays closed too. */
-export const confidentialSession = (state: SuperTabState, target: Agent): boolean => {
-  const { leaders, privateMembers } = confidentialSets(state)
-  return leaders.has(target.id) || privateMembers.has(target.id)
-}
+export const confidentialSession = (state: SuperTabState, target: Agent, sets: ConfidentialSets = confidentialSets(state)): boolean =>
+  sets.leaders.has(target.id) || sets.privateMembers.has(target.id)
+
+/** confidentialSets' answer. A caller that asks about many agents or readers of one state builds it once and passes it down
+ *  (task #4504: the host roster rebuilt it for each person on each agent, agents x people passes over the conversations). */
+export interface ConfidentialSets { leaders: ReadonlySet<string>; privateMembers: ReadonlySet<string> }
 
 /** Who confidentialSession holds confidential, for every agent at once: the Leads of a project's Lead conversation, and every
  *  member of a private conversation (one with an audience). One pass over the conversations: asking per agent scanned them
  *  per project and agent on every command (markConfidential), 13.5 M of ledProject's callbacks and 1.6 M of the private
  *  member check's in the 2026-11-02 prod profiles. Built per call, never kept on the state, since a command changes it. */
-export function confidentialSets(state: SuperTabState): { leaders: ReadonlySet<string>; privateMembers: ReadonlySet<string> } {
+export function confidentialSets(state: SuperTabState): ConfidentialSets {
   const leadChats = new Set(projectsOf(state).map(p => p.leadConversationId))
   const leaders = new Set<string>(), privateMembers = new Set<string>()
   for (const c of state.conversations) {
@@ -495,8 +500,8 @@ export function confidentialSets(state: SuperTabState): { leaders: ReadonlySet<s
 }
 
 /** Whether an agent's session is confidential: marked, or a Lead or private member now, here or (`elsewhere`) in another Swarm. */
-export const isConfidential = (state: SuperTabState, target: Agent, elsewhere = false): boolean =>
-  !!target.confidential || elsewhere || confidentialSession(state, target)
+export const isConfidential = (state: SuperTabState, target: Agent, elsewhere = false, sets?: ConfidentialSets): boolean =>
+  !!target.confidential || elsewhere || confidentialSession(state, target, sets)
 
 /** A native session's identity across Swarms: its machine and harness. */
 export const sessionKey = (machineId: string, harnessId: string) => `${machineId}\n${harnessId}`
@@ -535,16 +540,16 @@ export function markConfidential(state: SuperTabState): void {
  *  the exception, view only (Ken, 2026-10-28): every reader of its project watches it, the private chats it is in included.
  *  It stays marked, so a former Lead, another Swarm and an ordinary share still find it closed. `elsewhere`: the session is
  *  confidential in another Swarm (confidential.ts), whose chats are not this Swarm's to read. */
-export const watchClosed = (state: SuperTabState, target: Agent, elsewhere = false): boolean =>
-  elsewhere || (isConfidential(state, target) && !ledProject(state, target.id))
+export const watchClosed = (state: SuperTabState, target: Agent, elsewhere = false, sets?: ConfidentialSets): boolean =>
+  elsewhere || (isConfidential(state, target, false, sets) && !ledProject(state, target.id))
 
 /** Who may watch an agent's terminal: observe it or hold a share of it. Reading or typing in it on request is closed by
  *  `isConfidential` alone (terminal.ts mayDrive). Any other agent: every reader of its project, as before. */
-export function canWatchAgent(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false): boolean {
+export function canWatchAgent(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false, sets?: ConfidentialSets): boolean {
   if (!canReadAgent(state, actor, target)) return false
-  const team = teamSessionAccess(state, actor, target, elsewhere)
+  const team = teamSessionAccess(state, actor, target, elsewhere, sets)
   if (team) return team !== 'none'
-  return !watchClosed(state, target, elsewhere) || ownSession(actor, target)
+  return !watchClosed(state, target, elsewhere, sets) || ownSession(actor, target)
 }
 
 /** Whether [pool] is a Harness Team account: a Mac's (it names its Mac) or a machine used only for agents (its reading came
@@ -588,11 +593,11 @@ export function wordsOf(source: unknown): 'author' | 'none' | 'unknown' | { agen
  * Other members watch it as they watch any confidential session (watchClosed). Null for every other session, and for
  * agents, which keep their own rules (mayDrive).
  */
-export function teamSessionAccess(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false): 'watch' | 'none' | 'member' | null {
-  if (!onTeamAccount(state, target) || actor.kind !== 'person' || !isConfidential(state, target, elsewhere)) return null
+export function teamSessionAccess(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false, sets?: ConfidentialSets): 'watch' | 'none' | 'member' | null {
+  if (!onTeamAccount(state, target) || actor.kind !== 'person' || !isConfidential(state, target, elsewhere, sets)) return null
   if (ownsProject(state, actor.userId, projectOf(state, agentProjectId(state, target)))) return 'watch'
   if (actor.userId === target.machineOwnerId) return 'none'
-  return watchClosed(state, target, elsewhere) ? 'none' : 'member'
+  return watchClosed(state, target, elsewhere, sets) ? 'none' : 'member'
 }
 
 /** Who could watch an agent's terminal before a commit and cannot after it (canWatchAgent, by the session the observer relay
@@ -602,12 +607,10 @@ export function teamSessionAccess(state: SuperTabState, actor: Actor, target: Ag
 export function watchersLost(before: SuperTabState, after: SuperTabState): Array<{ agentId: string; personIds: string[] }> {
   const session = (a: Agent) => `${a.machineId}\n${a.harnessId}\n${a.machineOwnerId}`
   const now = new Map(after.agents.map(a => [session(a), a]))
-  // canWatchAgent per person, with whether the agent is closed read once per state.
-  const watchers = (state: SuperTabState, target: Agent) => {
-    const closed = watchClosed(state, target)
-    return state.people.map(p => ({ kind: 'person' as const, userId: p.id, email: p.email }))
-      .filter(actor => canWatchAgent(state, actor, target))
-  }
+  // canWatchAgent per person, with the confidential sets built once per state, not once per person per agent (task #4504).
+  const sets = new Map<SuperTabState, ConfidentialSets>([[before, confidentialSets(before)], [after, confidentialSets(after)]])
+  const watchers = (state: SuperTabState, target: Agent) => state.people.map(p => ({ kind: 'person' as const, userId: p.id, email: p.email }))
+    .filter(actor => canWatchAgent(state, actor, target, false, sets.get(state)))
   return before.agents.flatMap(target => {
     const was = watchers(before, target)
     if (!was.length) return []

@@ -257,6 +257,9 @@ class _RestartBuddyDialogState extends State<_RestartBuddyDialog> {
   bool _busy = false;
   String? _error;
 
+  /// Flags an older Harness ignored: a warning, as the Buddy card colours it.
+  bool _warning = false;
+
   @override
   void dispose() {
     _flags.dispose();
@@ -267,7 +270,10 @@ class _RestartBuddyDialogState extends State<_RestartBuddyDialog> {
     final app = this.app;
     if (_busy) return;
     if (app == null) {
-      setState(() => _error = 'Restart is not available here.');
+      setState(() {
+        _error = 'Restart is not available here.';
+        _warning = false;
+      });
       return;
     }
     setState(() {
@@ -289,6 +295,7 @@ class _RestartBuddyDialogState extends State<_RestartBuddyDialog> {
     setState(() {
       _busy = false;
       _error = result.message;
+      _warning = result.outcome == BuddyRestartOutcome.ignored;
     });
   }
 
@@ -336,7 +343,12 @@ class _RestartBuddyDialogState extends State<_RestartBuddyDialog> {
                 Text(
                   error,
                   key: const ValueKey('super-buddy-launch-args-error'),
-                  style: DesktopChrome.control(),
+                  // The Buddy card's colours for the same results.
+                  style: DesktopChrome.control(
+                    color: _warning
+                        ? grid.AppPalette.warn
+                        : grid.AppPalette.dangerFill,
+                  ),
                 ),
               ],
             ],
