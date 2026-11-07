@@ -21,7 +21,9 @@ import '../terminal/terminal_theme_store.dart';
 import '../state/new_harness.dart';
 import '../state/device_form.dart';
 import '../state/lead_placement.dart';
+import '../state/harness_launch_integration.dart' show kNewProjectChoice;
 import '../super_tabs/identity.dart' show SuperTabAvatar;
+import '../super_tabs/project_choices.dart' show SuperTabProjectChoice;
 import '../super_tabs/project_visibility.dart';
 import 'box_chrome.dart' show kTerminalCornerRadius, terminalPaneBorder;
 import 'dsh_install_panel.dart' show describeInstallFailure;
@@ -94,6 +96,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   final _kindFocus = FocusNode(debugLabel: 'New agent role');
   final _leadRowFocus = <String, FocusNode>{};
   final _headerMachineAnchor = GlobalKey();
+  final _mainProjectAnchor = GlobalKey();
   bool get _desktopStartEnabled =>
       !box.busy &&
       box.leadBlocked == null &&
@@ -1740,6 +1743,36 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                                   ],
                                   _desktopHeader(),
                                   const SizedBox(height: 12),
+                                  // New project's name, under the pills (anh Dee's first-day mockup, 11-07).
+                                  if (box.choosesProject &&
+                                      box.integration!.mainProjectId ==
+                                          kNewProjectChoice) ...[
+                                    NewHarnessNewProjectName(controller: box),
+                                    const SizedBox(height: 12),
+                                  ],
+                                  if (box.integration?.projectsError
+                                      case final failed?
+                                      when box.choosesProject) ...[
+                                    Row(
+                                      children: [
+                                        Flexible(
+                                          child: Text(
+                                            failed,
+                                            style: DesktopChrome.metadata(
+                                              color: DesktopChrome.muted,
+                                            ),
+                                          ),
+                                        ),
+                                        TextButton(
+                                          onPressed: box.locked
+                                              ? null
+                                              : box.retryProjects,
+                                          child: const Text('Retry'),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 12),
+                                  ],
                                   if (_installing case final run?)
                                     _desktopInstallPane(run)
                                   else ...[
@@ -2018,6 +2051,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
             // repository's GitHub copy, never on this computer's folder.
             // A Buddy has a folder of its own (task #4196).
             if (!box.bringsBuddy &&
+                !box.choosesProject &&
                 (!box.isCloud || cloudAgentTakesRepository(box.engine)) &&
                 (!box.asGuest ||
                     box.fields.contains(NewHarnessField.projectMenu)))
@@ -2049,6 +2083,14 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                     capsule: true,
                   ),
                 ),
+              ),
+            if (box.choosesProject)
+              _desktopField(
+                order: 3,
+                finger: phone,
+                anchor: _mainProjectAnchor,
+                maxWidth: 340,
+                child: NewHarnessMainProject(controller: box),
               ),
           ]),
         ),
@@ -2362,7 +2404,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                   decoration: InputDecoration(
                     // An agent that takes no first message is not a terminal: with Kilo chosen
                     // the box said a terminal would open (a fresh Ubuntu VM, 2026-10-12).
-                    hintText: box.takesTask
+                    hintText: box.choosesProject
+                        ? 'Anything for it to start with? (optional)'
+                        : box.takesTask
                         ? 'What would you like to work on?'
                         : box.isTerminal
                         ? 'Open a terminal in this repo'
@@ -2436,13 +2480,14 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                       },
               ),
             ),
-          if (box.hasModes)
+          // The Swarm starts a picked agent with its own settings: only its model is chosen here (task #4541).
+          if (box.hasModes && !box.choosesProject)
             _desktopField(
               order: 6,
               anchor: _desktopAnchors[_Row.approvals]!,
               child: _desktopChoiceButton(_Row.approvals, AppIcons.shieldCheck),
             ),
-          if (box.usesProfile && !box.leadThroughSwarm)
+          if (box.usesProfile && !box.leadThroughSwarm && !box.choosesProject)
             _desktopField(
               order: 7,
               anchor: _desktopAnchors[_Row.profile]!,
@@ -2455,7 +2500,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         mainAxisSize: MainAxisSize.min,
         children: [
           // A Product Manager always gets its own worktree.
-          if (box.canUseWorktree && !box.placesLead)
+          if (box.canUseWorktree && !box.placesLead && !box.choosesProject)
             _desktopField(
               order: 8,
               anchor: _desktopAnchors[_Row.worktree]!,
@@ -2482,6 +2527,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
             ),
           if (!box.isCloud &&
               !box.leadThroughSwarm &&
+              !box.choosesProject &&
               (box.choosesBranch || box.checkingGit || box.gitError != null))
             _desktopField(
               order: 9,
@@ -2656,7 +2702,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         ),
       // Chosen where the agent is started, directly left of Start (product owner, task #4445).
       if (includeChoices)
-        if (box.agentKind case final kind?) _desktopKindChip(kind),
+        if (box.agentKind case final kind? when !box.choosesProject)
+          _desktopKindChip(kind),
       _desktopStartButton(),
     ],
   );
@@ -4553,5 +4600,161 @@ class _RoleFieldState extends State<_RoleField> {
         ),
       ),
     ),
+  );
+}
+
+/// The Cmd-N form's Main project (task #4541, anh Dee's first-day mockup 11-07): a pill naming the pick, beside the
+/// agent and computer, opening the project list: each readable project with its Lead's face, what it is and how many
+/// tasks wait, in the server's order, then New project, which the new agent leads. A pick makes it a Member there.
+class NewHarnessMainProject extends StatefulWidget {
+  const NewHarnessMainProject({super.key, required this.controller});
+  final NewHarnessController controller;
+
+  @override
+  State<NewHarnessMainProject> createState() => _NewHarnessMainProjectState();
+}
+
+class _NewHarnessMainProjectState extends State<NewHarnessMainProject> {
+  final _menu = MenuController();
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final box = widget.controller;
+    final integration = box.integration!;
+    final projects = [...?integration.projectChoices?.projects];
+    final picked = integration.mainProjectId;
+    final label = picked == kNewProjectChoice
+        ? 'New project'
+        : projects.where((p) => p.id == picked).firstOrNull?.name ??
+              'Main project';
+    void pick(String id) {
+      _menu.close();
+      box.setMainProject(id);
+    }
+
+    return AppDropdown(
+      controller: _menu,
+      width: _menuWidth,
+      header: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          grid.AppDesktop.groupGap,
+          grid.AppDesktop.menuInset,
+          grid.AppDesktop.groupGap,
+          grid.AppDesktop.listRowGap,
+        ),
+        child: Text(
+          'Main project',
+          style: DesktopChrome.metadata(color: DesktopChrome.muted),
+        ),
+      ),
+      children: newHarnessProjectRows(
+        projects: projects,
+        picked: picked,
+        onPick: box.locked ? null : pick,
+      ),
+      builder: (context, menu, _) => DesktopPill(
+        key: const ValueKey('new-harness-field-main-project'),
+        label: label,
+        semanticLabel: 'Main project, $label',
+        icon: AppIcons.folder,
+        menu: true,
+        capsule: true,
+        tooltip: 'Main project',
+        textSize: 13,
+        surfaceColor: DesktopChrome.surface,
+        onPressed: box.locked
+            ? null
+            : () => menu.isOpen ? menu.close() : menu.open(),
+      ),
+    );
+  }
+
+  static const _menuWidth = 420.0;
+}
+
+/// The Main project menu's rows (task #4541): each project with its Lead's face, what it is and how many tasks wait,
+/// then New project. [picked] is lit; [onPick] null while the form is locked. The gallery draws these same rows.
+List<Widget> newHarnessProjectRows({
+  required List<SuperTabProjectChoice> projects,
+  required String picked,
+  required ValueChanged<String>? onPick,
+}) {
+  const face = 24.0;
+  return [
+    for (final project in projects)
+      AppMenuItem(
+        key: ValueKey('new-harness-main-project-${project.id}'),
+        label: project.name,
+        detail: project.purpose.isEmpty ? null : project.purpose,
+        highlighted: picked == project.id,
+        leading: switch (project.lead) {
+          // A Lead's face is a rounded square (#4563).
+          final lead? => SuperTabAvatar(
+            identity: 'agent:${lead.agentId}',
+            name: lead.name,
+            size: face,
+            face: true,
+            radius: face * .28,
+          ),
+          null => const SizedBox.square(dimension: face),
+        },
+        trailing: Text(
+          project.waiting == 0 ? 'none waiting' : '${project.waiting} waiting',
+          style: DesktopChrome.metadata(
+            // On the lit row, the selection's own detail ink, as the row's other words turn.
+            color: picked == project.id
+                ? grid.AppDesktop.selectionDetail
+                : DesktopChrome.muted,
+          ).copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
+        ),
+        onPressed: onPick == null ? null : () => onPick(project.id),
+      ),
+    if (projects.isNotEmpty) const AppMenuDivider(),
+    AppMenuItem(
+      key: const ValueKey('new-harness-main-project-new'),
+      icon: AppIcons.plus,
+      label: 'New project',
+      detail: 'You lead it',
+      highlighted: picked == kNewProjectChoice,
+      onPressed: onPick == null ? null : () => onPick(kNewProjectChoice),
+    ),
+  ];
+}
+
+/// New project's name, under the pills while New project is the pick.
+class NewHarnessNewProjectName extends StatefulWidget {
+  const NewHarnessNewProjectName({super.key, required this.controller});
+  final NewHarnessController controller;
+
+  @override
+  State<NewHarnessNewProjectName> createState() =>
+      _NewHarnessNewProjectNameState();
+}
+
+class _NewHarnessNewProjectNameState extends State<NewHarnessNewProjectName> {
+  late final _name = TextEditingController(
+    text: widget.controller.integration?.newProjectName ?? '',
+  );
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => TextField(
+    key: const ValueKey('new-harness-new-project-name'),
+    controller: _name,
+    enabled: !widget.controller.locked,
+    maxLength: 80,
+    style: DesktopChrome.control(),
+    decoration: const InputDecoration(
+      hintText: 'Project name',
+      isDense: true,
+      counterText: '',
+    ),
+    onChanged: widget.controller.setNewProjectName,
   );
 }

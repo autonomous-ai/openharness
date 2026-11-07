@@ -21,6 +21,7 @@ import 'controller.dart';
 import 'machine_icon.dart';
 import 'machine_status.dart';
 import 'model.dart';
+import 'project_choices.dart';
 import 'new_repository.dart';
 import 'personal_projects.dart' show PersonalProjects;
 import 'launch_prompt.dart';
@@ -153,9 +154,26 @@ class SuperTabLaunch {
       newRepositoryOwners = await launch.newRepositoryOwnersOf(snapshot);
       leadModels = LeadModelList.of(await policy);
     }
+    // + New agent picks a main project from the Swarm's list (task #4541); a backend without it keeps today's form.
+    ({List<SuperTabProjectChoice> projects, String? pick})? choices;
+    String? choicesFailed;
+    var listed = false;
+    if (saved['newAgent'] == true && tab.superTabId != null) {
+      try {
+        choices = await SuperTabProjectChoices.read(
+          app.superTabs.map,
+          tab.superTabId!,
+        );
+        listed = choices != null;
+      } on SuperTabFailure catch (_) {
+        listed = true;
+        choicesFailed = kProjectsUnread;
+      }
+    }
     late final HarnessLaunchIntegration integration;
     integration =
         HarnessLaunchIntegration(
+            startAgent: listed ? launch.startAgent : null,
             startInSwarm: leadMachines == null
                 ? null
                 : (start) async {
@@ -359,6 +377,22 @@ class SuperTabLaunch {
                   }
                 : null,
           )
+          ..projectChoices = choices
+          ..projectsError = choicesFailed
+          ..retryProjects = !listed
+              ? null
+              : () async {
+                  try {
+                    integration
+                      ..projectChoices = await SuperTabProjectChoices.read(
+                        app.superTabs.map,
+                        tab.superTabId!,
+                      )
+                      ..projectsError = null;
+                  } on SuperTabFailure catch (_) {
+                    integration.projectsError = kProjectsUnread;
+                  }
+                }
           ..pending = recovering
           ..agentKindLocked =
               saved['newAgent'] == true && saved['newAgentAt'] != null
@@ -807,6 +841,81 @@ class SuperTabLaunch {
       'projectId': saved['projectId'],
       'name': title,
     });
+    final controller = await app.superTabs.open(tabId);
+    await controller.refresh();
+    checkAccount();
+    controller.select(conversationId);
+    await app.superTabs.storage.delete(key);
+  }
+
+  /// + New agent picked from the project list (task #4541): the Swarm starts a Member of the main project, or creates
+  /// a project and places its Lead, in Harness's own folder; then the first message goes to the new chat. Each step
+  /// keeps its receipt in the journal, so a retry after a lost answer repeats none of them.
+  Future<void> startAgent(AgentStart start) async {
+    checkAccount();
+    final lead = start.projectName != null;
+    saved['agentRequest'] ??= {
+      'operationId': superTabOperationId(),
+      'command': {
+        'type': 'agent.new',
+        'kind': lead ? 'pm' : 'regular',
+        'machineId': start.machineId,
+        'engine': start.engine,
+        'model': ?start.model,
+        if (!lead) 'name': start.engine == 'codex' ? 'Codex' : 'Claude Code',
+        'projectName': ?start.projectName,
+        'mainProjectId': ?start.mainProjectId,
+      },
+    };
+    saved['newAgentAt'] ??= DateTime.now().millisecondsSinceEpoch;
+    await persist();
+    final tabId = saved['tabId'] as String;
+    if (saved['agentStarted'] != true) {
+      final Map<String, dynamic> created;
+      try {
+        created = await app.superTabs.map(
+          'POST',
+          '/api/super-tabs/$tabId/commands',
+          body: superTabMap(saved['agentRequest']),
+        );
+      } on SuperTabFailure catch (failure) {
+        if (_refusedOutright(failure)) {
+          saved.remove('agentRequest');
+          await persist();
+        }
+        rethrow;
+      }
+      checkAccount();
+      final result = superTabMap(created['result']);
+      saved
+        ..['conversationId'] = result['conversationId']
+        ..['agentStarted'] = true;
+      await persist();
+    }
+    final conversationId = saved['conversationId'] as String;
+    if (saved['taskPosted'] != true && start.task.isNotEmpty) {
+      saved['taskRequest'] ??= {
+        'operationId': superTabOperationId(),
+        'command': {
+          'type': 'message.send',
+          'conversationId': conversationId,
+          'text': start.task,
+          'replyTo': null,
+          'recipientIds': const <String>[],
+        },
+      };
+      await persist();
+      await _replay('taskRequest');
+      saved['taskPosted'] = true;
+      await persist();
+    }
+    if (saved['newAgentAt'] case final int at) {
+      final ms = DateTime.now().millisecondsSinceEpoch - at;
+      appLog.info(
+        'super-tabs',
+        'New agent (${lead ? 'lead' : 'member'}) asked in $ms ms',
+      );
+    }
     final controller = await app.superTabs.open(tabId);
     await controller.refresh();
     checkAccount();

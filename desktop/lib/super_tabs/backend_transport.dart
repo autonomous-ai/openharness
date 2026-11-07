@@ -23,6 +23,8 @@ final _swarmRoute = RegExp(
   '|reminders'
   // The person's older Tasks, a page at a time (#4204, backend #4203).
   '|personal-tasks'
+  // The projects a new agent may take as its main project, read when Cmd-N or Join opens (#4541, backend #4540).
+  '|project-list'
   // New Project's New Repository asks whether an organization can (#3374).
   '|github/owners/$_id'
   // A voice message's clip, read once before it is sent (#2887; the mic, #2665).

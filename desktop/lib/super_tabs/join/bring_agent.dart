@@ -10,6 +10,8 @@ import '../../state/new_harness.dart';
 import '../../widgets/desktop_chrome.dart';
 import '../../widgets/new_harness_form.dart';
 import '../controller.dart';
+import '../machines.dart' show contributeComputer;
+import '../project_choices.dart';
 import 'agent_launcher.dart';
 
 /// Join's "bring your agent" (task #4196): the Cmd-N form, its agent and
@@ -123,41 +125,134 @@ Future<Map<String, dynamic>?> showBringAgentForm(
   String? startedOn;
   SwarmAgentLauncher? starting;
   final swarm = controller.snapshot?.name ?? 'this Swarm';
-  final integration = HarnessLaunchIntegration(
-    creationId: superTabOperationId(),
-    actionLabel: 'Bring agent',
-    heading: 'Bring your agent to $swarm',
-    intro:
-        'Your Buddy is your own agent in $swarm: it runs on your computer, '
-        'under your sign-in, and you can also start it later from your Buddy '
-        'chat.',
-    engines: const ['claude', 'codex'],
-    ownMachinesOnly: true,
-    prepare: (_, task, _) async => task,
-    complete: (_, _) async {},
-    beforeSubmit: (_, _) async {},
-    startBuddy: (machineId, engine) async {
-      final (launcher, operation) = launchers[machineId] ??= (
-        launcherFor(machineId),
-        superTabOperationId(),
+  Future<void> startOn(
+    String machineId,
+    String engine, {
+    String? mainProjectId,
+  }) async {
+    final (launcher, operation) = launchers[machineId] ??= (
+      launcherFor(machineId),
+      superTabOperationId(),
+    );
+    starting = launcher;
+    final Map<String, dynamic> result;
+    try {
+      result = await launcher.create(
+        engine,
+        operation,
+        mainProjectId: mainProjectId,
       );
-      starting = launcher;
-      final Map<String, dynamic> result;
-      try {
-        result = await launcher.create(engine, operation);
-      } finally {
-        starting = null;
-      }
-      if (result['agentId'] is! String && result['startId'] is! String) {
-        throw const SwarmAgentLaunchFailure(
-          'Your agent’s start is not confirmed. Try again to check it.',
-        );
-      }
-      started = result;
-      startedOn = machineId;
-    },
-    stopBuddy: () => starting?.stop() ?? false,
-  );
+    } finally {
+      starting = null;
+    }
+    if (result['agentId'] is! String && result['startId'] is! String) {
+      throw const SwarmAgentLaunchFailure(
+        'Your agent’s start is not confirmed. Try again to check it.',
+      );
+    }
+    started = result;
+    startedOn = machineId;
+  }
+
+  // New project from Join: a Buddy never leads (#4540), so this computer is listed in the Swarm, then the Lead starts
+  // there with the project's name, each step keeping its receipt across retries.
+  final leadSetup = superTabOperationId(), leadStart = superTabOperationId();
+  Future<void> startLead(AgentStart start) async {
+    final listed =
+        controller.snapshot?.machines.any(
+          (m) => m['machineId'] == start.machineId && m['buddyOnly'] != true,
+        ) ==
+        true;
+    if (!listed &&
+        await contributeComputer(
+              controller,
+              app,
+              start.machineId,
+              setupId: leadSetup,
+              alive: current,
+              ifMissing: true,
+            ) ==
+            null) {
+      throw const SwarmAgentLaunchFailure(
+        'Your account changed. Close this form and try again.',
+      );
+    }
+    final result = await controller.command({
+      'type': 'agent.new',
+      'kind': 'pm',
+      'machineId': start.machineId,
+      'engine': start.engine,
+      'model': ?start.model,
+      'projectName': start.projectName,
+    }, operationId: leadStart);
+    if (result == null) {
+      throw SwarmAgentLaunchFailure(
+        controller.operationError ??
+            'Your agent’s start is not confirmed. Try again to check it.',
+      );
+    }
+    started = result;
+    startedOn = start.machineId;
+  }
+
+  // The same project list as + New agent (task #4541); a backend without it keeps Bring agent as it was.
+  ({List<SuperTabProjectChoice> projects, String? pick})? choices;
+  String? choicesFailed;
+  var listed = false;
+  try {
+    choices = await SuperTabProjectChoices.read(
+      controller.request,
+      controller.tabId,
+    );
+    listed = choices != null;
+  } on SuperTabFailure catch (_) {
+    listed = true;
+    choicesFailed = kProjectsUnread;
+  }
+  if (!context.mounted || !current()) return null;
+  late final HarnessLaunchIntegration integration;
+  integration =
+      HarnessLaunchIntegration(
+          creationId: superTabOperationId(),
+          actionLabel: 'Bring agent',
+          // anh Dee's first-day mockup (11-07).
+          heading: listed ? 'Welcome to $swarm' : 'Bring your agent to $swarm',
+          intro: listed
+              ? 'Bring your agent and pick the project it works on. It helps others when it’s free.'
+              : 'Your Buddy is your own agent in $swarm: it runs on your computer, '
+                    'under your sign-in, and you can also start it later from your '
+                    'Buddy chat.',
+          engines: const ['claude', 'codex'],
+          ownMachinesOnly: true,
+          prepare: (_, task, _) async => task,
+          complete: (_, _) async {},
+          beforeSubmit: (_, _) async {},
+          startBuddy: listed ? null : startOn,
+          startAgent: !listed
+              ? null
+              : (start) => start.projectName != null
+                    ? startLead(start)
+                    : startOn(
+                        start.machineId,
+                        start.engine,
+                        mainProjectId: start.mainProjectId,
+                      ),
+          stopBuddy: () => starting?.stop() ?? false,
+        )
+        ..projectChoices = choices
+        ..projectsError = choicesFailed
+        ..retryProjects = () async {
+          try {
+            integration
+              ..projectChoices = await SuperTabProjectChoices.read(
+                controller.request,
+                controller.tabId,
+              )
+              ..projectsError = null;
+          } on SuperTabFailure catch (_) {
+            integration.projectsError = kProjectsUnread;
+          }
+        };
   final box = NewHarnessController(
     app,
     machineId: here.machine.machineId,

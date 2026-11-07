@@ -222,6 +222,7 @@ Future<void> showProjectAction(
     return;
   }
   var name = project.name;
+  var about = project.about ?? '';
   var visibility = project.isPrivate ? 'private' : 'public';
   final members = project.memberIds.toSet();
   var busy = false;
@@ -240,7 +241,11 @@ Future<void> showProjectAction(
                 .firstOrNull;
             final canManage = current?.ownerId == c.accountId;
             return AlertDialog(
-              title: Text(action == 'rename' ? 'Rename project' : 'Sharing'),
+              title: Text(switch (action) {
+                'rename' => 'Rename project',
+                'about' => 'Purpose',
+                _ => 'Sharing',
+              }),
               content: SizedBox(
                 width: 400,
                 child: SingleChildScrollView(
@@ -254,6 +259,15 @@ Future<void> showProjectAction(
                           initialValue: name,
                           maxLength: 160,
                           onChanged: (value) => update(() => name = value),
+                        ),
+                      // What the project is, in one plain line: the project lists show it (task #4541).
+                      if (action == 'about')
+                        TextFormField(
+                          autofocus: true,
+                          initialValue: about,
+                          maxLength: 80,
+                          maxLines: 1,
+                          onChanged: (value) => update(() => about = value),
                         ),
                       if (action == 'sharing') ...[
                         ProjectVisibility(
@@ -320,17 +334,20 @@ Future<void> showProjectAction(
                       busy ||
                           c.saving ||
                           c.hasPendingAction ||
-                          name.trim().isEmpty ||
+                          (action == 'rename' && name.trim().isEmpty) ||
                           !canManage
                       ? null
                       : () async {
                           update(() => busy = true);
                           final result = await c.command({
-                            'type': action == 'rename'
-                                ? 'project.rename'
-                                : 'project.sharing',
+                            'type': switch (action) {
+                              'rename' => 'project.rename',
+                              'about' => 'project.about',
+                              _ => 'project.sharing',
+                            },
                             'projectId': project.id,
                             if (action == 'rename') 'name': name.trim(),
+                            if (action == 'about') 'about': about.trim(),
                             if (action == 'sharing') ...{
                               'visibility': visibility,
                               'memberIds': members.toList(),

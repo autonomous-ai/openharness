@@ -57,7 +57,12 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **Workspace** | The level above Swarms: several Swarms on one account and the people who may be in them, each with a role (owner, admin, member or guest). A person can belong to several Workspaces. Not the Harness **Team account**, a Mac's privacy-checked account for teammates' work. System name: workspace. | Create the Swarm in your company Workspace. |
 | **Project in a Swarm** | An initiative with its own product manager, repository, sharing and workgroups. | Discuss Lamp OS with its product manager; expand it to follow a workgroup. |
 | **Instructions** | The visible name for a project's instruction document (on an older backend, its skill set). System name: instructions; the agent skills are `swarm-tools` and `swarm-instructions`. See [Instructions](swarms.md#instructions). | Open Instructions; edit the Reviewer section. |
-| **Product Manager** | The agent coordinating a Swarm project. A project may name it otherwise, and then that name replaces Product Manager wherever the screen names the coordinator; a badge shows the agent's own role name. Use **PM** in a compact role badge for the default name. System name: coordinator (the saved and wire value stays `lead`). | Message Product Manager. |
+| **Member** | An agent of a person's, on that person's own computer and login, that works in a team: it talks with its person in its chat and does tasks. Every agent that is not a Lead is a Member. Replaces **Buddy** and **Regular agent** on screen (system names `buddy`, `regular` stay on the wire until 2026-12-07). | Start a Member on harness. |
+| **Lead** | The Member that leads a project: it decides what the project does and who does it, shown with the gold ring. A project may name its coordinator otherwise, and then that name replaces Lead wherever the screen names the coordinator. Replaces **Product Manager** and **PM agent** on screen. System name: coordinator (the saved and wire value stays `lead`). | River is harness's Lead. |
+| **Main project** | The one project a Member belongs to: it works there first and goes back whenever it has work. A Lead's main project is the one it leads. | Main project: harness. |
+| **Helping** | A free Member doing a task in a project that is not its main project. | Kai is helping lamp. |
+| **Set up** | A project is set up for a Member when its worktree is on the Member's computer, ready to work in. | harness is set up on Mac Studio. |
+| **Waiting** | A task is waiting when it is approved and nobody is on it yet (the Board's Next up). | 12 waiting. |
 | **Engineer** | An agent carrying out project work. Use **Dev** in a compact role badge. System name: agent (wire `dev`). | Atlas is an engineer on Lamp OS. |
 | **Reviewer** | An agent that reviews project work. Use **Rev** in a compact role badge. System name: agent (wire `review`, sent only for an older client's start). | Atlas is a reviewer on Lamp OS. |
 | **Notice** | A message the server posts to the coordinator about what happened. See [Notices to the coordinator](swarms.md#notices-to-the-coordinator). | Atlas's task is Ready for review. |
@@ -81,11 +86,12 @@ built-in instructions; a project's document may rename or replace them.
 
 | Role | On screen | Short label | System name | Skill |
 | --- | --- | --- | --- | --- |
-| Coordinates | Product Manager | PM | coordinator (wire `lead`) | `swarm-instructions` |
+| Coordinates | Lead | Lead | coordinator (wire `lead`) | `swarm-instructions` |
 | Builds | Engineer | Dev | agent (wire `dev`) | `swarm-instructions` |
 | Reviews | Reviewer | Rev | agent (wire `review`, sent only for an older client's start) | `swarm-instructions` |
 
-Roles are names in the project's document; the server checks none of them. Badges show
+Engineer, Reviewer and Tester are what a Member does on a given task, not kinds of agent: on screen an agent is a
+Member or a Lead (2026-11-07). Roles are names in the project's document; the server checks none of them. Badges show
 the role name cut to 12 characters. People see the on-screen name and short label.
 Agent-facing text (prompts, skills, CLI help) may use the system names coordinator and
 agent. The wire values `lead | dev | review | buddy` stay for older CLIs.

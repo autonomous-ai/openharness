@@ -4509,6 +4509,7 @@ class _SuperTabViewState extends State<SuperTabView>
     return showProjectSettings(context, c, project, [
       if (editable && owner)
         row('Rename project', 'rename', value: project.name),
+      if (editable && owner) row('Purpose', 'about', value: project.about),
       row(
         'Project details',
         'details',

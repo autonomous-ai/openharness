@@ -482,6 +482,16 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   lines, and two 18 faces: who asked, then who is doing it. Only while the
   task waits for the reader: Decline as plain text and Accept as the blue
   capsule, on the right.
+- **Main project.** + New agent and Join's Bring agent pick a main project in the Cmd-N form (task #4541, anh Dee's
+  first-day mockup 11-07), where the folder, worktree and branch pickers and the Member or Lead pill were. A pill
+  beside the agent and computer names the pick (`NewHarnessMainProject`); its menu (`newHarnessProjectRows`) lists
+  each project the person can read in the server's order: the Lead's face, the name, one line on what it is (its
+  Purpose, else its repository's name) and `N waiting` or `none waiting` on the right in the metadata role; the pick
+  is the lit row, its words in the selection's inks. A divider, then **New project** with "You lead it"; picked, a
+  name field shows under the pills. The task box asks "Anything for it to start with? (optional)". A list that
+  fails says so beside Retry, and New project still works; a backend without the list keeps the older form.
+- **Purpose.** A project's one plain line, at most 80 characters, which its owner sets in Project settings; it is
+  what the Main project menu says the project is.
 - **Adding or changing one.** A new or changed element updates this section
   and the gallery, with its images, in the same pull request.
 

@@ -596,6 +596,12 @@ class ConversationServer {
   /// The leaderboard read's answer; reads of it are listed in [leaderboardReads].
   Map<String, dynamic>? leaderboard;
 
+  /// The project list Cmd-N picks a main project from (task #4541); null answers 404, as a backend before it.
+  /// [projectListStatus], when not 0, fails each read with it. Reads are listed in [projectListReads].
+  Map<String, dynamic>? projectList;
+  int projectListStatus = 0;
+  final projectListReads = <String>[];
+
   /// A Member's own chat that agent.new opens is left out of a Swarm's first load, as a big Swarm's read can leave out
   /// a quiet chat (hotfix #4647): only a read of the chat itself finds it.
   bool newAgentChatsDormant = false;
@@ -1757,6 +1763,37 @@ class ConversationServer {
           'machineId': ?machineId,
           'requestedAt': revision,
         };
+      } else if (command['type'] == 'agent.new' && command['local'] != true) {
+        // As backend agent.new (task #4541): the Swarm starts a Member of its main project in its own chat, or creates
+        // a project and places its Lead.
+        revision++;
+        if (command['kind'] == 'pm') {
+          final id = 'project-$revision', leadId = 'lead-$revision';
+          ((state['projects'] ??= <dynamic>[]) as List).add({
+            ...projectFixture(id, command['projectName'] as String, leadId),
+            'skillMode': 'default',
+          });
+          (state['conversations'] as List).add({
+            ...conversationFixture(leadId, command['projectName'] as String),
+            'projectId': id,
+          });
+          output
+            ..['projectId'] = id
+            ..['conversationId'] = leadId;
+        } else {
+          final id = 'agent-chat-$revision';
+          (state['conversations'] as List).add({
+            ...conversationFixture(id, command['name'] as String),
+            'kind': 'agent-chat',
+            'audience': {
+              'people': [
+                {'id': 'owner', 'generation': 'g'},
+              ],
+            },
+          });
+          output['conversationId'] = id;
+        }
+        output['startId'] = operationId;
       } else if (command['type'] == 'agent.new' && command['local'] == true) {
         // As backend agent.new with `local` (task #4196): a Member's own chat,
         // and no start; its person's Desktop starts the agent itself.
@@ -1939,6 +1976,7 @@ class ConversationServer {
         'project.rename',
         'project.cadence',
         'project.sharing',
+        'project.about',
       ].contains(command['type'])) {
         final project = (state['projects'] as List?)
             ?.cast<Map<String, dynamic>>()
@@ -1947,6 +1985,8 @@ class ConversationServer {
         if (project != null) {
           if (command['type'] == 'project.rename') {
             project['name'] = command['name'];
+          } else if (command['type'] == 'project.about') {
+            project['about'] = command['about'];
           } else if (command['type'] == 'project.cadence') {
             project['updateMinutes'] = command['minutes'];
           } else {
@@ -2085,6 +2125,21 @@ class ConversationServer {
       final answer = uri.pathSegments.last == 'threads'
           ? followedThreads
           : inbox;
+      if (answer == null) {
+        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+      }
+      return jsonDecode(jsonEncode(answer)) as Map<String, dynamic>;
+    }
+    if (uri.pathSegments.last == 'project-list' && method == 'GET') {
+      projectListReads.add(path);
+      if (projectListStatus != 0) {
+        throw SuperTabFailure(
+          'UNAVAILABLE',
+          'The Swarm is unavailable.',
+          statusCode: projectListStatus,
+        );
+      }
+      final answer = projectList;
       if (answer == null) {
         throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
       }
