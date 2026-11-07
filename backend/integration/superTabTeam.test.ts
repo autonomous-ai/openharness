@@ -1348,7 +1348,7 @@ describe('a machine its owner keeps for some projects', () => {
 // Task #2806 (Scholes, 11-04): a machine's owner lets teammates' work run in their own account there. A guard loosened by the
 // owner alone: never by the Harness Team account that runs on the same Mac as them, nor by anyone else.
 describe('teammates\' work in a machine owner\'s own account', () => {
-  it('is chosen by its owner alone, never by its Team account session, kept across reads and said on the machine', async () => {
+  it('is chosen by its owner alone, never by its Team account session, and said only in the route\'s note (#4289)', async () => {
     const f = await fixture()
     const choose = (allowed: boolean, user: AuthUser) => run(f.tab, { type: 'machine.ownAccountWork', machineId: 'team-mac', allowed } as Command, user)
     await expect(choose(true, owner)).rejects.toMatchObject({ code: 'OWNER_REQUIRED' })
@@ -1356,12 +1356,69 @@ describe('teammates\' work in a machine owner\'s own account', () => {
     expect((await store.read(owner, f.tab)).state.machines!.find(m => m.machineId === 'team-mac')!.ownAccountChoice).toBeUndefined()
     await choose(true, person)
     const seen = (await store.read(owner, f.tab)).state.machines!.find(m => m.machineId === 'team-mac')!
-    expect(seen.ownAccountChoice).toMatchObject({ allowed: true, by: person.sub })
+    // Swarm v3 has no choice to show: no reader gets the stored field (#4289).
+    expect(seen.ownAccountChoice).toBeUndefined()
     // Whoever routes a teammate's task there reads it.
     expect((seen as unknown as { teamWork: { ownAccount?: string } }).teamWork.ownAccount).toMatch(/runs teammates' work in .+'s own account\.$/)
     await choose(false, person)
     const off = (await store.read(owner, f.tab)).state.machines!.find(m => m.machineId === 'team-mac')!
-    expect(off.ownAccountChoice).toMatchObject({ allowed: false, by: person.sub })
+    expect(off.ownAccountChoice).toBeUndefined()
     expect((off as unknown as { teamWork: { ownAccount?: string } }).teamWork.ownAccount).toBeUndefined()
+  })
+})
+
+// Task #4248 (finding 7 of #4212): a PM from before Swarm v3 still running in its person's Harness Team account. Its team sign-in
+// still reaches nothing in a main account, so it neither assigns nor starts there; it is told so in words that say who moves it
+// and how, and that move (Switch PM to its person's own computer, where it starts agents in their own account) works.
+describe('a PM still in a Harness Team account', () => {
+  const capable = (generation: string) => ({ ...reading(generation), capabilities: ['leadStart', 'leadSwitch'] }) as Parameters<SuperTabStore['observeMachine']>[3]
+  /** The fixture, with the person's own Mac reporting and their project's PM on their Team machine, started there by the person as
+   *  before Swarm v3 and settled by its team session. */
+  async function teamPm() {
+    const f = await fixture()
+    await run(f.tab, { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work', scope: 'swarm', engines: ['codex'], maxAgents: 4 }, person)
+    const own = (await poolRows(store, person, 'personal-mac')).find(p => p.tabId === f.tab)!.machine.generation
+    await store.observeMachine(person, f.tab, 'personal-mac', capable(own))
+    await run(f.tab, { type: 'machine.contribute', machineId: 'team-mac', name: 'MacBook Pro · Team', cwd: '/team', scope: 'swarm', engines: ['codex'], maxAgents: 4 }, person)
+    const generation = (await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!.machine.generation
+    await store.observeMachine(team, f.tab, 'team-mac', capable(generation))
+    const pm = await beforeV3(f.tab, generation, async () => {
+      const startId = String((await asBeforeV3('team-mac', () => run(f.tab, { type: 'lead.start', projectId: f.own, machineId: 'team-mac', engine: 'codex',
+        repositoryUrl: 'https://github.com/example/own' }, person))).result.startId)
+      await hostRun(f.tab, { type: 'agent.startDispatch', startId })
+      const id = String((await hostRun(f.tab, { type: 'agent.started', startId, harnessId: `team-pm-${randomUUID()}`, configuration: config })).result.agentId)
+      await hostRun(f.tab, { type: 'agent.startSettled', startId, warning: null })
+      return id
+    })
+    await store.observeMachine(team, f.tab, 'team-mac', capable(generation))
+    const project = (await store.read(person, f.tab)).state.projects!.find(p => p.id === f.own)!
+    return { ...f, pm, leadChat: project.leadConversationId }
+  }
+  const MOVE = { code: 'PM_IN_TEAM_ACCOUNT', status: 403, message: expect.stringMatching(/Harness Team account.*Switch PM.*own computer/s) }
+
+  it('is refused assigning or starting an agent with how to move it, and keeps coordinating', async () => {
+    const f = await teamPm()
+    await expect(run(f.tab, { type: 'work.assign', conversationId: f.personalGroup, agentId: f.personal }, team, f.pm)).rejects.toMatchObject(MOVE)
+    for (const machineId of ['personal-mac', 'team-mac']) {
+      await expect(run(f.tab, { type: 'agent.start', request: { conversationId: f.personalGroup, machineId, engine: 'codex', name: 'Builder',
+        cwd: machineId === 'team-mac' ? '/team' : `/work/${f.own}`, worktree: false, requirements } }, team, f.pm), machineId).rejects.toMatchObject(MOVE)
+    }
+    // An agent of the Team account that is no PM keeps the plain refusal.
+    await expect(run(f.tab, { type: 'work.assign', conversationId: f.personalGroup, agentId: f.personal }, team, f.builder)).rejects.toMatchObject(LIMITED)
+    // Naming another project's PM, one not on this Team computer, tells it nothing of that project (review of #3476).
+    const other = run(f.tab, { type: 'work.assign', conversationId: f.personalGroup, agentId: f.personal }, team, f.lead)
+    await expect(other).rejects.not.toMatchObject({ code: 'PM_IN_TEAM_ACCOUNT' })
+    await expect(other).rejects.not.toMatchObject({ message: expect.stringContaining('Switch PM') })
+    // Coordinating stays: it posts in its project.
+    await run(f.tab, { type: 'message.send', conversationId: f.leadChat, text: 'The footer task needs a Switch PM before I can assign it.', replyTo: null,
+      recipientIds: [] }, team, f.pm)
+  })
+
+  it('moves to its person\'s own computer with Switch PM, and the crew dispatch says why it waits until then', async () => {
+    const f = await teamPm()
+    expect((await store.dispatchCrew(f.tab)).skipped).toMatchObject({ PM_IN_TEAM_ACCOUNT: 1 })
+    await run(f.tab, { type: 'lead.switch', projectId: f.own, engine: 'codex', profileId: 'default', machineId: 'personal-mac' }, person)
+    expect((await poolRows(store, person, 'personal-mac')).find(p => p.tabId === f.tab)!.leadStarts)
+      .toEqual([expect.objectContaining({ request: expect.objectContaining({ machineId: 'personal-mac', conversationId: f.leadChat }) })])
   })
 })

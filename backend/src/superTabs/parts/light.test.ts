@@ -69,6 +69,7 @@ const conversation: Required<Conversation> = {
   paused: { by: 'person:owner', at: 1, reason: 'Wait' },
   pin: { agentId: 'a', why: 'ci', at: 1 },
   priority: 'P0',
+  process: 'full',
   projectId: 'p',
   proposal: { version: 1, text: 'Words', goal: 'Goal', why: 'Why', doneWhen: 'Done', evidence: ['Evidence'], priority: 'P2', createdAt: 0, senders: [], questions: [] },
   proposals: [],
@@ -85,6 +86,7 @@ const conversation: Required<Conversation> = {
   requesterId: 'p',
   reviewOf: 'r',
   reviewStamp: { assignmentId: 'w', handoff: 1 },
+  statusLine: { text: '', since: 0 },
   step: 'Review',
   stepIds: [],
   stepUp: { attempt: 2, floor: 2, reason: 'r', at: 1, carry: '' },
@@ -96,6 +98,8 @@ const conversation: Required<Conversation> = {
   teamWrittenBy: { kind: 'assigned' },
   title: 't',
   unlinkedPullRequests: [],
+  waitingLinuxStep: { step: { name: 'Test on a Linux machine', kind: 'test', areas: [], where: ['The CLI on a Linux machine'], os: 'linux' }, pulls: [] },
+  waitingWindowsStep: { step: { name: 'Test on a Windows machine', kind: 'test', areas: [], where: ['The CLI on a Windows machine'], os: 'windows' }, pulls: [] },
   writers: [],
 }
 

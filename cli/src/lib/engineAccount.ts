@@ -118,7 +118,7 @@ export async function engineAccount(engine: AgentEngine, deps: EngineAccountDeps
   // folder exported in ~/.zshrc is seen through the login shell's environment, captured once per
   // process (loginShellEnv.ts), with the daemon's own on top.
   const env = deps.env ?? { ...await warmLoginShellEnvironment(), ...process.env }
-  // A model API saved on this computer (Models ▸ APIs, or `harness team model set`) serves Claude Code without a
+  // A model API saved on this computer (Models ▸ APIs) serves Claude Code without a
   // subscription, so the machine can take Swarm work on it (headless run, 2026-11-03: a working OpenRouter key saved,
   // and the account read "not signed in").
   const savedApi = (() => {

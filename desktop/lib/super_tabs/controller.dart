@@ -441,6 +441,30 @@ class SuperTabController extends ChangeNotifier {
 
   SuperTabPersonalTasks? get personalTasks => _parts?.personalTasks;
 
+  Future<bool>? _olderPersonalTasks;
+
+  /// Reads the next older page of the person's Tasks (backend #4203), one read at a time. False when it failed.
+  Future<bool> loadOlderPersonalTasks() => _olderPersonalTasks ??=
+      _readOlderPersonalTasks().whenComplete(() => _olderPersonalTasks = null);
+
+  Future<bool> _readOlderPersonalTasks() async {
+    final parts = _parts;
+    final cursor = parts?.personalTasks.olderCursor;
+    if (parts == null || cursor == null) return true;
+    try {
+      final page = await request(
+        'GET',
+        '$_path/personal-tasks?before=${Uri.encodeComponent(cursor)}',
+      );
+      if (_disposed || !identical(parts, _parts)) return true;
+      if (parts.personalTasks.applyOlder(page, from: cursor)) _changed();
+      return true;
+    } catch (failure) {
+      if (_isUpdateRequired(failure)) _requireUpdate();
+      return false;
+    }
+  }
+
   /// The visibility epoch of the last read: it moves when who may read what changes (backend parts/commit.ts
   /// `visibilityChanged`). Null before a read.
   int? get visibilityEpoch => _parts?.epoch;
@@ -3477,7 +3501,7 @@ class SuperTabController extends ChangeNotifier {
   /// PM (Ken, 10-29), so no private chat but a Buddy chat is listed or opened,
   /// the reader's old Chat with PM that an older server still sends included.
   bool hiddenByBuddies(SuperTabConversation group) =>
-      group.audience != null && !group.isBuddyChat;
+      group.audience != null && !group.isBuddyChat && !group.isAgentChat;
 
   /// Where opening conversation [id] lands: itself, unless the app hides it.
   String landsOn(String id) => _shownFor(id);

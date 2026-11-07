@@ -64,6 +64,69 @@ function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation 
     stamp: (next: string) => { stamp = next } }
 }
 
+// Ken's 2026-11-06 scan: a stale failed-start report was refused 581 times, even after CLI updates.
+describe('a failed-start report', () => {
+  function reporting(refuse: () => void) {
+    const f = fixture(), original = f.backend.getMockImplementation()!
+    let elapsed = 0
+    const attempts: Array<{ at: number; body: unknown }> = []
+    f.prepare.mockRejectedValue(new Error('Could not prepare the checkout.'))
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      if (method === 'POST' && (body as { command?: { type?: string } })?.command?.type === 'agent.startFailed') {
+        attempts.push({ at: elapsed, body: structuredClone(body) })
+        refuse()
+        return { result: {} }
+      }
+      return original(core, method, path, body)
+    })
+    return { f, attempts, pass: async (ms = 0) => { elapsed += ms; f.step(ms); await f.machine.tick() } }
+  }
+
+  it('drops NOT_FOUND once without relaunching or logging server text, and leaves other starts free', async () => {
+    const h = reporting(() => { throw new SuperTabHostError('NOT_FOUND', 'fixture-secret-server-text', 404) })
+    await h.pass()
+    for (let i = 0; i < 10; i++) await h.pass(15_000)
+    expect(h.attempts).toHaveLength(1)
+    expect(h.f.prepare).toHaveBeenCalledTimes(1)
+    const lines = h.f.log.mock.calls.flat().join('\n')
+    expect(lines).not.toContain('fixture-secret-server-text')
+    expect(lines.match(/no longer has this start/g)).toHaveLength(1)
+    h.f.pool.starts.push({ id: 'another', dispatched: false })
+    h.f.prepare.mockResolvedValue(undefined)
+    await h.pass(15_000)
+    expect(h.f.start).toHaveBeenCalledTimes(1)
+    expect((h.f.start.mock.calls as unknown[][])[0]![0]).toMatchObject({ startId: 'another' })
+    expect(h.attempts).toHaveLength(1)
+  })
+
+  it.each([
+    ['a lost reply', () => { throw new Error('fixture-secret-transport') }],
+    ['a server failure', () => { throw new SuperTabHostError('BACKEND_UNAVAILABLE', 'fixture-secret-server', 503) }],
+    ['another refusal', () => { throw new SuperTabHostError('CONFLICT', 'fixture-secret-refusal', 409) }],
+  ])('backs off with a five-minute cap after %s and retains the original report', async (_name, refuse) => {
+    const h = reporting(refuse)
+    await h.pass()
+    for (let i = 0; i < 72; i++) await h.pass(15_000)
+    expect(h.attempts.map(a => a.at)).toEqual([0, 15_000, 45_000, 105_000, 225_000, 465_000, 765_000, 1_065_000])
+    expect(h.attempts.every(a => JSON.stringify(a.body) === JSON.stringify(h.attempts[0]!.body))).toBe(true)
+    expect(h.f.prepare).toHaveBeenCalledTimes(1)
+    expect(h.f.start).not.toHaveBeenCalled()
+    expect(h.f.log.mock.calls.flat().join('\n')).not.toContain('fixture-secret')
+  })
+
+  it('reports a real failure once, including when a retry recovers', async () => {
+    for (const failFirst of [false, true]) {
+      let fail = failFirst
+      const h = reporting(() => { if (fail) { fail = false; throw new Error('lost reply') } })
+      await h.pass()
+      for (let i = 0; i < 5; i++) await h.pass(15_000)
+      expect(h.attempts).toHaveLength(failFirst ? 2 : 1)
+      expect(h.attempts[0]!.body).toEqual({ operationId: 'prepare-failed-start', command: { type: 'agent.startFailed', startId: 'start', error: 'Could not prepare the checkout.' } })
+      expect(h.f.prepare).toHaveBeenCalledTimes(1)
+    }
+  })
+})
+
 // Second review of #1991: a start in a Swarm this host is cleaning up could write into a folder the cleanup then deleted.
 describe('a Swarm this host is cleaning up', () => {
   const homes: string[] = []
@@ -410,12 +473,12 @@ describe('contributed machine executor', () => {
     const withEngines = (f: ReturnType<typeof fixture>) => {
       const usage = f.request.getMockImplementation()!
       f.request.mockImplementation(async (type, ...rest) => type === 'engines_probe'
-        ? { engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true }, { engine: 'cursor', installed: true }] }
+        ? { engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true }] }
         : usage(type, ...rest as []))
     }
     const probes = (f: ReturnType<typeof fixture>) => f.request.mock.calls.filter(c => c[0] === 'engines_probe')
 
-    it('says whether each engine is installed and signed in, probing again only after ten minutes', async () => {
+    it('probes only engines with account readers periodically, and repeats only after ten minutes', async () => {
       const f = fixture()
       withEngines(f)
       await f.machine.tick()
@@ -428,6 +491,25 @@ describe('contributed machine executor', () => {
       expect(probes(f)).toHaveLength(1)
       f.step(10 * 60_000); await f.machine.tick()
       expect(probes(f)).toHaveLength(2)
+    })
+
+    it.each([true, false, null])('reports another installed engine account as %s, without copying secrets or unknown engine names', async signedIn => {
+      const f = fixture()
+      const usage = f.request.getMockImplementation()!
+      f.request.mockImplementation(async (type, ...rest) => type === 'engines_probe'
+        ? { engines: [
+          { engine: 'cursor', installed: true, signedIn, token: 'test-secret' },
+          { engine: 'hermes', installed: false, signedIn: true },
+          { engine: 'copilot', installed: true, signedIn: 'test-secret' },
+          { engine: 'terminal', installed: true, signedIn: true },
+          { engine: 'invented', installed: true, signedIn: true },
+        ] } : usage(type, ...rest as []))
+      await f.machine.tick()
+      expect(readings(f)[0]!.readiness?.engines).toEqual([
+        { engine: 'cursor', installed: true, signedIn },
+        { engine: 'hermes', installed: null, signedIn: null },
+        { engine: 'copilot', installed: true, signedIn: null },
+      ])
     })
 
     it('reads an engine the probe calls not installed as unknown, since a timed-out shell probe says the same (review of #1743)', async () => {
@@ -2111,6 +2193,71 @@ describe('removed machine cleanup', () => {
     writeFileSync(file, JSON.stringify({ ...saved, worktrees: [...saved.worktrees, row] }))
   }
 
+  // Task #4353: a Team-written start saved Claude trust for its worktree in the person's own settings, so it did not stall at
+  // the trust question. That trust goes with the worktree, and nothing else in the file does: the person's own answer for
+  // the repository stays.
+  describe('the trust a Team-written start saved', () => {
+    const trustFile = (m: ReturnType<typeof machine>) => join(m.home, '.claude.json')
+    const saveTrust = (m: ReturnType<typeof machine>, folders: string[]) => writeFileSync(trustFile(m), JSON.stringify({ userID: 'u',
+      projects: Object.fromEntries(folders.map(folder => [folder, { hasTrustDialogAccepted: true, allowedTools: [] }])) }, null, 2))
+    const trusted = (m: ReturnType<typeof machine>) => Object.entries(JSON.parse(readFileSync(trustFile(m), 'utf8')).projects as Record<string, { hasTrustDialogAccepted?: boolean }>)
+      .filter(([, entry]) => entry.hasTrustDialogAccepted === true).map(([folder]) => folder).sort()
+    const markTeamWritten = (m: ReturnType<typeof machine>) => {
+      const file = swarmWorktreesFile(m.data, 'host'), saved = JSON.parse(readFileSync(file, 'utf8'))
+      writeFileSync(file, JSON.stringify({ ...saved, worktrees: saved.worktrees.map((w: { startId: string }) => w.startId === 'recorded' ? { ...w, teamWritten: true } : w) }))
+    }
+    const removable = (m: ReturnType<typeof machine>) => {
+      m.setLive([])
+      rmSync(join(m.recorded, 'unpushed.txt'))
+      git(m.clone, 'config', 'branch.super-tab/recorded.harness', 'placeholder')
+    }
+
+    it('is cleared when its stopped worker\'s worktree goes, and kept while the worktree stays', async () => {
+      const m = machine()
+      markTeamWritten(m)
+      saveTrust(m, [m.recorded, m.clone])
+      const host = m.open()
+      // Its session still runs there: the worktree stays, and so does its trust.
+      await host.removeStoppedWorktree('tab', 'h-recorded')
+      expect(trusted(m)).toEqual([m.clone, m.recorded].sort())
+      removable(m)
+      await host.removeStoppedWorktree('tab', 'h-recorded')
+      expect(existsSync(m.recorded)).toBe(false)
+      expect(trusted(m)).toEqual([m.clone])
+      const saved = JSON.parse(readFileSync(trustFile(m), 'utf8'))
+      expect(saved.userID).toBe('u')
+      expect(saved.projects[m.recorded]).toEqual({ allowedTools: [] })
+    })
+
+    it('is cleared when its worktree folder is already gone', async () => {
+      const m = machine()
+      markTeamWritten(m)
+      saveTrust(m, [m.recorded, m.clone])
+      m.setLive([])
+      rmSync(m.recorded, { recursive: true, force: true })
+      await m.open().removeStoppedWorktree('tab', 'h-recorded')
+      expect(trusted(m)).toEqual([m.clone])
+    })
+
+    it('is cleared when the machine leaves the Swarm, for a recorded worktree and one known from its start', async () => {
+      const m = machine()
+      markTeamWritten(m)
+      Object.assign(m.starts[0].request, { projectSettings: 'off' })
+      saveTrust(m, [m.recorded, m.earlier, m.unproven, m.own])
+      await m.open().clean('tab', 'removal')
+      expect(trusted(m)).toEqual([m.own, m.unproven].sort())
+    })
+
+    it('leaves a normal start\'s trust as it was', async () => {
+      const m = machine()
+      saveTrust(m, [m.recorded])
+      removable(m)
+      await m.open().removeStoppedWorktree('tab', 'h-recorded')
+      expect(existsSync(m.recorded)).toBe(false)
+      expect(trusted(m)).toEqual([m.recorded])
+    })
+  })
+
   // Diego, 10-30: a worktree folder deleted by hand kept its record for good, so every later stop tried it again.
   it('drops the record of a stopped worker whose worktree folder is gone, and keeps every other record', async () => {
     const m = machine()
@@ -2548,6 +2695,21 @@ describe('removed machine cleanup', () => {
     expect(JSON.parse(readFileSync(swarmWorktreesFile(root, 'host'), 'utf8'))).toEqual({ version: 1, worktrees: [
       { tabId: 'tab', startId: 'new', harnessId: 'h-new', source: '/clone', path: '/worktrees/project/new' }] })
     expect(backend.mock.calls.some(c => JSON.stringify(c[3] ?? '').includes('agent.startSettled'))).toBe(true)
+  })
+
+  // Task #4353: its removal clears the trust a Team-written start saved, so the record says which start it was.
+  it('marks the worktree of a Team-written start', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'swarm-record-')); roots.push(root)
+    const core = fakeCore({ dataDir: root, agents: { byAgent: vi.fn(id => id === 'h-new' ? session('h-new', '/worktrees/project/new', 'agent') : undefined) } })
+    const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['claude'], paused: false },
+      harnessIds: [], starts: [{ id: 'new', dispatched: true, request: { worktree: true, cwd: '/clone', projectSettings: 'off' } }], paused: false }
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
+    const open = vi.fn(async () => ({ machineId: 'host', request: vi.fn(async () => ({})), close: vi.fn() }))
+    const start = vi.fn(async () => ({ ok: true, harnessId: 'h-new' }))
+    await new ContributedMachines(core, 'host', { backend, open, start, now: () => 0,
+      capabilities: vi.fn(async () => ({ ok: true, resources: {}, tools: {} })) } as never).tick()
+    expect(JSON.parse(readFileSync(swarmWorktreesFile(root, 'host'), 'utf8')).worktrees).toEqual([
+      { tabId: 'tab', startId: 'new', harnessId: 'h-new', source: '/clone', path: '/worktrees/project/new', teamWritten: true }])
   })
 
   // Scholes, 2026-10-30: work is assigned only after the settle, so the settle carries the model the start saw.

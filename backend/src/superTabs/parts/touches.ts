@@ -124,7 +124,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       break
     case 'project.report': case 'project.repository':
     // The coordinator's own writes check it leads the project, which a concurrent Lead change ends (review of phase 2).
-    case 'instructions.save': case 'note.add': case 'note.remove': case 'project.coordinatorName':
+    case 'instructions.save': case 'note.add': case 'note.remove': case 'project.coordinatorName': case 'project.answers':
       leadCheck(command.projectId)
       break
     // A rules save writes its own collection, no part of the project: by anyone, it guards on the project's Lead chat, which a
@@ -164,6 +164,10 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'conversation.merged':
     case 'conversation.unlink':
       leadCheck(projectOfGroup(command.conversationId)?.id)
+      break
+    case 'work.status':
+      // Ready decides whether to open steps from the project's preset; a concurrent switch must make it retry.
+      if (command.status === 'review') head()
       break
     // Whether an agent may change a priority is whether it is still its project's PM (commands.ts coordinatorOrPerson).
     case 'work.priority':

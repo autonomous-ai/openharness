@@ -45,6 +45,7 @@ class SuperTabTaskCard extends StatefulWidget {
     required this.unread,
     required this.activity,
     required this.onOpen,
+    this.markLabel,
     this.priority,
     this.lane,
     this.titleLines = 2,
@@ -68,6 +69,10 @@ class SuperTabTaskCard extends StatefulWidget {
   final Key? noteKey;
   final bool needsYou, unread;
   final HarnessActivity activity;
+
+  /// What the activity mark means when its activity's own word is too broad ("In review" for a needs-input mark):
+  /// its tooltip and what a screen reader hears; null says the activity's word.
+  final String? markLabel;
   final VoidCallback onOpen;
   final SuperTabTaskPriority? priority;
 
@@ -131,14 +136,7 @@ class _SuperTabTaskCardState extends State<SuperTabTaskCard> {
         if (w.priority case final priority?) 'Priority ${priority.badge}',
         w.caption,
         ?w.note,
-        if (!w.needsYou)
-          switch (w.activity) {
-            HarnessActivity.starting => 'Queued',
-            HarnessActivity.needsInput => 'Waiting on a person',
-            HarnessActivity.offline => 'Blocked or agent lost',
-            HarnessActivity.done => 'Shipped',
-            _ => w.activity.label,
-          },
+        if (!w.needsYou) _markWord,
         if (w.unread) 'New replies',
         for (final chip in w.chips) chip.label,
         ?w.facts.pullRequest,
@@ -338,19 +336,34 @@ class _SuperTabTaskCardState extends State<SuperTabTaskCard> {
   static const _agentSize = SuperTabAvatar.rowSize;
   static const _requesterSize = 18.0;
 
-  Widget _mark() => ListenableBuilder(
-    listenable: Listenable.merge([terminalThemeStore, appearancePrefsStore]),
-    builder: (context, _) => ActivityMark(
-      activity: widget.activity,
-      color: activityColor(
-        widget.activity,
-        terminalThemeFor(
-          grid.AppTheme.surfacePalette,
-          terminalThemeStore.value,
+  /// The card's state in words: the mark's tooltip and the screen reader's.
+  String get _markWord =>
+      widget.markLabel ??
+      switch (widget.activity) {
+        HarnessActivity.starting => 'Queued',
+        HarnessActivity.needsInput => 'Waiting on a person',
+        HarnessActivity.offline => 'Blocked or agent lost',
+        HarnessActivity.done => 'Shipped',
+        _ => widget.activity.label,
+      };
+
+  // A bare glyph says nothing until it is named (finding 13 of #4211): the card's word, not the terminal's.
+  Widget _mark() => Tooltip(
+    message: _markWord,
+    child: ListenableBuilder(
+      listenable: Listenable.merge([terminalThemeStore, appearancePrefsStore]),
+      builder: (context, _) => ActivityMark(
+        activity: widget.activity,
+        color: activityColor(
+          widget.activity,
+          terminalThemeFor(
+            grid.AppTheme.surfacePalette,
+            terminalThemeStore.value,
+          ),
+          color: appearancePrefsStore.value.prompt.color,
         ),
-        color: appearancePrefsStore.value.prompt.color,
+        tooltip: false,
       ),
-      tooltip: false,
     ),
   );
 

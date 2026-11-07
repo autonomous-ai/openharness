@@ -162,8 +162,9 @@ describe('a Mac whose own Harness Team account has not joined the Swarm yet', ()
     const f = setup()
     const pool = mac(f)
     expect(joiningTeamMacs(f.state, [row('kelvin', 'kelvin-mac')])).toEqual(['kelvin-mac'])
-    expect(machineTeamWork(f.state, pool, NOW, [], [], ['kelvin-mac'])?.code).toBe('TEAM_ACCOUNT_JOINING')
-    expect(machineTeamWork(f.state, pool, NOW, [], [])?.code).toBe('TEAM_ACCOUNT_REQUIRED')
+    // Swarm v3 has no Team accounts (#4248): the Mac takes teammates' projects as itself meanwhile, through its person's own agents.
+    expect(machineTeamWork(f.state, pool, NOW, [], [], ['kelvin-mac'])).toBeNull()
+    expect(machineTeamWork(f.state, pool, NOW, [], [])).toBeNull()
   })
 
   it("is not joining with another account's Team account on it, one listed already, or no room for it", () => {

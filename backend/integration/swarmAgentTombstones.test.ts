@@ -47,13 +47,13 @@ afterAll(async () => {
 })
 
 describe('the live-agent read', () => {
-  it('uses the [tabId, deleted] index and examines only live agents', async () => {
+  it('uses an index led by [tabId, deleted] and examines only live agents', async () => {
     let parts: Awaited<ReturnType<typeof loadDeliveryParts>> | undefined
     const entries = await profiled(db, async () => { parts = await db.$transaction(tx => loadDeliveryParts(tx, busy, [], [])) })
     expect(parts!.agents.map(a => a.key).sort()).toEqual(Array.from({ length: LIVE }, (_, i) => `live-${i}`).sort())
     const read = reads(entries, 'SwarmAgent', ['tabId', 'deleted'])
     expect(read, JSON.stringify(plan(read))).toHaveLength(1)
-    expect(read[0]!.planSummary, JSON.stringify(plan(read))).toMatch(/IXSCAN \{ tabId: 1, deleted: 1 \}/)
+    expect(read[0]!.planSummary, JSON.stringify(plan(read))).toMatch(/IXSCAN \{ tabId: 1, deleted: 1[ ,]/)
     expect(read[0]!.docsExamined, JSON.stringify(plan(read))).toBe(LIVE)
   })
 
@@ -62,7 +62,7 @@ describe('the live-agent read', () => {
     const entries = await profiled(db, async () => { parts = await db.$transaction(tx => loadDeliveryParts(tx, empty, [], [])) })
     expect(parts!.agents).toEqual([])
     const read = reads(entries, 'SwarmAgent', ['tabId', 'deleted'])
-    expect(read[0]!.planSummary, JSON.stringify(plan(read))).toMatch(/IXSCAN \{ tabId: 1, deleted: 1 \}/)
+    expect(read[0]!.planSummary, JSON.stringify(plan(read))).toMatch(/IXSCAN \{ tabId: 1, deleted: 1[ ,]/)
     expect(read[0]!.docsExamined, JSON.stringify(plan(read))).toBe(0)
   })
 })

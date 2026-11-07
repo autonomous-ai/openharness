@@ -161,7 +161,10 @@ void main() {
     final asked = rig.conn('m').payloadsOf('agent_create').single;
     expect(asked['engine'], 'claude');
     expect(asked['cwd'], '/Users/me/games');
-    expect(asked['permissionMode'], 'full');
+    // Swarm v3 (task #4215): the PM starts with its owner's own permission
+    // settings: no mode, nothing approved for them.
+    expect(asked.containsKey('permissionMode'), isFalse);
+    expect(asked['bypassPermission'], isFalse);
     expect(asked['swarmRole'], 'lead');
     expect(asked['swarmSkillMode'], 'default');
     expect(asked['prompt'], 'Harness Swarm agent. You are the Lead.');

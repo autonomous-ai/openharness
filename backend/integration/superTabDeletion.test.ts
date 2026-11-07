@@ -331,7 +331,7 @@ describe('while a Swarm is deleted', () => {
     expect(await db.superTabMessage.count({ where: { tabId: tab, text: 'after the delete' } })).toBe(0)
   })
 
-  /** A Swarm with an archived group whose reports are all summarized (so it may sleep), a finished start past its keeping,
+  /** A Swarm with a group archived by hand (so it may sleep), a finished start past its keeping,
    *  a decision still waiting in that finished group, and a group finished weeks ago with a merged pull request; deleted or
    *  not. Each background job changes the live one, so a check on the deleted one can fail (re-check 2 of #2457). */
   async function quietSwarm(w: ReturnType<typeof world>, name: string, deleted: boolean) {
@@ -339,8 +339,11 @@ describe('while a Swarm is deleted', () => {
     const group = String((await f.execute({ type: 'conversation.create', title: 'Old work', brief: 'Done long ago.',
       checks: [{ description: 'Done', independent: false }] })).result.conversationId)
     await f.execute({ type: 'conversation.archive', conversationId: group, archived: true })
-    const progress = await db.swarmProgress.findUniqueOrThrow({ where: { id: `${f.tab}:lead` } })
-    await db.swarmProgress.update({ where: { id: progress.id }, data: { data: { ...(progress.data as object), summarizedFloor: 1e9 } } })
+    // An archived group sleeps at once now (task #3593); this test is about the sweep, so it is put back awake, as the sweep finds one
+    // archived before the sweep existed.
+    const slept = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: group } } })
+    const { dormant: _dormant, ...awake } = slept.data as unknown as Record<string, unknown>
+    await db.swarmGroup.update({ where: { id: slept.id }, data: { dormant: false, data: awake as object } })
     const prGroup = String((await f.execute({ type: 'conversation.create', title: 'Merged work', brief: 'Merged.',
       checks: [{ description: 'Done', independent: false }] })).result.conversationId)
     await db.superTabThreadBackfill.deleteMany({ where: { id: f.tab } })

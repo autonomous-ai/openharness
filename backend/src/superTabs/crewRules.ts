@@ -21,3 +21,12 @@ export const MOVE_REFUSED_WAIT_MS = HOUR
 
 /** How long after losing its task to its machine a crew member still counts as holding it, so it moves with it. */
 export const HELD_TASK_MS = HOUR
+
+/** The weekly quota an account keeps for a crew member (the routing's order and quota): below it the member moves to a fallback
+ *  instead of reopening in place (task #3662). 5% for the big work a crew member does; 20% when the account runs a PM, whose work
+ *  must never wait on a crew member's. */
+export const QUOTA_FLOOR_PERCENT = 5
+export const QUOTA_FLOOR_PM_PERCENT = 20
+/** A crew member whose session stopped this many times within the window is moved, not reopened. */
+export const UNSTABLE_STOPS = 3
+export const UNSTABLE_WINDOW_MS = HOUR

@@ -171,12 +171,12 @@ describe('an ask entrusted to a project agent', () => {
     expect(touchesFor(command, actor, before, effects)).toContainEqual({ kind: 'group', key: 'lead' })
   })
 
-  it('lets the PM close a plain greeting with a verdict and no answer', () => {
+  // Any explicit reaction of the PM settles it (#3346); another agent's does not.
+  it('lets the PM close a plain greeting with a reaction and no answer', () => {
     const { f, guest, owes, count, lines } = setup()
     const id = f.run({ type: 'message.send', conversationId: 'lead', text: 'hảo hn1', replyTo: null, recipientIds: [] }, guest).result.messageId as string
-    const react = (by: string, emoji: 'eyes' | 'check') => f.run({ type: 'message.react', conversationId: 'lead', messageId: id, emoji, on: true },
+    const react = (by: string, emoji: 'check') => f.run({ type: 'message.react', conversationId: 'lead', messageId: id, emoji, on: true },
       f.as(by), { reaction: { messageId: id, reacted: false } })
-    react(f.lead, 'eyes')
     react(f.dev, 'check')
     expect(owes()).toEqual([id])
     expect(react(f.lead, 'check').messages).toEqual([])

@@ -4,7 +4,7 @@ import { applyCommand, commandSchema, type Command, type CommandContext } from '
 import { createSuperTab, stableId, visibleState, type Actor, type Conversation } from './model.js'
 import { canReadGroup, canWatchAgent, isConfidential, readsRecordsIn, wordsOf } from './projects.js'
 import { CLOSED_CHAT_ANSWERED_NOTICE } from './decisions.js'
-import { buddyChatId, defaultBuddy, defaultBuddyChat, shownBefore, swarmBuddyChatId } from './buddies.js'
+import { BUDDY_REQUIREMENTS, buddyChatId, defaultBuddy, defaultBuddyChat, shownBefore, swarmBuddyChatId } from './buddies.js'
 import { isRoleName } from './agentNames.js'
 import { buddiesTold } from './buddyNews.js'
 import { sweepLiveness } from './liveness.js'
@@ -141,12 +141,14 @@ describe('what a Buddy reads', () => {
     expect(JSON.stringify(seen)).not.toContain('/Users/owner/app')
     // No machines means none: agents and a task's assignment keep no machine or terminal id (review 1 of #2115, item 3).
     f.state.conversations.find(c => c.id === f.group)!.assignment = { id: 'a1', agentId: f.pm, status: 'working', result: null,
-      execution: { machineId: 'machine', harnessId: 'app-pm', machineOwnerId: 'host' } } as never
+      execution: { machineId: 'machine', harnessId: 'app-pm', machineOwnerId: 'host', contributorId: 'runner-login' } } as never
     f.state.conversations.find(c => c.id === f.group)!.lostAttempt = { id: 'a0', agentId: f.pm, machineId: 'machine', engine: 'claude' }
     const strict = visibleState(f.state, agentActor('buddy'))
     expect(strict.agents.map(a => [a.machineId, a.harnessId])).toEqual(strict.agents.map(() => ['', '']))
     const task = strict.conversations.find(c => c.id === f.group)!
-    expect(task.assignment!.execution).toEqual({ machineId: '', harnessId: '', machineOwnerId: '' })
+    // Nor whose login its agent runs under (the Tasks feed's, #4203), as an agent's own contributor is blanked.
+    expect(task.assignment!.execution).toEqual({ machineId: '', harnessId: '', machineOwnerId: '', contributorId: '' })
+    expect(JSON.stringify(strict)).not.toContain('runner-login')
     expect(task.lostAttempt).toEqual({ id: 'a0', agentId: f.pm })
     expect(visibleState(f.state, agentActor(f.pm)).agents.find(a => a.id === f.pm)!.machineId).toBe('machine')
     // A lost task's reason without its machine, on the task and on the agent; a reason naming none stays (re-check 2).
@@ -397,7 +399,28 @@ describe('adding a Buddy', () => {
     const f = fresh()
     const added = addBuddy(f, peer, f.app.projectId, 'peer-mac')
     const start = f.state.starts!.find(s => s.id === added.result.startId)!
-    expect(start.request.requirements).toEqual({ memoryBytes: 2 * 1024 ** 3, diskBytes: 1024 ** 3, maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false })
+    expect(start.request.requirements).toEqual({ memoryBytes: BUDDY_REQUIREMENTS.memoryBytes, diskBytes: 1024 ** 3, maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false })
+  })
+
+  // Task #3738 (tuan.dev, 11-06): a Windows PC with 16 GB and under 2 GB free could not add a Buddy. The requirement is the measured peak
+  // with a margin (buddies.ts BUDDY_PEAK_BYTES), checked here and again by the host from the same start request.
+  it('is admitted on a machine with 1.5 GB free, which the old 2 GB refused, and refused below its need with the amounts (#3738)', () => {
+    const GIB = 1024 ** 3
+    const free = (f: ReturnType<typeof fresh>, bytes: number) => {
+      const pool = f.state.machines!.find(m => m.machineId === 'peer-mac')!
+      // Its owner leaves room to memory (Agents: by memory), so the free memory decides, not a count.
+      pool.agents = 'memory'
+      const resources = pool.observation!.resources
+      resources.memoryTotalBytes = 16 * GIB
+      resources.memoryUsedBytes = 16 * GIB - bytes
+    }
+    const roomy = fresh()
+    free(roomy, 1.5 * GIB)
+    expect(() => addBuddy(roomy, peer, roomy.app.projectId, 'peer-mac')).not.toThrow()
+    const short = fresh()
+    free(short, 1 * GIB)
+    expect(() => addBuddy(short, peer, short.app.projectId, 'peer-mac')).toThrow(
+      'peer\'s Mac is out of free memory: 1 GB free, and a Buddy needs 1.25 GB. Try again when an agent there finishes, or pick another machine.')
   })
 
   it('makes the started agent a Buddy in its owner\'s chat, and says it is ready there', () => {
@@ -590,6 +613,7 @@ describe('a Buddy\'s proposal to the PM', () => {
       source: { kind: 'buddy-proposal', personId: 'peer', buddyId: 'buddy', ownerMessageId: 'ask',
         goal: 'Sync edits made offline', scope: 'Desktop drafts only; no phone yet', priority: 'high' } })
     expect(posted.some(m => m.author.kind === 'agent' && m.conversationId === f.app.conversationId)).toBe(false)
+    expect(f.state.conversations.find(c => c.id === f.app.conversationId)!.owed ?? []).toContainEqual(expect.objectContaining({ id: home[0]!.id, personId: 'peer' }))
   })
 
   it('takes words up to a chat message\'s length, never cut at 80', () => {

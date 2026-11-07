@@ -48,7 +48,7 @@ describe('harness machines engines (#1788)', () => {
     const lines: string[] = []
     const code = await runMachinesEngines(['office', '--engine', 'hermes', '--engine', 'hermes', '--json'], '/tmp', 1, probe, (line) => lines.push(line))
     expect(code).toBe(0)
-    expect(asked).toEqual([{ machine: 'office', payload: { engines: ['hermes'] } }])
+    expect(asked).toEqual([{ machine: 'office', payload: { engines: ['hermes'], accounts: true } }])
     expect(lines.map((line) => JSON.parse(line))).toEqual([
       { machineId: OFFICE, engine: 'hermes', installed: true, signedIn: null, installable: true, firstPrompt: true },
     ])
@@ -57,7 +57,7 @@ describe('harness machines engines (#1788)', () => {
   it('asks for every engine when none is named', async () => {
     const { asked, probe } = probing({ engines: [] })
     expect(await runMachinesEngines(['office', '--json'], '/tmp', 1, probe, () => {})).toBe(0)
-    expect(asked[0].payload).toEqual({})
+    expect(asked[0].payload).toEqual({ accounts: true })
   })
 
   it('refuses an engine it does not know, a missing machine and an unknown flag, asking nothing', async () => {
