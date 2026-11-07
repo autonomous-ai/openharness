@@ -509,7 +509,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
 
 ## Swarm left pane
 
-The Desktop's Swarm left pane (anh Dee, 2026-11-07, task #4466) follows the
+The Desktop's Swarm left pane (anh Dee, 2026-11-07, tasks #4466 and #4645) follows the
 Swarm's six rules: grey everywhere, colour only on agent faces; blue only for
 the main action, red only for failed; 14 chat, 13 names, 12 details, and in a
 list bold means unread; every row a face, a name and one quiet detail on the
@@ -520,21 +520,23 @@ decide. Top to bottom:
  autonomous.ai ⌄              org name, semibold 13 primary; ⌄ only on hover
  ⊡  Decisions              3  inbox icon; the waiting count is the detail
  ▦  Projects               1  grid icon; opens the grid; the detail counts tags of you
- My agents ⌄                  quiet heading; ⌄ only on hover; folds, remembered
- ◉  Buddy                  ⠋  the Buddy first, by its own name and face
- ◎  River        harness   ?  a Lead's detail is the project it leads
- ◉  Leftquiet    offline      a down agent's detail is "offline"
- +  New agent                 the last row, opens Cmd-N
+ My agents ⌄             +  quiet heading; ⌄ only on hover; folds, remembered; + opens Cmd-N
+ ◉  Buddy                     the Buddy first, by its own name and face
+ ◎  River           harness   a Lead's detail is the project it leads
+ ◉  Leftquiet       offline   a down agent's detail is "offline"
+ ◉  Kai                       bold: something new from it
+ +  New agent                 only while the person has no agents of their own; opens Cmd-N
  Humans                       quiet heading; opens the Leaderboard
- D  dee              120      the board's top 8 by points; a tap opens it
+ D  dee                 120   the board's top 8 by points; a tap opens it
  ⚙  Manage                    at the foot
 ```
 
 | Element | Implementation | Rule |
 | --- | --- | --- |
 | Quiet row | `SuperTabQuietRow` (`super_tabs/buddy_rows.dart`) | 30 high, 2 under it. A 20 face (`SuperTabQuietRow.faceSize`) or a 16 icon centred in the 32 column, so every name starts on one line. Name 13 (`DesktopChrome.control`): read `textSecondary` regular, unread `textPrimary` semibold, the open row `SidebarInk.selected` with a primary name. One detail, 12 (`DesktopChrome.metadata`) in the tertiary grey (`SidebarInk.faint`, `textFaint`), right-aligned, tabular figures, no brackets; it keeps up to 40% of a row whose name is long, and is cut first. |
-| Status mark | `SuperTabQuietRow.mark`, `superTabAgentMark` | My agents only, in one 20 column at the right edge after the detail, kept on every agent row so details line up. A mark only while the agent works (the spinner), needs you (`?`) or failed: grey, failed in the error ink. Idle and finished show nothing; a finished agent's unread reply is its semibold name. |
-| Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) only while hovered or focused. |
+| Shared edges | `SuperTabQuietRow`, gallery check "the left pane's details end at one edge" | Every section's rows share the left edge (the faces' and icons' column), the right edge (every detail ends `AppDesktop.controlGap` from the row's right, with no column kept for anything after it) and the baselines (30 high rows). A heading's + ends on that right edge. |
+| No status marks | — | The left pane draws no spinner, check, `?` or failed mark (anh Dee 22:25, task #4645): status lives on the Tasks cards. An agent with something new is its row's semibold primary name, like an unread Slack channel; read rows stay regular, and the open row keeps its fill. |
+| Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) only while hovered or focused. `onAdd` puts the `plus` button at its right, as on every section heading: My agents' opens New agent. |
 | Org name | `SuperTabQuietHeading.org` | Semibold 13 primary, no icon; its chevron only on hover; opens the Swarm menu. |
 | Person | `SuperTabAvatar.person` at 20 | A photo, or an initial on the neutral grey disc. |
 | Projects grid | `SuperTabProjectsPage` (`super_tabs/projects_page.dart`) | Every project as a card, as repositories under a GitHub org, most recent first (the latest message in its chat or tasks). Cards at least 260 wide with 12 between them, transparent with a hairline (`DesktopChrome.rim`) and the hover fill; the name semibold 13 primary, one line 12 tertiary: its repository's `owner/name`, or Private. New project is the page's one blue button. A card opens its project's Board, which lights Projects in the left pane. |

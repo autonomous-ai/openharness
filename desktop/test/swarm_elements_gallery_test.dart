@@ -97,6 +97,32 @@ void main() {
     });
   }
 
+  // Task #4645 (anh Dee 22:25): every row's right-side detail ends at one edge, in every section of the left pane, and
+  // the + on a heading ends there too.
+  testWidgets('the left pane\'s details end at one edge', (tester) async {
+    final bars = await _show(tester, Brightness.light);
+    final details = find.descendant(
+      of: find.byKey(_Gallery.leftPane),
+      matching: find.byWidgetPredicate(
+        (w) => w is Text && w.textAlign == TextAlign.right,
+      ),
+    );
+    final rights = {
+      for (final e in details.evaluate())
+        tester.getRect(find.byWidget(e.widget)).right,
+    };
+    expect(details.evaluate().length, greaterThan(2));
+    expect(rights, hasLength(1), reason: '$rights');
+    // The heading's +: its glyph's box ends on the same edge.
+    final plus = find.descendant(
+      of: find.byKey(_Gallery.leftPane),
+      matching: find.byIcon(AppIcons.plus),
+    );
+    expect(plus, findsOneWidget);
+    expect(tester.getRect(plus).right, moreOrLessEquals(rights.single));
+    await _close(tester, bars);
+  });
+
   // Review of task #4461: a whole-image tolerance let a changed element pass. Ellis has Kai's colour with another
   // tilt: only its eyes and smile move.
   testWidgets('one changed face fails the gallery', (tester) async {
@@ -214,7 +240,6 @@ List<GalleryRegion> _regions(WidgetTester tester) {
     of: find.byType(SuperTabTaskStatusMark),
     matching: find.byType(Icon),
   );
-  final agentMarks = find.byType(SuperTabAgentMark);
   return [
     for (var i = 0; i < faces.evaluate().length; i++)
       if (tester.widget<SuperTabAvatarFace>(faces.at(i)) case final face)
@@ -242,13 +267,6 @@ List<GalleryRegion> _regions(WidgetTester tester) {
       (
         name: 'status mark ${tester.widget<Icon>(marks.at(i)).semanticLabel}',
         rect: tester.getRect(marks.at(i)),
-        limit: _glyph,
-      ),
-    for (var i = 0; i < agentMarks.evaluate().length; i++)
-      (
-        name:
-            'agent mark ${tester.widget<SuperTabAgentMark>(agentMarks.at(i)).activity.name}',
-        rect: tester.getRect(agentMarks.at(i)),
         limit: _glyph,
       ),
   ];
@@ -427,6 +445,7 @@ class _Gallery extends StatelessWidget {
 
   /// A Swarm with no tasks: the Tasks pane empty.
   final SuperTabController empty;
+  static const leftPane = ValueKey('gallery-left-pane');
 
   /// Whose answers the decision cards read.
   final SuperTabDecisions decisions;
@@ -516,10 +535,11 @@ class _Gallery extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   SizedBox(
+                    key: _Gallery.leftPane,
                     width: 280,
                     child: Column(
                       children: [
-                        // The Desktop left pane (task #4466).
+                        // The Desktop left pane (tasks #4466, #4645).
                         SuperTabQuietHeading.org('autonomous.ai', onTap: () {}),
                         SuperTabQuietRow(
                           leading: const Icon(
@@ -535,19 +555,16 @@ class _Gallery extends StatelessWidget {
                           'My agents',
                           collapsed: false,
                           onTap: () {},
+                          onAdd: () {},
+                          addTooltip: 'New agent',
                         ),
-                        for (final (name, lead, detail, mark, selected) in [
-                          ('River', true, 'harness', null, false),
-                          ('Quinn', false, null, null, true),
-                          ('Kai', false, null, HarnessActivity.working, false),
-                          (
-                            'Sage',
-                            false,
-                            'offline',
-                            HarnessActivity.needsInput,
-                            false,
-                          ),
-                          ('Lark', false, null, HarnessActivity.failed, false),
+                        // No status marks (task #4645): an agent with something new is its bold name.
+                        for (final (name, lead, detail, unread, selected) in [
+                          ('River', true, 'harness', false, false),
+                          ('Quinn', false, null, false, true),
+                          ('Kai', false, null, true, false),
+                          ('Sage', false, 'offline', false, false),
+                          ('Lark', false, null, false, false),
                         ])
                           SuperTabQuietRow(
                             leading: SuperTabAvatar.agent(
@@ -559,8 +576,7 @@ class _Gallery extends StatelessWidget {
                             name: name,
                             detail: detail,
                             selected: selected,
-                            mark: mark == null ? null : SuperTabAgentMark(mark),
-                            markColumn: true,
+                            unread: unread,
                             onTap: () {},
                           ),
                         SuperTabQuietHeading('Humans', onTap: () {}),
