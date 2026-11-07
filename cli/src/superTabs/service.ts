@@ -21,11 +21,7 @@ import { cardId, SwarmCards, type CardChat } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
 import { teamEngineReporter, type TeamEngineReporter } from '../team/engines.js'
 import { AUTO_SETUP_REASONS, realTeamAutoSetup, type AutoSetupReason, type TeamAutoSetup } from '../team/autoSetup.js'
-import { openDaemon } from '../agentClient/daemon.js'
 import { readTeamConfig } from '../team/config.js'
-import { realTeamRelayPublisher, TEAM_RELAY_GRANT_FILE, type TeamRelayPublisher } from '../team/relay.js'
-import { readLastTry, refreshCreationId, refreshTeamAccount, teamRefreshFile, writeLastTry, type TeamRefreshDeps } from '../team/refresh.js'
-import { readTeamStatusOffThread } from '../team/privacy.js'
 import { ensureTeamTmux, TMUX_MANIFEST_URL, tmuxRunsAt, untarGz, type TeamTmuxDeps, type TeamTmuxOutcome } from '../team/tmux.js'
 import { downloadVerified } from '../lib/selfUpdate.js'
 import { managedTmuxPath, tmuxInstallDirectories } from '../lib/tmuxOnPath.js'
@@ -35,10 +31,8 @@ import { linkTeamNodeTools, type TeamNodeToolsDeps } from '../team/nodeTools.js'
 import { env as appEnv } from '../config/env.js'
 import { homedir, userInfo } from 'node:os'
 import { delimiter, isAbsolute, join } from 'node:path'
-import { createOwnerSubscriptions } from '../lib/ownerSubscriptions.js'
 import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
 import { buddyArchived, buddyStatus, isBuddyIn, isSwarmBuddyIn, projectNamed, type BuddyStatusDeps } from './buddyStatus.js'
-import { startSubscriptionRelay } from '../lib/subscriptionRelay.js'
 import { peopleNamed, personName } from './personName.js'
 
 const POST_ABOUT = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with its ID: --answers puts your answer right below that message, in the main chat; --reply-to puts it in that message\'s thread. --attach sends a file (a screenshot, a log; up to 10 files of 256 MB each), and TEXT may then be empty. --to names the agents it reaches (any agent of this project, by id from status; up to 16): they join the conversation if they are not in it. With no --to or @Name it reaches no agent, except the agent a reply answers and, in a task or step, its assignee. Your status tells the PM your work: never post it results, verdicts or acknowledgements. In the project chat, an agent with a task or step in the project posts and reacts without joining it, and a person\'s answer to its line reaches it; --to there adds no agent, so name only the PM.'
@@ -317,8 +311,6 @@ export interface SuperTabServiceOptions {
   teamGh?: () => Promise<TeamGhOutcome>
   /** What links the Harness Team account's npm and npx (team/nodeTools.ts), for a spec. */
   teamNodeTools?: () => unknown
-  /** The owner's subscriptions for the Harness Team account (team/relay.ts), for a spec. */
-  teamRelay?: () => Pick<TeamRelayPublisher, 'start' | 'stop'>
   /** What reads a Buddy's pull requests with this machine's own GitHub (lib/pullRequestsStatus.ts), for a spec. */
   pullRequests?: BuddyStatusDeps['pullRequests']
 }
@@ -373,15 +365,6 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   const tokens = (options.githubTokens ?? (api => new GitHubTokenRefresher(api, sources)))(core)
   // In the Harness Team account only: whether its Claude Code and Codex are installed and signed in, for its owner to read.
   const engines = (options.teamEngines ?? teamEngineReporter)()
-  // On the Mac's owner's daemon, while a Harness Team account exists here: the owner's subscriptions for it, through a
-  // relay of its own (team/relay.ts). Kept through a lost backend connection, which running agents do not need.
-  const relay = (options.teamRelay ?? (() => realTeamRelayPublisher(
-    port => startSubscriptionRelay({ owner: createOwnerSubscriptions(), log: line => console.log(`[team] relay · ${line}`), ...(port ? { port } : {}) }),
-    () => readTeamConfig(), options.team ?? (() => readAuthSession()?.kind === 'team'), line => console.log(`[team] ${line}`),
-    // In the owner's closed home: a running Team agent's relay outlives this daemon (task #2125).
-    join(core.dataDir, TEAM_RELAY_GRANT_FILE),
-    // A team account still on a build that cannot use the relay is updated from here (team/refresh.ts).
-    (publishedAt) => refreshTeamAccount(realTeamRefreshDeps(core, publishedAt)))))()
   let autoSetup: Promise<Pick<TeamAutoSetup, 'offer' | 'decline'> & Partial<Pick<TeamAutoSetup, 'status'>>> | null = null
   // In the Harness Team account: a tmux and a gh of its own when it has none it can run (team/tmux.ts, team/gh.ts). Looked
   // at as it connects, and a failed install again half an hour later.
@@ -407,7 +390,6 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     connected: () => {
       tokens.start()
       engines.start()
-      relay.start()
       checkTmux()
       // A daemon that runs team work only is there for its Swarms: its host runs from its first connection. Its Mac's daemon adds
       // a Harness Team account to a Swarm without waking it (host.ts joinTeams), and a host that never ran reports no privacy
@@ -423,7 +405,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
       })
     },
     disconnected: disconnect,
-    stop: () => { disconnect(); void relay.stop() },
+    stop: disconnect,
     swarmRole: async (harnessId: string) => (await within(swarmRoleFor(sources(), harnessId).then(grant => ({ grant }))))?.grant,
   }
   const requests: ServiceRequests = {
@@ -536,7 +518,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // The devices' (core/devicesLink.ts): a Harness Pro that shows the Swarm cards is attached or gone, wants a Lead's recap, or
         // has one open. They read the account's Swarms as the person, and need no agent.
         // Only this computer's own devices ask: an account owner on another machine does not make this one read the Swarms.
-        if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen' || payload.action === 'cardSay' || payload.action === 'cardWorker' || payload.action === 'cardSide' || payload.action === 'cardThreadLeave') {
+        if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen' || payload.action === 'cardSay' || payload.action === 'cardWorker') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
           // A round dial that speaks swarmChat asks for the chat on its face (design 2026-10-28-round-dial-swarm-chat), and one
           // that speaks swarmBuddy for the face on the side it keeps ('buddy', spec 2026-10-29-round-dial-pm-buddy).
@@ -545,36 +527,21 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             const include = Array.isArray(payload.include) ? payload.include.filter(cardId) : []
             const asked = payload.focus && typeof payload.focus === 'object' ? payload.focus as Record<string, unknown> : {}
             const focus = cardId(asked.tabId) && cardId(asked.conversationId)
-              ? { tabId: asked.tabId, conversationId: asked.conversationId, ...(cardId(asked.threadRoot) ? { threadRoot: asked.threadRoot } : {}),
-                ...(asked.fromDevice === true ? { fromDevice: true as const } : {}) } : null
+              ? { tabId: asked.tabId, conversationId: asked.conversationId } : null
             cards().want(payload.on === true, include, focus)
             return { ok: true }
           }
           if (payload.action === 'cardRecap' && cardId(payload.tabId) && cardId(payload.leadId)) return { ok: true, ...await cards().recap(payload.tabId, payload.leadId, chat) }
           if (payload.action === 'cardSay' && cardId(payload.harnessId) && typeof payload.text === 'string' && payload.text.trim() && payload.text.length <= 32_000) {
-            // `threaded`: the dial speaks swarmThread and the words came from its face; `thread`: the root of the thread on the face
-            // then (null: none), which the words are held to.
-            const options = { ...(payload.threaded === true ? { threaded: true } : {}),
-              ...(payload.thread === null || cardId(payload.thread) ? { thread: payload.thread } : {}) }
             const pinned: [chatId?: string, reviewed?: boolean] = !cardId(payload.chatId) ? []
               : payload.reviewed === true ? [payload.chatId, true] : [payload.chatId]
-            const result = Object.keys(options).length
-              ? await cards().say(payload.harnessId, payload.text.trim(), chat, cardId(payload.chatId) ? payload.chatId : undefined, cardId(payload.chatId) && payload.reviewed === true, options)
-              : await cards().say(payload.harnessId, payload.text.trim(), chat, ...pinned)
+            const result = await cards().say(payload.harnessId, payload.text.trim(), chat, ...pinned)
             // A refusal travels with its code and message, which the dial shows instead of typing the words anywhere.
-            return { ok: true, said: result.said, ...(!result.said && result.refused ? { refused: result.refused } : {}), ...(result.said && result.thread ? { thread: result.thread } : {}) }
+            return { ok: true, said: result.said, ...(!result.said && result.refused ? { refused: result.refused } : {}) }
           }
           // A card's failure from another computer: whether its agent is a Swarm's Builder or Reviewer, from the Swarms read last.
           if (payload.action === 'cardWorker' && identifier(payload.machineId) && identifier(payload.harnessId)) {
             return { ok: true, worker: cards().worker(payload.machineId, payload.harnessId) }
-          }
-          if (payload.action === 'cardThreadLeave' && cardId(payload.tabId) && cardId(payload.leadId)) {
-            const left = cards().threadLeave(payload.tabId, payload.leadId, chat)
-            return { ok: true, ...(left ? { conversationId: left.conversationId } : {}) }
-          }
-          if (payload.action === 'cardSide' && cardId(payload.tabId) && (payload.side === 'pm' || payload.side === 'buddy')) {
-            cards().side(payload.tabId, payload.side)
-            return { ok: true }
           }
           if (payload.action === 'cardOpen' && cardId(payload.session) && cardId(payload.tabId) && (payload.leadId === null || cardId(payload.leadId))) {
             cards().open(payload.session, payload.tabId, payload.leadId, chat)
@@ -659,6 +626,21 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           // One per Buddy on this machine; a machine runs a few at most, so a small cap only guards against a leak.
           for (const oldest of buddySince.keys()) { if (buddySince.size <= 64) break; buddySince.delete(oldest) }
           return { ok: true, value: { lastChangedAt: read.lastChangedAt, summary } }
+        }
+        // A proposal's files (command.ts proposalFiles, #3872): the chat they go up to and the project PM's chat it names. A Buddy's
+        // status is a task summary with none of them, so every Buddy proposal with a file was refused. Only what the upload reads,
+        // from this agent's own read: the chat when it reads that chat, its own record, and each project's id and chat.
+        if (payload.action === 'proposalTarget') {
+          if (!identifier(payload.conversationId)) return { error: 'INVALID_REQUEST' }
+          const { state } = await swarm()
+          const chat = list(state.conversations).find(c => c.id === payload.conversationId)
+          const self = list(state.agents).find(a => a.id === agentId)
+          const session = object(self?.buddySession).projectId
+          return { ok: true, value: {
+            chat: chat ? { id: chat.id, ...typeof chat.kind === 'string' ? { kind: chat.kind } : {}, ...typeof chat.projectId === 'string' ? { projectId: chat.projectId } : {} } : null,
+            self: self ? { id: self.id, ...typeof self.projectId === 'string' ? { projectId: self.projectId } : {}, ...typeof session === 'string' ? { buddySession: { projectId: session } } : {} } : null,
+            projects: list(state.projects).map(p => ({ id: p.id, leadConversationId: p.leadConversationId })),
+          } }
         }
         // A Lead's terminal read or typing (`screen`, `type`): the backend answers only the agent that asked.
         if (payload.action === 'terminalResult') {
@@ -768,6 +750,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             }
             throw error
           }
+        }
+        // The project's machine rules alone, for the route (backend machine-rules read, task #3964).
+        if (payload.action === 'machineRules') {
+          if (!identifier(payload.projectId)) return { error: 'INVALID_REQUEST' }
+          return { ok: true, value: await backend(core, 'GET', `${path}/projects/${encodeURIComponent(String(payload.projectId))}/machine-rules?${identity}`) }
         }
         if (payload.action === 'decisions' && (payload.state === 'open' || payload.state === 'answered')) {
           return { ok: true, value: await backend(core, 'GET', `${path}/decisions?state=${payload.state}&${identity}`) }
@@ -937,37 +924,6 @@ function realTeamGhDeps(): TeamGhDeps {
     unzip: unzipArchive,
     runtimeDir: appEnv.ADAPTER_RUNTIME_DIR,
     binDir,
-    log: (line) => console.log(`[team] ${line}`),
-  }
-}
-
-/** The owner's daemon's own: its account's machine list, and the link to its Mac's team account (team/refresh.ts). */
-function realTeamRefreshDeps(core: CoreApi, publishedAt: number | null): TeamRefreshDeps {
-  const file = teamRefreshFile(core.dataDir)
-  return {
-    config: () => readTeamConfig(),
-    // Never on this thread on Windows: the Team account can hold its file's open for as long as it likes (audit W4).
-    status: (path) => readTeamStatusOffThread(path),
-    publishedAt: () => publishedAt,
-    machines: async () => {
-      const reply = await core.account.backend('GET', '/api/machines')
-      const body = object(reply.body), data = object(body.data)
-      const rows = Array.isArray(data.machines) ? data.machines : Array.isArray(body.machines) ? body.machines : []
-      return rows.map(object).filter(m => typeof m.machineId === 'string')
-        .map(m => ({ machineId: m.machineId as string, sessionKind: typeof m.sessionKind === 'string' ? m.sessionKind : null,
-          hostMachineId: typeof m.hostMachineId === 'string' ? m.hostMachineId : null }))
-    },
-    machineId: () => core.daemon.machineId(),
-    run: async (machineId, argv, cwd) => {
-      const link = await openDaemon({ dataDir: core.dataDir, port: core.daemon.port, machineId: core.daemon.machineId() }, machineId)
-      try {
-        const answer = object(await link.request('shell_open', { argv, cwd, creationId: refreshCreationId() }, 30_000))
-        return answer.state === 'created' ? { ok: true } : { ok: false, error: String(answer.error ?? answer.state ?? 'no answer') }
-      } finally { link.close() }
-    },
-    lastTry: () => readLastTry(file),
-    remember: (at) => writeLastTry(file, at),
-    now: () => Date.now(),
     log: (line) => console.log(`[team] ${line}`),
   }
 }

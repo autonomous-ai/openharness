@@ -9,7 +9,7 @@
  */
 import { execFile } from 'node:child_process'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
 import { launchEnvironment } from '../engines/kit/launchExecutable.js'
 import { folderTrust } from '../engines/launchPrep.js'
@@ -34,16 +34,24 @@ const ID = /^[A-Za-z0-9_-]{1,64}$/
 export const BUDDY_COPIES_FILE = 'project-copies.txt'
 const REFRESH_EVERY_MS = 60 * 60_000
 /** All of one pass's fetches share this: 50 projects offline must not hold a Buddy's start for 50 timeouts. */
+/**
+ * A hooks folder that holds none, for every git command on a Buddy's copy: the person's hooks are written for their own work.
+ * `worktree add` ran their post-checkout in the copy (WinTest3348's diagnostic, #3815). On Windows `/dev/null` names C:\dev\null,
+ * a folder any account may make, so there it is the NUL device, which can hold no hook.
+ */
+const NO_HOOKS = process.platform === 'win32' ? 'NUL' : '/dev/null'
 const FETCH_BUDGET_MS = 30_000
 const FETCH_TIMEOUT_MS = 20_000
 const FETCHES_AT_ONCE = 4
 
-/** The projects a start lists, as far as they are well formed: an id, a name and an absolute folder. */
+/** The projects a start lists, as far as they are well formed: an id, a name and a folder absolute by this machine's own rules.
+ *  A Windows checkout (C:\…, \\server\share\…) was dropped when this asked for a leading /, so a Buddy there had no copy of it
+ *  (#3815); on a Mac or Linux those names are relative, resolved from the service's folder (Linuxtest2), and stay dropped. */
 export function buddyProjectsOf(request: Record<string, unknown>): BuddyProject[] {
   const listed = Array.isArray(request.buddyProjects) ? request.buddyProjects : []
   return listed.flatMap(entry => {
     const p = entry as Record<string, unknown>
-    return typeof p?.id === 'string' && ID.test(p.id) && typeof p.name === 'string' && typeof p.cwd === 'string' && p.cwd.startsWith('/')
+    return typeof p?.id === 'string' && ID.test(p.id) && typeof p.name === 'string' && typeof p.cwd === 'string' && isAbsolute(p.cwd)
       ? [{ id: p.id, name: p.name, cwd: p.cwd }] : []
   }).slice(0, MAX_BUDDY_PROJECTS)
 }
@@ -102,7 +110,7 @@ export async function prepareBuddyHome(home: string, projects: readonly BuddyPro
     try {
       // A folder of this name removed before (a link taken out, a folder deleted) may still be listed by its checkout.
       await run('git', ['-C', project.cwd, 'worktree', 'prune'], { timeout: 60_000 }).catch(() => undefined)
-      await run('git', ['-C', project.cwd, 'worktree', 'add', '--detach', '--', join(home, 'projects', dir), 'HEAD'], { timeout: 120_000 })
+      await run('git', ['-c', `core.hooksPath=${NO_HOOKS}`, '-C', project.cwd, 'worktree', 'add', '--detach', '--', join(home, 'projects', dir), 'HEAD'], { timeout: 120_000 })
       if (!known) rows.push({ id: project.id, name: project.name, dir })
       ready.push(project.name)
     } catch { missing.push(project.name) }
@@ -180,14 +188,16 @@ async function refreshCopy(path: string, name: string, deadline: number, signal:
   const state = (next: CopyState['state'], revision: string | null = null): CopyState => ({ name, revision, state: next })
   const entry = lstatSync(path, { throwIfNoEntry: false })
   if (!entry || !entry.isDirectory()) return state('failed')
-  const words = (args: string[]) => ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', path, ...args]
+  const words = (args: string[]) => ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', `core.hooksPath=${NO_HOOKS}`, '-C', path, ...args]
   const git = async (args: string[], options: { timeout?: number; signal?: AbortSignal } = {}) => (await run('git', words(args),
     { timeout: options.timeout ?? 60_000, maxBuffer: 64 * 1024 * 1024, env: gitEnv(process.env), ...(options.signal ? { signal: options.signal } : {}) })).stdout.trim()
   let at: string | null = null
   const here = async () => await git(['log', '-1', '--no-show-signature', '--format=%h %cs']).catch(() => null)
   try {
-    // A folder that lost its .git would otherwise find whichever repository is above it, and move that one.
-    if (realpathSync(await git(['rev-parse', '--show-toplevel'])) !== realpathSync(path)) return state('failed')
+    // A folder that lost its .git would otherwise find whichever repository is above it, and move that one. Compared as the
+    // file system resolves them: git reports a folder's real, long name, and on Windows a path can hold a short one
+    // (C:\Users\HARNES~1) or another letter case, which made every copy there "another repository" (#3815).
+    if (realpathSync.native(await git(['rev-parse', '--show-toplevel'])) !== realpathSync.native(path)) return state('failed')
     at = await here()
     const detached = await git(['symbolic-ref', '--quiet', 'HEAD']).then(() => false, () => true)
     if (!detached || await git(['status', '--porcelain'])) return state('changed', at)
@@ -250,11 +260,12 @@ export async function pruneBuddyHome(home: string, readable: ReadonlySet<string>
  * This is an exception to "never a folder with content" (engines/kit/folderTrust.ts): the folder is Harness's, made for the
  * start its person pressed, and what the question guards against cannot happen in it: its own root holds no project's settings,
  * hooks or MCP servers (each project's copy is a folder below it), and the folder goes with the Buddy. Claude Code and Codex
- * alike, as both run a Buddy (task #2832). A failure here only leaves the question.
+ * alike, as both run a Buddy (task #2832). On a computer where Claude Code never ran there is no settings file to extend: it is
+ * made, holding this folder alone (task #3737). A failure here only leaves the question.
  */
 export async function trustBuddyHome(home: string, engine: unknown): Promise<void> {
   if (engine !== 'claude' && engine !== 'codex') return
-  try { folderTrust(engine, undefined, await launchEnvironment() ?? undefined)?.record(home) }
+  try { folderTrust(engine, undefined, await launchEnvironment() ?? undefined)?.record(home, { create: true }) }
   catch (error) { console.warn(`[super-tabs] could not answer the folder question for a Buddy: ${(error as Error).message}`) }
 }
 

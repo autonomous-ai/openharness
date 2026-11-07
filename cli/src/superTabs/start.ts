@@ -10,12 +10,13 @@ import { permissionModeFlags } from '../lib/engineLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
 import { isSwarmSkillMode, swarmSkillUse, wireRole, type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { isTeamDaemon, pmEngineHome } from './teamDaemon.js'
+import { agentFolderFor, prepareAgentFolder, temporaryFolder } from './agentFolder.js'
 import { BUDDY_COPIES_FILE, BUDDY_HOMES, buddyProjectsOf, prepareBuddyHome, trustBuddyHome } from './buddyHome.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { join as joinPath } from 'node:path'
 import { markBuddyOwner } from '../lib/buddyGuard.js'
-import { codexModelNotOffered, NO_PM_RELAY, offeredCodexModels, teamRelayed } from '../team/relay.js'
+import { engineAccount } from '../lib/engineAccount.js'
 
 type Json = Record<string, unknown>
 export type ScopedRequest = (payload: Json) => Promise<Json>
@@ -77,13 +78,15 @@ function workerPrompt(tabId: string, chat: string, roleName: string): string {
   return `You are joining a shared Super Tab. ${roleLine(roleName)}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Read the conversation with harness super-tab --tab ${tabId} messages ${chat}. Reply in that conversation using harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. ${INSTRUCTIONS_LINE(tabId)} Run harness super-tab help for commands. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
 
+const buddyProposalOffer = `When your discussion has a clear goal, why it matters and how to know it is done, check the project for an existing proposal or task; point to a match instead of duplicating it. Otherwise offer without waiting to be asked: "Want me to propose this to <project>?" Then show the exact proposal as a quoted line after "I'll post this as you:". Send only after your owner says yes to that proposal. One offer per idea; never repeat an ignored or declined offer.`
+
 function buddyPrompt(tabId: string, chat: string, mode: SwarmSkillMode | null): string {
-  return `You are a person's Buddy in a shared Super Tab. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Your chat with your owner is conversation ${chat}: read it with harness super-tab --tab ${tabId} messages ${chat}, and reply there with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. Then greet your owner there and ask what they have in mind. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
+  return `You are a person's Buddy in a shared Super Tab. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Your chat with your owner is conversation ${chat}: read it with harness super-tab --tab ${tabId} messages ${chat}, and reply there with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. Then greet your owner there and ask what they have in mind. ${buddyProposalOffer} If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
 /** A thread session's start note (docs/superpowers/specs/2026-10-30-buddy-thread-sessions-design.md): the same Buddy, for one
  *  thread of its owner's chat. Ids only, never a message's text: a start record is listed in the Lead's status. */
 function buddySessionPrompt(tabId: string, chat: string, thread: string, mode: SwarmSkillMode | null): string {
-  return `You are a person's Buddy in a shared Super Tab, in a session of your own for one thread of your owner's chat. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Your thread is the one rooted at message ${thread} in conversation ${chat}. Read it, with the main-chat messages it started from, with harness super-tab --tab ${tabId} messages ${chat} --thread ${thread}. Answer your owner only in this thread: harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID --reply-to MESSAGE_ID, naming a message in this thread. Your owner's newest message in the thread is the one to answer first. Your Buddy's other rules are unchanged. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
+  return `You are a person's Buddy in a shared Super Tab, in a session of your own for one thread of your owner's chat. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Your thread is the one rooted at message ${thread} in conversation ${chat}. Read it, with the main-chat messages it started from, with harness super-tab --tab ${tabId} messages ${chat} --thread ${thread}. Answer your owner only in this thread: harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID --reply-to MESSAGE_ID, naming a message in this thread. Your owner's newest message in the thread is the one to answer first. Your Buddy's other rules are unchanged. ${buddyProposalOffer} If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
 
 /** A person's one Buddy for the Swarm (docs/specs/2026-10-31-one-buddy-per-swarm.md): it reads every project its person
@@ -92,17 +95,20 @@ function buddySessionPrompt(tabId: string, chat: string, thread: string, mode: S
 function swarmBuddyPrompt(tabId: string, chat: string, home: { ready: string[]; missing: string[] }, mode: SwarmSkillMode | null): string {
   const code = home.ready.length ? `Each project's code is in its own folder under projects/ (${home.ready.join(', ')}). Each copy follows its project's default branch, moved at your start and at most hourly after that. ${BUDDY_COPIES_FILE} in your folder says which revision each copy is at: read it before saying what the code does or does not have. Say your copy is behind only when that file says it may be; otherwise, what is not in the copy is not on the default branch yet.` : 'No project\'s code is on this machine.'
   const none = home.missing.length ? ` Not on this machine: ${home.missing.join(', ')}; you still read their chats and tasks.` : ''
-  return `You are a person's one Buddy in a shared Super Tab, for every project they read. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster: it lists your owner's projects, one line each, and the newest tasks; status --project NAME reads one project's tasks. ${code}${none} Your chat with your owner is conversation ${chat}: read it with harness super-tab --tab ${tabId} messages ${chat}, and reply there with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. When your owner asks you to send something to a project's PM, send their proposal yourself, naming that project; if it is unclear which project, ask them first. Then greet your owner there and ask what they have in mind. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
+  return `You are a person's one Buddy in a shared Super Tab, for every project they read. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster: it lists your owner's projects, one line each, and the newest tasks; status --project NAME reads one project's tasks. ${code}${none} Your chat with your owner is conversation ${chat}: read it with harness super-tab --tab ${tabId} messages ${chat}, and reply there with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. When your owner asks you to send something to a project's PM, send their proposal yourself, naming that project; if it is unclear which project, ask them first. Then greet your owner there and ask what they have in mind. ${buddyProposalOffer} If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
 /** A project session of a person's one Buddy chat: the Buddy for that one project, in one thread, the only Buddy that sends
  *  into it. It reads that project and its owner's words in its thread alone. */
 function projectSessionPrompt(tabId: string, chat: string, thread: string, mode: SwarmSkillMode | null): string {
-  return `You are a person's Buddy in a shared Super Tab, in a session of your own for one project, in one thread of your owner's chat. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster: it is your project's tasks, and your folder is its code. Your thread is the one rooted at message ${thread} in conversation ${chat}. Read it with harness super-tab --tab ${tabId} messages ${chat} --thread ${thread}: you read your owner's words there and your own, nothing else of the chat. Answer your owner only in this thread: harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID --reply-to MESSAGE_ID, naming a message in this thread. When your owner asks, send their proposal to this project's PM, for their message in this thread. Your owner's newest message in the thread is the one to answer first. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
+  return `You are a person's Buddy in a shared Super Tab, in a session of your own for one project, in one thread of your owner's chat. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster: it is your project's tasks, and your folder is its code. Your thread is the one rooted at message ${thread} in conversation ${chat}. Read it with harness super-tab --tab ${tabId} messages ${chat} --thread ${thread}: you read your owner's words there and your own, nothing else of the chat. Answer your owner only in this thread: harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID --reply-to MESSAGE_ID, naming a message in this thread. When your owner asks, send their proposal to this project's PM, for their message in this thread. Your owner's newest message in the thread is the one to answer first. ${buddyProposalOffer} If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
 
 /** Why a thread session that is not Claude Code's never starts. */
 /** Why a Buddy start launched nothing on this machine: the server's own words (backend buddyContract.ts BUDDY_OWN_MACHINE_REFUSAL). */
 export const BUDDY_NOT_OWN_MACHINE = 'A Buddy runs only on your own machine. Pick one of yours.'
+/** Why a Claude Code Buddy start launched nothing: its engine would stop on its sign-in screen, in a terminal no Swarm view shows
+ *  (task #3737). The person signs in to Claude Code on that computer and starts the Buddy again. */
+export const BUDDY_CLAUDE_SIGNED_OUT = 'Sign in to Claude Code on this computer first'
 
 /**
  * Whether this machine may launch the Buddy a start names (Ken, 11-04, task #2832): a Buddy runs with its owner's full rights,
@@ -352,30 +358,18 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
     if (native.state === 'missing') {
       if (start.dispatched) return { error: 'START_UNCERTAIN', startId, creationId,
         detail: 'This start was submitted but its machine has no receipt. Inspect the machine before creating another agent.' }
-      // A Codex Product Manager in a Harness Team account runs in an engine home of its own, with no sign-in there: it signs
-      // in on the owner's relay, or not at all. With no relay it is refused before anything launches, and the queue moves it
-      // on (backend leadStart.ts), rather than starting signed out (security re-check 3 of #2089).
-      if (request.engine === 'codex' && request.leadFor && typeof request.leadFor === 'object' && isTeamDaemon() && !teamRelayed()) {
-        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: NO_PM_RELAY } }))
-        return { error: 'START_FAILED', startId, detail: NO_PM_RELAY }
-      }
-      // A Codex model the Mac owner's ChatGPT account does not offer launched and then failed every request (Mac Auto, whose
-      // owner is offered GPT-6-Luna and the GPT-5.6 models, was asked for gpt-6.1-sol, 2026-10-29). In a Team account on the
-      // relay the owner's list is read first, and such a start is refused before anything launches, naming what is offered.
-      // A list that cannot be read refuses nothing.
-      if (request.engine === 'codex' && model && model !== 'default' && request.gridModel === undefined && isTeamDaemon()) {
-        const offered = await offeredCodexModels().catch(() => null)
-        if (offered && !offered.slugs.includes(model)) {
-          const detail = codexModelNotOffered(model, offered)
-          requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: detail } }))
-          return { error: 'START_FAILED', startId, detail }
-        }
-      }
       // A Buddy launches with its owner's full rights, so only on its owner's own machine and account (task #2832), before
       // anything is reserved or launched.
       if (request.buddyOf !== undefined && !buddyOnOwnMachine(input, start, object(request.buddyOf))) {
         requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: BUDDY_NOT_OWN_MACHINE } }))
         return { error: 'START_FAILED', startId, detail: BUDDY_NOT_OWN_MACHINE }
+      }
+      // Claude Code that is not signed in on this computer asks to be, on a screen nobody sees, and the Buddy's chat goes quiet. A
+      // grid Buddy runs on the grid's key instead, and a computer that cannot say (null) refuses nothing (lib/engineAccount.ts).
+      if (request.buddyOf !== undefined && request.engine === 'claude' && request.gridModel === undefined && request.gridName === undefined
+        && (await engineAccount('claude', { lastUsed: false })).signedIn === false) {
+        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: BUDDY_CLAUDE_SIGNED_OUT } }))
+        return { error: 'START_FAILED', startId, detail: BUDDY_CLAUDE_SIGNED_OUT }
       }
       const resources = await inspectCapacity(target, request)
       if (resources.capacity.error === 'GUEST_NOT_ALLOWED') return {
@@ -431,6 +425,17 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       if (buddy && (homeFolder || request.worktree)) markBuddyOwner(worktreeFolderName(`super-tab/${startId}`), String(object(request.buddyOf).personId))
       const home = homeFolder ? await prepareBuddyHome(homeFolder, buddyProjectsOf(request)) : null
       if (homeFolder) await trustBuddyHome(homeFolder, request.engine)
+      // A start that works in the folder it names, when that folder is a temporary one: a scratchpad, which Claude Code asks
+      // about on every run and nobody answers (computer's Dee, Scholes 11-06, #3713). The agent gets a permanent folder of its
+      // own, made, marked and trusted here, and removed when it stops (agentFolder.ts, machines.ts).
+      // So does a Regular agent (backend agent.new, task #4116), which starts in no project: the backend's folder only admits it.
+      const agentFolder = !homeFolder && request.worktree !== true && (request.regular === true || (typeof request.cwd === 'string' && temporaryFolder(request.cwd)))
+        ? agentFolderFor(projectsRoot(), startId) : null
+      // A folder there Harness did not make is refused, and so is the start: it never runs, or trusts, in someone else's folder.
+      if (agentFolder) {
+        try { await prepareAgentFolder(agentFolder, request.engine) }
+        catch { return { error: 'START_FAILED', startId, detail: 'This agent\'s folder could not be made safely on this machine.' } }
+      }
       // A project's Product Manager (backend leadStart.ts): the Lead of its project's conversation once it runs.
       const lead = !buddy && !!request.leadFor && typeof request.leadFor === 'object'
       const handoffNote = lead && typeof request.handoffNote === 'string' && request.handoffNote.length <= 32_000
@@ -463,7 +468,7 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
           : home ? swarmBuddyPrompt(String(input.tabId), String(request.conversationId), home, mode)
           : buddyPrompt(String(input.tabId), String(request.conversationId), mode))
           : `${lead ? leadPrompt(String(input.tabId), String(request.conversationId), roleName) : workerPrompt(String(input.tabId), String(request.conversationId), roleName)}${github ? ` ${githubPromptLine()}` : ''}${handoffPrompt}`,
-        ...(homeFolder ? { cwd: homeFolder } : request.worktree ? { projectSource: 'worktree', gitSource: request.cwd, branchName: `super-tab/${startId}`,
+        ...(homeFolder ? { cwd: homeFolder } : agentFolder ? { cwd: agentFolder } : request.worktree ? { projectSource: 'worktree', gitSource: request.cwd, branchName: `super-tab/${startId}`,
           // No branch named: the repository's default branch, fetched, not the host checkout's old HEAD.
           ...(request.branchRef ? { branchRef: request.branchRef } : { branchBase: 'default' }) } : { cwd: request.cwd }),
       }

@@ -190,6 +190,18 @@ async function bringBackUnfollowed(tx: Tx, tabId: string, messages: MessageDraft
   if (answer.writeErrors?.length) throw new Error('The database refused some thread follows')
 }
 
+/** A stuck line fixed, or its task ended (stuck.ts, task #3915): its tags still waiting resolve as `fixed`. One update per person
+ *  on the `[tabId, conversationId, personId]` index, at most MAX_MENTIONS a line. */
+export async function resolveTags(tx: Tx, tabId: string, lines: ReadonlyArray<{ conversationId: string; messageId: string; personIds: readonly string[] }>,
+  now: number): Promise<void> {
+  for (const line of lines) {
+    for (const personId of line.personIds) {
+      await tx.superTabMention.updateMany({ where: { tabId, conversationId: line.conversationId, personId, messageId: line.messageId, ...waiting },
+        data: { resolvedAt: new Date(now), resolvedBy: 'fixed' } })
+    }
+  }
+}
+
 /** Any post by the tagged person in that conversation answers every earlier tag there, in a thread or not. */
 export async function resolveByReply(tx: Tx, tabId: string, conversationId: string, personId: string, now: number): Promise<void> {
   await tx.superTabMention.updateMany({ where: { tabId, conversationId, personId, createdAt: { lte: new Date(now) }, ...waiting },
@@ -368,7 +380,7 @@ export async function listMentions(tx: Tx, tabId: string, state: SuperTabState, 
     const authorName = taggerName(state, author && { ...author, id: row.authorAgentId })
     return { id: row.id, projectId: row.projectId, projectName: projectOf(state, group.projectId ?? 'lead').name,
       conversationId: row.conversationId, conversationTitle: group.title, messageId: row.messageId,
-      leadId: row.authorAgentId, leadName: authorName, text: (message?.text ?? '').slice(0, 200),
+      leadId: row.authorAgentId, leadName: authorName, leadKind: author?.kind ?? null, text: (message?.text ?? '').slice(0, 200),
       createdAt: row.createdAt, resolvedAt: row.resolvedAt, resolvedBy: row.resolvedBy, threadId: message ? threads.get(message.id) ?? null : null,
       // Where the tagged message is in its chat: Desktop clears its red number once the reader has read past it (Slack).
       messageSequence: message?.sequence ?? null }
