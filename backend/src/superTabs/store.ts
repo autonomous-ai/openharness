@@ -1,6 +1,7 @@
 import { legacyAsks } from './boardRights.js'
 import { canReadProject } from './projects.js'
 import { proposalMeasures, proposalMessageMeasures } from './proposalMetrics.js'
+import { timeCommand, timedPhase, type CommandPhases } from './commandTiming.js'
 import { advanceProposalCards, pmAcceptsMessage, legacyProposalId, migrateLegacyProposals, type LegacyProposalAsk } from './proposalCards.js'
 import { defaultBuddy } from './buddies.js'
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
@@ -326,9 +327,11 @@ export async function transaction<T>(db: Pick<PrismaClient, '$transaction'>, bod
       // The cache's stamps are bumped, and awaited, once the attempt commits (cache.ts); after-commit work runs after them.
       const run = () => swarmTransaction(db, tx => { committed = []; pendingCommits.set(tx, committed); return body(tx) }, TRANSACTION_OPTIONS)
       const result = await (hintless ? withoutHints(run) : run())
-      for (const callback of committed) {
-        try { callback() } catch (error) { logger.warn('[super-tab] after-commit callback failed', { error: error instanceof Error ? error.message : String(error) }) }
-      }
+      await timedPhase('afterCommit', async () => {
+        for (const callback of committed) {
+          try { callback() } catch (error) { logger.warn('[super-tab] after-commit callback failed', { error: error instanceof Error ? error.message : String(error) }) }
+        }
+      })
       return result
     } catch (error) {
       // A read in this attempt named an index removed since the last listing (parts/indexed.ts): the next attempts name none.
@@ -340,6 +343,15 @@ export async function transaction<T>(db: Pick<PrismaClient, '$transaction'>, bod
 /** The longest a failed claim's record may hold up the busy answer. */
 const RECORD_FAILED_CLAIM_MS = 2_000
 const TRANSACTION_OPTIONS = { maxWait: 5_000, timeout: 15_000 }
+/** A command this slow logs its phases (task #4560: commands waited ~3.5 s in prod while p50 stayed at 245 ms). */
+export const SLOW_COMMAND_MS = 1_000
+/** One line per slow command: its type and phases in milliseconds, whether an agent sent it; never its words or ids but the Swarm's. */
+function slowCommand(tabId: string, type: unknown, totalMs: number, phases: CommandPhases, byAgent: boolean): void {
+  if (totalMs < SLOW_COMMAND_MS) return
+  const timed = Object.entries(phases).reduce((sum, [phase, ms]) => phase === 'attempts' ? sum : sum + ms, 0)
+  logger.warn('Swarm command slow', { tabId, type: typeof type === 'string' ? type : 'unknown', totalMs, byAgent,
+    phases: { ...phases, other: Math.max(0, totalMs - timed) } })
+}
 /** Each attempt's after-commit work, by that attempt's client: a retried attempt's list is dropped with its client. */
 const pendingCommits = new WeakMap<Transaction, Array<() => void>>()
 
@@ -1661,7 +1673,8 @@ export class SuperTabStore {
   async execute(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
     client?: DeclaredClient) {
     try {
-      const done = await this.executeOnce(user, tabId, input, asAgentId, hostMachineId)
+      const done = await timeCommand(this.now, () => this.executeOnce(user, tabId, input, asAgentId, hostMachineId),
+        (phases, totalMs) => slowCommand(tabId, input.command?.type, totalMs, phases, !!asAgentId))
       // Buddy thread sessions' first warning (spec Design 4): starts, refusals by code and ends by reason, ids only, in the
       // server log that prod watch reads.
       if (input.command?.type === 'message.send' && input.command.newSession && done.result.startId) logger.info('Buddy session started', { tabId, startId: done.result.startId })
@@ -1854,9 +1867,13 @@ export class SuperTabStore {
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
     workspaceLeave = false, only: { overdue?: boolean; defaulted?: boolean; movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string } = {}) {
     const { operationId, command } = operationSchema.parse(input)
-    const [pushOrigin, repositoryReach, pullRequestFiles, pullRequestMerges] = await Promise.all([this.pushOriginFor(user, tabId, command),
-      this.repositoryReachFor(user, tabId, command), this.pullRequestFilesFor(user, tabId, command), this.pullRequestMergesFor(user, tabId, command),
-      this.verdictHeadRead(user, tabId, command)])
+    // Each read before the transaction is its own phase (commandTiming.ts): several call GitHub.
+    const [pushOrigin, repositoryReach, pullRequestFiles, pullRequestMerges] = await Promise.all([
+      timedPhase('read:pushOrigin', () => this.pushOriginFor(user, tabId, command)),
+      timedPhase('read:repositoryReach', () => this.repositoryReachFor(user, tabId, command)),
+      timedPhase('read:pullRequestFiles', () => this.pullRequestFilesFor(user, tabId, command)),
+      timedPhase('read:pullRequestMerges', () => this.pullRequestMergesFor(user, tabId, command)),
+      timedPhase('read:verdictHead', () => this.verdictHeadRead(user, tabId, command))])
     let ended: WorkHold[] = [], started: WorkHold[] = []
     // With only PMs and Buddies, no dispatch pass can hand out work.
     let hasWorkers = false
@@ -2559,7 +2576,7 @@ export class SuperTabStore {
     // A write that may free a worker or open a task hands out work at once, not at the next 30-second sweep (dispatch.ts).
     if (hasWorkers && freesOrOpens(command)) this.dispatchSoon(tabId)
     // A task's Ready records its pull request's head as GitHub has it now, for the Reviewers it hands over to (task #3628).
-    if (command.type === 'work.status' && command.status === 'review') await this.readyHeadRead(user, tabId, command)
+    if (command.type === 'work.status' && command.status === 'review') await timedPhase('read:readyHead', () => this.readyHeadRead(user, tabId, command))
     return done
   }
 
