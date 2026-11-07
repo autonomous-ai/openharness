@@ -161,7 +161,7 @@ class _DeviceSettingsPanelState extends State<DeviceSettingsPanel> {
         if (!device.status.isPro) ...[
           SettingRow(
             title: 'Still companion',
-            detail: 'Stops the artwork animating. Nothing else changes.',
+            detail: 'Stops the artwork animating.',
             controlSemanticLabel: 'Still companion',
             control: Switch(
               key: ValueKey('devices-quiet-${device.key}'),
@@ -321,12 +321,6 @@ Future<void> showDeviceFaces(BuildContext context) => showAppDialog<void>(
                       style: DesktopChrome.text(color: DesktopChrome.muted),
                     ),
                   ],
-                  const SizedBox(height: 20),
-                  Text(
-                    'Focus is the included face. New faces will appear here as they become available.',
-                    textAlign: TextAlign.center,
-                    style: DesktopChrome.metadata(),
-                  ),
                   const SizedBox(height: 24),
                   FilledButton(
                     onPressed: () => Navigator.of(context).pop(),

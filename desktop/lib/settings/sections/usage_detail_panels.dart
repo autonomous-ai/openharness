@@ -68,17 +68,7 @@ class UsageDailyChart extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (shown.isEmpty)
-            SizedBox(
-              height: 170,
-              child: Center(
-                child: Text(
-                  'Nothing in this range.',
-                  style: AppType.body(color: AppPalette.textFaint),
-                ),
-              ),
-            )
-          else
+          if (shown.isNotEmpty)
             LayoutBuilder(
               builder: (context, constraints) {
                 final painter = TextPainter(
@@ -258,10 +248,7 @@ class UsageBreakdownCard extends StatelessWidget {
       title: title,
       subtitle: subtitle,
       child: shown.isEmpty
-          ? Text(
-              'Nothing in this range.',
-              style: AppType.body(color: AppPalette.textFaint),
-            )
+          ? const SizedBox.shrink()
           : Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -332,10 +319,7 @@ class UsageSessionsTable extends StatelessWidget {
       subtitle:
           'The latest conversations this provider recorded on this computer.',
       child: rows.isEmpty
-          ? Text(
-              'Nothing in this range.',
-              style: AppType.body(color: AppPalette.textFaint),
-            )
+          ? const SizedBox.shrink()
           // A table is the one thing on this pane that can genuinely outgrow
           // its column, so it brings its own horizontal scroll rather than
           // letting the pane's body overflow.

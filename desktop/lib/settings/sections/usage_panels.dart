@@ -677,7 +677,7 @@ class ProviderUsageRow extends StatelessWidget {
         ledger.hasData
             ? '${ledger.sessionCount} '
                   '${ledger.sessionCount == 1 ? 'conversation' : 'conversations'}'
-            : 'Nothing spent here yet.',
+            : null,
     };
   }
 }

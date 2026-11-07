@@ -106,7 +106,7 @@ class _DeviceSetupState extends State<_DeviceSetup> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Connect your device by USB-C to any computer in your account. Keep Harness running on that computer; the device will appear here automatically.',
+                          'Connect it by USB-C to a computer of yours running Harness.',
                           style: DesktopChrome.text(color: DesktopChrome.muted),
                         ),
                         const SizedBox(height: 20),

@@ -454,11 +454,10 @@ class _OverviewHeader extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('Usage overview', style: AppType.heading()),
-          const SizedBox(height: 2),
-          Text(
-            _updatedLine(),
-            style: AppType.body(color: AppPalette.textSecondary),
-          ),
+          if (_updatedLine() case final line?) ...[
+            const SizedBox(height: 2),
+            Text(line, style: AppType.body(color: AppPalette.textSecondary)),
+          ],
         ],
       ),
       controls: [
@@ -482,8 +481,9 @@ class _OverviewHeader extends StatelessWidget {
     );
   }
 
-  String _updatedLine() {
-    if (overview.enabledCount == 0) return 'Nothing is being read yet.';
+  /// Null with no provider on: the card below already offers the switches.
+  String? _updatedLine() {
+    if (overview.enabledCount == 0) return null;
     if (isScanning) return '${range.label} · Scanning local logs…';
     final at = overview.lastScanAt;
     if (at == null) return 'No scan available.';
