@@ -153,6 +153,24 @@ void main() {
       expect(key('super-project-lead'), findsOneWidget);
     });
 
+    // Task #4220: the Desktop has no Mentions row, so a tag in a folded project's chat showed nowhere.
+    testWidgets('folded, it still lists a project whose chat tags you, with '
+        'its number', (tester) async {
+      await show(
+        tester,
+        setup: (server) => server.tag('message-1', conversationId: 'lead'),
+      );
+      expect(find.byTooltip('Expand Projects'), findsOneWidget);
+      expect(key('super-project-lead'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: key('super-project-lead'),
+          matching: key('super-mentions-lead'),
+        ),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('its heading opens and closes it', (tester) async {
       final c = await show(tester);
       await tester.tap(find.byTooltip('Expand Projects'));
