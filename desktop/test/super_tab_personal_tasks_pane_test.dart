@@ -39,6 +39,9 @@ class TasksFixture {
   Completer<void>? hold;
   String mode = 'autoApprove';
   var rows = [task('old', 1, 10), task('new', 1, 20)];
+
+  /// Every task the reader may read (backend #4689); null for a backend before it.
+  List<Map<String, dynamic>>? everyone;
   String? olderCursor;
   var olderRows = <Map<String, dynamic>>[];
   final olderReads = <String>[];
@@ -67,7 +70,7 @@ class TasksFixture {
       if (path.contains('/messages')) {
         return {'messages': <dynamic>[], 'next': null};
       }
-      if (path.contains('/personal-tasks')) {
+      if (path.contains('/personal-tasks') || path.contains('/all-tasks')) {
         olderReads.add(path);
         await olderHold?.future;
         if (olderFail) throw StateError('fixture private payload');
@@ -83,7 +86,7 @@ class TasksFixture {
         if (command['type'] == 'member.approvalMode') {
           mode = command['mode'] as String;
         }
-        for (final row in rows) {
+        for (final row in [...rows, ...?everyone]) {
           if (row['id'] != command['conversationId']) continue;
           row['version'] = (row['version'] as int) + 1;
           if (command['type'] == 'task.approve') row['status'] = 'working';
@@ -113,6 +116,13 @@ class TasksFixture {
           mode: mode,
           olderCursor: olderCursor,
         );
+        if (everyone case final everyone?) {
+          result['allTasks'] = feed(
+            everyone,
+            reset: path.endsWith('/parts'),
+            mode: mode,
+          );
+        }
       }
       return result;
     },
@@ -159,15 +169,16 @@ void main() {
     );
   }
 
-  testWidgets('newest task first with project, agent and proposal mark', (
+  testWidgets('waiting first, oldest first, with project, agent and proposal mark', (
     t,
   ) async {
     await mount(t);
+    // Both wait on the reader's Accept: pinned, the one waiting longest on top (#4689).
     expect(
-      t.getTopLeft(find.text('Task new')).dy,
-      lessThan(t.getTopLeft(find.text('Task old')).dy),
+      t.getTopLeft(find.text('Task old')).dy,
+      lessThan(t.getTopLeft(find.text('Task new')).dy),
     );
-    expect(find.text('Tasks'), findsOneWidget);
+    expect(find.text('Activity'), findsOneWidget);
     expect(find.byTooltip('Proposal'), findsNWidgets(2));
     expect(find.byIcon(AppIcons.lightbulb), findsNWidgets(2));
     f.rows.first['status'] = 'working';
@@ -180,7 +191,13 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.text('Accept all'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('tasks-approval-mode')),
+        matching: find.byIcon(AppIcons.checkCheck),
+      ),
+      findsOneWidget,
+    );
   });
   testWidgets(
     'ordinary proposals open their conversation without approval controls',
@@ -218,46 +235,32 @@ void main() {
     },
   );
   testWidgets(
-    'the header is quiet: Tasks in semibold, the choice plain text until hover',
+    'the header is quiet: Activity in semibold, two 28-point icons that light only on hover',
     (t) async {
       await mount(t);
-      final title = t.widget<Text>(find.text('Tasks')).style!;
+      final title = t.widget<Text>(find.text('Activity')).style!;
       expect(title.fontSize, 13);
       expect(title.fontWeight, FontWeight.w600);
       expect(find.byType(DropdownButton<String>), findsNothing);
-      final choice = find.byKey(const ValueKey('tasks-approval-mode'));
-      final label = t
-          .widget<Text>(
-            find.descendant(of: choice, matching: find.text('Accept all')),
-          )
-          .style!;
-      expect(label.fontSize, 12);
-      expect(label.color, DesktopChrome.muted);
-      double chevron() => t
-          .widget<Opacity>(
-            find
-                .ancestor(
-                  of: find.descendant(
-                    of: choice,
-                    matching: find.byIcon(AppIcons.chevronDown),
-                  ),
-                  matching: find.byType(Opacity),
-                )
-                .first,
-          )
-          .opacity;
-      final rest = t.getSize(choice);
-      expect(chevron(), 0);
-      final mouse = await t.createGesture(kind: PointerDeviceKind.mouse);
-      addTearDown(mouse.removePointer);
-      await mouse.addPointer(location: Offset.zero);
-      await mouse.moveTo(t.getCenter(choice));
-      await t.pump();
-      expect(chevron(), 1);
-      expect(t.getSize(choice), rest);
-      await mouse.moveTo(Offset.zero);
-      await t.pump();
-      expect(chevron(), 0);
+      for (final (key, icon) in [
+        ('tasks-scope', AppIcons.users),
+        ('tasks-approval-mode', AppIcons.checkCheck),
+      ]) {
+        final choice = find.byKey(ValueKey(key));
+        final glyph = find.descendant(of: choice, matching: find.byIcon(icon));
+        Color? ink() => t.widget<Icon>(glyph).color;
+        expect(t.getSize(find.descendant(of: choice, matching: find.byType(Ink))), const Size(28, 28));
+        expect(ink(), DesktopChrome.muted);
+        final mouse = await t.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(location: Offset.zero);
+        await mouse.moveTo(t.getCenter(choice));
+        await t.pump();
+        expect(ink(), DesktopChrome.foreground);
+        await mouse.moveTo(Offset.zero);
+        await t.pump();
+        expect(ink(), DesktopChrome.muted);
+        await mouse.removePointer();
+      }
     },
   );
   testWidgets(
@@ -283,12 +286,12 @@ void main() {
       final loading = TasksFixture();
       addTearDown(() => loading.controller.dispose());
       await t.pumpWidget(pane(loading.controller));
-      expect(words(), ['Tasks']);
+      expect(words(), ['Activity']);
       final empty = TasksFixture()..rows = [];
       addTearDown(() => empty.controller.dispose());
       await empty.controller.refresh();
       await t.pumpWidget(pane(empty.controller));
-      expect(words(), ['Tasks', 'Accept all']);
+      expect(words(), ['Activity']);
     },
   );
   testWidgets('mode is saved by authenticated command and server read', (
@@ -676,9 +679,13 @@ void main() {
   group('older tasks on scroll', () {
     Future<void> many(WidgetTester t, {String? cursor}) async {
       f = TasksFixture()
-        ..rows = [for (var i = 0; i < 30; i++) task('t$i', 1, 1000 + i)]
+        // Under way, not waiting: in newest-first order, below any pinned card.
+        ..rows = [
+          for (var i = 0; i < 30; i++)
+            task('t$i', 1, 1000 + i)..['status'] = 'working',
+        ]
         ..olderCursor = cursor
-        ..olderRows = [task('older', 1, 5)];
+        ..olderRows = [task('older', 1, 5)..['status'] = 'working'];
       addTearDown(() => f.controller.dispose());
       await f.controller.refresh();
       await t.pumpWidget(

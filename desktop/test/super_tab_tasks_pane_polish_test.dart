@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/pull_request_icon.dart';
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/shared/widgets/app_select_field.dart';
 import 'package:harness/shared/widgets/skeleton.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -132,32 +134,27 @@ void main() {
   });
 
   testWidgets(
-    'Accept all and Ask me are the app dropdown, plain until hover, saying what each does',
+    'Accept all and Ask me are the app dropdown behind a quiet icon, the hand showing Ask me',
     (t) async {
       await mount(t);
       final mode = find.byKey(const ValueKey('tasks-approval-mode'));
-      // Plain text at rest (#4468); the menu is the app's one dropdown (#3532).
+      // No field, no words at rest (#4689): the icon of the current choice.
       expect(find.byType(AppSelectField<String>), findsNothing);
       expect(find.byType(DropdownButton<String>), findsNothing);
+      expect(find.descendant(of: mode, matching: find.byIcon(AppIcons.checkCheck)), findsOneWidget);
+      expect(find.text('Accept all'), findsNothing);
       await t.tap(mode);
       await t.pumpAndSettle();
-      // Each says what it does, whole, in the pane's 340.
-      for (final detail in [
-        'Your tasks start right away.',
-        'Your tasks wait for you to accept them.',
-      ]) {
-        expect(
-          t.renderObject<RenderParagraph>(find.text(detail)).didExceedMaxLines,
-          isFalse,
-          reason: detail,
-        );
-      }
+      expect(find.byType(AppMenuItem), findsNWidgets(2));
+      expect(t.widget<AppMenuItem>(find.widgetWithText(AppMenuItem, 'Accept all')).selected, isTrue);
+      expect(t.widget<AppMenuItem>(find.widgetWithText(AppMenuItem, 'Ask me')).icon, AppIcons.hand);
       await t.tap(find.text('Ask me').last);
       await t.pumpAndSettle();
       expect(f.commands.single, {
         'type': 'member.approvalMode',
         'mode': 'review',
       });
+      expect(find.descendant(of: mode, matching: find.byIcon(AppIcons.hand)), findsOneWidget);
     },
   );
 
