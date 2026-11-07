@@ -5,6 +5,7 @@ import { activeWork, isLeads, stableId, type Assignment, type Author, type Comma
 import { groupProject, projectsOf } from './projects.js'
 import type { Reaction } from './reactions.js'
 import { isStep } from './steps.js'
+import { WINDOWS_OWED } from './osSteps.js'
 import { usernameOf } from './usernames.js'
 
 /** A task's ordinary opening message in the project chat. Its details and progress are replies; the root is never edited. */
@@ -67,9 +68,11 @@ function progress(state: SuperTabState, effects: CommandEffects, group: Conversa
   const cards = group.cards?.pullRequests
   const merged = cards?.length ? cards.filter(card => card.mergedAt !== undefined
     && previous?.cards?.pullRequests?.find(was => was.url === card.url)?.mergedAt === undefined).map(card => card.url) : []
-  if (merged.length) return `Merged: ${pullRequests(merged)}. Ships in the next release.`
+  // A merge while its Windows test step waits for a Windows machine says the check is owed (osSteps.ts, task #4410).
+  const owed = group.waitingWindowsStep ? ` ${WINDOWS_OWED}` : ''
+  if (merged.length) return `Merged: ${pullRequests(merged)}. Ships in the next release.${owed}`
   // A merge with no card to mark is still the merge: its row has no other way to say it shipped.
-  if (group.ledger?.mergedAt != null && previous?.ledger?.mergedAt == null) return `Merged: ${pullRequests(group.pullRequestUrls ?? [])}. Ships in the next release.`
+  if (group.ledger?.mergedAt != null && previous?.ledger?.mergedAt == null) return `Merged: ${pullRequests(group.pullRequestUrls ?? [])}. Ships in the next release.${owed}`
   const assignment = group.assignment
   const was = previous?.assignment
   // Most tasks did not move in this command: they say nothing, and nothing more is read for them.

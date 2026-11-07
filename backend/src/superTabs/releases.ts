@@ -320,9 +320,15 @@ export function settleReleases(state: SuperTabState, projectId: string, facts: R
   const id = stableId('release-step', state.id, projectId, due.map(c => c.id).join(','), String(now))
   if (state.conversations.some(c => c.id === id)) return outcome
   const integrator = integratorOf(state, projectId)
-  const waiting = [...new Set(due.flatMap(c => waitingFor(scheduled, c.id).map(e => e.groupId)))].map(groupId => named(state, groupId))
+  const waitingIds = [...new Set(due.flatMap(c => waitingFor(scheduled, c.id).map(e => e.groupId)))]
+  const waiting = waitingIds.map(groupId => named(state, groupId))
+  // Each task merged while its Windows test step waited for a Windows machine owes a person's Windows check, which the Windows
+  // rules ask for on the signed build (osSteps.ts, task #4410, River's ruling 11-07): listed here, for whoever records it.
+  const owed = waitingIds.filter(groupId => state.conversations.find(c => c.id === groupId)?.waitingWindowsStep).map(groupId => named(state, groupId))
   const names = joined(due.map(c => c.name)), window = rules.releaseWindow
   const brief = [`Release ${names}: ${waiting.length} merged ${waiting.length === 1 ? 'task waits' : 'tasks wait'} for it (${waiting.join('; ')}).`,
+    ...owed.length ? [`Windows check owed on the signed build: ${owed.join('; ')}. No Windows machine took ${owed.length === 1
+      ? 'its test step: record it here.' : 'their test steps: record each here.'}`] : [],
     `Release between ${window.start} and ${window.end} (${window.timeZone}), applying the merged pull requests' rollout notes first, and verify each release is live.`,
     'The Swarm marks those tasks shipped once each tag\'s release workflow succeeds, and says so here.'].join('\n')
   const number = nextConversationNumber(state)

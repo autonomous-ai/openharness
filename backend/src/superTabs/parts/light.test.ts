@@ -86,6 +86,7 @@ const conversation: Required<Conversation> = {
   requesterId: 'p',
   reviewOf: 'r',
   reviewStamp: { assignmentId: 'w', handoff: 1 },
+  statusLine: { text: '', since: 0 },
   step: 'Review',
   stepIds: [],
   stepUp: { attempt: 2, floor: 2, reason: 'r', at: 1, carry: '' },
@@ -98,6 +99,7 @@ const conversation: Required<Conversation> = {
   title: 't',
   unlinkedPullRequests: [],
   waitingLinuxStep: { step: { name: 'Test on a Linux machine', kind: 'test', areas: [], where: ['The CLI on a Linux machine'], os: 'linux' }, pulls: [] },
+  waitingWindowsStep: { step: { name: 'Test on a Windows machine', kind: 'test', areas: [], where: ['The CLI on a Windows machine'], os: 'windows' }, pulls: [] },
   writers: [],
 }
 

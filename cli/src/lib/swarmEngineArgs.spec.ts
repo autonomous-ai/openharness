@@ -4,6 +4,7 @@ import { claudeShellGuardArgs, codexShellGuardArgs, shellGuardArgv } from './age
 import { swarmEngineArgs } from './swarmEngineArgs.js'
 
 const settingsOf = (args: string[]) => JSON.parse(args[args.indexOf('--settings') + 1]) as {
+  disableAllHooks?: boolean
   hooks: { PreToolUse: { matcher: string; hooks: { type: string; command: string; args?: string[]; timeout: number }[] }[] }
 }
 
@@ -19,6 +20,13 @@ describe('what the Swarm adds to an engine\'s argv', () => {
     expect(blocks).toHaveLength(1)
     expect(blocks[0].matcher).toBe('Bash|Write|Edit|MultiEdit|NotebookEdit')
     expect(blocks[0].hooks).toEqual([{ type: 'command', command: expect.stringContaining('__swarm-shell-guard'), timeout: 30 }])
+  })
+
+  it('re-enables hooks for a Swarm session even when inherited Claude settings disable all hooks', () => {
+    const inherited = { disableAllHooks: true }
+    const session = { ...inherited, ...settingsOf(swarmEngineArgs('claude')) }
+    expect(session.disableAllHooks).toBe(false)
+    expect(session.hooks.PreToolUse).toHaveLength(1)
   })
 
   it('runs it before each of a Swarm Codex session\'s tool calls, as a session flag', () => {

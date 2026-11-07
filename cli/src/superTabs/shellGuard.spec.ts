@@ -55,13 +55,19 @@ describe('shell guard: kill by name', () => {
 
 describe('shell guard: kill -1, every process the account can reach', () => {
   it.each([
+    'kill -1',
+    'kill -4242',
+    'kill -- -4242',
+    'kill -TERM -4242',
+    'kill -s TERM -4242',
+    'kill -n 9 -4242',
+    'kill -- 0',
     'kill -9 -1',
     'kill -- -1',
     'kill -KILL -1',
     'kill -s TERM -1',
     '/bin/kill -1 -1',
     'kill 4242 -1',
-    'kill -1',
     '/bin/kill -9 -1 ; true',
   ])('refuses %s', (command) => {
     expect(refused(command)).toBe(GUARD_REASONS.killAll)
@@ -69,7 +75,6 @@ describe('shell guard: kill -1, every process the account can reach', () => {
 
   it.each([
     'kill -1 4242',
-    'kill -- -4242',
     'kill -l',
   ])('lets %s through', (command) => {
     expect(refused(command)).toBeNull()
@@ -142,6 +147,29 @@ describe('shell guard: heredocs', () => {
   it('still reads the command a heredoc feeds', () => {
     expect(refused('cat <<EOF | sudo tee /etc/x\nhi\nEOF')).toBe(GUARD_REASONS.systemWide)
     expect(refused('cat <<-EOF > /tmp/x\n\tbody\n\tEOF')).toBe(GUARD_REASONS.fixedTmp)
+  })
+})
+
+describe('shell guard: temporary paths in simple variables', () => {
+  it.each([
+    'OUT=/tmp; echo hi > "$OUT/shared.txt"',
+    'OUT=/tmp; cat ${OUT}/shared.txt',
+    'OUT=/private; OUT="$OUT/tmp"; touch "$OUT/shared.txt"',
+    'OUT=/tmp; NEXT=$OUT; curl -o "$NEXT/shared.txt" https://example.com',
+    'export OUT=/tmp; tee "$OUT/shared.txt"',
+    "bash -c 'OUT=/tmp; echo hi > \"$OUT/shared.txt\"'",
+  ])('refuses %s', command => {
+    expect(refused(command)).toBe(GUARD_REASONS.fixedTmp)
+  })
+
+  it.each([
+    'OUT=/work; echo hi > "$OUT/shared.txt"',
+    'OUT=/tmp; OUT=/work; echo hi > "$OUT/shared.txt"',
+    "OUT=/tmp; echo '$OUT/shared.txt'",
+    "OUT=/tmp; echo \\$OUT/shared.txt",
+    'OUT=$(mktemp -d); echo hi > "$OUT/shared.txt"',
+  ])('allows %s', command => {
+    expect(refused(command)).toBeNull()
   })
 })
 

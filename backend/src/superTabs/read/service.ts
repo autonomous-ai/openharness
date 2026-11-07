@@ -222,7 +222,7 @@ export class SwarmReads {
         ...marks.map(mark => mark.conversationId), ...threadMarks.keys(), ...settings.keys()])].filter(id => !held.has(id))
       const read = await this.load(tx, cached, user, tabId, asAgentId, t0, {},
         async () => withStarts(withGroups(base, await readLightGroups(tx, cached, tabId, named)), extra), taggedRows)
-      const sent = changesFor(read.view, changed, read.actor, options.lightMachines ? { since: from.since } : undefined)
+      const sent = changesFor(read.view, changed, read.actor, options.lightMachines ? { since: from.since } : undefined, from.since)
       // A changed project chat comes whole from the change feed, with its stored newest main row (servedTops.ts).
       if (!asAgentId) sent.groups = await this.servedTops.served(tabId, read.view.state, sent.groups)
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
