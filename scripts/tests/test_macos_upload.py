@@ -2,13 +2,13 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-UPLOADER = ROOT / "desktop/scripts/upload-desktop.sh"
 
 TOOL = r'''
 import json, os, shutil, sys, time
@@ -120,6 +120,14 @@ class MacOSUploadTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name) / "fixture with spaces"
         self.root.mkdir()
+        # The uploader and its signer, beside fixture entitlements: CI's process checkout has no desktop/macos.
+        scripts = self.root / "desktop/scripts"
+        scripts.mkdir(parents=True)
+        for name in ("upload-desktop.sh", "sign-macos-app.sh"):
+            shutil.copy(ROOT / "desktop/scripts" / name, scripts)
+        (self.root / "desktop/macos/Runner").mkdir(parents=True)
+        (self.root / "desktop/macos/Runner/Release.entitlements").write_text("<plist/>")
+        self.uploader = scripts / "upload-desktop.sh"
         self.bin = self.root / "bin"
         self.bin.mkdir()
         for name in ("curl", "plutil", "ditto", "hdiutil", "xcrun", "spctl", "gcloud", "flutter", "codesign"):
@@ -137,7 +145,7 @@ class MacOSUploadTests(unittest.TestCase):
 
     def upload(self, failure="", notarize=True):
         options = [] if notarize else ["--no-notarize"]
-        result = subprocess.run(["bash", str(UPLOADER), "--no-build", "1.2.3", *options],
+        result = subprocess.run(["bash", str(self.uploader), "--no-build", "1.2.3", *options],
                                 env=dict(self.env, UPLOAD_FAILURE=failure, UPLOAD_NOTARIZE=str(int(notarize))),
                                 text=True, capture_output=True, timeout=12)
         stage = self.root / "stage-path"

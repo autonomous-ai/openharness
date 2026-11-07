@@ -2,14 +2,13 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-SIGNER = ROOT / "desktop/scripts/sign-macos-app.sh"
-ENTITLEMENTS = ROOT / "desktop/macos/Runner/Release.entitlements"
 
 CODESIGN = r'''
 import json, os, sys
@@ -25,6 +24,14 @@ class MacOSSigningTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         root = Path(self.temp.name)
+        # A copy beside fixture entitlements: CI's process checkout holds desktop/scripts but not desktop/macos.
+        desktop = root / "desktop"
+        (desktop / "scripts").mkdir(parents=True)
+        self.signer = desktop / "scripts/sign-macos-app.sh"
+        shutil.copy(ROOT / "desktop/scripts/sign-macos-app.sh", self.signer)
+        self.entitlements = desktop / "macos/Runner/Release.entitlements"
+        self.entitlements.parent.mkdir(parents=True)
+        self.entitlements.write_text("<plist/>")
         self.app = root / "app with spaces/Harness.app"
         contents = self.app / "Contents"
         (contents / "MacOS").mkdir(parents=True)
@@ -47,7 +54,7 @@ class MacOSSigningTests(unittest.TestCase):
                         SIGN_IDENTITY="Fixture Identity")
 
     def sign(self, **env):
-        return subprocess.run(["bash", str(SIGNER), str(self.app)], env=dict(self.env, **env),
+        return subprocess.run(["bash", str(self.signer), str(self.app)], env=dict(self.env, **env),
                               capture_output=True, text=True, timeout=30)
 
     def calls(self):
@@ -65,7 +72,7 @@ class MacOSSigningTests(unittest.TestCase):
         for call in calls[:2]:
             self.assertEqual(call[:-1], ["--force", "--sign", "Fixture Identity", "--timestamp"])
         self.assertEqual(calls[2], ["--force", "--sign", "Fixture Identity", "--timestamp", "--options", "runtime",
-                                    "--entitlements", str(ENTITLEMENTS), str(self.app)])
+                                    "--entitlements", str(self.entitlements), str(self.app)])
         self.assertEqual(calls[3], ["--verify", "--deep", "--strict", str(self.app)])
         self.assertEqual(len(calls), 4)
 
