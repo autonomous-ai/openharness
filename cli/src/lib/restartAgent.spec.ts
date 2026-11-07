@@ -404,4 +404,15 @@ describe('bypassPermissionFor', () => {
     await expect(bypassPermissionFor({}, live)).resolves.toBe(true)
     expect(live).toHaveBeenCalledTimes(1)
   })
+
+  // Swarm v3 (task #4215): a Swarm agent's mode is its person's choice, or none. One Harness started in full mode, cleared
+  // since, still runs with that flag: read back, its restart or retarget came back in Auto, which nobody chose.
+  it('never asks a Swarm agent\'s live process: with no mode it relaunches approving nothing', async () => {
+    const live = probe()
+    const swarmSkill = { role: 'coordinator' as const, key: 'swarm-lead' }
+    await expect(bypassPermissionFor({ swarmSkill }, live)).resolves.toBe(false)
+    expect(live).not.toHaveBeenCalled()
+    // The mode its person chose still counts.
+    await expect(bypassPermissionFor({ swarmSkill, permissionMode: 'full' }, live)).resolves.toBe(true)
+  })
 })

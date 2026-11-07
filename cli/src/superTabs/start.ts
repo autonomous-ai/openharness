@@ -6,8 +6,6 @@ import { randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { admission, quotaOf, type Requirements } from './capacity.js'
 import { groupSkillMode, identifier, object } from './host.js'
-import { permissionModeFlags } from '../lib/engineLaunch.js'
-import type { AgentEngine } from '../engines/types.js'
 import { isSwarmSkillMode, swarmSkillUse, wireRole, type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { isTeamDaemon, pmEngineHome } from './teamDaemon.js'
 import { agentFolderFor, prepareAgentFolder, temporaryFolder } from './agentFolder.js'
@@ -17,7 +15,6 @@ import { worktreeFolderName } from '../lib/agentNames.js'
 import { join as joinPath } from 'node:path'
 import { markBuddyOwner } from '../lib/buddyGuard.js'
 import { engineAccount } from '../lib/engineAccount.js'
-import { codexModelNotOffered, NO_PM_RELAY, offeredCodexModels, teamRelayed } from '../team/relay.js'
 
 type Json = Record<string, unknown>
 export type ScopedRequest = (payload: Json) => Promise<Json>
@@ -25,7 +22,10 @@ const text = (v: unknown) => typeof v === 'string' ? v : null
 const number = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 // These native validations run before dispatch. Storage errors, conflicts and
 // unknown failures deliberately stay uncertain: they cannot prove no launch.
-const TEAM_WRITTEN_MAIN_ACCOUNT = 'A Harness Team agent wrote this task\'s code, so it runs only in a Team account, never in this machine\'s main account. Choose an agent or machine in a Team account.'
+/** Why Team-written work starts only on Claude Code off a Team daemon (task #4307). */
+export const TEAM_WRITTEN_CLAUDE_ONLY = 'A Harness Team agent wrote this task\'s code, so on this computer it runs only on Claude Code, which keeps the branch\'s own settings out. Codex would need a sign-in of its own for that, which Harness never makes from yours. Choose Claude Code for this task.'
+/** Why Team-written work starts only in a worktree Harness makes for it (task #4353). */
+export const TEAM_WRITTEN_WORKTREE_ONLY = 'A Harness Team agent wrote this task\'s code, so on this computer it runs only in a worktree Harness makes for it and removes with it, never in the project\'s own checkout. Start it with a worktree.'
 const PRE_DISPATCH_REFUSALS = new Set([
   'INVALID_ENGINE', 'INVALID_CWD', 'INVALID_PROJECT_SOURCE', 'INVALID_REPOSITORY',
   'INVALID_GRID', 'INVALID_CODEX_HOME', 'INVALID_DSH', 'INVALID_PROMPT',
@@ -79,13 +79,15 @@ function workerPrompt(tabId: string, chat: string, roleName: string): string {
   return `You are joining a shared Super Tab. ${roleLine(roleName)}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Read the conversation with harness super-tab --tab ${tabId} messages ${chat}. Reply in that conversation using harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. ${INSTRUCTIONS_LINE(tabId)} Run harness super-tab help for commands. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
 
+const buddyProposalOffer = `When your discussion has a clear goal, why it matters and how to know it is done, check the project for an existing proposal or task; point to a match instead of duplicating it. Otherwise offer without waiting to be asked: "Want me to propose this to <project>?" Then show the exact proposal as a quoted line after "I'll post this as you:". Send only after your owner says yes to that proposal. One offer per idea; never repeat an ignored or declined offer.`
+
 function buddyPrompt(tabId: string, chat: string, mode: SwarmSkillMode | null): string {
-  return `You are a person's Buddy in a shared Super Tab. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Your chat with your owner is conversation ${chat}: read it with harness super-tab --tab ${tabId} messages ${chat}, and reply there with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. Then greet your owner there and ask what they have in mind. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
+  return `You are a person's Buddy in a shared Super Tab. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Your chat with your owner is conversation ${chat}: read it with harness super-tab --tab ${tabId} messages ${chat}, and reply there with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. Then greet your owner there and ask what they have in mind. ${buddyProposalOffer} If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
 /** A thread session's start note (docs/superpowers/specs/2026-10-30-buddy-thread-sessions-design.md): the same Buddy, for one
  *  thread of its owner's chat. Ids only, never a message's text: a start record is listed in the Lead's status. */
 function buddySessionPrompt(tabId: string, chat: string, thread: string, mode: SwarmSkillMode | null): string {
-  return `You are a person's Buddy in a shared Super Tab, in a session of your own for one thread of your owner's chat. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Your thread is the one rooted at message ${thread} in conversation ${chat}. Read it, with the main-chat messages it started from, with harness super-tab --tab ${tabId} messages ${chat} --thread ${thread}. Answer your owner only in this thread: harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID --reply-to MESSAGE_ID, naming a message in this thread. Your owner's newest message in the thread is the one to answer first. Your Buddy's other rules are unchanged. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
+  return `You are a person's Buddy in a shared Super Tab, in a session of your own for one thread of your owner's chat. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Your thread is the one rooted at message ${thread} in conversation ${chat}. Read it, with the main-chat messages it started from, with harness super-tab --tab ${tabId} messages ${chat} --thread ${thread}. Answer your owner only in this thread: harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID --reply-to MESSAGE_ID, naming a message in this thread. Your owner's newest message in the thread is the one to answer first. Your Buddy's other rules are unchanged. ${buddyProposalOffer} If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
 
 /** A person's one Buddy for the Swarm (docs/specs/2026-10-31-one-buddy-per-swarm.md): it reads every project its person
@@ -94,12 +96,12 @@ function buddySessionPrompt(tabId: string, chat: string, thread: string, mode: S
 function swarmBuddyPrompt(tabId: string, chat: string, home: { ready: string[]; missing: string[] }, mode: SwarmSkillMode | null): string {
   const code = home.ready.length ? `Each project's code is in its own folder under projects/ (${home.ready.join(', ')}). Each copy follows its project's default branch, moved at your start and at most hourly after that. ${BUDDY_COPIES_FILE} in your folder says which revision each copy is at: read it before saying what the code does or does not have. Say your copy is behind only when that file says it may be; otherwise, what is not in the copy is not on the default branch yet.` : 'No project\'s code is on this machine.'
   const none = home.missing.length ? ` Not on this machine: ${home.missing.join(', ')}; you still read their chats and tasks.` : ''
-  return `You are a person's one Buddy in a shared Super Tab, for every project they read. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster: it lists your owner's projects, one line each, and the newest tasks; status --project NAME reads one project's tasks. ${code}${none} Your chat with your owner is conversation ${chat}: read it with harness super-tab --tab ${tabId} messages ${chat}, and reply there with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. When your owner asks you to send something to a project's PM, send their proposal yourself, naming that project; if it is unclear which project, ask them first. Then greet your owner there and ask what they have in mind. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
+  return `You are a person's one Buddy in a shared Super Tab, for every project they read. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster: it lists your owner's projects, one line each, and the newest tasks; status --project NAME reads one project's tasks. ${code}${none} Your chat with your owner is conversation ${chat}: read it with harness super-tab --tab ${tabId} messages ${chat}, and reply there with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. When your owner asks you to send something to a project's PM, send their proposal yourself, naming that project; if it is unclear which project, ask them first. Then greet your owner there and ask what they have in mind. ${buddyProposalOffer} If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
 /** A project session of a person's one Buddy chat: the Buddy for that one project, in one thread, the only Buddy that sends
  *  into it. It reads that project and its owner's words in its thread alone. */
 function projectSessionPrompt(tabId: string, chat: string, thread: string, mode: SwarmSkillMode | null): string {
-  return `You are a person's Buddy in a shared Super Tab, in a session of your own for one project, in one thread of your owner's chat. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster: it is your project's tasks, and your folder is its code. Your thread is the one rooted at message ${thread} in conversation ${chat}. Read it with harness super-tab --tab ${tabId} messages ${chat} --thread ${thread}: you read your owner's words there and your own, nothing else of the chat. Answer your owner only in this thread: harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID --reply-to MESSAGE_ID, naming a message in this thread. When your owner asks, send their proposal to this project's PM, for their message in this thread. Your owner's newest message in the thread is the one to answer first. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
+  return `You are a person's Buddy in a shared Super Tab, in a session of your own for one project, in one thread of your owner's chat. ${mode ? `${swarmSkillUse({ role: 'buddy' }, mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster: it is your project's tasks, and your folder is its code. Your thread is the one rooted at message ${thread} in conversation ${chat}. Read it with harness super-tab --tab ${tabId} messages ${chat} --thread ${thread}: you read your owner's words there and your own, nothing else of the chat. Answer your owner only in this thread: harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID --reply-to MESSAGE_ID, naming a message in this thread. When your owner asks, send their proposal to this project's PM, for their message in this thread. Your owner's newest message in the thread is the one to answer first. ${buddyProposalOffer} If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
 
 /** Why a thread session that is not Claude Code's never starts. */
@@ -247,15 +249,18 @@ export const HEAVY_NOT_RECORDED = 'This server cannot record that the start runs
 async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open: typeof openDaemon): Promise<Json> {
   let startId = input.startId
   let routed: unknown
-  let permissionWarning: string | undefined, heavyWarning: string | undefined
+  let heavyWarning: string | undefined
   if (input.action === 'start') {
     // The routing decision belongs to the command, not to the machine-side request.
     const { routeDecisionId, overrideReason, ...request } = object(input.request)
     routed = routeDecisionId
     const submit = (request: Json) => scoped({ action: 'command', operationId: input.operationId,
       command: { type: 'agent.start', request, ...(routeDecisionId ? { routeDecisionId } : {}), ...(overrideReason ? { overrideReason } : {}) } })
-    let sent = request
-    let reply = await submit({ ...sent, permissionMode: 'full' })
+    // Swarm v3 (task #4215): an agent starts with its owner's own permission settings, so the start names no mode, whatever
+    // the caller sent; the backend refuses one.
+    const { permissionMode: _mode, ...own } = request
+    let sent: Json = own
+    let reply = await submit(sent)
     // A backend from before heavy work was recorded refuses that field in its body check, before it records anything: that
     // refusal alone sends the start again without it. A timeout or any other refusal may have started an agent, so it never
     // does (Lead, 10-31).
@@ -263,19 +268,7 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       const { heavy: _heavy, ...plain } = sent
       sent = plain
       heavyWarning = HEAVY_NOT_RECORDED
-      reply = await submit({ ...sent, permissionMode: 'full' })
-    }
-    // Older backends refused this field before recording a start. A recorded
-    // legacy retry may instead report a hash mismatch after its reply was lost:
-    // replay its exact payload with the same operation ID to recover that receipt.
-    // Other refusals and uncertain replies never authorize another intent.
-    if (reply.error === 'OPERATION_REUSED' || (reply.error === 'OUTSIDE_CONTRIBUTION' && typeof reply.detail === 'string' &&
-      reply.detail.endsWith('Refused: permissionMode (it runs with its own default account settings, so leave it out).'))) {
-      const { permissionMode: _mode, ...legacyRequest } = sent
-      if (reply.error === 'OUTSIDE_CONTRIBUTION') {
-        permissionWarning = "This backend cannot request full permissions. Older machine hosts run the agent with the machine's default. Update Harness on the backend and machine."
-      }
-      reply = await submit(legacyRequest)
+      reply = await submit(sent)
     }
     const result = requireSuccess(reply)
     startId = object(result.result).startId
@@ -293,15 +286,15 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
     return { error: 'SWARM_ENGINE', startId, detail }
   }
   if (start.harnessId && (!start.poolGeneration || start.poolSettled)) return { ok: true, startId, machineId: request.machineId, harnessId: start.harnessId,
-    ...(permissionWarning ? { permissionWarning } : {}), ...(heavyWarning ? { heavyWarning } : {}) }
+    ...(heavyWarning ? { heavyWarning } : {}) }
   // Contributed capacity is executed by its owner. A collaborator receives no
   // machine credentials and cannot issue arbitrary commands to that computer.
   // Its machine reports it preparing (backend liveness.ts): the backend waits up to 15 minutes, and so should the Lead.
   if (start.poolGeneration && input.hostDispatch !== true) return start.preparing === true
-    ? { ok: true, queued: true, preparing: true, startId, machineId: request.machineId, ...(permissionWarning ? { permissionWarning } : {}), ...(heavyWarning ? { heavyWarning } : {}),
+    ? { ok: true, queued: true, preparing: true, startId, machineId: request.machineId, ...(heavyWarning ? { heavyWarning } : {}),
       detail: 'Its machine is still preparing it (fetching the project, checking its worktree out); that can take up to 15 minutes. Resume this start ID to read its receipt; do not start another.' }
     : { ok: true, queued: true, startId, machineId: request.machineId,
-      ...(permissionWarning ? { permissionWarning } : {}), ...(heavyWarning ? { heavyWarning } : {}),
+      ...(heavyWarning ? { heavyWarning } : {}),
       detail: 'Queued on the contributed machine. Resume this start ID to read its receipt.' }
   const target = await open(where, request.machineId)
   /** What the agent runs now, and its frame, as the frame says; null when the frame cannot say. */
@@ -354,25 +347,6 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
     if (native.state === 'missing') {
       if (start.dispatched) return { error: 'START_UNCERTAIN', startId, creationId,
         detail: 'This start was submitted but its machine has no receipt. Inspect the machine before creating another agent.' }
-      // A Codex Product Manager in a Harness Team account runs in an engine home of its own, with no sign-in there: it signs
-      // in on the owner's relay, or not at all. With no relay it is refused before anything launches, and the queue moves it
-      // on (backend leadStart.ts), rather than starting signed out (security re-check 3 of #2089).
-      if (request.engine === 'codex' && request.leadFor && typeof request.leadFor === 'object' && isTeamDaemon() && !teamRelayed()) {
-        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: NO_PM_RELAY } }))
-        return { error: 'START_FAILED', startId, detail: NO_PM_RELAY }
-      }
-      // A Codex model the Mac owner's ChatGPT account does not offer launched and then failed every request (Mac Auto, whose
-      // owner is offered GPT-6-Luna and the GPT-5.6 models, was asked for gpt-6.1-sol, 2026-10-29). In a Team account on the
-      // relay the owner's list is read first, and such a start is refused before anything launches, naming what is offered.
-      // A list that cannot be read refuses nothing.
-      if (request.engine === 'codex' && model && model !== 'default' && request.gridModel === undefined && isTeamDaemon()) {
-        const offered = await offeredCodexModels().catch(() => null)
-        if (offered && !offered.slugs.includes(model)) {
-          const detail = codexModelNotOffered(model, offered)
-          requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: detail } }))
-          return { error: 'START_FAILED', startId, detail }
-        }
-      }
       // A Buddy launches with its owner's full rights, so only on its owner's own machine and account (task #2832), before
       // anything is reserved or launched.
       if (request.buddyOf !== undefined && !buddyOnOwnMachine(input, start, object(request.buddyOf))) {
@@ -409,12 +383,22 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
         if (!refusedByBackend(error)) throw error
         return await releaseRefused(error)
       }
-      // Code a Team agent wrote never runs as this machine's owner (backend superTabs/teamWritten.ts, audit H2). The server sends it
-      // only to a Team account's machine, so this is the last check, for a row or a server that says otherwise.
-      const projectSettingsOff = request.projectSettings === 'off'
-      if (projectSettingsOff && !isTeamDaemon()) {
-        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: TEAM_WRITTEN_MAIN_ACCOUNT } }))
-        return { error: 'START_FAILED', startId, detail: TEAM_WRITTEN_MAIN_ACCOUNT }
+      // Code a Team agent wrote runs with none of its branch's own settings, hooks or trust (backend superTabs/teamWritten.ts,
+      // audit H2). Since Swarm v3 there is no Team machine, and the server sends such work only to the project owner's own
+      // computer (ruling #4120); a refusal here failed every start of it (#4188, 11-07). Claude Code launches there in the
+      // `teamWritten` mode below. Codex keeps the branch's settings out only in an engine home of its own, which off a Team
+      // daemon has no sign-in, and Harness never reads or links one (anh Dee, 11-07; loginReads.spec.ts): refused, before
+      // anything is made.
+      const projectSettingsOff = request.projectSettings === 'off', team = isTeamDaemon()
+      if (projectSettingsOff && !team && request.engine !== 'claude') {
+        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: TEAM_WRITTEN_CLAUDE_ONLY } }))
+        return { error: 'START_FAILED', startId, detail: TEAM_WRITTEN_CLAUDE_ONLY }
+      }
+      // Its Claude trust is saved for the folder it runs in and cleared when Harness removes its worktree (machines.ts, task
+      // #4353). The owner's main checkout is neither Harness's to trust for it nor to remove: refused there.
+      if (projectSettingsOff && !team && request.worktree !== true) {
+        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: TEAM_WRITTEN_WORKTREE_ONLY } }))
+        return { error: 'START_FAILED', startId, detail: TEAM_WRITTEN_WORKTREE_ONLY }
       }
       // Both direct and contributed-host starts reach this boundary. Existing
       // native receipts are read above and never have their permissions changed.
@@ -443,7 +427,8 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       // A start that works in the folder it names, when that folder is a temporary one: a scratchpad, which Claude Code asks
       // about on every run and nobody answers (computer's Dee, Scholes 11-06, #3713). The agent gets a permanent folder of its
       // own, made, marked and trusted here, and removed when it stops (agentFolder.ts, machines.ts).
-      const agentFolder = !homeFolder && request.worktree !== true && typeof request.cwd === 'string' && temporaryFolder(request.cwd)
+      // So does a Regular agent (backend agent.new, task #4116), which starts in no project: the backend's folder only admits it.
+      const agentFolder = !homeFolder && request.worktree !== true && (request.regular === true || (typeof request.cwd === 'string' && temporaryFolder(request.cwd)))
         ? agentFolderFor(projectsRoot(), startId) : null
       // A folder there Harness did not make is refused, and so is the start: it never runs, or trusts, in someone else's folder.
       if (agentFolder) {
@@ -467,13 +452,17 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       const hosted = input.hostDispatch === true ? object(input.github) : null
       const facts = skilled && !hosted ? await projectFacts(scoped, request.conversationId, start.machineOwnerId) : null
       const mode = !skilled ? null : isSwarmSkillMode(start.skillMode) ? start.skillMode : facts?.mode ?? 'orchestration'
-      // A Buddy is its owner's right hand (Ken, 11-04, task #2832): on their own machine it launches like their own session, in
-      // full mode, and uses their own git and gh. It never gets the Harness GitHub App's token, which is for a task's agents.
+      // A Buddy is its owner's right hand (Ken, 11-04, task #2832): on their own machine it launches like their own session and
+      // uses their own git and gh. It never gets the Harness GitHub App's token, which is for a task's agents.
       const github = buddy ? null : hosted ? (typeof hosted.requester === 'string' && hosted.requester ? { requester: hosted.requester } : null) : facts?.github ?? null
       // The role's name from the project's document, when the backend's start request has it; one line, bounded.
       const roleName = typeof request.roleName === 'string' ? request.roleName.replace(/\s+/g, ' ').trim().slice(0, 80) : ''
-      const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: true,
-        ...(projectSettingsOff ? { permissionMode: 'teamWritten' } : permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
+      // Swarm v3 (task #4215): a PM, an agent and a Buddy start with their owner's own permission settings: no mode, so the
+      // engine opens in the person's own default. Forced full mode turned off every check on people's own computers, where
+      // Anthropic says to use it only in isolated environments. Team-written work keeps its barrier against the branch's own
+      // settings, and approves nothing on its own either: it runs as the owner, on their own computer (review of #3485).
+      const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: false,
+        ...(projectSettingsOff ? { permissionMode: 'teamWritten' } : {}),
         ...(mode ? { swarmRole: role, swarmSkillMode: mode } : {}),
         ...(github ? { swarmGitHub: true } : {}),
         // A thread session (#2345) gets its own Buddy note; a coordinator's and an agent's notes name their role (phase 3).
@@ -490,7 +479,7 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       // A Codex Product Manager in a Harness Team account runs in an engine home of its own, deleted whole when the Swarm
       // ends it, so nothing of its chats stays where the account's next agent reads (teamDaemon.ts, security re-check 2 of #2089).
       // Team-written Codex work too: a home that trusts no project keeps the branch's own settings out (engines/codex/launch.ts).
-      const pmHome = lead || projectSettingsOff ? pmEngineHome(String(request.engine), creationId, isTeamDaemon(), homedir()) : null
+      const pmHome = lead || projectSettingsOff ? pmEngineHome(String(request.engine), creationId, team, homedir()) : null
       if (pmHome) {
         // Codex refuses a CODEX_HOME that is not there; only the Team user reads it.
         mkdirSync(pmHome, { recursive: true, mode: 0o700 })
@@ -680,6 +669,6 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       engineVersion: text(last.frame.engineVersion)?.slice(0, 160) ?? null } : null
     return { ok: true, startId, machineId: request.machineId, harnessId: nativeId, ...object(joined.result),
       ...(settledConfiguration ? { configuration: settledConfiguration } : {}),
-      ...(permissionWarning ? { permissionWarning } : {}), ...(heavyWarning ? { heavyWarning } : {}), ...(modelWarning ? { modelWarning } : {}) }
+      ...(heavyWarning ? { heavyWarning } : {}), ...(modelWarning ? { modelWarning } : {}) }
   } finally { target.close() }
 }

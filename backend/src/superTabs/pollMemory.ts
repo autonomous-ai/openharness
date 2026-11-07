@@ -11,7 +11,7 @@ export interface PollRedis {
 const grant = z.object({ contributorId: z.string(), machineId: z.string(), machineOwnerId: z.string(), hostGrant: z.string().nullable() })
 const polled = z.object({
   at: z.number().finite(),
-  open: z.object({ stamp: z.number().finite(), seen: z.array(z.string()), allowed: z.array(z.string()),
+  open: z.object({ prioritized: z.boolean().optional(), stamp: z.number().finite(), seen: z.array(z.string()), allowed: z.array(z.string()),
     swarm: z.object({ workspaceId: z.string().optional(), environment: z.string() }), grants: z.record(z.string(), grant) }).optional(),
 })
 

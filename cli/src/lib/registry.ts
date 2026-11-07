@@ -392,6 +392,8 @@ const NAMES_FILE = join(env.ADAPTER_DATA_DIR, 'agent-names.json')
 const BOOT_FILE = join(env.ADAPTER_DATA_DIR, 'registry-boot')
 const LOCK_DIR = join(env.ADAPTER_DATA_DIR, 'registry.json.lock')
 const PRE_V2_BACKUP_FILE = join(env.ADAPTER_DATA_DIR, 'registry.pre-v2.json')
+/** Written once this machine's saved agents are cleared of the permission modes Harness forced (`withoutForcedModes`). */
+const OWN_MODES_FILE = join(env.ADAPTER_DATA_DIR, 'registry-own-modes')
 const NAME_OVERRIDES = new Map<string, string>()
 
 const PANE_RE = /^%\d+$/
@@ -636,6 +638,23 @@ function withoutRetiredRows(stored: readonly unknown[]): { rows: unknown[]; drop
   const cleaned = stored.map(withoutRetiredRuntimes)
   const rows = cleaned.filter((row, i) => row !== null || stored[i] === null)
   return { rows, dropped: stored.length - rows.length, changed: cleaned.some((row, i) => row !== stored[i]) }
+}
+
+/**
+ * Swarm v3 (task #4215): until then Harness itself started every Swarm agent in full mode, and an older Buddy in `buddy` or
+ * `readOnlyAsk`; nobody chose those, and a relaunch reapplies a saved mode. So the first load of a build with this clears them,
+ * once (`OWN_MODES_FILE`): full mode a person chooses for a Swarm agent afterwards is theirs and kept. Review after 2027-01-07.
+ */
+function withoutForcedModes(rows: Array<Partial<RegisteredSession>>): { rows: Array<Partial<RegisteredSession>>; cleared: number } {
+  let cleared = 0
+  const kept = rows.map((row) => {
+    const mode: unknown = row?.permissionMode
+    if (!(mode === 'buddy' || mode === 'readOnlyAsk' || (mode === 'full' && parseSwarmSkill(row.swarmSkill)))) return row
+    cleared++
+    const { permissionMode: _mode, bypassPermission: _bypass, ...own } = row
+    return own
+  })
+  return { rows: kept, cleared }
 }
 
 /** A legacy `tmuxPane` adds a tmux runtime unless it is a listed runtime's own projection (`paneProjection`). */
@@ -1266,16 +1285,23 @@ class Registry {
         this.quarantine('contains a malformed v2 row')
         return
       }
-      const arr = parsed as Array<Partial<RegisteredSession>>
+      let arr = parsed as Array<Partial<RegisteredSession>>
       for (const row of arr) {
         const id = rowId(row)
         if (id) this.persistedBaseline.set(id, rowFingerprint(row))
+      }
+      // After the baseline, so the save below writes the cleared rows rather than merging the disk's back in.
+      const ownModes = !existsSync(OWN_MODES_FILE)
+      if (ownModes) {
+        const swept = withoutForcedModes(arr)
+        if (swept.cleared) console.log(`[registry] ${swept.cleared} agent(s) start with their owner's own permission settings again`)
+        arr = swept.rows
       }
       // The rollback copy is the file as found, retired runtimes and all — not the cleaned rows.
       if (arr.some((row) => row.schemaVersion !== 2)) {
         atomicWriteJson(PRE_V2_BACKUP_FILE, stored, true)
       }
-      let changed = strippedRetired
+      let changed = strippedRetired || (ownModes && arr.some((row, i) => row !== parsed[i]))
       if (rebooted) {
         this.rebooted = true
         console.log(`[registry] machine rebooted since last run — ${arr.length} agent(s) kept with their process identity cleared (stale panes, restored on start)`)
@@ -1493,12 +1519,13 @@ class Registry {
         return
       }
       if (changed) this.save()
+      if (ownModes) atomicWriteJson(OWN_MODES_FILE, Date.now())
     } catch (error) {
       if (error instanceof SyntaxError) this.quarantine(`is not JSON (${error.message})`)
       else if (existsSync(FILE)) {
         this.writeBlocked = true
         console.error('[registry] registry is unreadable; refusing to overwrite it:', error instanceof Error ? error.message : error)
-      }
+      } else atomicWriteJson(OWN_MODES_FILE, Date.now())
       // A genuinely absent file starts empty. A file that cannot be opened safely (a symlink, another
       // owner, open permissions) is left exactly as it is, and nothing is written over it.
     }

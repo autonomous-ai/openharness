@@ -10,16 +10,14 @@ const permissionModes = {
   plan: ['--permission-mode', 'plan'],
   ask: ['--permission-mode', 'default'],
   full: ['--dangerously-skip-permissions'],
-  // An older Buddy's saved mode, from when a guard held it read-only. A Buddy is its owner's right hand now (Ken, 11-04, task
-  // #2832): relaunched like their own session, in full mode. After `full`, so a process's argv reads back as `full`
-  // (lib/processTable.ts). Remove after 2026-12-04, once every Buddy saved before #2832 has started again.
-  buddy: ['--dangerously-skip-permissions'],
-  // Code a Harness Team agent wrote, in a Team account (backend superTabs/teamWritten.ts, audit H2): full mode, and nothing the
-  // branch carries. `user` and not `local`: a branch can commit `.claude/settings.local.json`. Harness's hooks are in the user
+  // Code a Harness Team agent wrote (backend superTabs/teamWritten.ts, audit H2): nothing the branch carries. Since v3 it runs as
+  // the project owner on their own computer, not in a Team account's own OS user, so it skips no permission check: the
+  // owner's own mode from their user settings (review of #3485). `user` and not `local`: a branch can commit
+  // `.claude/settings.local.json`. Harness's hooks are in the user
   // settings. Claude Code 2.1.316, tried: planted settings.json, settings.local.json and .mcp.json each ran in a trusted
   // folder without these flags, and none with them. With no trust record the session stops at the trust question, so the record
   // stays and the flags are the barrier; a Yes on the main repository answers for its worktrees anyway.
-  teamWritten: ['--dangerously-skip-permissions', '--setting-sources', 'user', '--strict-mcp-config'],
+  teamWritten: ['--setting-sources', 'user', '--strict-mcp-config'],
 }
 export const launch: EngineLaunch = {
   permissionModes, bypassPermission: permissionModes.auto,
@@ -47,14 +45,6 @@ export const launch: EngineLaunch = {
     home: { variable: 'CLAUDE_CONFIG_DIR', otherwise: 'home' }, file: '.claude.json',
     format: 'json', projects: 'projects', accepted: 'hasTrustDialogAccepted', entry: { allowedTools: [] },
   },
-  /**
-   * "WARNING: Claude Code running in Bypass Permissions mode … Yes, I accept", the first time `--dangerously-skip-permissions`
-   * runs: a Swarm Lead on the Mac Studio sat there before its first turn (2026-10-26). Accepting writes
-   * `skipDangerousModePermissionPrompt: true` to the user settings, "Whether the user has accepted the bypass permissions
-   * mode dialog" in its settings schema, and the key its own message tells people to add (2.1.310; with it set the
-   * dialog is not shown, tried with the binary).
-   */
-  bypassAcceptance: { home: { variable: 'CLAUDE_CONFIG_DIR', otherwise: { folder: '.claude' } }, file: 'settings.json', key: 'skipDangerousModePermissionPrompt' },
   /**
    * `.mcp.json` in a folder above, such as the home's, is asked about as "New MCP server found in this project". Its
    * default, "Continue without using this MCP server", adds the name to `disabledMcpjsonServers` in the folder's
@@ -87,6 +77,15 @@ export const launch: EngineLaunch = {
     instruction: 'When you create or update a pull request, its body must include this exact line once, near the end and '
       + 'after any other attribution line: `{line}` It says another agent started this session in Harness. Do not add it '
       + 'to commit messages.',
+  },
+  /**
+   * Harness's status line, which records the rate limits Claude Code reports to it and then shows the person's own
+   * (kit/statusLine.ts). Theirs is read from the files Claude Code reads it from, a later one over an earlier.
+   */
+  statusLine: {
+    home: { variable: 'CLAUDE_CONFIG_DIR', otherwise: { folder: '.claude' } }, file: 'settings.json',
+    folder: ['.claude/settings.json', '.claude/settings.local.json'],
+    key: 'statusLine', type: 'command', args: ['--settings', '{settings}'],
   },
   // Recorded with the rest of the system prompt on the conversation's first request and kept on every resume
   // (`--system-prompt-snapshot`, on by default), so it is given at each launch and read once.

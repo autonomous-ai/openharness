@@ -126,7 +126,6 @@ class SuperTabLaunch {
     late final HarnessLaunchIntegration integration;
     integration =
         HarnessLaunchIntegration(
-            forcedPermissionMode: 'full',
             startInSwarm: leadMachines == null
                 ? null
                 : (start) async {
@@ -537,12 +536,6 @@ class SuperTabLaunch {
                   .firstOrNull,
         native: own && connected,
         team: server ? shownHost != null && shownHost != id : team,
-        teamEngines: server
-            ? {
-                for (final MapEntry(:key, :value) in decided.entries)
-                  if (value != id) key,
-              }
-            : null,
         engineRefusals: engineRefusals,
         unavailable: snapshot.paused
             ? kLeadSwarmPaused

@@ -27,7 +27,6 @@ import { agentTmpState } from '../lib/agentTmp.js'
 import { realPrivacyDeps, readTeamStatus, runPrivacyCheck, writeTeamStatus } from './privacy.js'
 import { takeHandoffFile } from './handoff.js'
 import { checkTeamEngines, ownerEngineCopies, realEngineCheckDeps } from './engines.js'
-import { teamSetupDecisionFile, writeTeamSetupDecision } from './autoSetup.js'
 
 /** What `launchctl print system/<label>` says of a job; not loaded when launchd does not know it. Readable without root. */
 export function parseLaunchctlPrint(code: number | null, stdout: string): JobState {
@@ -154,10 +153,6 @@ export function teamCommandDeps(options: {
     takeHandoff: (path) => process.platform === 'win32' ? takeWindowsHandoffFile(path) : takeHandoffFile(path),
     privacy: (config) => runPrivacyCheck(config, realPrivacyDeps),
     engines: (config) => checkTeamEngines(realEngineCheckDeps(config.home)),
-    setupDecision: {
-      clear: () => writeTeamSetupDecision(teamSetupDecisionFile(env.ADAPTER_DATA_DIR), null),
-      decline: () => writeTeamSetupDecision(teamSetupDecisionFile(env.ADAPTER_DATA_DIR), { state: 'declined', at: Date.now() }),
-    },
     stopDaemon: options.stopDaemon,
     startDaemon: options.startDaemon,
     ...(options.signIn ? { signIn: options.signIn } : {}),

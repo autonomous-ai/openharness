@@ -172,6 +172,9 @@ class SuperTabAgent {
       machineOwnerId =
           row['machineOwnerId'] as String? ?? _text(row, 'contributorId'),
       role = row['role'] as String?,
+      kind = row['kind'] as String?,
+      chatId = row['chatId'] as String?,
+      myAgent = row['myAgent'] as bool?,
       roleId = row['roleId'] as String?,
       roleName = row['roleName'] as String?,
       buddyOf = switch (row['buddyOf']) {
@@ -230,6 +233,13 @@ class SuperTabAgent {
   final bool buddyNarrow;
 
   final String id, projectId, name, machineId, harnessId, contributorId;
+
+  /// What it is and where its person talks to it (Swarm v3, backend #4116), read as the desktop's model reads them.
+  final String? kind, chatId;
+
+  /// Whether it is in the reader's My agents (backend agentKind.ts inMyAgents, task #4192), read as the desktop's model
+  /// reads it. Null from an older backend.
+  final bool? myAgent;
 
   /// Set by its contributor or its project's Lead; null draws its pattern.
   final SuperTabAvatarPicture? avatar;
@@ -429,6 +439,13 @@ class SuperTabConversation {
       releasing = row['releasing'] is List
           ? List.unmodifiable((row['releasing'] as List).whereType<String>())
           : null,
+      pullRequestChecks = row['pullRequestChecks'] is Map
+          ? Map.unmodifiable({
+              for (final MapEntry(:key, :value)
+                  in (row['pullRequestChecks'] as Map).entries)
+                if (key is String && value is String) key: value,
+            })
+          : const {},
       releasedTags = row['released'] is Map && row['released']['tags'] is List
           ? List.unmodifiable(
               (row['released']['tags'] as List).whereType<String>(),
@@ -508,6 +525,10 @@ class SuperTabConversation {
   /// when it is not on the server's release list (the desktop's model reads
   /// it for its board; the phone carries it as the desktop does).
   final List<String>? releasing;
+
+  /// Each linked pull request's check state as the server's PR watch last read it, by URL: `green`, `red` or `running`
+  /// (backend pullRequestEvents.ts checksStateOf, task #3827). Read as the desktop does; the phone draws no board yet.
+  final Map<String, String> pullRequestChecks;
 
   /// The release tags that carried it to people, once they have (backend releases.ts `released`); empty before. Read as the
   /// desktop does; the phone draws no board yet.
@@ -949,6 +970,15 @@ class SuperTabSnapshot {
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
       pulses = SuperTabPulse.readAll(row['pulse']),
+      _releaseTimes = {
+        if (row['releaseTimes'] case final Map projects)
+          for (final MapEntry(key: project, value: times) in projects.entries)
+            if (project is String && times is Map)
+              project: {
+                for (final MapEntry(key: part, value: at) in times.entries)
+                  if (part is String && at is num) part: at.toInt(),
+              },
+      },
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
       promptsWaiting = List.unmodifiable([
@@ -1083,6 +1113,11 @@ class SuperTabSnapshot {
   /// [projectId]'s board pulse; null where the server sent none, and the
   /// board draws no strip.
   SuperTabPulse? pulseOf(String projectId) => pulses[projectId];
+
+  /// When each release part of [projectId] may next open, in ms: 0 is now (backend releases.ts nextReleaseAt, task #3827).
+  Map<String, int> releaseTimesOf(String projectId) =>
+      _releaseTimes[projectId] ?? const {};
+  final Map<String, Map<String, int>> _releaseTimes;
 
   /// Decisions asked of the reader and not yet answered, Swarm-wide; 0 from a
   /// backend before decisions (backend superTabs/decisions.ts).

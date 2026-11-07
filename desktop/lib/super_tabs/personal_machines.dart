@@ -236,7 +236,6 @@ class PersonalMachines extends ChangeNotifier {
         // decides, whatever this computer's read was.
         ifMissing: true,
         unlessRemoved: true,
-        offerTeamAccount: false,
       );
       if (added == null) return;
       _failures.remove(key);
