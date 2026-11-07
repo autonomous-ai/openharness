@@ -67,10 +67,10 @@ The task itself is the work, not overhead, so it isn't counted in "before it sta
 ### 1. The job page
 
 Two templates in the Harness repository, `cli/src/superTabs/jobPages/lead.md` and `member.md`, their full text below
-(Appendix). They change only by a reviewed pull request. Harness fills in three things and nothing else: the agent's
-name, its main project, and the helping line. The helping line for a Member is "When {project} has nothing waiting,
-help other projects, starting with ones already set up on your computer, and go back when {project} has work." A
-Lead's page has its own fixed line instead.
+(Appendix). They change only by a reviewed pull request. Harness fills in nothing but the agent's name and its main
+project, and on a Member's page the helping line: "When {project} has nothing waiting, help other projects, starting
+with ones already set up on your computer, and go back when {project} has work." A Lead's page has a fixed line
+instead, so it fills in two things.
 
 - **The Lead's page** has River's seven points, the folder rule, the safety rules and the commands a Lead uses:
   540 words.
@@ -326,7 +326,8 @@ a7ca78c (Ownrev6): role procedures go to role files sent with their task or step
 the Member page lists `work.check`. Security review 2 of 9323153 (Ownmac1): engines load no checkout files at all, Harness sends
 the default branch's copies, they are re-sent after every compaction, and the frame header is one line. Security review 1 of 9323153 (Ownrev4): outside text quoted in the server's
 messages is fenced too; the temp-folder rule gives the `mktemp` form; the pages name the engine's own load of a
-checkout's AGENTS.md. Each line: answered.
+checkout's AGENTS.md. Review of a4c30cc (Secrev9): the job pages are rule files under the guard too. Each line:
+answered.
 
 New data, all small and replaced in place:
 
