@@ -321,3 +321,27 @@ describe('the leaderboard read', () => {
     expect(fresh.data).not.toHaveProperty('ledger')
   })
 })
+
+// The Projects list's sparkline and "Updated" line (task #4662): the same groups the board sums, live and dormant.
+describe('the project activity read', () => {
+  const days = (counts: Record<number, number>) => Array.from({ length: 28 }, (_, i) => counts[i] ?? 0)
+
+  it('counts each readable project\'s shipped tasks per day, a dormant one\'s too, and never a private chat\'s', async () => {
+    const s = await scene()
+    const { status, body } = await get(`/api/super-tabs/${s.tabId}/project-activity`, outsider)
+    expect(status).toBe(200)
+    expect(body.data.through).toBe('2026-10-26')
+    // Fresh shipped today, Old two days before this week's Monday; the private project is not the outsider's to see.
+    expect(body.data.projects).toEqual([{ projectId: 'lead', shipped: days({ 25: 1, 27: 1 }), updatedAt: expect.any(Number) }])
+    const own = await get(`/api/super-tabs/${s.tabId}/project-activity`, owner)
+    expect(own.body.data.projects.map((p: { projectId: string }) => p.projectId)).toEqual(['lead', s.secret])
+    expect(own.body.data.projects[1].shipped).toEqual(days({ 27: 1 }))
+  })
+
+  it('takes no query, and refuses a Team session as the board does', async () => {
+    const s = await scene()
+    expect((await get(`/api/super-tabs/${s.tabId}/project-activity?projectId=lead`)).status).toBe(400)
+    const reads = new SwarmReads(new SuperTabStore(db), { now: () => NOW })
+    await expect(reads.projectActivity({ ...owner, harnessSessionKind: 'team' }, s.tabId)).rejects.toMatchObject({ code: 'TEAM_SESSION_LIMITED', status: 403 })
+  })
+})

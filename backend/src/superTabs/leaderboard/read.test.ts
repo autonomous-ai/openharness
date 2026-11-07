@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Prisma } from '@prisma/client'
-import { profileNames, recentDormantGroups, weeklyBoard } from './read.js'
+import { profileNames, recentDormantActivity, recentDormantGroups, weeklyBoard } from './read.js'
 import { SwarmCache } from '../cache.js'
 import { MemoryStamps } from '../cache.test-support.js'
 import type { Leaderboard } from './contract.js'
@@ -32,6 +32,12 @@ describe('the dormant groups the leaderboard sums', () => {
     expect(pipeline[0]!.$match).toEqual({ tabId: 'tab', deleted: false, dormant: true, lastActivityAt: { $gte: { $date: new Date(weekStart(since)).toISOString() } }, projectId: { $in: ['web'] } })
     expect(Object.keys(pipeline[1]!.$project!).sort()).toEqual(['_id', 'key', 'version', 'changedAt', 'ordinal', 'dormant', 'lastActivityAt', ...['archived', 'assignment.id', 'assignment.status', 'audience', 'id', 'kind', 'leadId', 'ledger',
       'projectId', 'pullRequestUrls', 'requesterId', 'reviewOf', 'step', 'title'].map(field => `data.${field}`)].sort())
+  })
+
+  it('keeps, for the Projects list, when each was last active: the row\'s indexed time (task #4662)', async () => {
+    const { tx } = reading([row('g1', since + 1), row('g0', since - 1)])
+    expect(await recentDormantActivity(tx, DIRECT, 'tab', 'web', since)).toEqual([{ id: 'g1', requesterId: 'peer', ledger: { shippedAt: since + 1 },
+      assignment: { id: 'a1', status: 'done' }, lastActivityAt: new Date(since + 1).toISOString() }])
   })
 
   it('reads the default project\'s groups stored with no project too', async () => {
