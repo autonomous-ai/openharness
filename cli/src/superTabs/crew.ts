@@ -24,7 +24,9 @@ export const CREW_CONTINUE_TRIES = 5
  *  on purpose by crew sleep, task #3398) and not moved to another machine (`movedTo`, task #3398), which is gone here. */
 export function isCrewRow(row: unknown): boolean {
   const agent = object(object(row).agent), role = object(agent.crew).role
-  return typeof role === 'string' && role.length > 0 && !agent.asleep && !agent.movedTo
+  // A Member and its helpers (task #4698) work their project's tasks one at a time as crew does, so they are kept the same way.
+  const member = identifier(object(agent.member).projectId) || identifier(object(agent.helperOf).harnessId)
+  return (typeof role === 'string' && role.length > 0 || member) && !agent.asleep && !agent.movedTo
 }
 
 /** Whether this machine's assignment rows name a task running in session [harnessId] (host.ts reads its feed). */

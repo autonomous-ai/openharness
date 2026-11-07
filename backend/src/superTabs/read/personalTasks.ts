@@ -23,6 +23,8 @@ export interface PersonalTask {
   /** Its newest linked pull request. */
   pullRequestUrl?: string
   status: import('../model.js').WorkStatus | 'proposal' | 'rejected'
+  /** A verified release holds it (task #4547): its card says shipped, where its person once got a line in their Buddy chat. */
+  shipped?: true
   suggested: boolean
   canApprove: boolean
   reason?: string
@@ -92,7 +94,7 @@ function summary(part: Part, reader: Reader): PersonalTask | 'gone' | null {
     title: group.title, status, suggested: !group.assignment && !!approval?.suggestedAgentId, canApprove: approval?.state === 'proposal' && asked && !undecidedProposal(group),
     agent: agent ? { id: agent.id, name: agent.displayName ?? agent.name, ...agent.avatar ? { avatar: agent.avatar } : {} } : null,
     requester: asker ? { id: asker.id, ...askerName ? { name: askerName } : {}, ...asker.avatar ? { avatar: asker.avatar } : {} } : null,
-    ...pullRequestUrl ? { pullRequestUrl } : {}, ...declined ? { reason: group.proposal!.decision!.reason } : approval?.reason ? { reason: approval.reason } : {} }
+    ...pullRequestUrl ? { pullRequestUrl } : {}, ...group.released ? { shipped: true as const } : {}, ...declined ? { reason: group.proposal!.decision!.reason } : approval?.reason ? { reason: approval.reason } : {} }
 }
 
 const newestFirst = (a: PersonalTask, b: PersonalTask) => b.at - a.at || a.id.localeCompare(b.id)

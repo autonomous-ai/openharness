@@ -187,7 +187,7 @@ describe('machineRules', () => {
 describe('instructions', () => {
   const document = { projectId: FIXTURE.projectId, revision: 3, hash: 'h', text: 'Work by this.', template: false, coordinatorName: 'Ana', notesRevision: 1, notes: [] }
   const instructionsPath = (projectId: string, agentId: string) => `/api/super-tabs/${T}/projects/${projectId}/instructions?asAgentId=${agentId}`
-  const NO_ROUTE = 'This Swarm has no project instructions yet: work by the swarm skill Harness gave you at start.'
+  const NO_ROUTE = 'This Swarm has no project instructions yet: ask its coordinator in your task chat what to work by.'
 
   it('reads the project the agent leads, or else the project of its open groups, as that agent', async () => {
     for (const agentId of [FIXTURE.leadId, FIXTURE.builderId]) {

@@ -120,11 +120,13 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     // head guards the claim, as agent.start and agent.add touch it, so of two claims at once one retries and is refused
     // (review of #2094).
     case 'buddy.rename':
+    // A new agent's free name is picked against every name in the Swarm (agentRename.ts newAgentName, review of #3560).
+    case 'agent.new':
       head()
       break
     case 'project.report': case 'project.repository':
     // The coordinator's own writes check it leads the project, which a concurrent Lead change ends (review of phase 2).
-    case 'instructions.save': case 'note.add': case 'note.remove': case 'project.coordinatorName': case 'project.answers':
+    case 'instructions.save': case 'note.add': case 'note.remove': case 'project.coordinatorName': case 'project.answers': case 'project.about':
       leadCheck(command.projectId)
       break
     // A rules save writes its own collection, no part of the project: by anyone, it guards on the project's Lead chat, which a
@@ -184,6 +186,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       group(command.after ?? undefined)
       break
     case 'message.send': {
+      if (command.handoff) leadCheck(projectOfGroup(command.conversationId)?.id)
       // Every start a post makes, a thread session's or the one Buddy's in an older project chat (commands.ts
       // startOldChatBuddy), counts its machine's slots, as buddy.create's does, and meets a concurrent removal of the Buddy it
       // runs beside: a Remove racing it can never leave it running (security review 2 of #2435).

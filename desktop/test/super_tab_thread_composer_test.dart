@@ -13,6 +13,7 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/widgets/new_harness_paste.dart';
+import 'package:path/path.dart' as p;
 
 import 'support/super_tab_fixture.dart';
 
@@ -380,7 +381,9 @@ void main() {
 
     testThread('a dropped file becomes a chip', (tester) async {
       final c = await openThread(tester, threaded());
-      final file = File('${Directory.systemTemp.path}/swarm-thread-drop.log');
+      final file = File(
+        p.join(Directory.systemTemp.path, 'swarm-thread-drop.log'),
+      );
       await tester.runAsync(() => file.writeAsString('boom'));
       addTearDown(() => file.deleteSync());
       final inside = tester.getCenter(surface);

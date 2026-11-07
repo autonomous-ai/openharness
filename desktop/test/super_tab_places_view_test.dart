@@ -116,13 +116,14 @@ void main() {
           };
         },
       );
-      expect(key('super-leaderboard'), findsOneWidget);
+      // Humans is the Leaderboard's way in (task #4466).
+      expect(key('project-sidebar-humans'), findsOneWidget);
       expect(
-        tester.getTopLeft(key('super-leaderboard')).dy,
+        tester.getTopLeft(key('project-sidebar-humans')).dy,
         greaterThanOrEqualTo(tester.getBottomLeft(key('super-decisions')).dy),
       );
       await tap(tester, 'super-decisions');
-      await tap(tester, 'super-leaderboard');
+      await tap(tester, 'project-sidebar-humans');
       expect(find.text('This week'), findsOneWidget);
       expect(key('weekly-person-owner'), findsOneWidget);
       expect(

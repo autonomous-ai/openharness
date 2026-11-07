@@ -70,7 +70,8 @@ ALSO.update({f"desktop/{path}": "mobile" for path in (
     "lib/super_tabs/parts.dart", "lib/super_tabs/profile_model.dart", "lib/super_tabs/live_card_model.dart",
     "lib/super_tabs/linked_tasks.dart", "lib/super_tabs/task_steps.dart", "lib/super_tabs/instructions_model.dart",
     "lib/super_tabs/live_card.dart", "lib/super_tabs/task_status.dart", "lib/widgets/engine_identity.dart",
-    "lib/super_tabs/roster.dart", "lib/screens/swarm_screen.dart", "test/support/real_fonts.dart")})
+    "lib/super_tabs/roster.dart", "lib/super_tabs/pulse.dart", "lib/super_tabs/tasks/personal_tasks.dart",
+    "lib/screens/swarm_screen.dart", "test/support/real_fonts.dart")})
 # Narrower directories that add a suite on top of their component's (the ESP32-P4 build and golden screens).
 SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 
@@ -83,10 +84,11 @@ DEPENDS = {
     # attachments.limits.test.ts compares the attachment size limits each client declares.
     "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
                 "cli/src/lib/superTabAttachmentProxy.ts", "cli/src/superTabs/attachments.ts", "daemons/frames.json",
-                "desktop/lib/measurement/", "desktop/lib/super_tabs/attachment_upload.dart",
-                "desktop/lib/super_tabs/buddies.dart", "mobile/lib/measurement/", "mobile/lib/swarm/swarm_outgoing_files.dart",
+                "desktop/lib/measurement/", "desktop/lib/super_tabs/attachment_upload.dart", "mobile/lib/measurement/",
+                "mobile/integration_test/push_e2e/reply_push.apns", "mobile/lib/swarm/swarm_outgoing_files.dart",
                 "provider/reference-provider/", "tests/fixtures/"),
-    "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts", "desktop/",
+    "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts",
+            "backend/src/superTabs/machineRules.cases.json", "backend/src/superTabs/processNotes.ts", "desktop/",
             "cli/e2e/harness/", "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/", "pty/", "tui/"),
     "companions": ("cli/", "docs/research/2026-09-30-memory-batch-extraction-cases.json",
                    "docs/research/2026-09-30-memory-extraction-cases.json"),
@@ -118,11 +120,33 @@ DEPENDS = {
 # CrossReadTests fails when a file outside the folder refers into it.
 NOT_READ = {"cli": ("cli/e2e/",)}
 # Strings in a suite's files that name another directory's path but are not read by its PR jobs:
-# test data, or a script run only by hand. {source: (why, {path the scan reports})}.
+# test data, or a script run only by hand. {source: (why, {path the scan reports, or a folder "dir/" covering it})}.
+# A folder covers only paths named from the repository root: a relative read ("../../cli/x.ts") is always a read.
 NOT_READS = {
     **{source: ("test data: owned-code paths and model names", {"desktop/lib/", "desktop/lib/super_tabs/",
                                                                 "desktop/lib/super_tabs/roster.dart"})
        for source in ("backend/src/superTabs/commands.test.ts", "backend/integration/superTabs.test.ts")},
+    # Task #4511: a task's owned or changed paths, a PR's files, a lane's folders; none is opened.
+    **{source: ("test data: owned, changed and PR file paths", {"cli/", "companions/", "desktop/", "devices/", "docs/", "mobile/",
+                                                                 "os/", "tests/", "website/"})
+       for source in ("backend/integration/crewDispatch.test.ts", "backend/integration/superTabReviewSteps.test.ts",
+                      "backend/src/github/train.test.ts", "backend/src/superTabs/crew.test.ts",
+                      "backend/src/superTabs/dispatch.test.ts", "backend/src/superTabs/machineRules.commands.test.ts",
+                      "backend/src/superTabs/mergeTrain/plan.test.ts", "backend/src/superTabs/mergeTrain/rulesRecord.test.ts",
+                      "backend/src/superTabs/mergeTrain/train.test.ts", "backend/src/superTabs/osSteps.test.ts",
+                      "backend/src/superTabs/policy.test.ts", "backend/src/superTabs/prHistory.test.ts",
+                      "backend/src/superTabs/prHistoryRead.test.ts", "backend/src/superTabs/process.test.ts",
+                      "backend/src/superTabs/pullRequestFiles.test.ts", "backend/src/superTabs/releaseWatch.test.ts",
+                      "backend/src/superTabs/releases.test.ts", "backend/src/superTabs/reviewSteps.test.ts",
+                      "backend/src/superTabs/reviewTable.test.ts", "backend/src/superTabs/stepOs.test.ts")},
+    **{source: ("path rules: the folders a review area or a release matches", {"cli/", "companions/", "daemons/", "desktop/",
+                                                                               "devices/", "docs/", "installer/", "mobile/",
+                                                                               "pty/", "term/", "tui/", "website/"})
+       for source in ("backend/src/superTabs/policy.ts", "backend/src/superTabs/releases.ts",
+                      "backend/src/superTabs/reviewTable.ts")},
+    "backend/src/superTabs/policy.securityExclusions.json": (
+        "file names policy.test.ts compares with git ls-files, not opened",
+        {"cli/", "companions/", "desktop/", "mobile/", "os/", "provider/", "term/", "tui/", "website/"}),
     **{source: ("test data: a task's owned paths", {"docs/"})
        for source in ("cli/src/superTabs/routeCheapFirst.spec.ts", "cli/src/superTabs/routeCommand.spec.ts")},
     # cli-tests runs vitest on src/ only; these start the real backend with its installed prisma.
@@ -142,6 +166,7 @@ NOT_READS = {
                                                   "checkout holds, each declared in ci.SOURCE_INPUTS", {"mobile/"}),
     "desktop/test/community_publish_test.dart": ("test data: a file in a temporary folder", {"docs/"}),
     "desktop/test/runtime_model_name_test.dart": ("test data: a model name", {"provider/"}),
+    "desktop/test/super_tab_project_rules_test.dart": ("test data: rule path globs", {"docs/", "mobile/"}),
     "desktop/test/super_tab_read_fixtures/first_load.json": ("test data: a task's owned paths", {"docs/design/"}),
     "mobile/lib/demo/sample_scripts.dart": ("demo transcript text", {"tests/"}),
     "tui/src/runtime_model.rs": ("test data: a model name", {"provider/"}),
@@ -499,7 +524,7 @@ def undeclared_reads(root, suite, known_paths=()):
                     for start in (top, str(PurePosixPath(source).parent))):
                 continue
             known = existing(target)
-            if known is None or known in data:
+            if known is None or any(covers(entry, known) for entry in data):
                 continue
             probe = known + "x" if known.endswith("/") else known
             if not shared_input(probe) and not reads(suite, probe):

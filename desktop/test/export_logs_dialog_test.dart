@@ -206,11 +206,15 @@ void main() {
             find.textContaining('It holds no credentials.'),
             findsOneWidget,
           );
+          // Windows names its own file manager.
+          final revealLabel = Platform.isWindows
+              ? 'Show in Explorer'
+              : 'Show in Finder';
           final close = find.widgetWithText(FilledButton, 'Close');
-          final reveal = find.widgetWithText(TextButton, 'Show in Finder');
+          final reveal = find.widgetWithText(TextButton, revealLabel);
           for (final (button, text) in [
             (close, 'Close'),
-            (reveal, 'Show in Finder'),
+            (reveal, revealLabel),
           ]) {
             expect(button.hitTestable(), findsOneWidget);
             final label = tester.getRect(find.text(text));
@@ -228,7 +232,7 @@ void main() {
           await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
           await tester.pump();
           expect(
-            Focus.of(tester.element(find.text('Show in Finder'))).hasFocus,
+            Focus.of(tester.element(find.text(revealLabel))).hasFocus,
             isTrue,
           );
           await tester.sendKeyEvent(LogicalKeyboardKey.tab);

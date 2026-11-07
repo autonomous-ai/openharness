@@ -58,6 +58,14 @@ describe('which roster rows are crew this host keeps alive', () => {
     expect(isCrewRow(row({}, { movedTo: 'a2' }))).toBe(false)
     expect(isCrewRow({})).toBe(false)
   })
+
+  // Task #4698: a Member and its helpers are kept as crew is: reopened in place, told to continue, never while asleep.
+  it('is a Member\'s or a helper\'s row too, while awake', () => {
+    expect(isCrewRow(row({}, { crew: undefined, member: { projectId: 'p1' } }))).toBe(true)
+    expect(isCrewRow(row({}, { crew: undefined, helperOf: { agentId: 'a1', harnessId: 'h1' } }))).toBe(true)
+    expect(isCrewRow(row({}, { crew: undefined, member: { projectId: 'p1' }, asleep: { since: 5 } }))).toBe(false)
+    expect(isCrewRow(row({}, { crew: undefined, member: {} }))).toBe(false)
+  })
 })
 
 describe('a frozen crew session', () => {

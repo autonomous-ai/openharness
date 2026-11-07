@@ -144,6 +144,9 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('super-manage-tab-devices')));
       await tester.pumpAndSettle();
       expect(tab.panes.single, same(viewer));
+      // A project opens from the Projects grid (task #4466).
+      await tester.tap(find.byKey(const ValueKey('super-projects')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('super-group-lead')));
       await tester.pumpAndSettle();
       expect(c.devicesSelected, isFalse);

@@ -394,7 +394,8 @@ class _DecisionsPageState extends State<SuperTabDecisionsPage> {
       trailingWarn: pmComing && pmSoon(created, now),
       preview: decision.question,
       previewStrong: true,
-      previewLines: 2,
+      // A send line shows whole: Send posts exactly these words.
+      previewLines: decision.send ? null : 2,
       extra: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -510,7 +511,7 @@ class _DecisionsPageState extends State<SuperTabDecisionsPage> {
     String option,
     bool busy,
   ) {
-    final recommended = index == decision.recommended;
+    final recommended = index == decision.marked;
     final onPressed = busy
         ? null
         : () => unawaited(_activity.decisions.answer(decision, index));

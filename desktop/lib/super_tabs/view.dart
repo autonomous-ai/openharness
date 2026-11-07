@@ -98,6 +98,7 @@ import 'thread_panel.dart';
 import 'work_details.dart';
 import 'manage_page.dart';
 import 'project_sidebar.dart';
+import 'projects_page.dart';
 import 'buddy_sessions.dart';
 import 'swarm_switcher.dart' show fallBackToPersonal;
 import 'project_options.dart';
@@ -117,6 +118,7 @@ import 'buddy_rows.dart';
 import 'task_groups.dart';
 import 'tasks_view.dart';
 import 'chat/agent_chat_header.dart';
+import 'chat/send_button.dart';
 import 'tasks/personal_tasks_pane.dart';
 import 'tasks/task_header.dart';
 import 'voice_length.dart';
@@ -1421,14 +1423,6 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  /// [path] as it goes into a message: as it is, or in double quotes when it
-  /// holds a space or anything else a shell reads specially, with `"`, `\`,
-  /// `$` and `` ` `` escaped, so it reads back as the same path.
-  static String _pathText(String path) =>
-      path.contains(RegExp(r'''[\s"'$`\\!*?\[\]{}()<>|&;]'''))
-      ? '"${path.replaceAllMapped(RegExp(r'["\\$`]'), (m) => '\\${m[0]}')}"'
-      : path;
-
   /// Puts dropped folders' paths into chat [id]'s message at the cursor,
   /// space-separated, as a terminal takes a dropped folder.
   void _pasteFolders(String id, List<String> paths) {
@@ -1442,7 +1436,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final after = text.substring(selection.end);
     final pasted =
         '${before.isEmpty || RegExp(r'\s$').hasMatch(before) ? '' : ' '}'
-        '${paths.map(_pathText).join(' ')}'
+        '${paths.map(folderPathText).join(' ')}'
         '${after.startsWith(RegExp(r'\s')) ? '' : ' '}';
     final next = before + pasted + after;
     c.setDraft(id, next);
@@ -1459,7 +1453,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The dropped folders whose paths are still in chat [id]'s message.
   List<String> _foldersInMessage(String id) => [
     for (final path in _droppedFolders[id] ?? const <String>[])
-      if (_composer.text.contains(_pathText(path))) path,
+      if (_composer.text.contains(folderPathText(path))) path,
   ];
 
   /// Whether an agent of [group] runs on another computer than this one,
@@ -1517,7 +1511,7 @@ class _SuperTabViewState extends State<SuperTabView>
     ];
     String withoutPaths(String text) {
       for (final folder in attached) {
-        final path = _pathText(folder);
+        final path = folderPathText(folder);
         text = text.contains('$path ')
             ? text.replaceFirst('$path ', '')
             : text.contains(' $path')
@@ -2124,6 +2118,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// [boardProjectId]: the project whose Board holds the middle, whose row is then lit.
   Widget _sidebar({String? boardProjectId}) => ProjectSidebar(
     board: widget.board,
+    leaderboard: _board,
     boardProjectId: boardProjectId,
     controller: c,
     compact: _phone,
@@ -2730,11 +2725,7 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() => _finding = null);
     if (target == null) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        SnackBar(
-          content: Text(
-            note ?? 'The original message is no longer in this conversation.',
-          ),
-        ),
+        SnackBar(content: Text(note ?? 'Original message removed')),
       );
       return;
     }
@@ -3048,13 +3039,22 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The name of the reader's Buddy that [group] is the chat with: the name
   /// they chose while it has none (removed, or starting), else "your Buddy".
   /// Null when [group] is no Buddy chat of the reader's.
+  /// The reader's Buddy in [group] by the name it goes by (task #4568): its
+  /// agent's, else the name kept on its chat, else "your agent".
   String? _buddyName(SuperTabConversation? group) {
     if (group == null || !_isBuddyChat(group)) return null;
-    final agent = c.buddy(group.projectId);
+    final agent = superTabChatBuddy(c, group);
     return agent == null
-        ? group.buddyName ?? 'your Buddy'
+        ? group.buddyName ?? 'your agent'
         : c.snapshot!.agentName(agent.id, fallback: agent.name);
   }
+
+  /// [_buddyName] as a label: capitalized when it is no agent's own name.
+  String _shownBuddyName(SuperTabConversation? group) =>
+      switch (_buddyName(group)) {
+        null || 'your agent' => 'Your agent',
+        final name => name,
+      };
 
   /// The open conversation's name, or what the pane shows instead of one,
   /// named as the sidebar names it: "# openharness", or a workgroup's
@@ -3070,6 +3070,7 @@ class _SuperTabViewState extends State<SuperTabView>
             SwarmPage.leaderboard => 'Leaderboard',
             SwarmPage.mentions => 'Mentions',
             SwarmPage.threads => 'Threads',
+            SwarmPage.projects => 'Projects',
           }
         : group == null
         ? c.snapshot?.projects.isEmpty == true
@@ -3222,13 +3223,10 @@ class _SuperTabViewState extends State<SuperTabView>
       // it does; the one Buddy chat is the sidebar's # buddy.
       : c.isEarlierBuddyChat(group)
       ? 'Earlier Buddy chat · ${c.snapshot!.projects.where((p) => p.id == group.projectId).firstOrNull?.name ?? 'a project'}'
+      // A Buddy chat is named for its agent (task #4568).
       : _buddyName(group) == null
       ? null
-      : group.isSwarmBuddyChat
-      ? 'Buddy'
-      : c.buddy(group.projectId) == null && group.buddyName == null
-      ? 'Your Buddy'
-      : '${_buddyName(group)} · Your Buddy';
+      : _shownBuddyName(group);
 
   /// The pictures [messages] show in place, oldest first, each with its
   /// sender as its row shows them and where it was posted, for the viewer.
@@ -3319,10 +3317,7 @@ class _SuperTabViewState extends State<SuperTabView>
       final project = snapshot.projectFor(group.id)!;
       return 'Message ${project.isPrivate ? project.name : '#${project.name}'}';
     }
-    if (_buddyName(group) case final buddy?) {
-      // A Buddy's name is its person's and long: a phone's one line says Buddy.
-      return _phone ? 'Message Buddy' : 'Message $buddy';
-    }
+    if (_buddyName(group) case final buddy?) return 'Message $buddy';
     // An agent's own chat keeps the title it was opened with; a rename changes the agent (audit finding 8 of #4436).
     if (_ownAgent(group) case final agent?) {
       return 'Message ${snapshot.agentName(agent.id, fallback: agent.name)}';
@@ -3381,7 +3376,6 @@ class _SuperTabViewState extends State<SuperTabView>
     required double room,
     required Widget field,
     required Widget attach,
-    required Widget tag,
     required List<Widget> options,
     required List<Widget> trailing,
     required Widget send,
@@ -3389,8 +3383,7 @@ class _SuperTabViewState extends State<SuperTabView>
   }) {
     // Too little height for a second row (a phone on its side with its keyboard
     // up): the actions take the row's end. A narrow phone with so little
-    // height gets the squeezed row, which beats a composer that overflows; it
-    // has no room for @ Tag there, and an @ typed still opens the list.
+    // height gets the squeezed row, which beats a composer that overflows.
     final target = _phone ? kFingerTarget : grid.AppControl.height;
     final row = composerRowInsets(target: target);
     if (_phone && room < _phoneComposerTwoRowsFrom && voice == null) {
@@ -3432,8 +3425,9 @@ class _SuperTabViewState extends State<SuperTabView>
               Row(
                 key: const ValueKey('super-message-composer-actions'),
                 children: [
+                  // Only the paperclip on the left: an @ typed tags
+                  // (River, 11-07, #4467).
                   attach,
-                  tag,
                   Expanded(
                     child: Wrap(
                       crossAxisAlignment: WrapCrossAlignment.center,
@@ -3447,13 +3441,6 @@ class _SuperTabViewState extends State<SuperTabView>
         ),
       ],
     );
-  }
-
-  /// @ Tag: `@` at the caret, reported as an edit so the tag list opens.
-  void _promptTag() {
-    _composer.value = superTabTagPrompt(_composer.value);
-    _composerEdited(_composer.text);
-    _focus.requestFocus();
   }
 
   /// Whether ⋮ carries the views a wider header draws as icons.
@@ -3490,8 +3477,6 @@ class _SuperTabViewState extends State<SuperTabView>
       title: count == 1
           ? '1 pane in this project'
           : '$count panes in this project',
-      message:
-          'Discuss the plan with ${c.snapshot!.coordinatorNameOf(group.projectId)}.',
       action: OutlinedButton(
         key: const ValueKey('super-project-show-panes'),
         onPressed: _openTerminals(group),
@@ -3508,8 +3493,7 @@ class _SuperTabViewState extends State<SuperTabView>
   };
 
   /// A Personal project's empty chat with no Lead: the card that starts one
-  /// (Huy 11-04, task #2815), and under it what the chat says without it: its
-  /// panes when it holds any, else its plain line.
+  /// (Huy 11-04, task #2815), and under it its panes when it holds any.
   Widget _leadWaiting(SuperTabConversation group) => Center(
     child: SingleChildScrollView(
       padding: const EdgeInsets.all(grid.AppDesktop.panelPadding),
@@ -3524,20 +3508,8 @@ class _SuperTabViewState extends State<SuperTabView>
               conversationId: group.id,
               app: widget.app!,
             ),
-            if (_personalPaneCount(group) > 0)
-              _panesWaiting(group)
-            else
-              Padding(
-                padding: const EdgeInsets.only(
-                  top: grid.AppDesktop.panelPadding,
-                ),
-                child: Text(
-                  'Discuss the plan with '
-                  '${c.snapshot!.coordinatorNameOf(group.projectId)}.',
-                  textAlign: TextAlign.center,
-                  style: DesktopChrome.text(color: DesktopChrome.muted),
-                ),
-              ),
+            // Nothing more for a chat with no panes (rule 7, task #4465).
+            if (_personalPaneCount(group) > 0) _panesWaiting(group),
           ],
         ),
       ),
@@ -3841,7 +3813,13 @@ class _SuperTabViewState extends State<SuperTabView>
                   key: const ValueKey('super-board-chat-buddy'),
                   onPressed: () => _showBuddy(project),
                   icon: const Icon(AppIcons.arrowLeft, size: 16),
-                  label: const Text('Your Buddy'),
+                  label: Text(switch (c.buddy(project.id)) {
+                    final agent? => c.snapshot!.agentName(
+                      agent.id,
+                      fallback: agent.name,
+                    ),
+                    null => 'Your agent',
+                  }),
                 ),
               if (ownBuddy) ...[
                 Flexible(
@@ -3850,14 +3828,14 @@ class _SuperTabViewState extends State<SuperTabView>
                     controller: c,
                     projectId: group.projectId,
                     app: widget.app,
-                    label: 'Your Buddy',
+                    label: _shownBuddyName(group),
                   ),
                 ),
                 const Spacer(),
               ] else
                 Expanded(
                   child: Text(
-                    onBuddy ? 'Your Buddy' : (group?.label ?? ''),
+                    onBuddy ? _shownBuddyName(group) : (group?.label ?? ''),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: DesktopChrome.control().copyWith(
@@ -4659,7 +4637,7 @@ class _SuperTabViewState extends State<SuperTabView>
       ],
       builder: (context, menu, _) => AppIconButton(
         key: const ValueKey('super-group-options'),
-        icon: AppIcons.ellipsisVertical,
+        icon: AppIcons.ellipsis,
         // On the Board the Buddy card holds the Buddy's own options, so this one is the chat's (audit finding 15).
         tooltip: _isBuddyChat(group)
             ? widget.board
@@ -5618,28 +5596,31 @@ class _SuperTabViewState extends State<SuperTabView>
                     _personalPaneCount(group) > 0
               ? _panesWaiting(group)
               : messages.isEmpty && outgoing.isEmpty
-              ? Padding(
-                  // The pane's side padding, as the composer has: a long line
-                  // wraps inside it, centered.
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: grid.AppDesktop.panelPadding,
-                  ),
-                  child: Center(
-                    child: Text(
-                      c.accessRevoked
-                          ? 'Conversation unavailable.'
-                          : group == null
-                          ? 'Loading conversation…'
-                          : c.snapshot!.isProjectLead(group.id)
-                          ? 'Discuss the plan with ${c.snapshot!.coordinatorNameOf(group.projectId)}.'
-                          : _buddyName(group) != null
-                          ? "Only you and ${_buddyName(group)} read this chat. Say what you want to build; say 'send to the ${c.snapshot!.coordinatorNameOf(group.projectId)}' when it's ready."
-                          : 'Start the conversation.',
-                      textAlign: TextAlign.center,
-                      style: DesktopChrome.text(color: DesktopChrome.muted),
+              ? switch (c.accessRevoked
+                    ? 'Conversation unavailable.'
+                    : group == null
+                    ? 'Loading conversation…'
+                    : _buddyName(group) != null
+                    // One short line that helps the reader act (anh Dee's copy rules, task #4465).
+                    ? "Say what to build, then 'send to the ${c.snapshot!.coordinatorNameOf(group.projectId)}'."
+                    // Empty means empty (anh Dee's rule 7, task #4465): no words for a chat with nothing in it.
+                    : null) {
+                  final words? => Padding(
+                    // The pane's side padding, as the composer has: a long line
+                    // wraps inside it, centered.
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: grid.AppDesktop.panelPadding,
+                    ),
+                    child: Center(
+                      child: Text(
+                        words,
+                        textAlign: TextAlign.center,
+                        style: DesktopChrome.text(color: DesktopChrome.muted),
+                      ),
                     ),
                   ),
-                )
+                  null => const SizedBox.expand(),
+                }
               : Column(
                   children: [
                     // Above the list, never over a message.
@@ -6058,7 +6039,7 @@ class _SuperTabViewState extends State<SuperTabView>
                               bottom: grid.AppDesktop.controlGap,
                             ),
                             child: Text(
-                              'Your message starts its own thread and Buddy session',
+                              'Starts its own thread and Buddy session',
                               key: const ValueKey('super-chat-session-note'),
                               style: DesktopChrome.metadata(
                                 color: DesktopChrome.muted,
@@ -6198,14 +6179,6 @@ class _SuperTabViewState extends State<SuperTabView>
                               NewHarnessAttachButton(
                                 attachments: _files,
                                 enabled: writable && !busy,
-                                icon: AppIcons.plus,
-                              ),
-                            ),
-                            tag: fingerTarget(
-                              enabled: _phone,
-                              SuperTabComposerTagButton(
-                                key: const ValueKey('super-composer-tag'),
-                                onPressed: writable ? _promptTag : null,
                               ),
                             ),
                             options: [
@@ -6252,10 +6225,8 @@ class _SuperTabViewState extends State<SuperTabView>
                               listenable: Listenable.merge([_composer, _files]),
                               builder: (context, _) => fingerTarget(
                                 enabled: _phone,
-                                AppIconButton(
-                                  icon: AppIcons.arrowUp,
+                                SwarmSendButton(
                                   tooltip: 'Send message',
-                                  color: DesktopChrome.accent,
                                   onPressed:
                                       writable &&
                                           !c.uploading &&
@@ -6308,7 +6279,7 @@ class _SuperTabViewState extends State<SuperTabView>
               maintainAnimation: true,
               maintainState: true,
               child: Text(
-                'Your message starts its own thread and Buddy session',
+                'Starts its own thread and Buddy session',
                 key: const ValueKey('super-chat-session-note'),
                 style: DesktopChrome.metadata(color: DesktopChrome.muted),
               ),
@@ -6511,6 +6482,11 @@ class _SuperTabViewState extends State<SuperTabView>
         onKeyEvent: _attentionKey,
         child: Stack(
           children: [
+            // One surface under the left, middle and right panes, split only by the layout's hairlines (anh Dee's six
+            // rules, task #4465): no pane shows its host's colour.
+            Positioned.fill(
+              child: ColoredBox(color: grid.AppPalette.swarmField),
+            ),
             ExcludeFocus(
               excluding: chatCovered,
               child: SuperTabPaneLayout(
@@ -6621,6 +6597,13 @@ class _SuperTabViewState extends State<SuperTabView>
                                       const {},
                                       inThread: true,
                                     ),
+                                  ),
+                                  SwarmPage.projects => SuperTabProjectsPage(
+                                    controller: c,
+                                    onOpen: _openBoard,
+                                    onNewProject: c.canWrite
+                                        ? widget.onNewProject
+                                        : null,
                                   ),
                                   null => const SizedBox.shrink(),
                                 },

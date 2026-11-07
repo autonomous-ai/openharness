@@ -34,18 +34,16 @@ Widget superTabMessageAvatar(
   SuperTabPerson? person,
   double size = SuperTabMessageRow.avatarSize,
 }) {
-  const radius = grid.AppDesktop.messageAvatarRadius;
   if (agent != null) {
     return SuperTabAvatar.agent(
       agent,
       name: author,
       size: size,
       engineBadge: false,
-      radius: radius,
     );
   }
   if (person != null && !message.fromAgent) {
-    return SuperTabAvatar.person(person, size: size, radius: radius);
+    return SuperTabAvatar.person(person, size: size);
   }
   // Someone no longer in the Swarm keeps the face their recorded name gives.
   return SuperTabAvatar(
@@ -53,7 +51,6 @@ Widget superTabMessageAvatar(
     name: message.fromAgent ? author : superTabPersonName(message.authorName),
     size: size,
     face: message.fromAgent,
-    radius: radius,
   );
 }
 
@@ -739,15 +736,9 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     crossAxisAlignment:
                                         WrapCrossAlignment.center,
                                     children: [
+                                      // The name and the time only: colour
+                                      // is the face's (River, 11-07, #4467).
                                       _name(authorStyle, finger),
-                                      if (message.fromAgent)
-                                        Tooltip(
-                                          message: _identityDetails,
-                                          child: EngineMark(
-                                            engine: widget.agent?.engine,
-                                            size: 14,
-                                          ),
-                                        ),
                                       if (widget.headerStatus
                                           case final status?)
                                         status
@@ -807,9 +798,9 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                         'Earlier message',
                                     text: switch (widget.reply) {
                                       final reply? => superTabQuoteText(reply),
-                                      null when widget.replyGone => 'The original message is no longer in this conversation.',
-                                      null =>
-                                        'The original message isn’t loaded.',
+                                      null when widget.replyGone =>
+                                        'Original message removed',
+                                      null => 'Original message not loaded',
                                     },
                                     onTap: widget.onOpenReply == null
                                         ? null

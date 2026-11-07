@@ -85,12 +85,7 @@ void main() {
     }
     final c = server.controller(
       account: 'owner',
-      initial: {
-        'tabId': 'tab',
-        'projectsGroupOpen': true,
-        'accountId': 'owner',
-        'selectedId': 'lead',
-      },
+      initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
     );
     await tester.runAsync(c.refresh);
     await tester.pumpWidget(
@@ -109,6 +104,9 @@ void main() {
       ),
     );
     await _settle(tester);
+    // A project's Board opens from the Projects grid (task #4466).
+    await tester.tap(find.byKey(const ValueKey('super-projects')));
+    await tester.pump();
     await tester.tap(_key('super-group-lead'));
     await _settle(tester);
     return c;

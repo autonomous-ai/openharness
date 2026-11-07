@@ -57,6 +57,7 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
       [{ type: 'note.remove', projectId: 'lead', noteId: 'n1' }, { notes }],
       [{ type: 'project.coordinatorName', projectId: 'lead', name: 'Lead engineer' }, {}],
       [{ type: 'project.answers', projectId: 'lead', inThread: true }, {}],
+      [{ type: 'project.about', projectId: 'lead', about: 'The Harness app' }, {}],
       // An older CLI's rule, a save to the instructions after the one above (project instructions, phase 4).
       [{ type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Idle first.', askedIn: { conversationId: 'lead', messageId: 'm1' } },
         { askedIn: { author: { kind: 'person', id: 'owner', name: 'owner', membershipGeneration: 'g' }, source: false, createdAt: 0 },
@@ -131,6 +132,14 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const { touches } = f.run({ type: 'agent.start', request }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
     expect(has(touches, 'machine', 'host')).toBe(true)
+    expect(has(touches, 'head', 'head')).toBe(true)
+  })
+
+  // Review of #3560: + New agent picks a name free across the Swarm, so two at once must meet, as Buddy names do.
+  it('makes two new agents meet on the head, where their names are claimed', () => {
+    const f = swarm()
+    const { touches } = f.run({ type: 'agent.new', kind: 'regular', machineId: 'host', engine: 'claude', local: true }, owner,
+      { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
     expect(has(touches, 'head', 'head')).toBe(true)
   })
 })

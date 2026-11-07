@@ -417,7 +417,7 @@ describe('contributed machine executor', () => {
     Object.assign(f.pool, { capabilitiesWanted: true })
     await f.machine.tick()
     const posted = (g: typeof f) => g.backend.mock.calls.filter(c => c[1] === 'POST').map(c => c[3] as Record<string, unknown>)
-    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy', 'regularAgent', 'leadSwitch', 'buddyModel', 'buddyEngine', 'turnInbox'] })
+    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy', 'regularAgent', 'memberSetUp', 'leadSwitch', 'buddyModel', 'buddyEngine', 'turnInbox'] })
     // A backend from before them does not ask, and would refuse the field.
     const older = fixture()
     await older.machine.tick()
@@ -1711,6 +1711,48 @@ describe('contributed machine executor', () => {
         error: 'The selected agent engine is not installed on this machine. CPU use is 97%; the requested maximum is 85%.' } }])
     })
 
+    // Task #3861 (stone7890's Mac, 11-06): a start stayed Queued for hours, its machine's fault only in the host log. The Swarm is
+    // told the reason, once, and the start fails with it after 5 minutes, so the Lead starts it elsewhere.
+    describe('on a fault of this machine', () => {
+      const fault = { error: 'START_MACHINE_FAULT', startId: 'start', creationId: 'creation-0000000000000001',
+        detail: 'CREATION_STORAGE_FAILED: The creation folder ~/.harness/cli/data/agent-creations is not usable by this account (permissions).' }
+      const waiting = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && c[2] === '/api/super-tabs/hosts/host/starts/tab/start')
+        .map(c => (c[3] as { command: { type: string; startId: string; reason: string } }).command).filter(command => command.type === 'agent.startWaiting')
+
+      it('tells the Swarm the reason once, and fails the start with it after five minutes', async () => {
+        const f = fixture()
+        f.start.mockResolvedValue(fault as never)
+        await f.machine.tick()
+        for (let i = 0; i < 4; i++) { f.step(60_000); await f.machine.tick() }
+        expect(waiting(f)).toEqual([{ type: 'agent.startWaiting', startId: 'start', reason: fault.detail }])
+        expect(failures(f)).toEqual([])
+        f.step(60_000); await f.machine.tick()
+        expect(failures(f)).toEqual([{ operationId: 'refused-start', command: { type: 'agent.startFailed', startId: 'start', error: fault.detail } }])
+      })
+
+      it('never fails a start already dispatched, whose launch may have happened', async () => {
+        const f = fixture()
+        f.pool.starts[0]!.dispatched = true
+        f.start.mockResolvedValue(fault as never)
+        await f.machine.tick()
+        for (let i = 0; i < 6; i++) { f.step(60_000); await f.machine.tick() }
+        expect(failures(f)).toEqual([])
+      })
+
+      it('goes on when the Swarm\'s server does not know the report', async () => {
+        const f = fixture()
+        f.start.mockResolvedValue(fault as never)
+        const post = f.backend.getMockImplementation()!
+        f.backend.mockImplementation(async (...args: Parameters<typeof post>) => {
+          if ((args[3] as { command?: { type?: string } } | undefined)?.command?.type === 'agent.startWaiting') throw new SuperTabHostError('VALIDATION_ERROR', 'Unknown command', 400)
+          return post(...args)
+        })
+        await f.machine.tick()
+        for (let i = 0; i < 5; i++) { f.step(60_000); await f.machine.tick() }
+        expect(failures(f)).toHaveLength(1)
+      })
+    })
+
     it('starts its minute again after a pass that did not refuse it, and never fails one whose launch is uncertain or pending', async () => {
       const f = fixture()
       f.start.mockResolvedValue({ error: 'CONTRIBUTION_REQUIRED', startId: 'start', detail: 'Ask the machine owner to use Add machine in this Swarm.' } as never)
@@ -2695,6 +2737,107 @@ describe('removed machine cleanup', () => {
     expect(JSON.parse(readFileSync(swarmWorktreesFile(root, 'host'), 'utf8'))).toEqual({ version: 1, worktrees: [
       { tabId: 'tab', startId: 'new', harnessId: 'h-new', source: '/clone', path: '/worktrees/project/new' }] })
     expect(backend.mock.calls.some(c => JSON.stringify(c[3] ?? '').includes('agent.startSettled'))).toBe(true)
+  })
+
+  // Task #4698: a helper starts from its Member's ready setup on this computer, found by the Swarm's own worktree record.
+  it('readies a helper from its Member\'s setup here, and says when that setup is not on this computer', async () => {
+    for (const memberHere of [true, false]) {
+      const root = mkdtempSync(join(tmpdir(), 'swarm-helper-')); roots.push(root)
+      if (memberHere) {
+        mkdirSync(join(root, 'super-tabs'), { recursive: true })
+        writeFileSync(swarmWorktreesFile(root, 'host'), JSON.stringify({ version: 1, worktrees: [
+          { tabId: 'tab', startId: 'member-start', harnessId: 'member-harness', source: '/clone', path: '/worktrees/project/member' }] }))
+      }
+      const core = fakeCore({ dataDir: root, agents: { byAgent: vi.fn(id => id === 'h-new' ? session('h-new', '/worktrees/project/new', 'agent') : undefined) } })
+      const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['claude'], paused: false },
+        harnessIds: [], starts: [{ id: 'new', dispatched: true, request: { worktree: true, cwd: '/clone', helperOf: { agentId: 'member', harnessId: 'member-harness' } } }], paused: false }
+      const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
+      const open = vi.fn(async () => ({ machineId: 'host', request: vi.fn(async () => ({})), close: vi.fn() }))
+      const start = vi.fn(async (input: Record<string, unknown>) => {
+        expect(input.memberHere).toBe(memberHere)
+        await (input.beforeJoin as (harnessId: string) => Promise<void>)('h-new')
+        return { ok: true, harnessId: 'h-new' }
+      })
+      const readySetup = vi.fn(async () => ({ copied: ['node_modules', 'build'] }))
+      const log = vi.fn()
+      await new ContributedMachines(core, 'host', { backend, open, start, now: () => 0, log, readySetup,
+        capabilities: vi.fn(async () => ({ ok: true, resources: {}, tools: {} })) } as never).tick()
+      if (memberHere) {
+        expect(readySetup).toHaveBeenCalledWith('/worktrees/project/member', '/worktrees/project/new')
+        expect(log).toHaveBeenCalledWith('Readied a helper from its Member\'s setup: 2 folders copied')
+      } else {
+        expect(readySetup).not.toHaveBeenCalled()
+        expect(log).toHaveBeenCalledWith('Started a helper without its Member\'s setup: HELPER_SETUP_NOT_HERE')
+      }
+    }
+  })
+
+  // Security review 2 of #3579: the copy writes only into the helper's own new worktree, never a person's or the Member's folder.
+  it('copies into no folder but a helper\'s own new worktree', async () => {
+    for (const [request, cwd] of [
+      [{ worktree: false, cwd: '/clone' }, '/clone'],
+      [{ cwd: '/clone' }, '/somewhere'],
+      [{ worktree: true, cwd: '/clone' }, '/clone'],
+      [{ worktree: true, cwd: '/clone' }, '/worktrees/project/member'],
+      [{ worktree: true, cwd: '/clone' }, '/worktrees/project/member/inner'],
+    ] as const) {
+      const root = mkdtempSync(join(tmpdir(), 'swarm-helper-')); roots.push(root)
+      mkdirSync(join(root, 'super-tabs'), { recursive: true })
+      writeFileSync(swarmWorktreesFile(root, 'host'), JSON.stringify({ version: 1, worktrees: [
+        { tabId: 'tab', startId: 'member-start', harnessId: 'member-harness', source: '/clone', path: '/worktrees/project/member' }] }))
+      const core = fakeCore({ dataDir: root, agents: { byAgent: vi.fn(id => id === 'h-new' ? session('h-new', cwd, 'agent') : undefined) } })
+      const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['claude'], paused: false },
+        harnessIds: [], starts: [{ id: 'new', dispatched: true, request: { ...request, helperOf: { agentId: 'member', harnessId: 'member-harness' } } }], paused: false }
+      const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
+      const open = vi.fn(async () => ({ machineId: 'host', request: vi.fn(async () => ({})), close: vi.fn() }))
+      const start = vi.fn(async (input: Record<string, unknown>) => {
+        // Its Member's commands only for a start that makes the helper a worktree of its own.
+        expect(input.memberHere).toBe(request.worktree === true)
+        await (input.beforeJoin as (harnessId: string) => Promise<void>)('h-new')
+        return { ok: true, harnessId: 'h-new' }
+      })
+      const readySetup = vi.fn(async () => ({ copied: [] }))
+      const log = vi.fn()
+      await new ContributedMachines(core, 'host', { backend, open, start, now: () => 0, log, readySetup,
+        capabilities: vi.fn(async () => ({ ok: true, resources: {}, tools: {} })) } as never).tick()
+      expect(readySetup).not.toHaveBeenCalled()
+      expect(log).toHaveBeenCalledWith('Started a helper without its Member\'s setup: HELPER_FOLDER_NOT_OWN')
+    }
+  })
+
+  it('says so when readying a helper fails, and never fails its start', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'swarm-helper-')); roots.push(root)
+    mkdirSync(join(root, 'super-tabs'), { recursive: true })
+    writeFileSync(swarmWorktreesFile(root, 'host'), JSON.stringify({ version: 1, worktrees: [
+      { tabId: 'tab', startId: 'member-start', harnessId: 'member-harness', source: '/clone', path: '/worktrees/project/member' }] }))
+    const core = fakeCore({ dataDir: root, agents: { byAgent: vi.fn(id => id === 'h-new' ? session('h-new', '/worktrees/project/new', 'agent') : undefined) } })
+    const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['claude'], paused: false },
+      harnessIds: [], starts: [{ id: 'new', dispatched: true, request: { worktree: true, cwd: '/clone', helperOf: { agentId: 'member', harnessId: 'member-harness' } } }], paused: false }
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
+    const open = vi.fn(async () => ({ machineId: 'host', request: vi.fn(async () => ({})), close: vi.fn() }))
+    let readied: unknown = 'not called'
+    const start = vi.fn(async (input: Record<string, unknown>) => {
+      readied = await (input.beforeJoin as (harnessId: string) => Promise<void>)('h-new').then(() => 'resolved', () => 'rejected')
+      return { ok: true, harnessId: 'h-new' }
+    })
+    const log = vi.fn()
+    await new ContributedMachines(core, 'host', { backend, open, start, now: () => 0, log, readySetup: vi.fn(async () => { throw new Error('/secret/path') }),
+      capabilities: vi.fn(async () => ({ ok: true, resources: {}, tools: {} })) } as never).tick()
+    expect(readied).toBe('resolved')
+    expect(log).toHaveBeenCalledWith('Started a helper without its Member\'s setup: HELPER_SETUP_FAILED')
+  })
+
+  it('gives no readying step to a start that is not a helper\'s', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'swarm-helper-')); roots.push(root)
+    const core = fakeCore({ dataDir: root, agents: { byAgent: vi.fn(() => undefined) } })
+    const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['claude'], paused: false },
+      harnessIds: [], starts: [{ id: 'new', dispatched: true, request: { worktree: true, cwd: '/clone', member: { projectId: 'project-1' } } }], paused: false }
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
+    const open = vi.fn(async () => ({ machineId: 'host', request: vi.fn(async () => ({})), close: vi.fn() }))
+    const start = vi.fn(async (_input: Record<string, unknown>) => ({ ok: true, harnessId: 'h-new' }))
+    await new ContributedMachines(core, 'host', { backend, open, start, now: () => 0,
+      capabilities: vi.fn(async () => ({ ok: true, resources: {}, tools: {} })) } as never).tick()
+    expect(start.mock.calls[0]![0]).not.toHaveProperty('beforeJoin')
   })
 
   // Task #4353: its removal clears the trust a Team-written start saved, so the record says which start it was.

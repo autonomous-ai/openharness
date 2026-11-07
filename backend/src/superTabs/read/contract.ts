@@ -87,7 +87,9 @@ export interface Derived {
    *  (agentKind.ts, task #4116). Absent from an older backend. */
   /** `myAgent`: whether it is in the reader's My agents (agentKind.ts inMyAgents, task #4192). Absent from an older backend. */
   agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null; roleId: string | null; roleName: string;
-    kind: import('../agentKind.js').AgentKind; chatId: string | null; myAgent: boolean }>
+    kind: import('../agentKind.js').AgentKind; chatId: string | null; myAgent: boolean
+    /** Lead or Member, and its main project when the reader reads that project (agentKind.ts, task #4540). Absent from an older backend. */
+    role: import('../agentKind.js').AgentRole; mainProjectId: string | null }>
   /** Every contributed machine the reader can see. */
   /** `clientVersion`: the CLI version its daemon last connected with (routing reads a machine updated since its failed starts). */
   machines: Record<string, { availableSlots: number; teamWork: { allowed: true } | { allowed: false; reason: string; [key: string]: unknown }; clientVersion?: string
@@ -333,10 +335,7 @@ export interface HostAgentRow {
   roleName: string
   /** Its project's instructions as the state names them: the host reads the text when `revision` moves. Revision 0 (no
    *  `hash`): no document yet, so the built-in template. */
-  instructions: { projectId: string; revision: number; hash: string | null; coordinatorName: string
-    /** The coordinator's alone: the built-in PM schedule's hash (pmSchedule.ts), which its read carries beside the text. The host
-     *  reads again when it moves, as it does for `revision`. */
-    builtInHash?: string } | null
+  instructions: { projectId: string; revision: number; hash: string | null; coordinatorName: string } | null
   lead: boolean
   /** A PM's own row: the oldest message a person sent it that it has not answered (timeChecks.ts owedAsk), and how long it may
    *  owe one while it hangs before its host restarts it. Null on every other row, and while it owes nothing. */

@@ -412,13 +412,6 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     setState(() {});
   }
 
-  /// @ Tag: `@` at the caret, reported as an edit so the tag list opens.
-  void _promptTag() {
-    _composer.value = superTabTagPrompt(_composer.value);
-    _edited(_composer.text);
-    _focus.requestFocus();
-  }
-
   void _moveTag(int index) {
     _tagIndex.value = index;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -722,7 +715,6 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     onEdited: _edited,
     onSend: () => unawaited(_send()),
     options: _choices(_writable),
-    onTag: _promptTag,
     onMic: switch (widget.voice) {
       final voice? => () => voice.start(
         conversationId: _conversationId,
