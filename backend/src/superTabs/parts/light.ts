@@ -96,6 +96,7 @@ export const GROUP_FIELDS = {
     'paused',
     'pin',
     'priority',
+    'process',
     'proposals',
     'pullRequestChecks',
     'pullRequestEvents',
@@ -116,6 +117,8 @@ export const GROUP_FIELDS = {
     'teamWritten',
     'teamWrittenBy',
     'unlinkedPullRequests',
+    'waitingLinuxStep',
+    'waitingWindowsStep',
     'writers',
   ],
 } as const

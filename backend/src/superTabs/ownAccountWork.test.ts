@@ -230,3 +230,16 @@ describe('a Mac\'s Team account entry, as every read shows it', () => {
     expect(f.machine('gray-team').name).toBe('Gray\'s Mac')
   })
 })
+
+describe('the choice in a Swarm read (task #4289)', () => {
+  it('reaches no reader, the machine\'s owner included: Swarm v3 has no choice of where teammates\' work runs', () => {
+    const f = swarm()
+    f.choose(true)
+    expect(f.machine('gray-mac').ownAccountChoice).toMatchObject({ allowed: true })
+    for (const actor of [gray, owner, mate, f.leadActor]) {
+      const read = (visibleState(f.state, actor, NOW).machines ?? []).find(m => m.machineId === 'gray-mac')
+      expect(read).toBeDefined()
+      expect(read).not.toHaveProperty('ownAccountChoice')
+    }
+  })
+})

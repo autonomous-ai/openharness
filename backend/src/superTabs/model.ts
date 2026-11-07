@@ -11,6 +11,7 @@ import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
 import { FIRST_INSTRUCTIONS } from './instructions.js'
 import { visibleAccess } from './machineAccess.js'
+import { processOf, projectColumns } from './process.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownerlessProjects, ownsProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
@@ -92,7 +93,12 @@ export interface Agent {
    *  window, the smallest any serving machine reported. One at a time; the result or the liveness sweep's lease drops it. */
   modelRequest?: { id: string; gridModel: string | null; gridName?: string; name?: string; servedBy?: string[]; machines?: string[]; contextWindow?: number; requestedBy: string; at: string
     /** Set when the Swarm sent the Buddy home by itself: the model hit a limit, kept failing, or nobody served it. */
-    reason?: 'limit' | 'failing' | 'gone' }
+    reason?: 'limit' | 'failing' | 'gone'
+    /** Only its thread sessions move: a move home left one on a shared model (buddyModel.ts, task #3810). */
+    sessionsOnly?: true }
+  /** A Buddy thread session that stayed on a shared model when its Buddy went home (task #3810): why it was sent home, and how
+   *  many times it stayed. The liveness sweep asks its machine to move it home again, three times at most (buddyModel.ts). */
+  homeOwed?: { reason?: 'limit' | 'failing' | 'gone'; tries: number }
   /** When the liveness sweep first found nobody serving the Buddy's `gridModel` (ms): two minutes on, it is sent home. */
   gridModelUnservedSince?: number
   /** The name its owner was shown for the Buddy's `gridModel`, for the lines after nobody serves it any more. */
@@ -308,7 +314,9 @@ export interface Assignment {
   agentId: string
   status: WorkStatus
   configuration: AgentConfiguration
-  execution: { machineId: string; harnessId: string; machineOwnerId: string }
+  /** `contributorId`: whose login its agent runs under (Agent.contributorId), so the person's Tasks feed keeps it after the agent
+   *  is closed (read/feedIds.ts). Absent on assignments made before 2026-11-07. */
+  execution: { machineId: string; harnessId: string; machineOwnerId: string; contributorId?: string }
   result: string | null
   /** Explicit progress fences delayed recording gaps; absent on older backends. */
   recordingProgress?: { at: number; revision: number }
@@ -411,6 +419,8 @@ export interface Conversation {
   archived: boolean
   brief: string
   task?: WorkTask
+  /** The process when this task was opened; a Simple task stays Simple if the project returns to Full (#3896). */
+  process?: import('./process.js').ProjectProcess
   /** A review group names the group whose work it reviews; only a Reviewer is assigned it, and a Reviewer nothing else. */
   reviewOf?: string
   /** A Harness Team agent was assigned to build this task, or GitHub shows the app's bot pushed to its branch: its code runs
@@ -475,6 +485,11 @@ export interface Conversation {
    *  pull request head re-derives the checks of, dormant ones included (#3394). Empty from a task's start; absent on a task
    *  from before, whose PR watch looks them up once (pullRequestEvents.ts listedSteps). */
   stepIds?: string[]
+  /** Its Linux test step, waiting for a Linux machine the project can test on (osSteps.ts, task #4278): set by a Ready that
+   *  found none, gone once the step opens. */
+  waitingLinuxStep?: import('./osSteps.js').WaitingStep
+  /** Its Windows test step, waiting likewise for a Windows machine (osSteps.ts, task #4410). */
+  waitingWindowsStep?: import('./osSteps.js').WaitingStep
   /** Its messages drawn as live cards: its task and each linked pull request (cards.ts). Absent until its first card. */
   cards?: import('./cards.js').GroupCards
   /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */
@@ -916,7 +931,8 @@ export const groupForBuddy = <T extends Pick<Conversation, 'assignment' | 'lostA
 }
 export const groupWithoutMachines = <T extends Pick<Conversation, 'assignment' | 'lostAttempt'>>(group: T): T => {
   const assignment = group.assignment && { ...group.assignment,
-    ...(group.assignment.execution ? { execution: { ...group.assignment.execution, machineId: '', harnessId: '', machineOwnerId: '' } } : {}),
+    ...(group.assignment.execution ? { execution: { ...group.assignment.execution, machineId: '', harnessId: '', machineOwnerId: '',
+      ...group.assignment.execution.contributorId !== undefined ? { contributorId: '' } : {} } } : {}),
     ...(group.assignment.lost ? { lost: { ...group.assignment.lost, reason: lostReasonWithoutMachine(group.assignment.lost.reason) } } : {}) }
   return { ...group, ...(assignment ? { assignment } : {}),
     ...(group.lostAttempt ? { lostAttempt: { id: group.lostAttempt.id, agentId: group.lostAttempt.agentId } } : {}) }
@@ -1077,9 +1093,13 @@ export function leadsRemoved(): never { fail('LEADS_CONVERSATION_REMOVED', LEADS
  * numbers are never reassigned; the store serializes concurrent additions. */
 export function numberConversations(state: SuperTabState): void {
   let next = nextConversationNumber(state)
-  const leads = new Set(projectsOf(state).map(p => p.leadConversationId))
+  const projects = projectsOf(state), leads = new Set(projects.map(p => p.leadConversationId))
   for (const group of state.conversations) {
-    if (!leads.has(group.id) && !isLeads(group) && group.number == null) state.groupCounter = group.number = next++
+    if (!leads.has(group.id) && !isLeads(group) && group.number == null) {
+      // An unnumbered dormant task predates a Simple→Full switch. Giving it a number now must not make it new work.
+      if (!group.kind && !group.audience && !group.reviewOf && projects.some(p => p.id === (group.projectId ?? 'lead') && p.simpleThrough !== undefined)) group.process = 'simple'
+      state.groupCounter = group.number = next++
+    }
   }
 }
 /** The store by parts keeps the highest number ever given (`groupCounter`): a dormant group is not loaded, and its
@@ -1160,6 +1180,9 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   }
   // Rows by day and project that only the leaderboard read uses, and it takes them from the Swarm itself.
   for (const pool of visible.machines ?? []) delete pool.lentDays
+  // Where teammates' work ran was a Team-account choice; Swarm v3 runs every agent as its own person (#4120, #4289). It stays
+  // stored for teamWorkRefusal until the Team entries go (#4290), and no reader gets it.
+  for (const pool of visible.machines ?? []) delete pool.ownAccountChoice
   // A Mac's Harness Team account is stored under its Mac's name (machines.ts followAccountName), and read so it named two
   // entries alike: a lamp start picked the Team account's thinking it was the Mac (task #3060). Every read tells them apart;
   // the stored name, which renames and the server's own sentences read, stays the Mac's.
@@ -1254,7 +1277,10 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // One index for every project: the loop sets only workDecision, which the index does not hold.
   const workers = workerIndex(visible)
   for (const project of projectsOf(visible)) for (const target of awaitingWorkers(visible, project.id, workers)) target.workDecision = 'awaiting'
-  for (const project of visible.projects ?? []) project.skillSet = skillSetOf(project)
+  for (const project of visible.projects ?? []) {
+    project.skillSet = skillSetOf(project)
+    Object.assign(project, { process: processOf(project), columns: projectColumns(project) })
+  }
   // An uploaded avatar's stored key stays on the server; readers get a link with each parts read (avatarLinks.ts).
   // Each person as the Swarm names them (usernames.ts), their default included.
   const names = swarmUsernames(state)

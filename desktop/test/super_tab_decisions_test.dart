@@ -396,7 +396,7 @@ void main() {
       await showView(tester, swarm());
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
-      expect(find.text('Nothing needs you'), findsOneWidget);
+      expect(find.text('All clear'), findsOneWidget);
     });
   });
 

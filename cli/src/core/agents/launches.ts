@@ -15,6 +15,7 @@ import type { BackendSocket } from '../../backendSocket.js'
 import type { Asker, SwarmLaunch } from '../api.js'
 import { installedDsh } from '../../dsh/installed.js'
 import { DSH_ID_RE, dshSupportedEngines } from '../../dsh/manifest.js'
+import { homeIsAbsolute } from '../../engines/kit/homeAdoption.js'
 import { folderTrust } from '../../engines/launchPrep.js'
 import type { NativeLaunchResult, NativeLaunchSource } from '../../engines/nativeLaunch.js'
 import * as opencodeLaunch from '../../engines/launchControl.js'
@@ -138,20 +139,20 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       // the person's own repo is theirs to answer for (engines/kit/folderTrust.ts); a worktree gets only
       // the answer its source repo already has. `branch` IS the source folder: nothing to record.
       //
-      // One consented exception: a Swarm agent in the Swarm's full mode, in the checkout a remote project resolved
+      // One consented exception: a Swarm agent, in any mode (task #4215), in the checkout a remote project resolved
       // to (cloned now, or one already there that holds that very repository). The person chose this repository
-      // and full mode for the Swarm, and machine trust favors that choice over a prompt. 2026-10-26: on WIN-DELL
+      // for the Swarm, and machine trust favors that choice over a prompt. 2026-10-26: on WIN-DELL
       // a Lead in a reused `harnesses\openharness` sat at Claude Code's trust question; on the Mac Studio a Lead in
       // a fresh clone did, and the next Lead, in a worktree of it, asked again because the source had never been
       // answered. Its Yes then landed under the source's key (Claude Code records a worktree's answer under its
       // main repository), which made the source look trusted before the worktree started.
       // Claude Code only: Codex's trust also sets its defaults for the person's own later sessions in that folder.
       //
-      // And a worktree of a repository the person picked in this machine's OWN window for a Swarm agent in full mode:
+      // And a worktree of a repository the person picked in this machine's OWN window for a Swarm agent, in any mode (#4215):
       // 2026-10-30, a new Swarm made with Cmd+S on a local openharness checkout started its PM in a worktree of it, and
       // the PM sat at Claude Code's trust question, which no Swarm view shows; it read Idle and every message to it was
       // withheld. Only from a local frame: a relayed request could name any repository on this machine.
-      const swarmAgent = input.engine === 'claude' && !!input.swarmRole && (input.permissionMode === 'full' || input.permissionMode === 'teamWritten')
+      const swarmAgent = input.engine === 'claude' && !!input.swarmRole
       const swarmCheckout = swarmAgent && (projectFolder.source === 'remote' || (projectFolder.source === 'worktree' && local))
       try {
         // A Codex agent on its own profile reads its trust from that profile's config.toml, not ~/.codex.
@@ -388,11 +389,11 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       const missing = await unsupportedLaunchModelFlag(engine, launchModel.launchModel)
       if (missing) { reply({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: `The ${engine} on this machine does not support ${missing}; update ${engine} to launch it with a model.` }); return }
     }
-    // Same validation the desktop app already applies client-side (`Agent._safeCodexHome`) —
-    // repeated here because a client's own check is not a guarantee about what actually
-    // arrives on the wire.
+    // Checked here whatever the client checked (`Agent._safeCodexHome` in the desktop app), because a client's own check is
+    // not a guarantee about what arrives on the wire. Absolute as this platform spells it: on Windows a drive-letter path,
+    // which a leading-'/' check refused, so a linked profile's agent ran on the default account (#4183).
     const rawCodexHome = typeof payload.codexHome === 'string' ? payload.codexHome : null
-    const codexHome = rawCodexHome && rawCodexHome.startsWith('/') && rawCodexHome.length <= 4096
+    const codexHome = rawCodexHome && homeIsAbsolute(rawCodexHome) && rawCodexHome.length <= 4096
       && !/[\x00-\x1f\x7f]/.test(rawCodexHome)
       ? rawCodexHome
       : null
@@ -402,7 +403,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     }
     // Claude profiles (CLAUDE_CONFIG_DIR) follow the same rule: Claude only, without a grid.
     const rawClaudeHome = typeof payload.claudeHome === 'string' ? payload.claudeHome : null
-    const claudeHome = rawClaudeHome && rawClaudeHome.startsWith('/') && rawClaudeHome.length <= 4096
+    const claudeHome = rawClaudeHome && homeIsAbsolute(rawClaudeHome) && rawClaudeHome.length <= 4096
       && !/[\x00-\x1f\x7f]/.test(rawClaudeHome)
       ? rawClaudeHome
       : null

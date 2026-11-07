@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/tasks/personal_tasks.dart';
 import 'package:harness/super_tabs/tasks/personal_tasks_pane.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -159,8 +160,21 @@ void main() {
           expect(find.text('No tasks yet'), findsOneWidget);
         } else {
           expect(find.text('Task number 0'), findsOneWidget);
-          // The row with no agent is on screen, as the person's own task.
-          if (count > 1) expect(find.text('Not assigned'), findsWidgets);
+          // The card with no agent is on screen, as the person's own task, with no agent avatar (#4204's cards
+          // name nobody).
+          if (count > 1) {
+            final card = find.byKey(const ValueKey('personal-task-row1'));
+            expect(card, findsOneWidget);
+            expect(
+              find.descendant(
+                of: card,
+                matching: find.byWidgetPredicate(
+                  (w) => w is SuperTabAvatar && w.identity.startsWith('agent:'),
+                ),
+              ),
+              findsNothing,
+            );
+          }
         }
         expect(await strayPixels(t), isEmpty);
         await captureWindow(

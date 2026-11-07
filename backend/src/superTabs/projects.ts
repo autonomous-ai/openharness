@@ -44,6 +44,11 @@ export interface SwarmProject {
   visibility: ProjectVisibility
   members: Array<{ id: string; generation: string }>
   updateMinutes: 1 | 5 | 15 | 30
+  /** The project's board and work process; absent on older projects, which keep Full (task #3896). */
+  process?: import('./process.js').ProjectProcess
+  /** Tasks up to this number stay Simple after returning to Full. One watermark covers dormant tasks and repeated
+   *  switches without loading or rewriting any task history; absent until the first Simple→Full switch (#3896). */
+  simpleThrough?: number
   /** The morning digest (digest.ts): its local time ("08:00") and zone, and the local date and time of the last one sent.
    *  On by default: a project without one gets the default on its coordinator's next poll, unless a person turned it off. */
   digest?: { time: string; timeZone: string; lastOn?: string; lastAt?: number }
@@ -109,6 +114,9 @@ export interface SwarmProject {
   githubSeen?: GitHubSeen
   /** What its coordinator is called; reads give "Product Manager" when absent (instructions.ts coordinatorNameOf). */
   coordinatorName?: string
+  /** Agents answer every person's message in that message's thread, never right below it in the main chat (task #3747, anh
+   *  Dee 11-06: "i don't know which one you reply to which"). Absent: as before. Set with `project.answers`. */
+  answersInThread?: true
   /** Its owner's last "New repository" from New Project (task #1788): asked, then what GitHub's sign-in made of it. The
    *  app that asked starts the Product Manager in it once `created`; the next ask replaces it. */
   repositoryCreation?: RepositoryCreation
@@ -239,6 +247,7 @@ export function settleOwners(state: SuperTabState): Array<{ projectId: string; f
  *  a project from before ownerGeneration whose owner left is never matched to them again (security reviews of #3082). */
 export function admitPerson(state: SuperTabState, member: Person): void {
   settleOwners(state)
+  settleBoardRights(state)
   state.people.push(member)
 }
 
@@ -247,6 +256,22 @@ export function admitPerson(state: SuperTabState, member: Person): void {
 export function dismissPeople(state: SuperTabState, leaving: ReadonlySet<string>): void {
   state.people = state.people.filter(p => !leaving.has(p.id))
   settleOwners(state)
+  settleBoardRights(state)
+}
+
+/** Takes everyone no longer in the Swarm out of each project's Can chat and decider seat (task #4216). Both name a person by
+ *  id only, and any member reads a public project, so without this a person removed and invited back had them again. Run
+ *  before a person is admitted too, which clears a right kept from before this ran on leaving. */
+function settleBoardRights(state: SuperTabState): void {
+  const people = new Set(state.people.map(p => p.id))
+  for (const project of state.projects ?? []) {
+    if (project.canChat) {
+      const kept = project.canChat.filter(id => people.has(id))
+      if (kept.length) project.canChat = kept
+      else delete project.canChat
+    }
+    if (project.decider && !people.has(project.decider)) delete project.decider
+  }
 }
 
 /** Whose active work other projects' Leads see and are alerted about. A private project's work stays with its own people. */
@@ -344,9 +369,10 @@ export function readConversation(state: SuperTabState, actor: Actor, conversatio
  *  (2026-10-26); this is the one place that decides it (design section 4.8). */
 export const PRIVATE_VISIBLE_TO_OWNERS = false
 
-/** A Chat with PM from before Buddies replaced it (Ken, 10-29): a private conversation that is no Buddy chat. Nobody opens
- *  one any more, and nobody reads one, the PM and its person included; its rows stay in the database. */
-export const isClosedPmChat = (group: Pick<Conversation, 'kind' | 'audience'>): boolean => !!group.audience && !isBuddyChat(group)
+/** A Chat with PM from before Buddies replaced it (Ken, 10-29): a private conversation that is no Buddy chat and no Regular agent's
+ *  chat (#4248: counted as one, a Regular agent's chat was never listed or delivered). Nobody opens one any more, and nobody reads
+ *  one, the PM and its person included; its rows stay in the database. */
+export const isClosedPmChat = (group: Pick<Conversation, 'kind' | 'audience'>): boolean => !!group.audience && !isBuddyChat(group) && !isAgentChat(group)
 
 /** Who reads a conversation: nobody the removed Leads conversation (model.ts leadsRemoved); a project conversation's readers; and a Buddy
  *  chat's owner and Buddy (buddies.ts), the PM never. A closed Chat with PM is nobody's. A Buddy reads what its person
