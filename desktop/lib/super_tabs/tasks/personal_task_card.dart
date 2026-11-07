@@ -8,21 +8,10 @@ import '../../widgets/harness_activity_mark.dart';
 import '../task_card.dart';
 import 'personal_tasks.dart';
 
-/// A project's tag colour: one of the roster's hues, which carry white at 5:1 or more in both appearances, picked by
-/// its id so a project keeps its colour everywhere and needs no stored field.
-Color superTabProjectColor(String projectId) {
-  const palette = grid.AppPalette.avatarPalette;
-  var hash = 0;
-  for (final unit in projectId.codeUnits) {
-    hash = (hash * 31 + unit) & 0x7fffffff;
-  }
-  return palette[hash % palette.length];
-}
-
-/// One task in the Tasks pane, as a Board tile, cleaner (anh Dee, 11-07): the project's tag and the status mark on
-/// top, the title in up to three lines, then who asked and the agent as two avatars, with Approve and Reject on the
-/// right while the task waits for the reader.
-class SuperTabPersonalTaskCard extends StatefulWidget {
+/// One task in the Tasks pane, quiet (anh Dee, 11-07): a hairline card with the project's grey capsule and the
+/// status mark on top, the title in up to three lines, then who asked and the agent as two faces, with Decline and
+/// Accept on the right only while the task waits for the reader.
+class SuperTabPersonalTaskCard extends StatelessWidget {
   const SuperTabPersonalTaskCard({
     super.key,
     required this.task,
@@ -46,62 +35,40 @@ class SuperTabPersonalTaskCard extends StatefulWidget {
   final VoidCallback onOpen;
   final Widget? requester, agent;
 
-  /// The task waits for the reader: Approve and Reject show, disabled while [onApprove] and [onReject] are null.
+  /// The task waits for the reader: Accept and Decline show, disabled while [onApprove] and [onReject] are null.
   final bool waiting;
   final VoidCallback? onApprove, onReject;
 
   /// The decision sent for this task and not yet confirmed, `approve` or `reject`: its button spins.
   final String? pending;
 
-  /// Why Approve and Reject are disabled, as their tooltip; null when they are not, or nothing to say.
+  /// Why Accept and Decline are disabled, as their tooltip; null when they are not, or nothing to say.
   final String? disabledReason;
-
-  @override
-  State<SuperTabPersonalTaskCard> createState() => _CardState();
-}
-
-/// Approve and Reject fit beside two avatars in the pane's fixed 340.
-const _buttonPadding = EdgeInsets.symmetric(
-  horizontal: grid.AppDesktop.controlGap,
-  vertical: grid.AppDesktop.menuInset,
-);
-
-class _CardState extends State<SuperTabPersonalTaskCard> {
-  bool _hovered = false;
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final w = widget;
-    final radius = BorderRadius.circular(grid.AppCard.insetRadius);
-    final waiting = w.waiting;
-    final avatars = [?w.requester, ?w.agent];
+    final radius = BorderRadius.circular(grid.AppDesktop.rowRadius);
+    final avatars = [?requester, ?agent];
+    // One hairline and no shadow, selected or not: a selected card differs by its fill alone (#4468).
     return Semantics(
-      selected: w.selected ? true : null,
+      selected: selected ? true : null,
       container: true,
       child: Material(
         type: MaterialType.transparency,
         child: Ink(
           decoration: BoxDecoration(
-            color: w.selected
+            color: selected
                 ? Color.alphaBlend(
                     grid.AppSurface.selectedFill,
                     grid.AppCard.base,
                   )
                 : grid.AppCard.base,
             borderRadius: radius,
-            border: Border.all(
-              color: w.selected ? grid.AppGlass.lift : grid.AppCard.insetHair,
-            ),
-            boxShadow: _hovered
-                ? grid.AppGlass.shadow
-                : grid.AppGlass.cardShadow,
+            border: Border.all(color: DesktopChrome.rim),
           ),
           child: InkWell(
-            onTap: w.onOpen,
-            onHover: (hovered) {
-              if (hovered != _hovered) setState(() => _hovered = hovered);
-            },
+            onTap: onOpen,
             hoverColor: grid.AppSurface.hoverFill,
             focusColor: grid.AppSurface.hoverFill,
             borderRadius: radius,
@@ -117,19 +84,16 @@ class _CardState extends State<SuperTabPersonalTaskCard> {
                       Expanded(
                         child: Align(
                           alignment: AlignmentDirectional.centerStart,
-                          child: _Tag(w.project, w.task.projectId),
+                          child: _Tag(project),
                         ),
                       ),
                       const SizedBox(width: grid.AppDesktop.controlGap),
-                      SuperTabTaskStatusMark(
-                        w.task.status,
-                        reason: w.task.reason,
-                      ),
+                      SuperTabTaskStatusMark(task.status, reason: task.reason),
                     ],
                   ),
                   const SizedBox(height: grid.AppDesktop.controlGap),
                   Text(
-                    w.task.title,
+                    task.title,
                     maxLines: 3,
                     overflow: TextOverflow.ellipsis,
                     style: DesktopChrome.control(
@@ -149,23 +113,26 @@ class _CardState extends State<SuperTabPersonalTaskCard> {
                         ],
                         const Spacer(),
                         if (waiting) ...[
+                          // Plain text: only Accept, the main action, is a capsule.
                           TextButton(
-                            onPressed: w.onReject,
+                            onPressed: onReject,
                             style: TextButton.styleFrom(
+                              backgroundColor: Colors.transparent,
+                              side: BorderSide.none,
                               visualDensity: VisualDensity.compact,
                               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                               padding: _buttonPadding,
                               minimumSize: Size.zero,
                             ),
                             child: _label(
-                              'Reject',
-                              w.pending == 'reject',
-                              w.onReject,
+                              'Decline',
+                              pending == 'reject',
+                              onReject,
                             ),
                           ),
                           const SizedBox(width: grid.AppDesktop.listRowGap * 2),
                           FilledButton(
-                            onPressed: w.onApprove,
+                            onPressed: onApprove,
                             style: FilledButton.styleFrom(
                               visualDensity: VisualDensity.compact,
                               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -173,9 +140,9 @@ class _CardState extends State<SuperTabPersonalTaskCard> {
                               minimumSize: Size.zero,
                             ),
                             child: _label(
-                              'Approve',
-                              w.pending == 'approve',
-                              w.onApprove,
+                              'Accept',
+                              pending == 'approve',
+                              onApprove,
                             ),
                           ),
                         ],
@@ -206,24 +173,30 @@ class _CardState extends State<SuperTabPersonalTaskCard> {
             ],
           )
         : Text(text);
-    final why = widget.disabledReason;
+    final why = disabledReason;
     return onPressed == null && why != null
         ? Tooltip(message: why, child: label)
         : label;
   }
 }
 
-/// The project's name in a capsule of its colour, white on it, as a Board tile labels its lane.
+/// Accept and Decline fit beside two faces in the pane's fixed 340.
+const _buttonPadding = EdgeInsets.symmetric(
+  horizontal: grid.AppDesktop.controlGap,
+  vertical: grid.AppDesktop.menuInset,
+);
+
+/// The project's name in a neutral grey capsule: grey everywhere, colour only on agent faces (anh Dee, 11-07).
 class _Tag extends StatelessWidget {
-  const _Tag(this.name, this.projectId);
-  final String name, projectId;
+  const _Tag(this.name);
+  final String name;
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
     key: const ValueKey('personal-task-tag'),
-    decoration: BoxDecoration(
-      color: superTabProjectColor(projectId),
-      borderRadius: BorderRadius.circular(grid.AppDesktop.paneCloseInset),
+    decoration: ShapeDecoration(
+      color: grid.AppSurface.wellFill,
+      shape: const StadiumBorder(),
     ),
     child: Padding(
       padding: const EdgeInsets.symmetric(
@@ -234,8 +207,7 @@ class _Tag extends StatelessWidget {
         name,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: DesktopChrome.metadata(color: grid.AppDesktop.onSelection)
-            .copyWith(fontWeight: grid.AppFont.medium, height: 1.25),
+        style: DesktopChrome.metadata().copyWith(height: 1.25),
       ),
     ),
   );
@@ -303,7 +275,7 @@ HarnessActivity superTabTaskActivity(String status) => switch (status) {
 /// as the Board says them.
 String superTabTaskStatusLabel(String status) => switch (status) {
   'proposal' => 'Proposal',
-  'rejected' => 'Rejected',
+  'rejected' => 'Declined',
   'planned' => 'Planned',
   'working' => 'Working',
   'needs_human' => 'Needs a human',
