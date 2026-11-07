@@ -152,10 +152,23 @@ could otherwise drop anh Dee's or Ken's rule, or add a rule every agent trusts, 
 
 - **The rule files are every `AGENTS.md` and `CLAUDE.md` at any path** (the root file and the component files, such
   as `desktop/AGENTS.md`, which agents also follow) **and everything in `docs/roles/`.**
-- A pull request that changes any of them names the person who asked for the change, and the merge train refuses it
-  until that person approves it (a GitHub approval from them, or a message of theirs the pull request names, as
-  `ruleGuard.ts` accepts today). For a task a person asked for, the ask the task records is that message, so nobody is
-  asked anything extra, with two limits that today's guard already keeps:
+- A pull request that changes any of them names the person who asked for the change, and waits until that person
+  approves it (a GitHub approval from them, or a message of theirs the pull request names, as `ruleGuard.ts` accepts
+  today).
+- **Every way of merging waits.** The guard is a check on the pull request's head, `harness/rules`, that GitHub requires
+  before merging, so the merge train, a hand merge (`make merge-pr`) and GitHub's own button all wait for it. The server
+  sets it (pending while an approval is missing, success once it is there) through the Swarm's GitHub App, which needs
+  the narrow commit-statuses permission for it, granted for that one check. The project's owner adds the check to the
+  default branch's required checks once; Harness says so in Project details until it is, and `make merge-pr` refuses a
+  pull request whose `harness/rules` isn't green in the meantime.
+- **An approval counts for the head it approved:** a GitHub approval on that commit, or a message written after that
+  head was pushed, as today's guard counts only a message newer than the version it replaces. A later push that changes
+  a rule file needs it again; a push that leaves the rule files alone keeps it.
+- For a task a person asked for, the ask the task records can be that approval, so nobody is asked anything extra, with
+  limits that today's guard already keeps:
+  - **only for a change the accepted brief names:** the brief says which rule file it changes ("add the release rule to
+    AGENTS.md"). An ask like "fix the installer" never approves a rule-file change, and it never approves dropping a
+    rule;
   - **only a member's own ask counts:** a member of this Swarm, in this project, in their own words. An ask from a
     guest, from an outside author of a GitHub issue (#4533: on a public repository anyone can open one), or relayed by
     a Buddy, the Lead or an agent does not count, and the change waits for a person;
@@ -295,7 +308,8 @@ requests to weigh) and security review 1 of 76d361b (the other-account limit kep
 Security review 1 of d7a9b23 (Ownrev1): the rule guard moves to pull
 requests that change AGENTS.md, CLAUDE.md or role files, before any rule leaves the instructions document; security
 review 2 of 728b78b and 2c9546f (Ownrev4): at any path, nested component files included; only a member's own ask
-counts, and the asker is told which rule lines changed. Review of
+counts, and the asker is told which rule lines changed. Security review 1 of 2c9546f (Secrev7): the guard is a check
+GitHub requires, an approval counts for its head, and an ask approves only a change its brief names, never a drop. Review of
 a7ca78c (Ownrev6): role procedures go to role files sent with their task or step;
 the Member page lists `work.check`. Security review 2 of 9323153 (Ownmac1): engines load no checkout files at all, Harness sends
 the default branch's copies, they are re-sent after every compaction, and the frame header is one line. Security review 1 of 9323153 (Ownrev4): outside text quoted in the server's
@@ -388,13 +402,18 @@ the default branch's copy, never a checkout's. The menu's version list is shown 
 7. **The task as part 3.** The brief, or the issue once #4533 ships, sent at assignment and on change, with the role
    file the task or step names, from the default branch. Owner area:
    `cli/src/superTabs/`, `backend/src/superTabs/`. Backend release, then CLI release.
-8. **Guard the rule files.** The merge train refuses a pull request that changes any `AGENTS.md` or `CLAUDE.md` at any
-   path, or anything in `docs/roles/`, until a person approves it, by today's rule guard (`ruleGuard.ts`, #3151) applied to the diff
+8. **Guard the rule files.** A required check on the pull request's head, `harness/rules`, holds every merge (the
+   merge train, `make merge-pr`, GitHub's button) of a pull request that changes any `AGENTS.md` or `CLAUDE.md` at any
+   path, or anything in `docs/roles/`, until a person approves that head, by today's rule guard (`ruleGuard.ts`, #3151) applied to the diff
    (section "Who may change the rule files"). Owner area: `backend/src/superTabs/mergeTrain/`,
    `backend/src/superTabs/ruleGuard.ts`, `instructionsDiff.ts`. Its tests try a root file, a nested component file
    (`desktop/AGENTS.md`), a nested `CLAUDE.md` and a role file, each with and without a person's approval; a member's
    own ask passes and the asker gets the private line, while a guest's ask, an outside issue author's and a relayed one
-   are refused. Backend
+   are refused; an ask whose brief doesn't name the rule file is refused, and so is any ask for a drop; an approval at
+   one head stops counting after a push that changes a rule file; a hand merge waits on the check. It adds the App's
+   commit-statuses permission for that one check (`backend/src/github/app.ts` mints none today). GitHub asks each
+   installation's owner to accept a new permission; until a project's installation has, the merge train and
+   `make merge-pr` refuse its pull requests that change a rule file, so the gap fails closed. Backend
    release, with two security reviews. It ships
    before task 9 moves any rule out of the instructions document.
 9. **openharness AGENTS.md and role files.** Its Lead moves the project's Roles sections into `docs/roles/` (engineer,
