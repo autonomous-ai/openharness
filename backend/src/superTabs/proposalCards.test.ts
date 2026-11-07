@@ -165,13 +165,10 @@ const ask = (conversationId: unknown, extra = {}) => ({ type: 'proposal.ask', co
 describe('PM decisions and card questions', () => {
   it('shows shipped on the card after verified release, never at merge, and tells no proposer privately', async () => {
     const { notePendingRelease, pendingKey, settleReleases } = await import('./releases.js')
-    const { shippedNotice } = await import('./buddyNews.js')
-    const { author } = await import('./model.js')
     const f = fixture(), id = f.create().result.conversationId, other = f.create(owner).result.conversationId
     f.run({ type: 'proposal.merge', conversationId: other, intoConversationId: id, reason: 'Same request' }, f.pm)
     f.run(decide(id), f.pm)
     const card = f.card(id), project = f.state.projects![0]!
-    expect(shippedNotice(f.state, card, author(f.state, f.pm), 'merge')).toBeNull()
     notePendingRelease(project, card, 'https://github.com/o/r/pull/1', NOW)
     const entry = project.releases!.pending[0]!
     const facts = { resolved: [{ ...entry, components: ['backend' as const] }], releases: {} }

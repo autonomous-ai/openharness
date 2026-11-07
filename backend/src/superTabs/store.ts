@@ -3707,7 +3707,7 @@ export class SuperTabStore {
         // A top-level message is its own thread's root; only a row written before threads has none (its replies stay inline).
         thread: message.thread ?? message.id, ...(message.alsoInChat ? { alsoInChat: true } : {}),
         ...(message.buddySession ? { buddySession: true } : {}), ...(message.buddyProject ? { buddyProject: message.buddyProject } : {}) })
-      for (const recipient of [...message.recipients, ...message.buddyRecipients ?? []]) {
+      for (const recipient of message.recipients) {
         if (!pmAcceptsMessage(state, recipient, message.source)) continue
         const target = agent(state, recipient)
         const group = conversation(state, message.conversationId)

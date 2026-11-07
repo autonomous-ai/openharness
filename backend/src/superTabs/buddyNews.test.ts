@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, forRecipients, type Actor, type Conversation, type MessageDraft } from './model.js'
 import { buddyChatId } from './buddies.js'
-import { assignedNotice, buddiesTold } from './buddyNews.js'
 import { SHIP_KIND } from './ship.js'
 import { pendingKey, settleReleases } from './releases.js'
 import { TASK_LINE_KIND } from './taskLine.js'
@@ -51,135 +50,30 @@ function setup() {
   return { run, add, app, pm, chat: chat.id, proposed, propose, pmPost, get state() { return state } }
 }
 
-describe('which Buddy a project-chat message reaches (Diego, 10-29)', () => {
-  it('is the Buddy whose person\'s proposal it replies to, in its thread too', () => {
+// Task #4623 (anh Dee, 11-07): no agent relays news to its owner. Their card shows accepted, working and shipped, and every
+// question for them is a Decision, so a Buddy hears no project-chat line, assignment or release for its person.
+describe('no agent relays news to its owner', () => {
+  const hears = (messages: MessageDraft[]) => messages.filter(m => m.recipients.includes('buddy'))
+
+  it('hears nothing when the PM answers its person’s proposal, in its thread too', () => {
     const f = setup(), sent = f.propose()
     const answer = f.pmPost('Taking it: #12 will build this.', { replyTo: sent })
-    expect(answer.buddyRecipients).toEqual(['buddy'])
-    expect(answer.recipients).not.toContain('buddy')
-    expect(f.pmPost('Builder Orion has it.', { replyTo: answer, root: sent }).buddyRecipients).toEqual(['buddy'])
+    expect(hears([answer, f.pmPost('Builder Orion has it.', { replyTo: answer, root: sent })])).toEqual([])
   })
 
-  it('is the Buddy of a person the PM tags', () => {
+  it('hears nothing when the PM tags its person', () => {
     const f = setup()
-    expect(f.pmPost('@peer does this cover your case?', { mentions: ['peer'] }).buddyRecipients).toEqual(['buddy'])
+    expect(hears([f.pmPost('@peer the build is green.', { mentions: ['peer'] })])).toEqual([])
   })
 
-  it('is the Buddy of the person who requested work that shipped', () => {
-    const f = setup()
-    const ship = (requesterId?: string): MessageDraft => ({ id: 'ship', conversationId: f.app.conversationId, author: { kind: 'agent', id: f.pm, name: 'pm',
-      membershipGeneration: 'first' }, text: 'Shipped', replyTo: null, recipients: [],
-      source: { kind: SHIP_KIND, conversationId: 'g', title: 'Offline', pullRequests: [], ...(requesterId ? { requesterId } : {}) } })
-    expect(buddiesTold(f.state, ship('peer'), null)).toEqual(['buddy'])
-    expect(buddiesTold(f.state, ship('owner'), null)).toEqual([])
-    expect(buddiesTold(f.state, ship(), null)).toEqual([])
-  })
-
-  it('is nobody for anything else in the project chat: a plain post, a reply to a plain post, another person\'s tag', () => {
-    const f = setup()
-    const plain = f.pmPost('Batch AB is merging.')
-    expect(plain.buddyRecipients).toBeUndefined()
-    expect(f.pmPost('Done.', { replyTo: plain }).buddyRecipients).toBeUndefined()
-    expect(f.pmPost('@owner please approve.', { mentions: ['owner'] }).buddyRecipients).toBeUndefined()
-  })
-
-  it('is nobody for a routing row, whatever it carries: a Buddy reads no routing (security review 2 of #2115)', () => {
-    const f = setup()
-    const row = (kind: string): MessageDraft => ({ id: kind, conversationId: f.app.conversationId, author: { kind: 'agent', id: f.pm, name: 'pm',
-      membershipGeneration: 'first' }, text: 'Rule set.', replyTo: null, recipients: [], mentions: ['peer'], source: { kind } })
-    for (const kind of ['route', 'route-override', 'rule']) expect(buddiesTold(f.state, row(kind), null)).toEqual([])
-  })
-
-  it('is nobody for a notice only its recipients read, by kind or marked so (review of #2177)', () => {
-    const f = setup()
-    const notice = (source: Record<string, unknown>): MessageDraft => ({ id: 'notice', conversationId: f.app.conversationId, author: { kind: 'agent', id: f.pm,
-      name: 'pm', membershipGeneration: 'first' }, text: '@peer #12 stalled.', replyTo: null, recipients: [f.pm], mentions: ['peer'], source })
-    expect(buddiesTold(f.state, notice({ kind: 'work-stalled' }), null)).toEqual([])
-    expect(buddiesTold(f.state, notice(forRecipients({ kind: 'work-cancelled' })), null)).toEqual([])
-  })
-
-  it('is nobody for the person\'s own words: they know what they wrote', () => {
-    const f = setup(), sent = f.propose()
-    expect(f.pmPost('Thanks, go ahead.', { replyTo: sent }, peer).buddyRecipients).toBeUndefined()
-  })
-
-  it('is nobody once its person no longer reads the project, has left, or rejoined at a new membership', () => {
-    const lost = setup(), sent = lost.propose()
-    lost.state.projects!.find(p => p.id === lost.app.projectId)!.visibility = 'private'
-    expect(lost.pmPost('Taking this as its own task.', { replyTo: sent }).buddyRecipients).toBeUndefined()
-    const rejoined = setup(), asked = rejoined.propose()
-    rejoined.state.people.find(p => p.id === 'peer')!.generation = 'second'
-    expect(buddiesTold(rejoined.state, { ...asked, id: 'answer', replyTo: asked.id, thread: asked.id, author: { kind: 'agent', id: rejoined.pm, name: 'pm',
-      membershipGeneration: 'first' } }, asked.source ?? null)).toEqual([])
-  })
-
-  it('is nobody outside the project chat: a tag in a workgroup stays there', () => {
-    const f = setup()
-    const group = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline', brief: 'Save edits.', checks: [] }).result.conversationId as string
-    const tagged = f.run({ type: 'message.send', conversationId: group, text: '@peer which drafts?', recipientIds: [], replyTo: null, mentions: ['peer'] },
-      agentActor(f.pm)).messages.at(-1)!
-    expect(tagged.buddyRecipients).toBeUndefined()
-  })
-})
-
-describe('the assignment notice a Buddy gets for work its person requested', () => {
-  /** A group peer requested, briefed and ready, and a worker in it. */
-  function requested(extra: Record<string, unknown> = {}) {
+  it('writes no news line when its person’s requested work is assigned', () => {
     const f = setup()
     const group = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline edits', brief: 'Save edits offline.',
-      checks: [{ description: 'Tests pass', independent: false }], requesterId: 'peer', ...extra } as Command).result.conversationId as string
+      checks: [{ description: 'Tests pass', independent: false }], requesterId: 'peer' } as Command).result.conversationId as string
     const worker = f.add(group, 'worker')
-    const assign = () => f.run({ type: 'work.assign', conversationId: group, agentId: worker }).messages
-    const number = f.state.conversations.find(c => c.id === group)!.number
-    return { f, group, assign, number }
-  }
-  const notices = (messages: MessageDraft[]) => messages.filter(m => m.recipients.includes('buddy'))
-
-  it('is one line inside the task, for the Buddy alone: its number, title and status, nothing more', () => {
-    const { group, assign, number } = requested()
-    expect(notices(assign())).toEqual([expect.objectContaining({ conversationId: group, recipients: ['buddy'], source: { kind: 'agent-only' },
-      text: `News for your owner: #${number} "Offline edits", recorded as their request, is assigned and working.` })])
-  })
-
-  it('is sent once per task: a replacement agent taking the work over is no new news (task #4217)', () => {
-    const { f, group, assign } = requested()
-    expect(notices(assign())).toHaveLength(1)
-    const first = f.state.conversations.find(c => c.id === group)!.assignment!
-    f.run({ type: 'agent.alert', agentId: first.agentId, alert: 'model', active: true }, { kind: 'agent', agentId: first.agentId, machineOwnerId: 'host' })
-    expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('lost')
-    const replacement = f.add(group, 'replacement')
-    expect(notices(f.run({ type: 'work.assign', conversationId: group, agentId: replacement }).messages)).toEqual([])
-  })
-
-  it('is not sent for a private task in a public project, though its person requested it (security review 2 of #2178)', () => {
-    const { f, group, assign } = requested()
-    assign()
-    const task = f.state.conversations.find(c => c.id === group)!
-    task.audience = { people: [{ id: 'peer', generation: 'first' }] }
-    expect(assignedNotice(f.state, task, { kind: 'agent', id: f.pm, name: 'pm', membershipGeneration: 'first' }, 'op')).toBeNull()
-  })
-
-  // The Shipped line's rule, kept for the news (ship.test.ts before #2633): work Done without a pull request never shipped.
-  it('says nothing has shipped for work Done without a pull request, or Done before its merge', () => {
-    for (const result of ['Ready to merge: Yes.', 'Review passed: https://github.com/o/r/pull/7']) {
-      const { f, group, assign } = requested()
-      assign()
-      const task = f.state.conversations.find(c => c.id === group)!
-      const worker = task.assignment!.agentId
-      const done = f.run({ type: 'work.status', conversationId: group, assignmentId: task.assignment!.id, status: 'done', result },
-        agentActor(worker))
-      expect(notices(done.messages)).toEqual([])
-    }
-  })
-
-  it('is not sent when its person cannot read the task, when nobody requested it, or when another person did', () => {
-    const hidden = requested()
-    hidden.f.state.projects!.find(p => p.id === hidden.f.app.projectId)!.visibility = 'private'
-    expect(notices(hidden.assign())).toEqual([])
-    const nobody = requested()
-    delete nobody.f.state.conversations.find(c => c.id === nobody.group)!.requesterId
-    expect(notices(nobody.assign())).toEqual([])
-    expect(notices(requested({ requesterId: 'owner' }).assign())).toEqual([])
+    const assigned = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).messages
+    expect(hears(assigned)).toEqual([])
+    expect(assigned.filter(m => m.text.startsWith('News for your owner'))).toEqual([])
   })
 })
 
@@ -194,13 +88,12 @@ describe('work the PM opens from a Buddy\'s proposal without naming anyone (grou
     return { f, group, created, find: () => f.state.conversations.find(c => c.id === group)! }
   }
 
-  it('is requested by the person the proposal was sent for, who gets the assignment news, the ship news and the Shipped points', () => {
+  it('is requested by the person the proposal was sent for, who gets the Shipped points and no news through their Buddy', () => {
     const { f, group, created, find } = opened()
     expect(find().requesterId).toBe('peer')
     expect(created.result.requesterUnknown).toBeUndefined()
     const worker = f.add(group, 'worker')
-    expect(f.run({ type: 'work.assign', conversationId: group, agentId: worker }).messages.filter(m => m.recipients.includes('buddy')))
-      .toEqual([expect.objectContaining({ conversationId: group, recipients: ['buddy'], source: { kind: 'agent-only' } })])
+    expect(f.run({ type: 'work.assign', conversationId: group, agentId: worker }).messages.filter(m => m.recipients.includes('buddy'))).toEqual([])
     const assignmentId = find().assignment!.id
     for (const check of find().checks) f.run({ type: 'work.check', conversationId: group, assignmentId, checkId: check.id, passed: true, evidence: 'ok' })
     // Done with its pull request reads ready and is no news yet; its recorded merge ships it (taskLine.ts; PM, review of #2633),
@@ -219,7 +112,8 @@ describe('work the PM opens from a Buddy\'s proposal without naming anyone (grou
     expect(board.people.find(p => p.personId === 'peer')).toMatchObject({ points: 3, shipped: { count: 1 } })
   })
 
-  it('tells the Buddy its work shipped only when a verified release holds it, once (task #4217)', () => {
+  // Task #4623: the card says Shipped (task #4547); the Buddy hears nothing.
+  it('tells the Buddy nothing when a verified release holds its work', () => {
     const { f, group, find } = opened()
     const worker = f.add(group, 'worker')
     f.run({ type: 'work.assign', conversationId: group, agentId: worker })
@@ -234,11 +128,9 @@ describe('work the PM opens from a Buddy\'s proposal without naming anyone (grou
       Object.assign(f.state, state)
       return out.messages.filter(m => m.recipients.includes('buddy'))
     }
-    // A release that does not hold the merge says nothing; the one that does tells the Buddy, inside the task, once.
     expect(settle('v1.0.1_backend', [], 5000)).toEqual([])
-    expect(settle('v1.0.2_backend', [key], 6000)).toEqual([expect.objectContaining({ conversationId: group, recipients: ['buddy'],
-      source: { kind: 'agent-only' }, text: `News for your owner: #${find().number} "Offline edits", recorded as their request, shipped.` })])
-    expect(settle('v1.0.3_backend', [key], 7000)).toEqual([])
+    expect(settle('v1.0.2_backend', [key], 6000)).toEqual([])
+    expect(find().released).toMatchObject({ at: 6000 })
   })
 
   it('keeps the requester the PM names, even someone else', () => {
