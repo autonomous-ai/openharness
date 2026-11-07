@@ -11,13 +11,18 @@ import 'package:harness/state/harness_activity.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/shared/widgets/app_icon_button.dart';
+import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/buddy_card.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/chat/agent_chat_header.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/decisions.dart';
+import 'package:harness/super_tabs/decisions_view.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
 import 'package:harness/super_tabs/identity.dart';
+import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/reply_box.dart';
 import 'package:harness/super_tabs/tasks/personal_task_card.dart';
 import 'package:harness/super_tabs/tasks/personal_tasks.dart';
 import 'package:harness/super_tabs/tasks/tasks_pane_header.dart';
@@ -26,6 +31,7 @@ import 'package:harness/terminal/terminal_typography.dart';
 
 import 'super_tab_personal_tasks_pane_test.dart' show TasksFixture;
 import 'support/buddy_engine_fixture.dart';
+import 'support/super_tab_fixture.dart';
 
 /// The Swarm elements gallery (desktop-design-system.md, Swarm elements): every
 /// element drawn in light and dark against its checked-in image. A new or
@@ -137,7 +143,7 @@ Future<List<SuperTabController>> _show(
   await buddy.select('swarm-buddy-peer');
   await member.select('aeef');
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 1280);
+  tester.view.physicalSize = const Size(760, 1740);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -151,6 +157,8 @@ Future<List<SuperTabController>> _show(
           faces: faces,
           bars: [buddy, member],
           empty: empty,
+          // The decision cards read their answers' state from a reader's Decisions.
+          decisions: SuperTabDecisions.of(member),
         ),
       ),
     ),
@@ -357,6 +365,26 @@ final _person = SuperTabPerson.fromJson({
   'role': 'owner',
 });
 
+/// A person's own Buddy's question, and a line it waits to post as them
+/// (task #4525), as the backend lists them.
+SuperTabDecision _decision(
+  String id,
+  String question,
+  List<String> options,
+  String unblocks, {
+  bool send = false,
+}) => SuperTabDecision.fromJson({
+  'id': id,
+  'conversationId': 'buddy',
+  'askerName': 'Buddy',
+  'question': question,
+  'options': options,
+  'recommended': send ? 0 : 1,
+  'unblocks': unblocks,
+  'fromBuddy': true,
+  'send': send,
+});
+
 /// A Tasks pane card as the pane draws it: the project's capsule, the mark, the title and two 18 faces.
 Widget _card(
   String title,
@@ -389,6 +417,7 @@ class _Gallery extends StatelessWidget {
     required this.faces,
     required this.bars,
     required this.empty,
+    required this.decisions,
   });
   final Brightness brightness;
   final List<String> faces;
@@ -398,6 +427,9 @@ class _Gallery extends StatelessWidget {
 
   /// A Swarm with no tasks: the Tasks pane empty.
   final SuperTabController empty;
+
+  /// Whose answers the decision cards read.
+  final SuperTabDecisions decisions;
   static const boundary = ValueKey('swarm-elements-gallery');
 
   @override
@@ -589,6 +621,29 @@ class _Gallery extends StatelessWidget {
                   ),
                 ],
               ),
+              title('Chat: message rows, and the composer empty and typed'),
+              SizedBox(
+                width: 440,
+                child: Column(
+                  children: [
+                    _message(
+                      'River',
+                      'New Project is in the sidebar now.',
+                      agent: _agent('River'),
+                    ),
+                    _message('dee', 'Found it, thanks!', person: _person),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(width: 340, child: _Composer('empty', '')),
+                  SizedBox(width: 16),
+                  SizedBox(width: 340, child: _Composer('typed', 'Ship it')),
+                ],
+              ),
               title('Top bar: your Buddy, a member agent'),
               for (final c in bars)
                 SizedBox(
@@ -657,12 +712,115 @@ class _Gallery extends StatelessWidget {
                   onOpenTask: (_) {},
                 ),
               ),
+              title('Decision card: a Buddy question and a send line'),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 340,
+                    child: SuperTabDecisionCard(
+                      decisions: decisions,
+                      decision: _decision('d1', 'Keep the old flag a week?', [
+                        'Keep it',
+                        'Drop it',
+                      ], 'The cleanup'),
+                      onNotNow: () {},
+                    ),
+                  ),
+                  SizedBox(
+                    width: 340,
+                    child: SuperTabDecisionCard(
+                      decisions: decisions,
+                      decision: _decision(
+                        'd2',
+                        'Drop the old --legacy-sync flag from the CLI.',
+                        ['Send', 'Not now'],
+                        'Posts this in the harness chat as you.',
+                        send: true,
+                      ),
+                      onNotNow: () {},
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
         ),
       ),
     );
   }
+}
+
+/// A chat message row, as the chat draws one. Its time is words, which the
+/// comparison leaves out, so the image holds in every time zone.
+Widget _message(
+  String author,
+  String text, {
+  SuperTabAgent? agent,
+  SuperTabPerson? person,
+}) => SuperTabMessageRow(
+  message: SuperTabMessage.fromJson({
+    'id': 'm-$author',
+    'conversationId': 'lead',
+    'text': text,
+    'sequence': 1,
+    'createdAt': '2026-11-07T09:12:00Z',
+    'author': agent != null
+        ? {'kind': 'agent', 'id': agent.id, 'name': author}
+        : {'kind': 'person', 'id': person!.id, 'name': 'dee@example.com'},
+  }),
+  author: author,
+  agent: agent,
+  person: person,
+  receipts: const [],
+  onReturnToComposer: () {},
+  readerId: 'p1',
+);
+
+/// A chat composer ([SuperTabReplyBox], the box both composers draw) holding
+/// [typed]: the round send grey while empty, blue once there is text.
+class _Composer extends StatefulWidget {
+  const _Composer(this.name, this.typed);
+  final String name, typed;
+
+  @override
+  State<_Composer> createState() => _ComposerState();
+}
+
+class _ComposerState extends State<_Composer> {
+  final SuperTabController controller = ConversationServer().controller();
+  late final text = TextEditingController(text: widget.typed);
+  final focus = FocusNode();
+  final files = HarnessAttachments();
+
+  @override
+  void dispose() {
+    text.dispose();
+    focus.dispose();
+    files.dispose();
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SuperTabReplyBox(
+    controller: controller,
+    text: text,
+    focus: focus,
+    files: files,
+    enabled: true,
+    writable: true,
+    busy: false,
+    error: null,
+    onEdited: (_) {},
+    onSend: () {},
+    onMic: () {},
+    hint: 'Message #Pilot',
+    surfaceKey: ValueKey('gallery-composer-${widget.name}'),
+    fieldKey: ValueKey('gallery-composer-field-${widget.name}'),
+    sendKey: ValueKey('gallery-composer-send-${widget.name}'),
+    micKey: ValueKey('gallery-composer-mic-${widget.name}'),
+  );
 }
 
 /// Matches when [galleryDifference] finds none. A mismatch fails with what

@@ -235,6 +235,25 @@ void main() {
       expect(f.commands, isEmpty);
     },
   );
+  // Task #4547: shipped shows on the card, never as a line in the person's
+  // Buddy chat.
+  testWidgets('a task a verified release holds says Shipped', (t) async {
+    await mount(t);
+    f.rows.first
+      ..['status'] = 'done'
+      ..['shipped'] = true
+      ..['version'] = 2;
+    await f.controller.refresh();
+    await t.pump();
+    expect(find.byTooltip('Shipped'), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (w) => w is ActivityMark && w.activity == HarnessActivity.done,
+      ),
+      findsOneWidget,
+    );
+  });
+
   testWidgets(
     'the header is quiet: Activity in semibold, two 28-point icons that light only on hover',
     (t) async {

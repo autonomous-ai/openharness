@@ -109,6 +109,15 @@ describe('personal Tasks summaries', () => {
     expect(personalTasksFor([closed], view, owner)!.upserts.map(r => r.id)).toEqual([row.key])
   })
 
+  // Task #4547: shipped shows on the card, never as a line in the person's Buddy chat.
+  it('marks a task shipped once a verified release holds it, and not at merge', () => {
+    const s = scene(), row = s.stored.groups.find(g => g.key === s.f.web)!
+    const merged = { ...row, data: { ...row.data!, assignment: { ...row.data!.assignment!, status: 'done' as const } } }
+    expect(personalTasksFor([merged], s.view(), peer)!.upserts[0]).not.toHaveProperty('shipped')
+    const released = { ...merged, data: { ...merged.data, released: { at: NOW, tags: ['v1.0.0_backend'] } } }
+    expect(personalTasksFor([released], s.view(), peer)!.upserts).toEqual([expect.objectContaining({ id: row.key, status: 'done', shipped: true })])
+  })
+
   it('reads by at most 200 keys: the person\'s two and their newest 198 agents (review of #3465)', async () => {
     const s = scene(), template = s.f.state.agents.find(a => a.id === s.f.worker)!
     const agents = Array.from({ length: 250 }, (_, i) => ({ ...template, id: `agent-${String(i).padStart(3, '0')}`, harnessId: `h-${i}`, contributorId: peer.userId }))
