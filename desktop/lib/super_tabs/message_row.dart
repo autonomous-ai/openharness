@@ -291,9 +291,9 @@ class SuperTabMessageRow extends StatefulWidget {
         // A message that started a session stands on its own, with its line.
         current.sessionRoot ||
         previous.sessionRoot ||
-        // An older reply keeps its quote under its own header.
-        (current.replyTo != null && !current.threadReply) ||
-        (previous.replyTo != null && !previous.threadReply) ||
+        // A message under a quote starts its own bubble.
+        current.quotes != null ||
+        previous.quotes != null ||
         (!inThread && (current.threadReply || previous.threadReply)) ||
         current.authorId.isEmpty ||
         current.authorId != previous.authorId ||
@@ -834,8 +834,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                       ),
                                     // A thread reply sits under its root, so it
                                     // quotes nothing; an older reply keeps its quote.
-                                    if ((message.replyTo != null &&
-                                            !message.threadReply) ||
+                                    if (message.quotes != null ||
                                         (widget.quoteThreadReply &&
                                             widget.reply != null))
                                       Padding(

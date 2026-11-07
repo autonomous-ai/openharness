@@ -1944,6 +1944,7 @@ class SuperTabMessage {
       conversationId = _text(row, 'conversationId'),
       text = _messageText(row),
       replyTo = row['replyTo'] as String?,
+      answers = row['answers'] as String?,
       thread = row['thread'] as String?,
       alsoInChat = row['alsoInChat'] == true,
       buddySession = row['buddySession'] == true,
@@ -1966,6 +1967,14 @@ class SuperTabMessage {
       );
   final String id, conversationId, text;
   final String? replyTo;
+
+  /// The message this one answers inline, in the chat itself (no threads,
+  /// task #4555): an agent's reply the server posted with its quote.
+  final String? answers;
+
+  /// The message this one quotes above itself: an inline answer's, or an
+  /// older reply's.
+  String? get quotes => answers ?? (threadReply ? null : replyTo);
 
   /// The root of this message's thread: its own id for a top-level message,
   /// null for one written before threads (its replies stay inline quotes).
