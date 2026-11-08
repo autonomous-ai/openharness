@@ -2634,7 +2634,8 @@ class _SuperTabViewState extends State<SuperTabView>
   /// A thread reply shows in its thread, and here only when also sent.
   /// No Threads ([SuperTabView.threads]): a chat is one flat list, old thread replies inline in time order, and a
   /// reply quotes its message rather than opening a thread.
-  bool get _flatChat => widget.board;
+  // Swarm v4: a task is a thread in its channel, so replies stay in their thread.
+  bool get _flatChat => false;
 
   List<SuperTabMessage> _shownMessages(String id, {bool replies = false}) {
     final messages = c.taskMessages(id);
@@ -3710,8 +3711,8 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   /// Whether the right pane is the Tasks slot (Swarm v3), so no chat sits beside the Board.
-  bool get _hasTasksPane =>
-      widget.rightPane != null || c.personalTasks?.supported == true;
+  // Swarm v4 (anh Dee 2026-11-08): no Tasks pane. A task's chat opens beside the channel, and an agent's list is its own.
+  bool get _hasTasksPane => false;
 
   /// The task opened from its Tasks card, shown under the task's header while it stays the selected chat; the same
   /// chat chosen another way is under its agent's header.
@@ -4248,13 +4249,19 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
+  /// A project's channel or one of its tasks' chats: agents post there, people read (Swarm v4). A person's chat with their
+  /// own agent is the one place they write.
+  bool _agentsOnly(SuperTabConversation group) =>
+      c.snapshot?.isProjectLead(group.id) == true || group.task != null;
+
   Widget _header(SuperTabConversation? group, bool narrow) {
     final isProject =
         group != null && c.snapshot?.isProjectLead(group.id) == true;
     // A project's chat on the Board: its Board / Chat tabs follow its name on this one row, at the Board header's height
     // and inset so they stay put on Board → Chat, and the Board tab is its one way to the Board (audit finding 18).
     final tabsOf =
-        isProject &&
+        false &&
+            isProject &&
             widget.board &&
             !_manageVisible &&
             !_notificationsVisible &&
@@ -4387,7 +4394,7 @@ class _SuperTabViewState extends State<SuperTabView>
                   },
                 ),
               ),
-            if (isProject || !_menuNamesViews) ...[
+            if (!widget.board && (isProject || !_menuNamesViews)) ...[
               const SizedBox(width: 4),
               fingerTarget(
                 enabled: _phone,
@@ -4404,7 +4411,7 @@ class _SuperTabViewState extends State<SuperTabView>
                 ),
               ),
             ],
-            if ((isProject && tabsOf == null) || isTask) ...[
+            if (!widget.board && ((isProject && tabsOf == null) || isTask)) ...[
               const SizedBox(width: 4),
               _tasksButton(group, task: isTask),
             ],
@@ -4433,6 +4440,7 @@ class _SuperTabViewState extends State<SuperTabView>
           // The right column opens only from here (Quiet Swarm, Dee,
           // 2026-11-02): closed at rest, at every width.
           if (group != null &&
+              !widget.board &&
               !_listViewHoldsThePane &&
               !oneBuddy &&
               !_devicesVisible)
@@ -6097,7 +6105,24 @@ class _SuperTabViewState extends State<SuperTabView>
         // nothing looks typeable: a closed group, or an older Buddy chat in a
         // project, which also leads to the one Buddy (Lead's design review,
         // 10-31).
-        if (group != null && c.canWrite && !c.mayChatIn(group))
+        // Swarm v4 (anh Dee 2026-11-08): only agents post in a project's channel and its tasks' chats. People talk to
+        // their own agents.
+        if (group != null && widget.board && _agentsOnly(group))
+          Container(
+            key: const ValueKey('super-agents-only'),
+            margin: const EdgeInsets.fromLTRB(28, 6, 28, 18),
+            height: 40,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: grid.AppSurface.recess,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              'Only agents post here. To change what happens, talk to your agents.',
+              style: DesktopChrome.metadata(),
+            ),
+          )
+        else if (group != null && c.canWrite && !c.mayChatIn(group))
           // A project on the Board: its chat is read here by everyone, written by those with Can chat (#3820).
           Padding(
             key: const ValueKey('super-chat-no-can-chat'),
@@ -6494,7 +6519,9 @@ class _SuperTabViewState extends State<SuperTabView>
           widget.board && _agentChatId != null && c.selectedId == _agentChatId;
       // The chat is in the middle, by the reader's choice of an agent or once the right pane is the Tasks slot.
       final chatInMiddle = agentChat || _hasTasksPane;
+      // Swarm v4: no Board in the middle. A project opens its channel, the way a chat opens.
       final boardLayout =
+          false &&
           widget.board &&
           (!_projectChatOnly || chatInMiddle) &&
           thread == null &&
@@ -6664,6 +6691,8 @@ class _SuperTabViewState extends State<SuperTabView>
                 // The Desktop's right pane is the Tasks pane's 340, giving back only to keep two Board columns
                 // in a small window (River, Swarm v3; #4211). It stays under a page or Manage too (#4220).
                 rightFixed: fixedSides,
+                // Swarm v4: a task's thread or a terminal opens beside what you read, at equal width.
+                rightHalf: widget.board && (thread != null || chatBeside),
                 // Over the chat, beside an open thread, as in Slack.
                 over: wide ? viewer : null,
                 // A project's own chat keeps its header and tabs (Project options, Tasks): the full chat view.

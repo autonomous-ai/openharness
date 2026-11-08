@@ -20,7 +20,6 @@ import 'model.dart';
 import 'my_agents.dart';
 import 'personal_projects.dart' show PersonalProjects;
 import 'places.dart';
-import 'buddy_chat.dart' show countText;
 import 'buddy_rows.dart';
 import 'identity.dart';
 import 'leaderboard/reader.dart';
@@ -646,48 +645,31 @@ class ProjectSidebar extends StatelessWidget {
     onTap: onTap,
   );
 
-  /// The Desktop's left pane, top to bottom (task #4466, anh Dee 11-07): the org name, Decisions with its count,
-  /// Projects (one link to the grid in the middle), My agents, then Humans; Manage stays at the foot.
+  /// The Desktop's left pane (Swarm v4, anh Dee 2026-11-08): the org name, Your agents, Projects, then Humans; Manage
+  /// stays at the foot. Nothing else: no Decisions, no Projects grid, no Buddy.
   List<Widget> _desktop(
     SuperTabSnapshot? snapshot,
     _SidebarReading reading, {
     required Widget? switcher,
-    required int decisions,
   }) {
-    // The projects with something new in their chat, a tag of you or a person's new lines: with no project rows and no
-    // Mentions row, they show here (tasks #4220, #4445).
-    final waiting = [
-      for (final read in _listed(snapshot, reading))
-        if ((read.unread.contains(read.lead!.id) &&
-                controller.notifyOf(read.lead!.id) != SuperTabNotify.muted) ||
-            (attention?.chatTagsIn(read.lead!.id) ?? 0) > 0)
-          read,
-    ].length;
+    final projects = snapshot?.projects ?? const <SuperTabProject>[];
     return [
       ?switcher,
-      if (onPage case final onPage?) ...[
-        _iconRow(
-          key: 'super-decisions',
-          icon: AppIcons.inbox,
-          name: 'Decisions',
-          detail: decisions > 0 ? countText(decisions) : null,
-          unread: decisions > 0,
-          selected: page == SwarmPage.decisions,
-          onTap: () => onPage(SwarmPage.decisions),
-        ),
-        _iconRow(
-          key: 'super-projects',
-          icon: AppIcons.layoutGrid,
-          name: 'Projects',
-          detail: waiting > 0 ? countText(waiting) : null,
-          unread: waiting > 0,
-          // A project's Board is one of the grid's: it lights Projects.
-          selected: page == SwarmPage.projects || (!_paneCovered && _boardOpen),
-          onTap: () => onPage(SwarmPage.projects),
-        ),
-      ],
       const SizedBox(height: grid.AppDesktop.groupGap),
       ..._myAgents(snapshot, reading),
+      SuperTabQuietHeading(
+        'Projects',
+        key: const ValueKey('project-sidebar-projects'),
+        onTap: null,
+        onAdd: controller.canWrite ? onNewProject : null,
+        addTooltip: 'New project',
+        addKey: const ValueKey('project-sidebar-projects-add'),
+      ),
+      if (snapshot != null && projects.isEmpty)
+        _noProjects()
+      else
+        for (final (_, channel) in _channels(snapshot, reading)) channel,
+      const SizedBox(height: grid.AppDesktop.groupGap),
       ..._humans(snapshot),
     ];
   }
@@ -697,6 +679,9 @@ class ProjectSidebar extends StatelessWidget {
   List<Widget> _humans(SuperTabSnapshot? snapshot) {
     final onPage = this.onPage;
     if (snapshot == null || onPage == null) return const [];
+    final scores = [...?leaderboard?.board?.people].take(humansShown).toList();
+    // An empty list shows nothing (anh Dee's rule): no heading until someone has points.
+    if (scores.isEmpty) return const [];
     void open() => onPage(SwarmPage.leaderboard);
     final people = {for (final person in snapshot.people) person.id: person};
     return [
@@ -705,7 +690,7 @@ class ProjectSidebar extends StatelessWidget {
         key: const ValueKey('project-sidebar-humans'),
         onTap: open,
       ),
-      for (final score in [...?leaderboard?.board?.people].take(humansShown))
+      for (final score in scores)
         if (people[score.personId] case final person)
           SuperTabQuietRow(
             key: ValueKey('super-human-${score.personId}'),
@@ -833,31 +818,15 @@ class ProjectSidebar extends StatelessWidget {
     final newAgent = controller.canWrite ? onNewAgent : null;
     return [
       SuperTabQuietHeading(
-        'My agents',
+        'Your agents',
         key: const ValueKey('project-sidebar-agents'),
-        // It folds, remembered (task #4192); its chevron shows on hover.
-        collapsed: !controller.agentsGroupOpen,
-        onTap: controller.toggleAgentsGroup,
+        onTap: null,
         onAdd: newAgent,
         addTooltip: 'New agent',
         addKey: const ValueKey('project-sidebar-agents-add'),
       ),
-      if (controller.agentsGroupOpen) ...[
-        if (controller.oneBuddy)
-          ?_swarmBuddyRow()
-        else
-          ..._buddies([...snapshot.projects], reading),
-        for (final (agent, chat) in reading.myAgents)
-          _agentRow(snapshot, agent, chat),
-        // With no agents yet, a row says where to start; the creation dialog chooses Regular or PM.
-        if (newAgent != null && reading.myAgents.isEmpty)
-          _iconRow(
-            key: 'super-new-agent-row',
-            icon: AppIcons.plus,
-            name: 'New agent',
-            onTap: newAgent,
-          ),
-      ],
+      for (final (agent, chat) in reading.myAgents)
+        _agentRow(snapshot, agent, chat),
       const SizedBox(height: grid.AppDesktop.groupGap),
     ];
   }
@@ -877,10 +846,6 @@ class ProjectSidebar extends StatelessWidget {
       tooltip: chat == null && onOpenAgentTerminal != null
           ? 'Opens its terminal'
           : null,
-      detail: _detail(
-        agent,
-        leads: pm ? snapshot.leadProjectForAgent(agent.id)?.name : null,
-      ),
       selected: _chatLit(chat),
       unread: chat != null && controller.unreadShown(chat),
       onTap: switch ((chat, onOpenAgentTerminal)) {
@@ -1066,12 +1031,7 @@ class ProjectSidebar extends StatelessWidget {
             child: LaidOutListView(
               padding: const EdgeInsets.all(8),
               children: board
-                  ? _desktop(
-                      snapshot,
-                      reading,
-                      switcher: switcher,
-                      decisions: decisions,
-                    )
+                  ? _desktop(snapshot, reading, switcher: switcher)
                   : [
                       if (places case final places?) _arrows(places),
                       ?switcher,

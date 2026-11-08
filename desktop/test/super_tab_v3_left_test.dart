@@ -132,226 +132,104 @@ void main() {
     return c;
   }
 
-  group('the org switcher is the first thing in the left pane', () {
-    // Task #4192 (anh Dee 11-07): no back and forward arrows under it; ⌘[ and ⌘] still step back and forward.
-    testWidgets('on the Desktop it sits above Decisions, with no back and '
-        'forward arrows', (tester) async {
-      await show(tester);
-      double top(String k) => tester.getTopLeft(key(k)).dy;
-      expect(top('super-swarm-switcher'), lessThan(top('super-decisions')));
-      expect(key('super-back'), findsNothing);
-      expect(key('super-forward'), findsNothing);
-    });
+  // Swarm v4 (anh Dee 2026-11-08): the org name, Your agents, Projects, Humans; Manage at the foot. No Decisions, Mentions,
+  // Threads, Projects grid or Buddy, and an agent's row is its face and name only.
+  group('the v4 left pane', () {
+    void lead(ConversationServer server) {
+      (server.state['conversations'] as List)
+              .cast<Map<String, dynamic>>()
+              .firstWhere((g) => g['id'] == 'lead')['leadId'] =
+          'orion';
+    }
 
-    testWidgets('a layout that is not the Desktop\'s keeps its order', (
+    final mine = [
+      _agent('kestrel', 'Kestrel'),
+      _agent('orion', 'Orion'),
+      _agent('tuan-agent', 'Tuan agent', contributor: 'tuan'),
+    ];
+    double top(WidgetTester tester, String k) => tester.getTopLeft(key(k)).dy;
+
+    testWidgets('org, Your agents, Projects, Humans, then Manage', (
       tester,
     ) async {
-      await show(tester, board: false);
-      double top(String k) => tester.getTopLeft(key(k)).dy;
-      expect(top('super-back'), lessThan(top('super-swarm-switcher')));
-    });
-  });
-
-  group('Mentions goes', () {
-    testWidgets('the Desktop\'s left pane has Decisions and no Mentions', (
-      tester,
-    ) async {
-      await show(tester);
-      expect(key('super-decisions'), findsOneWidget);
-      expect(key('super-mentions'), findsNothing);
-    });
-
-    testWidgets('a layout that is not the Desktop\'s keeps its rows', (
-      tester,
-    ) async {
-      await show(tester, board: false);
-      expect(key('super-mentions'), findsOneWidget);
-    });
-  });
-
-  // Task #4466 (anh Dee 11-07): top to bottom, the org name, Decisions, Projects, My agents, Humans; Manage at the foot.
-  group('the Desktop left pane, top to bottom', () {
-    testWidgets('org, Decisions, Projects, My agents, Humans, then Manage', (
-      tester,
-    ) async {
-      await show(tester);
-      double top(String k) => tester.getTopLeft(key(k)).dy;
+      await show(tester, agents: mine);
       final order = [
         'super-swarm-switcher',
-        'super-decisions',
-        'super-projects',
         'project-sidebar-agents',
+        'project-sidebar-projects',
         'project-sidebar-humans',
         'super-manage',
       ];
       for (var i = 1; i < order.length; i++) {
-        expect(top(order[i - 1]), lessThan(top(order[i])), reason: order[i]);
-      }
-    });
-
-    testWidgets('the org name is plain text, its chevron only on hover', (
-      tester,
-    ) async {
-      await show(tester);
-      final org = key('super-swarm-switcher');
-      Finder chevron() =>
-          find.descendant(of: org, matching: find.byIcon(AppIcons.chevronDown));
-      expect(chevron(), findsNothing);
-      expect(
-        find.descendant(of: org, matching: find.byIcon(AppIcons.users)),
-        findsNothing,
-      );
-      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-      await mouse.addPointer(location: Offset.zero);
-      addTearDown(mouse.removePointer);
-      await mouse.moveTo(tester.getCenter(org));
-      await tester.pump();
-      expect(chevron(), findsOneWidget);
-    });
-
-    testWidgets('Decisions has the inbox icon and its count on the right', (
-      tester,
-    ) async {
-      await show(tester, setup: wait);
-      final row = key('super-decisions');
-      expect(
-        find.descendant(of: row, matching: find.byIcon(AppIcons.inbox)),
-        findsOneWidget,
-      );
-      final count = find.descendant(of: row, matching: find.text('1'));
-      expect(count, findsOneWidget);
-      expect(
-        tester.getRect(count).right,
-        greaterThan(tester.getRect(row).right - 16),
-      );
-    });
-
-    testWidgets('no Leaderboard row, no project rows and no unread filter: '
-        'Projects is one link to the grid', (tester) async {
-      final pages = <SwarmPage>[];
-      await show(tester, pages: pages);
-      for (final gone in [
-        'super-leaderboard',
-        'project-sidebar-projects',
-        'super-project-lead',
-        'super-unread-only',
-      ]) {
-        expect(key(gone), findsNothing, reason: gone);
+        expect(
+          top(tester, order[i - 1]),
+          lessThan(top(tester, order[i])),
+          reason: order[i],
+        );
       }
       expect(
         find.descendant(
-          of: key('super-projects'),
-          matching: find.byIcon(AppIcons.layoutGrid),
+          of: key('project-sidebar-agents'),
+          matching: find.text('Your agents'),
         ),
         findsOneWidget,
       );
-      await tester.tap(key('super-projects'));
-      expect(pages, [SwarmPage.projects]);
     });
 
-    // Task #4220 kept a project that tags you in folded Projects, the Desktop having no Mentions row; with no project
-    // rows (task #4466) the tags are Projects' own detail, and it is bold while any waits.
-    testWidgets('a tag of you in a project\'s chat shows on Projects, with its '
-        'count', (tester) async {
-      await show(
-        tester,
-        setup: (server) => server.tag('message-1', conversationId: 'lead'),
-      );
-      final row = key('super-projects');
-      expect(
-        find.descendant(of: row, matching: find.text('1')),
-        findsOneWidget,
-      );
-      expect(
-        tester
-            .widget<Text>(
-              find.descendant(of: row, matching: find.text('Projects')),
+    testWidgets('no Decisions, Mentions, Threads or Projects grid', (
+      tester,
+    ) async {
+      await show(tester, agents: mine);
+      for (final gone in [
+        'super-decisions',
+        'super-mentions',
+        'super-threads',
+        'super-projects',
+      ]) {
+        expect(key(gone), findsNothing, reason: gone);
+      }
+    });
+
+    testWidgets('Projects lists each project as a row', (tester) async {
+      final c = await show(tester, agents: mine);
+      for (final project in c.snapshot!.projects) {
+        expect(key('super-project-${project.id}'), findsOneWidget);
+      }
+    });
+
+    testWidgets('Your agents lists only the reader\'s agents, face and name, '
+        'with no detail', (tester) async {
+      await show(tester, agents: mine, setup: lead);
+      expect(key('super-agent-kestrel'), findsOneWidget);
+      expect(key('super-agent-orion'), findsOneWidget);
+      expect(key('super-agent-tuan-agent'), findsNothing);
+      expect(key('super-swarm-buddy'), findsNothing);
+      // The PM still wears the gold ring, and no row says more than its name.
+      expect(ring('orion'), findsOneWidget);
+      expect(ring('kestrel'), findsNothing);
+      for (final agent in ['kestrel', 'orion']) {
+        final texts = tester
+            .widgetList<Text>(
+              find.descendant(
+                of: key('super-agent-$agent'),
+                matching: find.byType(Text),
+              ),
             )
-            .style
-            ?.fontWeight,
-        grid.AppFont.semibold,
-      );
-      await tester.pumpWidget(const SizedBox());
-      await show(tester);
-      expect(find.descendant(of: row, matching: find.text('1')), findsNothing);
+            .map((t) => t.data)
+            .whereType<String>()
+            .where((t) => t.trim().isNotEmpty);
+        expect(texts, [agent == 'orion' ? 'Orion' : 'Kestrel']);
+      }
     });
 
-    // Audit finding 19 (task #4445), carried to the Projects row: new lines from a person count as a tag does.
-    testWidgets('a tag in one project and new lines in another: Projects is '
-        'bold and counts the two', (tester) async {
-      await show(
-        tester,
-        setup: (server) {
-          (server.state['projects'] as List).add(
-            projectFixture('second', 'second-project', 'second'),
-          );
-          (server.state['conversations'] as List).add({
-            ...conversationFixture('second', 'second-project'),
-            'projectId': 'second',
-          });
-          server.tag('message-1', conversationId: 'lead');
-          server.append('Can someone look?', conversationId: 'second');
-          server.messages.last['author'] = {
-            'kind': 'person',
-            'id': 'tuan',
-            'name': 'tuan@example.com',
-          };
-        },
-      );
-      expect(
-        find.descendant(of: key('super-projects'), matching: find.text('2')),
-        findsOneWidget,
-      );
-    });
-
-    // Review of #3539: the Desktop has no unread filter to turn off, so one saved on must hide nothing there.
-    testWidgets('a saved unread filter hides no Buddy row on the Desktop', (
-      tester,
-    ) async {
-      final c = await show(tester);
-      expect(key('super-buddy-lead'), findsOneWidget);
-      c.toggleUnreadOnly();
+    testWidgets('the + on Your agents opens New agent', (tester) async {
+      final created = <String>[];
+      await show(tester, agents: mine, created: created);
+      await tester.tap(key('project-sidebar-agents-add'));
       await tester.pump();
-      expect(c.unreadOnly, isTrue);
-      expect(key('super-buddy-lead'), findsOneWidget);
-      await tester.runAsync(c.flush);
-    });
-
-    testWidgets('Projects is the lit row while the grid or a Board is open', (
-      tester,
-    ) async {
-      bool lit() => tester
-          .widget<Semantics>(
-            find
-                .descendant(
-                  of: key('super-projects'),
-                  matching: find.byWidgetPredicate(
-                    (w) => w is Semantics && w.properties.selected != null,
-                  ),
-                )
-                .first,
-          )
-          .properties
-          .selected!;
-      await show(tester);
-      expect(lit(), isFalse);
-      await tester.pumpWidget(const SizedBox());
-      await show(tester, page: SwarmPage.projects);
-      expect(lit(), isTrue);
-      await tester.pumpWidget(const SizedBox());
-      await show(tester, boardProjectId: 'lead');
-      expect(lit(), isTrue);
-    });
-
-    testWidgets('a layout that is not the Desktop\'s keeps Projects open', (
-      tester,
-    ) async {
-      await show(tester, board: false);
-      expect(key('super-project-lead'), findsOneWidget);
-      expect(key('super-projects'), findsNothing);
+      expect(created, ['new']);
     });
   });
-
   group('Humans is the Leaderboard', () {
     SuperTabLeaderboardReader board(List<(String, int)> people) {
       final reader = SuperTabLeaderboardReader(
@@ -421,651 +299,15 @@ void main() {
       expect(pages, [SwarmPage.leaderboard, SwarmPage.leaderboard]);
     });
 
-    testWidgets('before the board is read, the heading alone', (tester) async {
+    testWidgets('before the board is read, nothing: an empty list shows no '
+        'heading', (tester) async {
       await show(tester, leaderboard: board([('dee', 1)]));
-      expect(key('project-sidebar-humans'), findsOneWidget);
+      expect(key('project-sidebar-humans'), findsNothing);
       expect(key('super-human-dee'), findsNothing);
       expect(find.byType(CircularProgressIndicator), findsNothing);
     });
   });
 
-  group('My agents', () {
-    final buddy = {
-      ..._agent('buddy', 'Buddy'),
-      'buddyScope': 'swarm',
-      'buddyOf': {'personId': 'owner'},
-    };
-
-    /// The person's Buddy, an agent of theirs at work on a task (Kestrel), a
-    /// PM of theirs (Orion, the project's), and another person's agent.
-    void agents(ConversationServer server) {
-      server.state['swarmBuddy'] = true;
-      final groups = (server.state['conversations'] as List)
-          .cast<Map<String, dynamic>>();
-      groups.firstWhere((g) => g['id'] == 'lead')['leadId'] = 'orion';
-      groups.firstWhere((g) => g['id'] == 'offline')['assignment'] = {
-        'id': 'a1',
-        'agentId': 'kestrel',
-        'status': 'working',
-      };
-    }
-
-    final mine = [
-      buddy,
-      _agent('kestrel', 'Kestrel'),
-      _agent('orion', 'Orion'),
-      _agent('tuan-agent', 'Tuan agent', contributor: 'tuan'),
-    ];
-
-    double top(WidgetTester tester, String k) => tester.getTopLeft(key(k)).dy;
-
-    testWidgets('lists the Buddy first, then the person\'s own agents and '
-        'no one else\'s', (tester) async {
-      await show(tester, agents: mine, setup: agents);
-      expect(key('project-sidebar-agents'), findsOneWidget);
-      expect(
-        find.descendant(
-          of: key('project-sidebar-agents'),
-          matching: find.text('My agents'),
-        ),
-        findsOneWidget,
-      );
-      expect(key('super-swarm-buddy'), findsOneWidget);
-      expect(
-        top(tester, 'super-swarm-buddy'),
-        lessThan(top(tester, 'super-agent-kestrel')),
-      );
-      expect(
-        top(tester, 'super-agent-kestrel'),
-        lessThan(top(tester, 'super-agent-orion')),
-      );
-      expect(key('super-agent-tuan-agent'), findsNothing);
-      // Under the Projects link.
-      expect(
-        top(tester, 'super-projects'),
-        lessThan(top(tester, 'project-sidebar-agents')),
-      );
-    });
-
-    // Task #4192 (anh Dee 11-07): his list showed about 30 rows, Team-account and finished agents he never started among
-    // them. The server says which agents are the reader's; the list follows it.
-    testWidgets('lists only the agents the server says are the reader\'s', (
-      tester,
-    ) async {
-      await show(
-        tester,
-        agents: [
-          {...buddy, 'myAgent': true},
-          {..._agent('kestrel', 'Kestrel'), 'myAgent': true},
-          {..._agent('avatarrow', 'Avatarrow'), 'myAgent': false},
-          {..._agent('fir', 'Fir'), 'myAgent': false},
-        ],
-        setup: agents,
-      );
-      expect(key('super-swarm-buddy'), findsOneWidget);
-      expect(key('super-agent-kestrel'), findsOneWidget);
-      expect(key('super-agent-avatarrow'), findsNothing);
-      expect(key('super-agent-fir'), findsNothing);
-    });
-
-    // Task #4466: grey everywhere, colour only on faces; an agent that is down says so in its one detail.
-    testWidgets('no coloured marks in the rows; an offline agent says '
-        '"offline" on the right', (tester) async {
-      await show(
-        tester,
-        agents: [
-          {...buddy}..remove('projectId'),
-          {...mine[1], 'downSince': '2026-11-07T08:00:00Z'},
-          ...mine.skip(2),
-        ],
-        setup: agents,
-      );
-      expect(find.byType(ActivityMark), findsNothing);
-      final offline = text('kestrel', 'offline');
-      expect(offline, findsOneWidget);
-      expect(
-        tester.getRect(offline).right,
-        greaterThan(tester.getRect(key('super-agent-kestrel')).right - 40),
-      );
-    });
-
-    // Task #4421 (anh Dee 11-07): "let's put the project name next to the one that it leads". Task #4461 (anh Dee
-    // 11-07): a Lead wears a thin gold ring instead of the crown, outside its avatar's box so no row moves.
-    testWidgets('a PM wears the gold Lead ring around its avatar and names the '
-        'project it leads after its name; a Regular agent neither', (
-      tester,
-    ) async {
-      final semantics = tester.ensureSemantics();
-      await show(tester, agents: mine, setup: agents);
-      expect(ring('orion'), findsOneWidget);
-      expect(
-        find.descendant(
-          of: key('super-agent-orion'),
-          matching: find.byIcon(AppIcons.crown),
-        ),
-        findsNothing,
-      );
-      final avatarFinder = find.descendant(
-        of: key('super-agent-orion'),
-        matching: find.byType(SuperTabAvatar),
-      );
-      final avatar = tester.getRect(avatarFinder);
-      // The row's avatar keeps its size; the ring lies 7% + 5% of it outside.
-      expect(avatar.size, const Size.square(20));
-      expect(tester.getRect(ring('orion')), avatar.inflate(20 * (.07 + .05)));
-      final painter =
-          tester.widget<CustomPaint>(ring('orion')).painter! as dynamic;
-      expect(painter.stroke as double, closeTo(20 * .05, 1e-9));
-      expect(painter.gap as double, closeTo(20 * .07, 1e-9));
-      expect(
-        (painter.color as Color).toARGB32(),
-        HSLColor.fromAHSL(1, 42, .92, .58).toColor().toARGB32(),
-      );
-      // A reader still hears it is the Lead.
-      String said(String agent) =>
-          tester.getSemantics(key('super-agent-$agent')).label;
-      expect(said('orion').split('\n'), contains('Lead'));
-      expect(said('kestrel').split('\n'), isNot(contains('Lead')));
-      final name = tester.getRect(text('orion', 'Orion'));
-      expect(tester.getRect(ring('orion')).right, lessThan(name.left));
-      final project = tester.getRect(text('orion', 'web-project'));
-      expect(project.left, greaterThan(name.right));
-      expect((project.center.dy - name.center.dy).abs(), lessThan(4));
-      // The one quiet detail, right-aligned at the row's end.
-      expect(
-        project.right,
-        greaterThan(tester.getRect(key('super-agent-orion')).right - 40),
-      );
-      expect(
-        tester.widget<Text>(text('orion', 'web-project')).style?.color,
-        grid.AppPalette.textFaint,
-      );
-      expect(ring('kestrel'), findsNothing);
-      expect(text('kestrel', 'web-project'), findsNothing);
-      semantics.dispose();
-    });
-
-    testWidgets('in a narrow pane the project name is cut before the agent\'s '
-        'name', (tester) async {
-      await show(
-        tester,
-        agents: [
-          buddy,
-          {..._agent('orion', 'Orion Lead'), 'kind': 'pm'},
-        ],
-        setup: (server) {
-          agents(server);
-          (server.state['projects'] as List).first['name'] =
-              'a-project-with-a-long-name';
-        },
-        // The test font draws every letter as a square: 320 here is about 200 in the app's.
-        width: 320,
-      );
-      bool cut(String shown) => tester
-          .renderObject<RenderParagraph>(text('orion', shown))
-          .didExceedMaxLines;
-      expect(cut('a-project-with-a-long-name'), isTrue);
-      expect(cut('Orion Lead'), isFalse);
-    });
-
-    /// The Buddy's own chat, which is how the controller finds the reader's Buddy.
-    void buddyChat(ConversationServer server) {
-      agents(server);
-      // A Swarm's one Buddy belongs to no project.
-      for (final agent in (server.state['agents'] as List).cast<Map>()) {
-        if (agent['id'] == 'buddy') agent.remove('projectId');
-      }
-      (server.state['conversations'] as List).add({
-        ...conversationFixture('swarm-buddy-owner', 'Buddy'),
-        'kind': 'swarm-buddy',
-        'buddyOwnerId': 'owner',
-        'agentIds': ['buddy'],
-      });
-    }
-
-    // Audit finding 8 of task #4436 (task #4444): the row read "Buddy" with a pink "B" while the header said "Wren".
-    testWidgets('the Buddy row wears the Buddy\'s own name and face', (
-      tester,
-    ) async {
-      await show(
-        tester,
-        agents: [
-          {...buddy, 'name': 'Wren', 'displayName': 'Wren'},
-        ],
-        setup: buddyChat,
-      );
-      final row = key('super-swarm-buddy');
-      expect(find.descendant(of: row, matching: find.text('Wren')), findsOne);
-      expect(
-        find.descendant(of: row, matching: find.text('Buddy')),
-        findsNothing,
-      );
-      final avatar = tester.widget<SuperTabAvatar>(
-        find.descendant(of: row, matching: find.byType(SuperTabAvatar)),
-      );
-      expect(avatar.name, 'Wren');
-      expect(avatar.identity, 'agent:buddy');
-      // The agent's own face, as every other row draws it, not a letter.
-      expect(avatar.face, isTrue);
-    });
-
-    test('the detail is "offline", else the project a Lead leads', () {
-      for (final (activity, lead, word) in [
-        (HarnessActivity.offline, 'web', 'offline'),
-        (HarnessActivity.working, 'web', 'web'),
-        (HarnessActivity.needsInput, null, null),
-        (null, 'web', 'web'),
-      ]) {
-        expect(superTabAgentDetail(activity, leads: lead), word);
-      }
-    });
-
-    // Audit finding 9 of task #4436 (task #4444): working, waiting, offline and starting all looked the same. Since
-    // task #4466 a state is the row's one quiet word on the right, grey, with no coloured mark.
-    testWidgets('a row says "offline" on the right when its agent is down, '
-        'with no coloured mark', (tester) async {
-      await show(
-        tester,
-        agents: [
-          {...buddy, 'downSince': '2026-11-07T01:00:00.000Z'},
-          _agent('kestrel', 'Kestrel'),
-          {
-            ..._agent('orion', 'Orion'),
-            'downSince': '2026-11-07T01:00:00.000Z',
-          },
-        ],
-        setup: buddyChat,
-      );
-      expect(find.byType(ActivityMark), findsNothing);
-      for (final row in ['super-swarm-buddy', 'super-agent-orion']) {
-        final word = find.descendant(
-          of: key(row),
-          matching: find.text('offline'),
-        );
-        expect(word, findsOne, reason: row);
-        expect(
-          tester.getRect(word).right,
-          greaterThan(tester.getRect(key(row)).right - 40),
-          reason: row,
-        );
-      }
-      expect(text('kestrel', 'offline'), findsNothing);
-    });
-
-    testWidgets('names use the whole row in the narrowest left pane, in the '
-        'pane\'s one row size', (tester) async {
-      await show(
-        tester,
-        agents: [buddy, _agent('kestrel', 'Kestrel Windows crew agent')],
-        setup: buddyChat,
-        width: 180,
-      );
-      final row = tester.getRect(key('super-agent-kestrel'));
-      final name = find.descendant(
-        of: key('super-agent-kestrel'),
-        matching: find.text('Kestrel Windows crew agent'),
-      );
-      // No empty columns at the right: the name runs to the row's inset (task #4645: no marks' column).
-      expect(
-        tester.getRect(name).right,
-        greaterThan(row.right - grid.AppDesktop.controlGap - 1),
-      );
-      double? size(Finder f) => tester.widget<Text>(f).style?.fontSize;
-      final buddyName = find.descendant(
-        of: key('super-swarm-buddy'),
-        matching: find.text('Buddy'),
-      );
-      expect(size(name), size(buddyName));
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets('screenshots of My agents, light and dark', (tester) async {
-      await tester.runAsync(() => loadCaptureFonts(shots));
-      for (final (brightness, name) in [
-        (Brightness.light, 'light'),
-        (Brightness.dark, 'dark'),
-      ]) {
-        await show(tester, agents: mine, setup: agents, brightness: brightness);
-        await captureWindow(tester, shots, 'my-agents-pm-ring-$name');
-        await tester.pumpWidget(const SizedBox());
-      }
-    }, skip: shots == null);
-
-    testWidgets('screenshots of My agents rows at the narrowest and a wide '
-        'left pane, light and dark (#4444)', (tester) async {
-      await tester.runAsync(() => loadCaptureFonts(shots));
-      for (final (brightness, name) in [
-        (Brightness.light, 'light'),
-        (Brightness.dark, 'dark'),
-      ]) {
-        for (final width in [180.0, 300.0]) {
-          await show(
-            tester,
-            agents: [
-              {...buddy, 'name': 'Wren', 'displayName': 'Wren'},
-              _agent('kestrel', 'Kestrel Windows crew'),
-              {
-                ..._agent('orion', 'Orion'),
-                'downSince': '2026-11-07T01:00:00.000Z',
-              },
-            ],
-            setup: buddyChat,
-            brightness: brightness,
-            width: width,
-          );
-          await captureWindow(
-            tester,
-            shots,
-            '09-my-agents-${width.round()}-$name',
-          );
-          await tester.pumpWidget(const SizedBox());
-        }
-      }
-    }, skip: shots == null);
-
-    testWidgets('unread is a bold name, with no dot and no number', (
-      tester,
-    ) async {
-      await show(
-        tester,
-        agents: mine,
-        setup: (server) {
-          agents(server);
-          server.append('Done with the change.', conversationId: 'offline');
-        },
-      );
-      FontWeight? weight(String agent, String name) => tester
-          .widget<Text>(
-            find.descendant(of: key(agent), matching: find.text(name)),
-          )
-          .style
-          ?.fontWeight;
-      expect(weight('super-agent-kestrel', 'Kestrel'), FontWeight.w600);
-      expect(weight('super-agent-orion', 'Orion'), isNot(FontWeight.w600));
-      expect(
-        find.descendant(
-          of: key('super-agent-kestrel'),
-          matching: find.byType(SuperTabCountBadge),
-        ),
-        findsNothing,
-      );
-    });
-
-    testWidgets('opening an agent opens its chat: a PM\'s project chat, a '
-        'Regular agent\'s task', (tester) async {
-      final selected = <String>[];
-      final c = await show(
-        tester,
-        agents: mine,
-        setup: agents,
-        selected: selected,
-      );
-      await tester.tap(key('super-agent-orion'));
-      await tester.pump();
-      await tester.tap(key('super-agent-kestrel'));
-      await tester.pump();
-      expect(selected, ['lead', 'offline']);
-      await tester.runAsync(c.flush);
-    });
-
-    // Task #4220: an agent from before its own chat (#4116), with no open task, was a row that did nothing.
-    testWidgets('an agent with no chat opens its terminal', (tester) async {
-      final selected = <String>[], terminals = <String>[];
-      await show(
-        tester,
-        agents: mine,
-        setup: (server) {
-          agents(server);
-          (server.state['conversations'] as List<Map<String, dynamic>>)
-              .firstWhere((g) => g['id'] == 'offline')
-              .remove('assignment');
-        },
-        selected: selected,
-        terminals: terminals,
-      );
-      await tester.tap(key('super-agent-kestrel'));
-      await tester.pump();
-      expect(selected, isEmpty);
-      expect(terminals, ['kestrel']);
-      // Copy says it once: no name repeated, no filler (anh Dee 11-07).
-      expect(find.byTooltip('Opens its terminal'), findsOneWidget);
-      expect(find.byTooltip('Kestrel'), findsNothing);
-    });
-
-    // Task #4192: My agents folds with the same chevron as Projects, and the choice is remembered.
-    testWidgets('its heading folds and unfolds it, and the choice is saved', (
-      tester,
-    ) async {
-      late ConversationServer server;
-      final c = await show(
-        tester,
-        agents: mine,
-        setup: (s) {
-          server = s;
-          agents(s);
-        },
-      );
-      expect(key('super-agent-kestrel'), findsOneWidget);
-      await tester.tap(key('project-sidebar-agents'));
-      await tester.pump();
-      for (final row in ['super-swarm-buddy', 'super-agent-kestrel']) {
-        expect(key(row), findsNothing, reason: row);
-      }
-      expect(key('project-sidebar-agents'), findsOneWidget);
-      expect(c.agentsGroupOpen, isFalse);
-      await tester.runAsync(c.flush);
-      final again = server.controller(initial: server.saved);
-      addTearDown(again.dispose);
-      expect(again.agentsGroupOpen, isFalse);
-      await tester.tap(key('project-sidebar-agents'));
-      await tester.pump();
-      expect(key('super-agent-kestrel'), findsOneWidget);
-      expect(c.agentsGroupOpen, isTrue);
-      await tester.runAsync(c.flush);
-    });
-
-    // Task #4192: the Buddy wears the face every agent has, not the robot icon, and is still first.
-    testWidgets('the Buddy has the avatar every agent has, first', (
-      tester,
-    ) async {
-      await show(
-        tester,
-        agents: mine,
-        setup: (server) {
-          agents(server);
-          (server.state['conversations'] as List).add({
-            ...conversationFixture('swarm-buddy-owner', 'Buddy'),
-            'kind': 'swarm-buddy',
-            'buddyOwnerId': 'owner',
-            'agentIds': ['buddy'],
-          });
-        },
-      );
-      Finder inBuddy(Finder f) =>
-          find.descendant(of: key('super-swarm-buddy'), matching: f);
-      expect(inBuddy(find.byType(SuperTabAvatar)), findsOneWidget);
-      expect(inBuddy(find.byIcon(AppIcons.bot)), findsNothing);
-      expect(
-        tester.getSize(inBuddy(find.byType(SuperTabAvatar))),
-        tester.getSize(
-          find.descendant(
-            of: key('super-agent-kestrel'),
-            matching: find.byType(SuperTabAvatar),
-          ),
-        ),
-      );
-      expect(
-        top(tester, 'super-swarm-buddy'),
-        lessThan(top(tester, 'super-agent-kestrel')),
-      );
-    });
-
-    testWidgets('a layout that is not the Desktop\'s has no My agents', (
-      tester,
-    ) async {
-      await show(tester, agents: mine, setup: agents, board: false);
-      expect(key('project-sidebar-agents'), findsNothing);
-    });
-  });
-
-  // Task #4645 (anh Dee 19:50 and 22:25): the left pane is calm and exactly aligned. A + on the My agents heading adds
-  // an agent, rows carry no status marks, and every row's right-side detail ends at one edge in every section.
-  group('a calm left pane', () {
-    final buddy = {
-      ..._agent('buddy', 'Buddy'),
-      'buddyScope': 'swarm',
-      'buddyOf': {'personId': 'owner'},
-    };
-    void agents(ConversationServer server) {
-      server.state['swarmBuddy'] = true;
-      (server.state['conversations'] as List)
-              .cast<Map<String, dynamic>>()
-              .firstWhere((g) => g['id'] == 'lead')['leadId'] =
-          'orion';
-      (server.state['people'] as List).add({
-        'id': 'dee',
-        'email': 'dee@example.com',
-        'role': 'collaborator',
-      });
-    }
-
-    SuperTabLeaderboardReader board() {
-      final reader = SuperTabLeaderboardReader(
-        tabId: 'tab',
-        request: (method, path, {body}) async => {
-          'projectId': 'lead',
-          'week': 0,
-          'people': [
-            {'personId': 'dee', 'points': 120, 'rank': 1},
-          ],
-        },
-      );
-      addTearDown(reader.dispose);
-      return reader;
-    }
-
-    final heading = find.byKey(const ValueKey('project-sidebar-agents-add'));
-
-    testWidgets('a + on the My agents heading opens New agent, and the New '
-        'agent row is gone while the person has agents', (tester) async {
-      final created = <String>[];
-      await show(
-        tester,
-        agents: [buddy, _agent('kestrel', 'Kestrel')],
-        setup: agents,
-        created: created,
-      );
-      expect(
-        find.descendant(
-          of: key('project-sidebar-agents'),
-          matching: find.byIcon(AppIcons.plus),
-        ),
-        findsOneWidget,
-      );
-      expect(find.byTooltip('New agent'), findsOneWidget);
-      // On the heading's line, at the pane's right.
-      expect(
-        tester.getCenter(heading).dy,
-        moreOrLessEquals(tester.getCenter(key('project-sidebar-agents')).dy),
-      );
-      expect(
-        tester.getRect(heading).right,
-        greaterThan(tester.getRect(key('project-sidebar-agents')).right - 8),
-      );
-      expect(key('super-new-agent-row'), findsNothing);
-      await tester.tap(heading);
-      await tester.pump();
-      expect(created, ['new']);
-    });
-
-    testWidgets('with no agents of their own, the New agent row shows too', (
-      tester,
-    ) async {
-      await show(tester, agents: [buddy], setup: agents);
-      expect(heading, findsOneWidget);
-      expect(key('super-new-agent-row'), findsOneWidget);
-    });
-
-    // The old mark test went with the marks: an agent that works, needs you or failed still draws none.
-    testWidgets('a working, waiting or failed agent\'s row draws no mark', (
-      tester,
-    ) async {
-      final app = createApp(connected: true);
-      addTearDown(app.dispose);
-      final machine = app.stateOf('m')!;
-      machine.agents = const [
-        Agent(id: 'busy', name: 'Busy', engine: 'codex'),
-        Agent(id: 'asks', name: 'Asks', engine: 'codex'),
-        Agent(
-          id: 'broke',
-          name: 'Broke',
-          engine: 'codex',
-          launchState: 'failed',
-        ),
-      ];
-      machine.processingAgentIds.add('busy');
-      machine.blockedAgents['asks'] = activityQuestion('asks');
-      for (final (id, activity) in [
-        ('busy', HarnessActivity.working),
-        ('asks', HarnessActivity.needsInput),
-        ('broke', HarnessActivity.failed),
-      ]) {
-        expect(harnessActivity(app, 'm', id), activity, reason: id);
-      }
-      await show(
-        tester,
-        withApp: app,
-        agents: [
-          buddy,
-          for (final id in ['busy', 'asks', 'broke'])
-            {..._agent(id, id), 'machineId': 'm', 'harnessId': id},
-        ],
-        setup: agents,
-      );
-      for (final id in ['busy', 'asks', 'broke']) {
-        expect(key('super-agent-$id'), findsOneWidget, reason: id);
-      }
-      expect(find.byType(ActivityMark), findsNothing);
-      expect(find.byType(CircularProgressIndicator), findsNothing);
-    });
-
-    testWidgets('every right-side detail ends at one edge: a Lead\'s project '
-        'in My agents, a person\'s points in Humans', (tester) async {
-      final reader = board();
-      await tester.runAsync(() => reader.show('lead'));
-      await show(
-        tester,
-        agents: [buddy, _agent('orion', 'Orion')],
-        setup: agents,
-        leaderboard: reader,
-      );
-      final project = find.descendant(
-        of: key('super-agent-orion'),
-        matching: find.byWidgetPredicate(
-          (w) => w is Text && w.textAlign == TextAlign.right,
-        ),
-      );
-      final points = find.descendant(
-        of: key('super-human-dee'),
-        matching: find.text('120'),
-      );
-      expect(project, findsOneWidget);
-      expect(points, findsOneWidget);
-      // The texts are right-aligned in their boxes: their boxes' right edges are where the words end.
-      expect(
-        tester.getRect(project).right,
-        moreOrLessEquals(tester.getRect(points).right),
-      );
-      expect(
-        tester.getRect(key('super-agent-orion')).right -
-            tester.getRect(project).right,
-        moreOrLessEquals(grid.AppDesktop.controlGap),
-      );
-    });
-  });
-
-  // Task #4196: + New agent opens the workspace's Cmd-N form, so the view
-  // offers it only when its workspace can open one.
   group('the view offers + New agent only with Cmd-N to open', () {
     Future<SuperTabController> view(
       WidgetTester tester, {
