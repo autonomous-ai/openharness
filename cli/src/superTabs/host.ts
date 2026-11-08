@@ -57,7 +57,6 @@ import { leadSwitchOf, leadSwitchRecovered, SWITCH_ADOPT_MS, SWITCH_RECOVERY_MS,
 import { backend, ENDED_WORK, identifier, object, SuperTabHostError, within } from './wire.js'
 import { parseSwarmSkill, recordBuddySkillNotice, refreshBuddySkill, wireRole, type SkillRefresh, type SwarmSkill, type SwarmSkillGrant,
   type SwarmSkillMode } from '../lib/swarmSkills.js'
-import { recordInstructionsNotice, refreshInstructionsNotice } from './instructionsNotice.js'
 import { artifactLinks, buddyLaunchOf, buddyReadsOf, forgetBuddyReads, grantBuddyWide, heldByOldGuard, listSentToOldGuard, SentListsError,
   writeBuddyAccount } from '../lib/buddyGuard.js'
 import { authorName } from './personName.js'
@@ -272,25 +271,9 @@ async function sessionOfFolder(home: string, sessionId: string, folder: string):
 const JOIN_RETRY_MS = 60_000
 /** How long a skill re-read notice that could not be sent (no open group yet, or the backend failed) waits to retry. */
 const SKILL_RETRY_MS = 60_000
-/** How long new instructions wait for their history (the save's summary and time) once its read fails, read again each
- *  SKILL_RETRY_MS: long enough for a backend blip, short enough that an unreadable history never keeps them from agents. */
-const HISTORY_WAIT_MS = 5 * 60_000
-/** The project instructions the roster names for this agent (project instructions, phase 3), or null: an older backend's row
- *  has no `instructions` key and one in no project has null, and neither is told anything. */
-interface RowInstructions { projectId: string; revision: number; hash: string | null; roleName: string }
-function rowInstructions(target: HostAgent): RowInstructions | null {
-  const { projectId, revision, hash } = object(target.instructions)
-  return identifier(projectId) && Number.isSafeInteger(revision) && (revision as number) >= 0 && (hash === null || typeof hash === 'string')
-    && typeof target.roleName === 'string' && target.roleName !== '' ? { projectId, revision: revision as number, hash, roleName: target.roleName } : null
-}
-/** The instructions history held for one project of a tab, shared by its agents here. */
-const instructionsKey = (tabId: string, projectId: string) => JSON.stringify([tabId, projectId])
-/** What a session is told about: its project's instructions at a revision, in its role (a save is acted on at the next roster,
- *  not the next CLI release); a Buddy's own skill, which only a CLI release changes; or nothing. */
-function skillSetOf(target: HostAgent): string {
-  const doc = rowInstructions(target)
-  return doc ? JSON.stringify(['instructions', doc.projectId, doc.revision, doc.hash, doc.roleName]) : 'none'
-}
+/** What a session is told about: a Buddy's own skill, which only a CLI release changes. Plain agents (Swarm v4) are told
+ *  nothing: they read only their repo's files. */
+function skillSetOf(_target: HostAgent): string { return 'none' }
 const JOIN_RETRY_MAX_MS = 30 * 60_000
 /** A server that no longer serves this client's reads (HTTP 426): said once, then asked again a minute later (design 5.1). */
 const UPDATE_BACKOFF_MS = 60_000
@@ -620,11 +603,6 @@ export class SuperTabHost {
   /** Per running session, the skill set the latest roster names: a refresh started from an older roster installs and
    *  tells nothing once this has moved on (the review of #1660). */
   private readonly rosterSkills = new Map<string, string>()
-  /** Per tab and project (instructionsKey), the revision last named and its summary and save time once a history read
-   *  answered (`failedSince`: when it first failed): read again only when the roster's revision moves, and dropped once no
-   *  roster row names the project. */
-  private readonly instructionHistories = new Map<string, { revision: number; hash: string | null
-    history: { summary: string | null; savedAt: number | null } | null; failedSince?: number }>()
   private skillsRunning: Promise<void> | null = null
   private missing = new Map<string, number>()
   /** A Buddy with no pending switch is checked once at roster admission, never on idle passes. */
@@ -1214,16 +1192,10 @@ export class SuperTabHost {
     // Set as the roster arrives, before any delivery read can stall this poll: a refresh started from an older roster must
     // see this one at once (round 2 of the review of #1660).
     this.rosterSkills.clear()
-    /** The projects whose instructions this roster still names. */
-    const instructionKeys = new Set<string>()
     for (const item of data) {
       const row = object(item), agent = object(row.agent)
       if (identifier(agent.harnessId) && agent.machineId === this.machineId && row.closeSession !== true && row.stopRequested !== true) {
         this.rosterSkills.set(agent.harnessId, skillSetOf(row as unknown as HostAgent))
-        const doc = rowInstructions(row as unknown as HostAgent)
-        if (doc && identifier(row.tabId) && identifier(agent.id)) {
-          instructionKeys.add(instructionsKey(row.tabId, doc.projectId))
-        }
       }
     }
     const stopKeys = new Set(data.filter(item => object(item).stopRequested === true).map(item => { const row = object(item); return `${row.tabId}:${object(row.agent).id}` }))
@@ -1419,7 +1391,6 @@ export class SuperTabHost {
     for (const skills of [this.skillChecks, this.skillModes]) {
       for (const harnessId of skills.keys()) if (!this.rosterSkills.has(harnessId)) skills.delete(harnessId)
     }
-    for (const key of this.instructionHistories.keys()) if (!instructionKeys.has(key)) this.instructionHistories.delete(key)
     // A wait outlives a list that failed or was skipped: that says nothing of the delivery. It goes when a list that was read no
     // longer has the delivery, or when its agent is no longer here.
     for (const [key, retry] of this.deliveryRetries) {
@@ -1845,7 +1816,6 @@ export class SuperTabHost {
     const session = this.core.agents.byAgent(target.agent.harnessId)
     // Read as every saved row is (project instructions, phase 4): a core from before role kinds answers in the wire's values.
     const skill = parseSwarmSkill(session?.swarmSkill)
-    const doc = rowInstructions(target)
     const set = skillSetOf(target)
     const current = () => this.rosterSkills.get(target.agent.harnessId) === set
     // A checked session waits for the next host (Infinity); a change the roster names must reach it now.
@@ -1854,11 +1824,11 @@ export class SuperTabHost {
       this.skillChecks.delete(target.agent.harnessId)
     }
     const due = this.skillChecks.get(target.agent.harnessId) ?? 0
-    if (!session || !skill || !session.cwd || this.now() < due || (skill.role !== 'buddy' && !doc)) return
+    // Plain agents (Swarm v4): only a Buddy has Harness text to keep fresh; every other agent reads only its repo's files.
+    if (!session || !skill || !session.cwd || this.now() < due || skill.role !== 'buddy') return
     this.skillChecks.set(target.agent.harnessId, Infinity)
     try {
-      if (skill.role === 'buddy') await this.refreshBuddyFile(target, session.cwd, skill, current)
-      else await this.refreshInstructions(target, session.cwd, skill, doc!, current)
+      await this.refreshBuddyFile(target, session.cwd, skill, current)
     } catch (error) {
       this.log(error instanceof Error ? error.message : String(error))
       this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
@@ -1872,59 +1842,6 @@ export class SuperTabHost {
     if (await this.tellSkill(target, refresh, current)) recordBuddySkillNotice(cwd, skill, refresh)
     else if (!current()) this.skillChecks.delete(target.agent.harnessId)
     else this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
-  }
-  /** Project instructions (spec 2026-10-30, How agents read it): the roster names the revision, never the text, and the agent
-   *  reads the text itself with the instructions command. The history (the newest save's summary and when a revision was
-   *  saved) is read once per revision for the project's agents here; the agent is told once per change, however many saves
-   *  came between two rosters. */
-  private async refreshInstructions(target: HostAgent, cwd: string, skill: SwarmSkill, doc: RowInstructions, current: () => boolean): Promise<void> {
-    const harnessId = target.agent.harnessId
-    const key = instructionsKey(target.tabId, doc.projectId)
-    const path = `/api/super-tabs/${target.tabId}/projects/${doc.projectId}/instructions/revisions?asAgentId=${target.agent.id}`
-    let held = this.instructionHistories.get(key)
-    // The hash as well as the revision: a project with nothing saved stays at revision 0 while the template it reads changes
-    // with backend builds (2026-11-02: running agents kept the old routing after #2495 until their daemon restarted).
-    if (held?.revision !== doc.revision || held.hash !== doc.hash) {
-      // Revision 0 is the built-in template: nothing was saved, and nothing has a history.
-      held = { revision: doc.revision, hash: doc.hash, history: doc.revision ? null : { summary: null, savedAt: null } }
-      this.instructionHistories.set(key, held)
-    }
-    // Task 4's review: a failed history read kept for the revision's life left every notice without its summary and gave each
-    // fresh launch an extra notice (its save time unknown). Only a read that answered is kept; a failure is said once and
-    // read again at the next pass, for at most HISTORY_WAIT_MS: a history that stays unreadable never holds them back.
-    let unread = false
-    if (!held.history) {
-      try {
-        held.history = await this.instructionsHistory(path, doc.revision)
-      } catch (error) {
-        unread = true
-        if (held.failedSince === undefined) {
-          held.failedSince = this.now()
-          this.log(`Could not read the history of project ${doc.projectId}'s instructions in Swarm ${target.tabId} (${error instanceof Error ? error.message : String(error)}). `
-            + `Revision ${doc.revision} waits up to ${HISTORY_WAIT_MS / 60_000} minutes for its summary, then goes out without it.`)
-        }
-      }
-    }
-    if (!current()) { this.skillChecks.delete(harnessId); return }
-    if (unread && this.now() - held.failedSince! < HISTORY_WAIT_MS) { this.skillChecks.set(harnessId, this.now() + SKILL_RETRY_MS); return }
-    const { summary, savedAt } = held.history ?? { summary: null, savedAt: null }
-    const refresh = refreshInstructionsNotice(cwd, skill, { tabId: target.tabId, projectId: doc.projectId, revision: doc.revision, hash: doc.hash,
-      roleName: doc.roleName, summary, savedAt })
-    if (!refresh?.owed) return
-    if (await this.tellSkill(target, refresh, current)) recordInstructionsNotice(cwd, skill, refresh)
-    else if (!current()) this.skillChecks.delete(harnessId)
-    else this.skillChecks.set(harnessId, this.now() + SKILL_RETRY_MS)
-  }
-  /** From the project's kept revisions (newest first): the newest one's one-line summary when it is [revision], and when
-   *  [revision] was saved (epoch ms), which tells whether a session launched since has read it. Either is null when the
-   *  answer does not say; a read that fails throws. */
-  private async instructionsHistory(path: string, revision: number): Promise<{ summary: string | null; savedAt: number | null }> {
-    const revisions = object(await backend(this.core, 'GET', path)).revisions
-    const list = (Array.isArray(revisions) ? revisions : []).map(object)
-    const newest = list[0], entry = list.find(r => r.revision === revision)
-    const at = typeof entry?.at === 'string' ? Date.parse(entry.at) : NaN
-    return { summary: newest?.revision === revision && typeof newest.summary === 'string' ? newest.summary : null,
-      savedAt: Number.isFinite(at) ? at : null }
   }
   /** False when nothing was sent: no open group, or the roster has moved on (`current`) and the next refresh decides. */
   private async tellSkill(target: HostAgent, refresh: Pick<SkillRefresh, 'version' | 'change' | 'notice'>, current: () => boolean): Promise<boolean> {

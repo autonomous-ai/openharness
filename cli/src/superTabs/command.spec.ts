@@ -3,7 +3,6 @@ import { PassThrough } from 'node:stream'
 import { resolve } from 'node:path'
 import { parseSuperTabArgs, readStdin, StdinIdle, superTabCommand } from './command.js'
 import type { Where } from '../agentClient/daemon.js'
-import { SWARM_TOOLS_SKILL } from '../lib/swarmTools.js'
 const where = { port: 14001, dataDir: '/fixture', machineId: 'machine' }
 const prefix = ['--tab', 'tab', '--agent', 'agent']
 /** The service's answer for a proposal's files (service.ts proposalTarget) from a fixture's Swarm state: the chat named, the
@@ -1116,14 +1115,3 @@ it('sends answer as the answer to a message, placed by the server', () => {
   }
 })
 
-// Task #3448: the role sheets point to the full tools manual, which `help tools` prints from this CLI itself.
-it('prints the full tools manual for help tools, without reaching the daemon', async () => {
-  expect(parseSuperTabArgs(['help', 'tools'], where).payload).toMatchObject({ action: 'help', topic: 'tools' })
-  expect(parseSuperTabArgs(['--tab', 'tab', 'help', 'tools'], where).payload).toMatchObject({ action: 'help', topic: 'tools' })
-  expect(parseSuperTabArgs(['help'], where).payload).not.toHaveProperty('topic')
-  for (const argv of [['help', 'other'], ['help', 'tools', 'extra']]) expect(() => parseSuperTabArgs(argv, where), argv.join(' ')).toThrow('harness super-tab')
-  const open = vi.fn(), print = vi.fn()
-  expect(await superTabCommand(['--tab', 'tab', 'help', 'tools'], { where: () => where, pane: '%42', open, print })).toBe(0)
-  expect(print).toHaveBeenCalledWith(SWARM_TOOLS_SKILL)
-  expect(open).not.toHaveBeenCalled()
-})

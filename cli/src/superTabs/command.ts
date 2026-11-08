@@ -18,7 +18,6 @@ import type { ProcessRow } from '../lib/processTable.js'
 export { buddyRefusal } from './buddyPane.js'
 import { paneBuddy } from './buddyPane.js'
 import { sendPane } from '../messages/command.js'
-import { SWARM_TOOLS_SKILL } from '../lib/swarmTools.js'
 
 type PaneFrame = Frame
 /** Whether [pane] is a harness's here: a tmux pane as `callerOf` finds it, or a pty host's `<instance>:%N`. */
@@ -355,7 +354,6 @@ export async function superTabCommand(argv: readonly string[], deps: {
         throw error
       })
     operationId = request.payload.operationId
-    if (request.payload.action === 'help' && request.payload.topic === 'tools') { print(SWARM_TOOLS_SKILL); return 0 }
     // A harness reaches the Swarm through this computer's Harness alone (second review of #2087: a Buddy's --machine reached
     // the owner's other Mac, which knew no pane there). The daemon refuses an agent's request from another computer as well.
     const elsewhere = request.where.port !== local.port || request.where.machineId !== local.machineId

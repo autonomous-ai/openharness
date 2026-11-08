@@ -89,11 +89,6 @@ You are one person's Buddy. Your start note says which: their one Buddy for ever
 
 /** What a Buddy's start note tells it to use. */
 export const BUDDY_SKILL_USE = 'Use the built-in swarm-buddy skill for this session.'
-/** What every other Swarm session is told at launch: the two reads it works from, and nothing else. The manual holds the
- *  shared-machine and secret rules the tool sheets carried (Teamspec's check of #4673), so it is read at start, not on demand. */
-export const SWARM_LAUNCH_LINE = 'Your role and how this project works are in its instructions: read them with harness super-tab --tab TAB instructions. '
-  + 'Read the manual too, with harness super-tab help tools: every command, and the rules for shared machines and secrets. Work by both.'
-
 /** A row from any release, read as this one keeps it; refused when it is none. */
 function skillOf(saved: SavedSwarmSkill): SwarmSkill {
   const skill = parseSwarmSkill(saved)
@@ -107,13 +102,9 @@ function skillOf(saved: SavedSwarmSkill): SwarmSkill {
 export function prepareSwarmSkill(workspace: string, saved: SavedSwarmSkill): { instructions: string } {
   const skill = skillOf(saved)
   const root = realpathSync(workspace)
-  if (skill.role !== 'buddy') {
-    const launch = join(swarmFolder(root, skill, [], true)!, LAUNCH_FILE)
-    ignoreHarnessRuntime(root)
-    if (existsSync(launch)) plainFile(launch)
-    else writeFileSync(launch, JSON.stringify({ at: Date.now() }), { flag: 'wx', mode: 0o600 })
-    return { instructions: SWARM_LAUNCH_LINE }
-  }
+  // Swarm v4 (anh Dee, 2026-11-08): every agent but a Buddy starts as plain Claude Code or Codex. Harness tells it nothing
+  // at launch; its instructions are the repo's own AGENTS.md and agents/<name>.md, which the engine reads by itself.
+  if (skill.role !== 'buddy') return { instructions: '' }
   prepareBuddyFolder(root, skill.key)
   const dir = buddySkillFolder(root, skill, true)!
   ignoreHarnessRuntime(root)
@@ -240,25 +231,8 @@ export function recordBuddySkillNotice(workspace: string, saved: SavedSwarmSkill
   if (dir && record) writeRecord(dir, { ...record, notified: sent.version, toldChange: sent.change })
 }
 
-const LAUNCH_FILE = 'launch.json'
 const textVersion = (text: string) => createHash('sha256').update(text).digest('hex')
-/** One of the session's own files in its Swarm folder (superTabs/instructionsNotice.ts keeps its record there); null when the
- *  folder is missing and not [create]d. */
-export function swarmFile(workspace: string, saved: SavedSwarmSkill, name: string, create: boolean): string | null {
-  const dir = swarmFolder(realpathSync(workspace), skillOf(saved), [], create)
-  return dir && join(dir, name)
-}
-/** When this release launched the session (prepareSwarmSkill), in epoch ms; null for a session an older release launched,
- *  which kept skill files instead. */
-export function launchedAt(workspace: string, saved: SavedSwarmSkill): number | null {
-  const file = swarmFile(workspace, saved, LAUNCH_FILE, false)
-  if (!file || !existsSync(file)) return null
-  plainFile(file)
-  const at = (JSON.parse(readFileSync(file, 'utf8')) as { at?: unknown }).at
-  return typeof at === 'number' && Number.isFinite(at) ? at : null
-}
-/** Removes the skill files an older release wrote for the session: every one but a Buddy's own skill. Its agent is told they
- *  are gone (superTabs/instructionsNotice.ts). Only plain folders under the session's own: a link refuses the pass. */
+/** Removes the skill files an older release wrote for the session: every one but a Buddy's own skill. Only plain folders under the session's own: a link refuses the pass. */
 export function removeOlderSkills(workspace: string, saved: SavedSwarmSkill): void {
   const skill = skillOf(saved)
   const skills = swarmFolder(realpathSync(workspace), skill, ['skills'], false)
