@@ -720,312 +720,347 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                       right: SuperTabMessageRow.horizontalInset,
                     ),
                     child: LayoutBuilder(
-                      builder: (_, room) => Row(
-                        mainAxisAlignment: own
-                            ? MainAxisAlignment.end
-                            : MainAxisAlignment.start,
-                        crossAxisAlignment: CrossAxisAlignment.end,
+                      builder: (_, room) => Column(
+                        crossAxisAlignment: own
+                            ? CrossAxisAlignment.end
+                            : CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          // A group chat's face sits by its sender's last
-                          // bubble (anh Dee's mockup, 11-07, #4529).
-                          if (faces) ...[
-                            SizedBox(
-                              width: SuperTabMessageRow.avatarSize,
-                              child: widget.joinsBelow
-                                  ? null
-                                  : ExcludeSemantics(
-                                      child: switch (widget.identity) {
-                                        final identity? => SuperTabHoverCard(
-                                          facts: identity,
-                                          child: _avatar(message),
-                                        ),
-                                        null => Tooltip(
-                                          message: _identityDetails,
-                                          child: _avatar(message),
-                                        ),
-                                      },
-                                    ),
-                            ),
-                            const SizedBox(width: SuperTabMessageRow.avatarGap),
-                          ],
-                          // A line on its way says so beside its bubble, so
-                          // the row keeps its height once it is confirmed.
-                          if (widget.headerStatus case final status?) ...[
-                            ConstrainedBox(
-                              // The room a bubble leaves: a long status
-                              // wraps there and never narrows the bubble.
-                              constraints: BoxConstraints(
-                                maxWidth:
-                                    room.maxWidth *
-                                        (1 - SuperTabMessageRow.bubbleShare) -
-                                    8,
-                              ),
-                              child: Padding(
-                                padding: const EdgeInsets.only(
-                                  bottom: grid.AppDesktop.bubbleNoteGap,
-                                ),
-                                child: status,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                          ],
-                          Flexible(
-                            child: ConstrainedBox(
-                              constraints: BoxConstraints(
-                                maxWidth:
-                                    room.maxWidth *
-                                    SuperTabMessageRow.bubbleShare,
-                              ),
-                              child: SwarmBubbleSide(
-                                own: own,
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  crossAxisAlignment: own
-                                      ? CrossAxisAlignment.end
-                                      : CrossAxisAlignment.start,
-                                  children: [
-                                    if (named)
-                                      Padding(
-                                        padding:
-                                            grid.AppDesktop.bubbleNamePadding,
-                                        child: Wrap(
-                                          spacing: 8,
-                                          crossAxisAlignment:
-                                              WrapCrossAlignment.center,
-                                          children: [
-                                            _name(
-                                              DesktopChrome.text(
-                                                size: SwarmType.nameSize,
-                                                height:
-                                                    SwarmType.bodyLine /
-                                                    SwarmType.nameSize,
-                                                color: DesktopChrome.muted,
+                          Row(
+                            mainAxisAlignment: own
+                                ? MainAxisAlignment.end
+                                : MainAxisAlignment.start,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              // A group chat's face sits by its sender's last
+                              // bubble (anh Dee's mockup, 11-07, #4529).
+                              if (faces) ...[
+                                SizedBox(
+                                  width: SuperTabMessageRow.avatarSize,
+                                  child: widget.joinsBelow
+                                      ? null
+                                      : ExcludeSemantics(
+                                          child: switch (widget.identity) {
+                                            final identity? =>
+                                              SuperTabHoverCard(
+                                                facts: identity,
+                                                child: _avatar(message),
                                               ),
-                                              finger,
+                                            null => Tooltip(
+                                              message: _identityDetails,
+                                              child: _avatar(message),
                                             ),
-                                            if (widget.thread?.askTag
-                                                case final tag?)
-                                              Text(
-                                                tag,
-                                                style: SwarmType.time(context),
-                                              ),
-                                          ],
-                                        ),
-                                      ),
-                                    if (message.threadReply &&
-                                        widget.onOpenThread != null)
-                                      Padding(
-                                        padding: const EdgeInsets.only(
-                                          bottom: grid.AppDesktop.menuInset,
-                                        ),
-                                        child: SuperTabLink(
-                                          key: ValueKey(
-                                            'super-thread-also-${message.id}',
-                                          ),
-                                          label:
-                                              'Replied in thread, open thread',
-                                          onTap: widget.onOpenThread!,
-                                          child: Text(
-                                            'Replied in thread',
-                                            style: DesktopChrome.metadata(),
-                                          ),
-                                        ),
-                                      ),
-                                    // A thread reply sits under its root, so it
-                                    // quotes nothing; an older reply keeps its quote.
-                                    if (message.replyTo != null &&
-                                        !message.threadReply)
-                                      Padding(
-                                        padding: const EdgeInsets.only(
-                                          bottom: 8,
-                                        ),
-                                        child: SuperTabReplyPreview(
-                                          author:
-                                              widget.replyAuthor ??
-                                              widget.reply?.authorName ??
-                                              'Earlier message',
-                                          text: switch (widget.reply) {
-                                            final reply? => superTabQuoteText(
-                                              reply,
-                                            ),
-                                            null when widget.replyGone =>
-                                              'Original message removed',
-                                            null =>
-                                              'Original message not loaded',
                                           },
-                                          onTap: widget.onOpenReply == null
-                                              ? null
-                                              : () => widget.onOpenReply!(
-                                                  context,
-                                                ),
                                         ),
-                                      ),
-                                    if (widget.brief case final brief?)
-                                      brief
-                                    else if (_bubbled(voiceMessage))
-                                      SwarmBubble(
-                                        own: own,
-                                        tooltip: _clock,
-                                        joinsAbove: widget.grouped,
-                                        joinsBelow: widget.joinsBelow,
-                                        child: Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            if (message.terminalNote
-                                                case final note?)
-                                              Padding(
-                                                padding: const EdgeInsets.only(
-                                                  bottom: 6,
+                                ),
+                                const SizedBox(
+                                  width: SuperTabMessageRow.avatarGap,
+                                ),
+                              ],
+                              // A line on its way says so beside its bubble, so
+                              // the row keeps its height once it is confirmed.
+                              if (widget.headerStatus case final status?) ...[
+                                ConstrainedBox(
+                                  // The room a bubble leaves: a long status
+                                  // wraps there and never narrows the bubble.
+                                  constraints: BoxConstraints(
+                                    maxWidth:
+                                        room.maxWidth *
+                                            (1 -
+                                                SuperTabMessageRow
+                                                    .bubbleShare) -
+                                        8,
+                                  ),
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(
+                                      bottom: grid.AppDesktop.bubbleNoteGap,
+                                    ),
+                                    child: status,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                              ],
+                              Flexible(
+                                child: ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    maxWidth:
+                                        room.maxWidth *
+                                        SuperTabMessageRow.bubbleShare,
+                                  ),
+                                  child: SwarmBubbleSide(
+                                    own: own,
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      crossAxisAlignment: own
+                                          ? CrossAxisAlignment.end
+                                          : CrossAxisAlignment.start,
+                                      children: [
+                                        if (named)
+                                          Padding(
+                                            padding: grid
+                                                .AppDesktop
+                                                .bubbleNamePadding,
+                                            child: Wrap(
+                                              spacing: 8,
+                                              crossAxisAlignment:
+                                                  WrapCrossAlignment.center,
+                                              children: [
+                                                _name(
+                                                  DesktopChrome.text(
+                                                    size: SwarmType.nameSize,
+                                                    height:
+                                                        SwarmType.bodyLine /
+                                                        SwarmType.nameSize,
+                                                    color: DesktopChrome.muted,
+                                                  ),
+                                                  finger,
                                                 ),
-                                                child: Text(
-                                                  note,
-                                                  style:
-                                                      DesktopChrome.metadata(),
-                                                ),
-                                              ),
-                                            if (message.deleted)
-                                              Text(
-                                                SuperTabMessageRow.deletedText,
-                                                key: ValueKey(
-                                                  'super-message-deleted-${message.id}',
-                                                ),
-                                                style:
-                                                    SwarmType.body(
+                                                if (widget.thread?.askTag
+                                                    case final tag?)
+                                                  Text(
+                                                    tag,
+                                                    style: SwarmType.time(
                                                       context,
-                                                      color:
-                                                          DesktopChrome.muted,
-                                                    ).copyWith(
-                                                      fontStyle:
-                                                          FontStyle.italic,
-                                                    ),
-                                              )
-                                            else if (_editing
-                                                case final editing?)
-                                              ConstrainedBox(
-                                                constraints:
-                                                    const BoxConstraints(
-                                                      maxWidth: 960,
-                                                    ),
-                                                child: _editor(
-                                                  context,
-                                                  editing,
-                                                ),
-                                              )
-                                            // A voice message's text is its words, never
-                                            // shown: it plays only (anh Dee, 2026-11-04).
-                                            else if (message.text.isNotEmpty &&
-                                                !voiceMessage)
-                                              Opacity(
-                                                opacity: widget.dimmed
-                                                    ? 0.6
-                                                    : 1,
-                                                child: ConstrainedBox(
-                                                  constraints:
-                                                      const BoxConstraints(
-                                                        maxWidth: 960,
-                                                      ),
-                                                  child: _folded(
-                                                    SuperTabMessageText(
-                                                      message.text,
-                                                      ink: own
-                                                          ? SwarmBubble.ownInk
-                                                          : null,
-                                                      references:
-                                                          widget.references,
-                                                      onOpenGroup:
-                                                          widget.onOpenGroup,
-                                                      mentions: widget.mentions,
-                                                      agents: widget.agentNames,
-                                                      addresses: widget
-                                                          .mentionAddresses,
-                                                      labels:
-                                                          widget.mentionLabels,
-                                                      taggedYou: taggedYou,
                                                     ),
                                                   ),
-                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        if (message.threadReply &&
+                                            widget.onOpenThread != null)
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                              bottom: grid.AppDesktop.menuInset,
+                                            ),
+                                            child: SuperTabLink(
+                                              key: ValueKey(
+                                                'super-thread-also-${message.id}',
                                               ),
-                                            if (message.editedAt != null &&
-                                                !message.deleted &&
-                                                _editing == null)
-                                              Text(
-                                                '(edited)',
-                                                key: ValueKey(
-                                                  'super-message-edited-${message.id}',
-                                                ),
-                                                style: SwarmType.time(
-                                                  context,
-                                                  color: own
-                                                      ? SwarmBubble.ownInk
-                                                      : null,
-                                                ),
+                                              label: 'Replied in thread, open thread',
+                                              onTap: widget.onOpenThread!,
+                                              child: Text(
+                                                'Replied in thread',
+                                                style: DesktopChrome.metadata(),
                                               ),
-                                          ],
-                                        ),
-                                      ),
-                                    if (message.attachments.isNotEmpty &&
-                                        !message.deleted)
-                                      Opacity(
-                                        opacity: widget.dimmed ? 0.6 : 1,
-                                        child: Padding(
-                                          padding: EdgeInsets.only(
-                                            top:
-                                                message.text.isEmpty ||
-                                                    voiceMessage
-                                                ? 0
-                                                : 8,
+                                            ),
                                           ),
-                                          child: SuperTabAttachments(
-                                            message.attachments,
-                                            conversationId:
-                                                message.conversationId,
-                                            messageId: message.id,
+                                        // A thread reply sits under its root, so it
+                                        // quotes nothing; an older reply keeps its quote.
+                                        if (message.replyTo != null &&
+                                            !message.threadReply)
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                              bottom: 8,
+                                            ),
+                                            child: SuperTabReplyPreview(
+                                              author:
+                                                  widget.replyAuthor ??
+                                                  widget.reply?.authorName ??
+                                                  'Earlier message',
+                                              text: switch (widget.reply) {
+                                                final reply? =>
+                                                  superTabQuoteText(reply),
+                                                null when widget.replyGone =>
+                                                  'Original message removed',
+                                                null =>
+                                                  'Original message not loaded',
+                                              },
+                                              onTap: widget.onOpenReply == null
+                                                  ? null
+                                                  : () => widget.onOpenReply!(
+                                                      context,
+                                                    ),
+                                            ),
                                           ),
-                                        ),
-                                      ),
-                                    if (!message.deleted) ...[
-                                      widget.card ??
-                                          SuperTabPullRequestLinks(
-                                            message.text,
+                                        if (widget.brief case final brief?)
+                                          brief
+                                        else if (_bubbled(voiceMessage))
+                                          SwarmBubble(
+                                            own: own,
+                                            tooltip: _clock,
+                                            joinsAbove: widget.grouped,
+                                            joinsBelow: widget.joinsBelow,
+                                            child: Column(
+                                              mainAxisSize: MainAxisSize.min,
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                if (message.terminalNote
+                                                    case final note?)
+                                                  Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                          bottom: 6,
+                                                        ),
+                                                    child: Text(
+                                                      note,
+                                                      style:
+                                                          DesktopChrome.metadata(),
+                                                    ),
+                                                  ),
+                                                if (message.deleted)
+                                                  Text(
+                                                    SuperTabMessageRow
+                                                        .deletedText,
+                                                    key: ValueKey(
+                                                      'super-message-deleted-${message.id}',
+                                                    ),
+                                                    style:
+                                                        SwarmType.body(
+                                                          context,
+                                                          color: DesktopChrome
+                                                              .muted,
+                                                        ).copyWith(
+                                                          fontStyle:
+                                                              FontStyle.italic,
+                                                        ),
+                                                  )
+                                                else if (_editing
+                                                    case final editing?)
+                                                  ConstrainedBox(
+                                                    constraints:
+                                                        const BoxConstraints(
+                                                          maxWidth: 960,
+                                                        ),
+                                                    child: _editor(
+                                                      context,
+                                                      editing,
+                                                    ),
+                                                  )
+                                                // A voice message's text is its words, never
+                                                // shown: it plays only (anh Dee, 2026-11-04).
+                                                else if (message
+                                                        .text
+                                                        .isNotEmpty &&
+                                                    !voiceMessage)
+                                                  Opacity(
+                                                    opacity: widget.dimmed
+                                                        ? 0.6
+                                                        : 1,
+                                                    child: ConstrainedBox(
+                                                      constraints:
+                                                          const BoxConstraints(
+                                                            maxWidth: 960,
+                                                          ),
+                                                      child: _folded(
+                                                        SuperTabMessageText(
+                                                          message.text,
+                                                          ink: own
+                                                              ? SwarmBubble
+                                                                    .ownInk
+                                                              : null,
+                                                          references:
+                                                              widget.references,
+                                                          onOpenGroup: widget
+                                                              .onOpenGroup,
+                                                          mentions:
+                                                              widget.mentions,
+                                                          agents:
+                                                              widget.agentNames,
+                                                          addresses: widget
+                                                              .mentionAddresses,
+                                                          labels: widget
+                                                              .mentionLabels,
+                                                          taggedYou: taggedYou,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                if (message.editedAt != null &&
+                                                    !message.deleted &&
+                                                    _editing == null)
+                                                  Text(
+                                                    '(edited)',
+                                                    key: ValueKey(
+                                                      'super-message-edited-${message.id}',
+                                                    ),
+                                                    style: SwarmType.time(
+                                                      context,
+                                                      color: own
+                                                          ? SwarmBubble.ownInk
+                                                          : null,
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
                                           ),
-                                      if (widget.linkTarget case final resolve?)
-                                        if (widget.onOpenLink case final open?)
-                                          SuperTabMessageLinkPreviews(
-                                            message.text,
-                                            resolve: resolve,
-                                            onOpen: open,
+                                        if (message.attachments.isNotEmpty &&
+                                            !message.deleted)
+                                          Opacity(
+                                            opacity: widget.dimmed ? 0.6 : 1,
+                                            child: Padding(
+                                              padding: EdgeInsets.only(
+                                                top:
+                                                    message.text.isEmpty ||
+                                                        voiceMessage
+                                                    ? 0
+                                                    : 8,
+                                              ),
+                                              child: SuperTabAttachments(
+                                                message.attachments,
+                                                conversationId:
+                                                    message.conversationId,
+                                                messageId: message.id,
+                                              ),
+                                            ),
                                           ),
-                                      SuperTabReactionBar(
-                                        message: message,
-                                        readerId: widget.readerId,
-                                        nameOf:
-                                            widget.reactorName ?? (_, id) => id,
-                                        onReact: widget.onReact,
-                                      ),
-                                    ],
-                                    if ((widget.thread, widget.onOpenThread)
-                                        case (final thread?, final open?))
-                                      SuperTabThreadLine(
-                                        key: ValueKey(
-                                          'super-thread-line-${message.id}',
-                                        ),
-                                        thread: thread,
-                                        unread: widget.threadUnread,
-                                        tagged: widget.threadTagged,
-                                        fresh: widget.threadFresh,
-                                        onOpen: open,
-                                        member: widget.member,
-                                        trailing: widget.threadTrailing,
-                                        end: widget.threadEnd,
-                                      ),
-                                    ...widget.receipts,
-                                  ],
+                                        if (!message.deleted) ...[
+                                          widget.card ??
+                                              SuperTabPullRequestLinks(
+                                                message.text,
+                                              ),
+                                          if (widget.linkTarget
+                                              case final resolve?)
+                                            if (widget.onOpenLink
+                                                case final open?)
+                                              SuperTabMessageLinkPreviews(
+                                                message.text,
+                                                resolve: resolve,
+                                                onOpen: open,
+                                              ),
+                                          SuperTabReactionBar(
+                                            message: message,
+                                            readerId: widget.readerId,
+                                            nameOf:
+                                                widget.reactorName ??
+                                                (_, id) => id,
+                                            onReact: widget.onReact,
+                                          ),
+                                        ],
+                                        ...widget.receipts,
+                                      ],
+                                    ),
+                                  ),
                                 ),
                               ),
-                            ),
+                            ],
                           ),
+                          // A task's replies sit under its bubble, so its face stays by the bubble (Swarm v4).
+                          if ((widget.thread, widget.onOpenThread) case (
+                            final thread?,
+                            final open?,
+                          ))
+                            Padding(
+                              padding: EdgeInsetsDirectional.only(
+                                start: faces
+                                    ? SuperTabMessageRow.avatarSize +
+                                          SuperTabMessageRow.avatarGap
+                                    : 0,
+                              ),
+                              child: SuperTabThreadLine(
+                                key: ValueKey(
+                                  'super-thread-line-${message.id}',
+                                ),
+                                thread: thread,
+                                unread: widget.threadUnread,
+                                tagged: widget.threadTagged,
+                                fresh: widget.threadFresh,
+                                onOpen: open,
+                                member: widget.member,
+                                trailing: widget.threadTrailing,
+                                end: widget.threadEnd,
+                              ),
+                            ),
                         ],
                       ),
                     ),

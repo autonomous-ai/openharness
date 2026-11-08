@@ -5004,8 +5004,12 @@ class _SuperTabViewState extends State<SuperTabView>
   /// list's dividing row both ways, so a page read in above regroups none of
   /// the rows already shown.
   Set<String> _joined(List<SuperTabMessage> messages, SuperTabMessage? split) {
+    // A task (a message with a thread, Swarm v4) stands on its own row, with its name and face, as a tagged one does.
     bool tagged(SuperTabMessage m) =>
-        c.thread(m.conversationId, m.id)?.askTag != null;
+        switch (c.thread(m.conversationId, m.id)) {
+          final thread? => thread.askTag != null || thread.replies > 0,
+          null => false,
+        };
     final at = split == null
         ? -1
         : messages.indexWhere((m) => superTabMessageOrder(m, split) >= 0);
