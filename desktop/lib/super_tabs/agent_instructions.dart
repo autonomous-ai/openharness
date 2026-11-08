@@ -87,7 +87,9 @@ class SwarmAgentInstructions extends StatelessWidget {
                           child: SelectableText(
                             data,
                             key: const ValueKey('swarm-instructions-text'),
-                            style: grid.AppType.mono(color: DesktopChrome.foreground),
+                            style: grid.AppType.mono(
+                              color: DesktopChrome.foreground,
+                            ),
                           ),
                         ),
                       AsyncSnapshot(connectionState: ConnectionState.done) =>
