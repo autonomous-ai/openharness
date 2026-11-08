@@ -234,15 +234,15 @@ class _SuperTabViewState extends State<SuperTabView>
   /// requests does for a task.
   bool _showTasks = false;
 
-  /// Opens [project]'s Board in the middle, with the person's Buddy on the right.
-  void _openBoard(SuperTabProject project) {
+  /// Opens [project]'s channel in the middle (Swarm v4: a project is its channel, its tasks threads in it).
+  void _openProject(SuperTabProject project) {
     c.leaveDevices();
     widget.onCloseTerminal?.call();
     setState(() {
       _page = null;
       _showManage = _showTasks = _showPullRequests = false;
     });
-    _showBuddy(project);
+    unawaited(c.select(project.leadConversationId));
     _closeSidebar();
   }
 
@@ -280,17 +280,6 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() {
       if (group.id != project.leadConversationId) _tasksSelectedId = group.id;
     });
-  }
-
-  /// The person's Buddy chat on the right: the Swarm's one Buddy, or this project's.
-  void _showBuddy(SuperTabProject project) {
-    final key = c.oneBuddy ? SuperTabController.kSwarmBuddyKey : project.id;
-    final chat = c.buddyChat(key);
-    if (chat != null) {
-      unawaited(c.select(chat.id));
-    } else {
-      unawaited(c.openBuddyChat(key));
-    }
   }
 
   /// The card the board shows selected (task #2948): the task or proposal
@@ -2106,11 +2095,6 @@ class _SuperTabViewState extends State<SuperTabView>
     // and the sidebar lists it as Slack does (task #2996).
     onPage: _openPage,
     onSelect: (id) {
-      // A project's row opens its Board (task #3787), never its chat.
-      final project = c.snapshot?.projects
-          .where((p) => p.leadConversationId == id)
-          .firstOrNull;
-      if (project != null && widget.board) return _openBoard(project);
       setState(() {
         _page = null;
         _showManage = _showTasks = false;
@@ -3622,7 +3606,7 @@ class _SuperTabViewState extends State<SuperTabView>
       // The fixed layout has one Board: projects, the Board and the chat on
       // the right, the Buddy unless a task's chat is the one open.
       if (group.id == project.leadConversationId || group.isBuddyChat) {
-        _openBoard(project);
+        _openProject(project);
       } else {
         _showBoardOf(group);
       }
@@ -6349,7 +6333,7 @@ class _SuperTabViewState extends State<SuperTabView>
                             ),
                             SwarmPage.projects => SuperTabProjectsPage(
                               controller: c,
-                              onOpen: _openBoard,
+                              onOpen: _openProject,
                               onNewProject: c.canWrite
                                   ? widget.onNewProject
                                   : null,
