@@ -149,7 +149,7 @@ void main() {
     ];
     double top(WidgetTester tester, String k) => tester.getTopLeft(key(k)).dy;
 
-    testWidgets('org, Your agents, Projects, Humans, then Manage', (
+    testWidgets('org, Your agents, Projects, then Manage', (
       tester,
     ) async {
       await show(tester, agents: mine);
@@ -157,7 +157,6 @@ void main() {
         'super-swarm-switcher',
         'project-sidebar-agents',
         'project-sidebar-projects',
-        'project-sidebar-humans',
         'super-manage',
       ];
       for (var i = 1; i < order.length; i++) {

@@ -5160,6 +5160,10 @@ class _SuperTabViewState extends State<SuperTabView>
         for (final id in message.mentions)
           if (_people[id] case final person?) person.username,
       ],
+      agentNames: [
+        for (final agent in c.snapshot?.agents ?? const <SuperTabAgent>[])
+          agent.name,
+      ],
       mentionAddresses: {
         for (final id in message.mentions)
           if (_people[id] case final person?) person.username: person.email,

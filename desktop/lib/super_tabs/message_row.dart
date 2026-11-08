@@ -82,6 +82,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.references = const {},
     this.onOpenGroup,
     this.mentions = const [],
+    this.agentNames = const [],
     this.mentionAddresses = const {},
     this.mentionLabels = const {},
     this.readerId = '',
@@ -148,6 +149,9 @@ class SuperTabMessageRow extends StatefulWidget {
 
   /// The names of the people [message] tags.
   final List<String> mentions;
+
+  /// The Swarm's agents' names, read as tags where the text says them (Swarm v4).
+  final List<String> agentNames;
 
   /// Their addresses, by name: a tag by full address is theirs only when it
   /// is this one.
@@ -940,6 +944,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                                       onOpenGroup:
                                                           widget.onOpenGroup,
                                                       mentions: widget.mentions,
+                                                      agents: widget.agentNames,
                                                       addresses: widget
                                                           .mentionAddresses,
                                                       labels:
