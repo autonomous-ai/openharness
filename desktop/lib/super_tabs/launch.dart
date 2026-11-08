@@ -1538,7 +1538,11 @@ class SuperTabLaunch {
         );
       }
     }
-    controller.select(saved['conversationId'] as String);
+    // Its person goes on in their chat with it: a PM's own chat since Swarm v4, as only agents post in the project's channel.
+    final joined = controller.snapshot?.agents
+        .where((a) => a.machineId == machine && a.harnessId == harnessId)
+        .firstOrNull;
+    controller.select(joined?.chatId ?? saved['conversationId'] as String);
     // How long + New agent took to a running agent in its chat: the measure
     // that warns first if it slows again (task #4196). No names or ids.
     if (saved['newAgentAt'] case final int at) {

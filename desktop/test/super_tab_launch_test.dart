@@ -279,11 +279,22 @@ class SuperTabFixtureConnection extends WsConn {
           (server.state['agents'] as List).last['projectId'] =
               group['projectId'] ?? 'lead';
           (group['agentIds'] as List).add('lead-agent');
-          if (command['lead'] == true) group['leadId'] = 'lead-agent';
+          // As the v4 backend: a PM gets a chat of its own with its person, which holds its first request.
+          String? pmChat;
+          if (command['lead'] == true) {
+            group['leadId'] = 'lead-agent';
+            pmChat = 'pm-chat';
+            (server.state['conversations'] as List).add({
+              ...conversationFixture(pmChat, command['name'] as String),
+              'kind': 'agent-chat',
+              'agentIds': ['lead-agent'],
+            });
+            (server.state['agents'] as List).last['chatId'] = pmChat;
+          }
           if (command['initialMessage'] is String) {
             server.append(
               command['initialMessage'] as String,
-              conversationId: command['conversationId'] as String,
+              conversationId: pmChat ?? command['conversationId'] as String,
             );
           }
         }
@@ -675,7 +686,7 @@ void main() {
       final c = f.app.superTabs.peek(tabId)!;
       final project = c.snapshot!.projects.last;
       expect(project.isPrivate, isTrue);
-      expect(c.selectedId, project.leadConversationId);
+      expect(c.selectedId, 'pm-chat'); // its PM's own chat (Swarm v4)
       expect(c.snapshot!.conversation('offline'), isNotNull);
       expect(
         f.connection.joins.single['command'],
@@ -2367,6 +2378,12 @@ void main() {
           f.connection.server.messages.single['text'],
           'Discuss the architecture.',
         );
+        // Swarm v4: its person goes on in their chat with the PM, not the channel only agents post in.
+        expect(
+          f.connection.server.messages.single['conversationId'],
+          'pm-chat',
+        );
+        expect(f.app.superTabs.peek(tabId)!.selectedId, 'pm-chat');
       },
     );
   }
