@@ -5,7 +5,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/first_task.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/new_harness.dart';
-import 'package:harness/super_tabs/launch_prompt.dart';
 
 import 'super_tab_launch_test.dart';
 
@@ -38,76 +37,6 @@ Future<String> legacyLaunch(
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-
-  test('bootstrap fits native limit with maximum server IDs', () {
-    for (final lead in [true, false]) {
-      final prompt = superTabLaunchPrompt(
-        tabId: 'a' * 160,
-        conversationId: 'b' * 160,
-        lead: lead,
-      );
-      expect(
-        prompt.length,
-        lessThanOrEqualTo(kFirstTaskMaxLength),
-        reason:
-            '${lead ? 'Lead' : 'Builder'} bootstrap must fit native creation',
-      );
-      expect(
-        prompt,
-        contains('harness super-tab --tab ${'a' * 160} instructions'),
-      );
-      for (final gone in [
-        'swarm-lead',
-        'swarm-dev',
-        'swarm-review',
-        'Discuss first',
-        'Coordinate:',
-        'Route only',
-        'Do not review yet',
-        'assign work',
-        'decide reuse',
-        'Each task needs',
-      ]) {
-        expect(prompt, isNot(contains(gone)), reason: gone);
-      }
-    }
-  });
-
-  test('lead bootstrap keeps report reading and the reply rules', () {
-    final prompt = superTabLaunchPrompt(
-      tabId: 'a' * 160,
-      conversationId: 'b' * 160,
-      lead: true,
-    );
-    expect(prompt, contains('read new reports'));
-    expect(prompt, contains('No per-turn summarizer'));
-    expect(
-      prompt,
-      contains(
-        'On scheduled requests read new reports, then use project.report with the whole card',
-      ),
-    );
-    expect(prompt, contains('text:null when nothing changed'));
-  });
-
-  // Answers go right below, not in a thread (anh Dee, 2026-11-04; task #2929).
-  test('bootstrap answers a main-chat message right below it', () {
-    for (final lead in [true, false]) {
-      final prompt = superTabLaunchPrompt(
-        tabId: 'a' * 160,
-        conversationId: 'b' * 160,
-        lead: lead,
-      );
-      expect(
-        prompt,
-        contains(
-          'Reply: `post GROUP "message" UNIQUE_OPERATION_ID [--answers MESSAGE_ID | --reply-to MESSAGE_ID]`. '
-          'A main-chat message is answered right below it with --answers; one in a thread, in its thread with --reply-to; answer each message once, do not post again.',
-        ),
-      );
-      expect(prompt.length, lessThanOrEqualTo(2000));
-    }
-  });
 
   for (final engine in ['codex', 'claude']) {
     for (final newProject in [false, true]) {

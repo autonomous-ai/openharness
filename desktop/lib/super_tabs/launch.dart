@@ -1166,10 +1166,12 @@ class SuperTabLaunch {
     if (snapshot.projectFor(conversationId)?.hasInstructions != true) {
       saved.remove('roleName');
     }
+    // The name the person gave it in the form; the same name joins the Swarm.
+    saved['agentName'] ??=
+        saved['roleName'] as String? ?? (saved['lead'] == true ? 'Lead' : null);
     final prompt = superTabLaunchPrompt(
-      tabId: saved['tabId'] as String,
-      conversationId: saved['conversationId'] as String,
-      lead: saved['lead'] == true,
+      name: saved['agentName'] as String? ?? 'an agent',
+      task: task,
     );
     saved['launchPrompt'] = prompt;
     await persist();
@@ -1395,7 +1397,7 @@ class SuperTabLaunch {
       'conversationId': saved['conversationId'],
       'machineId': machine,
       'harnessId': harnessId,
-      'name': saved['lead'] == true ? 'Lead' : superTabAddName(native),
+      'name': saved['agentName'] as String? ?? superTabAddName(native),
       'lead': saved['lead'],
       // A journal from an older Desktop keeps the id it chose.
       if (saved['roleId'] case final String roleId) 'roleId': roleId,
