@@ -70,10 +70,19 @@ Done on the branch (committed, not pushed):
 - Backend: a project's agents talk in its channel. Any agent of the project (not a Buddy, another project's or a stopping
   one) posts there and is reached by @Name, joining it then, with no join row (the PM's join row stays). Adding one by
   hand keeps #2207.
+- Backend: a PM gets a chat of its own with its person when it joins its project, which holds its first request;
+  `agentChatId` prefers an agent's own chat (a PM from before keeps the project chat). Agent chats take no task number.
+  Deleting a project and Buddy news skip agent chats (both threw in a Swarm without its first project).
+- CLI: a line in a project's channel is answered in its thread (`--reply-to`); answered below, a second agent was
+  refused, as a line is answered once.
+- Desktop: after starting an agent, its person lands in their chat with it (a PM's own chat too); an agent's person
+  renames it by clicking its name in the chat's bar.
 - No compact hook: Claude Code re-reads the repo's AGENTS.md after compaction (see above).
 
-Tests: Desktop Swarm suite 4,449 pass (`flutter test test/super_tab_* test/swarm_*`); backend `src/superTabs` 3,931 pass;
-CLI host and delivery specs pass. Failures that are this machine's and also fail on main: CLI connectors, localSocket,
+Ship order: backend first. Desktop v4 against today's backend opens a PM's row on the channel, where people cannot post.
+
+Tests: Desktop Swarm suite 4,449 pass (`flutter test test/super_tab_* test/swarm_*`) and the rest of Desktop 7,780;
+backend unit suite 6,488 (`src/superTabs` 3,934); CLI Swarm specs 2,771. Failures that are this machine's and also fail on main: CLI connectors, localSocket,
 mcpShim; integration_test/super_tab_native_test.dart calls a method an earlier pull request removed.
 
 Not done yet:
