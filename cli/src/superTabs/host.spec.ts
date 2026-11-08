@@ -998,18 +998,18 @@ describe('Super Tab native delivery handoff', () => {
       expect(prompt).toContain('In task #12 "Fix login" (conversation g12).\nYou are assigned task #12 "Fix login" (working).\n')
       expect(prompt.indexOf('You are assigned')).toBeLessThan(prompt.indexOf('@Collaborator, to you:'))
     })
-    // Task #3747 (anh Dee, 11-06: "i don't know which one you reply to which"): in a project that answers people in threads,
-    // a person's message is answered in its thread, and the rules say so; an agent's, and other projects', as before.
-    it('says --reply-to for a person\'s main-chat message in a project that answers in threads', async () => {
-      const THREADED = { ...SWARM, projects: [{ ...SWARM.projects[0], answersInThread: true }] }
+    // Swarm v4 (anh Dee 2026-11-08): a task is a thread in its project's channel, so every line there is answered in its thread.
+    // Answered right below, the second agent to answer one line was refused (answered once, answers.ts).
+    it('says --reply-to for any main-chat line in the project channel, and --answers elsewhere', async () => {
       const person = { kind: 'person', id: 'p1', name: 'Dee' }
+      const birch = { kind: 'agent', id: 'a0000000000000000000000b', name: 'Birch' }
       const line = (prompt: string) => prompt.split('\n').find(l => l.startsWith('Answer: '))!
-      const threaded = await delivered(wired({ author: person, text: 'Is login fixed?', thread: 'message' }, {}, () => THREADED).t)
-      expect(line(threaded)).toMatch(/ --reply-to 'message'$/)
-      const agent = await delivered(wired({ author: { kind: 'agent', id: 'a0000000000000000000000b', name: 'Birch' }, text: 'Which branch is it on?', thread: 'message' }, {}, () => THREADED).t)
-      expect(line(agent)).toMatch(/ --answers 'message' --to 'a0000000000000000000000b'$/)
-      const plain = await delivered(wired({ author: person, text: 'Is login fixed?', thread: 'message' }).t)
-      expect(line(plain)).toMatch(/ --answers 'message'$/)
+      const asked = await delivered(wired({ conversationId: 'lead', author: birch, text: '#14 Flaky login test. @Dev1 yours.', thread: 'message' }).t)
+      expect(line(asked)).toMatch(/ --reply-to 'message' --to 'a0000000000000000000000b'$/)
+      const told = await delivered(wired({ conversationId: 'lead', author: person, text: 'Is login fixed?', thread: 'message' }).t)
+      expect(line(told)).toMatch(/ --reply-to 'message'$/)
+      const task = await delivered(wired({ author: birch, text: 'Which branch is it on?', thread: 'message' }).t)
+      expect(line(task)).toMatch(/ --answers 'message' --to 'a0000000000000000000000b'$/)
     })
     // Task #3057 (Ken, 11-05): the reply line carried --to <sender>, and agents copied --to the PM into their own task, so
     // 29 of 55 acknowledgements still reached it. In its own task or step a coordinator's message gets the plain form.
@@ -1027,14 +1027,15 @@ describe('Super Tab native delivery handoff', () => {
         const [line] = replyLines(await delivered(t))
         expect(line).toMatch(/ --reply-to 'message' --to 'pm'$/)
       })
-      it('keeps the named form for an agent that is not the coordinator, a task the reader does not hold, and the project chat', async () => {
+      it('keeps the named form for an agent that is not the coordinator, a task the reader does not hold, and the project channel', async () => {
         const reviewer = wired({ author: { kind: 'agent', id: 'rev', name: 'Rev1' }, text: 'Two findings.', thread: 'message' })
         expect(replyLines(await delivered(reviewer.t))[0]).toMatch(/ --answers 'message' --to 'rev'$/)
         const other = { ...SWARM, conversations: [SWARM.conversations[0]!, { ...SWARM.conversations[1]!, assignment: { agentId: 'someone', status: 'working' } }] }
         const notMine = wired({ author: PM, text: 'FYI.', thread: 'message' }, {}, () => other)
         expect(replyLines(await delivered(notMine.t))[0]).toMatch(/ --answers 'message' --to 'pm'$/)
         const chat = wired({ conversationId: 'lead', author: PM, text: 'Hello.', thread: 'message' })
-        expect(replyLines(await delivered(chat.t))[0]).toMatch(/ --answers 'message' --to 'pm'$/)
+        // In the channel, in its thread (Swarm v4).
+        expect(replyLines(await delivered(chat.t))[0]).toMatch(/ --reply-to 'message' --to 'pm'$/)
       })
     })
     // Task #3114 (Ken, 11-05): "release urgent" in #3022 reached the PM with only the task's place; its pull request had passed

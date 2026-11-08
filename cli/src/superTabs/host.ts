@@ -448,12 +448,10 @@ export const writeJournal = (file: string, journal: Journal) => {
 }
 
 
-/** Whether [groupId]'s project answers people in threads (backend projects.ts answersInThread). A group from before projects is
- *  in the first. */
-export function answersInThread(state: Record<string, unknown>, groupId: string): boolean {
-  const group = (Array.isArray(state.conversations) ? state.conversations.map(object) : []).find(c => c.id === groupId)
-  const project = group && (Array.isArray(state.projects) ? state.projects.map(object) : []).find(p => p.id === (group.projectId ?? 'lead'))
-  return project?.answersInThread === true
+/** Whether [groupId] is a project's channel, its chat (Swarm v4, anh Dee 2026-11-08): there a task is a thread, so every
+ *  line is answered in its thread. Answered right below, the second agent to answer one line was refused (answered once). */
+export function inChannel(state: Record<string, unknown>, groupId: string): boolean {
+  return (Array.isArray(state.projects) ? state.projects.map(object) : []).some(p => p.leadConversationId === groupId)
 }
 
 /** Owns only the handoff between a durable backend claim and the core's native input.
@@ -498,7 +496,7 @@ export class SuperTabHost {
   private readonly quotes = new Map<string, string>()
   /** Each delivery's context lines (deliveryContext.ts), read once per delivery and kept while it is tried again. */
   private readonly contexts = new Map<string, string>()
-  /** Deliveries of a person's message in a project that answers in threads (task #3747): answered with --reply-to. */
+  /** Deliveries of a line in a project's channel (inChannel): answered with --reply-to. */
   private readonly threadAnswers = new Set<string>()
   /** The tasks and steps where a coordinator's delivery carried their state (#3114), by Swarm, agent and conversation: a later
    *  one there reads its latest messages beside the Swarm read, not after it (review 1, AGENTS.md standard 4). The
@@ -2392,8 +2390,7 @@ export class SuperTabHost {
       const read = await within(this.sources.reads.read(entry.tabId, entry.agentId), wait)
       if (!read) throw new Error(`no answer in ${wait} ms`)
       const { state } = read
-      const author = object(message.author)
-      if (author.kind === 'person' && answersInThread(state, group)) this.threadAnswers.add(entry.deliveryId)
+      if (inChannel(state, group)) this.threadAnswers.add(entry.deliveryId)
       lines.push(placeLine(state, group))
       // "Release urgent" in #3022 reached the PM with its place alone, while its pull request had passed review with CI green,
       // and the PM answered about something else: its state, and what was said just before, come with it.
@@ -2493,13 +2490,10 @@ export class SuperTabHost {
     // chat itself.
     const author = object(message.author)
     const to = author.kind === 'agent' && identifier(author.id) ? ` --to ${shellQuote(author.id)}` : ''
-    // A thread reply is answered in its thread, and a Buddy session's thread stays its own; any other message right below it.
-    // In a project that answers people in threads, a person's message too (task #3747); the server threads an --answers there anyway.
+    // A thread reply is answered in its thread, and a Buddy session's thread stays its own; a line in a project's channel too,
+    // where a task is a thread (Swarm v4); any other message right below it.
     const threadAnswer = this.threadAnswers.has(entry.deliveryId)
     const threaded = (identifier(message.thread) && message.thread !== message.id) || message.buddySession === true || threadAnswer
-    // Task #3057 (Ken, 11-05): 29 of 55 agent posts to the PM still did not name it, mostly an assignee writing in its own task,
-    // because this line carried --to <sender> and the PM sends the briefs. The coordinator's message in the reader's own task or
-    // step, with no question, shows the plain form: in a task it reaches no agent, and the people see it. To acknowledge, react.
     const answer = `Answer: ${command} post ${shellQuote(group)} 'your message' UNIQUE_OPERATION_ID ${threaded ? '--reply-to' : '--answers'} ${shellQuote(String(message.id))}${to}`
     return context + native + reply + said + `\n\n${answer}`
   }
