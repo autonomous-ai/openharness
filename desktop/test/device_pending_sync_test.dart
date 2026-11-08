@@ -51,7 +51,8 @@ class _DaemonApi extends ApiClient {
   /// Whether marking DEVICES seen succeeds; "Got it" on the baseline panel is a write of its own.
   bool dismissWorks = true;
   bool baselineWorks = true;
-  final dismissed = <({String? pub, List<String>? pubs, bool baseline, bool confirm})>[];
+  final dismissed =
+      <({String? pub, List<String>? pubs, bool baseline, bool confirm})>[];
   final rebaselines = <({bool confirm, Map<String, Object?>? head})>[];
   Map<String, dynamic>? rebaselineAnswer;
 
@@ -518,10 +519,7 @@ void main() {
 
   test('a device another of the person\'s devices confirmed leaves the banner, and says where', () async {
     api.listing = {
-      'members': [
-        _member('me', 1, self: true),
-        _member('a', 3),
-      ],
+      'members': [_member('me', 1, self: true), _member('a', 3)],
       'pending': ['a'],
     };
     await frame('device_keys_changed');
@@ -543,7 +541,10 @@ void main() {
     expect(app.newDevices, isEmpty);
     final devices = (await app.loadDevices())!;
     expect(devices.devices.firstWhere((d) => d.pub == 'a').confirmedOn, 'box2');
-    expect(devices.devices.firstWhere((d) => d.pub == 'me').confirmedOn, isNull);
+    expect(
+      devices.devices.firstWhere((d) => d.pub == 'me').confirmedOn,
+      isNull,
+    );
   });
 
   test('a fork-suspended entry is marked so on the banner, and follows the listing', () async {
@@ -681,7 +682,12 @@ void main() {
 
   test('"Got it" on the baseline panel is written to the daemon', () async {
     await app.seeDeviceBaseline();
-    expect(api.dismissed.single, (pub: null, pubs: null, baseline: true, confirm: false));
+    expect(api.dismissed.single, (
+      pub: null,
+      pubs: null,
+      baseline: true,
+      confirm: false,
+    ));
     expect(app.baselineSeenLocally, isTrue);
   });
 

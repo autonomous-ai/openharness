@@ -101,9 +101,7 @@ void main() {
     await watcher.check();
     await tester.pump();
     final left =
-        tester
-            .getTopLeft(find.text('A new version of Harness is ready.'))
-            .dx -
+        tester.getTopLeft(find.text('A new version of Harness is ready.')).dx -
         tester.getTopLeft(bar()).dx;
     final right =
         tester.getTopRight(bar()).dx -

@@ -56,11 +56,8 @@ String _string(JSObject object, String path) {
 bool _closed(JSObject notification) =>
     (notification['closed'] as JSBoolean).toDart;
 
-void _click(JSObject notification) =>
-    (notification['onclick'] as JSFunction).callAsFunction(
-      notification,
-      JSObject(),
-    );
+void _click(JSObject notification) => (notification['onclick'] as JSFunction)
+    .callAsFunction(notification, JSObject());
 
 Future<NotificationPermission> _show(
   BrowserSystemNotifier notifier, {
@@ -92,19 +89,22 @@ void main() {
     expect(notifier.deniedAdvice, contains('site settings'));
   });
 
-  test('asks once when nobody has, and reads an answer already given', () async {
-    _installFakeNotification(permission: 'default');
-    expect(
-      await BrowserSystemNotifier().authorize(),
-      NotificationPermission.granted,
-    );
+  test(
+    'asks once when nobody has, and reads an answer already given',
+    () async {
+      _installFakeNotification(permission: 'default');
+      expect(
+        await BrowserSystemNotifier().authorize(),
+        NotificationPermission.granted,
+      );
 
-    _installFakeNotification(permission: 'denied');
-    expect(
-      await BrowserSystemNotifier().authorize(),
-      NotificationPermission.denied,
-    );
-  });
+      _installFakeNotification(permission: 'denied');
+      expect(
+        await BrowserSystemNotifier().authorize(),
+        NotificationPermission.denied,
+      );
+    },
+  );
 
   test('posts nothing without permission', () async {
     _installFakeNotification(permission: 'denied');
@@ -117,7 +117,10 @@ void main() {
     _installFakeNotification(permission: 'granted');
     final notifier = BrowserSystemNotifier();
 
-    expect(await _show(notifier, body: 'finished'), NotificationPermission.granted);
+    expect(
+      await _show(notifier, body: 'finished'),
+      NotificationPermission.granted,
+    );
     await _show(notifier, body: 'is waiting for you');
 
     expect(_shown.length, 2);

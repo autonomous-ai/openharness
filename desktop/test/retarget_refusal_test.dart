@@ -92,17 +92,20 @@ void main() {
     }
   });
 
-  test('a model change shows the machine\'s reason for an engine it refuses', () async {
-    final app = createApp(
-      connectionForTest: (_) => _Refusing('ENGINE_LAUNCH_REFUSED'),
-    );
-    addTearDown(app.dispose);
-    await app.clearAgentGrid('m', 'a1');
-    expect(app.lastError, 'cursor cannot run on grid kelvin-e2e: …');
-    app.machineStates['m']!.agents = const [];
-    await app.retargetAgentToGridModel('m', 'a1', 'qwen');
-    expect(app.lastError, 'cursor cannot run on grid kelvin-e2e: …');
-  });
+  test(
+    'a model change shows the machine\'s reason for an engine it refuses',
+    () async {
+      final app = createApp(
+        connectionForTest: (_) => _Refusing('ENGINE_LAUNCH_REFUSED'),
+      );
+      addTearDown(app.dispose);
+      await app.clearAgentGrid('m', 'a1');
+      expect(app.lastError, 'cursor cannot run on grid kelvin-e2e: …');
+      app.machineStates['m']!.agents = const [];
+      await app.retargetAgentToGridModel('m', 'a1', 'qwen');
+      expect(app.lastError, 'cursor cannot run on grid kelvin-e2e: …');
+    },
+  );
 
   test('moving home is reported the same way', () async {
     final app = createApp(connectionForTest: (_) => _Refusing('AGENT_BUSY'));

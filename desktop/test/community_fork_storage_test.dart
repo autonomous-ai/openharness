@@ -192,7 +192,9 @@ void main() {
     test(
       'migration resumes $interruption using its saved reservation',
       () async {
-        final target = Directory(p.join(fixture.path, 'harnesses', 'moonlight'));
+        final target = Directory(
+          p.join(fixture.path, 'harnesses', 'moonlight'),
+        );
         await target.create(recursive: true);
         await legacy(
           extra: {

@@ -76,9 +76,7 @@ void main() {
     expect(find.textContaining('Running low'), findsOneWidget);
   });
 
-  testWidgets('with none yet, says so instead of an empty box', (
-    tester,
-  ) async {
+  testWidgets('with none yet, says so instead of an empty box', (tester) async {
     await mount(tester, const []);
     expect(
       find.widgetWithText(EmptyState, 'No subscriptions yet'),

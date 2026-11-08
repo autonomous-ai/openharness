@@ -81,7 +81,11 @@ void main() {
     final rows = superTabCrewRows(
       _swarm([
         _agent('keeper', 'Keeper', crew: {..._engineer, 'lane': 'cli'}),
-        _agent('heron', 'Heron', crew: {'role': 'Reviewer', 'at': 1, 'by': 'pm'}),
+        _agent(
+          'heron',
+          'Heron',
+          crew: {'role': 'Reviewer', 'at': 1, 'by': 'pm'},
+        ),
         _agent(
           'sorrel',
           'Sorrel',
@@ -90,14 +94,25 @@ void main() {
           engine: 'codex',
           downSince: _now.subtract(const Duration(minutes: 2)),
         ),
-        _agent('aster', 'Aster', crew: _engineer, downSince: _now.subtract(const Duration(minutes: 6))),
+        _agent(
+          'aster',
+          'Aster',
+          crew: _engineer,
+          downSince: _now.subtract(const Duration(minutes: 6)),
+        ),
         _agent('dozy', 'Dozy', crew: _engineer, asleep: {'since': 1}),
         _agent('plain', 'Plain'),
       ]),
       'lead',
       now: _now,
     );
-    expect(rows.map((r) => r.name), ['Keeper', 'Heron', 'Sorrel', 'Aster', 'Dozy']);
+    expect(rows.map((r) => r.name), [
+      'Keeper',
+      'Heron',
+      'Sorrel',
+      'Aster',
+      'Dozy',
+    ]);
     expect(rows.first.role, 'Engineer · cli');
     expect(rows.first.machine, 'Mac 3 · Claude');
     expect(rows.first.state, 'Running');
@@ -109,13 +124,34 @@ void main() {
     expect(rows[4].state, 'Asleep');
   });
 
-  testWidgets('shows the rows, and an empty line when the project has no crew', (tester) async {
-    final rows = superTabCrewRows(_swarm([_agent('keeper', 'Keeper', crew: _engineer)]), 'lead', now: _now);
-    await tester.pumpWidget(MaterialApp(home: Scaffold(body: SuperTabCrewList(rows: rows))));
-    for (final text in ['Keeper', 'Engineer', 'Mac 3 · Claude', 'Running', '#3397 A standing crew']) {
-      expect(find.text(text), findsOneWidget);
-    }
-    await tester.pumpWidget(const MaterialApp(home: Scaffold(body: SuperTabCrewList(rows: []))));
-    expect(find.text(superTabCrewEmpty), findsOneWidget);
-  });
+  testWidgets(
+    'shows the rows, and an empty line when the project has no crew',
+    (tester) async {
+      final rows = superTabCrewRows(
+        _swarm([_agent('keeper', 'Keeper', crew: _engineer)]),
+        'lead',
+        now: _now,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: SuperTabCrewList(rows: rows)),
+        ),
+      );
+      for (final text in [
+        'Keeper',
+        'Engineer',
+        'Mac 3 · Claude',
+        'Running',
+        '#3397 A standing crew',
+      ]) {
+        expect(find.text(text), findsOneWidget);
+      }
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(body: SuperTabCrewList(rows: [])),
+        ),
+      );
+      expect(find.text(superTabCrewEmpty), findsOneWidget);
+    },
+  );
 }

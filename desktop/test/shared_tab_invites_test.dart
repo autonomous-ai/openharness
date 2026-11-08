@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/agent_messages/shared_tab_dialogs.dart';
-import 'package:harness/agent_messages/shared_tabs_model.dart' hide SharedTabNotice;
+import 'package:harness/agent_messages/shared_tabs_model.dart'
+    hide SharedTabNotice;
 import 'package:harness/core/models.dart';
 import 'package:harness/settings/experimental_features.dart';
 import 'package:harness/settings/sections/tab_invites_section.dart';
@@ -87,11 +88,20 @@ void main() {
     addTearDown(tester.view.reset);
     daemon = _Daemon();
     store = MemoryStore();
-    app = createApp(store: store, connectionForTest: (_) => daemon, connected: true);
+    app = createApp(
+      store: store,
+      connectionForTest: (_) => daemon,
+      connected: true,
+    );
     app.machineStates['m']!.localOnly = true;
     app.machineStates['m']!.agents = [
       Agent(id: 'a1', name: 'Fixer', engine: 'codex', terminalAvailable: true),
-      Agent(id: 'a2', name: 'Writer', engine: 'claude', terminalAvailable: true),
+      Agent(
+        id: 'a2',
+        name: 'Writer',
+        engine: 'claude',
+        terminalAvailable: true,
+      ),
     ];
     addTearDown(app.dispose);
     await tester.runAsync(() => app.sharedTabs.refresh());
@@ -99,7 +109,9 @@ void main() {
 
   Future<void> settle(WidgetTester tester) async {
     for (var i = 0; i < 6; i++) {
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
       await tester.pump(const Duration(milliseconds: 50));
     }
   }
@@ -128,67 +140,82 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
   }
 
-  testWidgets('a new invitation shows one notice with View, once per invitation', (tester) async {
-    await open(tester);
-    daemon.shares = _shares(invites: [_invite()]);
-    await tester.runAsync(() => app.sharedTabs.refresh());
-    await tester.pumpWidget(host(SharedTabNotice(notifier: app)));
-    await settle(tester);
-    expect(
-      tester.widget<Text>(find.byKey(const Key('shared-tab-notice'))).data,
-      'alice@example.com invited you to the tab "app"',
-    );
-    expect(store.values['shared_tabs.invites_seen.bob'], contains('i1'));
+  testWidgets(
+    'a new invitation shows one notice with View, once per invitation',
+    (tester) async {
+      await open(tester);
+      daemon.shares = _shares(invites: [_invite()]);
+      await tester.runAsync(() => app.sharedTabs.refresh());
+      await tester.pumpWidget(host(SharedTabNotice(notifier: app)));
+      await settle(tester);
+      expect(
+        tester.widget<Text>(find.byKey(const Key('shared-tab-notice'))).data,
+        'alice@example.com invited you to the tab "app"',
+      );
+      expect(store.values['shared_tabs.invites_seen.bob'], contains('i1'));
 
-    await tester.tap(find.byKey(const Key('shared-tab-notice-view')));
-    await tester.pump();
-    expect(app.takeSharedTabsRequest(), isTrue);
-    expect(app.takeSharedTabsRequest(), isFalse);
-    expect(find.byKey(const Key('shared-tab-notice')), findsNothing);
+      await tester.tap(find.byKey(const Key('shared-tab-notice-view')));
+      await tester.pump();
+      expect(app.takeSharedTabsRequest(), isTrue);
+      expect(app.takeSharedTabsRequest(), isFalse);
+      expect(find.byKey(const Key('shared-tab-notice')), findsNothing);
 
-    // The same invitation read again: no second notice.
-    await tester.runAsync(() => app.sharedTabs.refresh());
-    await settle(tester);
-    expect(find.byKey(const Key('shared-tab-notice')), findsNothing);
+      // The same invitation read again: no second notice.
+      await tester.runAsync(() => app.sharedTabs.refresh());
+      await settle(tester);
+      expect(find.byKey(const Key('shared-tab-notice')), findsNothing);
 
-    // Nor after a restart of the window (a fresh widget, same store).
-    await tester.pumpWidget(host(const SizedBox()));
-    await tester.pumpWidget(host(SharedTabNotice(notifier: app)));
-    await settle(tester);
-    expect(find.byKey(const Key('shared-tab-notice')), findsNothing);
+      // Nor after a restart of the window (a fresh widget, same store).
+      await tester.pumpWidget(host(const SizedBox()));
+      await tester.pumpWidget(host(SharedTabNotice(notifier: app)));
+      await settle(tester);
+      expect(find.byKey(const Key('shared-tab-notice')), findsNothing);
 
-    // A different invitation is new.
-    daemon.shares = _shares(invites: [_invite(), _invite(id: 'i2')]);
-    await tester.runAsync(() => app.sharedTabs.refresh());
-    await settle(tester);
-    expect(find.byKey(const Key('shared-tab-notice')), findsOneWidget);
-  });
+      // A different invitation is new.
+      daemon.shares = _shares(
+        invites: [
+          _invite(),
+          _invite(id: 'i2'),
+        ],
+      );
+      await tester.runAsync(() => app.sharedTabs.refresh());
+      await settle(tester);
+      expect(find.byKey(const Key('shared-tab-notice')), findsOneWidget);
+    },
+  );
 
-  testWidgets('a re-invitation (same id, later expiry) shows again; the same one after a restart does not', (tester) async {
-    await open(tester);
-    daemon.shares = _shares(invites: [_invite()]);
-    await tester.runAsync(() => app.sharedTabs.refresh());
-    await tester.pumpWidget(host(SharedTabNotice(notifier: app)));
-    await settle(tester);
-    expect(find.byKey(const Key('shared-tab-notice')), findsOneWidget);
-    await tester.tap(find.byKey(const Key('shared-tab-notice-dismiss')));
-    await tester.pump();
-    expect(find.byKey(const Key('shared-tab-notice')), findsNothing);
+  testWidgets(
+    'a re-invitation (same id, later expiry) shows again; the same one after a restart does not',
+    (tester) async {
+      await open(tester);
+      daemon.shares = _shares(invites: [_invite()]);
+      await tester.runAsync(() => app.sharedTabs.refresh());
+      await tester.pumpWidget(host(SharedTabNotice(notifier: app)));
+      await settle(tester);
+      expect(find.byKey(const Key('shared-tab-notice')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('shared-tab-notice-dismiss')));
+      await tester.pump();
+      expect(find.byKey(const Key('shared-tab-notice')), findsNothing);
 
-    // Restart: same id and expiry, same store: nothing.
-    await tester.pumpWidget(host(const SizedBox()));
-    await tester.pumpWidget(host(SharedTabNotice(notifier: app)));
-    await settle(tester);
-    expect(find.byKey(const Key('shared-tab-notice')), findsNothing);
+      // Restart: same id and expiry, same store: nothing.
+      await tester.pumpWidget(host(const SizedBox()));
+      await tester.pumpWidget(host(SharedTabNotice(notifier: app)));
+      await settle(tester);
+      expect(find.byKey(const Key('shared-tab-notice')), findsNothing);
 
-    // The backend reuses the id when the owner invites again; the expiry is new.
-    daemon.shares = _shares(invites: [_invite(expiresAt: '2026-11-15T00:00:00.000Z')]);
-    await tester.runAsync(() => app.sharedTabs.refresh());
-    await settle(tester);
-    expect(find.byKey(const Key('shared-tab-notice')), findsOneWidget);
-  });
+      // The backend reuses the id when the owner invites again; the expiry is new.
+      daemon.shares = _shares(
+        invites: [_invite(expiresAt: '2026-11-15T00:00:00.000Z')],
+      );
+      await tester.runAsync(() => app.sharedTabs.refresh());
+      await settle(tester);
+      expect(find.byKey(const Key('shared-tab-notice')), findsOneWidget);
+    },
+  );
 
-  testWidgets('an invitation from an older backend says "a tab"', (tester) async {
+  testWidgets('an invitation from an older backend says "a tab"', (
+    tester,
+  ) async {
     await open(tester);
     daemon.shares = _shares(invites: [_invite(tabName: '')]);
     await tester.runAsync(() => app.sharedTabs.refresh());
@@ -200,11 +227,19 @@ void main() {
     );
   });
 
-  testWidgets('a daemon notice shows its copy and dismiss goes to the daemon', (tester) async {
+  testWidgets('a daemon notice shows its copy and dismiss goes to the daemon', (
+    tester,
+  ) async {
     await open(tester);
     daemon.shares = _shares(
       notices: [
-        {'id': 'n1', 'sharedTabId': 's1', 'kind': 'removed', 'at': 'x', 'ownerEmail': 'alice@example.com'},
+        {
+          'id': 'n1',
+          'sharedTabId': 's1',
+          'kind': 'removed',
+          'at': 'x',
+          'ownerEmail': 'alice@example.com',
+        },
       ],
     );
     daemon.answer = (_) => {};
@@ -221,7 +256,9 @@ void main() {
     expect(daemon.asked.last, {'action': 'share_notice_dismiss', 'id': 'n1'});
   });
 
-  testWidgets('a removed notice without an owner email says "a tab"', (tester) async {
+  testWidgets('a removed notice without an owner email says "a tab"', (
+    tester,
+  ) async {
     await open(tester);
     daemon.shares = _shares(
       notices: [
@@ -237,37 +274,54 @@ void main() {
     );
   });
 
-  testWidgets('another account\'s long email with a bidi override stays one bounded line', (tester) async {
-    await open(tester);
-    final hostile = '\u202E${'a' * 200}@example.com';
-    final invite = SharedTabInvite.fromJson({
-      ..._invite(),
-      'ownerEmail': hostile,
-      'tabName': 'b' * 200,
-    })!;
-    daemon.shares = _shares(
-      invites: [
-        {..._invite(), 'ownerEmail': hostile, 'tabName': 'b' * 200},
-      ],
-      untrusted: [
-        {'sharedTabId': 's2', 'ownerEmail': hostile},
-      ],
-    );
-    await tester.runAsync(() => app.sharedTabs.refresh());
-    await tester.pumpWidget(host(TabInvitesSection(notifier: app)));
-    await settle(tester);
-    final texts = tester.widgetList<Text>(find.byType(Text)).map((t) => t.data ?? '');
-    expect(texts.where((t) => t.contains('\u202E')), isEmpty);
-    expect(texts.every((t) => t.length < 130), isTrue, reason: texts.toString());
-    await tester.pumpWidget(host(const SizedBox()));
-    await pumpDialog(tester, (c, a) => showAcceptInvite(c, a, invite));
-    final dialog = tester.widgetList<Text>(find.byType(Text)).map((t) => t.data ?? '');
-    expect(dialog.where((t) => t.contains('\u202E')), isEmpty);
-    expect(dialog.every((t) => t.length < 200), isTrue, reason: dialog.toString());
-    expect(tester.takeException(), isNull);
-  });
+  testWidgets(
+    'another account\'s long email with a bidi override stays one bounded line',
+    (tester) async {
+      await open(tester);
+      final hostile = '\u202E${'a' * 200}@example.com';
+      final invite = SharedTabInvite.fromJson({
+        ..._invite(),
+        'ownerEmail': hostile,
+        'tabName': 'b' * 200,
+      })!;
+      daemon.shares = _shares(
+        invites: [
+          {..._invite(), 'ownerEmail': hostile, 'tabName': 'b' * 200},
+        ],
+        untrusted: [
+          {'sharedTabId': 's2', 'ownerEmail': hostile},
+        ],
+      );
+      await tester.runAsync(() => app.sharedTabs.refresh());
+      await tester.pumpWidget(host(TabInvitesSection(notifier: app)));
+      await settle(tester);
+      final texts = tester
+          .widgetList<Text>(find.byType(Text))
+          .map((t) => t.data ?? '');
+      expect(texts.where((t) => t.contains('\u202E')), isEmpty);
+      expect(
+        texts.every((t) => t.length < 130),
+        isTrue,
+        reason: texts.toString(),
+      );
+      await tester.pumpWidget(host(const SizedBox()));
+      await pumpDialog(tester, (c, a) => showAcceptInvite(c, a, invite));
+      final dialog = tester
+          .widgetList<Text>(find.byType(Text))
+          .map((t) => t.data ?? '');
+      expect(dialog.where((t) => t.contains('\u202E')), isEmpty);
+      expect(
+        dialog.every((t) => t.length < 200),
+        isTrue,
+        reason: dialog.toString(),
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 
-  testWidgets('an accept without a fingerprint does not ask to compare', (tester) async {
+  testWidgets('an accept without a fingerprint does not ask to compare', (
+    tester,
+  ) async {
     await open(tester);
     daemon.answer = (p) => {'sharedTabId': 's1'};
     final invite = SharedTabInvite.fromJson(_invite())!;
@@ -278,7 +332,9 @@ void main() {
     expect(find.text('Add harnesses'), findsOneWidget);
   });
 
-  testWidgets('Trust again offers Try again when the check fails', (tester) async {
+  testWidgets('Trust again offers Try again when the check fails', (
+    tester,
+  ) async {
     await open(tester);
     var fail = true;
     daemon.answer = (p) {
@@ -289,7 +345,13 @@ void main() {
           detail: '',
         );
       }
-      return {'sharedTabId': 's2', 'ownerEmail': 'alice@example.com', 'ownerPub': 'P', 'fingerprint': 'F1', 'version': 1};
+      return {
+        'sharedTabId': 's2',
+        'ownerEmail': 'alice@example.com',
+        'ownerPub': 'P',
+        'fingerprint': 'F1',
+        'version': 1,
+      };
     };
     await pumpDialog(tester, (c, a) => showTrustAgain(c, a, 's2'));
     await settle(tester);
@@ -301,32 +363,37 @@ void main() {
     expect(find.byKey(const Key('shared-trust-retry')), findsNothing);
   });
 
-  testWidgets('Accept shows the promise, then the fingerprint after it succeeds', (tester) async {
-    await open(tester);
-    daemon.answer = (p) => {'sharedTabId': 's1', 'fingerprint': 'AB12 CD34'};
-    final invite = SharedTabInvite.fromJson(_invite())!;
-    await pumpDialog(tester, (c, a) => showAcceptInvite(c, a, invite));
-    expect(find.text('app'), findsOneWidget);
-    expect(find.text('alice@example.com'), findsWidgets);
-    expect(
-      find.text(
-        'alice@example.com and everyone in this tab will see the terminals of the harnesses you add. Only you can type into them.',
-      ),
-      findsOneWidget,
-    );
-    expect(find.text('AB12 CD34'), findsNothing);
-    await tester.tap(find.byKey(const Key('shared-invite-accept')));
-    await settle(tester);
-    expect(daemon.asked.first, {'action': 'share_accept', 'inviteId': 'i1'});
-    expect(find.text('AB12 CD34'), findsOneWidget);
-    expect(
-      find.text('Compare it with alice@example.com if you want to be sure.'),
-      findsOneWidget,
-    );
-    expect(find.text('Add harnesses'), findsOneWidget);
-  });
+  testWidgets(
+    'Accept shows the promise, then the fingerprint after it succeeds',
+    (tester) async {
+      await open(tester);
+      daemon.answer = (p) => {'sharedTabId': 's1', 'fingerprint': 'AB12 CD34'};
+      final invite = SharedTabInvite.fromJson(_invite())!;
+      await pumpDialog(tester, (c, a) => showAcceptInvite(c, a, invite));
+      expect(find.text('app'), findsOneWidget);
+      expect(find.text('alice@example.com'), findsWidgets);
+      expect(
+        find.text(
+          'alice@example.com and everyone in this tab will see the terminals of the harnesses you add. Only you can type into them.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('AB12 CD34'), findsNothing);
+      await tester.tap(find.byKey(const Key('shared-invite-accept')));
+      await settle(tester);
+      expect(daemon.asked.first, {'action': 'share_accept', 'inviteId': 'i1'});
+      expect(find.text('AB12 CD34'), findsOneWidget);
+      expect(
+        find.text('Compare it with alice@example.com if you want to be sure.'),
+        findsOneWidget,
+      );
+      expect(find.text('Add harnesses'), findsOneWidget);
+    },
+  );
 
-  testWidgets('a refused accept shows the daemon\'s message and stays', (tester) async {
+  testWidgets('a refused accept shows the daemon\'s message and stays', (
+    tester,
+  ) async {
     await open(tester);
     final invite = SharedTabInvite.fromJson(_invite())!;
     final failing = daemon;
@@ -338,38 +405,56 @@ void main() {
     await pumpDialog(tester, (c, a) => showAcceptInvite(c, a, invite));
     await tester.tap(find.byKey(const Key('shared-invite-accept')));
     await settle(tester);
-    expect(find.text('The owner\'s computer key does not match.'), findsOneWidget);
+    expect(
+      find.text('The owner\'s computer key does not match.'),
+      findsOneWidget,
+    );
     expect(find.byKey(const Key('shared-invite-accept')), findsOneWidget);
   });
 
-  testWidgets('a pending accept says the tab comes when the owner\'s computer is reachable', (tester) async {
-    await open(tester);
-    daemon.answer = (p) => {'sharedTabId': 's1', 'pending': true};
-    final invite = SharedTabInvite.fromJson(_invite())!;
-    await pumpDialog(tester, (c, a) => showAcceptInvite(c, a, invite));
-    await tester.tap(find.byKey(const Key('shared-invite-accept')));
-    await settle(tester);
-    expect(
-      find.text('The tab will appear when alice@example.com\'s computer is reachable.'),
-      findsOneWidget,
-    );
-    expect(find.text('Add harnesses'), findsNothing);
-  });
+  testWidgets(
+    'a pending accept says the tab comes when the owner\'s computer is reachable',
+    (tester) async {
+      await open(tester);
+      daemon.answer = (p) => {'sharedTabId': 's1', 'pending': true};
+      final invite = SharedTabInvite.fromJson(_invite())!;
+      await pumpDialog(tester, (c, a) => showAcceptInvite(c, a, invite));
+      await tester.tap(find.byKey(const Key('shared-invite-accept')));
+      await settle(tester);
+      expect(
+        find.text(
+          'The tab will appear when alice@example.com\'s computer is reachable.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Add harnesses'), findsNothing);
+    },
+  );
 
-  testWidgets('Add harnesses without the desk tab says it comes when the owner\'s computer is reachable', (tester) async {
-    await open(tester);
-    await pumpDialog(tester, (c, a) => showAddHarnesses(c, a, 's1'));
-    expect(find.text('Fixer · codex · Test host'), findsOneWidget);
-    await tester.tap(find.text('Fixer · codex · Test host'));
-    await tester.pump();
-    await tester.tap(find.byKey(const Key('shared-add-confirm')));
-    await settle(tester);
-    expect(find.text('The tab will appear when the owner\'s computer is reachable.'), findsOneWidget);
-    expect(daemon.actions.where((a) => a == 'share_add'), isEmpty);
-    expect(find.byKey(const Key('shared-add-confirm')), findsOneWidget);
-  });
+  testWidgets(
+    'Add harnesses without the desk tab says it comes when the owner\'s computer is reachable',
+    (tester) async {
+      await open(tester);
+      await pumpDialog(tester, (c, a) => showAddHarnesses(c, a, 's1'));
+      expect(find.text('Fixer · codex · Test host'), findsOneWidget);
+      await tester.tap(find.text('Fixer · codex · Test host'));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('shared-add-confirm')));
+      await settle(tester);
+      expect(
+        find.text(
+          'The tab will appear when the owner\'s computer is reachable.',
+        ),
+        findsOneWidget,
+      );
+      expect(daemon.actions.where((a) => a == 'share_add'), isEmpty);
+      expect(find.byKey(const Key('shared-add-confirm')), findsOneWidget);
+    },
+  );
 
-  testWidgets('New Harness here hands the tab to the caller and closes', (tester) async {
+  testWidgets('New Harness here hands the tab to the caller and closes', (
+    tester,
+  ) async {
     await open(tester);
     String? target;
     await pumpDialog(
@@ -382,44 +467,53 @@ void main() {
     expect(find.byKey(const Key('shared-add-confirm')), findsNothing);
   });
 
-  testWidgets('Tab invites lists invitations and untrusted tabs with Trust again', (tester) async {
-    await open(tester);
-    daemon.shares = _shares(
-      invites: [_invite()],
-      untrusted: [
-        {'sharedTabId': 's2', 'ownerEmail': 'alice@example.com'},
-      ],
-    );
-    daemon.answer = (p) => switch (p['action']) {
-      'share_retrust_check' => {
+  testWidgets(
+    'Tab invites lists invitations and untrusted tabs with Trust again',
+    (tester) async {
+      await open(tester);
+      daemon.shares = _shares(
+        invites: [_invite()],
+        untrusted: [
+          {'sharedTabId': 's2', 'ownerEmail': 'alice@example.com'},
+        ],
+      );
+      daemon.answer = (p) => switch (p['action']) {
+        'share_retrust_check' => {
+          'sharedTabId': 's2',
+          'ownerEmail': 'alice@example.com',
+          'ownerPub': 'PUB',
+          'fingerprint': 'NEW1 NEW2',
+          'version': 4,
+          'pinnedFingerprint': 'OLD1 OLD2',
+        },
+        _ => {},
+      };
+      await tester.pumpWidget(host(TabInvitesSection(notifier: app)));
+      await settle(tester);
+      expect(find.text('app'), findsOneWidget);
+      expect(find.byKey(const Key('tab-invite-accept-i1')), findsOneWidget);
+      expect(find.text('Decline'), findsNothing);
+      expect(
+        find.text('alice@example.com\'s computer has a new key.'),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('tab-invite-trust-s2')));
+      await settle(tester);
+      expect(daemon.asked.last, {
+        'action': 'share_retrust_check',
         'sharedTabId': 's2',
-        'ownerEmail': 'alice@example.com',
+      });
+      expect(find.text('New: NEW1 NEW2'), findsOneWidget);
+      expect(find.text('Before: OLD1 OLD2'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('shared-trust-confirm')));
+      await settle(tester);
+      expect(daemon.asked.firstWhere((p) => p['action'] == 'share_retrust'), {
+        'action': 'share_retrust',
+        'sharedTabId': 's2',
         'ownerPub': 'PUB',
-        'fingerprint': 'NEW1 NEW2',
-        'version': 4,
-        'pinnedFingerprint': 'OLD1 OLD2',
-      },
-      _ => {},
-    };
-    await tester.pumpWidget(host(TabInvitesSection(notifier: app)));
-    await settle(tester);
-    expect(find.text('app'), findsOneWidget);
-    expect(find.byKey(const Key('tab-invite-accept-i1')), findsOneWidget);
-    expect(find.text('Decline'), findsNothing);
-    expect(find.text('alice@example.com\'s computer has a new key.'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('tab-invite-trust-s2')));
-    await settle(tester);
-    expect(daemon.asked.last, {'action': 'share_retrust_check', 'sharedTabId': 's2'});
-    expect(find.text('New: NEW1 NEW2'), findsOneWidget);
-    expect(find.text('Before: OLD1 OLD2'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('shared-trust-confirm')));
-    await settle(tester);
-    expect(daemon.asked.firstWhere((p) => p['action'] == 'share_retrust'), {
-      'action': 'share_retrust',
-      'sharedTabId': 's2',
-      'ownerPub': 'PUB',
-    });
-  });
+      });
+    },
+  );
 
   testWidgets('Tab invites with nothing says so', (tester) async {
     await open(tester);
@@ -442,7 +536,9 @@ void main() {
   test('the switch\'s copy names inviting people', () {
     expect(
       ExperimentalFeature.agentMessages.description,
-      contains('Invite people to a tab and their harnesses join it from their own computers.'),
+      contains(
+        'Invite people to a tab and their harnesses join it from their own computers.',
+      ),
     );
   });
 }

@@ -123,10 +123,17 @@ void main() {
       isNull,
     );
     expect(checked, ['/Users/me/harnesses/date-page/index.html']);
-    expect(launched.single.toFilePath(), '/Users/me/harnesses/date-page/index.html');
+    expect(
+      launched.single.toFilePath(),
+      '/Users/me/harnesses/date-page/index.html',
+    );
     expect(await opener.open('/tmp/report.pdf', isLocalMachine: true), isNull);
     expect(
-      await opener.open('index.html', isLocalMachine: true, workingDirectory: 'relative/dir'),
+      await opener.open(
+        'index.html',
+        isLocalMachine: true,
+        workingDirectory: 'relative/dir',
+      ),
       contains('full file path'),
     );
   });

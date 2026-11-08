@@ -8,22 +8,28 @@ import 'package:xterm/src/ui/painter.dart';
 import 'package:xterm/xterm.dart';
 
 TerminalPainter _painter({TerminalTheme? theme}) => TerminalPainter(
-      theme: theme ?? TerminalThemes.defaultTheme,
-      textStyle: const TerminalStyle(),
-      textScaler: TextScaler.noScaling,
-    );
+  theme: theme ?? TerminalThemes.defaultTheme,
+  textStyle: const TerminalStyle(),
+  textScaler: TextScaler.noScaling,
+);
 
 /// A screen exercising everything a line can draw: colours, inverse, faint,
 /// bold/italic/underline, wide CJK, emoji, block glyphs, box drawing, RGB.
 Terminal _sampleTerminal() {
   final terminal = Terminal(maxLines: 200)..resize(60, 12);
-  terminal.write('plain text, then \x1b[31mred\x1b[0m \x1b[42mgreen bg\x1b[0m\r\n');
-  terminal.write('\x1b[7minverse\x1b[0m \x1b[2mfaint\x1b[0m \x1b[1mbold\x1b[0m '
-      '\x1b[3mitalic\x1b[0m \x1b[4munder line \x1b[0m\r\n');
+  terminal.write(
+    'plain text, then \x1b[31mred\x1b[0m \x1b[42mgreen bg\x1b[0m\r\n',
+  );
+  terminal.write(
+    '\x1b[7minverse\x1b[0m \x1b[2mfaint\x1b[0m \x1b[1mbold\x1b[0m '
+    '\x1b[3mitalic\x1b[0m \x1b[4munder line \x1b[0m\r\n',
+  );
   terminal.write('wide 漢字テスト emoji 😀 done\r\n');
   terminal.write('blocks ▀▄█▌▐░▒▓ box ┌─┬─┐│ │└─┴─┘\r\n');
   terminal.write('\x1b[38;2;255;128;0;48;2;0;64;128mrgb run\x1b[0m end\r\n');
-  terminal.write('\x1b[44m                    \x1b[0m trailing spaces on blue\r\n');
+  terminal.write(
+    '\x1b[44m                    \x1b[0m trailing spaces on blue\r\n',
+  );
   return terminal;
 }
 
@@ -125,7 +131,8 @@ void main() {
         'eraseRange': (l) => l.eraseRange(2, 5, style),
         'eraseCell': (l) => l.eraseCell(0, style),
         'resetCell': (l) => l.resetCell(0),
-        'setContent': (l) => l.setContent(0, 0x7a | (1 << CellContent.widthShift)),
+        'setContent': (l) =>
+            l.setContent(0, 0x7a | (1 << CellContent.widthShift)),
         'setCodePoint': (l) => l.setCodePoint(0, 0x7a),
         'resize': (l) => l.resize(4),
         'copyFrom': (l) => l.copyFrom(BufferLine(10), 0, 0, 5),
@@ -195,21 +202,27 @@ void main() {
   });
 
   group('TerminalPainter.paintLine', () {
-    test('merged backgrounds fill exactly what cell-by-cell painting filled', () async {
-      // Backgrounds alone: runs of colours, inverse, a wide cell, gaps.
-      final terminal = Terminal(maxLines: 50)..resize(40, 4);
-      terminal.write('\x1b[41m   \x1b[42m  \x1b[0m  \x1b[44m    \x1b[0m\r\n');
-      terminal.write('\x1b[7m     \x1b[0m \x1b[48;2;10;20;30m   \x1b[48;2;10;20;31m  \x1b[0m\r\n');
-      terminal.write('\x1b[45m\u3000 \u3000\x1b[0m\r\n');
-      final lines = _visible(terminal);
-      final painter = _painter();
-      final expected = await _render(
-        painter,
-        lines,
-        (canvas, offset, line) => _paintCellByCell(painter, canvas, offset, line),
-      );
-      expect(await _render(painter, lines, painter.paintLine), expected);
-    });
+    test(
+      'merged backgrounds fill exactly what cell-by-cell painting filled',
+      () async {
+        // Backgrounds alone: runs of colours, inverse, a wide cell, gaps.
+        final terminal = Terminal(maxLines: 50)..resize(40, 4);
+        terminal.write('\x1b[41m   \x1b[42m  \x1b[0m  \x1b[44m    \x1b[0m\r\n');
+        terminal.write(
+          '\x1b[7m     \x1b[0m \x1b[48;2;10;20;30m   \x1b[48;2;10;20;31m  \x1b[0m\r\n',
+        );
+        terminal.write('\x1b[45m\u3000 \u3000\x1b[0m\r\n');
+        final lines = _visible(terminal);
+        final painter = _painter();
+        final expected = await _render(
+          painter,
+          lines,
+          (canvas, offset, line) =>
+              _paintCellByCell(painter, canvas, offset, line),
+        );
+        expect(await _render(painter, lines, painter.paintLine), expected);
+      },
+    );
 
     test('glyphs on coloured backgrounds differ only where they overhang a neighbour', () async {
       // Cell by cell, the next cell's background was drawn over the edge of
@@ -221,7 +234,8 @@ void main() {
       final expected = await _render(
         painter,
         lines,
-        (canvas, offset, line) => _paintCellByCell(painter, canvas, offset, line),
+        (canvas, offset, line) =>
+            _paintCellByCell(painter, canvas, offset, line),
       );
       final actual = await _render(painter, lines, painter.paintLine);
       var differing = 0;
@@ -242,7 +256,11 @@ void main() {
       terminal.write(text);
       final painter = _painter();
       final recorder = PictureRecorder();
-      painter.paintLine(Canvas(recorder), Offset.zero, terminal.buffer.lines[0]);
+      painter.paintLine(
+        Canvas(recorder),
+        Offset.zero,
+        terminal.buffer.lines[0],
+      );
       recorder.endRecording().dispose();
       return painter.debugAsciiRunsPainted;
     }
@@ -267,18 +285,28 @@ void main() {
 
     test('draw what cell-by-cell painting drew', () async {
       final terminal = Terminal(maxLines: 50)..resize(60, 8);
-      terminal.write('The quick brown fox jumps over the lazy dog 0123456789\r\n');
-      terminal.write('\x1b[31mred \x1b[1mbold \x1b[3mitalic\x1b[0m \x1b[2mfaint\x1b[0m \x1b[7minverse\x1b[0m\r\n');
+      terminal.write(
+        'The quick brown fox jumps over the lazy dog 0123456789\r\n',
+      );
+      terminal.write(
+        '\x1b[31mred \x1b[1mbold \x1b[3mitalic\x1b[0m \x1b[2mfaint\x1b[0m \x1b[7minverse\x1b[0m\r\n',
+      );
       terminal.write('\x1b[4munderlined words and trailing   \x1b[0m!\r\n');
-      terminal.write('\x1b[38;5;208m256-colour\x1b[0m \x1b[38;2;1;2;3;48;2;200;200;200mrgb on rgb\x1b[0m\r\n');
-      terminal.write(r'punctuation !"#$%&()*+,-./:;<=>?@[\]^_`{|}~' '\r\n');
+      terminal.write(
+        '\x1b[38;5;208m256-colour\x1b[0m \x1b[38;2;1;2;3;48;2;200;200;200mrgb on rgb\x1b[0m\r\n',
+      );
+      terminal.write(
+        r'punctuation !"#$%&()*+,-./:;<=>?@[\]^_`{|}~'
+        '\r\n',
+      );
       terminal.write('mixed ascii 漢字 and ▀▄ blocks, then ascii again\r\n');
       final lines = _visible(terminal);
       final painter = _painter();
       final expected = await _render(
         painter,
         lines,
-        (canvas, offset, line) => _paintCellByCell(painter, canvas, offset, line),
+        (canvas, offset, line) =>
+            _paintCellByCell(painter, canvas, offset, line),
       );
       final actual = await _render(painter, lines, painter.paintLine);
       expect(painter.debugAsciiRunsPainted, greaterThan(10));
@@ -380,7 +408,9 @@ void main() {
         painter.paintLineCached(canvas, Offset.zero, line);
       }
       painter.endFrame();
-      final before = {for (final line in _visible(terminal)) line: line.paintVersion};
+      final before = {
+        for (final line in _visible(terminal)) line: line.paintVersion,
+      };
 
       terminal.write('line 5\r\n');
       final after = _visible(terminal);
@@ -436,4 +466,3 @@ void main() {
     });
   });
 }
-

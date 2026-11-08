@@ -8,7 +8,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/agent_messages/shared_tabs.dart' show SharedTabsState;
-import 'package:harness/agent_messages/shared_tabs_model.dart' show memberDeskTabId;
+import 'package:harness/agent_messages/shared_tabs_model.dart'
+    show memberDeskTabId;
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
@@ -64,7 +65,10 @@ class _Desk {
 /// scripted machine list.
 class _Api extends ApiClient {
   _Api(this.board)
-    : super(config: AppConfig.dev, session: AuthSession(storage: MemoryStore()));
+    : super(
+        config: AppConfig.dev,
+        session: AuthSession(storage: MemoryStore()),
+      );
 
   final _Desk board;
   List<Machine> list = const [];
@@ -546,7 +550,10 @@ void main() {
       // What crosses accounts is filed under the shared tab id; the member's
       // own harnesses' messages to each other under the desk tab.
       expect(asked, unorderedEquals([_tab, _deskTab]));
-      expect(log.messages.map((m) => m.id), unorderedEquals(['msg-$_tab', 'msg-$_deskTab']));
+      expect(
+        log.messages.map((m) => m.id),
+        unorderedEquals(['msg-$_tab', 'msg-$_deskTab']),
+      );
       expect(log.reached, isTrue);
     });
 
@@ -581,30 +588,32 @@ void main() {
       expect(app.agentMessages.trafficFor(_deskTab), 2);
     });
 
-    test('openSharedDeskTab makes a desk tab with that id, not selected', () async {
-      final desk = _Desk();
-      final app = _app(_Api(desk), _Daemon(_shares(foreign: const [])));
-      addTearDown(app.dispose);
-      await app.deskStartForTest();
-      await _settle();
-      final before = app.activeSwarmId;
-      app.openSharedDeskTab('bbbbbbbbbbbbbbbbbbbbbbbb', 'web');
-      app.openSharedDeskTab('bbbbbbbbbbbbbbbbbbbbbbbb', 'web');
-      await _settle();
-      expect(app.activeSwarmId, before);
-      expect(
-        app.swarms.where((s) => s.id == 'bbbbbbbbbbbbbbbbbbbbbbbb'),
-        hasLength(1),
-      );
-      expect(desk.tab('bbbbbbbbbbbbbbbbbbbbbbbb')?.name, 'web');
-    });
+    test(
+      'openSharedDeskTab makes a desk tab with that id, not selected',
+      () async {
+        final desk = _Desk();
+        final app = _app(_Api(desk), _Daemon(_shares(foreign: const [])));
+        addTearDown(app.dispose);
+        await app.deskStartForTest();
+        await _settle();
+        final before = app.activeSwarmId;
+        app.openSharedDeskTab('bbbbbbbbbbbbbbbbbbbbbbbb', 'web');
+        app.openSharedDeskTab('bbbbbbbbbbbbbbbbbbbbbbbb', 'web');
+        await _settle();
+        expect(app.activeSwarmId, before);
+        expect(
+          app.swarms.where((s) => s.id == 'bbbbbbbbbbbbbbbbbbbbbbbb'),
+          hasLength(1),
+        );
+        expect(desk.tab('bbbbbbbbbbbbbbbbbbbbbbbb')?.name, 'web');
+      },
+    );
   });
 
   group('fix round 1', () {
     test('a hostile roster name reaches the desk as an accepted tab name, and later writes still flush', () async {
       final desk = _Desk();
-      final hostile =
-          '\u202Eevil\u0007${'x' * 120}\n${'y' * 80}\u200B';
+      final hostile = '\u202Eevil\u0007${'x' * 120}\n${'y' * 80}\u200B';
       final daemon = _Daemon(_shares(name: hostile));
       final app = _app(_Api(desk), daemon);
       addTearDown(app.dispose);
@@ -621,7 +630,13 @@ void main() {
       expect(tab.panes.map((p) => p.key), [_key('ma', 'a1')]);
 
       // Nothing is wedged behind it: the next edit reaches the desk.
-      await app.assignAgentToPane(null, 'm', 'a0', swarmId: _deskTab, focus: false);
+      await app.assignAgentToPane(
+        null,
+        'm',
+        'a0',
+        swarmId: _deskTab,
+        focus: false,
+      );
       await _settle();
       expect(desk.tab(_deskTab)!.panes.map((p) => p.key), [
         _key('ma', 'a1'),
@@ -684,7 +699,9 @@ void main() {
       _addAliceMachine(bob);
       await bob.deskStartForTest();
       await _settle();
-      expect(bobDesk.tab(_deskTab)?.panes.map((p) => p.key), [_key('ma', 'a1')]);
+      expect(bobDesk.tab(_deskTab)?.panes.map((p) => p.key), [
+        _key('ma', 'a1'),
+      ]);
       expect(jsonDecode(store.values['shared_tabs.placed.bob']!)[_tab], [
         _key('ma', 'a1'),
       ]);
@@ -807,9 +824,7 @@ void main() {
       // An unshared tab is re-minted as before.
       expect(app.swarms.where((s) => s.id == plain), isEmpty);
       expect(
-        app.swarms.where(
-          (s) => s.panes.any((p) => p.agentId == 'shell-a1'),
-        ),
+        app.swarms.where((s) => s.panes.any((p) => p.agentId == 'shell-a1')),
         hasLength(1),
       );
     });
@@ -829,7 +844,12 @@ void main() {
           ],
         );
       final daemon = _Daemon(
-        _shares(me: 'alice', foreign: const [], foreignAccount: 'bob', tabId: shared),
+        _shares(
+          me: 'alice',
+          foreign: const [],
+          foreignAccount: 'bob',
+          tabId: shared,
+        ),
       )..gate = Completer<void>();
       final app = _app(_Api(desk), daemon);
       addTearDown(app.dispose);
@@ -876,133 +896,157 @@ void main() {
       gate.complete();
       await _settle();
       expect(api.machineReads, greaterThanOrEqualTo(1));
-      expect(api.sharesTold, 1, reason: 'the machine is a harness share: the read reads the shares');
+      expect(
+        api.sharesTold,
+        1,
+        reason: 'the machine is a harness share: the read reads the shares',
+      );
       expect(pane.sharedHarness?.agentId, 'a1');
       expect(pane.sharedOwnerName, 'Alice');
     });
   });
 
   group('seams', () {
-    testWidgets('a desk-carried foreign pane is shared at once, never "Open here" (seam 2)', (tester) async {
-      final desk = _Desk()
-        ..doc = DeskDoc(
-          revision: 1,
-          tabs: [
-            DeskTab(
-              id: 'c' * 32,
-              name: 'Work',
-              nameIsCustom: true,
-              panes: const [DeskPaneRef(machineId: 'ma', agentId: 'a1')],
-            ),
-          ],
-        );
-      // No roster: a desk another computer wrote, the inventory already in.
-      final app = _app(_Api(desk), _Daemon(_shares(foreign: const [])));
-      _addAliceMachine(app);
-      await tester.runAsync(app.deskStartForTest);
-      final pane = app.allPanes.singleWhere((p) => p.machineId == 'ma');
-      expect(pane.sharedHarness?.agentId, 'a1');
-      expect(pane.sharedOwnerName, 'Alice');
+    testWidgets(
+      'a desk-carried foreign pane is shared at once, never "Open here" (seam 2)',
+      (tester) async {
+        final desk = _Desk()
+          ..doc = DeskDoc(
+            revision: 1,
+            tabs: [
+              DeskTab(
+                id: 'c' * 32,
+                name: 'Work',
+                nameIsCustom: true,
+                panes: const [DeskPaneRef(machineId: 'ma', agentId: 'a1')],
+              ),
+            ],
+          );
+        // No roster: a desk another computer wrote, the inventory already in.
+        final app = _app(_Api(desk), _Daemon(_shares(foreign: const [])));
+        _addAliceMachine(app);
+        await tester.runAsync(app.deskStartForTest);
+        final pane = app.allPanes.singleWhere((p) => p.machineId == 'ma');
+        expect(pane.sharedHarness?.agentId, 'a1');
+        expect(pane.sharedOwnerName, 'Alice');
 
-      app.selectSwarm('c' * 32);
-      await _pumpGrid(tester, app);
-      // Drawn from its grant (the observer channel), never the takeover offer.
-      expect(find.byType(SharedHarnessPanel), findsOneWidget);
-      expect(find.text('Open here'), findsNothing);
-      // The panel's observer socket (refused under the test's HTTP mock)
-      // closes with the tree.
-      await tester.pumpWidget(const SizedBox());
-      await tester.pump(const Duration(seconds: 3));
-      app.dispose();
-    });
+        app.selectSwarm('c' * 32);
+        await _pumpGrid(tester, app);
+        // Drawn from its grant (the observer channel), never the takeover offer.
+        expect(find.byType(SharedHarnessPanel), findsOneWidget);
+        expect(find.text('Open here'), findsNothing);
+        // The panel's observer socket (refused under the test's HTTP mock)
+        // closes with the tree.
+        await tester.pumpWidget(const SizedBox());
+        await tester.pump(const Duration(seconds: 3));
+        app.dispose();
+      },
+    );
 
     for (final named in [false, true]) {
-      testWidgets('restored before the inventory, a foreign pane says "${named ? 'Alice Liddell' : 'alice@example.com'} · waiting" (seam 3)', (tester) async {
-        final daemon = _Daemon(
-          _shares(
-            members: [
-              if (named)
-                {
-                  'accountId': 'alice',
-                  'email': 'alice@example.com',
-                  'name': 'Alice Liddell',
-                },
-            ],
-          ),
-        );
-        final app = _app(_Api(_Desk()), daemon);
-        await tester.runAsync(app.sharedTabs.refresh);
-        app.panes.add(TerminalPane(id: 900, machineId: 'ma', agentId: 'a1'));
-        await _pumpGrid(tester, app);
-        final name = named ? 'Alice Liddell' : 'alice@example.com';
-        expect(find.text('$name · waiting'), findsOneWidget);
-        expect(find.textContaining('This machine isn’t available'), findsNothing);
-        expect(find.textContaining('Waiting for this machine'), findsNothing);
-        expect(app.sharedWaitingName('ma', 'a1'), name);
-        // A harness no roster lists keeps the ordinary wording.
-        expect(app.sharedWaitingName('ma', 'other'), isNull);
-        app.dispose();
-      });
+      testWidgets(
+        'restored before the inventory, a foreign pane says "${named ? 'Alice Liddell' : 'alice@example.com'} · waiting" (seam 3)',
+        (tester) async {
+          final daemon = _Daemon(
+            _shares(
+              members: [
+                if (named)
+                  {
+                    'accountId': 'alice',
+                    'email': 'alice@example.com',
+                    'name': 'Alice Liddell',
+                  },
+              ],
+            ),
+          );
+          final app = _app(_Api(_Desk()), daemon);
+          await tester.runAsync(app.sharedTabs.refresh);
+          app.panes.add(TerminalPane(id: 900, machineId: 'ma', agentId: 'a1'));
+          await _pumpGrid(tester, app);
+          final name = named ? 'Alice Liddell' : 'alice@example.com';
+          expect(find.text('$name · waiting'), findsOneWidget);
+          expect(
+            find.textContaining('This machine isn’t available'),
+            findsNothing,
+          );
+          expect(find.textContaining('Waiting for this machine'), findsNothing);
+          expect(app.sharedWaitingName('ma', 'a1'), name);
+          // A harness no roster lists keeps the ordinary wording.
+          expect(app.sharedWaitingName('ma', 'other'), isNull);
+          app.dispose();
+        },
+      );
     }
 
-    testWidgets('a foreign pane with retained output whose machine this window lacks says who it waits for (seam 3)', (tester) async {
-      final app = _app(_Api(_Desk()), _Daemon(_shares()));
-      await tester.runAsync(app.sharedTabs.refresh);
-      app.panes.add(
-        TerminalPane(id: 901, machineId: 'ma', agentId: 'a1')
-          ..session = (TerminalSession(
-            machineId: 'ma',
-            agentId: 'a1',
-            agentName: 'Harness a1',
-            engineId: 'claude',
-            readOnly: true,
-            send: (_, _) async => true,
-            sendBinary: (_) async => true,
-          )
-            ..status = TerminalSessionStatus.controlling
-            ..streamId = 'stream-a1'),
-      );
-      await _pumpGrid(tester, app);
-      // The compact pane header carries the notice as its status: label and
-      // detail, as text where there is room and as its tooltip.
-      bool says(Widget w, String text) =>
-          (w is Text && (w.data ?? '').contains(text)) ||
-          (w is Tooltip && (w.message ?? '').contains(text));
-      expect(
-        find.byWidgetPredicate((w) => says(w, 'alice@example.com · waiting')),
-        findsWidgets,
-      );
-      expect(
-        find.byWidgetPredicate((w) => says(w, 'isn’t available')),
-        findsNothing,
-      );
-      expect(find.textContaining('Waiting for this machine'), findsNothing);
-      await tester.pumpWidget(const SizedBox());
-      app.dispose();
-    });
+    testWidgets(
+      'a foreign pane with retained output whose machine this window lacks says who it waits for (seam 3)',
+      (tester) async {
+        final app = _app(_Api(_Desk()), _Daemon(_shares()));
+        await tester.runAsync(app.sharedTabs.refresh);
+        app.panes.add(
+          TerminalPane(id: 901, machineId: 'ma', agentId: 'a1')
+            ..session =
+                (TerminalSession(
+                    machineId: 'ma',
+                    agentId: 'a1',
+                    agentName: 'Harness a1',
+                    engineId: 'claude',
+                    readOnly: true,
+                    send: (_, _) async => true,
+                    sendBinary: (_) async => true,
+                  )
+                  ..status = TerminalSessionStatus.controlling
+                  ..streamId = 'stream-a1'),
+        );
+        await _pumpGrid(tester, app);
+        // The compact pane header carries the notice as its status: label and
+        // detail, as text where there is room and as its tooltip.
+        bool says(Widget w, String text) =>
+            (w is Text && (w.data ?? '').contains(text)) ||
+            (w is Tooltip && (w.message ?? '').contains(text));
+        expect(
+          find.byWidgetPredicate((w) => says(w, 'alice@example.com · waiting')),
+          findsWidgets,
+        );
+        expect(
+          find.byWidgetPredicate((w) => says(w, 'isn’t available')),
+          findsNothing,
+        );
+        expect(find.textContaining('Waiting for this machine'), findsNothing);
+        await tester.pumpWidget(const SizedBox());
+        app.dispose();
+      },
+    );
 
-    testWidgets('another account\'s hostile name waits on one plain line (seam 3)', (tester) async {
-      final hostile = '\u202EAlice\n${'L' * 200}\u0007';
-      final app = _app(
-        _Api(_Desk()),
-        _Daemon(
-          _shares(
-            members: [
-              {'accountId': 'alice', 'email': 'a@example.com', 'name': hostile},
-            ],
+    testWidgets(
+      'another account\'s hostile name waits on one plain line (seam 3)',
+      (tester) async {
+        final hostile = '\u202EAlice\n${'L' * 200}\u0007';
+        final app = _app(
+          _Api(_Desk()),
+          _Daemon(
+            _shares(
+              members: [
+                {
+                  'accountId': 'alice',
+                  'email': 'a@example.com',
+                  'name': hostile,
+                },
+              ],
+            ),
           ),
-        ),
-      );
-      await tester.runAsync(app.sharedTabs.refresh);
-      app.panes.add(TerminalPane(id: 902, machineId: 'ma', agentId: 'a1'));
-      await _pumpGrid(tester, app);
-      final text = tester.widget<Text>(find.textContaining('· waiting'));
-      expect(text.data, 'Alice ${'L' * 200} · waiting');
-      expect(text.maxLines, 1);
-      expect(text.overflow, TextOverflow.ellipsis);
-      expect(tester.takeException(), isNull);
-      app.dispose();
-    });
+        );
+        await tester.runAsync(app.sharedTabs.refresh);
+        app.panes.add(TerminalPane(id: 902, machineId: 'ma', agentId: 'a1'));
+        await _pumpGrid(tester, app);
+        final text = tester.widget<Text>(find.textContaining('· waiting'));
+        expect(text.data, 'Alice ${'L' * 200} · waiting');
+        expect(text.maxLines, 1);
+        expect(text.overflow, TextOverflow.ellipsis);
+        expect(tester.takeException(), isNull);
+        app.dispose();
+      },
+    );
 
     test('closing a foreign pane or its tab sends no stop (seam 4)', () async {
       final daemon = _Daemon(_shares(foreign: const []));
@@ -1056,23 +1100,26 @@ void main() {
       expect(daemon.sent, isNot(contains('stop_agent')));
     });
 
-    test('the status bar names the owner for a focused foreign pane (seam 5)', () async {
-      final app = _app(_Api(_Desk()), _Daemon(_shares()));
-      addTearDown(app.dispose);
-      _addAliceMachine(app);
-      await app.assignAgentToPane(null, 'ma', 'a1');
-      final context = WorkspacePaneContext.focused(app)!;
-      expect(context.machineName, 'Alice');
-      app.panes.single.sharedOwnerName = '\u202EAl\u0007ice\n';
-      expect(WorkspacePaneContext.focused(app)!.machineName, 'Al ice');
-      app.panes.single.sharedOwnerName = 'Alice';
-      expect(context.shared, isTrue);
-      expect(context.location, startsWith('Alice'));
+    test(
+      'the status bar names the owner for a focused foreign pane (seam 5)',
+      () async {
+        final app = _app(_Api(_Desk()), _Daemon(_shares()));
+        addTearDown(app.dispose);
+        _addAliceMachine(app);
+        await app.assignAgentToPane(null, 'ma', 'a1');
+        final context = WorkspacePaneContext.focused(app)!;
+        expect(context.machineName, 'Alice');
+        app.panes.single.sharedOwnerName = '\u202EAl\u0007ice\n';
+        expect(WorkspacePaneContext.focused(app)!.machineName, 'Al ice');
+        app.panes.single.sharedOwnerName = 'Alice';
+        expect(context.shared, isTrue);
+        expect(context.location, startsWith('Alice'));
 
-      await app.assignAgentToPane(null, 'm', 'a0');
-      final own = WorkspacePaneContext.focused(app)!;
-      expect(own.machineName, 'This Mac');
-      expect(own.shared, isFalse);
-    });
+        await app.assignAgentToPane(null, 'm', 'a0');
+        final own = WorkspacePaneContext.focused(app)!;
+        expect(own.machineName, 'This Mac');
+        expect(own.shared, isFalse);
+      },
+    );
   });
 }

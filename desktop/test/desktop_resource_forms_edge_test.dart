@@ -284,7 +284,10 @@ void main() {
         find.text('1 model stops being shared with this Swarm'),
         findsOneWidget,
       );
-      expect(find.textContaining('This removes the API and its saved key from '), findsOneWidget);
+      expect(
+        find.textContaining('This removes the API and its saved key from '),
+        findsOneWidget,
+      );
       final bar = find.byKey(const ValueKey('api-form:delete-bar'));
       expect(
         find.descendant(of: bar, matching: _api('delete')),

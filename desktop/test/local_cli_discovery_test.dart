@@ -630,12 +630,14 @@ void main() {
     var slotOpen = false;
     final discovery = _SupervisionProbe(
       readProbe: () async => running
-          ? LocalCliProbe.ready(LocalCliEndpoint(
-              computerId: computerId,
-              wsUri: Uri.parse('ws://127.0.0.1/api/local-ws'),
-              protocolVersion: localWsProtocolVersion,
-              terminalProtocolVersion: localTerminalProtocolVersion,
-            ))
+          ? LocalCliProbe.ready(
+              LocalCliEndpoint(
+                computerId: computerId,
+                wsUri: Uri.parse('ws://127.0.0.1/api/local-ws'),
+                protocolVersion: localWsProtocolVersion,
+                terminalProtocolVersion: localTerminalProtocolVersion,
+              ),
+            )
           : const LocalCliProbe.down('fixture daemon is down'),
       spawnCommand: () async {
         spawnCount++;
@@ -699,12 +701,14 @@ void main() {
     final readies = <LocalCliEndpoint>[];
     final discovery = _SupervisionProbe(
       readProbe: () async => running
-          ? LocalCliProbe.ready(LocalCliEndpoint(
-              computerId: computerId,
-              wsUri: Uri.parse('ws://127.0.0.1/api/local-ws'),
-              protocolVersion: localWsProtocolVersion,
-              terminalProtocolVersion: localTerminalProtocolVersion,
-            ))
+          ? LocalCliProbe.ready(
+              LocalCliEndpoint(
+                computerId: computerId,
+                wsUri: Uri.parse('ws://127.0.0.1/api/local-ws'),
+                protocolVersion: localWsProtocolVersion,
+                terminalProtocolVersion: localTerminalProtocolVersion,
+              ),
+            )
           : const LocalCliProbe.down('fixture daemon is down'),
       spawnCommand: () async {
         spawnCount++;
@@ -909,7 +913,8 @@ void main() {
       var spawnCount = 0;
       var signedOutCalls = 0;
       final discovery = _SupervisionProbe(
-        readProbe: () async => const LocalCliProbe.down('fixture daemon is down'),
+        readProbe: () async =>
+            const LocalCliProbe.down('fixture daemon is down'),
         spawnCommand: () async {
           spawnCount++;
         },
@@ -949,7 +954,8 @@ void main() {
       var spawnCount = 0;
       var signedOutCalls = 0;
       final discovery = _SupervisionProbe(
-        readProbe: () async => const LocalCliProbe.down('fixture daemon is down'),
+        readProbe: () async =>
+            const LocalCliProbe.down('fixture daemon is down'),
         spawnCommand: () async {
           spawnCount++;
         },
@@ -992,7 +998,8 @@ void main() {
       var spawnCount = 0;
       var signedOutCalls = 0;
       final discovery = _SupervisionProbe(
-        readProbe: () async => const LocalCliProbe.down('fixture daemon is down'),
+        readProbe: () async =>
+            const LocalCliProbe.down('fixture daemon is down'),
         spawnCommand: () async {
           spawnCount++;
         },

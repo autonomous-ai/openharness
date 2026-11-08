@@ -167,7 +167,11 @@ class _ReviewSubscriptions extends ModelsMenuController {
       'accountKey': 'aabbccddeeff0011',
       'status': '8% remaining',
       'remainingPercent': 8.0,
-      'details': ['Limiting window: Session', 'Session — 8% remaining · resets in 30m', 'Weekly — 58% remaining · resets in 5d 10h'],
+      'details': [
+        'Limiting window: Session',
+        'Session — 8% remaining · resets in 30m',
+        'Weekly — 58% remaining · resets in 5d 10h',
+      ],
     },
     {
       'engine': 'codex',
@@ -733,7 +737,9 @@ void main() {
             expect(
               find.descendant(
                 of: preview,
-                matching: find.text('Anthropic · developer.with.a.long.email@example.com'),
+                matching: find.text(
+                  'Anthropic · developer.with.a.long.email@example.com',
+                ),
               ),
               findsOneWidget,
             );

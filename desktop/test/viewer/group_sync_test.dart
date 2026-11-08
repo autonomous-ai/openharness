@@ -43,12 +43,14 @@ class _Socket implements WebSocketChannel {
   @override
   WebSocketSink get sink => _sink;
   void emit(Map<String, dynamic> frame) => _down.add(jsonEncode(frame));
+
   /// The address the swap dialled.
   Uri? dialled;
   WebSocketChannel factory(Uri uri, Iterable<String> _) {
     dialled = uri;
     return this;
   }
+
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

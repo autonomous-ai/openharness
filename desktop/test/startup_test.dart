@@ -186,7 +186,7 @@ void main() {
           'harness_background_behind_harnesses',
           'harness_shade_inactive_panes',
           'harness_panes_v1',
-'harness_auto_rename_tabs',
+          'harness_auto_rename_tabs',
           'workspace_prompt_v1',
         },
       ]);

@@ -9,9 +9,8 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   String plist(String path) => File(path).readAsStringSync();
 
-  bool hasTrue(String plist, String key) => RegExp(
-    '<key>${RegExp.escape(key)}</key>\\s*<true/>',
-  ).hasMatch(plist);
+  bool hasTrue(String plist, String key) =>
+      RegExp('<key>${RegExp.escape(key)}</key>\\s*<true/>').hasMatch(plist);
 
   for (final file in [
     'macos/Runner/Release.entitlements',

@@ -1519,53 +1519,91 @@ void main() {
       expect(connection.creations.single, isNot(contains('codexHome')));
     });
 
+    test('using an account that is not offered runs this pane on it and offers nothing', () async {
+      final connection = ProfileConnection();
+      connection.claudeRows[1]['offered'] = false;
+      final app = fixture(connection, sourceEngine: 'codex');
+      app.stateOf('m')!.localOnly = true;
+      addTearDown(app.dispose);
+      await app.addAgentToSwarm('m', 'a0');
+      final rows = await app.agentProfiles('m', 'claude');
+      expect(rows.map((r) => r.offered), [true, false]);
+      expect(
+        await app.changeAgent('m', 'a0', 'claude', profile: rows.last.key),
+        isNull,
+      );
+      expect(connection.links, isEmpty);
+      expect(connection.offers, isEmpty);
+      expect(
+        connection.creations.single,
+        containsPair('claudeHome', '/home/me/.claude-work'),
+      );
+    });
+
     test(
-      'using an account that is not offered runs this pane on it and offers nothing',
+      'the owner offers and withdraws an account by asking this computer',
       () async {
         final connection = ProfileConnection();
         connection.claudeRows[1]['offered'] = false;
         final app = fixture(connection, sourceEngine: 'codex');
         app.stateOf('m')!.localOnly = true;
         addTearDown(app.dispose);
-        await app.addAgentToSwarm('m', 'a0');
-        final rows = await app.agentProfiles('m', 'claude');
-        expect(rows.map((r) => r.offered), [true, false]);
         expect(
-          await app.changeAgent('m', 'a0', 'claude', profile: rows.last.key),
+          await app.setAccountOffered(
+            'm',
+            'claude',
+            '/home/me/.claude-work',
+            true,
+          ),
           isNull,
         );
-        expect(connection.links, isEmpty);
-        expect(connection.offers, isEmpty);
         expect(
-          connection.creations.single,
-          containsPair('claudeHome', '/home/me/.claude-work'),
+          await app.setAccountOffered(
+            'm',
+            'claude',
+            '/home/me/.claude-work',
+            false,
+          ),
+          isNull,
+        );
+        expect(connection.offers, [
+          {
+            'engine': 'claude',
+            'path': '/home/me/.claude-work',
+            'offered': true,
+          },
+          {
+            'engine': 'claude',
+            'path': '/home/me/.claude-work',
+            'offered': false,
+          },
+        ]);
+        connection.offerReply = {'error': 'NOT_FOUND'};
+        expect(
+          await app.setAccountOffered('m', 'claude', '/gone', true),
+          'That account’s folder is gone.',
+        );
+        connection.offerReply = {'error': 'UNSUPPORTED'};
+        expect(
+          await app.setAccountOffered('m', 'claude', '/x', true),
+          'Update Harness on this computer to offer accounts.',
         );
       },
     );
-
-    test('the owner offers and withdraws an account by asking this computer', () async {
-      final connection = ProfileConnection();
-      connection.claudeRows[1]['offered'] = false;
-      final app = fixture(connection, sourceEngine: 'codex');
-      app.stateOf('m')!.localOnly = true;
-      addTearDown(app.dispose);
-      expect(await app.setAccountOffered('m', 'claude', '/home/me/.claude-work', true), isNull);
-      expect(await app.setAccountOffered('m', 'claude', '/home/me/.claude-work', false), isNull);
-      expect(connection.offers, [
-        {'engine': 'claude', 'path': '/home/me/.claude-work', 'offered': true},
-        {'engine': 'claude', 'path': '/home/me/.claude-work', 'offered': false},
-      ]);
-      connection.offerReply = {'error': 'NOT_FOUND'};
-      expect(await app.setAccountOffered('m', 'claude', '/gone', true), 'That account’s folder is gone.');
-      connection.offerReply = {'error': 'UNSUPPORTED'};
-      expect(await app.setAccountOffered('m', 'claude', '/x', true), 'Update Harness on this computer to offer accounts.');
-    });
 
     test('accounts of another computer cannot be offered from here', () async {
       final connection = ProfileConnection();
       final app = fixture(connection, sourceEngine: 'codex');
       addTearDown(app.dispose);
-      expect(await app.setAccountOffered('m', 'claude', '/home/me/.claude-work', true), 'Accounts can be offered on their own computer only.');
+      expect(
+        await app.setAccountOffered(
+          'm',
+          'claude',
+          '/home/me/.claude-work',
+          true,
+        ),
+        'Accounts can be offered on their own computer only.',
+      );
       expect(connection.offers, isEmpty);
     });
 
@@ -1575,9 +1613,15 @@ void main() {
       final app = fixture(connection, sourceEngine: 'codex');
       app.stateOf('m')!.localOnly = true;
       addTearDown(app.dispose);
-      expect((await app.agentProfiles('m', 'claude')).map((r) => r.canOffer), [false, true]);
+      expect((await app.agentProfiles('m', 'claude')).map((r) => r.canOffer), [
+        false,
+        true,
+      ]);
       connection.claudeRows[1].remove('offered');
-      expect((await app.agentProfiles('m', 'claude')).map((r) => r.canOffer), [false, false]);
+      expect((await app.agentProfiles('m', 'claude')).map((r) => r.canOffer), [
+        false,
+        false,
+      ]);
     });
 
     test(
@@ -1719,8 +1763,14 @@ void main() {
       final search = await pick(app);
       final work = search.rows.firstWhere((r) => r.title == 'Claude · Work');
       expect(work.detail, 'Not offered to the Swarm');
-      expect(search.rows.where((r) => r.managesSwarmAccounts).single.title, 'Swarm accounts…');
-      expect(search.rows.where((r) => r.addsClaudeAccount).single.detail, contains('Yours until you offer it'));
+      expect(
+        search.rows.where((r) => r.managesSwarmAccounts).single.title,
+        'Swarm accounts…',
+      );
+      expect(
+        search.rows.where((r) => r.addsClaudeAccount).single.detail,
+        contains('Yours until you offer it'),
+      );
       connection.claudeRows[1].remove('offered');
       final old = await pick(app);
       expect(old.rows.where((r) => r.managesSwarmAccounts), isEmpty);
@@ -1730,14 +1780,22 @@ void main() {
       final connection = ProfileConnection();
       connection.claudeRows[1]['offered'] = false;
       connection.codexRows = [
-        {'path': '${homeDir()}/.codex', 'label': 'Default', 'default': true, 'offered': true},
+        {
+          'path': '${homeDir()}/.codex',
+          'label': 'Default',
+          'default': true,
+          'offered': true,
+        },
         {'path': '/home/me/.codex-a', 'label': 'A', 'offered': true},
       ];
       final app = fixture(connection, sourceEngine: 'codex');
       app.stateOf('m')!.localOnly = true;
       addTearDown(app.dispose);
       final rows = await app.swarmAccounts('m');
-      expect(rows.map((r) => (r.engine, r.label, r.offered)), [('claude', 'Work', false), ('codex', 'A', true)]);
+      expect(rows.map((r) => (r.engine, r.label, r.offered)), [
+        ('claude', 'Work', false),
+        ('codex', 'A', true),
+      ]);
       connection.claudeRows = [];
       final other = fixture(ProfileConnection(), sourceEngine: 'codex');
       addTearDown(other.dispose);

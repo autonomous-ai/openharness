@@ -30,12 +30,15 @@ void main() {
     test('$desktop matches the phone\'s $mobile', () {
       final phone = File('../mobile/$mobile');
       if (!phone.existsSync()) {
-        throw StateError('${phone.path} missing — run from desktop/ in the monorepo');
+        throw StateError(
+          '${phone.path} missing — run from desktop/ in the monorepo',
+        );
       }
       expect(
         File(desktop).readAsStringSync(),
         _asDesktop(phone.readAsStringSync()),
-        reason: 'carry the change to both copies (or drop the pair from '
+        reason:
+            'carry the change to both copies (or drop the pair from '
             'test/p2p/mobile_parity_test.dart if they are meant to differ)',
       );
     });

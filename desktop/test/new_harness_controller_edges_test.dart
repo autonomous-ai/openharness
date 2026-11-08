@@ -282,30 +282,27 @@ void main() {
     },
   );
 
-  test(
-    'no default stays unavailable and a delayed Git read revalidates before creating',
-    () async {
-      final fixture = _Fixture();
-      final pending = Completer<Map<String, dynamic>>();
-      fixture.connection.replies['git_project_info'] = (_) => pending.future;
-      final box = fixture.box();
-      final creating = box.create();
-      expect(box.busy, isTrue);
-      pending.complete({
-        'isGit': true,
-        'branches': [
-          {'ref': 'refs/heads/trunk', 'name': 'trunk'},
-        ],
-        'refreshed': true,
-      });
-      expect(await creating, NewHarnessOutcome.failed);
-      expect(box.branchLabel, 'default · unavailable');
-      expect(box.worktree, isTrue);
-      expect(box.field, NewHarnessField.branch);
-      expect(box.error, contains('Choose a branch'));
-      expect(fixture.connection.requests('agent_create'), isEmpty);
-    },
-  );
+  test('no default stays unavailable and a delayed Git read revalidates before creating', () async {
+    final fixture = _Fixture();
+    final pending = Completer<Map<String, dynamic>>();
+    fixture.connection.replies['git_project_info'] = (_) => pending.future;
+    final box = fixture.box();
+    final creating = box.create();
+    expect(box.busy, isTrue);
+    pending.complete({
+      'isGit': true,
+      'branches': [
+        {'ref': 'refs/heads/trunk', 'name': 'trunk'},
+      ],
+      'refreshed': true,
+    });
+    expect(await creating, NewHarnessOutcome.failed);
+    expect(box.branchLabel, 'default · unavailable');
+    expect(box.worktree, isTrue);
+    expect(box.field, NewHarnessField.branch);
+    expect(box.error, contains('Choose a branch'));
+    expect(fixture.connection.requests('agent_create'), isEmpty);
+  });
 
   test('early branch focus refreshes after discovery and replaces a colliding placeholder', () async {
     final fixture = _Fixture();
@@ -542,21 +539,24 @@ void main() {
 
   // The desktop composer types the task through setTask, not the chooser's
   // query; a fresh VM's first harness was "Untitled Pane" in a clock folder.
-  test('the desktop composer names the suggested project and agent after the task', () async {
-    final fixture = _Fixture();
-    final box = fixture.box(folder: null, autoProject: true);
-    await _settle();
-    expect(box.project.name, startsWith('codex-'), reason: 'no task yet');
+  test(
+    'the desktop composer names the suggested project and agent after the task',
+    () async {
+      final fixture = _Fixture();
+      final box = fixture.box(folder: null, autoProject: true);
+      await _settle();
+      expect(box.project.name, startsWith('codex-'), reason: 'no task yet');
 
-    box.setTask("make a small web page that shows today's date");
-    await _settle();
-    expect(box.project.name, 'make-a-small-web-page-that');
+      box.setTask("make a small web page that shows today's date");
+      await _settle();
+      expect(box.project.name, 'make-a-small-web-page-that');
 
-    await box.create();
-    final create = fixture.connection.requests('agent_create').single;
-    expect(create['name'], 'make a small web page that');
-    expect(create['projectName'], 'make-a-small-web-page-that');
-  });
+      await box.create();
+      final create = fixture.connection.requests('agent_create').single;
+      expect(create['name'], 'make a small web page that');
+      expect(create['projectName'], 'make-a-small-web-page-that');
+    },
+  );
 
   test('a first message into an existing folder names the agent too', () async {
     final fixture = _Fixture();
@@ -572,17 +572,23 @@ void main() {
     final empty = silent.box(folder: '/work/repo');
     await _settle();
     await empty.create();
-    expect(silent.connection.requests('agent_create').single.containsKey('name'), isFalse);
+    expect(
+      silent.connection.requests('agent_create').single.containsKey('name'),
+      isFalse,
+    );
   });
 
-  test('a clock-named project leaves the agent for the machine to name', () async {
-    final fixture = _Fixture();
-    final box = fixture.box(folder: null, autoProject: true);
-    await _settle();
-    await box.create();
-    final create = fixture.connection.requests('agent_create').single;
-    expect(create.containsKey('name'), isFalse);
-  });
+  test(
+    'a clock-named project leaves the agent for the machine to name',
+    () async {
+      final fixture = _Fixture();
+      final box = fixture.box(folder: null, autoProject: true);
+      await _settle();
+      await box.create();
+      final create = fixture.connection.requests('agent_create').single;
+      expect(create.containsKey('name'), isFalse);
+    },
+  );
 
   test('profile discovery includes observed agent paths and link failures preserve selection', () async {
     final fixture = _Fixture();
@@ -739,109 +745,152 @@ void main() {
 
   // A fresh Mac has none of the agents. The product default installs in its
   // pane on Create; asking for a replacement stopped every first harness.
-  test('a fresh computer starts the default agent, which installs on Create', () async {
-    final fixture = _Fixture();
-    fixture.connection.replies['engines_probe'] = (_) => {
-      'engines': [
-        {'engine': 'opencode', 'installed': false, 'installable': true},
-        {'engine': 'claude', 'installed': false, 'installable': true},
-        {'engine': 'codex', 'installed': false, 'installable': true},
-      ],
-    };
-    final box = NewHarnessController(fixture.app, machineId: 'm', folder: '/work/repo');
-    addTearDown(box.dispose);
-    await _settle();
-    expect(box.engine, 'opencode');
-    expect(fixture.app.stateOf('m')!.engines['opencode']!.installed, isFalse);
-    expect(box.requiredChoice, isNull);
-    box.task = 'Make a small web page';
-    expect(await box.create(), NewHarnessOutcome.created);
-    expect(fixture.connection.requests('agent_create').single['engine'], 'opencode');
-  });
-
-  // Someone who installed Harness to run the Claude Code or Codex they already
-  // pay for opened on OpenCode's free model.
-  group('with nothing remembered, the box opens on the agent the person uses', () {
-    Map<String, dynamic> probe({bool claudeIn = true, int claudeAt = 2, int codexAt = 1}) => {
-      'engines': [
-        {'engine': 'opencode', 'installed': false, 'installable': true},
-        {'engine': 'claude', 'installed': true, 'signedIn': claudeIn, 'lastUsedAt': claudeAt},
-        {'engine': 'codex', 'installed': true, 'signedIn': true, 'lastUsedAt': codexAt},
-      ],
-    };
-    Future<NewHarnessController> open(_Fixture fixture) async {
-      final box = NewHarnessController(fixture.app, machineId: 'm', folder: '/work/repo');
-      addTearDown(box.dispose);
-      await _settle();
-      return box;
-    }
-
-    test('the one used most recently when both are signed in', () async {
-      final fixture = _Fixture();
-      fixture.connection.replies['engines_probe'] = (_) => probe();
-      expect((await open(fixture)).engine, 'claude');
-      final codexLater = _Fixture();
-      codexLater.connection.replies['engines_probe'] = (_) => probe(codexAt: 3);
-      expect((await open(codexLater)).engine, 'codex');
-    });
-
-    test('only a signed-in one', () async {
-      final fixture = _Fixture();
-      fixture.connection.replies['engines_probe'] = (_) => probe(claudeIn: false, claudeAt: 9);
-      expect((await open(fixture)).engine, 'codex');
-    });
-
-    test('a suggested project is renamed for that agent', () async {
-      final fixture = _Fixture();
-      fixture.connection.replies['engines_probe'] = (_) => probe();
-      final box = NewHarnessController(
-        fixture.app,
-        machineId: 'm',
-        autoProject: true,
-        now: () => DateTime(2026, 9, 25, 9, 10, 11),
-      );
-      addTearDown(box.dispose);
-      // Named after the product default until the machine says otherwise.
-      expect(box.engine, 'opencode');
-      expect(box.project.name, 'opencode-2026-09-25-09-10');
-      await _settle();
-      expect(box.engine, 'claude');
-      expect(box.project.name, 'claude-2026-09-25-09-10');
-      expect(box.projectFolderRequest!.isGenerated, isTrue);
-    });
-
-    test('a remembered choice still wins', () async {
-      final fixture = _Fixture();
-      fixture.connection.replies['engines_probe'] = (_) => probe();
-      await fixture.app.agentPreference.select('opencode');
-      expect((await open(fixture)).engine, 'opencode');
-    });
-
-    test('the product default when no agent is signed in', () async {
+  test(
+    'a fresh computer starts the default agent, which installs on Create',
+    () async {
       final fixture = _Fixture();
       fixture.connection.replies['engines_probe'] = (_) => {
         'engines': [
-          {'engine': 'claude', 'installed': true, 'signedIn': false},
+          {'engine': 'opencode', 'installed': false, 'installable': true},
+          {'engine': 'claude', 'installed': false, 'installable': true},
           {'engine': 'codex', 'installed': false, 'installable': true},
         ],
       };
-      expect((await open(fixture)).engine, 'opencode');
-    });
-  });
+      final box = NewHarnessController(
+        fixture.app,
+        machineId: 'm',
+        folder: '/work/repo',
+      );
+      addTearDown(box.dispose);
+      await _settle();
+      expect(box.engine, 'opencode');
+      expect(fixture.app.stateOf('m')!.engines['opencode']!.installed, isFalse);
+      expect(box.requiredChoice, isNull);
+      box.task = 'Make a small web page';
+      expect(await box.create(), NewHarnessOutcome.created);
+      expect(
+        fixture.connection.requests('agent_create').single['engine'],
+        'opencode',
+      );
+    },
+  );
 
-  test('a default agent that cannot be installed here still asks for another', () async {
-    final fixture = _Fixture();
-    fixture.connection.replies['engines_probe'] = (_) => {
-      'engines': [
-        {'engine': 'opencode', 'installed': false, 'installable': false},
-      ],
-    };
-    final box = NewHarnessController(fixture.app, machineId: 'm', folder: '/work/repo');
-    addTearDown(box.dispose);
-    await _settle();
-    expect(box.engine, 'opencode');
-    expect(box.requiredChoice?.message, 'OpenCode is unavailable. Choose an agent.');
-  });
+  // Someone who installed Harness to run the Claude Code or Codex they already
+  // pay for opened on OpenCode's free model.
+  group(
+    'with nothing remembered, the box opens on the agent the person uses',
+    () {
+      Map<String, dynamic> probe({
+        bool claudeIn = true,
+        int claudeAt = 2,
+        int codexAt = 1,
+      }) => {
+        'engines': [
+          {'engine': 'opencode', 'installed': false, 'installable': true},
+          {
+            'engine': 'claude',
+            'installed': true,
+            'signedIn': claudeIn,
+            'lastUsedAt': claudeAt,
+          },
+          {
+            'engine': 'codex',
+            'installed': true,
+            'signedIn': true,
+            'lastUsedAt': codexAt,
+          },
+        ],
+      };
+      Future<NewHarnessController> open(_Fixture fixture) async {
+        final box = NewHarnessController(
+          fixture.app,
+          machineId: 'm',
+          folder: '/work/repo',
+        );
+        addTearDown(box.dispose);
+        await _settle();
+        return box;
+      }
+
+      test('the one used most recently when both are signed in', () async {
+        final fixture = _Fixture();
+        fixture.connection.replies['engines_probe'] = (_) => probe();
+        expect((await open(fixture)).engine, 'claude');
+        final codexLater = _Fixture();
+        codexLater.connection.replies['engines_probe'] = (_) =>
+            probe(codexAt: 3);
+        expect((await open(codexLater)).engine, 'codex');
+      });
+
+      test('only a signed-in one', () async {
+        final fixture = _Fixture();
+        fixture.connection.replies['engines_probe'] = (_) =>
+            probe(claudeIn: false, claudeAt: 9);
+        expect((await open(fixture)).engine, 'codex');
+      });
+
+      test('a suggested project is renamed for that agent', () async {
+        final fixture = _Fixture();
+        fixture.connection.replies['engines_probe'] = (_) => probe();
+        final box = NewHarnessController(
+          fixture.app,
+          machineId: 'm',
+          autoProject: true,
+          now: () => DateTime(2026, 9, 25, 9, 10, 11),
+        );
+        addTearDown(box.dispose);
+        // Named after the product default until the machine says otherwise.
+        expect(box.engine, 'opencode');
+        expect(box.project.name, 'opencode-2026-09-25-09-10');
+        await _settle();
+        expect(box.engine, 'claude');
+        expect(box.project.name, 'claude-2026-09-25-09-10');
+        expect(box.projectFolderRequest!.isGenerated, isTrue);
+      });
+
+      test('a remembered choice still wins', () async {
+        final fixture = _Fixture();
+        fixture.connection.replies['engines_probe'] = (_) => probe();
+        await fixture.app.agentPreference.select('opencode');
+        expect((await open(fixture)).engine, 'opencode');
+      });
+
+      test('the product default when no agent is signed in', () async {
+        final fixture = _Fixture();
+        fixture.connection.replies['engines_probe'] = (_) => {
+          'engines': [
+            {'engine': 'claude', 'installed': true, 'signedIn': false},
+            {'engine': 'codex', 'installed': false, 'installable': true},
+          ],
+        };
+        expect((await open(fixture)).engine, 'opencode');
+      });
+    },
+  );
+
+  test(
+    'a default agent that cannot be installed here still asks for another',
+    () async {
+      final fixture = _Fixture();
+      fixture.connection.replies['engines_probe'] = (_) => {
+        'engines': [
+          {'engine': 'opencode', 'installed': false, 'installable': false},
+        ],
+      };
+      final box = NewHarnessController(
+        fixture.app,
+        machineId: 'm',
+        folder: '/work/repo',
+      );
+      addTearDown(box.dispose);
+      await _settle();
+      expect(box.engine, 'opencode');
+      expect(
+        box.requiredChoice?.message,
+        'OpenCode is unavailable. Choose an agent.',
+      );
+    },
+  );
 
   test('a remembered agent that is no longer installed still asks for a replacement', () async {
     final fixture = _Fixture();
@@ -852,11 +901,18 @@ void main() {
       ],
     };
     await fixture.app.agentPreference.select('claude');
-    final box = NewHarnessController(fixture.app, machineId: 'm', folder: '/work/repo');
+    final box = NewHarnessController(
+      fixture.app,
+      machineId: 'm',
+      folder: '/work/repo',
+    );
     addTearDown(box.dispose);
     await _settle();
     expect(box.engine, 'claude');
-    expect(box.requiredChoice?.message, 'Claude Code is unavailable. Choose an agent.');
+    expect(
+      box.requiredChoice?.message,
+      'Claude Code is unavailable. Choose an agent.',
+    );
   });
 
   test('a harness removed during the launch probe requires an explicit replacement', () async {

@@ -69,10 +69,7 @@ void main() {
       ...namesIn(relay, 'PAIR_REQUESTS'),
       plateRequest(relay),
       ...namesIn(cli('sharing/protocol.ts'), 'SHARE_REQUEST_TYPES'),
-      ...namesIn(
-        cli('messages/wire.ts'),
-        'AGENT_MESSAGES_REQUEST_TYPES',
-      ),
+      ...namesIn(cli('messages/wire.ts'), 'AGENT_MESSAGES_REQUEST_TYPES'),
       ...namesIn(cli('lib/viewerFrames.ts'), 'VIEWER_DOWN_TYPES'),
     };
   });

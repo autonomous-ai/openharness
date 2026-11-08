@@ -488,10 +488,11 @@ void main() {
         ..clear()
         ..add(TerminalPane(id: 100, machineId: 'm', agentId: 'a0'));
       app.activeSwarm.focusedPaneId = 100;
-      expect(
-        taskRouteDefault(app),
-        (machineId: 'm', engine: 'codex', folder: folder),
-      );
+      expect(taskRouteDefault(app), (
+        machineId: 'm',
+        engine: 'codex',
+        folder: folder,
+      ));
     });
   }
 

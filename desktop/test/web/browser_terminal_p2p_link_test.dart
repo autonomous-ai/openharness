@@ -49,10 +49,7 @@ class _Responder {
   };
 
   void _toLink(Map<String, Object?> candidate) => unawaited(
-    link.handleSignal(
-      'p2p_ice_candidate',
-      _envelope({'candidate': candidate}),
-    ),
+    link.handleSignal('p2p_ice_candidate', _envelope({'candidate': candidate})),
   );
 
   Future<void> signal(String type, Map<String, dynamic> payload) async {
@@ -139,7 +136,10 @@ void main() {
   test('opens a direct channel the machine can read', () async {
     final machine = await open();
 
-    expect(states, [TerminalP2pLinkState.connecting, TerminalP2pLinkState.open]);
+    expect(states, [
+      TerminalP2pLinkState.connecting,
+      TerminalP2pLinkState.open,
+    ]);
     expect(responder.link.transport, TerminalP2pTransport.direct);
     // A keyframe outgrows the default 256 KiB; the offer must ask for more.
     expect(responder.offers.single, contains('a=max-message-size:524288'));

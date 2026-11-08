@@ -48,7 +48,9 @@ void main() {
       'MaterialIcons',
     )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
     await (FontLoader('packages/lucide_icons_flutter/Lucide400')..addFont(
-          rootBundle.load('packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf'),
+          rootBundle.load(
+            'packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf',
+          ),
         ))
         .load();
     // Widget tests disable native font fallback. Supply symbol glyphs under

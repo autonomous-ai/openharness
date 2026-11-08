@@ -767,8 +767,7 @@ void main() {
   testWidgets(
     'remote Windows home owns completion paths independently of this host',
     (tester) async {
-      final folders = _Folders('studio')
-        ..remoteHome = r'C:\Users\Remote';
+      final folders = _Folders('studio')..remoteHome = r'C:\Users\Remote';
       folders.entriesByPath[r'C:\Users\Remote\work'] = [
         {'name': 'payments', 'isDir': true},
       ];
@@ -792,7 +791,10 @@ void main() {
       expect(box.selected!.project!.folder, r'C:\Users\Remote\work\payments');
       expect(box.complete(), '~/work/payments/');
       expect(folders.paths, contains(r'C:\Users\Remote\work'));
-      expect(folders.paths.any((path) => path?.contains('/local-only-home') == true), isFalse);
+      expect(
+        folders.paths.any((path) => path?.contains('/local-only-home') == true),
+        isFalse,
+      );
       box.setQuery(r'C:\Users\Remote\work\pa');
       expect(box.isPathQuery, isTrue);
       expect(box.selected!.project!.folder, r'C:\Users\Remote\work\payments');

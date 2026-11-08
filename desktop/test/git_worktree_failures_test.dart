@@ -71,7 +71,8 @@ void main() {
   test('a folder linked into a checkout is read as part of it', () async {
     final root = await Directory.systemTemp.createTemp('harness-linked-');
     addTearDown(() => root.delete(recursive: true));
-    final repo = await Directory('${root.path}/repo/packages/app').create(recursive: true);
+    final repo = await Directory('${root.path}/repo/packages/app')
+        .create(recursive: true);
     await Directory('${root.path}/repo/.git').create();
     final link = await Link('${root.path}/proj').create(repo.path);
     var started = 0;
@@ -172,7 +173,11 @@ void main() {
   test('excessive Git output is bounded and the process is killed', () async {
     final process = _GitProcess(bytes: Uint8List(1024 * 1024 + 1));
     expect(
-      await readLocalGitProject('/repo',insideCheckout: _checkout, startProcess: (_, _) async => process),
+      await readLocalGitProject(
+        '/repo',
+        insideCheckout: _checkout,
+        startProcess: (_, _) async => process,
+      ),
       {'error': 'GIT_UNAVAILABLE'},
     );
     expect(process.signals, [ProcessSignal.sigkill]);

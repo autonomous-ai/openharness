@@ -278,20 +278,23 @@ void main() {
 
     // Final review I1: the daemon and backend supporting Agent Messages is
     // not the account's switch, which is off by default.
-    test('nothing, and no leader, with the account\'s Agent Messages switch off', () async {
-      final (app, _, _) = await _started();
-      app.newSwarm();
-      final tab = app.activeSwarmId;
-      await _put(app, tab, 'm', 'a0');
-      await app.setTabLeader(tab, 'm', 'a0');
-      expect(app.isTabLeader('m', 'a0'), isTrue);
-      await agentMessagesSwitch(app, false);
-      expect(app.agentMessagesOffered(tab), isTrue);
-      expect(app.leaderActionFor('m', 'a0'), isNull);
-      expect(app.isTabLeader('m', 'a0'), isFalse);
-      await agentMessagesSwitch(app, true);
-      expect(app.leaderActionFor('m', 'a0'), 'remove');
-    });
+    test(
+      'nothing, and no leader, with the account\'s Agent Messages switch off',
+      () async {
+        final (app, _, _) = await _started();
+        app.newSwarm();
+        final tab = app.activeSwarmId;
+        await _put(app, tab, 'm', 'a0');
+        await app.setTabLeader(tab, 'm', 'a0');
+        expect(app.isTabLeader('m', 'a0'), isTrue);
+        await agentMessagesSwitch(app, false);
+        expect(app.agentMessagesOffered(tab), isTrue);
+        expect(app.leaderActionFor('m', 'a0'), isNull);
+        expect(app.isTabLeader('m', 'a0'), isFalse);
+        await agentMessagesSwitch(app, true);
+        expect(app.leaderActionFor('m', 'a0'), 'remove');
+      },
+    );
 
     test('a web pane or a pane without a harness has none', () async {
       final (app, _, _) = await _started();
@@ -421,7 +424,10 @@ void main() {
       expect(find.byKey(const ValueKey('pane-chip-make-leader')), findsNothing);
       await tester.runAsync(() => agentMessagesSwitch(app, true));
       await tester.pump();
-      expect(find.byKey(const ValueKey('pane-chip-make-leader')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('pane-chip-make-leader')),
+        findsOneWidget,
+      );
       await pump(tester, app, 'm', 'a0');
       expect(find.byKey(const ValueKey('pane-chip-leader')), findsOneWidget);
     });

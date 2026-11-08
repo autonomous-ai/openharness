@@ -51,27 +51,22 @@ void main() {
     expect(body.fontWeight ?? FontWeight.w400, FontWeight.w400);
   });
 
-  testWidgets(
-    'another sender is named over their bubble at 13 px, plain, in '
-    'secondary ink; your own bubble carries no name',
-    (tester) async {
-      final server = ConversationServer()
-        ..append('Shipped')
-        ..append('Thanks', agent: true);
-      await showView(tester, server);
-      final row = find.byType(SuperTabMessageRow);
-      final texts = tester
-          .widgetList<Text>(
-            find.descendant(of: row, matching: find.byType(Text)),
-          )
-          .toList();
-      expect(texts.where((t) => t.data == 'You'), isEmpty);
-      final name = texts.firstWhere((t) => t.data == 'Lead');
-      expect(name.style!.fontSize, 13);
-      expect(name.style!.fontWeight, FontWeight.w400);
-      expect(name.style!.color, DesktopChrome.muted);
-    },
-  );
+  testWidgets('another sender is named over their bubble at 13 px, plain, in '
+      'secondary ink; your own bubble carries no name', (tester) async {
+    final server = ConversationServer()
+      ..append('Shipped')
+      ..append('Thanks', agent: true);
+    await showView(tester, server);
+    final row = find.byType(SuperTabMessageRow);
+    final texts = tester
+        .widgetList<Text>(find.descendant(of: row, matching: find.byType(Text)))
+        .toList();
+    expect(texts.where((t) => t.data == 'You'), isEmpty);
+    final name = texts.firstWhere((t) => t.data == 'Lead');
+    expect(name.style!.fontSize, 13);
+    expect(name.style!.fontWeight, FontWeight.w400);
+    expect(name.style!.color, DesktopChrome.muted);
+  });
 
   testWidgets('markdown in a message keeps the body size, and code its face', (
     tester,

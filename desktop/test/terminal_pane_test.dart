@@ -152,15 +152,18 @@ void main() {
       expect(frames, isEmpty);
     });
 
-    test('closing focused pane selects replacement, then clears last pane', () async {
-      await app.assignAgentToPane(null, 'm1', 'a');
-      await app.assignAgentToPane(null, 'm1', 'b');
-      frames.clear();
-      await app.closePane(app.focusedPane!.id);
-      expect(frames, [('m1', 'a')]);
-      await app.closePane(app.focusedPane!.id);
-      expect(frames.last, ('m1', null));
-    });
+    test(
+      'closing focused pane selects replacement, then clears last pane',
+      () async {
+        await app.assignAgentToPane(null, 'm1', 'a');
+        await app.assignAgentToPane(null, 'm1', 'b');
+        frames.clear();
+        await app.closePane(app.focusedPane!.id);
+        expect(frames, [('m1', 'a')]);
+        await app.closePane(app.focusedPane!.id);
+        expect(frames.last, ('m1', null));
+      },
+    );
 
     test('closing background pane does not change the voice target', () async {
       await app.assignAgentToPane(null, 'm1', 'a');
@@ -177,38 +180,47 @@ void main() {
       expect(frames, [('m1', null), ('m2', 'c')]);
     });
 
-    test('machine-only pane clears focus even without its own connection', () async {
-      await app.assignAgentToPane(null, 'm1', 'a');
-      frames.clear();
-      app.showMachinePane('m2');
-      expect(frames, [('m1', null)]);
-      app.focusPane(app.paneOfAgent('m1', 'a')!.id);
-      app.showMachinePane('m2');
-      expect(frames, [('m1', null), ('m1', 'a'), ('m1', null)]);
-    });
+    test(
+      'machine-only pane clears focus even without its own connection',
+      () async {
+        await app.assignAgentToPane(null, 'm1', 'a');
+        frames.clear();
+        app.showMachinePane('m2');
+        expect(frames, [('m1', null)]);
+        app.focusPane(app.paneOfAgent('m1', 'a')!.id);
+        app.showMachinePane('m2');
+        expect(frames, [('m1', null), ('m1', 'a'), ('m1', null)]);
+      },
+    );
 
-    test('deleted focused agent reports replacement and clears when empty', () async {
-      await app.assignAgentToPane(null, 'm1', 'a');
-      await app.assignAgentToPane(null, 'm1', 'b');
-      frames.clear();
-      await app.handleMachineEventForTest('m1', {
-        'type': 'agent_deleted',
-        'payload': {'agentId': 'b'},
-      });
-      expect(frames, [('m1', 'a')]);
-      await app.handleMachineEventForTest('m1', {
-        'type': 'agent_deleted',
-        'payload': {'agentId': 'a'},
-      });
-      expect(frames.last, ('m1', null));
-    });
+    test(
+      'deleted focused agent reports replacement and clears when empty',
+      () async {
+        await app.assignAgentToPane(null, 'm1', 'a');
+        await app.assignAgentToPane(null, 'm1', 'b');
+        frames.clear();
+        await app.handleMachineEventForTest('m1', {
+          'type': 'agent_deleted',
+          'payload': {'agentId': 'b'},
+        });
+        expect(frames, [('m1', 'a')]);
+        await app.handleMachineEventForTest('m1', {
+          'type': 'agent_deleted',
+          'payload': {'agentId': 'a'},
+        });
+        expect(frames.last, ('m1', null));
+      },
+    );
 
-    test('refocusing selected pane reasserts agent without opening terminal', () async {
-      await app.assignAgentToPane(null, 'm1', 'a');
-      frames.clear();
-      app.focusPane(app.focusedPane!.id);
-      expect(frames, [('m1', 'a')]);
-    });
+    test(
+      'refocusing selected pane reasserts agent without opening terminal',
+      () async {
+        await app.assignAgentToPane(null, 'm1', 'a');
+        frames.clear();
+        app.focusPane(app.focusedPane!.id);
+        expect(frames, [('m1', 'a')]);
+      },
+    );
   });
 
   test('selecting an agent already on screen focuses it instead of reopening', () async {
@@ -336,35 +348,44 @@ void main() {
     app.dispose();
   });
 
-  test('a store tab is remembered as the store, and comes back as one', () async {
-    final storage = _MemoryStore();
-    final app = _notifier(layout: PaneLayoutStore(storage: storage));
-    app.openStore();
-    expect(app.activeSwarm.isStore, isTrue);
-    await Future<void>.delayed(Duration.zero);
-    final layout = jsonDecode(storage.values['swarm_layout_v1']!);
-    expect(layout['swarms'][0]['kind'], 'store');
-    app.dispose();
+  test(
+    'a store tab is remembered as the store, and comes back as one',
+    () async {
+      final storage = _MemoryStore();
+      final app = _notifier(layout: PaneLayoutStore(storage: storage));
+      app.openStore();
+      expect(app.activeSwarm.isStore, isTrue);
+      await Future<void>.delayed(Duration.zero);
+      final layout = jsonDecode(storage.values['swarm_layout_v1']!);
+      expect(layout['swarms'][0]['kind'], 'store');
+      app.dispose();
 
-    final again = _notifier(layout: PaneLayoutStore(storage: storage));
-    await again.restorePaneLayoutForTest();
-    expect(again.swarms.where((s) => s.isStore).length, 1, reason: 'the store, once');
-    expect(again.swarms.where((s) => s.isStore).single.name, 'Harness Store');
-    again.dispose();
+      final again = _notifier(layout: PaneLayoutStore(storage: storage));
+      await again.restorePaneLayoutForTest();
+      expect(
+        again.swarms.where((s) => s.isStore).length,
+        1,
+        reason: 'the store, once',
+      );
+      expect(again.swarms.where((s) => s.isStore).single.name, 'Harness Store');
+      again.dispose();
 
-    // A layout that somehow holds two store tabs brings back one — and an
-    // empty tab named for the store, saved by a build before tabs had a kind,
-    // counts as the store rather than as an empty harness tab.
-    final doubled = jsonDecode(storage.values['swarm_layout_v1']!) as Map<String, dynamic>;
-    final rows = List<dynamic>.from(doubled['swarms'] as List);
-    rows.add({...(rows.first as Map), 'id': 'swarm-99'}..remove('kind'));
-    doubled['swarms'] = rows;
-    storage.values['swarm_layout_v1'] = jsonEncode(doubled);
-    final once = _notifier(layout: PaneLayoutStore(storage: storage));
-    await once.restorePaneLayoutForTest();
-    expect(once.swarms.where((s) => s.isStore).length, 1);
-    once.dispose();
-  });
+      // A layout that somehow holds two store tabs brings back one — and an
+      // empty tab named for the store, saved by a build before tabs had a kind,
+      // counts as the store rather than as an empty harness tab.
+      final doubled = jsonDecode(
+        storage.values['swarm_layout_v1']!,
+      ) as Map<String, dynamic>;
+      final rows = List<dynamic>.from(doubled['swarms'] as List);
+      rows.add({...(rows.first as Map), 'id': 'swarm-99'}..remove('kind'));
+      doubled['swarms'] = rows;
+      storage.values['swarm_layout_v1'] = jsonEncode(doubled);
+      final once = _notifier(layout: PaneLayoutStore(storage: storage));
+      await once.restorePaneLayoutForTest();
+      expect(once.swarms.where((s) => s.isStore).length, 1);
+      once.dispose();
+    },
+  );
 
   test('the layout is remembered, and machine tiles are not', () async {
     final storage = _MemoryStore();

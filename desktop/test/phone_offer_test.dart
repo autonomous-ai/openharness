@@ -129,12 +129,12 @@ void main() {
         await app.offerPhoneForTest(atLaunch: true);
         expect(app.phoneOfferShowing, isTrue);
         expect(store.values['phone_offer_returning.account-a'], isNull);
-      expect(store.values[_done], isNull);
+        expect(store.values[_done], isNull);
         app.phoneOfferShown();
         app.phoneOfferShown();
         await pumpEventQueue();
         expect(store.values['phone_offer_returning.account-a'], '1');
-      expect(store.values[_done], '1');
+        expect(store.values[_done], '1');
         expect(store.values[_seen], '1');
         expect(store.values[_shows], '1');
         final next = launch('account-a');
@@ -274,77 +274,98 @@ void main() {
     });
   });
 
-  test('a returning launch waits for the asynchronous account profile', () async {
-    final profile = Completer<Map<String, dynamic>?>();
-    final api = _DevicesApi(_listing([]))..profile = profile.future;
-    final store = MemoryStore();
-    final app = createApp(store: store)
-      ..status = AppStatus.authenticated
-      ..signedIn = true
-      ..api = api;
-    addTearDown(app.dispose);
-    final offer = app.offerPhoneForTest(atLaunch: true);
-    await pumpEventQueue();
-    expect(api.profileReads, 1);
-    expect(api.reads, 0);
-    expect(app.phoneOfferShowing, isFalse);
-    profile.complete({'user': {'id': 'loaded-account', 'email': 'a@example.test'}});
-    await offer;
-    expect(app.phoneOfferShowing, isTrue);
-    expect(api.profileReads, 1);
-    expect(api.reads, 1);
-    expect(store.values['phone_offer_returning.loaded-account'], isNull);
-    app.phoneOfferShown();
-    await pumpEventQueue();
-    expect(store.values['phone_offer_returning.loaded-account'], '1');
-  });
-
-  test('signing out while the returning profile loads leaves no record', () async {
-    final profile = Completer<Map<String, dynamic>?>();
-    final api = _DevicesApi(_listing([]))..profile = profile.future;
-    final store = MemoryStore();
-    final usage = AddPhoneRecorder();
-    final app = createApp(store: store, productMeasurement: usage)
-      ..status = AppStatus.authenticated
-      ..signedIn = true
-      ..api = api;
-    addTearDown(app.dispose);
-    final offer = app.offerPhoneForTest(atLaunch: true);
-    await pumpEventQueue();
-    expect(api.profileReads, 1);
-    app.signedIn = false;
-    profile.complete({'user': {'id': 'loaded-account', 'email': 'a@example.test'}});
-    await offer;
-    expect(app.phoneOfferShowing, isFalse);
-    expect(api.reads, 0);
-    expect(store.values, isEmpty);
-    expect(usage.skipped, ['not_signed_in']);
-  });
-
-  test('a returning launch without a stable account identity offers nothing', () async {
-    for (final id in [null, '']) {
-      final usage = AddPhoneRecorder();
-      final app = createApp(store: MemoryStore(), productMeasurement: usage)
+  test(
+    'a returning launch waits for the asynchronous account profile',
+    () async {
+      final profile = Completer<Map<String, dynamic>?>();
+      final api = _DevicesApi(_listing([]))..profile = profile.future;
+      final store = MemoryStore();
+      final app = createApp(store: store)
+        ..status = AppStatus.authenticated
         ..signedIn = true
-        ..currentUser = CurrentUserProfile(id: id, email: 'a@example.test')
-          ..api = _DevicesApi(_listing([]));
+        ..api = api;
       addTearDown(app.dispose);
+      final offer = app.offerPhoneForTest(atLaunch: true);
+      await pumpEventQueue();
+      expect(api.profileReads, 1);
+      expect(api.reads, 0);
+      expect(app.phoneOfferShowing, isFalse);
+      profile.complete({
+        'user': {'id': 'loaded-account', 'email': 'a@example.test'},
+      });
+      await offer;
+      expect(app.phoneOfferShowing, isTrue);
+      expect(api.profileReads, 1);
+      expect(api.reads, 1);
+      expect(store.values['phone_offer_returning.loaded-account'], isNull);
+      app.phoneOfferShown();
+      await pumpEventQueue();
+      expect(store.values['phone_offer_returning.loaded-account'], '1');
+    },
+  );
+
+  test(
+    'signing out while the returning profile loads leaves no record',
+    () async {
+      final profile = Completer<Map<String, dynamic>?>();
+      final api = _DevicesApi(_listing([]))..profile = profile.future;
+      final store = MemoryStore();
+      final usage = AddPhoneRecorder();
+      final app = createApp(store: store, productMeasurement: usage)
+        ..status = AppStatus.authenticated
+        ..signedIn = true
+        ..api = api;
+      addTearDown(app.dispose);
+      final offer = app.offerPhoneForTest(atLaunch: true);
+      await pumpEventQueue();
+      expect(api.profileReads, 1);
+      app.signedIn = false;
+      profile.complete({
+        'user': {'id': 'loaded-account', 'email': 'a@example.test'},
+      });
+      await offer;
+      expect(app.phoneOfferShowing, isFalse);
+      expect(api.reads, 0);
+      expect(store.values, isEmpty);
+      expect(usage.skipped, ['not_signed_in']);
+    },
+  );
+
+  test(
+    'a returning launch without a stable account identity offers nothing',
+    () async {
+      for (final id in [null, '']) {
+        final usage = AddPhoneRecorder();
+        final app = createApp(store: MemoryStore(), productMeasurement: usage)
+          ..signedIn = true
+          ..currentUser = CurrentUserProfile(id: id, email: 'a@example.test')
+          ..api = _DevicesApi(_listing([]));
+        addTearDown(app.dispose);
+        await app.offerPhoneForTest(atLaunch: true);
+        expect(app.phoneOfferShowing, isFalse);
+        expect(usage.skipped, ['not_signed_in']);
+      }
+    },
+  );
+
+  test(
+    'a guest launch cannot show after the account lands during its state read',
+    () async {
+      final usage = AddPhoneRecorder();
+      final store = _OnReadStore();
+      final app = createApp(store: store, productMeasurement: usage)
+        ..signedIn = false;
+      addTearDown(app.dispose);
+      store.onRead = (key) {
+        if (key == _done) {
+          app.signedIn = true;
+        }
+      };
       await app.offerPhoneForTest(atLaunch: true);
       expect(app.phoneOfferShowing, isFalse);
-      expect(usage.skipped, ['not_signed_in']);
-    }
-  });
-
-  test('a guest launch cannot show after the account lands during its state read', () async {
-    final usage = AddPhoneRecorder();
-    final store = _OnReadStore();
-    final app = createApp(store: store, productMeasurement: usage)..signedIn = false;
-    addTearDown(app.dispose);
-    store.onRead = (key) { if (key == _done) { app.signedIn = true; } };
-    await app.offerPhoneForTest(atLaunch: true);
-    expect(app.phoneOfferShowing, isFalse);
-    expect(usage.skipped, ['account_changed']);
-  });
+      expect(usage.skipped, ['account_changed']);
+    },
+  );
 
   test('each offer refusal counts one fixed skip reason without another device read', () async {
     final usage = AddPhoneRecorder();
@@ -395,10 +416,7 @@ void main() {
             await app.offerPhoneAfterWorkForTest();
           }
           expect(api.reads, 3);
-          expect(usage.skipped, [
-            'no_device_list',
-            'read_limit',
-          ]);
+          expect(usage.skipped, ['no_device_list', 'read_limit']);
         }
         if (expected == 'has_phone') {
           await app.offerPhoneAfterWorkForTest();
@@ -627,42 +645,60 @@ void main() {
     }
   });
 
-  test('Add Phone opened while a card path reads devices stops the pending card', () async {
-    for (final path in ['returning', 'sign_in', 'work']) {
-      final usage = AddPhoneRecorder();
-      final api = _DevicesApi(_listing([]));
-      final app = createApp(store: MemoryStore(), productMeasurement: usage)
-        ..status = AppStatus.authenticated
-        ..signedIn = true
-        ..currentUser = const CurrentUserProfile(id: 'a', email: 'a@example.test')
-        ..api = api;
-      addTearDown(app.dispose);
-      api.onRead = () => app.addPhoneOpened(AddPhoneOpening.menu);
-      if (path == 'work') { await app.offerPhoneAfterWorkForTest(); }
-      else { await app.offerPhoneForTest(atLaunch: path == 'returning'); }
-      expect(app.phoneOfferShowing, isFalse, reason: path);
-      expect(usage.skipped, ['stopped'], reason: path);
-    }
-  });
+  test(
+    'Add Phone opened while a card path reads devices stops the pending card',
+    () async {
+      for (final path in ['returning', 'sign_in', 'work']) {
+        final usage = AddPhoneRecorder();
+        final api = _DevicesApi(_listing([]));
+        final app = createApp(store: MemoryStore(), productMeasurement: usage)
+          ..status = AppStatus.authenticated
+          ..signedIn = true
+          ..currentUser = const CurrentUserProfile(
+            id: 'a',
+            email: 'a@example.test',
+          )
+          ..api = api;
+        addTearDown(app.dispose);
+        api.onRead = () => app.addPhoneOpened(AddPhoneOpening.menu);
+        if (path == 'work') {
+          await app.offerPhoneAfterWorkForTest();
+        } else {
+          await app.offerPhoneForTest(atLaunch: path == 'returning');
+        }
+        expect(app.phoneOfferShowing, isFalse, reason: path);
+        expect(usage.skipped, ['stopped'], reason: path);
+      }
+    },
+  );
 
-  test('changing accounts before a returning card is shown writes no offer record', () async {
-    final store = MemoryStore();
-    final usage = AddPhoneRecorder();
-    final app = createApp(store: store, productMeasurement: usage)
-      ..signedIn = true
-      ..currentUser = const CurrentUserProfile(id: 'a', email: 'a@example.test')
-      ..api = _DevicesApi(_listing([]));
-    addTearDown(app.dispose);
-    await app.offerPhoneForTest(atLaunch: true);
-    app.currentUser = const CurrentUserProfile(id: 'b', email: 'b@example.test');
-    app.phoneOfferShown();
-    await pumpEventQueue();
-    expect(store.values[_done], isNull);
-    expect(store.values[_seen], isNull);
-    expect(store.values['phone_offer_returning.a'], isNull);
-    expect(store.values['phone_offer_returning.b'], isNull);
-    expect(usage.started, isEmpty);
-  });
+  test(
+    'changing accounts before a returning card is shown writes no offer record',
+    () async {
+      final store = MemoryStore();
+      final usage = AddPhoneRecorder();
+      final app = createApp(store: store, productMeasurement: usage)
+        ..signedIn = true
+        ..currentUser = const CurrentUserProfile(
+          id: 'a',
+          email: 'a@example.test',
+        )
+        ..api = _DevicesApi(_listing([]));
+      addTearDown(app.dispose);
+      await app.offerPhoneForTest(atLaunch: true);
+      app.currentUser = const CurrentUserProfile(
+        id: 'b',
+        email: 'b@example.test',
+      );
+      app.phoneOfferShown();
+      await pumpEventQueue();
+      expect(store.values[_done], isNull);
+      expect(store.values[_seen], isNull);
+      expect(store.values['phone_offer_returning.a'], isNull);
+      expect(store.values['phone_offer_returning.b'], isNull);
+      expect(usage.started, isEmpty);
+    },
+  );
 
   test(
     'another account arriving during a returning read cannot inherit its offer',
@@ -1213,16 +1249,19 @@ void main() {
       expect(usage.skipped, ['not_signed_in']);
     });
 
-    test('an account whose workspace is not ready skips the away card', () async {
-      final usage = AddPhoneRecorder();
-      final (app, _) = await working(_DevicesApi(_listing([])), usage: usage);
-      leave(app);
-      await finishes(app);
-      app.status = AppStatus.unauthenticated;
-      await back(app, const Duration(minutes: 10));
-      expect(app.phoneOfferShowing, isFalse);
-      expect(usage.skipped, ['not_signed_in']);
-    });
+    test(
+      'an account whose workspace is not ready skips the away card',
+      () async {
+        final usage = AddPhoneRecorder();
+        final (app, _) = await working(_DevicesApi(_listing([])), usage: usage);
+        leave(app);
+        await finishes(app);
+        app.status = AppStatus.unauthenticated;
+        await back(app, const Duration(minutes: 10));
+        expect(app.phoneOfferShowing, isFalse);
+        expect(usage.skipped, ['not_signed_in']);
+      },
+    );
 
     for (final reason in [
       'stopped',

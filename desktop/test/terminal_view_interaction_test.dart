@@ -161,22 +161,20 @@ void main() {
       variant: TargetPlatformVariant.only(TargetPlatform.macOS),
     );
 
-    testWidgets(
-      'other platforms leave the space bar to the input method',
-      (tester) async {
-        final output = await mount(tester);
-        expect(
-          await tester.sendKeyEvent(
-            LogicalKeyboardKey.space,
-            character: ' ',
-            platform: 'linux',
-          ),
-          isFalse,
-        );
-        expect(output, isEmpty);
-      },
-      variant: TargetPlatformVariant.only(TargetPlatform.linux),
-    );
+    testWidgets('other platforms leave the space bar to the input method', (
+      tester,
+    ) async {
+      final output = await mount(tester);
+      expect(
+        await tester.sendKeyEvent(
+          LogicalKeyboardKey.space,
+          character: ' ',
+          platform: 'linux',
+        ),
+        isFalse,
+      );
+      expect(output, isEmpty);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
   });
 
   testWidgets(

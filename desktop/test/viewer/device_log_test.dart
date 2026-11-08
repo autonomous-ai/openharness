@@ -9,7 +9,9 @@ import 'package:harness/viewer/device_log.dart';
 /// The Dart port of the device key log, held to the fixture every implementation shares
 /// (cli/scripts/gen-devlog-vectors.ts).
 void main() {
-  final vectors = jsonDecode(File('test/viewer/device_log.vectors.json').readAsStringSync()) as Map<String, dynamic>;
+  final vectors = jsonDecode(
+    File('test/viewer/device_log.vectors.json').readAsStringSync(),
+  ) as Map<String, dynamic>;
   final acct = vectors['acct'] as String;
   final valid = vectors['valid'] as Map<String, dynamic>;
   final entries = (valid['entries'] as List).cast<Object?>();
@@ -23,13 +25,19 @@ void main() {
     }
   });
 
-  test('applies every valid entry to the fixture hashes, head and active set', () async {
-    final applied = await applyDevLogEntries(DevLogState.empty(acct), entries);
-    expect(applied.state.hashes, valid['hashes']);
-    expect(applied.state.head.toJson(), valid['head']);
-    expect(applied.state.active.keys.toList()..sort(), valid['active']);
-    expect(applied.state.removed, valid['removed']);
-  });
+  test(
+    'applies every valid entry to the fixture hashes, head and active set',
+    () async {
+      final applied = await applyDevLogEntries(
+        DevLogState.empty(acct),
+        entries,
+      );
+      expect(applied.state.hashes, valid['hashes']);
+      expect(applied.state.head.toJson(), valid['head']);
+      expect(applied.state.active.keys.toList()..sort(), valid['active']);
+      expect(applied.state.removed, valid['removed']);
+    },
+  );
 
   test('re-signs every valid entry to the same signature', () async {
     final seeds = (vectors['seeds'] as Map).cast<String, String>();
@@ -44,25 +52,37 @@ void main() {
 
   for (final c in (vectors['invalid'] as List).cast<Map<String, dynamic>>()) {
     test('refuses: ${c['name']} (${c['code']})', () async {
-      final base = (await applyDevLogEntries(DevLogState.empty(acct), entries.sublist(0, c['after'] as int))).state;
+      final base = (await applyDevLogEntries(
+        DevLogState.empty(acct),
+        entries.sublist(0, c['after'] as int),
+      )).state;
       Object? error;
       try {
         await applyDevLogEntries(base, [c['entry']]);
       } catch (err) {
         error = err;
       }
-      expect(error, isA<DevLogError>().having((e) => e.code, 'code', c['code']));
+      expect(
+        error,
+        isA<DevLogError>().having((e) => e.code, 'code', c['code']),
+      );
     });
   }
 
   test('round-trips its state through JSON', () async {
-    final s = (await applyDevLogEntries(DevLogState.empty(acct), entries)).state;
+    final s = (await applyDevLogEntries(
+      DevLogState.empty(acct),
+      entries,
+    )).state;
     final back = DevLogState.fromJson(jsonDecode(jsonEncode(s.toJson())))!;
     expect(back.toJson(), s.toJson());
   });
 
   test('tells same, ahead, behind and fork apart', () async {
-    final s = (await applyDevLogEntries(DevLogState.empty(acct), entries.sublist(0, 4))).state;
+    final s = (await applyDevLogEntries(
+      DevLogState.empty(acct),
+      entries.sublist(0, 4),
+    )).state;
     final hashes = (valid['hashes'] as List).cast<String>();
     expect(compareDevLogHead(s, s.head), 'same');
     expect(compareDevLogHead(s, DevLogHead(2, hashes[1])), 'ahead');

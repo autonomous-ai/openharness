@@ -135,9 +135,7 @@ class _TimedLogFile extends DailyLogFile {
 
   @override
   void append(String block, {bool buffered = false, bool durable = false}) =>
-      _measure(
-        () => super.append(block, buffered: buffered, durable: durable),
-      );
+      _measure(() => super.append(block, buffered: buffered, durable: durable));
 
   @override
   void flush({bool durable = false}) =>

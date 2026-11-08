@@ -29,8 +29,11 @@ void main() {
         .toList();
     expect(offenders, ['lib/core/config.dart']);
     final config = File('lib/core/config.dart').readAsStringSync();
-    expect(literal.allMatches(config).length, 1,
-        reason: 'the define default is the only 18473');
+    expect(
+      literal.allMatches(config).length,
+      1,
+      reason: 'the define default is the only 18473',
+    );
     expect(config, contains("int.fromEnvironment('HARNESS_DAEMON_PORT'"));
   });
 }

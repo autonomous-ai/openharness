@@ -615,7 +615,11 @@ void main() {
     addTearDown(usage.dispose);
     await menu.refresh();
     expect(
-      menu.subscriptionFor('codex', local: true, machineName: '')?['accountKey'],
+      menu.subscriptionFor(
+        'codex',
+        local: true,
+        machineName: '',
+      )?['accountKey'],
       '1111111111111111',
     );
     expect(

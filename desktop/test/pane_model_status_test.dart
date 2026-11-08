@@ -104,9 +104,21 @@ void main() {
     await pane(tester, {'model': 'Qwen3.5-4B', 'webSearch': 'on'});
     // Engine identity remains beside the model; no startup label is added.
     // The activity mark is offline because the fixture is not connected.
-    expect(textsUnder(tester), ['Desktop', '⊘', 'Test host', 'Codex', 'Qwen3.5-4B']);
+    expect(textsUnder(tester), [
+      'Desktop',
+      '⊘',
+      'Test host',
+      'Codex',
+      'Qwen3.5-4B',
+    ]);
     await event(tester, 'turn_started', payload: {'userMessage': 'hi'});
-    expect(textsUnder(tester), ['Desktop', '⊘', 'Test host', 'Codex', 'Qwen3.5-4B']);
+    expect(textsUnder(tester), [
+      'Desktop',
+      '⊘',
+      'Test host',
+      'Codex',
+      'Qwen3.5-4B',
+    ]);
     await settle(tester);
   });
 

@@ -68,7 +68,10 @@ void main() {
       );
       for (final shiny in [false, true]) {
         expect(
-          contrastRatio(daemonColor(d, _light, shiny: shiny), _light.background),
+          contrastRatio(
+            daemonColor(d, _light, shiny: shiny),
+            _light.background,
+          ),
           greaterThanOrEqualTo(4.5),
           reason: '${d.id} shiny=$shiny',
         );

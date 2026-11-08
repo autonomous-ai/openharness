@@ -54,7 +54,11 @@ void main() {
           '"b": [1, 2,], "c": "q\\"//",\n}',
         ),
       ),
-      {'a': 'http://x // not a comment', 'b': [1, 2], 'c': 'q"//'},
+      {
+        'a': 'http://x // not a comment',
+        'b': [1, 2],
+        'c': 'q"//',
+      },
     );
   });
 
@@ -86,15 +90,18 @@ void main() {
     expect(pairConfigTurnsOn('pair.jsonc (0 rules):\n{ not json'), isEmpty);
   });
 
-  test('a missing file is written once; an existing one is never touched', () async {
-    final dir = await Directory.systemTemp.createTemp('pair-rules');
-    addTearDown(() => dir.delete(recursive: true));
-    final env = {'HOME': '/nowhere', 'XDG_CONFIG_HOME': dir.path};
-    final file = await ensurePairRules(environment: env);
-    expect(file.path, '${dir.path}/harness/pair.jsonc');
-    expect(await file.readAsString(), pairRulesTemplate);
-    await file.writeAsString('{"rules": [], "model": true}');
-    await ensurePairRules(environment: env);
-    expect(await file.readAsString(), '{"rules": [], "model": true}');
-  });
+  test(
+    'a missing file is written once; an existing one is never touched',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('pair-rules');
+      addTearDown(() => dir.delete(recursive: true));
+      final env = {'HOME': '/nowhere', 'XDG_CONFIG_HOME': dir.path};
+      final file = await ensurePairRules(environment: env);
+      expect(file.path, '${dir.path}/harness/pair.jsonc');
+      expect(await file.readAsString(), pairRulesTemplate);
+      await file.writeAsString('{"rules": [], "model": true}');
+      await ensurePairRules(environment: env);
+      expect(await file.readAsString(), '{"rules": [], "model": true}');
+    },
+  );
 }

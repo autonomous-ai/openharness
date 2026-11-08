@@ -88,7 +88,9 @@ class _RecordingLog implements AppLog {
 void main() {
   /// Two tabs, `a0` in the first (background) and `a1` in the second (in front), on a machine
   /// that has come back once, so its agents and terminal capability are loaded.
-  Future<({AppNotifier app, _Connection connection, TerminalSession background})>
+  Future<
+    ({AppNotifier app, _Connection connection, TerminalSession background})
+  >
   rig(WidgetTester tester) async {
     final connection = _Connection();
     // Disposed at the end of each test body: it disposes the sessions too, whose open watchdogs
@@ -140,12 +142,17 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
 
       expect(r.connection.opened, ['a0']);
-      expect(log.lines, contains('terminal reattach machine=m agent=a0 attempt=1'));
+      expect(
+        log.lines,
+        contains('terminal reattach machine=m agent=a0 attempt=1'),
+      );
       r.app.dispose();
     },
   );
 
-  testWidgets('each further attempt waits longer: 1 s, then 2 s', (tester) async {
+  testWidgets('each further attempt waits longer: 1 s, then 2 s', (
+    tester,
+  ) async {
     final r = await rig(tester);
 
     r.background.transportLost('gone');
@@ -248,7 +255,9 @@ void main() {
     r.app.dispose();
   });
 
-  testWidgets('nothing is retried while the machine is offline', (tester) async {
+  testWidgets('nothing is retried while the machine is offline', (
+    tester,
+  ) async {
     final r = await rig(tester);
 
     await r.app.handleEventForTest('m', {

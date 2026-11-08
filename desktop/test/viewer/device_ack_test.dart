@@ -10,16 +10,23 @@ import 'package:harness/viewer/device_log.dart';
 /// The Dart port of the device acknowledgement, held to the fixture every implementation shares
 /// (cli/scripts/gen-devack-vectors.ts).
 void main() {
-  final vectors = jsonDecode(File('test/viewer/deviceAck.vectors.json').readAsStringSync()) as Map<String, dynamic>;
+  final vectors = jsonDecode(
+    File('test/viewer/deviceAck.vectors.json').readAsStringSync(),
+  ) as Map<String, dynamic>;
   final acct = vectors['acct'] as String;
   final seeds = (vectors['seeds'] as Map).cast<String, String>();
   final pubs = (vectors['pubs'] as Map).cast<String, String>();
   final valid = (vectors['valid'] as List).cast<Map<String, dynamic>>();
-  Future<DevLogState> state() async =>
-      (await applyDevLogEntries(DevLogState.empty(acct), (vectors['log'] as List).cast<Object?>())).state;
+  Future<DevLogState> state() async => (await applyDevLogEntries(
+    DevLogState.empty(acct),
+    (vectors['log'] as List).cast<Object?>(),
+  )).state;
 
   test('encodes the first acknowledgement to the fixture bytes', () {
-    expect(hexOf(devAckMessage(DevAck.parse(valid.first)!)), vectors['message']);
+    expect(
+      hexOf(devAckMessage(DevAck.parse(valid.first)!)),
+      vectors['message'],
+    );
   });
 
   test('re-signs every valid acknowledgement to the same signature, and accepts it', () async {

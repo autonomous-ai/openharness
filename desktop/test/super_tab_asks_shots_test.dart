@@ -141,12 +141,7 @@ void main() {
           thread: 'message-1',
           minutesAgo: 88,
         );
-        say(
-          'ok thanks',
-          huy,
-          thread: 'message-1',
-          minutesAgo: 86,
-        );
+        say('ok thanks', huy, thread: 'message-1', minutesAgo: 86);
         say(
           'I renamed the agents, but the sidebar still shows the old names.',
           darren,

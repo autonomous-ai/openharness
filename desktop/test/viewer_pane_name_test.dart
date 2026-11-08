@@ -32,7 +32,12 @@ void main() {
       viewer: true,
       viewerUse: 'autonomous/blank-viewer',
     ),
-    DshEntry(id: 'autonomous/blank-viewer', name: '  ', engine: '', kind: 'viewer'),
+    DshEntry(
+      id: 'autonomous/blank-viewer',
+      name: '  ',
+      engine: '',
+      kind: 'viewer',
+    ),
   ];
   Agent agent({String? dsh, String? dshName, String? viewerName}) => Agent(
     id: 'a1',

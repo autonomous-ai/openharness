@@ -187,24 +187,27 @@ void main() {
     },
   );
 
-  test('a resume the terminal service could not take says what to do', () async {
-    app.stateOf('m')!.agents = [
-      Agent.fromJson((inventory()['agents'] as List).single),
-    ];
-    final resume = app.resumeAgent('m', 'a0');
-    connection.restartReplies.single.complete({
-      'creationId': connection.requests.single['creationId'],
-      'state': 'failed',
-      'failure': {
-        'code': 'PTY_HOST_UNAVAILABLE',
-        'detail': 'harness-pty is not installed',
-      },
-    });
-    expect(
-      (await resume).error,
-      'Harness could not open a terminal on this machine. Run harness start on it, then try again.',
-    );
-  });
+  test(
+    'a resume the terminal service could not take says what to do',
+    () async {
+      app.stateOf('m')!.agents = [
+        Agent.fromJson((inventory()['agents'] as List).single),
+      ];
+      final resume = app.resumeAgent('m', 'a0');
+      connection.restartReplies.single.complete({
+        'creationId': connection.requests.single['creationId'],
+        'state': 'failed',
+        'failure': {
+          'code': 'PTY_HOST_UNAVAILABLE',
+          'detail': 'harness-pty is not installed',
+        },
+      });
+      expect(
+        (await resume).error,
+        'Harness could not open a terminal on this machine. Run harness start on it, then try again.',
+      );
+    },
+  );
 
   for (final (detail, expected) in [
     ('Use another engine.', 'Use another engine.'),

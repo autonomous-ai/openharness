@@ -177,21 +177,18 @@ void main() {
       },
     );
 
-    test(
-      'a read that could not reach the machine keeps the last good picture for every surface',
-      () async {
-        await app.refreshGridModels('m');
-        daemon.reply = {'error': 'GRID_MODELS_FAILED'};
+    test('a read that could not reach the machine keeps the last good picture for every surface', () async {
+      await app.refreshGridModels('m');
+      daemon.reply = {'error': 'GRID_MODELS_FAILED'};
 
-        // The caller that must know (the creation check) still hears that the machine did not answer…
-        expect((await app.refreshGridModels('m')).reachable, isFalse);
-        // …while the picture every other surface shows stays the last list it had.
-        final picture = await app.readGridPicture('m');
-        expect(picture.reachable, isTrue);
-        expect(picture.sections.single.models.single.id, 'Qwen3.5-4B');
-        expect(app.gridPictures['m']!.reachable, isTrue);
-      },
-    );
+      // The caller that must know (the creation check) still hears that the machine did not answer…
+      expect((await app.refreshGridModels('m')).reachable, isFalse);
+      // …while the picture every other surface shows stays the last list it had.
+      final picture = await app.readGridPicture('m');
+      expect(picture.reachable, isTrue);
+      expect(picture.sections.single.models.single.id, 'Qwen3.5-4B');
+      expect(app.gridPictures['m']!.reachable, isTrue);
+    });
 
     test('the foreground flag follows the lifecycle, unknown counting as foreground', () {
       expect(app.inForeground, isTrue);

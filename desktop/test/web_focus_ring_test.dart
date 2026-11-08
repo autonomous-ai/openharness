@@ -104,11 +104,7 @@ void main() {
               onPressed: () {},
               child: const Text('Before'),
             ),
-            SizedBox(
-              width: 600,
-              height: 300,
-              child: TerminalView(terminal),
-            ),
+            SizedBox(width: 600, height: 300, child: TerminalView(terminal)),
           ],
         ),
       ),
@@ -123,9 +119,7 @@ void main() {
     expect(_ring, findsNothing);
   });
 
-  testWidgets('it follows the focused row as its list scrolls', (
-    tester,
-  ) async {
+  testWidgets('it follows the focused row as its list scrolls', (tester) async {
     final scroll = ScrollController();
     addTearDown(scroll.dispose);
     await _show(
@@ -135,11 +129,7 @@ void main() {
           controller: scroll,
           children: [
             for (var i = 0; i < 40; i++)
-              ListTile(
-                autofocus: i == 0,
-                title: Text('Row $i'),
-                onTap: () {},
-              ),
+              ListTile(autofocus: i == 0, title: Text('Row $i'), onTap: () {}),
           ],
         ),
       ),
@@ -191,19 +181,20 @@ void main() {
     _around(tester, button);
   });
 
-  testWidgets('Desktop\'s frame has no ring: its controls keep their own focus', (
-    tester,
-  ) async {
-    await tester.pumpWidget(
-      desktop.appFrame(
-        MaterialApp(
-          theme: grid.buildAppTheme(brightness: Brightness.dark),
-          home: _buttons(),
+  testWidgets(
+    'Desktop\'s frame has no ring: its controls keep their own focus',
+    (tester) async {
+      await tester.pumpWidget(
+        desktop.appFrame(
+          MaterialApp(
+            theme: grid.buildAppTheme(brightness: Brightness.dark),
+            home: _buttons(),
+          ),
         ),
-      ),
-    );
-    await _tab(tester);
-    expect(find.byType(WebFocusRing), findsNothing);
-    expect(_ring, findsNothing);
-  });
+      );
+      await _tab(tester);
+      expect(find.byType(WebFocusRing), findsNothing);
+      expect(_ring, findsNothing);
+    },
+  );
 }

@@ -271,28 +271,31 @@ void main() {
     },
   );
 
-  test('project revocation removes cached text, drafts and terminals', () async {
-    final server = projectsServer(), c = server.controller();
-    server.append('Private design', conversationId: 'design-lead');
-    await c.refresh();
-    await c.loadMessages('design-lead');
-    c.select('design-lead');
-    c.setDraft('design-lead', 'Private response');
-    expect(c.messages('design-lead'), hasLength(1));
-    (server.state['projects'] as List).removeLast();
-    (server.state['conversations'] as List).removeLast();
-    server.revision++;
-    await c.refresh();
-    await c.flush();
-    expect(c.selectedId, 'lead');
-    expect(c.messages('design-lead'), isEmpty);
-    expect(c.draft('design-lead'), isEmpty);
-    expect(
-      (server.saved!['drafts'] as Map).containsKey('design-lead'),
-      isFalse,
-    );
-    c.dispose();
-  });
+  test(
+    'project revocation removes cached text, drafts and terminals',
+    () async {
+      final server = projectsServer(), c = server.controller();
+      server.append('Private design', conversationId: 'design-lead');
+      await c.refresh();
+      await c.loadMessages('design-lead');
+      c.select('design-lead');
+      c.setDraft('design-lead', 'Private response');
+      expect(c.messages('design-lead'), hasLength(1));
+      (server.state['projects'] as List).removeLast();
+      (server.state['conversations'] as List).removeLast();
+      server.revision++;
+      await c.refresh();
+      await c.flush();
+      expect(c.selectedId, 'lead');
+      expect(c.messages('design-lead'), isEmpty);
+      expect(c.draft('design-lead'), isEmpty);
+      expect(
+        (server.saved!['drafts'] as Map).containsKey('design-lead'),
+        isFalse,
+      );
+      c.dispose();
+    },
+  );
 
   test('internal consolidation requests do not appear as chat posts', () async {
     final server = projectsServer(), c = server.controller();

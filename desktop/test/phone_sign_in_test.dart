@@ -143,22 +143,40 @@ void main() {
       expect(asked, ['dee@example.com']);
     });
 
-    test('a wait behind another sign-in is shown until the CLI moves on', () async {
-      final process = _Process();
-      final login = CliLogin(runner: _Runner(process));
-      final done = login.loginWithPhone(onQr: (_, _) {}, onConfirm: (_) async => false);
-      await Future<void>.delayed(Duration.zero);
-      process.emit({'type': 'waiting', 'message': 'Another sign-in on this computer is still running — waiting for it to finish…'});
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-      expect(login.waitingNote.value, startsWith('Another sign-in'));
-      process.emit({'type': 'qr', 'url': 'https://harness.autonomous.ai/signin#k=hnq_x', 'expiresIn': 120});
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-      expect(login.waitingNote.value, isNull);
-      process.emit({'type': 'result', 'status': 'error', 'code': 'CANCELLED', 'message': 'x'});
-      process.finish(1);
-      await expectLater(done, throwsA(isA<PhoneSignInException>()));
-      expect(login.waitingNote.value, isNull);
-    });
+    test(
+      'a wait behind another sign-in is shown until the CLI moves on',
+      () async {
+        final process = _Process();
+        final login = CliLogin(runner: _Runner(process));
+        final done = login.loginWithPhone(
+          onQr: (_, _) {},
+          onConfirm: (_) async => false,
+        );
+        await Future<void>.delayed(Duration.zero);
+        process.emit({
+          'type': 'waiting',
+          'message': 'Another sign-in on this computer is still running — waiting for it to finish…',
+        });
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(login.waitingNote.value, startsWith('Another sign-in'));
+        process.emit({
+          'type': 'qr',
+          'url': 'https://harness.autonomous.ai/signin#k=hnq_x',
+          'expiresIn': 120,
+        });
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(login.waitingNote.value, isNull);
+        process.emit({
+          'type': 'result',
+          'status': 'error',
+          'code': 'CANCELLED',
+          'message': 'x',
+        });
+        process.finish(1);
+        await expectLater(done, throwsA(isA<PhoneSignInException>()));
+        expect(login.waitingNote.value, isNull);
+      },
+    );
 
     test('says no on stdin when the person refuses the account, and reports why it ended', () async {
       final process = _Process();

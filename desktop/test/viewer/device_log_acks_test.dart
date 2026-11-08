@@ -38,20 +38,47 @@ class _Backend {
   bool ackRoute = true;
   bool ackReadThrows = false;
 
-  Future<void> add(E2eeIdentity who, String kind, String machineId, String label) async {
+  Future<void> add(
+    E2eeIdentity who,
+    String kind,
+    String machineId,
+    String label,
+  ) async {
     final pub = b64e(who.pub);
-    await _push(await signDevLogEntry(
-      nextDevLogEntry(state, op: 'add', pub: pub, kind: kind, machineId: machineId, label: label, signer: pub, at: 1000),
-      who,
-    ));
+    await _push(
+      await signDevLogEntry(
+        nextDevLogEntry(
+          state,
+          op: 'add',
+          pub: pub,
+          kind: kind,
+          machineId: machineId,
+          label: label,
+          signer: pub,
+          at: 1000,
+        ),
+        who,
+      ),
+    );
   }
 
   Future<void> removeBy(String target, E2eeIdentity by) async {
     final t = state.active[target]!;
-    await _push(await signDevLogEntry(
-      nextDevLogEntry(state, op: 'remove', pub: t.pub, kind: t.kind, machineId: t.machineId, label: t.label, signer: b64e(by.pub), at: 2000),
-      by,
-    ));
+    await _push(
+      await signDevLogEntry(
+        nextDevLogEntry(
+          state,
+          op: 'remove',
+          pub: t.pub,
+          kind: t.kind,
+          machineId: t.machineId,
+          label: t.label,
+          signer: b64e(by.pub),
+          at: 2000,
+        ),
+        by,
+      ),
+    );
   }
 
   Future<void> _push(DevLogEntry e) async {
@@ -59,11 +86,18 @@ class _Backend {
     entries.add(e);
   }
 
-  Future<DeviceLogFetched?> fetch(int since) async =>
-      (acct: _acct, head: state.head, entries: [for (final e in entries) if (e.seq > since) e.toJson()]);
+  Future<DeviceLogFetched?> fetch(int since) async => (
+    acct: _acct,
+    head: state.head,
+    entries: [
+      for (final e in entries)
+        if (e.seq > since) e.toJson(),
+    ],
+  );
 
   Future<DeviceLogAppendAnswer?> append(DevLogEntry entry) async {
-    if (entry.seq != state.head.seq + 1 || entry.prev != state.head.hash) return (head: state.head, error: 'STALE_HEAD');
+    if (entry.seq != state.head.seq + 1 || entry.prev != state.head.hash)
+      return (head: state.head, error: 'STALE_HEAD');
     await _push(entry);
     return (head: state.head, error: null);
   }
@@ -83,11 +117,22 @@ class _Backend {
   }
 
   /// An acknowledgement of [of] by [by], for the entry that added it unless [addSeq] says otherwise.
-  Future<Map<String, Object?>> ack(E2eeIdentity by, String of, {int? addSeq, String acct = _acct}) async =>
-      (await signDevAck(
-        DevAck(v: 1, acct: acct, pub: of, addSeq: addSeq ?? state.active[of]?.seq ?? 1, signer: b64e(by.pub), at: 7000),
-        by,
-      )).toJson();
+  Future<Map<String, Object?>> ack(
+    E2eeIdentity by,
+    String of, {
+    int? addSeq,
+    String acct = _acct,
+  }) async => (await signDevAck(
+    DevAck(
+      v: 1,
+      acct: acct,
+      pub: of,
+      addSeq: addSeq ?? state.active[of]?.seq ?? 1,
+      signer: b64e(by.pub),
+      at: 7000,
+    ),
+    by,
+  )).toJson();
 }
 
 void main() {
@@ -110,7 +155,8 @@ void main() {
     sleep: (_) async {},
   );
 
-  Future<Map<String, Object?>> file() async => ((await keys.deviceLog()) as Map).cast<String, Object?>();
+  Future<Map<String, Object?>> file() async =>
+      ((await keys.deviceLog()) as Map).cast<String, Object?>();
   Future<String> self() async => b64e((await keys.identity()).pub);
   String pubOf(E2eeIdentity id) => b64e(id.pub);
 
@@ -146,8 +192,15 @@ void main() {
     expect(listing.pending, isEmpty);
     final row = listing.members.firstWhere((r) => r.member.pub == pubOf(phone));
     expect(row.pending, isFalse);
-    expect(row.confirmed?.toJson(), {'by': pubOf(box2), 'label': 'box2', 'at': 5000});
-    expect(listing.members.firstWhere((r) => r.member.pub == pubOf(box2)).confirmed, isNull);
+    expect(row.confirmed?.toJson(), {
+      'by': pubOf(box2),
+      'label': 'box2',
+      'at': 5000,
+    });
+    expect(
+      listing.members.firstWhere((r) => r.member.pub == pubOf(box2)).confirmed,
+      isNull,
+    );
     expect(changed, greaterThan(0));
   });
 
@@ -204,10 +257,21 @@ void main() {
       backend.acks.addAll([
         await backend.ack(phone, pubOf(phone)),
         {...good, 'at': 7001},
-        await backend.ack(box2, pubOf(phone), addSeq: backend.state.active[pubOf(phone)]!.seq - 1),
+        await backend.ack(
+          box2,
+          pubOf(phone),
+          addSeq: backend.state.active[pubOf(phone)]!.seq - 1,
+        ),
         await backend.ack(box2, pubOf(phone), acct: 'acct-2'),
         (await signDevAck(
-          DevAck(v: 1, acct: _acct, pub: pubOf(phone), addSeq: backend.state.active[pubOf(phone)]!.seq, signer: await self(), at: 7000),
+          DevAck(
+            v: 1,
+            acct: _acct,
+            pub: pubOf(phone),
+            addSeq: backend.state.active[pubOf(phone)]!.seq,
+            signer: await self(),
+            at: 7000,
+          ),
           await keys.identity(),
         )).toJson(),
         {'junk': true},
@@ -222,7 +286,10 @@ void main() {
       final log = await joined();
       await backend.add(later, 'viewer', '', 'later');
       await log.refresh();
-      backend.acks.addAll([await backend.ack(later, pubOf(phone)), await backend.ack(phone, pubOf(later))]);
+      backend.acks.addAll([
+        await backend.ack(later, pubOf(phone)),
+        await backend.ack(phone, pubOf(later)),
+      ]);
       await log.refresh();
       expect((await log.list()).pending, [pubOf(phone), pubOf(later)]);
     });
@@ -241,25 +308,38 @@ void main() {
       expect((await log.list()).pending, [pubOf(phone)]);
     });
 
-    test('a signer suspended here, or tombstoned in the trust group here', () async {
-      for (final how in ['suspended', 'tombstoned']) {
-        backend = _Backend();
-        keys = ViewerKeyStore(storage: _Memory());
-        final log = await joined();
-        if (how == 'suspended') {
-          await keys.writeDeviceLog({...await file(), 'suspended': [pubOf(box2)]});
-        } else {
-          await keys.writeGroupRoster(GroupRoster(const [], [GroupTombstone(pubOf(box2), 1000)]).toJson());
+    test(
+      'a signer suspended here, or tombstoned in the trust group here',
+      () async {
+        for (final how in ['suspended', 'tombstoned']) {
+          backend = _Backend();
+          keys = ViewerKeyStore(storage: _Memory());
+          final log = await joined();
+          if (how == 'suspended') {
+            await keys.writeDeviceLog({
+              ...await file(),
+              'suspended': [pubOf(box2)],
+            });
+          } else {
+            await keys.writeGroupRoster(
+              GroupRoster(const [], [
+                GroupTombstone(pubOf(box2), 1000),
+              ]).toJson(),
+            );
+          }
+          backend.acks.add(await backend.ack(box2, pubOf(phone)));
+          await log.refresh();
+          expect((await log.list()).pending, [pubOf(phone)], reason: how);
         }
-        backend.acks.add(await backend.ack(box2, pubOf(phone)));
-        await log.refresh();
-        expect((await log.list()).pending, [pubOf(phone)], reason: how);
-      }
-    });
+      },
+    );
 
     test('never lifts a suspension: a key a fork suspended here stays new and suspended', () async {
       final log = await joined();
-      await keys.writeDeviceLog({...await file(), 'suspended': [pubOf(phone)]});
+      await keys.writeDeviceLog({
+        ...await file(),
+        'suspended': [pubOf(phone)],
+      });
       backend.acks.add(await backend.ack(box2, pubOf(phone)));
       await log.refresh();
       expect(backend.askedAcks, isEmpty);
@@ -272,7 +352,11 @@ void main() {
       final log = await joined();
       await keys.writeDeviceLog({
         ...await file(),
-        'frozen': {'reason': 'fork', 'at': 1, 'lastGoodHead': backend.state.head.toJson()},
+        'frozen': {
+          'reason': 'fork',
+          'at': 1,
+          'lastGoodHead': backend.state.head.toJson(),
+        },
       });
       backend.acks.add(await backend.ack(box2, pubOf(phone)));
       await log.refresh();
@@ -317,7 +401,10 @@ void main() {
       final log = await joined();
       await backend.add(later, 'viewer', '', 'later');
       await log.refresh();
-      expect(await log.dismiss(pubs: [pubOf(phone), pubOf(later)], confirm: true), isFalse);
+      expect(
+        await log.dismiss(pubs: [pubOf(phone), pubOf(later)], confirm: true),
+        isFalse,
+      );
       backend = _Backend();
       keys = ViewerKeyStore(storage: _Memory());
       final again = await joined();
@@ -335,25 +422,38 @@ void main() {
       expect(backend.posted, isEmpty);
     });
 
-    test('for a suspended key only when "It\'s mine" lifted the suspension here', () async {
-      final log = await joined();
-      await keys.writeDeviceLog({...await file(), 'suspended': [pubOf(phone)]});
-      expect(await log.dismiss(pubs: [pubOf(phone)], confirm: true), isFalse);
-      expect((await log.list()).suspended, [pubOf(phone)]);
-      expect(await log.dismiss(pub: pubOf(phone), confirm: true), isTrue);
-      expect((await log.list()).suspended, isEmpty);
-    });
+    test(
+      'for a suspended key only when "It\'s mine" lifted the suspension here',
+      () async {
+        final log = await joined();
+        await keys.writeDeviceLog({
+          ...await file(),
+          'suspended': [pubOf(phone)],
+        });
+        expect(await log.dismiss(pubs: [pubOf(phone)], confirm: true), isFalse);
+        expect((await log.list()).suspended, [pubOf(phone)]);
+        expect(await log.dismiss(pub: pubOf(phone), confirm: true), isTrue);
+        expect((await log.list()).suspended, isEmpty);
+      },
+    );
 
-    test('not from a frozen log — the key is marked seen here all the same', () async {
-      final log = await joined();
-      await keys.writeDeviceLog({
-        ...await file(),
-        'frozen': {'reason': 'fork', 'at': 1, 'lastGoodHead': backend.state.head.toJson()},
-      });
-      expect(await log.dismiss(pub: pubOf(phone), confirm: true), isFalse);
-      expect((await log.list()).pending, isEmpty);
-      expect(backend.posted, isEmpty);
-    });
+    test(
+      'not from a frozen log — the key is marked seen here all the same',
+      () async {
+        final log = await joined();
+        await keys.writeDeviceLog({
+          ...await file(),
+          'frozen': {
+            'reason': 'fork',
+            'at': 1,
+            'lastGoodHead': backend.state.head.toJson(),
+          },
+        });
+        expect(await log.dismiss(pub: pubOf(phone), confirm: true), isFalse);
+        expect((await log.list()).pending, isEmpty);
+        expect(backend.posted, isEmpty);
+      },
+    );
 
     test('a backend that does not take it, or none to take it, leaves the dismissal here', () async {
       final log = await joined();

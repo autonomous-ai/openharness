@@ -127,7 +127,12 @@ void main() {
             status == 200
                 ? {
                     'success': true,
-                    'data': {'tabId': 't 1', 'enabled': false, 'leader': null, 'revision': 2},
+                    'data': {
+                      'tabId': 't 1',
+                      'enabled': false,
+                      'leader': null,
+                      'revision': 2,
+                    },
                   }
                 : {
                     'success': false,
@@ -162,11 +167,18 @@ void main() {
       expect(seen.last.$4, {'enabled': true});
       status = 400;
       await expectLater(
-        api.setAgentMessageTab('t 1', leader: const AgentMessageLeader('m', 'z')),
+        api.setAgentMessageTab(
+          't 1',
+          leader: const AgentMessageLeader('m', 'z'),
+        ),
         throwsA(
           isA<ApiException>()
               .having((e) => e.status, 'status', 400)
-              .having((e) => e.message, 'message', 'Choose a harness in this tab.'),
+              .having(
+                (e) => e.message,
+                'message',
+                'Choose a harness in this tab.',
+              ),
         ),
       );
     } finally {

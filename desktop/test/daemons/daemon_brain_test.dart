@@ -615,146 +615,149 @@ void main() {
     expect(brain.wasShown('need:1'), isFalse);
   });
 
-  test('the hardened frames: detail, harness, the pair, confirms, the dial',
-      () {
-    final said = <DaemonSay>[];
-    brain.said.listen(said.add);
-    brain.receive('daemon_say', {
-      'id': 'ask:7',
-      'about': {'machineId': 'm', 'agentId': ''},
-      'mood': 'ask',
-      'from': 'pair',
-      'line': '[y/n] start codex in ~/api?',
-      'detail': 'start codex in ~/code/api\nfirst prompt: run the tests',
-      'harness': {
-        'machineId': 'm',
-        'machine': 'laptop',
-        'agentId': null,
-        'name': 'api',
-      },
-      'actions': [
-        {'key': 'y', 'label': 'do it', 'choice': 'y'},
-        {'key': 'n', 'label': 'skip', 'choice': 'n'},
-      ],
-      'ttlMs': 5200,
-    });
-    // The pair talking never carries a key, whatever it sends.
-    brain.receive('daemon_say', {
-      'id': 'say:3',
-      'about': {'machineId': 'm', 'agentId': ''},
-      'mood': 'say',
-      'from': 'pair',
-      'line': 'y) sure, done.',
-      'actions': [
-        {'key': 'y', 'label': 'yes', 'choice': 'y'},
-      ],
-      'ttlMs': 5200,
-    });
-    brain.receive('daemon_say', {
-      'id': 'confirm:autonomy:k1',
-      'about': {'machineId': 'm', 'agentId': ''},
-      'mood': 'ask',
-      'from': 'daemon',
-      'line': '[y/n] let your daemon act at act-on-key? it stays at suggest '
-          'until you say yes',
-      'detail': 'autonomy suggest -> act-on-key',
-      'confirm': {'kind': 'autonomy', 'nonce': 'k1'},
-      'actions': [
-        {'key': 'y', 'label': 'confirm', 'choice': 'y'},
-        {'key': 'n', 'label': 'keep it as it is', 'choice': 'n'},
-      ],
-      'ttlMs': 5200,
-    });
-    expect(said[0].fromPair, isTrue);
-    expect(said[0].detail, contains('first prompt: run the tests'));
-    expect(said[0].harness!.label, 'api@laptop');
-    expect(said[0].actions, hasLength(2), reason: 'a proposal has its keys');
-    expect(said[1].fromPair, isTrue);
-    expect(said[1].actions, isEmpty);
-    expect(said[2].confirm, (kind: 'autonomy', nonce: 'k1'));
-    expect(said[2].fromPair, isFalse);
-    brain.receive('daemon_state', {
-      'pair': 'tim',
-      'needs': [
-        {
-          'machineId': 'office',
-          'machine': 'office',
-          'agentId': 'a1',
+  test(
+    'the hardened frames: detail, harness, the pair, confirms, the dial',
+    () {
+      final said = <DaemonSay>[];
+      brain.said.listen(said.add);
+      brain.receive('daemon_say', {
+        'id': 'ask:7',
+        'about': {'machineId': 'm', 'agentId': ''},
+        'mood': 'ask',
+        'from': 'pair',
+        'line': '[y/n] start codex in ~/api?',
+        'detail': 'start codex in ~/code/api\nfirst prompt: run the tests',
+        'harness': {
+          'machineId': 'm',
+          'machine': 'laptop',
+          'agentId': null,
           'name': 'api',
-          'requestId': 'r1',
-          'question': 'Bash: npm test',
-          'allow': true,
-          'options': ['1. Yes', '3. No'],
-          'detail': 'Bash command\n  npm test\nDo you want to proceed?',
         },
-      ],
-      'working': 0,
-      'failing': [],
-      'machines': [],
-      'done': {'count': 0, 'last': []},
-      'asks': [
-        {
-          'id': 'lesson:ab12:ffee',
-          'line': '[y/n/s] teach your agents "x"?',
-          'detail': '---\nname: x\n---\nBack up first.',
-          'actions': [
-            {'key': 'y', 'label': 'teach', 'choice': 'y'},
-          ],
-        },
-      ],
-      'acted': [],
-      'autonomy': 'suggest',
-      'autonomyRequested': 'act-on-key',
-      'confirms': [
-        {
-          'id': 'confirm:autonomy:k1',
-          'kind': 'autonomy',
-          'nonce': 'k1',
-          'line': '[y/n] let your daemon act at act-on-key?',
-          'detail': 'autonomy suggest -> act-on-key',
-          'actions': [
-            {'key': 'y', 'label': 'confirm', 'choice': 'y'},
-          ],
-          'at': 1790000000000,
-          'level': 'act-on-key',
-        },
-        {'kind': 'rules'},
-      ],
-    });
-    final state = brain.state!;
-    expect(state.needs.single.detail, contains('npm test'));
-    expect(state.needs.single.allow, isTrue);
-    expect(state.needs.single.options, ['1. Yes', '3. No']);
-    expect(state.needs.single.who, 'api@office');
-    expect(state.asks.single.isLesson, isTrue);
-    expect(state.asks.single.lessonId, 'ab12');
-    expect(state.asks.single.detail, contains('Back up first.'));
-    expect(state.autonomy, 'suggest');
-    expect(brain.autonomy, 'suggest');
-    expect(state.autonomyRequested, 'act-on-key');
-    expect(state.confirms.single.level, 'act-on-key');
-    expect(state.confirms.single.id, 'confirm:autonomy:k1');
-    expect(DaemonConfirm.idFor('rules', 'n2'), 'confirm:rules:n2');
-    brain.receive('daemon_brief', {
-      'line': 'x',
-      'items': [
-        {
-          'id': 'b1',
-          'kind': 'waiting',
-          'line': '[y/n/g] api',
-          'detail': 'the whole dialog',
-        },
-        {
-          'id': 'lesson:ab12:ffee',
-          'kind': 'lesson',
-          'line': '[y/n] teach',
-          'text': 'the lesson',
-        },
-      ],
-    });
-    expect(brain.brief!.items[0].shows, 'the whole dialog');
-    expect(brain.brief!.items[1].shows, 'the lesson');
-  });
+        'actions': [
+          {'key': 'y', 'label': 'do it', 'choice': 'y'},
+          {'key': 'n', 'label': 'skip', 'choice': 'n'},
+        ],
+        'ttlMs': 5200,
+      });
+      // The pair talking never carries a key, whatever it sends.
+      brain.receive('daemon_say', {
+        'id': 'say:3',
+        'about': {'machineId': 'm', 'agentId': ''},
+        'mood': 'say',
+        'from': 'pair',
+        'line': 'y) sure, done.',
+        'actions': [
+          {'key': 'y', 'label': 'yes', 'choice': 'y'},
+        ],
+        'ttlMs': 5200,
+      });
+      brain.receive('daemon_say', {
+        'id': 'confirm:autonomy:k1',
+        'about': {'machineId': 'm', 'agentId': ''},
+        'mood': 'ask',
+        'from': 'daemon',
+        'line':
+            '[y/n] let your daemon act at act-on-key? it stays at suggest '
+            'until you say yes',
+        'detail': 'autonomy suggest -> act-on-key',
+        'confirm': {'kind': 'autonomy', 'nonce': 'k1'},
+        'actions': [
+          {'key': 'y', 'label': 'confirm', 'choice': 'y'},
+          {'key': 'n', 'label': 'keep it as it is', 'choice': 'n'},
+        ],
+        'ttlMs': 5200,
+      });
+      expect(said[0].fromPair, isTrue);
+      expect(said[0].detail, contains('first prompt: run the tests'));
+      expect(said[0].harness!.label, 'api@laptop');
+      expect(said[0].actions, hasLength(2), reason: 'a proposal has its keys');
+      expect(said[1].fromPair, isTrue);
+      expect(said[1].actions, isEmpty);
+      expect(said[2].confirm, (kind: 'autonomy', nonce: 'k1'));
+      expect(said[2].fromPair, isFalse);
+      brain.receive('daemon_state', {
+        'pair': 'tim',
+        'needs': [
+          {
+            'machineId': 'office',
+            'machine': 'office',
+            'agentId': 'a1',
+            'name': 'api',
+            'requestId': 'r1',
+            'question': 'Bash: npm test',
+            'allow': true,
+            'options': ['1. Yes', '3. No'],
+            'detail': 'Bash command\n  npm test\nDo you want to proceed?',
+          },
+        ],
+        'working': 0,
+        'failing': [],
+        'machines': [],
+        'done': {'count': 0, 'last': []},
+        'asks': [
+          {
+            'id': 'lesson:ab12:ffee',
+            'line': '[y/n/s] teach your agents "x"?',
+            'detail': '---\nname: x\n---\nBack up first.',
+            'actions': [
+              {'key': 'y', 'label': 'teach', 'choice': 'y'},
+            ],
+          },
+        ],
+        'acted': [],
+        'autonomy': 'suggest',
+        'autonomyRequested': 'act-on-key',
+        'confirms': [
+          {
+            'id': 'confirm:autonomy:k1',
+            'kind': 'autonomy',
+            'nonce': 'k1',
+            'line': '[y/n] let your daemon act at act-on-key?',
+            'detail': 'autonomy suggest -> act-on-key',
+            'actions': [
+              {'key': 'y', 'label': 'confirm', 'choice': 'y'},
+            ],
+            'at': 1790000000000,
+            'level': 'act-on-key',
+          },
+          {'kind': 'rules'},
+        ],
+      });
+      final state = brain.state!;
+      expect(state.needs.single.detail, contains('npm test'));
+      expect(state.needs.single.allow, isTrue);
+      expect(state.needs.single.options, ['1. Yes', '3. No']);
+      expect(state.needs.single.who, 'api@office');
+      expect(state.asks.single.isLesson, isTrue);
+      expect(state.asks.single.lessonId, 'ab12');
+      expect(state.asks.single.detail, contains('Back up first.'));
+      expect(state.autonomy, 'suggest');
+      expect(brain.autonomy, 'suggest');
+      expect(state.autonomyRequested, 'act-on-key');
+      expect(state.confirms.single.level, 'act-on-key');
+      expect(state.confirms.single.id, 'confirm:autonomy:k1');
+      expect(DaemonConfirm.idFor('rules', 'n2'), 'confirm:rules:n2');
+      brain.receive('daemon_brief', {
+        'line': 'x',
+        'items': [
+          {
+            'id': 'b1',
+            'kind': 'waiting',
+            'line': '[y/n/g] api',
+            'detail': 'the whole dialog',
+          },
+          {
+            'id': 'lesson:ab12:ffee',
+            'kind': 'lesson',
+            'line': '[y/n] teach',
+            'text': 'the lesson',
+          },
+        ],
+      });
+      expect(brain.brief!.items[0].shows, 'the whole dialog');
+      expect(brain.brief!.items[1].shows, 'the lesson');
+    },
+  );
 
   test('a confirmation is daemon_confirm, only once armed; its answer and '
       "a lesson key's are heard", () {

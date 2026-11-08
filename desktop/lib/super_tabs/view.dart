@@ -6297,7 +6297,10 @@ class _SuperTabViewState extends State<SuperTabView>
                           chatBeside && !terminalRight
                               ? const SizedBox.shrink()
                               : chat,
-                          terminal ?? const SizedBox.shrink(),
+                          // Beside an agent's chat the terminal is in the right pane, and one widget is in one place.
+                          terminalRight
+                              ? const SizedBox.shrink()
+                              : terminal ?? const SizedBox.shrink(),
                           _showPullRequests
                               ? SuperTabPullRequests(
                                   controller: c,

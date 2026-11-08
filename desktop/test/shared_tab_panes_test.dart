@@ -6,7 +6,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/agent_messages/pane_shared_chips.dart';
-import 'package:harness/agent_messages/shared_tabs_model.dart' show memberDeskTabId;
+import 'package:harness/agent_messages/shared_tabs_model.dart'
+    show memberDeskTabId;
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
@@ -238,7 +239,9 @@ Map<String, dynamic> _ownerShares(
 /// A started app whose desk holds the tab Bob shares (with his a0 and
 /// Alice's a1 in it), and that tab's desk id.
 Future<(AppNotifier, _Daemon, String)> _owner() async {
-  final (app, daemon) = await _started(daemon: _Daemon(_shares(foreign: const [])));
+  final (app, daemon) = await _started(
+    daemon: _Daemon(_shares(foreign: const [])),
+  );
   app.newSwarm();
   final tab = app.activeSwarmId;
   for (final (machine, agent) in [('m', 'a0'), ('ma', 'a1')]) {
@@ -365,7 +368,12 @@ void _addStudio(AppNotifier app) {
     ..connectionStatus = ConnectionStatus.connected
     ..agentLoadStatus = AgentLoadStatus.loaded
     ..agents = [
-      Agent(id: 's1', name: 'Studio 1', engine: 'codex', terminalAvailable: true),
+      Agent(
+        id: 's1',
+        name: 'Studio 1',
+        engine: 'codex',
+        terminalAvailable: true,
+      ),
     ];
 }
 
@@ -375,7 +383,14 @@ void main() {
   test('dragging a harness of a machine another account shares into a shared tab sends no share_add', () async {
     final (app, daemon) = await _started();
     _addStudio(app);
-    await app.assignAgentToPane(null, 'studio', 's1', swarmId: _deskTab, focus: false, intent: AttachIntent.person);
+    await app.assignAgentToPane(
+      null,
+      'studio',
+      's1',
+      swarmId: _deskTab,
+      focus: false,
+      intent: AttachIntent.person,
+    );
     await _settle();
     expect(daemon.named('share_add'), isEmpty);
   });
@@ -405,32 +420,39 @@ void main() {
 
     Future<void> settleW(WidgetTester tester) async {
       for (var i = 0; i < 6; i++) {
-        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
         await tester.pump(const Duration(milliseconds: 50));
       }
     }
 
-    testWidgets('picking two harnesses puts both panes in the desk tab with one share_add each', (tester) async {
-      final (app, daemon) = (await tester.runAsync(_started))!;
-      await open(tester, app);
-      await tester.tap(find.text('Own 0 · codex · This Mac'));
-      await tester.tap(find.text('Own 2 · codex · This Mac'));
-      await tester.pump();
-      await tester.tap(find.byKey(const Key('shared-add-confirm')));
-      await settleW(tester);
-      final desk = app.swarms.singleWhere((s) => s.id == _deskTab);
-      expect(
-        desk.panes.where((p) => p.machineId == 'm').map((p) => p.agentId),
-        containsAll(['a0', 'a2']),
-      );
-      expect(
-        daemon.named('share_add').map((a) => a['harness']['agentId']),
-        ['a0', 'a2'],
-      );
-      expect(find.byKey(const Key('shared-add-confirm')), findsNothing);
-    });
+    testWidgets(
+      'picking two harnesses puts both panes in the desk tab with one share_add each',
+      (tester) async {
+        final (app, daemon) = (await tester.runAsync(_started))!;
+        await open(tester, app);
+        await tester.tap(find.text('Own 0 · codex · This Mac'));
+        await tester.tap(find.text('Own 2 · codex · This Mac'));
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('shared-add-confirm')));
+        await settleW(tester);
+        final desk = app.swarms.singleWhere((s) => s.id == _deskTab);
+        expect(
+          desk.panes.where((p) => p.machineId == 'm').map((p) => p.agentId),
+          containsAll(['a0', 'a2']),
+        );
+        expect(daemon.named('share_add').map((a) => a['harness']['agentId']), [
+          'a0',
+          'a2',
+        ]);
+        expect(find.byKey(const Key('shared-add-confirm')), findsNothing);
+      },
+    );
 
-    testWidgets('does not list a harness of a machine another account shares', (tester) async {
+    testWidgets('does not list a harness of a machine another account shares', (
+      tester,
+    ) async {
       final (app, _) = (await tester.runAsync(_started))!;
       _addStudio(app);
       await open(tester, app);
@@ -438,52 +460,71 @@ void main() {
       expect(find.textContaining('Studio 1'), findsNothing);
     });
 
-    testWidgets('a MACHINE_AWAY refusal shows in the dialog and keeps it open', (tester) async {
-      final (app, daemon) = (await tester.runAsync(_started))!;
-      daemon.refuse['share_add'] = 'MACHINE_AWAY';
-      await open(tester, app);
-      await tester.tap(find.text('Own 1 · codex · This Mac'));
-      await tester.pump();
-      await tester.tap(find.byKey(const Key('shared-add-confirm')));
-      await settleW(tester);
-      expect(find.text('This Mac is away. Try again when it\'s on.'), findsOneWidget);
-      expect(find.byKey(const Key('shared-add-confirm')), findsOneWidget);
-      expect(daemon.named('share_add'), hasLength(1));
-    });
+    testWidgets(
+      'a MACHINE_AWAY refusal shows in the dialog and keeps it open',
+      (tester) async {
+        final (app, daemon) = (await tester.runAsync(_started))!;
+        daemon.refuse['share_add'] = 'MACHINE_AWAY';
+        await open(tester, app);
+        await tester.tap(find.text('Own 1 · codex · This Mac'));
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('shared-add-confirm')));
+        await settleW(tester);
+        expect(
+          find.text('This Mac is away. Try again when it\'s on.'),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('shared-add-confirm')), findsOneWidget);
+        expect(daemon.named('share_add'), hasLength(1));
+      },
+    );
 
-    testWidgets('after a refusal, pressing Add again shares the pane that stayed', (tester) async {
-      final (app, daemon) = (await tester.runAsync(_started))!;
-      daemon.refuse['share_add'] = 'MACHINE_AWAY';
-      await open(tester, app);
-      await tester.tap(find.text('Own 1 · codex · This Mac'));
-      await tester.pump();
-      await tester.tap(find.byKey(const Key('shared-add-confirm')));
-      await settleW(tester);
-      expect(find.byKey(const Key('shared-add-confirm')), findsOneWidget);
-      expect(
-        app.swarms.singleWhere((s) => s.id == _deskTab).panes.any((p) => p.agentId == 'a1' && p.machineId == 'm'),
-        isTrue,
-      );
+    testWidgets(
+      'after a refusal, pressing Add again shares the pane that stayed',
+      (tester) async {
+        final (app, daemon) = (await tester.runAsync(_started))!;
+        daemon.refuse['share_add'] = 'MACHINE_AWAY';
+        await open(tester, app);
+        await tester.tap(find.text('Own 1 · codex · This Mac'));
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('shared-add-confirm')));
+        await settleW(tester);
+        expect(find.byKey(const Key('shared-add-confirm')), findsOneWidget);
+        expect(
+          app.swarms
+              .singleWhere((s) => s.id == _deskTab)
+              .panes
+              .any((p) => p.agentId == 'a1' && p.machineId == 'm'),
+          isTrue,
+        );
 
-      daemon.refuse.clear();
-      daemon.shares = _shares(own: ['m/a1']);
-      await tester.tap(find.byKey(const Key('shared-add-confirm')));
-      await settleW(tester);
-      expect(daemon.named('share_add'), hasLength(2));
-      expect(find.byKey(const Key('shared-add-confirm')), findsNothing);
-      await tester.runAsync(() => app.sharedTabs.refresh());
-      expect(
-        app.sharedTabs.snapshot.tabs.single.harnesses.any((h) => h.machineId == 'm' && h.agentId == 'a1'),
-        isTrue,
-      );
-    });
+        daemon.refuse.clear();
+        daemon.shares = _shares(own: ['m/a1']);
+        await tester.tap(find.byKey(const Key('shared-add-confirm')));
+        await settleW(tester);
+        expect(daemon.named('share_add'), hasLength(2));
+        expect(find.byKey(const Key('shared-add-confirm')), findsNothing);
+        await tester.runAsync(() => app.sharedTabs.refresh());
+        expect(
+          app.sharedTabs.snapshot.tabs.single.harnesses.any(
+            (h) => h.machineId == 'm' && h.agentId == 'a1',
+          ),
+          isTrue,
+        );
+      },
+    );
 
     testWidgets('a full tab keeps the dialog open and says so', (tester) async {
       final (app, daemon) = (await tester.runAsync(_started))!;
       app.machineStates['m']!.agents = [
         ...app.machineStates['m']!.agents,
         for (var i = 0; i < 8; i++)
-          Agent(id: 'f$i', name: 'Fill $i', engine: 'codex', terminalAvailable: true),
+          Agent(
+            id: 'f$i',
+            name: 'Fill $i',
+            engine: 'codex',
+            terminalAvailable: true,
+          ),
       ];
       await tester.runAsync(() async {
         for (var i = 0; i < 8; i++) {
@@ -497,13 +538,19 @@ void main() {
           );
         }
       });
-      expect(app.swarms.singleWhere((s) => s.id == _deskTab).panes, hasLength(PaneLayoutStore.maxPanes));
+      expect(
+        app.swarms.singleWhere((s) => s.id == _deskTab).panes,
+        hasLength(PaneLayoutStore.maxPanes),
+      );
       await open(tester, app);
       await tester.tap(find.text('Own 0 · codex · This Mac'));
       await tester.pump();
       await tester.tap(find.byKey(const Key('shared-add-confirm')));
       await settleW(tester);
-      expect(find.text('This tab already shows 9 panes. Close one, then try again.'), findsOneWidget);
+      expect(
+        find.text('This tab already shows 9 panes. Close one, then try again.'),
+        findsOneWidget,
+      );
       expect(find.byKey(const Key('shared-add-confirm')), findsOneWidget);
       expect(daemon.named('share_add'), isEmpty);
     });
@@ -569,7 +616,10 @@ void main() {
           .singleWhere((s) => s.id == other)
           .panes
           .singleWhere((p) => p.machineId == 'ma');
-      expect(app.movePaneToSwarm(pane.id, _deskTab, sourceSwarmId: other), isTrue);
+      expect(
+        app.movePaneToSwarm(pane.id, _deskTab, sourceSwarmId: other),
+        isTrue,
+      );
       await _settle();
       expect(daemon.named('share_add'), isEmpty);
     });
@@ -762,12 +812,22 @@ void main() {
   group('the owner (final review of 1c, I2)', () {
     test('dragging an own harness into the tab it shares sends no share_add and no error', () async {
       final (app, daemon, tab) = await _owner();
-      await app.assignAgentToPane(null, 'm', 'a2', swarmId: tab, focus: false, intent: AttachIntent.person);
+      await app.assignAgentToPane(
+        null,
+        'm',
+        'a2',
+        swarmId: tab,
+        focus: false,
+        intent: AttachIntent.person,
+      );
       await _settle();
       expect(daemon.named('share_add'), isEmpty);
       expect(app.lastError, isNull);
       expect(
-        app.swarms.singleWhere((s) => s.id == tab).panes.any((p) => p.agentId == 'a2'),
+        app.swarms
+            .singleWhere((s) => s.id == tab)
+            .panes
+            .any((p) => p.agentId == 'a2'),
         isTrue,
       );
     });
@@ -781,78 +841,157 @@ void main() {
       expect(app.lastError, isNull);
     });
 
-    test('moving a pane in and out of the tab it shares sends nothing', () async {
-      final (app, daemon, tab) = await _owner();
-      app.newSwarm();
-      final plain = app.activeSwarmId;
-      final pane = app.swarms.singleWhere((s) => s.id == tab).panes.singleWhere((p) => p.agentId == 'a0');
-      expect(app.movePaneToSwarm(pane.id, plain, sourceSwarmId: tab), isTrue);
-      expect(app.movePaneToSwarm(pane.id, tab, sourceSwarmId: plain), isTrue);
-      await _settle();
-      expect(daemon.named('share_add'), isEmpty);
-      expect(daemon.named('share_remove'), isEmpty);
-      expect(app.lastError, isNull);
-    });
+    test(
+      'moving a pane in and out of the tab it shares sends nothing',
+      () async {
+        final (app, daemon, tab) = await _owner();
+        app.newSwarm();
+        final plain = app.activeSwarmId;
+        final pane = app.swarms
+            .singleWhere((s) => s.id == tab)
+            .panes
+            .singleWhere((p) => p.agentId == 'a0');
+        expect(app.movePaneToSwarm(pane.id, plain, sourceSwarmId: tab), isTrue);
+        expect(app.movePaneToSwarm(pane.id, tab, sourceSwarmId: plain), isTrue);
+        await _settle();
+        expect(daemon.named('share_add'), isEmpty);
+        expect(daemon.named('share_remove'), isEmpty);
+        expect(app.lastError, isNull);
+      },
+    );
 
-    test('Remove from Tab is not offered for its own harness, and asks nothing', () async {
-      final (app, daemon, _) = await _owner();
-      expect(app.canRemoveFromSharedTab('m', 'a0'), isFalse);
-      await app.removeFromSharedTab('m', 'a0');
-      await _settle();
-      expect(daemon.named('share_remove'), isEmpty);
-      expect(app.lastError, isNull);
-    });
+    test(
+      'Remove from Tab is not offered for its own harness, and asks nothing',
+      () async {
+        final (app, daemon, _) = await _owner();
+        expect(app.canRemoveFromSharedTab('m', 'a0'), isFalse);
+        await app.removeFromSharedTab('m', 'a0');
+        await _settle();
+        expect(daemon.named('share_remove'), isEmpty);
+        expect(app.lastError, isNull);
+      },
+    );
   });
 
   group('a harness still joining (final review of 1c, I3)', () {
     final joining = [
-      {'sharedTabId': _tab, 'op': 'add', 'machineId': 'm', 'agentId': 'a0', 'name': 'Own 0', 'since': ''},
+      {
+        'sharedTabId': _tab,
+        'op': 'add',
+        'machineId': 'm',
+        'agentId': 'a0',
+        'name': 'Own 0',
+        'since': '',
+      },
     ];
 
     test('Remove from Tab is offered and takes the add back', () async {
-      final (app, daemon) = await _started(daemon: _Daemon(_shares(pending: joining)));
-      await app.assignAgentToPane(null, 'm', 'a0', swarmId: _deskTab, focus: false, intent: AttachIntent.automatic);
+      final (app, daemon) = await _started(
+        daemon: _Daemon(_shares(pending: joining)),
+      );
+      await app.assignAgentToPane(
+        null,
+        'm',
+        'a0',
+        swarmId: _deskTab,
+        focus: false,
+        intent: AttachIntent.automatic,
+      );
       expect(app.canRemoveFromSharedTab('m', 'a0'), isTrue);
       await app.removeFromSharedTab('m', 'a0');
       await _settle();
-      expect(daemon.named('share_remove').single, containsPair('agentId', 'a0'));
+      expect(
+        daemon.named('share_remove').single,
+        containsPair('agentId', 'a0'),
+      );
     });
 
     test('moving it out of the tab takes the add back', () async {
-      final (app, daemon) = await _started(daemon: _Daemon(_shares(pending: joining)));
-      await app.assignAgentToPane(null, 'm', 'a0', swarmId: _deskTab, focus: false, intent: AttachIntent.automatic);
+      final (app, daemon) = await _started(
+        daemon: _Daemon(_shares(pending: joining)),
+      );
+      await app.assignAgentToPane(
+        null,
+        'm',
+        'a0',
+        swarmId: _deskTab,
+        focus: false,
+        intent: AttachIntent.automatic,
+      );
       app.newSwarm();
       final plain = app.activeSwarmId;
-      final pane = app.swarms.singleWhere((s) => s.id == _deskTab).panes.singleWhere((p) => p.agentId == 'a0');
-      expect(app.movePaneToSwarm(pane.id, plain, sourceSwarmId: _deskTab), isTrue);
+      final pane = app.swarms
+          .singleWhere((s) => s.id == _deskTab)
+          .panes
+          .singleWhere((p) => p.agentId == 'a0');
+      expect(
+        app.movePaneToSwarm(pane.id, plain, sourceSwarmId: _deskTab),
+        isTrue,
+      );
       await _settle();
-      expect(daemon.named('share_remove').single, containsPair('sharedTabId', _tab));
+      expect(
+        daemon.named('share_remove').single,
+        containsPair('sharedTabId', _tab),
+      );
     });
 
-    test('a pending add for another tab, or a remove, does not count', () async {
-      final (app, _) = await _started(
-        daemon: _Daemon(_shares(pending: [
-          {...joining.single, 'sharedTabId': 'bbbbbbbbbbbbbbbbbbbbbbbb'},
-          {...joining.single, 'op': 'remove', 'agentId': 'a1'},
-        ])),
-      );
-      await app.assignAgentToPane(null, 'm', 'a0', swarmId: _deskTab, focus: false, intent: AttachIntent.automatic);
-      expect(app.canRemoveFromSharedTab('m', 'a0'), isFalse);
-    });
+    test(
+      'a pending add for another tab, or a remove, does not count',
+      () async {
+        final (app, _) = await _started(
+          daemon: _Daemon(
+            _shares(
+              pending: [
+                {...joining.single, 'sharedTabId': 'bbbbbbbbbbbbbbbbbbbbbbbb'},
+                {...joining.single, 'op': 'remove', 'agentId': 'a1'},
+              ],
+            ),
+          ),
+        );
+        await app.assignAgentToPane(
+          null,
+          'm',
+          'a0',
+          swarmId: _deskTab,
+          focus: false,
+          intent: AttachIntent.automatic,
+        );
+        expect(app.canRemoveFromSharedTab('m', 'a0'), isFalse);
+      },
+    );
   });
 
   group('the desk\'s 9 (final review of 1c, M1)', () {
     /// Fill the shared desk tab with own harness panes up to [harnesses]
     /// (Alice's a1 is already one), plus [empty] tiles without a harness.
-    Future<(AppNotifier, _Daemon)> filled(int harnesses, {int empty = 0}) async {
+    Future<(AppNotifier, _Daemon)> filled(
+      int harnesses, {
+      int empty = 0,
+    }) async {
       final (app, daemon) = await _started();
       app.stateOf('m')!.agents = [
         for (var i = 0; i < 12; i++)
-          Agent(id: 'a$i', name: 'Own $i', engine: 'codex', terminalAvailable: true),
+          Agent(
+            id: 'a$i',
+            name: 'Own $i',
+            engine: 'codex',
+            terminalAvailable: true,
+          ),
       ];
       final tab = app.swarms.singleWhere((s) => s.id == _deskTab);
-      for (var i = 0; tab.panes.where((p) => p.agentId != null).length < harnesses; i++) {
-        await app.assignAgentToPane(null, 'm', 'a$i', swarmId: _deskTab, focus: false, intent: AttachIntent.automatic);
+      for (
+        var i = 0;
+        tab.panes.where((p) => p.agentId != null).length < harnesses;
+        i++
+      ) {
+        await app.assignAgentToPane(
+          null,
+          'm',
+          'a$i',
+          swarmId: _deskTab,
+          focus: false,
+          intent: AttachIntent.automatic,
+        );
       }
       for (var i = 0; i < empty; i++) {
         tab.panes.add(TerminalPane(id: 9000 + i, machineId: 'm'));
@@ -860,31 +999,75 @@ void main() {
       return (app, daemon);
     }
 
-    test('a person\'s 10th harness is refused in words, with no share_add', () async {
-      final (app, daemon) = await filled(9);
-      await app.assignAgentToPane(null, 'm', 'a11', swarmId: _deskTab, focus: false, intent: AttachIntent.person);
-      await _settle();
-      expect(app.lastError, 'This tab holds 9 harnesses. Close one, then try again.');
-      expect(daemon.named('share_add'), isEmpty);
-      expect(app.swarms.singleWhere((s) => s.id == _deskTab).panes.where((p) => p.agentId != null), hasLength(9));
-    });
+    test(
+      'a person\'s 10th harness is refused in words, with no share_add',
+      () async {
+        final (app, daemon) = await filled(9);
+        await app.assignAgentToPane(
+          null,
+          'm',
+          'a11',
+          swarmId: _deskTab,
+          focus: false,
+          intent: AttachIntent.person,
+        );
+        await _settle();
+        expect(
+          app.lastError,
+          'This tab holds 9 harnesses. Close one, then try again.',
+        );
+        expect(daemon.named('share_add'), isEmpty);
+        expect(
+          app.swarms
+              .singleWhere((s) => s.id == _deskTab)
+              .panes
+              .where((p) => p.agentId != null),
+          hasLength(9),
+        );
+      },
+    );
 
-    test('tiles without a harness do not count: the 9th harness lands beside them', () async {
-      final (app, daemon) = await filled(8, empty: 3);
-      await app.assignAgentToPane(null, 'm', 'a11', swarmId: _deskTab, focus: false, intent: AttachIntent.person);
-      await _settle();
-      expect(app.lastError, isNull);
-      expect(daemon.named('share_add').single['harness'], containsPair('agentId', 'a11'));
-    });
+    test(
+      'tiles without a harness do not count: the 9th harness lands beside them',
+      () async {
+        final (app, daemon) = await filled(8, empty: 3);
+        await app.assignAgentToPane(
+          null,
+          'm',
+          'a11',
+          swarmId: _deskTab,
+          focus: false,
+          intent: AttachIntent.person,
+        );
+        await _settle();
+        expect(app.lastError, isNull);
+        expect(
+          daemon.named('share_add').single['harness'],
+          containsPair('agentId', 'a11'),
+        );
+      },
+    );
 
     test('a move into a full shared tab is refused like an add', () async {
       final (app, _) = await filled(9);
       app.newSwarm();
       final plain = app.activeSwarmId;
-      await app.assignAgentToPane(null, 'm', 'a11', swarmId: plain, focus: false);
+      await app.assignAgentToPane(
+        null,
+        'm',
+        'a11',
+        swarmId: plain,
+        focus: false,
+      );
       final pane = app.swarms.singleWhere((s) => s.id == plain).panes.single;
-      expect(app.movePaneToSwarm(pane.id, _deskTab, sourceSwarmId: plain), isFalse);
-      expect(app.lastError, 'That tab holds 9 harnesses. Close one there to move this in.');
+      expect(
+        app.movePaneToSwarm(pane.id, _deskTab, sourceSwarmId: plain),
+        isFalse,
+      );
+      expect(
+        app.lastError,
+        'That tab holds 9 harnesses. Close one there to move this in.',
+      );
     });
 
     test('placement records a harness as seen only when its pane landed', () async {
@@ -897,22 +1080,34 @@ void main() {
       }
       app.machineStates['ma']!.agents = [
         for (final id in ['a1', 'a2'])
-          Agent(id: id, name: 'Harness $id', engine: 'claude', terminalAvailable: true),
+          Agent(
+            id: id,
+            name: 'Harness $id',
+            engine: 'claude',
+            terminalAvailable: true,
+          ),
       ];
       daemon.shares = _shares(foreign: ['ma/a1', 'ma/a2']);
       await app.sharedTabs.refresh();
       await _settle();
-      expect(tab.panes.any((p) => p.machineId == 'ma' && p.agentId == 'a2'), isFalse);
+      expect(
+        tab.panes.any((p) => p.machineId == 'ma' && p.agentId == 'a2'),
+        isFalse,
+      );
       // Nobody asked for it: no error either.
       expect(app.lastError, isNull);
       final store = app.deviceLibraryStorage!;
-      final placed = jsonDecode((await store.read('shared_tabs.placed.bob'))!) as Map;
+      final placed =
+          jsonDecode((await store.read('shared_tabs.placed.bob'))!) as Map;
       expect(placed[_tab], isNot(contains('ma\u0000a2')));
       // Room again: it is placed now.
       tab.panes.removeWhere((p) => p.agentId == null);
       await app.sharedTabs.refresh();
       await _settle();
-      expect(tab.panes.any((p) => p.machineId == 'ma' && p.agentId == 'a2'), isTrue);
+      expect(
+        tab.panes.any((p) => p.machineId == 'ma' && p.agentId == 'a2'),
+        isTrue,
+      );
     });
   });
 

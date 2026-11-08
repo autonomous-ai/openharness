@@ -68,7 +68,11 @@ class _Daemon extends WsConn {
               'tabId': tabId,
               'version': 1,
               'name': 'app',
-              'owner': {...me, 'machineId': ownerMachine, 'machinePublicKey': 'k'},
+              'owner': {
+                ...me,
+                'machineId': ownerMachine,
+                'machinePublicKey': 'k',
+              },
               'leader': null,
               'members': [],
               'invites': [],

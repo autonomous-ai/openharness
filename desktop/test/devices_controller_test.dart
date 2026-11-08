@@ -76,8 +76,7 @@ void main() {
         'id': 'E8:F6',
         'attached': false,
         'board': 'pro',
-        'problem':
-            'Not answering — unplug and replug',
+        'problem': 'Not answering — unplug and replug',
       }),
     ]);
     expect(controller.devices, hasLength(1));

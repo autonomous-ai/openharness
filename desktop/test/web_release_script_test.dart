@@ -121,9 +121,8 @@ void main() {
       'to tell it is out of date', () async {
     await _release(repo, [..._others, _mono, _icons, ..._unusedLucide, _used]);
 
-    final args = File(
-      p.join(repo.path, 'build/web-release/build-args.txt'),
-    ).readAsLinesSync();
+    final args = File(p.join(repo.path, 'build/web-release/build-args.txt'))
+        .readAsLinesSync();
     expect(args, contains('--dart-define=HARNESS_BUILD_VERSION=1.2.3'));
     expect(args, contains('--build-name=1.2.3'));
   }, skip: skip);
@@ -254,21 +253,17 @@ void main() {
     skip: skip,
   );
 
-  test(
-    'a build with no icon font fails instead of shipping blind',
-    () async {
-      final result = await _release(repo, [
-        ..._others,
-        _mono,
-        ..._unusedLucide,
-        _used,
-      ]);
+  test('a build with no icon font fails instead of shipping blind', () async {
+    final result = await _release(repo, [
+      ..._others,
+      _mono,
+      ..._unusedLucide,
+      _used,
+    ]);
 
-      expect(result.exitCode, isNot(0));
-      expect('${result.stderr}', contains(_icons));
-    },
-    skip: skip,
-  );
+    expect(result.exitCode, isNot(0));
+    expect('${result.stderr}', contains(_icons));
+  }, skip: skip);
 
   test(
     'a build with no Lucide 400 font fails instead of shipping blind',

@@ -12,22 +12,41 @@ Swarm tab(
   final swarm = Swarm(id: id, name: id, kind: kind)
     ..titleMachineId = titleMachine;
   for (var i = 0; i < machines.length; i++) {
-    swarm.panes.add(TerminalPane(id: i, machineId: machines[i], agentId: 'a$i'));
+    swarm.panes.add(
+      TerminalPane(id: i, machineId: machines[i], agentId: 'a$i'),
+    );
   }
   return swarm;
 }
 
 void main() {
-  test('Super Tabs stay visible when their terminals run on another computer', () {
-    final shared = tab('shared', ['m2'], kind: 'superTab');
-    expect(swarmsForMachineProfile([tab('local', ['m1']), shared], 'm1'),
-        contains(shared));
-  });
+  test(
+    'Super Tabs stay visible when their terminals run on another computer',
+    () {
+      final shared = tab('shared', ['m2'], kind: 'superTab');
+      expect(
+        swarmsForMachineProfile([
+          tab('local', ['m1']),
+          shared,
+        ], 'm1'),
+        contains(shared),
+      );
+    },
+  );
 
   test('no profile shows every tab', () {
-    final tabs = [tab('local', ['m1']), tab('remote', ['m2'])];
-    expect(swarmsForMachineProfile(tabs, null).map((s) => s.id), ['local', 'remote']);
-    expect(swarmsForMachineProfile(tabs, '').map((s) => s.id), ['local', 'remote']);
+    final tabs = [
+      tab('local', ['m1']),
+      tab('remote', ['m2']),
+    ];
+    expect(swarmsForMachineProfile(tabs, null).map((s) => s.id), [
+      'local',
+      'remote',
+    ]);
+    expect(swarmsForMachineProfile(tabs, '').map((s) => s.id), [
+      'local',
+      'remote',
+    ]);
   });
 
   test('a machine profile keeps that computer and drops the other', () {
@@ -36,7 +55,13 @@ void main() {
     final local = tab('local', ['m1']);
     final remote = tab('remote', ['m2'], titleMachine: 'm2');
     final mixed = tab('mixed', ['m1', 'm2']);
-    final shown = swarmsForMachineProfile([store, blank, local, remote, mixed], 'm1');
+    final shown = swarmsForMachineProfile([
+      store,
+      blank,
+      local,
+      remote,
+      mixed,
+    ], 'm1');
     expect(shown.map((s) => s.id), ['store', 'blank', 'local']);
   });
 
@@ -46,11 +71,14 @@ void main() {
     expect(swarmMatchesMachineProfile(named, 'm2'), isTrue);
   });
 
-  test('a stale title does not hide a tab whose agents are all on this computer', () {
-    final local = tab('local', ['m1'])..titleMachineId = 'm2';
-    expect(swarmMatchesMachineProfile(local, 'm1'), isTrue);
-    expect(swarmMatchesMachineProfile(local, 'm2'), isFalse);
-  });
+  test(
+    'a stale title does not hide a tab whose agents are all on this computer',
+    () {
+      final local = tab('local', ['m1'])..titleMachineId = 'm2';
+      expect(swarmMatchesMachineProfile(local, 'm1'), isTrue);
+      expect(swarmMatchesMachineProfile(local, 'm2'), isFalse);
+    },
+  );
 
   test('closing a visible tab does not land on a hidden one in between', () {
     final local = tab('local', ['m1']);

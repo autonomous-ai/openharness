@@ -80,8 +80,14 @@ void main() {
     'a device another of the person’s devices confirmed says where, in place of a banner',
     (tester) async {
       AccountDevice confirmedOn(String on) => AccountDevice(
-        pub: 'p1', label: 'iPad', kind: 'viewer', machineId: '', addedAt: DateTime(2026, 9, 1),
-        fingerprint: fp, self: false, confirmedOn: on,
+        pub: 'p1',
+        label: 'iPad',
+        kind: 'viewer',
+        machineId: '',
+        addedAt: DateTime(2026, 9, 1),
+        fingerprint: fp,
+        self: false,
+        confirmedOn: on,
       );
       await open(tester, pub: 'p1', device: confirmedOn('studio-mac'));
       expect(find.text('Confirmed'), findsOneWidget);

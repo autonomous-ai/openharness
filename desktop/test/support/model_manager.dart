@@ -151,6 +151,7 @@ class ModelManagerTestApp extends AppNotifier {
   }
 
   bool localReadFails = false, actionReplyLost = false;
+
   /// A refusal the daemon gives the local inventory for good (a computer shared with this account).
   String? localRefusal;
   Completer<Map<String, dynamic>>? actionReply;

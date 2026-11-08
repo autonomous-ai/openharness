@@ -100,7 +100,11 @@ class _App extends AppNotifier {
   Future<void> probeEngines(String machineId, {bool force = false}) async {}
 
   @override
-  Future<void> probeDsh(String machineId, {bool force = false, bool userAction = false}) async {}
+  Future<void> probeDsh(
+    String machineId, {
+    bool force = false,
+    bool userAction = false,
+  }) async {}
 
   @override
   Future<Map<String, dynamic>> listCodexProfiles(
@@ -113,8 +117,7 @@ class _App extends AppNotifier {
     String machineId,
     String id, {
     bool trustUnverified = false,
-  }) =>
-      pendingInstall?.future ?? Future.value(null);
+  }) => pendingInstall?.future ?? Future.value(null);
 
   @override
   Future<String?> createAgent(

@@ -376,7 +376,9 @@ void main() {
         machineId: 'm',
       );
       final own = search.rows.singleWhere(
-        (row) => grouped.entries[row.modelId]?.subscription?['accountKey'] == 'local-account',
+        (row) =>
+            grouped.entries[row.modelId]?.subscription?['accountKey'] ==
+            'local-account',
       );
       expect(search.canSelectModel(own), isTrue);
       expect(search.modelRowStatus(own), '50% remaining');

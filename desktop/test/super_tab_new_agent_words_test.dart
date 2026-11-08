@@ -94,8 +94,9 @@ Future<void> unmountSwarm(WidgetTester tester, SuperTabLaunchFixture f) async {
   f.app.superTabs.dispose();
 }
 
+/// Your agents' + (Swarm v4: the left pane's one way to New agent).
 Future<void> tapNewAgent(WidgetTester tester) async {
-  final row = find.byKey(const ValueKey('super-new-agent-row'));
+  final row = find.byKey(const ValueKey('project-sidebar-agents-add'));
   await tester.ensureVisible(row);
   await tester.tap(row);
   await tester.pumpAndSettle();

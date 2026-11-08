@@ -23,7 +23,9 @@ void main() {
     )..signedIn = true;
     addTearDown(app.dispose);
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: AccountSection(notifier: app))),
+      MaterialApp(
+        home: Scaffold(body: AccountSection(notifier: app)),
+      ),
     );
     expect(find.text('Your Harness sign-in in this browser.'), findsOneWidget);
     expect(find.textContaining('this computer'), findsNothing);

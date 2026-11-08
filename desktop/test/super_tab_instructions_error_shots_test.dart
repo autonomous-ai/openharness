@@ -46,7 +46,8 @@ void main() {
         'projectId': 'lead',
         'revision': 3,
         'hash': 'hash-lead-3',
-        'text': '## Roles\n\n### PM\n- Talks with people in the project chat.\n',
+        'text':
+            '## Roles\n\n### PM\n- Talks with people in the project chat.\n',
         'template': false,
         'coordinatorName': 'Product Manager',
         'notesRevision': 0,

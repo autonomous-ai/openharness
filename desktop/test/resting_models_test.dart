@@ -171,9 +171,7 @@ void main() {
       expect(asleep.offerWake, isFalse);
       // A resting list of no known age has nothing to say beside it.
       expect(
-        sectionWords(
-          _only(section('team', state: 'asleep', models: served)),
-        ),
+        sectionWords(_only(section('team', state: 'asleep', models: served))),
         SectionWords.none,
       );
 

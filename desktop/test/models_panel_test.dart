@@ -244,59 +244,67 @@ void main() {
     variant: TargetPlatformVariant.only(TargetPlatform.macOS),
   );
 
-  testWidgets('a download under way can be cancelled, the one action open while it runs', (
-    tester,
-  ) async {
-    tester.view.devicePixelRatio = 1;
-    tester.view.physicalSize = const Size(700, 800);
-    addTearDown(tester.view.reset);
-    final app = ModelManagerTestApp(ModelManagerConnection());
-    final controller = ModelManagerController(app, poll: false);
-    final subscriptions = _SubscriptionRows();
-    addTearDown(() {
-      controller.dispose();
-      subscriptions.dispose();
-      app.dispose();
-    });
-    // Nothing downloading: Cancel asks the daemon nothing.
-    await controller.refresh();
-    await controller.cancelDownload(controller.localModels.first);
-    expect(app.actions, isEmpty);
-    app.localInventory = modelInventory(scenario: 'downloading');
-    await controller.refresh();
-    expect(controller.downloading(controller.localModels.first), isTrue);
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: Center(
-            child: SizedBox(
-              width: 640,
-              child: ModelsPanel(
-                controller: controller,
-                subscriptions: subscriptions,
-                onClose: () {},
-                onManage: () {},
+  testWidgets(
+    'a download under way can be cancelled, the one action open while it runs',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(700, 800);
+      addTearDown(tester.view.reset);
+      final app = ModelManagerTestApp(ModelManagerConnection());
+      final controller = ModelManagerController(app, poll: false);
+      final subscriptions = _SubscriptionRows();
+      addTearDown(() {
+        controller.dispose();
+        subscriptions.dispose();
+        app.dispose();
+      });
+      // Nothing downloading: Cancel asks the daemon nothing.
+      await controller.refresh();
+      await controller.cancelDownload(controller.localModels.first);
+      expect(app.actions, isEmpty);
+      app.localInventory = modelInventory(scenario: 'downloading');
+      await controller.refresh();
+      expect(controller.downloading(controller.localModels.first), isTrue);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 640,
+                child: ModelsPanel(
+                  controller: controller,
+                  subscriptions: subscriptions,
+                  onClose: () {},
+                  onManage: () {},
+                ),
               ),
             ),
           ),
         ),
-      ),
-    );
-    await tester.tap(find.text('Local 5'));
-    await tester.pump();
-    // In place of the spinner: the download can be cancelled, though every other action waits.
-    final cancel = find.byKey(const ValueKey('model-cancel-qwen'));
-    expect(cancel, findsOneWidget);
-    expect(find.bySemanticsLabel('Cancel downloading Qwen3.8-27B'), findsOneWidget);
-    expect(
-      tester.widget<IconButton>(find.byKey(const ValueKey('model-action-gemma'))).onPressed,
-      isNull,
-    );
-    await tester.tap(cancel);
-    await tester.pump();
-    expect(app.actions, [(machine: 'm', model: 'qwen', start: false)]);
-    await tester.pumpWidget(const SizedBox());
-  });
+      );
+      await tester.tap(find.text('Local 5'));
+      await tester.pump();
+      // In place of the spinner: the download can be cancelled, though every other action waits.
+      final cancel = find.byKey(const ValueKey('model-cancel-qwen'));
+      expect(cancel, findsOneWidget);
+      expect(
+        find.bySemanticsLabel('Cancel downloading Qwen3.8-27B'),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<IconButton>(
+              find.byKey(const ValueKey('model-action-gemma')),
+            )
+            .onPressed,
+        isNull,
+      );
+      await tester.tap(cancel);
+      await tester.pump();
+      expect(app.actions, [(machine: 'm', model: 'qwen', start: false)]);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 
   testWidgets('download, play and pause reflect file and engine state', (
     tester,

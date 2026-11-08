@@ -192,44 +192,45 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('switching source panes does not revive cancelled project edits', (
-    tester,
-  ) async {
-    final app = createApp();
-    seedMixedAgents(app);
-    app.machineStates['m']!.localOnly = true;
-    app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
-    await app.agentPreference.remember('codex');
-    await app.projectHistory.select('m', '/work/openharness');
-    final first = app.adoptSessionForTest(terminal('a0', []));
-    await app.addAgentToSwarm('m', 'a1');
-    addTearDown(app.dispose);
-    await mount(tester, app);
-    app.focusPane(first.id);
-    await tester.pump();
-    await chord(tester, LogicalKeyboardKey.keyN);
-    box(tester).setFolder('/work/first-draft');
-    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    await tester.pump();
-    final other = app.panes.firstWhere((pane) => pane.agentId == 'a1');
-    app.focusPane(other.id);
-    await tester.pump();
-    await chord(tester, LogicalKeyboardKey.keyN);
-    expect(box(tester).project.folder, '/work/openharness');
-    box(tester).setFolder('/work/second-draft');
-    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    await tester.pump();
-    app.focusPane(first.id);
-    await tester.pump();
-    await chord(tester, LogicalKeyboardKey.keyN);
-    expect(box(tester).project.folder, '/work/openharness');
-    expect(app.projectHistory.selected('m'), '/work/openharness');
-    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    app.focusPane(other.id);
-    await tester.pump();
-    await chord(tester, LogicalKeyboardKey.keyN);
-    expect(box(tester).project.folder, '/work/openharness');
-    expect(tester.takeException(), isNull);
-    await tester.pumpWidget(const SizedBox());
-  });
+  testWidgets(
+    'switching source panes does not revive cancelled project edits',
+    (tester) async {
+      final app = createApp();
+      seedMixedAgents(app);
+      app.machineStates['m']!.localOnly = true;
+      app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
+      await app.agentPreference.remember('codex');
+      await app.projectHistory.select('m', '/work/openharness');
+      final first = app.adoptSessionForTest(terminal('a0', []));
+      await app.addAgentToSwarm('m', 'a1');
+      addTearDown(app.dispose);
+      await mount(tester, app);
+      app.focusPane(first.id);
+      await tester.pump();
+      await chord(tester, LogicalKeyboardKey.keyN);
+      box(tester).setFolder('/work/first-draft');
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      final other = app.panes.firstWhere((pane) => pane.agentId == 'a1');
+      app.focusPane(other.id);
+      await tester.pump();
+      await chord(tester, LogicalKeyboardKey.keyN);
+      expect(box(tester).project.folder, '/work/openharness');
+      box(tester).setFolder('/work/second-draft');
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      app.focusPane(first.id);
+      await tester.pump();
+      await chord(tester, LogicalKeyboardKey.keyN);
+      expect(box(tester).project.folder, '/work/openharness');
+      expect(app.projectHistory.selected('m'), '/work/openharness');
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      app.focusPane(other.id);
+      await tester.pump();
+      await chord(tester, LogicalKeyboardKey.keyN);
+      expect(box(tester).project.folder, '/work/openharness');
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 }
