@@ -3504,6 +3504,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       break
     }
     case 'agent.add': {
+      /** The chat a new PM opens with its person (Swarm v4), when this add opens one. */
+      let pmChat: string | undefined
       requireTaskApproval(conversation(state, command.conversationId), state.agents.find(a => a.machineId === command.machineId && a.harnessId === command.harnessId)?.id ?? null)
       if (!['claude', 'codex'].includes(command.configuration.engine)) fail('SWARM_ENGINE', 'A Swarm agent runs only Claude Code or Codex.', 400)
       // A person shares a session already running (Desktop sends this as its person); an agent starts a new one. From an
@@ -3610,8 +3612,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           // Swarm v4 (anh Dee 2026-11-08): the project chat is its channel, where only agents post, so its person talks to the PM
           // in a chat of its own, once (agentKind.ts agentChatId).
           if (!state.conversations.some(c => isAgentChat(c) && c.agentIds.includes(agentId))) {
-            const chatId = openAgentChat(contributor, addedName)
-            open(state, chatId).agentIds.push(agentId)
+            pmChat = openAgentChat(contributor, addedName)
+            open(state, pmChat).agentIds.push(agentId)
           }
         }
       }
@@ -3619,10 +3621,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Creation already handed this first request to the native harness (and
       // any attachments through its existing launch path). Record it once in
       // the shared conversation without delivering the same request twice.
+      // A new PM's first request is its person's first line in their chat with it (Swarm v4: only agents post in the channel).
       if (command.initialMessage) {
         if (actor.kind !== 'person') fail('FORBIDDEN', 'Only a person can record their initial launch request.', 403)
         requireCanChat(state, actor, group)
-        message(group.id, command.initialMessage)
+        message(pmChat ?? group.id, command.initialMessage)
       }
       // A Product Manager started on its person's own Mac says, as one the Swarm starts does (leadJoined), when it does not
       // run the model its role asked for.

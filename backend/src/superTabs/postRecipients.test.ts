@@ -105,6 +105,16 @@ describe('a PM\'s own chat', () => {
     const sent = f.run({ type: 'message.send', conversationId: chat.id, text: 'Ship login by Friday.', replyTo: null, recipientIds: [] } as Command, owner)
     expect(to(sent.messages)).toEqual([[f.lead]])
   })
+
+  it('holds a new PM\'s first request, not the channel', () => {
+    const f = stepsFixture()
+    const made = f.run({ type: 'project.create', name: 'Todo', visibility: 'public', brief: '' } as Command, owner).result
+    const added = f.run({ type: 'agent.add', conversationId: made.conversationId as string, machineId: 'host', harnessId: 'pm2', name: 'pm2', lead: true,
+      configuration: { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null },
+      initialMessage: 'Build a tiny todo app.' } as Command, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } })
+    const chat = f.state.conversations.find(c => c.kind === 'agent-chat' && c.agentIds.includes(added.result.agentId as string))!
+    expect(added.messages.filter(m => m.text === 'Build a tiny todo app.').map(m => m.conversationId)).toEqual([chat.id])
+  })
 })
 
 // Swarm v4 (anh Dee 2026-11-08): a project's chat is its channel, where its agents talk to each other by name, as lampOS's
