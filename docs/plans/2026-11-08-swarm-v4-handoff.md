@@ -58,7 +58,7 @@ Done on the branch (committed, not pushed):
   channel: a task stands on its own row, its replies line under its bubble; its thread opens beside the channel at
   equal width, read-only, titled by its number. The Tasks button lists the tasks as cards beside the channel; a card
   opens its thread. An agent's chat has one bar (face, name, machine · engine, Instructions, Terminal), each opening
-  beside the chat at equal width. Agents' @names read as tags.
+  beside the chat at equal width; its person clicks the name to rename it. Agents' @names read as tags.
 - Desktop code: the Board, Board/Chat tabs, flat chat, Tasks pane, Buddy card and list, proposal form and launch flags
   field are deleted with their tests (about 9k lines). The design doc and its gallery show v4.
 - Desktop fixes found by tests: a project's row opened a Buddy chat (v3 leftover); a terminal beside an agent's chat
@@ -81,6 +81,5 @@ Not done yet:
   backend still makes decisions and proposal cards. Remove them together (backend first).
 - Buddy removal in CLI, backend and phone (422 files); Accept/Decline and personal tasks on the backend.
 - Task numbers: a task's number is what its PM writes ("#12 ..."); nothing hands out numbers yet.
-- Agent rename moved out of the chat bar with the old ⋮ menu; it is still in Manage.
 - The two-machine acceptance run needs a signed-in throwaway account on a second machine (anh Dee).
 - Rename super tab to Swarm in code (anh Dee, 2026-11-08), as its own pull request at the end.

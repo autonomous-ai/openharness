@@ -134,6 +134,17 @@ void main() {
     expect(find.text('agents/second.md'), findsNothing);
   });
 
+  testWidgets('its person renames an agent by its name in the bar', (
+    tester,
+  ) async {
+    await show(tester);
+    await tester.tap(key('super-agent-second'));
+    await tester.pumpAndSettle();
+    await tester.tap(key('swarm-agent-name'));
+    await tester.pumpAndSettle();
+    expect(key('agent-rename-input'), findsOneWidget);
+  });
+
   testWidgets('Terminal opens the agent\'s terminal', (tester) async {
     final opened = <String>[];
     await show(tester, terminals: opened);

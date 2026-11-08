@@ -3280,6 +3280,33 @@ class _SuperTabViewState extends State<SuperTabView>
       ? null
       : c.snapshot?.agents.where((a) => a.chatId == group.id).firstOrNull;
 
+  /// An agent chat's name, which its person clicks to rename it; anyone else's reads as text.
+  Widget _agentTitle(SuperTabAgent agent) {
+    final name = Text(
+      _agentName(agent),
+      key: const ValueKey('swarm-agent-name'),
+      style: DesktopChrome.text(medium: true),
+    );
+    final mine = agent.myAgent ?? agent.contributorId == c.accountId;
+    if (!mine || !c.canWrite) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: name,
+      );
+    }
+    return Tooltip(
+      message: 'Rename',
+      child: InkWell(
+        onTap: () => _renameAgent(agent),
+        borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+          child: name,
+        ),
+      ),
+    );
+  }
+
   /// Renames [agent] for everyone in the Swarm, in the app's one rename prompt.
   void _renameAgent(SuperTabAgent agent) => unawaited(
     showTerminalPrompt<void>(
@@ -3833,9 +3860,10 @@ class _SuperTabViewState extends State<SuperTabView>
       child: Row(
         children: [
           SuperTabAvatar.agent(agent, size: 22, engineBadge: false),
-          const SizedBox(width: 10),
-          Text(agent.name, style: DesktopChrome.text(medium: true)),
-          const SizedBox(width: 10),
+          const SizedBox(width: 6),
+          // Its person renames it here, by its name (the v3 bar's ⋮ menu is gone).
+          _agentTitle(agent),
+          const SizedBox(width: 6),
           Expanded(
             child: Text(
               detail,
