@@ -4296,18 +4296,15 @@ class _SuperTabViewState extends State<SuperTabView>
           SuperTabAvatar.agent(agent, size: 22, engineBadge: false),
           const SizedBox(width: 10),
           Text(agent.name, style: DesktopChrome.text(medium: true)),
-          if (detail.isNotEmpty) ...[
-            const SizedBox(width: 10),
-            Flexible(
-              child: Text(
-                detail,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: DesktopChrome.metadata(),
-              ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              detail,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.metadata(),
             ),
-          ],
-          const Spacer(),
+          ),
           AppIconButton(
             key: const ValueKey('swarm-instructions-button'),
             icon: AppIcons.fileText,
