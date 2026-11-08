@@ -52,22 +52,35 @@ then a development build to review, then merge and release.
 ## Status, night of 2026-11-08
 
 Done on the branch (committed, not pushed):
-- Desktop: left pane is Your agents (faces and names only), Projects, Humans (only once someone has points), Manage.
-  A project opens its channel; people get "Only agents post here" instead of a composer. Tasks are threads in the
-  channel; a thread opens beside the channel at equal width, read-only for people. A Tasks button opens the task list
-  (cards: number, title, faces, replies) beside the channel; a card opens its thread. An agent chat's header shows the
-  agent, where it runs, and Instructions (agents/<name>.md, read from the agent's folder when it runs here) and Terminal,
-  each opening beside the chat at equal width. Agents' @names read as tags. An agent row opens only its own chat.
-- CLI: plain agents. No launch line, tools manual or instructions notices (605 CLI specs pass).
-- `desktop/test/swarm_v4_shots_test.dart` renders the five scenes (SWARM_V4_SHOTS=<dir>);
-  `desktop/integration_test/swarm_v4_review_test.dart` opens a real window with lampOS data for review.
+- Desktop: left pane is Your agents (faces and names only, one type size with projects), Projects, Humans (only once
+  someone has points), Manage. A project's row opens its channel; people get "Only agents post here" in place of a
+  composer, and that line holds the chat's keyboard focus so Cmd+F and the unread keys work. Tasks are threads in the
+  channel: a task stands on its own row, its replies line under its bubble; its thread opens beside the channel at
+  equal width, read-only, titled by its number. The Tasks button lists the tasks as cards beside the channel; a card
+  opens its thread. An agent's chat has one bar (face, name, machine · engine, Instructions, Terminal), each opening
+  beside the chat at equal width. Agents' @names read as tags.
+- Desktop code: the Board, Board/Chat tabs, flat chat, Tasks pane, Buddy card and list, proposal form and launch flags
+  field are deleted with their tests (about 9k lines). The design doc and its gallery show v4.
+- Desktop fixes found by tests: a project's row opened a Buddy chat (v3 leftover); a terminal beside an agent's chat
+  was mounted twice (duplicate key, the view broke).
+- Start line: "You are <name>." then the person's first message, the name being the one typed in the Cmd-N form; with no
+  name, the message alone. Nothing else.
+- CLI delivery: a message lands as the place line, `@sender, to you:`, the text, then one `Answer: ... post ...` line.
+  No Swarm preamble or reply rules.
+- Backend: a project's agents talk in its channel. Any agent of the project (not a Buddy, another project's or a stopping
+  one) posts there and is reached by @Name, joining it then, with no join row (the PM's join row stays). Adding one by
+  hand keeps #2207.
+- No compact hook: Claude Code re-reads the repo's AGENTS.md after compaction (see above).
+
+Tests: Desktop Swarm suite 4,449 pass (`flutter test test/super_tab_* test/swarm_*`); backend `src/superTabs` 3,931 pass;
+CLI host and delivery specs pass. Failures that are this machine's and also fail on main: CLI connectors, localSocket,
+mcpShim; integration_test/super_tab_native_test.dart calls a method an earlier pull request removed.
 
 Not done yet:
-- Desktop has temporary `false &&` switches in view.dart (Board middle, Board/Chat tabs). Remove the Board, Tasks pane,
-  Decisions, Buddy and flat-chat code they leave dead, with their tests, before the pull request.
-- 219 Desktop tests fail on the branch (list from `flutter test test/super_tab_*`): about 157 test removed features
-  (Board, Buddy card, Tasks pane, Decisions, personal tasks) and go with that code; the rest type into the project
-  composer (quick switcher, find, offline line, waiting notice) and need to use an agent's chat instead.
-- Message format into sessions (`@sender in #N title, to @agent:`), lists kept 3 deep, the backend's v4 commands,
-  Buddy removal in CLI/backend/phone, and the two-machine acceptance run.
+- Decisions, Mentions and Threads pages are still reachable from the narrow/web layout and the menu bar's notices; the
+  backend still makes decisions and proposal cards. Remove them together (backend first).
+- Buddy removal in CLI, backend and phone (422 files); Accept/Decline and personal tasks on the backend.
+- Task numbers: a task's number is what its PM writes ("#12 ..."); nothing hands out numbers yet.
+- Agent rename moved out of the chat bar with the old ⋮ menu; it is still in Manage.
+- The two-machine acceptance run needs a signed-in throwaway account on a second machine (anh Dee).
 - Rename super tab to Swarm in code (anh Dee, 2026-11-08), as its own pull request at the end.
