@@ -39,7 +39,7 @@ import { conversationTokens } from '../lib/conversationSize.js'
 import { isTeamDaemon } from './teamDaemon.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
-import { ADDED_MAX, coordinatorInOwnTask, placeLine, recentLines, setOff, taskStateLine, threadLine, workLine } from './deliveryContext.js'
+import { ADDED_MAX, placeLine, recentLines, setOff, taskStateLine, threadLine, workLine } from './deliveryContext.js'
 import { isCoordinator } from './agentContext.js'
 import { UPDATE_REQUIRED } from './readContract.js'
 import { projectsRoot } from '../lib/projectFolder.js'
@@ -447,26 +447,6 @@ export const writeJournal = (file: string, journal: Journal) => {
   }
 }
 
-/** Whether a message asks its reader something: then the answer goes to the one who asked. */
-const asksQuestion = (text: unknown): boolean => typeof text === 'string' && text.includes('?')
-
-/** The same rules the launch prompt gives (desktop/lib/super_tabs/launch.dart). On 2026-10-20 a Lead answered one
- * question twice, once in a long technical report. */
-const SUPER_TAB_REPLY_STYLE = 'Write to the people in this tab like a helpful colleague. Answer first, in plain words and in the language they used. '
-  + 'Keep it short: a few sentences, under about 150 words, unless they ask for detail. '
-  + 'Do not show commands, message or sequence ids, field names or error codes. '
-  + 'Do not describe your own tools or permission prompts unless that blocks what they asked. '
-  // Answers go right below, not in a thread (anh Dee, 2026-11-04; task #2929): the reply line names which one this message takes.
-  + 'Answer each message once, as the reply line says. A message in the main chat is answered right below it (--answers); '
-  + 'one in a thread, inside its thread (--reply-to). Open a thread only for a back-and-forth on one topic, or to answer something far up the chat. '
-  + 'If you have already answered a message, do not post again. '
-  + 'When you hand over finished work, give the result with the revision and links they need.'
-
-/** The same rules in a project that answers people in threads (task #3747, anh Dee 11-06: "i don't know which one you reply to
- *  which"): every person's message is answered in its thread. */
-const SUPER_TAB_REPLY_STYLE_THREADED = SUPER_TAB_REPLY_STYLE.replace(
-  'A message in the main chat is answered right below it (--answers); one in a thread, inside its thread (--reply-to). Open a thread only for a back-and-forth on one topic, or to answer something far up the chat. ',
-  'Answer every person\'s message in its own thread (--reply-to), never as a new line in the main chat; the main chat is only for news the whole team needs. ')
 
 /** Whether [groupId]'s project answers people in threads (backend projects.ts answersInThread). A group from before projects is
  *  in the first. */
@@ -518,8 +498,6 @@ export class SuperTabHost {
   private readonly quotes = new Map<string, string>()
   /** Each delivery's context lines (deliveryContext.ts), read once per delivery and kept while it is tried again. */
   private readonly contexts = new Map<string, string>()
-  /** Deliveries whose message is the coordinator's in the reader's own task or step, with no question to answer (#3057). */
-  private readonly plainReplies = new Set<string>()
   /** Deliveries of a person's message in a project that answers in threads (task #3747): answered with --reply-to. */
   private readonly threadAnswers = new Set<string>()
   /** The tasks and steps where a coordinator's delivery carried their state (#3114), by Swarm, agent and conversation: a later
@@ -1403,7 +1381,7 @@ export class SuperTabHost {
     for (const deliveryId of this.files.keys()) if (!this.journal.entries[deliveryId]) this.files.delete(deliveryId)
     for (const deliveryId of [...this.downloads.keys()]) if (!this.journal.entries[deliveryId]) this.dropDownload(deliveryId)
     for (const deliveryId of this.quotes.keys()) if (!this.journal.entries[deliveryId]) this.quotes.delete(deliveryId)
-    for (const deliveryId of this.contexts.keys()) if (!this.journal.entries[deliveryId]) { this.contexts.delete(deliveryId); this.plainReplies.delete(deliveryId); this.threadAnswers.delete(deliveryId) }
+    for (const deliveryId of this.contexts.keys()) if (!this.journal.entries[deliveryId]) { this.contexts.delete(deliveryId); this.threadAnswers.delete(deliveryId) }
     for (const deliveryId of this.replyPages.keys()) if (!this.journal.entries[deliveryId]) this.replyPages.delete(deliveryId)
     for (const entry of Object.values(this.journal.entries)) {
       const id = typedId(entry)
@@ -2415,8 +2393,6 @@ export class SuperTabHost {
       if (!read) throw new Error(`no answer in ${wait} ms`)
       const { state } = read
       const author = object(message.author)
-      if (author.kind === 'agent' && identifier(author.id) && !asksQuestion(message.text)
-        && coordinatorInOwnTask(state, group, author.id, entry.agentId)) this.plainReplies.add(entry.deliveryId)
       if (author.kind === 'person' && answersInThread(state, group)) this.threadAnswers.add(entry.deliveryId)
       lines.push(placeLine(state, group))
       // "Release urgent" in #3022 reached the PM with its place alone, while its pull request had passed review with CI green,
@@ -2499,8 +2475,9 @@ export class SuperTabHost {
     const details = source.kind === 'buddy-proposal' && typeof source.goal === 'string' && typeof source.scope === 'string'
       ? `\n\nProposal details from their Buddy, for the PM:\nGoal: ${source.goal}\nScope: ${source.scope}\nPriority: ${String(source.priority)}` : ''
     const body = `${String(message.text)}${details}${files ? `${message.text ? '\n\n' : ''}${files}` : ''}`
+    // Swarm v4 (anh Dee 2026-11-08): one plain message, the way lampOS's agents wrote to each other: who, then the text.
     const said = (otherAccount ? OTHER_ACCOUNT : '') + (othersWords ? BUDDY_OTHERS : '')
-      + `Message ${String(message.id)} from ${shownName(message.author, 'a collaborator')}:\n${othersWords ? setOff(body) : body}`
+      + `@${shownName(message.author, 'someone')}, to you:\n${othersWords ? setOff(body) : body}`
     // News for a Buddy's owner from outside its chat (backend buddyNews.ts), its agent-only line about a task too: the
     // Buddy cannot post there, and others wrote it (security review 2 of #2178).
     if (buddyNews) return BUDDY_NEWS(group) + `Read this conversation: ${command} messages ${shellQuote(group)}\n\n` + reply + said
@@ -2523,17 +2500,8 @@ export class SuperTabHost {
     // Task #3057 (Ken, 11-05): 29 of 55 agent posts to the PM still did not name it, mostly an assignee writing in its own task,
     // because this line carried --to <sender> and the PM sends the briefs. The coordinator's message in the reader's own task or
     // step, with no question, shows the plain form: in a task it reaches no agent, and the people see it. To acknowledge, react.
-    const plain = this.plainReplies.has(entry.deliveryId)
-    const replyLine = plain
-      ? `Reply there: ${command} post ${shellQuote(group)} 'your message' UNIQUE_OPERATION_ID (a post here reaches no agent, and the people see it; name no one unless you need them to act)\n`
-        + `To acknowledge, react instead of posting: ${command} react ${shellQuote(group)} ${shellQuote(String(message.id))} eyes UNIQUE_OPERATION_ID. Your status tells the PM your work.\n`
-      : `Reply there: ${command} post ${shellQuote(group)} 'your message' UNIQUE_OPERATION_ID ${threaded ? '--reply-to' : '--answers'} ${shellQuote(String(message.id))}${to}\n`
-    return `You are participating in a shared Super Tab conversation (${group}). Other humans and agents see messages posted there.\n`
-      + `Read its state: ${command} status\nRead this conversation: ${command} messages ${shellQuote(group)}\n`
-      + replyLine
-      + `Manage agreed work and delegation: ${command} help.\n`
-      + `Ask questions and post results in this conversation. ${threadAnswer ? SUPER_TAB_REPLY_STYLE_THREADED : SUPER_TAB_REPLY_STYLE} Replies to these delivered instructions must be posted here explicitly.\n\n`
-      + context + native + reply + said
+    const answer = `Answer: ${command} post ${shellQuote(group)} 'your message' UNIQUE_OPERATION_ID ${threaded ? '--reply-to' : '--answers'} ${shellQuote(String(message.id))}${to}`
+    return context + native + reply + said + `\n\n${answer}`
   }
 
   /** Says why the core keeps holding this delivery: once in the log per change of reason, and once to the conversation after 30 s. */
