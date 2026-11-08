@@ -17,7 +17,8 @@ then a development build to review, then merge and release.
   secondary opens beside the main view at equal width with its own header and x: task chat beside the channel; an
   agent's terminal or its instructions (agents/<name>.md) beside its chat, from two icons at the top right.
 - Messages into a session: `@sender in #N title, to @agent:` + text + `Answer: swarm post N "..."`.
-- Long sessions compact; a SessionStart hook with matcher `compact` prints the agent's own file.
+- Long sessions compact. No hook: Claude Code re-reads the repo's AGENTS.md after compaction, and it says "Read
+  agents/<your name>.md first"; the summary keeps "You are <name>." (decided 2026-11-08 night: less is better).
 - Keep code tiny. "less is better. ship quality."
 
 ## Measured
