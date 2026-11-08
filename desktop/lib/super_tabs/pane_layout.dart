@@ -265,7 +265,8 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
                     ),
                   ),
                   // A fixed right pane has no divider to drag.
-                  if (!(widget.rightFixed || widget.rightHalf) || (hasLeft && index == 0))
+                  if (!(widget.rightFixed || widget.rightHalf) ||
+                      (hasLeft && index == 0))
                     PaneResizeHandle(
                       key: ValueKey(
                         'super-resize-${hasLeft && index == 0 ? 'left' : 'right'}',

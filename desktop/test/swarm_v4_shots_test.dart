@@ -34,7 +34,7 @@ void main() {
   setUpAll(() => loadCaptureFonts(shots));
 
   for (final brightness in Brightness.values) {
-    for (final scene in ['channel', 'thread', 'agent']) {
+    for (final scene in ['channel', 'thread', 'tasks', 'agent']) {
       testWidgets('$scene (${brightness.name})', (tester) async {
         await tester.binding.setSurfaceSize(const Size(1440, 860));
         addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -91,11 +91,7 @@ void main() {
           'third',
           '@second My noisy-rooms change touches the mixer too. I\'ll rebase after yours merges.',
         );
-        say(
-          'lead',
-          'first builder',
-          '@third Not in v2. Parked for v2.1.',
-        );
+        say('lead', 'first builder', '@third Not in v2. Parked for v2.1.');
         // A task is a thread in the channel: its first line is the task, the replies its chat.
         say(
           'lead',
@@ -109,13 +105,25 @@ void main() {
           '@friday Can I keep faces in a cache for 10 minutes? Answers get 300 ms faster.',
           thread: task,
         );
-        say('lead', 'friday', '@second No face cache. Loc: privacy beats speed.', thread: task);
+        say(
+          'lead',
+          'friday',
+          '@second No face cache. Loc: privacy beats speed.',
+          thread: task,
+        );
         say(
           'lead',
           'fourth',
           'Approved at 7be03f1. The cloud delete now runs on the next connect.',
           thread: task,
         );
+        say(
+          'lead',
+          'first builder',
+          '#5843 Speaker clicks at low volume. @third yours.',
+        );
+        final clicks = server.messages.last['id'] as String;
+        say('lead', 'third', 'Found it: the mixer fades in at 0 ms.', thread: clicks);
         say(
           'agent-chat-second',
           'Dee',
@@ -173,6 +181,10 @@ void main() {
         }
 
         await settle();
+        if (scene == 'tasks') {
+          await tester.tap(find.byKey(const ValueKey('swarm-tasks-button')));
+          await settle();
+        }
         await captureWindow(tester, shots, 'v4-$scene-${brightness.name}');
         await tester.pumpWidget(const SizedBox());
         await tester.runAsync(c.flush);

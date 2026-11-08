@@ -95,6 +95,7 @@ import 'day_pill.dart';
 import 'decisions_view.dart';
 import 'route_row.dart';
 import 'terminal_row.dart';
+import 'task_list.dart';
 import 'thread_panel.dart';
 import 'work_details.dart';
 import 'manage_page.dart';
@@ -4251,8 +4252,15 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// A project's channel or one of its tasks' chats: agents post there, people read (Swarm v4). A person's chat with their
   /// own agent is the one place they write.
+  /// The project's task list, open beside its channel (Swarm v4).
+  bool _taskListOpen = false;
+
   bool _agentsOnly(SuperTabConversation group) =>
       c.snapshot?.isProjectLead(group.id) == true || group.task != null;
+  bool _agentsOnlyId(String id) => switch (c.snapshot?.conversation(id)) {
+    final group? => _agentsOnly(group),
+    null => false,
+  };
 
   Widget _header(SuperTabConversation? group, bool narrow) {
     final isProject =
@@ -4394,6 +4402,20 @@ class _SuperTabViewState extends State<SuperTabView>
                   },
                 ),
               ),
+            if (widget.board && isProject) ...[
+              const SizedBox(width: 4),
+              AppIconButton(
+                key: const ValueKey('swarm-tasks-button'),
+                icon: AppIcons.squareKanban,
+                size: AppIcons.inlineSize,
+                tooltip: 'Tasks',
+                selected: _taskListOpen,
+                color: _taskListOpen
+                    ? DesktopChrome.foreground
+                    : DesktopChrome.muted,
+                onPressed: () => setState(() => _taskListOpen = !_taskListOpen),
+              ),
+            ],
             if (!widget.board && (isProject || !_menuNamesViews)) ...[
               const SizedBox(width: 4),
               fingerTarget(
@@ -5223,6 +5245,7 @@ class _SuperTabViewState extends State<SuperTabView>
         machineName: widget.machineName,
         onScroll: (list) => _threadScroll = list,
         voice: _voice,
+        agentsOnly: widget.board && _agentsOnlyId(open.conversationId),
       ),
     );
   }
@@ -6678,7 +6701,18 @@ class _SuperTabViewState extends State<SuperTabView>
                               ? const SizedBox.expand()
                               : _boardChat(chat))
                     : thread ??
-                          (_rosterOpen
+                          (widget.board &&
+                                  _taskListOpen &&
+                                  c.snapshot?.isProjectLead(c.selectedId) ==
+                                      true
+                              ? SwarmTaskList(
+                                  controller: c,
+                                  conversationId: c.selectedId,
+                                  onOpen: c.openThread,
+                                  onClose: () =>
+                                      setState(() => _taskListOpen = false),
+                                )
+                              : _rosterOpen
                               ? roster
                               : chatBeside
                               ? chat
@@ -6692,7 +6726,9 @@ class _SuperTabViewState extends State<SuperTabView>
                 // in a small window (River, Swarm v3; #4211). It stays under a page or Manage too (#4220).
                 rightFixed: fixedSides,
                 // Swarm v4: a task's thread or a terminal opens beside what you read, at equal width.
-                rightHalf: widget.board && (thread != null || chatBeside),
+                rightHalf:
+                    widget.board &&
+                    (thread != null || chatBeside || _taskListOpen),
                 // Over the chat, beside an open thread, as in Slack.
                 over: wide ? viewer : null,
                 // A project's own chat keeps its header and tabs (Project options, Tasks): the full chat view.
