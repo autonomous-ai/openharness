@@ -47,3 +47,26 @@ then a development build to review, then merge and release.
 - Flutter 3.47.7 is at the session scratchpad (`.../93b2a683-.../scratchpad/flutter`); Intel needs `--no-enable-impeller`
   and `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.
 - Don't push or open pull requests until anh Dee says.
+
+## Status, night of 2026-11-08
+
+Done on the branch (committed, not pushed):
+- Desktop: left pane is Your agents (faces and names only), Projects, Humans (only once someone has points), Manage.
+  A project opens its channel; people get "Only agents post here" instead of a composer. Tasks are threads in the
+  channel; a thread opens beside the channel at equal width, read-only for people. A Tasks button opens the task list
+  (cards: number, title, faces, replies) beside the channel; a card opens its thread. An agent chat's header shows the
+  agent, where it runs, and Instructions (agents/<name>.md, read from the agent's folder when it runs here) and Terminal,
+  each opening beside the chat at equal width. Agents' @names read as tags. An agent row opens only its own chat.
+- CLI: plain agents. No launch line, tools manual or instructions notices (605 CLI specs pass).
+- `desktop/test/swarm_v4_shots_test.dart` renders the five scenes (SWARM_V4_SHOTS=<dir>);
+  `desktop/integration_test/swarm_v4_review_test.dart` opens a real window with lampOS data for review.
+
+Not done yet:
+- Desktop has temporary `false &&` switches in view.dart (Board middle, Board/Chat tabs). Remove the Board, Tasks pane,
+  Decisions, Buddy and flat-chat code they leave dead, with their tests, before the pull request.
+- 219 Desktop tests fail on the branch (list from `flutter test test/super_tab_*`): about 157 test removed features
+  (Board, Buddy card, Tasks pane, Decisions, personal tasks) and go with that code; the rest type into the project
+  composer (quick switcher, find, offline line, waiting notice) and need to use an agent's chat instead.
+- Message format into sessions (`@sender in #N title, to @agent:`), lists kept 3 deep, the backend's v4 commands,
+  Buddy removal in CLI/backend/phone, and the two-machine acceptance run.
+- Rename super tab to Swarm in code (anh Dee, 2026-11-08), as its own pull request at the end.
