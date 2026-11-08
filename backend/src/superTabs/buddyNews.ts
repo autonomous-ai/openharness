@@ -5,7 +5,7 @@
 import { buddyChatOf, defaultBuddy, isBuddy, isBuddyChat, isSwarmBuddy, routingRow } from './buddies.js'
 import { mainBuddyOf } from './buddySessions.js'
 import { agentOnly, isLeads, stableId, AGENT_ONLY, type Agent, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { agentProjectId, canReadGroup, groupProject } from './projects.js'
+import { agentProjectId, canReadGroup, groupProject, isAgentChat } from './projects.js'
 import { SHIP_KIND } from './ship.js'
 
 /** The source buddy.propose gives the proposal it posts (commands.ts). */
@@ -47,7 +47,7 @@ function newsFor(message: MessageDraft, threadSource: Record<string, unknown> | 
  *  never a routing row, as a Buddy reads none (buddies.ts). */
 export function buddiesTold(state: SuperTabState, message: MessageDraft, threadSource: Record<string, unknown> | null): string[] {
   const group = state.conversations.find(c => c.id === message.conversationId)
-  if (!group || isLeads(group) || isBuddyChat(group) || agentOnly(message.source, message.recipients) || routingRow(message.source) || groupProject(state, group).leadConversationId !== group.id) return []
+  if (!group || isLeads(group) || isBuddyChat(group) || isAgentChat(group) || agentOnly(message.source, message.recipients) || routingRow(message.source) || groupProject(state, group).leadConversationId !== group.id) return []
   const sender = senderOf(message, threadSource)
   return newsFor(message, threadSource).flatMap(id => listeningBuddy(state, id, group, id === threadSource?.personId ? sender : undefined)?.id ?? [])
 }

@@ -29,13 +29,13 @@ export function agentKind(state: SuperTabState, target: Agent): AgentKind {
   return ledProject(state, target.id) ? 'pm' : 'regular'
 }
 
-/** The chat [target]'s person talks to it in: a Buddy's own chat, a PM's project chat, a Regular agent's own chat (agent.new);
- *  none for an agent started before chats of their own. */
+/** The chat [target]'s person talks to it in: a Buddy's own chat, any other agent's own chat (agent.new, and a PM's since
+ *  Swarm v4, whose project chat is the channel only agents post in), else a PM's project chat (a PM from before); none for an
+ *  agent started before chats of their own. */
 export function agentChatId(state: SuperTabState, target: Agent): string | null {
   if (isBuddy(target)) return state.conversations.find(c => isBuddyChat(c) && c.agentIds.includes(target.id))?.id ?? null
-  const led = ledProject(state, target.id)
-  if (led) return led.leadConversationId
-  return state.conversations.find(c => isAgentChat(c) && c.agentIds.includes(target.id))?.id ?? null
+  const own = state.conversations.find(c => isAgentChat(c) && c.agentIds.includes(target.id))?.id
+  return own ?? ledProject(state, target.id)?.leadConversationId ?? null
 }
 
 /** Whether [target] is in [actor]'s My agents (task #4192, anh Dee 11-07: his list showed about 30 rows, agents he never

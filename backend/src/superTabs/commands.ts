@@ -3605,7 +3605,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         keepLead(group, agentId)
         if (group.leadId && group.leadId !== agentId && activeWork(group)) fail('WORK_ACTIVE', 'Reconcile active work before replacing its lead.')
         group.leadId = agentId
-        if (group.id === project.leadConversationId) arrived(project, agentId)
+        if (group.id === project.leadConversationId) {
+          arrived(project, agentId)
+          // Swarm v4 (anh Dee 2026-11-08): the project chat is its channel, where only agents post, so its person talks to the PM
+          // in a chat of its own, once (agentKind.ts agentChatId).
+          if (!state.conversations.some(c => isAgentChat(c) && c.agentIds.includes(agentId))) {
+            const chatId = openAgentChat(contributor, addedName)
+            open(state, chatId).agentIds.push(agentId)
+          }
+        }
       }
       result.agentId = agentId
       // Creation already handed this first request to the native harness (and

@@ -46,8 +46,9 @@ describe('state verification (design 6.3)', () => {
 
   it('names the first differing path', () => {
     const other = base()
-    other.conversations[2]!.title = 'Changed'
-    expect(stateDifference(base(), other)).toBe('conversations[2].title: "Web" ≠ "Changed"')
+    const web = other.conversations.findIndex(c => c.title === 'Web')
+    other.conversations[web]!.title = 'Changed'
+    expect(stateDifference(base(), other)).toBe(`conversations[${web}].title: "Web" ≠ "Changed"`)
     const extra = base()
     ;(extra.agents[1] as unknown as Record<string, unknown>).surprise = 1
     expect(stateDifference(base(), extra)).toBe('agents[1].surprise: (absent) ≠ 1')

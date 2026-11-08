@@ -289,11 +289,11 @@ describe('Super Tab collaboration policy', () => {
     const lead = f.add('lead', 'owner', 'lead', true)
     const group = f.group()
     const worker = f.add('worker', 'owner', group)
-    expect(f.state.conversations.map(c => c.title)).toEqual(['Lead', 'Offline editing'])
-    expect(f.state.conversations[1]).toMatchObject({ leadId: lead, agentIds: [lead, worker], assignment: null })
+    expect(f.state.conversations.filter(c => c.kind !== 'agent-chat').map(c => c.title)).toEqual(['Lead', 'Offline editing'])
+    expect(f.state.conversations.find(c => c.id === group)).toMatchObject({ leadId: lead, agentIds: [lead, worker], assignment: null })
     f.run({ type: 'conversation.agent', conversationId: group, agentId: worker, present: true, lead: false })
     expect(f.state.agents).toHaveLength(2)
-    expect(f.state.conversations).toHaveLength(2) // Lead and the group
+    expect(f.state.conversations.filter(c => c.kind !== 'agent-chat')).toHaveLength(2) // Lead and the group
   })
 
   it('routes a human reply to its author, and does not create agent chatter loops', () => {
@@ -346,7 +346,7 @@ describe('Super Tab collaboration policy', () => {
     expect(post(as(worker), [other])).toEqual([other])
     expect(post(as(worker), [lead])).toEqual([lead])
     expect(post(as(lead))).toEqual([worker])
-    f.run({ type: 'work.status', conversationId: group, assignmentId: f.state.conversations[1]!.assignment!.id, status: 'blocked', hold: HOLD, result: 'Stuck.' }, as(worker))
+    f.run({ type: 'work.status', conversationId: group, assignmentId: f.state.conversations.find(c => c.id === group)!.assignment!.id, status: 'blocked', hold: HOLD, result: 'Stuck.' }, as(worker))
     expect(post(as(worker))).toEqual([])
   })
 
@@ -621,7 +621,7 @@ describe('Super Tab collaboration policy', () => {
       expect(post(lead).recipients).toEqual([])
       f.run({ type: 'work.assign', conversationId: group, agentId: worker })
       expect(post(lead).recipients).toEqual([worker])
-      f.run({ type: 'work.cancel', conversationId: group, assignmentId: f.state.conversations[1]!.assignment!.id, reason: 'Duplicate of another task' })
+      f.run({ type: 'work.cancel', conversationId: group, assignmentId: f.state.conversations.find(c => c.id === group)!.assignment!.id, reason: 'Duplicate of another task' })
       expect(post(lead).recipients).toEqual([])
     })
 
@@ -767,13 +767,13 @@ describe('Super Tab collaboration policy', () => {
     const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
     const removed = f.run({ type: 'member.remove', userId: 'peer' })
     expect(removed.cancelledAgents).toEqual([worker])
-    expect(f.state.conversations[1]!.assignment).toMatchObject({ status: 'reconciling', execution: { machineId: 'host', harnessId: 'worker', machineOwnerId: 'host-owner' } })
+    expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ status: 'reconciling', execution: { machineId: 'host', harnessId: 'worker', machineOwnerId: 'host-owner' } })
     f.invite()
     expect(f.state.agents).toHaveLength(0)
     const stop: Command = { type: 'work.status', conversationId: group, assignmentId, status: 'stopped', result: 'Host receipt' }
     expect(() => f.run(stop)).toThrow('confirm the stop')
     f.run(stop, owner, { confirmedStopped: true })
-    expect(f.state.conversations[1]!.assignment!.status).toBe('stopped')
+    expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('stopped')
   })
 
   it('keeps ownership exclusive, and closes an attempt on its agent\'s Done', () => {
@@ -789,10 +789,10 @@ describe('Super Tab collaboration policy', () => {
     expect(() => f.run({ type: 'conversation.agent', conversationId: group, agentId: worker, present: true, lead: true })).toThrow('replacing its lead')
     const done: Command = { type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Revision fixture-1' }
     const check: Command = { type: 'work.check', conversationId: group, assignmentId,
-      checkId: f.state.conversations[1]!.checks[0]!.id, passed: true, evidence: 'Reconnect test passed on revision fixture-1.' }
+      checkId: f.state.conversations.find(c => c.id === group)!.checks[0]!.id, passed: true, evidence: 'Reconnect test passed on revision fixture-1.' }
     // Checks are information (project instructions, phase 4): its assignee passes one as anyone in the task may.
     f.run(check, { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' })
-    expect(f.state.conversations[1]!.checks[0]!.passedBy).toBe(`agent:${worker}`)
+    expect(f.state.conversations.find(c => c.id === group)!.checks[0]!.passedBy).toBe(`agent:${worker}`)
     f.run(check, { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' })
     const completion = f.run(done, { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' })
     expect(completion.messages[0]).toMatchObject({ conversationId: group, text: 'Done\n\nRevision fixture-1', recipients: [lead] })
@@ -800,7 +800,7 @@ describe('Super Tab collaboration policy', () => {
     expect(() => f.run({ ...done, status: 'working' })).toThrow('new attempt')
     const retry = f.run({ type: 'work.assign', conversationId: group, agentId: worker })
     expect(retry.previousAttempts[0]!.assignment).toMatchObject({ id: assignmentId, status: 'done', configuration: config })
-    expect(f.state.conversations[1]!.checks[0]!.evidence).toBeNull()
+    expect(f.state.conversations.find(c => c.id === group)!.checks[0]!.evidence).toBeNull()
   })
 
   it('tells the Lead when the assignee is stuck and keeps the work active', () => {
@@ -812,13 +812,13 @@ describe('Super Tab collaboration policy', () => {
     const as: Actor = { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }
     const stuck = f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'blocked', hold: HOLD, result: 'The staging database refuses my key.' }, as)
     expect(stuck.messages[0]).toMatchObject({ conversationId: group, text: 'Stuck\n\nThe staging database refuses my key.', recipients: [lead] })
-    expect(f.state.conversations[1]!.assignment!.status).toBe('blocked')
-    expect(activeWork(f.state.conversations[1]!)).toBe(true)
+    expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('blocked')
+    expect(activeWork(f.state.conversations.find(c => c.id === group)!)).toBe(true)
     expect(() => f.run({ type: 'work.assign', conversationId: f.group(), agentId: worker })).toThrow('active assignment')
     const decision = f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', hold: HOLD, result: 'Ship to everyone, or behind a flag?' }, as)
     expect(decision.messages[0]).toMatchObject({ text: 'Needs a human\n\nShip to everyone, or behind a flag?', recipients: [lead] })
     f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'working', result: null }, as)
-    expect(f.state.conversations[1]!.assignment!.status).toBe('working')
+    expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('working')
   })
 
   it('allows discussion while paused and refuses new work, without mutating rejected state', () => {
@@ -857,13 +857,13 @@ it('starts only in the chosen conversation, captures authority, and never assign
   const startId = f.run({ type: 'agent.start', request, ...via }, actor, { contribution, ...decisionIn(group) }).result.startId as string
   expect(f.state.starts![0]).toMatchObject({ request, hostGrant: null, dispatched: false })
   expect(f.state.agents).toHaveLength(1)
-  expect(f.state.conversations).toHaveLength(2) // Lead and the group
+  expect(f.state.conversations.filter(c => c.kind !== 'agent-chat')).toHaveLength(2) // Lead and the group
   expect(() => f.run({ type: 'agent.startDispatch', startId }, actor, { contribution: { ...contribution, hostGrant: 'new-grant' } })).toThrow('revoked')
   f.run({ type: 'agent.startDispatch', startId }, actor, { contribution })
   expect(() => f.run({ type: 'agent.startDispatch', startId }, actor, { contribution })).toThrow('already requested')
   const worker = f.run({ type: 'agent.started', startId, harnessId: 'native-worker', configuration: { ...config, engine: 'claude' } }, actor, { contribution }).result.agentId
   expect(f.state.agents).toHaveLength(2)
-  expect(f.state.conversations[1]).toMatchObject({ agentIds: [lead, worker], assignment: null })
+  expect(f.state.conversations.find(c => c.id === group)).toMatchObject({ agentIds: [lead, worker], assignment: null })
   expect(f.state.conversations[0]!.agentIds).toEqual([lead])
   f.run({ type: 'tab.pause', paused: true })
   expect(() => f.run({ type: 'agent.start', request, ...via }, actor, { contribution, ...decisionIn(group) })).toThrow('paused')

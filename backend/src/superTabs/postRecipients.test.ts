@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import { REACHED_NO_AGENT, type Command } from './commands.js'
 import { agent } from './model.js'
+import { agentChatId } from './agentKind.js'
 import { owner, stepsFixture } from './steps.test-support.js'
 
 const HOLD = { kind: 'person', personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' } as const
@@ -91,6 +92,18 @@ describe('an agent post that names agents', () => {
     const other = f.add('other', f.task)
     expect(to(post(f.dev, f.task, `@${nameOf(other)} the CI runner is down.`))).toEqual([[other]])
     expect(to(post(f.dev, f.task, `@${nameOf(f.lead)} the CI runner is down.`))).toEqual([[f.lead]])
+  })
+})
+
+// Swarm v4 (anh Dee 2026-11-08): only agents post in a project's channel, so its person talks to the PM in a chat of its own.
+describe('a PM\'s own chat', () => {
+  it('opens when the PM joins its project, and its person\'s message there reaches the PM', () => {
+    const { f, to } = setup()
+    const chat = f.state.conversations.find(c => c.kind === 'agent-chat' && c.agentIds.includes(f.lead))!
+    expect(chat.audience?.people.map(p => p.id)).toEqual(['owner'])
+    expect(agentChatId(f.state, agent(f.state, f.lead))).toBe(chat.id)
+    const sent = f.run({ type: 'message.send', conversationId: chat.id, text: 'Ship login by Friday.', replyTo: null, recipientIds: [] } as Command, owner)
+    expect(to(sent.messages)).toEqual([[f.lead]])
   })
 })
 

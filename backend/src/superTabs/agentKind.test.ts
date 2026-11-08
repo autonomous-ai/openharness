@@ -40,6 +40,20 @@ describe('an agent\'s kind and chat', () => {
     expect(agentChatId(state, pm)).toBe('lead')
   })
 
+  // Swarm v4 (anh Dee 2026-11-08): the project chat is its channel, where only agents post; its person talks to the PM in a
+  // chat of its own, as with any agent.
+  it('is a PM talked to in its own chat when it has one', () => {
+    const { state, agent } = setup()
+    const pm = agent('pm')
+    const lead = state.conversations.find(c => c.id === 'lead')!
+    lead.leadId = pm.id
+    lead.agentIds.push(pm.id)
+    state.conversations.push({ id: 'pm-chat', kind: 'agent-chat', title: 'pm', leadId: null, agentIds: [pm.id], archived: false, brief: '',
+      checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'peer', generation: 'second' }] } } as never)
+    expect(agentKind(state, pm)).toBe('pm')
+    expect(agentChatId(state, pm)).toBe('pm-chat')
+  })
+
   it('is Regular otherwise, with no chat of its own yet', () => {
     const { state, agent } = setup()
     const worker = agent('worker')
