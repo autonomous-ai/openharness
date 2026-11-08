@@ -66,7 +66,7 @@ import 'instructions_panel.dart';
 import 'project_rules.dart';
 import 'model.dart';
 import 'agent_details.dart';
-import 'identity.dart' show superTabMachineName;
+import 'identity.dart' show SuperTabAvatar, superTabMachineName;
 import 'identity_card.dart';
 import 'prompt_alerts.dart';
 import 'workgroup_name.dart';
@@ -95,6 +95,7 @@ import 'day_pill.dart';
 import 'decisions_view.dart';
 import 'route_row.dart';
 import 'terminal_row.dart';
+import 'agent_instructions.dart';
 import 'task_list.dart';
 import 'thread_panel.dart';
 import 'work_details.dart';
@@ -4255,6 +4256,15 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The project's task list, open beside its channel (Swarm v4).
   bool _taskListOpen = false;
 
+  /// An agent's instructions file, open beside its chat (Swarm v4).
+  bool _instructionsOpen = false;
+
+  /// The agent of a person's chat with their own agent, or null.
+  SuperTabAgent? _chatAgent(SuperTabConversation? group) =>
+      group != null && group.isAgentChat && group.agentIds.isNotEmpty
+      ? c.snapshot?.agent(group.agentIds.first)
+      : null;
+
   bool _agentsOnly(SuperTabConversation group) =>
       c.snapshot?.isProjectLead(group.id) == true || group.task != null;
   bool _agentsOnlyId(String id) => switch (c.snapshot?.conversation(id)) {
@@ -4262,7 +4272,77 @@ class _SuperTabViewState extends State<SuperTabView>
     null => false,
   };
 
+  /// An agent chat's header (Swarm v4): the agent, where it runs, then its instructions and its terminal, each opening
+  /// beside the chat.
+  Widget _agentHeader(SuperTabConversation group, SuperTabAgent agent) {
+    final machine = widget.machineName?.call(agent.machineId);
+    final engine = switch (agent.configuration['engine']) {
+      'codex' => 'Codex',
+      'claude' => 'Claude Code',
+      final String other => other,
+      _ => null,
+    };
+    final detail = [?machine, ?engine].join(' · ');
+    final terminalOpen = _terminalsVisible;
+    return Container(
+      key: const ValueKey('swarm-agent-header'),
+      constraints: const BoxConstraints(minHeight: 52),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
+      ),
+      child: Row(
+        children: [
+          SuperTabAvatar.agent(agent, size: 22, engineBadge: false),
+          const SizedBox(width: 10),
+          Text(agent.name, style: DesktopChrome.text(medium: true)),
+          if (detail.isNotEmpty) ...[
+            const SizedBox(width: 10),
+            Flexible(
+              child: Text(
+                detail,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: DesktopChrome.metadata(),
+              ),
+            ),
+          ],
+          const Spacer(),
+          AppIconButton(
+            key: const ValueKey('swarm-instructions-button'),
+            icon: AppIcons.fileText,
+            size: AppIcons.inlineSize,
+            tooltip: 'Instructions',
+            selected: _instructionsOpen,
+            onPressed: () => setState(() {
+              _instructionsOpen = !_instructionsOpen;
+              if (_instructionsOpen && terminalOpen) {
+                widget.onCloseTerminal?.call();
+              }
+            }),
+          ),
+          const SizedBox(width: 4),
+          AppIconButton(
+            key: const ValueKey('swarm-terminal-button'),
+            icon: AppIcons.terminal,
+            size: AppIcons.inlineSize,
+            tooltip: 'Terminal',
+            selected: terminalOpen,
+            onPressed: terminalOpen
+                ? widget.onCloseTerminal
+                : () {
+                    setState(() => _instructionsOpen = false);
+                    _openTerminals(group)?.call();
+                  },
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _header(SuperTabConversation? group, bool narrow) {
+    final chatAgent = widget.board ? _chatAgent(group) : null;
+    if (chatAgent != null) return _agentHeader(group!, chatAgent);
     final isProject =
         group != null && c.snapshot?.isProjectLead(group.id) == true;
     // A project's chat on the Board: its Board / Chat tabs follow its name on this one row, at the Board header's height
@@ -6651,6 +6731,11 @@ class _SuperTabViewState extends State<SuperTabView>
         },
         onClose: _closeRoster,
       );
+      // Swarm v4: an agent's terminal opens right of its chat, as its instructions do.
+      final terminalRight = widget.board && chatBeside;
+      final instructionsAgent = widget.board && _instructionsOpen
+          ? _chatAgent(c.selected)
+          : null;
       final pagesIndex = boardProject != null
           ? 5
           : _devicesVisible
@@ -6661,7 +6746,7 @@ class _SuperTabViewState extends State<SuperTabView>
           ? 3
           : c.snapshot?.projects.isEmpty == true
           ? 0
-          : _terminalsVisible
+          : _terminalsVisible && !terminalRight
           ? 1
           : _showPullRequests
           ? 2
@@ -6712,8 +6797,17 @@ class _SuperTabViewState extends State<SuperTabView>
                                   onClose: () =>
                                       setState(() => _taskListOpen = false),
                                 )
+                              : instructionsAgent != null
+                              ? SwarmAgentInstructions(
+                                  agent: instructionsAgent,
+                                  app: widget.app,
+                                  onClose: () =>
+                                      setState(() => _instructionsOpen = false),
+                                )
                               : _rosterOpen
                               ? roster
+                              : terminalRight
+                              ? terminal
                               : chatBeside
                               ? chat
                               : null),
@@ -6728,7 +6822,10 @@ class _SuperTabViewState extends State<SuperTabView>
                 // Swarm v4: a task's thread or a terminal opens beside what you read, at equal width.
                 rightHalf:
                     widget.board &&
-                    (thread != null || chatBeside || _taskListOpen),
+                    (thread != null ||
+                        chatBeside ||
+                        _taskListOpen ||
+                        instructionsAgent != null),
                 // Over the chat, beside an open thread, as in Slack.
                 over: wide ? viewer : null,
                 // A project's own chat keeps its header and tabs (Project options, Tasks): the full chat view.
@@ -6766,7 +6863,8 @@ class _SuperTabViewState extends State<SuperTabView>
                             child: SuperTabPages(
                               index: pagesIndex,
                               children: [
-                                chatBeside || boardProject != null
+                                (chatBeside && !terminalRight) ||
+                                        boardProject != null
                                     ? const SizedBox.shrink()
                                     : chat,
                                 terminal ?? const SizedBox.shrink(),

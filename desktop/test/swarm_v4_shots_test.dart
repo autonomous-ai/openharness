@@ -34,7 +34,13 @@ void main() {
   setUpAll(() => loadCaptureFonts(shots));
 
   for (final brightness in Brightness.values) {
-    for (final scene in ['channel', 'thread', 'tasks', 'agent']) {
+    for (final scene in [
+      'channel',
+      'thread',
+      'tasks',
+      'agent',
+      'instructions',
+    ]) {
       testWidgets('$scene (${brightness.name})', (tester) async {
         await tester.binding.setSurfaceSize(const Size(1440, 860));
         addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -123,7 +129,12 @@ void main() {
           '#5843 Speaker clicks at low volume. @third yours.',
         );
         final clicks = server.messages.last['id'] as String;
-        say('lead', 'third', 'Found it: the mixer fades in at 0 ms.', thread: clicks);
+        say(
+          'lead',
+          'third',
+          'Found it: the mixer fades in at 0 ms.',
+          thread: clicks,
+        );
         say(
           'agent-chat-second',
           'Dee',
@@ -139,7 +150,9 @@ void main() {
           initial: {
             'tabId': 'tab',
             'accountId': 'owner',
-            'selectedId': scene == 'agent' ? 'agent-chat-second' : 'lead',
+            'selectedId': scene == 'agent' || scene == 'instructions'
+                ? 'agent-chat-second'
+                : 'lead',
           },
         );
         await tester.runAsync(c.refresh);
@@ -181,6 +194,12 @@ void main() {
         }
 
         await settle();
+        if (scene == 'instructions') {
+          await tester.tap(
+            find.byKey(const ValueKey('swarm-instructions-button')),
+          );
+          await settle();
+        }
         if (scene == 'tasks') {
           await tester.tap(find.byKey(const ValueKey('swarm-tasks-button')));
           await settle();
