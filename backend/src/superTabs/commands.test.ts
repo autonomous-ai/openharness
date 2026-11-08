@@ -505,7 +505,7 @@ describe('Super Tab collaboration policy', () => {
     })
 
     // A linked task takes any agent, a Reviewer-kind one too (project instructions, phase 4): joining it hands it no work.
-    it('lets any agent be named into or post in a linked task, and leaves the project chat to people', () => {
+    it('lets any agent be named into or post in a linked task, and in the project\'s channel (Swarm v4)', () => {
       const f = fixture()
       const lead = f.add('lead', 'owner', 'lead', true)
       const build = f.group(), engineer = f.add('engineer', 'owner', build), reviewer = f.add('reviewer', 'owner', f.group())
@@ -518,9 +518,9 @@ describe('Super Tab collaboration policy', () => {
         checks: [{ description: 'Verdict', independent: false }] }, as(lead)).result.conversationId as string
       expect(send(f, as(reviewer), other, []).recipients).toEqual([])
       expect(f.state.conversations.find(c => c.id === other)!.agentIds).toContain(reviewer)
-      // The project chat is the people's: an agent is not named or posted into it.
-      expect(() => send(f, as(engineer), 'lead', [])).toThrow('does not participate')
-      expect(() => send(f, as(lead), 'lead', [engineer])).toThrow('The project chat holds only its coordinator among agents: a post here reaches no other agent.')
+      // The project chat is its channel, where its agents talk (anh Dee 2026-11-08): an agent of it posts and is named there.
+      expect(send(f, as(engineer), 'lead', []).recipients).toEqual([])
+      expect(send(f, as(lead), 'lead', [engineer]).recipients).toEqual([engineer])
     })
 
     it('never delivers an agent its own message, except its note to itself', () => {
@@ -2127,9 +2127,6 @@ describe('any agent of the project', () => {
     // A person sharing there a session already in the Swarm.
     expect(() => f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'reviewer', name: 'reviewer', configuration: config, lead: false },
       owner, { contribution: f.contribution })).toThrow(refused)
-    // A post naming it still reaches nobody new: the refusal says no other agent hears posts here, and where to tell it.
-    expect(() => f.run({ type: 'message.send', conversationId: 'lead', text: 'Announce the review.', replyTo: null, recipientIds: [reviewer] }, f.leadActor))
-      .toThrow(expect.objectContaining({ code: 'PROJECT_CHAT_COORDINATOR_ONLY', message: expect.stringContaining('reaches no other agent') }))
     expect(f.state).toEqual(before)
     // An agent stored there before is named as before (it stays until removed); the coordinator and a new one are still set.
     f.run({ type: 'message.send', conversationId: 'lead', text: 'Your turn.', replyTo: null, recipientIds: [f.worker] }, f.leadActor)
@@ -2147,6 +2144,9 @@ describe('any agent of the project', () => {
     expect(chat().agentIds).not.toContain(shared.result.agentId)
     expect(shared.messages).toEqual([expect.objectContaining({ conversationId: 'lead', recipients: [], source: { kind: 'system' },
       text: 'owner added "Shared" to the project. The project chat holds only its coordinator among agents, so "Shared" works in its tasks.' })])
+    // Swarm v4: a post that names an agent of the project reaches it, in the channel where agents talk.
+    const named = f.run({ type: 'message.send', conversationId: 'lead', text: 'Announce the review.', replyTo: null, recipientIds: [reviewer] }, f.leadActor)
+    expect(named.messages.map(m => [m.text, m.recipients])).toEqual([['Announce the review.', [reviewer]]])
   })
 
   // Dee, 2026-11-04 (#2924): the agent doing the work answers people in the project chat itself. It posts there without
@@ -2194,7 +2194,7 @@ describe('any agent of the project', () => {
       expect(chat().agentIds).not.toContain(reviewer)
     })
 
-    it('refuses everyone else there, and still adds no agent to the project chat', () => {
+    it('refuses another project\'s agent, a Buddy and a stopping one there, and adds no agent by hand', () => {
       const { f, task, engineer, chat, assigned } = working()
       // Of this project, with no task or step in it: added to a task it is not assigned.
       const idle = f.add('idle', 'owner', task)
@@ -2227,18 +2227,16 @@ describe('any agent of the project', () => {
       archive.task.archived = true
       const before = structuredClone(f.state)
       // Another project's agent does not read this chat at all; a Buddy posts only in its own chat (buddies.ts).
-      const refusals: Array<[string, string]> = [[idle, 'FORBIDDEN'], [ended, 'FORBIDDEN'], [lost, 'FORBIDDEN'], [stopped, 'FORBIDDEN'],
-        [archive.agentId, 'FORBIDDEN'], [outsider, 'NOT_FOUND'], [buddy, 'BUDDY_FORBIDDEN'], [stopping, 'FORBIDDEN']]
+      // Swarm v4: any other agent of this project posts in its channel, task or not (joinsChannel).
+      void [idle, ended, lost, stopped, archive]
+      const refusals: Array<[string, string]> = [[outsider, 'NOT_FOUND'], [buddy, 'BUDDY_FORBIDDEN'], [stopping, 'FORBIDDEN']]
       for (const [agentId, code] of refusals) {
         expect(() => f.run(post('Hello room.'), actorOf(agentId))).toThrow(expect.objectContaining({ code }))
         expect(() => f.run({ type: 'message.react', conversationId: 'lead', messageId: 'm1', emoji: 'eyes', on: true }, actorOf(agentId),
           { reaction: { messageId: 'm1', reacted: false } }))
           .toThrow(expect.objectContaining({ code }))
       }
-      // Naming an agent that is not in it, or adding one, is refused as before (#2207), the working Engineer's post too.
-      const notMember = expect.objectContaining({ code: 'PROJECT_CHAT_COORDINATOR_ONLY' })
-      expect(() => f.run(post('Look at this.', null, [idle]), actorOf(engineer))).toThrow(notMember)
-      expect(() => f.run(post('Look at this.', null, [engineer]), f.leadActor)).toThrow(notMember)
+      // Adding one by hand is refused as before (#2207).
       for (const actor of [f.leadActor, owner, actorOf(engineer)]) {
         expect(() => f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: engineer, present: true, lead: false }, actor)).toThrow()
       }
@@ -2248,13 +2246,15 @@ describe('any agent of the project', () => {
 
     // Decided, not by accident (security reviews of #2924): a done task's agent posts its result line in main until the task
     // archives with its merged pull request.
-    it('lets a done task\'s agent post there until its task archives', () => {
+    it('lets a done task\'s agent post there, and after its task archives as any agent of the project', () => {
       const { f, chat, assigned } = working()
       const done = assigned('done', 'done')
       f.run(post('Shipped: the login bug is fixed.'), actorOf(done.agentId))
       expect(chat().agentIds).not.toContain(done.agentId)
+      // Swarm v4: once archived it is still an agent of the project, and posts in its channel as any of them may.
       done.task.archived = true
-      expect(() => f.run(post('One more thing.'), actorOf(done.agentId))).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+      f.run(post('One more thing.'), actorOf(done.agentId))
+      expect(chat().agentIds).toContain(done.agentId)
     })
 
     // Security review 1 of #2924: posting there is no joining, so a Team account's agent marks nothing Team-written there and

@@ -102,7 +102,8 @@ describe('an ask entrusted to a project agent', () => {
     reply(otherAgent, id)
     reply(f.dev, otherAsk)
     reply(f.dev, id, { answers: true })
-    expect(() => reply(f.dev, id, { agentOnly: true })).toThrow('The project chat holds only its coordinator among agents')
+    // An agent-only note to itself is no public answer (Swarm v4: it may post in its channel, so it is not refused).
+    reply(f.dev, id, { agentOnly: true })
     expect(owes()).toEqual([id, otherAsk])
     reply(f.dev, id)
     expect(owes()).toEqual([otherAsk])

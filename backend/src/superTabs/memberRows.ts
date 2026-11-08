@@ -2,6 +2,7 @@ import { agentDisplayName } from './agentNames.js'
 import { isBuddyChat } from './buddies.js'
 import { stableId, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentWrittenNameOf } from './personNames.js'
+import { projectsOf } from './projects.js'
 
 /** One agent that joined or left one chat in a command. */
 export type MemberChange = { group: Conversation; agent: Agent; added: boolean }
@@ -16,11 +17,16 @@ export function memberChanges(original: SuperTabState, state: SuperTabState): Me
   const before = new Map(original.conversations.map(c => [c.id, c.agentIds]))
   const agents = new Map([...original.agents, ...state.agents].map(a => [a.id, a]))
   const changes: MemberChange[] = []
+  // A project's channel takes in every agent of the project that posts or is named there (Swarm v4, joinsChannel): its joining
+  // is no news to the people reading it. Its PM's still is.
+  const channels = new Set(projectsOf(state).map(p => p.leadConversationId))
   for (const group of state.conversations) {
     const was = before.get(group.id)
     if (!was || isBuddyChat(group) || (was.length === group.agentIds.length && was.every((id, i) => group.agentIds[i] === id))) continue
     const then = new Set(was), now = new Set(group.agentIds)
-    for (const id of group.agentIds) if (!then.has(id) && agents.has(id)) changes.push({ group, agent: agents.get(id)!, added: true })
+    for (const id of group.agentIds) {
+      if (!then.has(id) && agents.has(id) && (!channels.has(group.id) || id === group.leadId)) changes.push({ group, agent: agents.get(id)!, added: true })
+    }
     // Nobody reads an archived or dormant chat, and any row wakes it (parts/commit.ts): a long-lived agent's close woke every
     // quiet chat it was ever in (Luna's re-review). Its leaving is said only where people still read.
     if (group.archived || group.dormant) continue

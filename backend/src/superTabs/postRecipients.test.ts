@@ -94,6 +94,17 @@ describe('an agent post that names agents', () => {
   })
 })
 
+// Swarm v4 (anh Dee 2026-11-08): a project's chat is its channel, where its agents talk to each other by name, as lampOS's
+// did in its issues. An agent of the project is reached by @Name there before it has posted in it.
+describe('an agent post in the project channel', () => {
+  it('reaches an agent of the project it names, though that agent has not joined the channel', () => {
+    const { f, post, to, nameOf } = setup()
+    const other = f.add('other', f.task)
+    expect(f.group('lead').agentIds).not.toContain(other)
+    expect(to(post(f.dev, 'lead', `@${nameOf(other)} can you take the flaky login test?`))).toEqual([[other]])
+  })
+})
+
 describe('an agent\'s thread reply', () => {
   it('reaches the agent who wrote the message it answers', () => {
     const { f, post, to } = setup()

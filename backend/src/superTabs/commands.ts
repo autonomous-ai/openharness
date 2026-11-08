@@ -989,6 +989,14 @@ export function joinsProject(state: SuperTabState, group: Conversation, agentId:
   const project = groupProject(state, group)
   return agentProjectId(state, target) === project.id && group.id !== project.leadConversationId
 }
+/** Whether agent [agentId] may join [group] as its project's channel (Swarm v4, anh Dee 2026-11-08): any agent of the project,
+ *  never a Buddy or one stopping, by posting there or being named there. Its agents talk to each other there by name, as
+ *  lampOS's did in its issues; adding one by hand still keeps the chat to its coordinator (#2207). */
+export function joinsChannel(state: SuperTabState, group: Conversation, agentId: string): boolean {
+  const project = projectsOf(state).find(p => p.leadConversationId === group.id)
+  const target = state.agents.find(a => a.id === agentId)
+  return !!project && !!target && !isBuddy(target) && target.workDecision !== 'stop' && agentProjectId(state, target) === project.id
+}
 /** Whether agent [agentId] does work in [group], its project's chat: an agent of that project, never a Buddy, not stopping,
  *  assigned a task or step of the project that is not archived and did not end lost, stopped or cancelled. A done task counts
  *  until it archives with its pull request, so its agent posts its result line (Dee, 2026-11-04, #2924: the agent doing the
@@ -1009,7 +1017,9 @@ export function postable(state: SuperTabState, actor: Actor, conversationId: str
   requireCanChat(state, actor, group)
   if (actor.kind === 'agent' && !group.agentIds.includes(actor.agentId)) {
     if (projectAgent(state, actor, groupProject(state, group).id) && worksInProjectChat(state, group, actor.agentId)) return group
-    if (!joinsProject(state, group, actor.agentId)) fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
+    if (!joinsProject(state, group, actor.agentId) && !joinsChannel(state, group, actor.agentId)) {
+      fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
+    }
     group.agentIds.push(actor.agentId)
   }
   return group
@@ -1374,12 +1384,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
    *  terminal there and posted announcements in the people's chat. Refused whoever adds one and by whichever command; an
    *  agent stored there before stays until it is removed, and a new coordinator is still set (lead). [agentId] is null for an
    *  agent not started yet. */
-  const projectChatJoin = (group: Conversation, agentId: string | null, name: string, post = false) => {
+  const projectChatJoin = (group: Conversation, agentId: string | null, name: string) => {
     if (!projectsOf(state).some(p => p.leadConversationId === group.id)) return
     if (agentId && (agentId === group.leadId || group.agentIds.includes(agentId))) return
-    fail('PROJECT_CHAT_COORDINATOR_ONLY', post
-      ? `The project chat holds only its coordinator among agents: a post here reaches no other agent. Tell ${name} in its task.`
-      : `The project chat holds only its coordinator among agents, so ${name} cannot join it. Its work and announcements go in its task.`, 403)
+    fail('PROJECT_CHAT_COORDINATOR_ONLY',
+      `The project chat holds only its coordinator among agents, so ${name} cannot join it. Its work and announcements go in its task.`, 403)
   }
   /** An agent starts or assigns only what the route chose; a person may still do either by hand. */
   /** A private conversation is chat only (design section 4.8). */
@@ -4747,9 +4756,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         // An agent of this project that another agent names from outside the group joins it, so it can read and answer there
         // (joinsProject). A person's message adds nobody: a person adds an agent to a task with conversation.agent.
         if (!group.agentIds.includes(id) && id !== answered && id !== below && id !== answeredAgent) {
-          // Named only when it is of this chat's project: another's is refused below without its name (Orion's review).
-          if (agentProjectId(state, target) === groupProject(state, group).id) projectChatJoin(group, id, target.displayName ?? target.name, true)
-          if (actor.kind !== 'agent' || !joinsProject(state, group, id)) fail('INVALID_RECIPIENT', 'Choose an agent in this conversation.', 400)
+          // Swarm v4 (anh Dee 2026-11-08): an agent of the project named in its channel joins it, to read and answer there; the
+          // channel is where agents talk (#2207's coordinator-only rule still holds for adding one by hand).
+          if (actor.kind !== 'agent' || !(joinsProject(state, group, id) || joinsChannel(state, group, id))) {
+            fail('INVALID_RECIPIENT', 'Choose an agent in this conversation.', 400)
+          }
           teamJoin(groupProject(state, group), id, group)
           group.agentIds.push(id)
         }
