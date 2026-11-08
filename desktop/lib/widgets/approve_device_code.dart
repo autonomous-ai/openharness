@@ -15,7 +15,10 @@ import '../state/app_state.dart';
 ///
 /// Approving hands that device the account's terminals, so the prompt says what is asking and from
 /// where before anything is sent, and the device then asks its own person whose account it is joining.
-Future<void> approveDeviceByCode(BuildContext context, AppNotifier notifier) async {
+Future<void> approveDeviceByCode(
+  BuildContext context,
+  AppNotifier notifier,
+) async {
   final code = await showAppDialog<String>(
     context: context,
     builder: (_) => const _TypeCodeDialog(),
@@ -27,11 +30,17 @@ Future<void> approveDeviceByCode(BuildContext context, AppNotifier notifier) asy
   } catch (error) {
     if (!context.mounted) return;
     // A daemon from before this route answers its own bare 404, not the backend's sentence.
-    final oldDaemon = !kViewerMode && error is ApiException && error.status == 404 && error.message.startsWith('Request failed');
+    final oldDaemon =
+        !kViewerMode &&
+        error is ApiException &&
+        error.status == 404 &&
+        error.message.startsWith('Request failed');
     await _tell(
       context,
       "Couldn't find that code",
-      oldDaemon ? 'Update Harness on this computer to approve devices from here.' : _sentence(describeApiError(error)),
+      oldDaemon
+          ? 'Update Harness on this computer to approve devices from here.'
+          : _sentence(describeApiError(error)),
     );
     return;
   }
@@ -46,7 +55,9 @@ Future<void> approveDeviceByCode(BuildContext context, AppNotifier notifier) asy
     );
     return;
   }
-  final label = asking['label'] is String ? (asking['label'] as String).trim() : '';
+  final label = asking['label'] is String
+      ? (asking['label'] as String).trim()
+      : '';
   final approve = await showAppDialog<bool>(
     context: context,
     builder: (_) => _ApproveDialog(
@@ -64,13 +75,22 @@ Future<void> approveDeviceByCode(BuildContext context, AppNotifier notifier) asy
     if (approve) {
       await notifier.api.approveSignIn(code);
       if (context.mounted) {
-        await _tell(context, 'Approved', 'Confirm the account on the device to finish signing it in.');
+        await _tell(
+          context,
+          'Approved',
+          'Confirm the account on the device to finish signing it in.',
+        );
       }
     } else {
       await notifier.api.denySignIn(code);
     }
   } catch (error) {
-    if (context.mounted) await _tell(context, "Couldn't answer", _sentence(describeApiError(error)));
+    if (context.mounted)
+      await _tell(
+        context,
+        "Couldn't answer",
+        _sentence(describeApiError(error)),
+      );
   }
 }
 
@@ -81,20 +101,24 @@ String _sentence(String text) {
   return '${trimmed[0].toUpperCase()}${trimmed.substring(1)}';
 }
 
-Future<void> _tell(BuildContext context, String title, String message) => showAppDialog<void>(
-  context: context,
-  builder: (context) => AlertDialog(
-    title: Text(title),
-    content: SizedBox(width: 360, child: Text(message, style: grid.AppType.body(height: 1.4))),
-    actions: [
-      FilledButton(
-        key: const Key('approve-sign-in-ok'),
-        onPressed: () => Navigator.pop(context),
-        child: const Text('OK'),
+Future<void> _tell(BuildContext context, String title, String message) =>
+    showAppDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: SizedBox(
+          width: 360,
+          child: Text(message, style: grid.AppType.body(height: 1.4)),
+        ),
+        actions: [
+          FilledButton(
+            key: const Key('approve-sign-in-ok'),
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
       ),
-    ],
-  ),
-);
+    );
 
 /// The eight digits, typed with any spacing. Owns its controller, so nothing rebuilds over a disposed
 /// one while the dialog animates out.
@@ -139,7 +163,10 @@ class _TypeCodeDialogState extends State<_TypeCodeDialog> {
             const SizedBox(height: 6),
             Text(
               'Never type a code someone sent you — only one a device in front of you is saying.',
-              style: grid.AppType.body(height: 1.4, color: grid.AppPalette.textSecondary),
+              style: grid.AppType.body(
+                height: 1.4,
+                color: grid.AppPalette.textSecondary,
+              ),
             ),
             const SizedBox(height: 14),
             TextField(
@@ -223,7 +250,11 @@ class _ApproveDialog extends StatelessWidget {
                   ? '✓ On the same network as this computer.'
                   : '⚠ On another network${where.isEmpty ? '' : ' ($where)'}. Only approve a device you can see.',
               key: const Key('approve-sign-in-network'),
-              style: body.copyWith(color: sameNetwork ? grid.AppPalette.textSecondary : grid.AppPalette.dangerFill),
+              style: body.copyWith(
+                color: sameNetwork
+                    ? grid.AppPalette.textSecondary
+                    : grid.AppPalette.dangerFill,
+              ),
             ),
           ],
         ),
@@ -265,11 +296,13 @@ class _HoldToApprove extends StatefulWidget {
   State<_HoldToApprove> createState() => _HoldToApproveState();
 }
 
-class _HoldToApproveState extends State<_HoldToApprove> with SingleTickerProviderStateMixin {
-  late final _hold = AnimationController(vsync: this, duration: const Duration(seconds: 2))
-    ..addStatusListener((status) {
-      if (status == AnimationStatus.completed) widget.onApproved();
-    });
+class _HoldToApproveState extends State<_HoldToApprove>
+    with SingleTickerProviderStateMixin {
+  late final _hold =
+      AnimationController(vsync: this, duration: const Duration(seconds: 2))
+        ..addStatusListener((status) {
+          if (status == AnimationStatus.completed) widget.onApproved();
+        });
 
   void _release() {
     if (!_hold.isCompleted) _hold.reverse();
@@ -307,8 +340,16 @@ class _HoldToApproveState extends State<_HoldToApprove> with SingleTickerProvide
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Text('Hold to approve', style: grid.AppType.body(color: grid.AppPalette.textPrimary)),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  child: Text(
+                    'Hold to approve',
+                    style: grid.AppType.body(
+                      color: grid.AppPalette.textPrimary,
+                    ),
+                  ),
                 ),
               ],
             ),

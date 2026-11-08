@@ -142,7 +142,12 @@ EdwardsPoint _elligator(BigInt r0) {
   final w1 = fmod(nt * sqrtAdMinusOne);
   final w2 = fmod(BigInt.one - s2);
   final w3 = fmod(BigInt.one + s2);
-  return EdwardsPoint(fmod(w0 * w3), fmod(w2 * w1), fmod(w1 * w3), fmod(w0 * w2));
+  return EdwardsPoint(
+    fmod(w0 * w3),
+    fmod(w2 * w1),
+    fmod(w1 * w3),
+    fmod(w0 * w2),
+  );
 }
 
 /// noble `hashToRistretto255`: expand_message_xmd(SHA-512) to 64 bytes, then the one-way map.

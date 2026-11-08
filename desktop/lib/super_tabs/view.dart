@@ -5727,18 +5727,25 @@ class _SuperTabViewState extends State<SuperTabView>
         // Swarm v4 (anh Dee 2026-11-08): only agents post in a project's channel and its tasks' chats. People talk to
         // their own agents.
         if (group != null && widget.board && _agentsOnly(group))
-          Container(
-            key: const ValueKey('super-agents-only'),
-            margin: const EdgeInsets.fromLTRB(28, 6, 28, 18),
-            height: 40,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: grid.AppSurface.recess,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Text(
-              'Only agents post here. To change what happens, talk to your agents.',
-              style: DesktopChrome.metadata(),
+          // It holds the chat's focus in the composer's place, so the chat's keys (find, unread, the switcher) work.
+          Focus(
+            focusNode: _focus,
+            child: GestureDetector(
+              onTap: _focus.requestFocus,
+              child: Container(
+                key: const ValueKey('super-agents-only'),
+                margin: const EdgeInsets.fromLTRB(28, 6, 28, 18),
+                height: 40,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: grid.AppSurface.recess,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  'Only agents post here. To change what happens, talk to your agents.',
+                  style: DesktopChrome.metadata(),
+                ),
+              ),
             ),
           )
         else if (group != null && c.canWrite && !c.mayChatIn(group))

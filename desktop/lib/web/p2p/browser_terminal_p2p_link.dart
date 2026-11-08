@@ -149,7 +149,8 @@ class BrowserTerminalP2pLink implements TerminalP2pLink {
   RTCConfiguration _configuration() {
     final turn = policy.turn;
     final servers = <RTCIceServer>[
-      if (policy.stunUrls.isNotEmpty) RTCIceServer(urls: _urls(policy.stunUrls)),
+      if (policy.stunUrls.isNotEmpty)
+        RTCIceServer(urls: _urls(policy.stunUrls)),
       if (turn != null)
         RTCIceServer(
           urls: _urls(turn.urls),

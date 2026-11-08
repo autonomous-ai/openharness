@@ -2268,7 +2268,7 @@ void main() {
           f.connection.terminalCalls
               .singleWhere((c) => c.$1 == 'message')
               .$2['content'],
-          contains('messages lead'),
+          contains('Discuss the architecture.'),
         );
         expect(f.connection.terminalCalls.last.$1, 'terminal_close');
         expect(f.app.activeSwarm.panes, isEmpty);
@@ -2357,11 +2357,8 @@ void main() {
         expect(creates, hasLength(1));
         expect(creates.single.$2['engine'], engine);
         expect(f.connection.joins.single['command']['name'], 'Lead');
-        expect(creates.single.$2['prompt'], contains('messages lead'));
-        expect(
-          creates.single.$2['prompt'],
-          contains('harness super-tab --tab $tabId'),
-        );
+        // Swarm v4: the person's request, with no Swarm manual.
+        expect(creates.single.$2['prompt'], isNot(contains('super-tab')));
         expect(f.app.swarms, hasLength(1));
         expect(f.app.activeSwarmId, initialTab);
         expect(f.app.activeSwarm.superTabId, tabId);
@@ -2405,7 +2402,7 @@ void main() {
           .firstWhere((c) => c.$1 == 'agent_create')
           .$2;
       expect(create['swarmRole'], 'dev');
-      expect(create['prompt'], contains('instructions'));
+      expect(create['prompt'], isNot(contains('super-tab')));
       expect(create['prompt'], isNot(contains('swarm-dev')));
     });
   }
@@ -2754,27 +2751,30 @@ void main() {
     );
   });
 
-  test('the lead prompt points to the project instructions', () async {
-    final f = SuperTabLaunchFixture()..connection.nativeName = 'hi';
-    final box = await f.box(engine: 'claude');
-    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
-    final prompt =
-        f.connection.calls
-                .firstWhere((c) => c.$1 == 'agent_create')
-                .$2['prompt']
-            as String;
-    expect(prompt, contains('harness super-tab --tab '));
-    expect(prompt, contains(' instructions'));
-    for (final gone in [
-      'swarm-lead',
-      'swarm-dev',
-      'Route only',
-      'route GROUP',
-    ]) {
-      expect(prompt, isNot(contains(gone)), reason: gone);
-    }
-    expect(prompt.length, lessThanOrEqualTo(2000));
-  });
+  test(
+    'the lead prompt is its person\'s request, with no Swarm manual',
+    () async {
+      final f = SuperTabLaunchFixture()..connection.nativeName = 'hi';
+      final box = await f.box(engine: 'claude');
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      final prompt =
+          f.connection.calls
+                  .firstWhere((c) => c.$1 == 'agent_create')
+                  .$2['prompt']
+              as String;
+      for (final gone in [
+        'super-tab',
+        'instructions',
+        'swarm-lead',
+        'swarm-dev',
+        'Route only',
+        'route GROUP',
+      ]) {
+        expect(prompt, isNot(contains(gone)), reason: gone);
+      }
+      expect(prompt.length, lessThanOrEqualTo(2000));
+    },
+  );
 
   test('a new Lead starts Claude Code or Codex; other agents stay open to the rest', () async {
     final f = SuperTabLaunchFixture();
@@ -2805,29 +2805,6 @@ void main() {
     expect(member.integration!.engines, isNull);
     expect(member.compatibleEngines, contains('opencode'));
     expect(member.engine, 'opencode');
-  });
-
-  test('the lead prompt asks for short plain replies, answered once', () async {
-    final f = SuperTabLaunchFixture();
-    final box = await f.box(engine: 'claude');
-    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
-    final prompt =
-        f.connection.calls
-                .firstWhere((c) => c.$1 == 'agent_create')
-                .$2['prompt']
-            as String;
-    expect(prompt, contains('helpful colleague'));
-    expect(prompt, contains('under 150 words'));
-    expect(
-      prompt,
-      contains(
-        'UNIQUE_OPERATION_ID [--answers MESSAGE_ID | --reply-to MESSAGE_ID]`',
-      ),
-    );
-    expect(prompt, contains('answer each message once'));
-    expect(prompt, contains('do not post again'));
-    expect(prompt, isNot(contains('Report exact revisions')));
-    expect(prompt, isNot(contains('email addresses')));
   });
 
   test('lost join acknowledgement retries the same contribution without a second native launch', () async {

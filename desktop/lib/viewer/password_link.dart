@@ -47,8 +47,10 @@ final class PasswordLinkFailed extends PasswordLinkResult {
   final DateTime? retryAt;
 }
 
-typedef RelaySocketFactory =
-    WebSocketChannel Function(Uri uri, Iterable<String> protocols);
+typedef RelaySocketFactory = WebSocketChannel Function(
+  Uri uri,
+  Iterable<String> protocols,
+);
 
 WebSocketChannel defaultRelaySocket(Uri uri, Iterable<String> protocols) =>
     WebSocketChannel.connect(uri, protocols: protocols);
@@ -80,7 +82,13 @@ Future<PasswordLinkResult> linkWithPassword({
     },
   );
   final channel = socket(uri, [accessToken]);
-  final run = _PasswordLinkRun(machineId, password, identity, channel, onProgress);
+  final run = _PasswordLinkRun(
+    machineId,
+    password,
+    identity,
+    channel,
+    onProgress,
+  );
   try {
     await channel.ready;
     return await run.drive().timeout(
@@ -192,7 +200,12 @@ class _PasswordLinkRun {
       theirs,
       ours.share,
     );
-    final transcript = _transcript = transcriptHash(_sid, _ci, theirs, ours.share);
+    final transcript = _transcript = transcriptHash(
+      _sid,
+      _ci,
+      theirs,
+      ours.share,
+    );
     onProgress?.call(PasswordLinkStage.verifying);
     _send('e2e_pw_pake', {
       'sid': _sidB64,
@@ -205,7 +218,9 @@ class _PasswordLinkRun {
 
   /// Round 3 in, round 4 out: the machine proves the password too and hands over its identity,
   /// bound to this transcript; ours goes back the same way.
-  Future<PasswordLinkResult?> _answerIdentity(Map<String, dynamic> payload) async {
+  Future<PasswordLinkResult?> _answerIdentity(
+    Map<String, dynamic> payload,
+  ) async {
     final isk = _isk, transcript = _transcript;
     if (isk == null || transcript == null) {
       return const PasswordLinkFailed('PROTOCOL_ERROR');
@@ -215,7 +230,12 @@ class _PasswordLinkRun {
       return _wrongPassword;
     }
     final key = pairKey(isk, _ci);
-    final opened = aeadOpen(key, 3, utf8Bytes('e2e-id'), b64d(payload['enc'] as String));
+    final opened = aeadOpen(
+      key,
+      3,
+      utf8Bytes('e2e-id'),
+      b64d(payload['enc'] as String),
+    );
     final claim = opened == null ? null : jsonObjectOf(opened);
     final id = claim?['id'], sig = claim?['sig'];
     if (id is! String || sig is! String) return _wrongPassword;
@@ -253,7 +273,9 @@ class _PasswordLinkRun {
     final retryAt = payload['retryAt'];
     return PasswordLinkFailed(
       _codeOr(payload['error'], 'PAIR_FAILED'),
-      retryAt: retryAt is int ? DateTime.fromMillisecondsSinceEpoch(retryAt) : null,
+      retryAt: retryAt is int
+          ? DateTime.fromMillisecondsSinceEpoch(retryAt)
+          : null,
     );
   }
 

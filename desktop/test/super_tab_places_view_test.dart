@@ -90,7 +90,7 @@ void main() {
   });
 
   testWidgets(
-    'Leaderboard below Decisions opens this week and participates in Back and Forward',
+    'Humans opens this week\'s Leaderboard, and it takes part in Back and Forward',
     (tester) async {
       final (c, server) = await show(
         tester,
@@ -118,11 +118,6 @@ void main() {
       );
       // Humans is the Leaderboard's way in (task #4466).
       expect(key('project-sidebar-humans'), findsOneWidget);
-      expect(
-        tester.getTopLeft(key('project-sidebar-humans')).dy,
-        greaterThanOrEqualTo(tester.getBottomLeft(key('super-decisions')).dy),
-      );
-      await tap(tester, 'super-decisions');
       await tap(tester, 'project-sidebar-humans');
       expect(find.text('This week'), findsOneWidget);
       expect(key('weekly-person-owner'), findsOneWidget);
@@ -133,9 +128,11 @@ void main() {
         }),
         isTrue,
       );
+      // Back to the project's channel it was opened from (Swarm v4).
       SuperTabPlaces.of(c).step(-1);
       await _settle(tester);
-      expect(key('super-decisions-list'), findsOneWidget);
+      expect(find.text('This week'), findsNothing);
+      expect(key('super-agents-only'), findsOneWidget);
       SuperTabPlaces.of(c).step(1);
       await _settle(tester);
       expect(find.text('This week'), findsOneWidget);

@@ -96,14 +96,29 @@ class RelaySessionCrypto {
       final sig = _bytesField(payload, 'sig');
       final enc = _bytesField(payload, 'enc');
       if (adapterEphPub == null || sig == null || enc == null) return false;
-      if (!await welcomeVerify(_peerPub, machineId, _eph.pub, adapterEphPub, sig)) {
+      if (!await welcomeVerify(
+        _peerPub,
+        machineId,
+        _eph.pub,
+        adapterEphPub,
+        sig,
+      )) {
         return false;
       }
-      final keys = sessionKeys(_eph, adapterEphPub, machineId, _eph.pub, adapterEphPub);
+      final keys = sessionKeys(
+        _eph,
+        adapterEphPub,
+        machineId,
+        _eph.pub,
+        adapterEphPub,
+      );
       final opened = aeadOpen(keys.s2c, 0, utf8Bytes('e2e-welcome'), enc);
       final initial = opened == null ? null : jsonObjectOf(opened);
       final groupKey = initial?['groupKey'], epoch = initial?['epoch'];
-      if (groupKey is! String || groupKey.isEmpty || epoch is! String || epoch.isEmpty) {
+      if (groupKey is! String ||
+          groupKey.isEmpty ||
+          epoch is! String ||
+          epoch.isEmpty) {
         return false;
       }
       _groupKey = b64d(groupKey);
@@ -140,7 +155,10 @@ class RelaySessionCrypto {
       final opened = aeadOpen(s2c, n, utf8Bytes('e2e-rekey'), b64d(enc));
       final next = opened == null ? null : jsonObjectOf(opened);
       final groupKey = next?['groupKey'], epoch = next?['epoch'];
-      if (groupKey is! String || groupKey.isEmpty || epoch is! String || epoch.isEmpty) {
+      if (groupKey is! String ||
+          groupKey.isEmpty ||
+          epoch is! String ||
+          epoch.isEmpty) {
         return false;
       }
       _groupKey = b64d(groupKey);
@@ -161,7 +179,14 @@ class RelaySessionCrypto {
         !sealsDown(type, strictDown: _strictDown)) {
       return frame;
     }
-    final payload = wrapPayload(c2s, 'p', _c2sCounter++, type, null, frame['payload']);
+    final payload = wrapPayload(
+      c2s,
+      'p',
+      _c2sCounter++,
+      type,
+      null,
+      frame['payload'],
+    );
     return {...frame, 'payload': payload};
   }
 

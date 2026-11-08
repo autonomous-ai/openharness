@@ -63,6 +63,7 @@ class ModelManagerController extends ChangeNotifier {
   DateTime? _lastInventoryAttempt;
   bool _panelVisible = false;
   int _actionRevision = 0;
+
   /// The daemon refused this machine's models for good (a computer shared with
   /// this account): polling again every four seconds only grows the log.
   bool _guestRefused = false;

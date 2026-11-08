@@ -10,6 +10,7 @@ import '../core/test_run.dart';
 import 'daemon_pipe_record.dart';
 import 'trusted_pipe.dart';
 import 'windows_pipe.dart';
+
 import 'package:cryptography/dart.dart';
 
 /// The daemon's Unix socket, beside its loopback port (CLI `lib/localSocket.ts`).
@@ -57,7 +58,10 @@ String? defaultDaemonSocketPath(
   // down, never as a place with no socket at all, which would allow the port.
   final home = (environment ?? Platform.environment)['HOME'] ?? '';
   final hash = const DartSha256().hashSync(utf8.encode(dataDir)).bytes;
-  final hex = hash.take(8).map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  final hex = hash
+      .take(8)
+      .map((b) => b.toRadixString(16).padLeft(2, '0'))
+      .join();
   final short = '$home/.harness/s/$hex/${daemonSocketName(port)}';
   return utf8.encode(short).length <= _maxSocketPathBytes ? short : null;
 }

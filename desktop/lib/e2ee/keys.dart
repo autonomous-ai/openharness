@@ -29,7 +29,10 @@ class E2eeIdentity {
   static Future<E2eeIdentity> fromSeed(List<int> seed) async {
     final keyPair = await _ed25519.newKeyPairFromSeed(seed);
     final pub = await keyPair.extractPublicKey();
-    return E2eeIdentity._(Uint8List.fromList(seed), Uint8List.fromList(pub.bytes));
+    return E2eeIdentity._(
+      Uint8List.fromList(seed),
+      Uint8List.fromList(pub.bytes),
+    );
   }
 
   static Future<E2eeIdentity> generate([Rng rng = secureRandomBytes]) =>
@@ -89,15 +92,10 @@ class Ephemeral {
   }
 
   Uint8List sharedSecret(List<int> peerPub) {
-    final secret =
-        _x25519.sharedSecretSync(
-              keyPairData: _keyPair,
-              remotePublicKey: SimplePublicKey(
-                peerPub,
-                type: KeyPairType.x25519,
-              ),
-            )
-            as SecretKeyData;
+    final secret = _x25519.sharedSecretSync(
+      keyPairData: _keyPair,
+      remotePublicKey: SimplePublicKey(peerPub, type: KeyPairType.x25519),
+    ) as SecretKeyData;
     return Uint8List.fromList(secret.bytes);
   }
 }

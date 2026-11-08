@@ -62,7 +62,8 @@ void main() {
               (c) => c.$1 == 'agent_create',
             );
             expect(
-              (create.$2['prompt'] as String).length,
+              // No request and no name: it starts with nothing typed (Swarm v4).
+              (create.$2['prompt'] as String? ?? '').length,
               lessThanOrEqualTo(kFirstTaskMaxLength),
             );
             expect(create.$2['swarmRole'], 'lead');

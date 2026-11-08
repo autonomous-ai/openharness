@@ -50,24 +50,47 @@ class DevAck {
   final int at;
   final String sig;
 
-  DevAck withSig(String sig) =>
-      DevAck(v: v, acct: acct, pub: pub, addSeq: addSeq, signer: signer, at: at, sig: sig);
+  DevAck withSig(String sig) => DevAck(
+    v: v,
+    acct: acct,
+    pub: pub,
+    addSeq: addSeq,
+    signer: signer,
+    at: at,
+    sig: sig,
+  );
 
-  Map<String, Object?> toJson() =>
-      {'v': v, 'acct': acct, 'pub': pub, 'addSeq': addSeq, 'signer': signer, 'at': at, 'sig': sig};
+  Map<String, Object?> toJson() => {
+    'v': v,
+    'acct': acct,
+    'pub': pub,
+    'addSeq': addSeq,
+    'signer': signer,
+    'at': at,
+    'sig': sig,
+  };
 
   /// deviceAck.ts `parseDevAck`: every field present, of its type and within bounds.
   static DevAck? parse(Object? raw) {
     if (raw is! Map) return null;
-    final v = raw['v'], acct = raw['acct'], pub = raw['pub'], addSeq = raw['addSeq'];
+    final v = raw['v'],
+        acct = raw['acct'],
+        pub = raw['pub'],
+        addSeq = raw['addSeq'];
     final signer = raw['signer'], at = raw['at'], sig = raw['sig'];
     if (v != devAckVersion) return null;
     if (acct is! String || acct.isEmpty || acct.length > 128) return null;
-    if (!_isBytes(pub, 32) || !_isBytes(signer, 32) || !_isBytes(sig, 64)) return null;
+    if (!_isBytes(pub, 32) || !_isBytes(signer, 32) || !_isBytes(sig, 64))
+      return null;
     if (addSeq is! int || addSeq < 1 || addSeq > _maxSafe) return null;
     if (at is! int || at <= 0 || at > _maxSafe) return null;
     return DevAck(
-      v: v as int, acct: acct, pub: pub as String, addSeq: addSeq, signer: signer as String, at: at,
+      v: v as int,
+      acct: acct,
+      pub: pub as String,
+      addSeq: addSeq,
+      signer: signer as String,
+      at: at,
       sig: sig as String,
     );
   }
@@ -86,7 +109,13 @@ bool _isBytes(Object? s, int n) {
 
 /// The bytes a signature covers.
 Uint8List devAckMessage(DevAck a) => lvCat([
-  devAckTag, '${a.v}', a.acct, b64d(a.pub), '${a.addSeq}', b64d(a.signer), '${a.at}',
+  devAckTag,
+  '${a.v}',
+  a.acct,
+  b64d(a.pub),
+  '${a.addSeq}',
+  b64d(a.signer),
+  '${a.at}',
 ]);
 
 Future<DevAck> signDevAck(DevAck unsigned, E2eeIdentity identity) async =>
@@ -102,12 +131,18 @@ Future<DevAckCheck> checkDevAck(DevLogState state, Object? raw) async {
   final ack = DevAck.parse(raw);
   if (ack == null) return (ack: null, code: 'BAD_ACK');
   if (ack.acct != state.acct) return (ack: null, code: 'WRONG_ACCOUNT');
-  if (!await verifySignature(b64d(ack.signer), devAckMessage(ack), b64d(ack.sig))) {
+  if (!await verifySignature(
+    b64d(ack.signer),
+    devAckMessage(ack),
+    b64d(ack.sig),
+  )) {
     return (ack: null, code: 'BAD_SIGNATURE');
   }
   // A key saying it is its own owner's says nothing: whoever added it would sign that too.
   if (ack.signer == ack.pub) return (ack: null, code: 'SELF_ACK');
-  if (state.active[ack.signer] == null) return (ack: null, code: 'SIGNER_NOT_ACTIVE');
-  if (state.active[ack.pub]?.seq != ack.addSeq) return (ack: null, code: 'NOT_ADDED_THERE');
+  if (state.active[ack.signer] == null)
+    return (ack: null, code: 'SIGNER_NOT_ACTIVE');
+  if (state.active[ack.pub]?.seq != ack.addSeq)
+    return (ack: null, code: 'NOT_ADDED_THERE');
   return (ack: ack, code: null);
 }

@@ -129,9 +129,7 @@ class _ExportLogsDialogState extends State<_ExportLogsDialog> {
           TextButton(
             onPressed: () => unawaited(revealFile(result.path!)),
             child: Text(
-              RuntimePlatform.isWindows
-                  ? 'Show in Explorer'
-                  : 'Show in Finder',
+              RuntimePlatform.isWindows ? 'Show in Explorer' : 'Show in Finder',
             ),
           ),
         if (!busy)

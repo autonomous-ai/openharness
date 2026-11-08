@@ -72,7 +72,7 @@ void main() {
     final create = f.connection.calls
         .firstWhere((c) => c.$1 == 'agent_create')
         .$2;
-    expect(create['prompt'], contains('messages $chatId'));
+    expect(create['prompt'], 'Tidy the docs.');
     expect(create['swarmRole'], 'dev');
     expect(create['cwd'] ?? create['folder'], '/work/project');
     final join = f.connection.joins.single['command'] as Map;

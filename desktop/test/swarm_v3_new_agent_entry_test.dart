@@ -41,7 +41,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final row = find.byKey(const ValueKey('super-new-agent-row'));
+    final row = find.byKey(const ValueKey('project-sidebar-agents-add'));
     await tester.ensureVisible(row);
     await tester.tap(row);
     await tester.pumpAndSettle();

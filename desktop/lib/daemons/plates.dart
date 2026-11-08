@@ -81,9 +81,7 @@ class DaemonPlates {
         final sizes = (_eggs[kind] ?? _eggs['first']) as Map?;
         final stages = sizes?[size.name] as Map?;
         final frames = stages?[stage] as List? ?? const [];
-        return [
-          for (final f in frames) ?PlateFrame.fromJson(f),
-        ];
+        return [for (final f in frames) ?PlateFrame.fromJson(f)];
       }();
 
   /// Whether [id] has baked plates.
@@ -293,7 +291,8 @@ class EggInk implements PlateCellInk {
   Color get glow => light == 'plain' ? gradient.bottom : lightColour;
 
   @override
-  Color? cell(int rows, int r, String ch, String mat) => glyph(rows, r, ch, mat);
+  Color? cell(int rows, int r, String ch, String mat) =>
+      glyph(rows, r, ch, mat);
 
   Color? glyph(int rows, int r, String ch, String mat) =>
       _cache.putIfAbsent((rows, r, ch, mat), () {
@@ -365,7 +364,8 @@ class IndividualInk implements PlateCellInk {
   Color get glow => family.bottom;
 
   @override
-  Color? cell(int rows, int r, String ch, String mat) => glyph(rows, r, ch, mat);
+  Color? cell(int rows, int r, String ch, String mat) =>
+      glyph(rows, r, ch, mat);
 
   Color? glyph(int rows, int r, String ch, String mat) =>
       _cache.putIfAbsent((rows, r, ch, mat), () {
