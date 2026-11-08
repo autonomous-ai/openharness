@@ -83,26 +83,23 @@ void main() {
     app.agentAlerts.clear();
   });
 
-  testWidgets(
-    'clicking it opens that agent — which also proves it is reachable',
-    (tester) async {
-      // `tester.tap` dispatches a real pointer through hit testing, so an ancestor refusing the hit
-      // test fails this rather than needing an assertion of its own. That is what the first version
-      // did, and it left a banner perfectly visible and perfectly dead.
-      await show(tester);
-      expect(app.panes, isEmpty);
+  testWidgets('clicking it opens that agent — which also proves it is reachable', (tester) async {
+    // `tester.tap` dispatches a real pointer through hit testing, so an ancestor refusing the hit
+    // test fails this rather than needing an assertion of its own. That is what the first version
+    // did, and it left a banner perfectly visible and perfectly dead.
+    await show(tester);
+    expect(app.panes, isEmpty);
 
-      await tester.tap(find.byKey(const Key('agent-alert-banner')));
-      await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('agent-alert-banner')));
+    await tester.pumpAndSettle();
 
-      // The agent now has a pane, and it is the focused one.
-      expect(app.panes, isNotEmpty);
-      final pane = app.panes.firstWhere(
-        (p) => p.machineId == 'm1' && p.agentId == 'a1',
-      );
-      expect(app.focusedPane?.id, pane.id);
-    },
-  );
+    // The agent now has a pane, and it is the focused one.
+    expect(app.panes, isNotEmpty);
+    final pane = app.panes.firstWhere(
+      (p) => p.machineId == 'm1' && p.agentId == 'a1',
+    );
+    expect(app.focusedPane?.id, pane.id);
+  });
 
   testWidgets('clicking it takes the banner down', (tester) async {
     await show(tester);
@@ -111,9 +108,7 @@ void main() {
     expect(find.byKey(const Key('agent-alert-banner')), findsNothing);
   });
 
-  testWidgets('dismissing takes it down WITHOUT opening anything', (
-    tester,
-  ) async {
+  testWidgets('dismissing takes it down WITHOUT opening anything', (tester) async {
     // A notice you can only answer by following it would make every stray banner a navigation.
     await show(tester);
     await tester.tap(find.byKey(const Key('agent-alert-dismiss')));

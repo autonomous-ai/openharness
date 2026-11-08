@@ -5,8 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/agent_messages/shared_tabs.dart';
 import 'package:harness/agent_messages/tab_settings.dart';
-import 'package:harness/agent_messages/shared_tabs_model.dart'
-    show memberDeskTabId;
+import 'package:harness/agent_messages/shared_tabs_model.dart' show memberDeskTabId;
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
@@ -143,11 +142,7 @@ Map<String, dynamic> _roster({
 
 /// Shared tab [sharedTabId]'s desk tab on a member's desk (R1), made in [app]
 /// and named [name] there.
-String _memberTab(
-  AppNotifier app,
-  String sharedTabId, {
-  String name = 'theirs',
-}) {
+String _memberTab(AppNotifier app, String sharedTabId, {String name = 'theirs'}) {
   final id = memberDeskTabId(sharedTabId);
   app.openSharedDeskTab(id, 'theirs');
   app.renameSwarm(id, name);
@@ -394,48 +389,47 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets(
-    'File offers Make Leader, then Remove Leader, for the focused harness',
-    (tester) async {
-      // Prose: with Agent Messages on, the focused own harness offers Make
-      // Leader; choosing it makes it the leader, and the offer becomes Remove
-      // Leader; with Agent Messages off nothing is offered.
-      final app = _App();
-      addTearDown(app.dispose);
-      final api = await joinAgentMessagesDesk(app, _LeaderApi());
-      app.panes.add(TerminalPane(id: 900, machineId: 'm', agentId: 'a'));
-      app.focusPane(900);
-      expect(app.focusedPane?.agentId, 'a');
-      await mount(tester, app, nativeTabs: true);
-      await tester.pump(const Duration(milliseconds: 50));
-      await tester.idle();
-      Map actions() => updates().last['paneActions'] as Map;
-      expect(actions()['toggleLeader'], isTrue);
-      expect(updates().last['leaderAction'], 'make');
+  testWidgets('File offers Make Leader, then Remove Leader, for the focused harness', (
+    tester,
+  ) async {
+    // Prose: with Agent Messages on, the focused own harness offers Make
+    // Leader; choosing it makes it the leader, and the offer becomes Remove
+    // Leader; with Agent Messages off nothing is offered.
+    final app = _App();
+    addTearDown(app.dispose);
+    final api = await joinAgentMessagesDesk(app, _LeaderApi());
+    app.panes.add(TerminalPane(id: 900, machineId: 'm', agentId: 'a'));
+    app.focusPane(900);
+    expect(app.focusedPane?.agentId, 'a');
+    await mount(tester, app, nativeTabs: true);
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.idle();
+    Map actions() => updates().last['paneActions'] as Map;
+    expect(actions()['toggleLeader'], isTrue);
+    expect(updates().last['leaderAction'], 'make');
 
-      unawaited(
-        tester.binding.defaultBinaryMessenger.handlePlatformMessage(
-          'harness/swarm_tabs',
-          const StandardMethodCodec().encodeMethodCall(
-            const MethodCall('toggleLeader'),
-          ),
-          (_) {},
+    unawaited(
+      tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        'harness/swarm_tabs',
+        const StandardMethodCodec().encodeMethodCall(
+          const MethodCall('toggleLeader'),
         ),
-      );
-      await tester.pump(const Duration(milliseconds: 50));
-      await tester.idle();
-      expect(app.tabLeader(app.activeSwarmId)?.agentId, 'a');
-      expect(updates().last['leaderAction'], 'remove');
+        (_) {},
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.idle();
+    expect(app.tabLeader(app.activeSwarmId)?.agentId, 'a');
+    expect(updates().last['leaderAction'], 'remove');
 
-      api.unsupported = true;
-      await app.agentMessages.refresh();
-      await tester.pump(const Duration(milliseconds: 50));
-      await tester.idle();
-      expect(actions()['toggleLeader'], isFalse);
-      expect(updates().last.containsKey('leaderAction'), isFalse);
-      await tester.pumpWidget(const SizedBox());
-    },
-  );
+    api.unsupported = true;
+    await app.agentMessages.refresh();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.idle();
+    expect(actions()['toggleLeader'], isFalse);
+    expect(updates().last.containsKey('leaderAction'), isFalse);
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets('Tab Activity: the strip button and View row follow the '
       'toggle\'s own condition and the open state', (tester) async {
@@ -600,10 +594,7 @@ void main() {
           'stopSharingTab': true,
           'moveTabHere': true,
         });
-        expect(
-          rowOf(updates(), shared).containsKey('canInvitePeople'),
-          isFalse,
-        );
+        expect(rowOf(updates(), shared).containsKey('canInvitePeople'), isFalse);
 
         // A tab another account shares with this one: a member's, never Move
         // Here, and no Invite or Stop.
@@ -825,7 +816,10 @@ void main() {
 
       // Shared from the laptop: no Invite People here (final review of 1c,
       // M5), in the palette as in the menus.
-      expect(await offered(), ['Stop Sharing Tab', 'Move Tab Here']);
+      expect(await offered(), [
+        'Stop Sharing Tab',
+        'Move Tab Here',
+      ]);
       app.selectSwarm(member);
       await tester.pumpAndSettle();
       expect(await offered(), ['Leave Tab']);

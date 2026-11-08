@@ -4,6 +4,7 @@ import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/laid_out_list.dart';
 import 'controller.dart';
 import 'identity.dart';
 import 'model.dart';
@@ -73,14 +74,17 @@ class SwarmTaskList extends StatelessWidget {
             ),
           ),
           Expanded(
-            child: ListView.separated(
+            // Its cards are kept laid out off screen, so a hovered one never breaks hit testing (laid_out_list.dart).
+            child: LaidOutListView.builder(
               key: const ValueKey('swarm-task-list'),
               padding: const EdgeInsets.all(grid.AppDesktop.groupGap),
               itemCount: tasks.length,
-              separatorBuilder: (_, _) =>
-                  const SizedBox(height: grid.AppDesktop.controlGap),
-              itemBuilder: (context, i) =>
-                  _card(context, tasks[i].$1, tasks[i].$2),
+              itemBuilder: (context, i) => Padding(
+                padding: EdgeInsets.only(
+                  top: i == 0 ? 0 : grid.AppDesktop.controlGap,
+                ),
+                child: _card(context, tasks[i].$1, tasks[i].$2),
+              ),
             ),
           ),
         ],

@@ -297,10 +297,7 @@ void main() {
     }
 
     test('another account\'s tabs and history do not open', () async {
-      final app = signedInAs(
-        'new-account',
-        saved: layout(owner: 'old-account'),
-      );
+      final app = signedInAs('new-account', saved: layout(owner: 'old-account'));
       addTearDown(app.dispose);
 
       await app.restorePaneLayoutForTest();
@@ -311,10 +308,7 @@ void main() {
     });
 
     test('the same account gets its tabs back', () async {
-      final app = signedInAs(
-        'old-account',
-        saved: layout(owner: 'old-account'),
-      );
+      final app = signedInAs('old-account', saved: layout(owner: 'old-account'));
       addTearDown(app.dispose);
 
       await app.restorePaneLayoutForTest();

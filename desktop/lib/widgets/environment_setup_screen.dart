@@ -322,8 +322,10 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
     ],
   );
 
-  Widget _checkList(EnvironmentReadiness state, {bool checking = false}) =>
-      EnvironmentCheckList(readiness: state, checking: checking);
+  Widget _checkList(
+    EnvironmentReadiness state, {
+    bool checking = false,
+  }) => EnvironmentCheckList(readiness: state, checking: checking);
 
   Widget _planList(List<EnvironmentPlanItem> items) {
     if (items.isEmpty) {

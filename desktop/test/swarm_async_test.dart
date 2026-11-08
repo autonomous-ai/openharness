@@ -439,7 +439,6 @@ class _FlushLog implements FlushableAppLog {
     flushes++;
     if (durable) durableFlushes++;
   }
-
   @override
   void record(
     AppLogLevel level,

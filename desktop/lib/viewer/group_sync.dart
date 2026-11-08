@@ -229,11 +229,7 @@ Future<GroupSyncOutcome> syncTrustGroup({
     if (pin == null) return GroupSyncOutcome.none;
     final identity = await keys.identity();
     final selfPub = b64e(identity.pub);
-    final local = await _seeded(
-      keys,
-      selfPub,
-      await suspended?.call() ?? const {},
-    );
+    final local = await _seeded(keys, selfPub, await suspended?.call() ?? const {});
     final self = GroupMember(
       pub: selfPub,
       kind: 'viewer',
@@ -265,8 +261,7 @@ Future<GroupSyncOutcome> syncTrustGroup({
       });
     }().timeout(timeout, onTimeout: () => null);
     if (reply == null || reply['error'] != null) return GroupSyncOutcome.none;
-    if (reply['devlog'] != null)
-      await onDevlog?.call(b64e(pin.pub), reply['devlog']);
+    if (reply['devlog'] != null) await onDevlog?.call(b64e(pin.pub), reply['devlog']);
 
     final incoming = GroupRoster.parse(reply);
     final theirs = GroupMember.tryParse(reply['self']);

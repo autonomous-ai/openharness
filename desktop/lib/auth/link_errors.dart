@@ -22,14 +22,17 @@ String humanizeLinkError(String code, String machineId, {DateTime? retryAt}) {
     'BAD_INTENT' =>
       'The connection request was malformed — this usually means a version mismatch. '
           'Update harness on both machines and try again.',
-    'WRONG_PASSWORD' => 'That password is wrong. Check it against the other machine and try again.',
+    'WRONG_PASSWORD' =>
+      'That password is wrong. Check it against the other machine and try again.',
     'BUSY' =>
       'Machine $machineId is already handling another link attempt. Wait a moment and try again.',
     'TIMEOUT' =>
       "Machine $machineId didn't respond in time. Make sure it's running `harness start` "
           'and reachable, then try again.',
-    'SEND_FAILED' => 'Could not reach the relay to start linking. Check your network connection and try again.',
-    'DERIVE_FAILED' => 'Could not process the password locally. Try again; if it persists, restart the app and retry.',
+    'SEND_FAILED' =>
+      'Could not reach the relay to start linking. Check your network connection and try again.',
+    'DERIVE_FAILED' =>
+      'Could not process the password locally. Try again; if it persists, restart the app and retry.',
     'SELECT_FAILED' =>
       "Could not find machine $machineId, or it isn't reachable right now. Check that it has "
           'run `harness start`.',

@@ -54,64 +54,32 @@ class AccountDevice {
   bool get isMachine => kind == 'machine';
 
   AccountDevice withLastSeen(DateTime? at) => AccountDevice(
-    pub: pub,
-    label: label,
-    kind: kind,
-    machineId: machineId,
-    addedAt: addedAt,
-    fingerprint: fingerprint,
-    self: self,
-    lastSeen: at,
-    seq: seq,
-    pending: pending,
-    suspended: suspended,
+    pub: pub, label: label, kind: kind, machineId: machineId, addedAt: addedAt,
+    fingerprint: fingerprint, self: self, lastSeen: at, seq: seq, pending: pending, suspended: suspended,
     confirmedOn: confirmedOn,
   );
 
   static AccountDevice? fromDaemon(Object? raw) {
     if (raw is! Map) return null;
-    final pub = raw['pub'],
-        label = raw['label'],
-        kind = raw['kind'],
-        machineId = raw['machineId'];
+    final pub = raw['pub'], label = raw['label'], kind = raw['kind'], machineId = raw['machineId'];
     final addedAt = raw['addedAt'], fp = raw['fingerprint'], self = raw['self'];
-    if (pub is! String ||
-        label is! String ||
-        kind is! String ||
-        addedAt is! int ||
-        fp is! String)
-      return null;
+    if (pub is! String || label is! String || kind is! String || addedAt is! int || fp is! String) return null;
     final confirmed = raw['confirmed'];
     return AccountDevice(
-      pub: pub,
-      label: label,
-      kind: kind,
-      machineId: machineId is String ? machineId : '',
-      addedAt: DateTime.fromMillisecondsSinceEpoch(addedAt),
-      fingerprint: fp,
-      self: self == true,
+      pub: pub, label: label, kind: kind, machineId: machineId is String ? machineId : '',
+      addedAt: DateTime.fromMillisecondsSinceEpoch(addedAt), fingerprint: fp, self: self == true,
       seq: raw['seq'] is int ? raw['seq'] as int : null,
       pending: raw['pending'] == true,
       suspended: raw['suspended'] == true,
       // A daemon that predates "It's mine" for the account sends none.
-      confirmedOn: confirmed is Map && confirmed['label'] is String
-          ? confirmed['label'] as String
-          : null,
+      confirmedOn: confirmed is Map && confirmed['label'] is String ? confirmed['label'] as String : null,
     );
   }
 
   static AccountDevice fromRow(DeviceLogRow row) => AccountDevice(
-    pub: row.member.pub,
-    label: row.member.label,
-    kind: row.member.kind,
-    machineId: row.member.machineId,
-    addedAt: DateTime.fromMillisecondsSinceEpoch(row.member.addedAt),
-    fingerprint: row.fingerprint,
-    self: row.self,
-    seq: row.member.seq,
-    pending: row.pending,
-    suspended: row.suspended,
-    confirmedOn: row.confirmed?.label,
+    pub: row.member.pub, label: row.member.label, kind: row.member.kind, machineId: row.member.machineId,
+    addedAt: DateTime.fromMillisecondsSinceEpoch(row.member.addedAt), fingerprint: row.fingerprint, self: row.self,
+    seq: row.member.seq, pending: row.pending, suspended: row.suspended, confirmedOn: row.confirmed?.label,
   );
 }
 
@@ -137,10 +105,7 @@ class DeviceConflict {
   /// The listing's `conflict` and the `device_conflict` frame's payload are the same object.
   static DeviceConflict? fromJson(Object? raw) {
     if (raw is! Map) return null;
-    final pub = raw['pub'],
-        label = raw['label'],
-        fp = raw['fingerprint'],
-        addedAt = raw['addedAt'];
+    final pub = raw['pub'], label = raw['label'], fp = raw['fingerprint'], addedAt = raw['addedAt'];
     if (pub is! String || fp is! String || addedAt is! int) return null;
     return DeviceConflict(
       pub: pub,
@@ -231,16 +196,9 @@ class AccountDevices {
   /// Apps not seen in [unusedAfter]: most likely a browser whose data was cleared, which never signs
   /// its own removal. Offered for removal together; never this app, never a computer (whose
   /// absence is visible in the machine list anyway), never one the backend has no record of.
-  List<AccountDevice> unused(
-    DateTime now, {
-    Duration unusedAfter = const Duration(days: 90),
-  }) => [
+  List<AccountDevice> unused(DateTime now, {Duration unusedAfter = const Duration(days: 90)}) => [
     for (final d in devices)
-      if (!d.self &&
-          !d.isMachine &&
-          d.lastSeen != null &&
-          now.difference(d.lastSeen!) > unusedAfter)
-        d,
+      if (!d.self && !d.isMachine && d.lastSeen != null && now.difference(d.lastSeen!) > unusedAfter) d,
   ];
 
   /// This computer (or app): shown on its own in the "This device" card, so the list below leaves it out.
@@ -256,22 +214,13 @@ class AccountDevices {
   List<AccountDevice> listed(Set<String> newPubs) {
     final rows = [
       for (var i = 0; i < devices.length; i++)
-        if (!devices[i].self)
-          (
-            index: i,
-            device: devices[i],
-            isNew: newPubs.contains(devices[i].pub),
-          ),
+        if (!devices[i].self) (index: i, device: devices[i], isNew: newPubs.contains(devices[i].pub)),
     ];
     rows.sort((a, b) {
       if (a.isNew != b.isNew) return a.isNew ? -1 : 1;
-      final byTime =
-          (b.isNew ? b.device.addedAt : b.device.lastSeen ?? b.device.addedAt)
-              .compareTo(
-                a.isNew
-                    ? a.device.addedAt
-                    : a.device.lastSeen ?? a.device.addedAt,
-              );
+      final byTime = (b.isNew ? b.device.addedAt : b.device.lastSeen ?? b.device.addedAt).compareTo(
+        a.isNew ? a.device.addedAt : a.device.lastSeen ?? a.device.addedAt,
+      );
       return byTime != 0 ? byTime : a.index.compareTo(b.index);
     });
     return [for (final r in rows) r.device];
@@ -292,11 +241,7 @@ class AccountDevices {
   AccountDevices withLastSeen(Map<String, int> seen) => AccountDevices(
     devices: [
       for (final d in devices)
-        d.withLastSeen(
-          seen[d.pub] == null
-              ? null
-              : DateTime.fromMillisecondsSinceEpoch(seen[d.pub]!),
-        ),
+        d.withLastSeen(seen[d.pub] == null ? null : DateTime.fromMillisecondsSinceEpoch(seen[d.pub]!)),
     ],
     frozenReason: frozenReason,
     frozenPeers: frozenPeers,
@@ -317,37 +262,18 @@ class AccountDevices {
     final peers = raw['frozenPeers'];
     final pending = raw['pending'];
     return AccountDevices(
-      devices: members is List
-          ? members
-                .map(AccountDevice.fromDaemon)
-                .whereType<AccountDevice>()
-                .toList()
-          : const [],
-      frozenReason: frozen is Map && frozen['reason'] is String
-          ? frozen['reason'] as String
-          : null,
-      frozenPeers: peers is List
-          ? peers.whereType<String>().toList()
-          : const [],
+      devices: members is List ? members.map(AccountDevice.fromDaemon).whereType<AccountDevice>().toList() : const [],
+      frozenReason: frozen is Map && frozen['reason'] is String ? frozen['reason'] as String : null,
+      frozenPeers: peers is List ? peers.whereType<String>().toList() : const [],
       // An older daemon sends none of these: no `pending` array is how this end knows.
-      pending: pending is List
-          ? pending.whereType<String>().toList()
-          : const [],
+      pending: pending is List ? pending.whereType<String>().toList() : const [],
       joinedSeq: raw['joinedSeq'] is int ? raw['joinedSeq'] as int : null,
-      baselineSeen: raw['baselineSeen'] is bool
-          ? raw['baselineSeen'] as bool
-          : true,
-      baselineKeys: raw['baseline'] is List
-          ? (raw['baseline'] as List).whereType<String>().toList()
-          : null,
+      baselineSeen: raw['baselineSeen'] is bool ? raw['baselineSeen'] as bool : true,
+      baselineKeys: raw['baseline'] is List ? (raw['baseline'] as List).whereType<String>().toList() : null,
       conflict: DeviceConflict.fromJson(raw['conflict']),
       historyAvailable: pending is List,
-      departed: [
-        for (final d in DeviceLogDeparted.listFromJson(raw['departed'])) d.pub,
-      ],
-      registerError: raw['registerError'] is String
-          ? raw['registerError'] as String
-          : null,
+      departed: [for (final d in DeviceLogDeparted.listFromJson(raw['departed'])) d.pub],
+      registerError: raw['registerError'] is String ? raw['registerError'] as String : null,
     ).withLastSeen(parseLastSeen(raw['lastSeen']));
   }
 
@@ -406,12 +332,8 @@ class DevicesRebaseline {
   static DevicesRebaseline? fromDaemon(Map<String, dynamic>? raw) {
     if (raw == null) return null;
     if (raw['error'] == 'LOG_CHANGED') return const DevicesRebaseline.changed();
-    if (raw['error'] == 'OTHER_ACCOUNT')
-      return const DevicesRebaseline.otherAccount();
-    String name(Object? m) =>
-        m is Map && m['label'] is String && (m['label'] as String).isNotEmpty
-        ? m['label'] as String
-        : 'A device';
+    if (raw['error'] == 'OTHER_ACCOUNT') return const DevicesRebaseline.otherAccount();
+    String name(Object? m) => m is Map && m['label'] is String && (m['label'] as String).isNotEmpty ? m['label'] as String : 'A device';
     final added = raw['added'], removed = raw['removed'];
     return DevicesRebaseline(
       added: added is List ? added.map(name).toList() : const [],
@@ -423,12 +345,8 @@ class DevicesRebaseline {
   static DevicesRebaseline fromViewer(DeviceLogRebaseline r) => r.otherAccount
       ? const DevicesRebaseline.otherAccount()
       : DevicesRebaseline(
-          added: [
-            for (final m in r.added) m.label.isEmpty ? 'A device' : m.label,
-          ],
-          removed: [
-            for (final m in r.removed) m.label.isEmpty ? 'A device' : m.label,
-          ],
+          added: [for (final m in r.added) m.label.isEmpty ? 'A device' : m.label],
+          removed: [for (final m in r.removed) m.label.isEmpty ? 'A device' : m.label],
           head: r.logChanged ? null : r.head,
           logChanged: r.logChanged,
         );
@@ -474,12 +392,7 @@ class NewDeviceNotice {
   }
 
   static NewDeviceNotice fromMember(DevLogMember m, {bool suspended = false}) =>
-      NewDeviceNotice(
-        pub: m.pub,
-        label: m.label,
-        kind: m.kind,
-        suspended: suspended,
-      );
+      NewDeviceNotice(pub: m.pub, label: m.label, kind: m.kind, suspended: suspended);
 }
 
 /// `{pub: ms}` as the backend answers `GET /api/device-keys/seen`; anything else is dropped.
@@ -492,19 +405,9 @@ Map<String, int> parseLastSeen(Object? raw) => {
 /// The line under a device's name in the list: `Computer · active now`, `App · last active 2 days ago`.
 /// With [sameName] — another device goes by the same name — it ends in the first group of the key code,
 /// the one thing that tells the two apart without putting the whole code in the row.
-String deviceDetailLine(
-  AccountDevice d, {
-  required DateTime now,
-  required bool sameName,
-}) {
+String deviceDetailLine(AccountDevice d, {required DateTime now, required bool sameName}) {
   final what = d.isMachine ? 'Computer' : 'App';
-  final when = activityPhrase(
-    lastSeen: d.lastSeen,
-    addedAt: d.addedAt,
-    now: now,
-  );
-  final tail = sameName && d.fingerprint.isNotEmpty
-      ? ' · ${d.fingerprint.split('·').first}…'
-      : '';
+  final when = activityPhrase(lastSeen: d.lastSeen, addedAt: d.addedAt, now: now);
+  final tail = sameName && d.fingerprint.isNotEmpty ? ' · ${d.fingerprint.split('·').first}…' : '';
   return '$what · $when$tail';
 }

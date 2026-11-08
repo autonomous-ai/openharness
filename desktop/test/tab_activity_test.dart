@@ -12,19 +12,9 @@ void main() {
         asked.add(payload);
         return {
           'harnesses': [
-            {
-              'machineId': 'm1',
-              'agentId': 'a1',
-              'state': 'working',
-              'summary': 'fix the build',
-            },
+            {'machineId': 'm1', 'agentId': 'a1', 'state': 'working', 'summary': 'fix the build'},
             {'machineId': 'm1', 'agentId': 'a2', 'state': 'idle'},
-            {
-              'machineId': 'm2',
-              'agentId': 'a3',
-              'state': 'unknown',
-              'away': true,
-            },
+            {'machineId': 'm2', 'agentId': 'a3', 'state': 'unknown', 'away': true},
           ],
         };
       },
@@ -33,64 +23,35 @@ void main() {
     expect(asked, [
       {'action': 'tab_activity', 'tabId': 'tab-1'},
     ]);
-    expect(
-      [
-        for (final r in rows)
-          (r.machineId, r.agentId, r.state, r.summary, r.away),
-      ],
-      [
-        ('m1', 'a1', TabHarnessState.working, 'fix the build', false),
-        ('m1', 'a2', TabHarnessState.idle, null, false),
-        ('m2', 'a3', TabHarnessState.unknown, null, true),
-      ],
-    );
+    expect([for (final r in rows) (r.machineId, r.agentId, r.state, r.summary, r.away)], [
+      ('m1', 'a1', TabHarnessState.working, 'fix the build', false),
+      ('m1', 'a2', TabHarnessState.idle, null, false),
+      ('m2', 'a3', TabHarnessState.unknown, null, true),
+    ]);
   });
 
-  test(
-    'drops malformed rows; an unknown state or empty summary is unknown / none',
-    () async {
-      final reader = TabActivityReader(
-        request: (_) async => {
-          'harnesses': [
-            'nope',
-            {'machineId': '', 'agentId': 'a'},
-            {'machineId': 'm', 'agentId': 5},
-            {
-              'machineId': 'm',
-              'agentId': 'ok',
-              'state': 'sleeping',
-              'summary': '',
-            },
-            {
-              'machineId': 'm',
-              'agentId': 'x',
-              'state': 'idle',
-              'summary': 7,
-              'away': 'yes',
-            },
-          ],
-        },
-      );
-      final rows = await reader.read('t');
-      expect(
-        [for (final r in rows) (r.agentId, r.state, r.summary, r.away)],
-        [
-          ('ok', TabHarnessState.unknown, null, false),
-          ('x', TabHarnessState.idle, null, false),
+  test('drops malformed rows; an unknown state or empty summary is unknown / none', () async {
+    final reader = TabActivityReader(
+      request: (_) async => {
+        'harnesses': [
+          'nope',
+          {'machineId': '', 'agentId': 'a'},
+          {'machineId': 'm', 'agentId': 5},
+          {'machineId': 'm', 'agentId': 'ok', 'state': 'sleeping', 'summary': ''},
+          {'machineId': 'm', 'agentId': 'x', 'state': 'idle', 'summary': 7, 'away': 'yes'},
         ],
-      );
-    },
-  );
+      },
+    );
+    final rows = await reader.read('t');
+    expect([for (final r in rows) (r.agentId, r.state, r.summary, r.away)], [
+      ('ok', TabHarnessState.unknown, null, false),
+      ('x', TabHarnessState.idle, null, false),
+    ]);
+  });
 
   test('an answer without a list is nothing', () async {
-    expect(
-      await TabActivityReader(request: (_) async => {}).read('t'),
-      isEmpty,
-    );
-    expect(
-      await TabActivityReader(request: (_) async => {'harnesses': 3}).read('t'),
-      isEmpty,
-    );
+    expect(await TabActivityReader(request: (_) async => {}).read('t'), isEmpty);
+    expect(await TabActivityReader(request: (_) async => {'harnesses': 3}).read('t'), isEmpty);
   });
 
   test('a refusal is a SharedTabsFailure with the daemon\'s code; other errors mean unreachable', () async {
@@ -108,11 +69,7 @@ void main() {
       throwsA(
         isA<SharedTabsFailure>()
             .having((e) => e.code, 'code', 'NOT_A_TAB')
-            .having(
-              (e) => e.message,
-              'message',
-              'That tab is not on your desk.',
-            ),
+            .having((e) => e.message, 'message', 'That tab is not on your desk.'),
       ),
     );
     final bare = TabActivityReader(
@@ -122,33 +79,21 @@ void main() {
     );
     await expectLater(
       bare.read('t'),
-      throwsA(
-        isA<SharedTabsFailure>().having(
-          (e) => e.message,
-          'message',
-          'MESSAGES_OFF',
-        ),
-      ),
+      throwsA(isA<SharedTabsFailure>().having((e) => e.message, 'message', 'MESSAGES_OFF')),
     );
-    final down = TabActivityReader(
-      request: (_) => Future.error(StateError('closed')),
-    );
+    final down = TabActivityReader(request: (_) => Future.error(StateError('closed')));
     await expectLater(
       down.read('t'),
-      throwsA(
-        isA<SharedTabsFailure>().having((e) => e.code, 'code', 'UNAVAILABLE'),
-      ),
+      throwsA(isA<SharedTabsFailure>().having((e) => e.code, 'code', 'UNAVAILABLE')),
     );
     // On Desktop the daemon asked is this computer's, and the line says so, as it always has.
     await expectLater(
       down.read('t'),
-      throwsA(
-        isA<SharedTabsFailure>().having(
-          (e) => e.message,
-          'message',
-          'Harness could not reach this computer. Check that it is online, then try again.',
-        ),
-      ),
+      throwsA(isA<SharedTabsFailure>().having(
+        (e) => e.message,
+        'message',
+        'Harness could not reach this computer. Check that it is online, then try again.',
+      )),
     );
   });
 

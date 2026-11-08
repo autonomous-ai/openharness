@@ -27,10 +27,7 @@ void main() {
     }
   });
 
-  test(
-    'no manifest beside the page (native, or flutter run) names none',
-    () async {
-      expect(await webReleaseVersion(), isNull);
-    },
-  );
+  test('no manifest beside the page (native, or flutter run) names none', () async {
+    expect(await webReleaseVersion(), isNull);
+  });
 }

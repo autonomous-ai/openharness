@@ -9,10 +9,7 @@ import 'swarm_screen_test.dart' show terminal;
 /// The daemon's reviewed deletion: `inspect` answers a review, `delete` acts on it.
 class PurgeConnection extends RenameConnection {
   final purges = <Map<String, dynamic>>[];
-  Map<String, dynamic> inspectReply = {
-    'reviewId': 'review-1',
-    'sessionBytes': 1024,
-  };
+  Map<String, dynamic> inspectReply = {'reviewId': 'review-1', 'sessionBytes': 1024};
   Map<String, dynamic> deleteReply = {'deleted': true, 'sessionDeleted': true};
 
   @override
@@ -23,9 +20,7 @@ class PurgeConnection extends RenameConnection {
   }) {
     if (type == 'agent_purge') {
       purges.add(payload);
-      return Future.value(
-        payload['mode'] == 'inspect' ? inspectReply : deleteReply,
-      );
+      return Future.value(payload['mode'] == 'inspect' ? inspectReply : deleteReply);
     }
     return super.request(type, payload: payload, timeout: timeout);
   }
@@ -44,84 +39,36 @@ void main() {
 
   test('Delete Harness reviews, then deletes under that review, and the harness leaves the list', () async {
     app.stateOf('m')!.agents = [
-      Agent(
-        id: 'a0',
-        name: 'Codex',
-        engine: 'codex',
-        sessionId: 's0',
-        createdAt: created,
-        status: 'stopped',
-      ),
+      Agent(id: 'a0', name: 'Codex', engine: 'codex', sessionId: 's0', createdAt: created, status: 'stopped'),
     ];
     final pane = app.adoptSessionForTest(terminal('a0', []));
     expect(await app.purgeAgent('m', 'a0'), isNull);
     expect(connection.purges, [
-      {
-        'agentId': 'a0',
-        'sessionId': 's0',
-        'createdAt': created.millisecondsSinceEpoch,
-        'mode': 'inspect',
-      },
-      {
-        'agentId': 'a0',
-        'sessionId': 's0',
-        'createdAt': created.millisecondsSinceEpoch,
-        'mode': 'delete',
-        'reviewId': 'review-1',
-      },
+      {'agentId': 'a0', 'sessionId': 's0', 'createdAt': created.millisecondsSinceEpoch, 'mode': 'inspect'},
+      {'agentId': 'a0', 'sessionId': 's0', 'createdAt': created.millisecondsSinceEpoch, 'mode': 'delete', 'reviewId': 'review-1'},
     ]);
     expect(app.stateOf('m')!.agents.any((a) => a.id == 'a0'), isFalse);
     expect(app.allPanes, isNot(contains(pane)));
   });
 
-  test(
-    'a harness that never bound a conversation is named by no session',
-    () async {
-      app.stateOf('m')!.agents = [
-        Agent(id: 'a0', name: 'Codex', engine: 'codex', createdAt: created),
-      ];
-      expect(await app.purgeAgent('m', 'a0'), isNull);
-      expect(connection.purges.first['sessionId'], isNull);
-    },
-  );
+  test('a harness that never bound a conversation is named by no session', () async {
+    app.stateOf('m')!.agents = [Agent(id: 'a0', name: 'Codex', engine: 'codex', createdAt: created)];
+    expect(await app.purgeAgent('m', 'a0'), isNull);
+    expect(connection.purges.first['sessionId'], isNull);
+  });
 
   test('a refused review deletes nothing and says why', () async {
-    app.stateOf('m')!.agents = [
-      Agent(
-        id: 'a0',
-        name: 'Codex',
-        engine: 'codex',
-        sessionId: 's0',
-        createdAt: created,
-      ),
-    ];
-    connection.inspectReply = {
-      'error': 'DELETE_REFUSED',
-      'detail': 'Another harness uses this conversation.',
-    };
-    expect(
-      await app.purgeAgent('m', 'a0'),
-      'Delete failed: Another harness uses this conversation.',
-    );
+    app.stateOf('m')!.agents = [Agent(id: 'a0', name: 'Codex', engine: 'codex', sessionId: 's0', createdAt: created)];
+    connection.inspectReply = {'error': 'DELETE_REFUSED', 'detail': 'Another harness uses this conversation.'};
+    expect(await app.purgeAgent('m', 'a0'), 'Delete failed: Another harness uses this conversation.');
     expect(connection.purges.map((p) => p['mode']), ['inspect']);
     expect(app.stateOf('m')!.agents.any((a) => a.id == 'a0'), isTrue);
   });
 
   test('a delete that is not confirmed keeps the harness listed', () async {
-    app.stateOf('m')!.agents = [
-      Agent(
-        id: 'a0',
-        name: 'Codex',
-        engine: 'codex',
-        sessionId: 's0',
-        createdAt: created,
-      ),
-    ];
+    app.stateOf('m')!.agents = [Agent(id: 'a0', name: 'Codex', engine: 'codex', sessionId: 's0', createdAt: created)];
     connection.deleteReply = {};
-    expect(
-      await app.purgeAgent('m', 'a0'),
-      contains('Could not confirm the deletion'),
-    );
+    expect(await app.purgeAgent('m', 'a0'), contains('Could not confirm the deletion'));
     expect(app.stateOf('m')!.agents.any((a) => a.id == 'a0'), isTrue);
   });
 }

@@ -14,9 +14,7 @@ import '../measurement/speed_marks.dart';
 /// runtime, thrown from `main` before the first frame. The guard therefore has
 /// to live here rather than being left to each call site to remember.
 bool get hasManagedWindow =>
-    RuntimePlatform.isMacOS ||
-    RuntimePlatform.isWindows ||
-    RuntimePlatform.isLinux;
+    RuntimePlatform.isMacOS || RuntimePlatform.isWindows || RuntimePlatform.isLinux;
 
 /// Configures the native window before the first Flutter frame.
 ///
@@ -50,8 +48,9 @@ Future<void> configureDesktopWindow({
   await windowManager.waitUntilReadyToShow(options);
   speedMarks.launch('window ready to show');
   if (RuntimePlatform.isMacOS) {
-    await const MethodChannel('harness/swarm_tabs')
-        .invokeMethod('configure', {'palette': palette.nativeColors});
+    await const MethodChannel('harness/swarm_tabs').invokeMethod('configure', {
+      'palette': palette.nativeColors,
+    });
     speedMarks.launch('titlebar configured');
   }
   // Always open filling the screen (owner, 2026-09-15): the tabs, a viewer

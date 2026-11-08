@@ -72,7 +72,8 @@ class FinderRoots {
     final store = _storage();
     if (store == null) return;
     final value = jsonEncode([
-      for (final MapEntry(key: (machine, agent), value: root) in _roots.entries)
+      for (final MapEntry(key: (machine, agent), value: root)
+          in _roots.entries)
         {'machineId': machine, 'agentId': agent, 'root': root},
     ]);
     store.write(storageKey, value).catchError((Object _) {});

@@ -27,26 +27,13 @@ void main() {
     final id = p2pSessionId(Random(7));
     expect(
       id,
-      matches(
-        RegExp(
-          r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
-        ),
-      ),
+      matches(RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')),
     );
   });
 
   test('only server-answered candidates count as reflexive', () {
-    expect(
-      reflexiveCandidate.hasMatch('candidate:1 1 udp 1 1.2.3.4 9 typ srflx'),
-      isTrue,
-    );
-    expect(
-      reflexiveCandidate.hasMatch('candidate:1 1 udp 1 1.2.3.4 9 typ relay'),
-      isTrue,
-    );
-    expect(
-      reflexiveCandidate.hasMatch('candidate:1 1 udp 1 x.local 9 typ host'),
-      isFalse,
-    );
+    expect(reflexiveCandidate.hasMatch('candidate:1 1 udp 1 1.2.3.4 9 typ srflx'), isTrue);
+    expect(reflexiveCandidate.hasMatch('candidate:1 1 udp 1 1.2.3.4 9 typ relay'), isTrue);
+    expect(reflexiveCandidate.hasMatch('candidate:1 1 udp 1 x.local 9 typ host'), isFalse);
   });
 }

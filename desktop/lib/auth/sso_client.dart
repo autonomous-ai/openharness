@@ -10,7 +10,6 @@ import '../core/runtime_platform.dart';
 /// `harness-desktop` itself when the app tells it who is asking (`--entry-point=desktop`).
 String get ssoClientId {
   if (kIsWeb) return 'harness-web';
-  if (RuntimePlatform.isIOS || RuntimePlatform.isAndroid)
-    return 'harness-mobile';
+  if (RuntimePlatform.isIOS || RuntimePlatform.isAndroid) return 'harness-mobile';
   return 'harness-desktop';
 }

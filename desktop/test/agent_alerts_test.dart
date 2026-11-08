@@ -34,38 +34,32 @@ void main() {
     );
   }
 
-  AgentAlert alert(
-    String agentId, {
-    AlertKind kind = AlertKind.done,
-    String? title,
-  }) => AgentAlert(
-    machineId: 'm1',
-    agentId: agentId,
-    title: title ?? agentId,
-    kind: kind,
-    at: clock,
-  );
+  AgentAlert alert(String agentId, {AlertKind kind = AlertKind.done, String? title}) =>
+      AgentAlert(
+        machineId: 'm1',
+        agentId: agentId,
+        title: title ?? agentId,
+        kind: kind,
+        at: clock,
+      );
 
   test('the banner is OFF until somebody asks for it', () {
     // Both channels are interruptions; neither is taken without being asked.
     expect(ScreenAlertStore(storage: _Memory()).value, isFalse);
   });
 
-  test(
-    'the choice survives a restart, and only a real "on" turns it on',
-    () async {
-      final memory = _Memory();
-      await (ScreenAlertStore(storage: memory)).set(true);
-      final reopened = ScreenAlertStore(storage: memory);
-      await reopened.load();
-      expect(reopened.value, isTrue);
+  test('the choice survives a restart, and only a real "on" turns it on', () async {
+    final memory = _Memory();
+    await (ScreenAlertStore(storage: memory)).set(true);
+    final reopened = ScreenAlertStore(storage: memory);
+    await reopened.load();
+    expect(reopened.value, isTrue);
 
-      memory.values['app_screen_alerts'] = 'o';
-      final garbled = ScreenAlertStore(storage: memory);
-      await garbled.load();
-      expect(garbled.value, isFalse);
-    },
-  );
+    memory.values['app_screen_alerts'] = 'o';
+    final garbled = ScreenAlertStore(storage: memory);
+    await garbled.load();
+    expect(garbled.value, isFalse);
+  });
 
   test('newest first, because that is the order they are read in', () {
     final queue = alerts();
@@ -132,18 +126,10 @@ void main() {
   test('each kind says what it is, and they do not say the same thing', () {
     expect(alerts().runtimeType, AgentAlerts);
     final done = AgentAlert(
-      machineId: 'm',
-      agentId: 'a',
-      title: 'A',
-      kind: AlertKind.done,
-      at: clock,
+      machineId: 'm', agentId: 'a', title: 'A', kind: AlertKind.done, at: clock,
     );
     final waiting = AgentAlert(
-      machineId: 'm',
-      agentId: 'a',
-      title: 'A',
-      kind: AlertKind.needsYou,
-      at: clock,
+      machineId: 'm', agentId: 'a', title: 'A', kind: AlertKind.needsYou, at: clock,
     );
     expect(done.sentence, isNotEmpty);
     expect(waiting.sentence, isNotEmpty);

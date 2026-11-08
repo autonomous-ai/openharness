@@ -33,9 +33,7 @@ class _Daemon {
           final frame = jsonDecode(data as String) as Map<String, dynamic>;
           if (frame['type'] == 'machine_select') {
             selects++;
-            ws.add(
-              jsonEncode({'type': 'connected', 'payload': frame['payload']}),
-            );
+            ws.add(jsonEncode({'type': 'connected', 'payload': frame['payload']}));
           }
         });
         return;
@@ -75,10 +73,7 @@ class _Daemon {
       _Daemon(await HttpServer.bind(InternetAddress.loopbackIPv4, 0), 'tcp');
 
   static Future<_Daemon> unix(String path) async => _Daemon(
-    await HttpServer.bind(
-      InternetAddress(path, type: InternetAddressType.unix),
-      0,
-    ),
+    await HttpServer.bind(InternetAddress(path, type: InternetAddressType.unix), 0),
     'unix',
   );
 
@@ -93,9 +88,10 @@ void main() {
 
   setUp(() async {
     // Socket paths are capped near 104 bytes; the default temp dir is longer.
-    scratch =
-        await (Platform.isWindows ? Directory.systemTemp : Directory('/tmp'))
-            .createTemp('hsock-');
+    scratch = await (Platform.isWindows
+            ? Directory.systemTemp
+            : Directory('/tmp'))
+        .createTemp('hsock-');
     socketPath = '${scratch.path}/daemon.sock';
     identityFile = File('${scratch.path}/computer-id')
       ..writeAsStringSync(_computerId);
@@ -133,11 +129,7 @@ void main() {
 
     test('is the socket for the daemon\'s port in the CLI data directory', () {
       expect(
-        defaultDaemonSocketPath(
-          18473,
-          environment: {'HOME': '/Users/me'},
-          isWindows: false,
-        ),
+        defaultDaemonSocketPath(18473, environment: {'HOME': '/Users/me'}, isWindows: false),
         '/Users/me/.harness/cli/data/daemon-18473.sock',
       );
       // Another port, another daemon, another socket.
@@ -149,14 +141,7 @@ void main() {
         ),
         '/srv/h/daemon-18474.sock',
       );
-      expect(
-        defaultDaemonSocketPath(
-          18473,
-          environment: {'HOME': '/Users/me'},
-          isWindows: true,
-        ),
-        isNull,
-      );
+      expect(defaultDaemonSocketPath(18473, environment: {'HOME': '/Users/me'}, isWindows: true), isNull);
       // Too long for a socket: under the home folder, by the folder's hash, the
       // same hash as the CLI's (pinned for `/x` in cli localSocket.spec.ts).
       expect(
@@ -168,11 +153,7 @@ void main() {
         matches(RegExp(r'^/h/\.harness/s/[0-9a-f]{16}/daemon-18473\.sock$')),
       );
       expect(
-        defaultDaemonSocketPath(
-          18473,
-          environment: {'HOME': '/${'x' * 100}'},
-          isWindows: false,
-        ),
+        defaultDaemonSocketPath(18473, environment: {'HOME': '/${'x' * 100}'}, isWindows: false),
         isNull,
       );
     });
@@ -201,8 +182,7 @@ void main() {
 
     test('is never looked for under flutter test', () {
       expect(
-        LocalDaemonTransport.detect(Uri.parse('http://127.0.0.1:18473'))
-            .candidate,
+        LocalDaemonTransport.detect(Uri.parse('http://127.0.0.1:18473')).candidate,
         isNull,
       );
     });
@@ -214,8 +194,7 @@ void main() {
     test('is the hook-credential file in the daemon data directory', () {
       final env = {'ADAPTER_DATA_DIR': scratch.path};
       expect(readDaemonCredential(environment: env), isNull);
-      File('${scratch.path}/hook-credential')
-          .writeAsStringSync('$credential\n');
+      File('${scratch.path}/hook-credential').writeAsStringSync('$credential\n');
       expect(readDaemonCredential(environment: env), credential);
       // Anything that is not a credential the CLI made is not sent.
       File('${scratch.path}/hook-credential').writeAsStringSync('short');
@@ -224,8 +203,7 @@ void main() {
 
     test('is never read under flutter test', () {
       expect(
-        LocalDaemonTransport.detect(Uri.parse('http://127.0.0.1:18473'))
-            .tcpHeaders(),
+        LocalDaemonTransport.detect(Uri.parse('http://127.0.0.1:18473')).tcpHeaders(),
         isEmpty,
       );
     });
@@ -277,36 +255,30 @@ void main() {
       expect(transport.tcpHeaders(), isEmpty);
     });
 
-    test(
-      'goes with the local WebSocket over the port where no socket can exist',
-      () async {
-        final tcp = await start(_Daemon.tcp());
-        final transport = LocalDaemonTransport(credential: () => credential);
-        final conn = WsConn(
-          wsBaseUrl: 'wss://unused.example',
-          autonomousEnv: 'prod',
-          machineId: 'm1',
-          accessTokenProvider: (_, _) async => '',
-          onAuthFailure: (_) {},
-          onEvent: (_) {},
-          onStatus: (_) {},
-          transportKind: WsTransportKind.localPlaintext,
-          localWsUri: Uri.parse(
-            'ws://127.0.0.1:${tcp.server.port}/api/local-ws',
-          ),
-          localTransport: transport,
-        );
-        addTearDown(conn.close);
-        await conn.connect();
-        for (var i = 0; i < 100 && tcp.selects == 0; i++) {
-          await Future<void>.delayed(const Duration(milliseconds: 10));
-        }
+    test('goes with the local WebSocket over the port where no socket can exist', () async {
+      final tcp = await start(_Daemon.tcp());
+      final transport = LocalDaemonTransport(credential: () => credential);
+      final conn = WsConn(
+        wsBaseUrl: 'wss://unused.example',
+        autonomousEnv: 'prod',
+        machineId: 'm1',
+        accessTokenProvider: (_, _) async => '',
+        onAuthFailure: (_) {},
+        onEvent: (_) {},
+        onStatus: (_) {},
+        transportKind: WsTransportKind.localPlaintext,
+        localWsUri: Uri.parse('ws://127.0.0.1:${tcp.server.port}/api/local-ws'),
+        localTransport: transport,
+      );
+      addTearDown(conn.close);
+      await conn.connect();
+      for (var i = 0; i < 100 && tcp.selects == 0; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
 
-        expect(tcp.selects, 1);
-        expect(tcp.credentials, [credential]);
-      },
-      skip: _portCredentialSkip,
-    );
+      expect(tcp.selects, 1);
+      expect(tcp.credentials, [credential]);
+    }, skip: _portCredentialSkip);
   });
 
   group('discovery', () {
@@ -323,32 +295,25 @@ void main() {
       expect(endpoint?.socketPath, socketPath);
       expect(transport.socketPath, socketPath);
       // The WebSocket keeps its loopback name, so the pool's key is unchanged.
-      expect(
-        endpoint?.wsUri.toString(),
-        'ws://127.0.0.1:${tcp.server.port}/api/local-ws',
-      );
+      expect(endpoint?.wsUri.toString(), 'ws://127.0.0.1:${tcp.server.port}/api/local-ws');
       expect(tcp.hits, isEmpty);
     });
 
-    test(
-      'finds no daemon, and asks no port, when the socket is gone',
-      () async {
-        // The port's listener stands for another account: after a reboot it holds the
-        // port until this user logs in, and could answer anything (audit H1).
-        final tcp = await start(_Daemon.tcp());
-        final transport = LocalDaemonTransport(candidate: socketPath)
-          ..useSocket();
-        final endpoint = await LocalCliDiscovery(
-          config: configFor(tcp),
-          identity: LocalMachineIdentity(computerIdFile: identityFile),
-          transport: transport,
-        ).discover();
+    test('finds no daemon, and asks no port, when the socket is gone', () async {
+      // The port's listener stands for another account: after a reboot it holds the
+      // port until this user logs in, and could answer anything (audit H1).
+      final tcp = await start(_Daemon.tcp());
+      final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
+      final endpoint = await LocalCliDiscovery(
+        config: configFor(tcp),
+        identity: LocalMachineIdentity(computerIdFile: identityFile),
+        transport: transport,
+      ).discover();
 
-        expect(endpoint, isNull);
-        expect(transport.socketPath, isNull);
-        expect(tcp.hits, isEmpty);
-      },
-    );
+      expect(endpoint, isNull);
+      expect(transport.socketPath, isNull);
+      expect(tcp.hits, isEmpty);
+    });
 
     test('asks the port where no socket can exist', () async {
       final tcp = await start(_Daemon.tcp());
@@ -369,8 +334,7 @@ void main() {
     test('goes over the socket, and fails as a daemon that is down once it is gone', () async {
       final tcp = await start(_Daemon.tcp());
       final unix = await start(_Daemon.unix(socketPath));
-      final transport = LocalDaemonTransport(candidate: socketPath)
-        ..useSocket();
+      final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
       final api = ApiClient(
         config: configFor(tcp),
         session: AuthSession(),
@@ -393,8 +357,7 @@ void main() {
       final tcp = await start(_Daemon.tcp());
       final other = await start(_Daemon.tcp());
       final unix = await start(_Daemon.unix(socketPath));
-      final transport = LocalDaemonTransport(candidate: socketPath)
-        ..useSocket();
+      final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
       final dio = Dio()
         ..httpClientAdapter = LocalDaemonHttpAdapter(
           transport,
@@ -433,10 +396,7 @@ void main() {
     test('dials the socket when discovery chose it', () async {
       final tcp = await start(_Daemon.tcp());
       final unix = await start(_Daemon.unix(socketPath));
-      final conn = connFor(
-        tcp,
-        LocalDaemonTransport(candidate: socketPath)..useSocket(),
-      );
+      final conn = connFor(tcp, LocalDaemonTransport(candidate: socketPath)..useSocket());
       addTearDown(conn.close);
       await conn.connect();
       await until(() => unix.selects > 0);
@@ -463,8 +423,7 @@ void main() {
 
     test('never dials the port when the socket is not there', () async {
       final tcp = await start(_Daemon.tcp());
-      final transport = LocalDaemonTransport(candidate: socketPath)
-        ..useSocket();
+      final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
       final conn = connFor(tcp, transport);
       addTearDown(conn.close);
       await conn.connect();

@@ -119,10 +119,7 @@ void main() {
 
   test('footer totals round bytes, include shared servers once, and deduplicate storage', () async {
     final connection = _Connection();
-    final app = createApp(
-      connected: true,
-      connectionForTest: (_) => connection,
-    );
+    final app = createApp(connected: true, connectionForTest: (_) => connection);
     final monitor = HarnessMonitor(app);
     addTearDown(monitor.dispose);
     addTearDown(app.dispose);
@@ -132,37 +129,19 @@ void main() {
     ];
     final data = connection.reply['harnesses'] as Map;
     data['agents'] = [
-      {
-        'agentId': 'a0',
-        'memoryBytes': 10.4e9,
-        'cpuPercent': 125.5,
-        'gpuPercent': 24.4,
-        'workspaceBytes': 1.4e9,
-        'workspacePath': '/project',
-      },
-      {
-        'agentId': 'b',
-        'memoryBytes': 0.2e9,
-        'cpuPercent': 0,
-        'gpuPercent': 0,
-        'workspaceBytes': 0.4e9,
-        'workspacePath': '/project/child',
-      },
+      {'agentId': 'a0', 'memoryBytes': 10.4e9, 'cpuPercent': 125.5,
+       'gpuPercent': 24.4, 'workspaceBytes': 1.4e9, 'workspacePath': '/project'},
+      {'agentId': 'b', 'memoryBytes': 0.2e9, 'cpuPercent': 0,
+       'gpuPercent': 0, 'workspaceBytes': 0.4e9, 'workspacePath': '/project/child'},
     ];
     data['shared'] = [
-      {
-        'kind': 'codex',
-        'agentIds': ['a0', 'b'],
-        'memoryBytes': 0.4e9,
-        'cpuPercent': 4.5,
-        'gpuPercent': 0,
-      },
+      {'kind': 'codex', 'agentIds': ['a0', 'b'], 'memoryBytes': 0.4e9,
+       'cpuPercent': 4.5, 'gpuPercent': 0},
     ];
     await monitor.refresh();
     expect(monitor.metricsLabel(), 'CPU 130%   RAM 11 GB   GPU 24%   SSD 1 GB');
     app.machineStates['m']!.agents.add(
-      const Agent(id: 'unknown', name: 'Unknown', terminalAvailable: true),
-    );
+      const Agent(id: 'unknown', name: 'Unknown', terminalAvailable: true));
     expect(monitor.metricsLabel(), 'CPU 130%   RAM 11 GB   GPU 24%   SSD 1 GB');
     expect(monitor.resourceDetail, contains('Files remain after stopping'));
   });
@@ -252,10 +231,7 @@ void main() {
       monitor.resourceDetail,
       contains('Totals cover these harnesses only'),
     );
-    expect(
-      monitor.resourceDetail,
-      contains('supported macOS and Linux NVIDIA'),
-    );
+    expect(monitor.resourceDetail, contains('supported macOS and Linux NVIDIA'));
     expect(connection.calls, [
       {'type': 'machine_resources', 'harnesses': true, 'storage': true},
     ]);

@@ -42,8 +42,7 @@ class ApiStoreApi implements StoreApi {
         ? raw.map(StoreReview.fromJson).whereType<StoreReview>().toList()
         : <StoreReview>[];
     return StoreReviews(
-      rating:
-          StoreRating.fromJson(data?['rating']) ?? StoreRating.none(harnessId),
+      rating: StoreRating.fromJson(data?['rating']) ?? StoreRating.none(harnessId),
       reviews: reviews,
       mine: StoreReview.fromJson(data?['mine']),
     );
@@ -63,14 +62,12 @@ class ApiStoreApi implements StoreApi {
       body: body,
     );
     final review = StoreReview.fromJson(data?['review']);
-    if (review == null)
-      throw const FormatException('store: no review in answer');
+    if (review == null) throw const FormatException('store: no review in answer');
     return review;
   }
 
   @override
-  Future<void> deleteReview(String harnessId) =>
-      api.deleteStoreReview(harnessId);
+  Future<void> deleteReview(String harnessId) => api.deleteStoreReview(harnessId);
 }
 
 /// What the store screen holds while open: every harness's rating, and the

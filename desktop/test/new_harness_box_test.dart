@@ -382,7 +382,6 @@ void main() {
     void onListing() {
       if (!box.listing && !listed.isCompleted) listed.complete();
     }
-
     box.addListener(onListing);
     box.setQuery('~/au');
     // Wait for the disk listing, rather than a host-dependent isolate delay.
@@ -757,7 +756,6 @@ void main() {
     void onListing() {
       if (!box.listing && !listed.isCompleted) listed.complete();
     }
-
     box.addListener(onListing);
     box.setQuery('~/auth');
     await listed.future.timeout(const Duration(seconds: 3));

@@ -1,5 +1,4 @@
 import 'support/open_harness.dart';
-
 import 'dart:io';
 import 'dart:ui' as ui;
 

@@ -9,7 +9,9 @@ import 'package:harness/settings/sections/account_section.dart';
 import 'package:harness/state/app_state.dart';
 
 void main() {
-  testWidgets('Desktop: your Harness sign-in on this computer', (tester) async {
+  testWidgets('Desktop: your Harness sign-in on this computer', (
+    tester,
+  ) async {
     final app = AppNotifier(
       config: AppConfig.dev,
       authSession: AuthSession(),
@@ -17,9 +19,7 @@ void main() {
     )..signedIn = true;
     addTearDown(app.dispose);
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(body: AccountSection(notifier: app)),
-      ),
+      MaterialApp(home: Scaffold(body: AccountSection(notifier: app))),
     );
     expect(find.text('Your Harness sign-in on this computer.'), findsOneWidget);
   });

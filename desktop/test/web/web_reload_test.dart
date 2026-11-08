@@ -21,16 +21,13 @@ void main() {
     expect((await web.window.caches.keys().toDart).toDart, isEmpty);
   });
 
-  test(
-    'a browser that refuses service workers and caches still reloads',
-    () async {
-      var reloads = 0;
-      // A window with nothing the cleanup can use: every step fails, the reload
-      // still happens.
-      await reloadForNewVersion(window: _refusing(), reload: () => reloads++);
-      expect(reloads, 1);
-    },
-  );
+  test('a browser that refuses service workers and caches still reloads', () async {
+    var reloads = 0;
+    // A window with nothing the cleanup can use: every step fails, the reload
+    // still happens.
+    await reloadForNewVersion(window: _refusing(), reload: () => reloads++);
+    expect(reloads, 1);
+  });
 }
 
 web.Window _refusing() => ({}.jsify() as web.Window);

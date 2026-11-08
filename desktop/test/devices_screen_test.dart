@@ -429,8 +429,7 @@ void main() {
         'brightness': 70, 'character': 2, 'face': 720, 'round': false,
         'muted': false, 'quiet': false, 'straightTitle': true,
         'focusFace': true, 'scrollReversed': false, 'voiceLang': 'en',
-        'uiSkin':
-            'classic', // an older firmware: Pets is the only interface now
+        'uiSkin': 'classic', // an older firmware: Pets is the only interface now
       },
     });
     report(dial, [pro]);

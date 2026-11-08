@@ -73,10 +73,7 @@ void main() {
       expect(app.swarms, hasLength(1), reason: 'the start page is reused');
       expect(app.activeSwarm.name, 'Autonomous Circuit');
       expect(connection.calls.single.type, 'agent_create');
-      expect(
-        connection.calls.single.payload['dsh'],
-        'autonomous/autonomous-circuit',
-      );
+      expect(connection.calls.single.payload['dsh'], 'autonomous/autonomous-circuit');
       connection.calls.single.created('c1');
       expect(await create, isNull);
       expect(app.activeSwarm, same(starter));

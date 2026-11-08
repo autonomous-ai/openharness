@@ -111,10 +111,13 @@ void main() {
         ),
         hasLength(1),
       );
-      expect([
-        for (final (type, payload) in f.connection.calls)
-          if (type == 'super_tabs' && _teamSetup(payload)) payload['action'],
-      ], isEmpty);
+      expect(
+        [
+          for (final (type, payload) in f.connection.calls)
+            if (type == 'super_tabs' && _teamSetup(payload)) payload['action'],
+        ],
+        isEmpty,
+      );
       await c.flush();
       f.app.superTabs.dispose();
       f.dispose();
@@ -122,80 +125,87 @@ void main() {
     },
   );
 
-  testWidgets('this Mac\'s own row shows no Set up, Repair or Restart for a Team account, '
-      'and asks its daemon nothing of one', (tester) async {
-    final daemon = _Daemon();
-    final app = createApp(connectionForTest: (_) => daemon, connected: true)
-      ..teamAccountHereForTest = true;
-    app.machineStates['m']!.localOnly = true;
-    // A teammate, so the row has someone whose work it would run.
-    final server = ConversationServer();
-    (server.state['people'] as List).add({
-      'id': 'peer',
-      'email': 'peer@example.com',
-      'role': 'collaborator',
-    });
-    final now = DateTime.now().millisecondsSinceEpoch;
-    Map<String, dynamic> pool(
-      String id,
-      Map<String, dynamic> teamWork, {
-      String? host,
-      int age = 0,
-    }) => {
-      'machineId': id,
-      'name': 'MacBook Pro',
-      'contributorId': 'owner',
-      'scope': 'swarm',
-      'cwd': '/swarm',
-      'engines': ['codex'],
-      'maxAgents': 4,
-      'paused': false,
-      'observation': {'receivedAt': now - age},
-      'hostMachineId': ?host,
-      'teamWork': teamWork,
-    };
-    Map<String, dynamic> refused(String code) => {
-      'allowed': false,
-      'code': code,
-      'reason': 'Refused ($code).',
-    };
-    for (final machines in [
-      // No Team account here: once offered Set up.
-      [pool('m', refused('TEAM_ACCOUNT_REQUIRED'))],
-      // Its Team account offline: once offered Restart.
-      [
-        pool('m', {'allowed': true}),
-        pool(
-          'm-team',
-          refused('MACHINE_OFFLINE'),
-          host: 'm',
-          age: 10 * 60 * 1000,
-        ),
-      ],
-    ]) {
-      server.state['machines'] = machines;
-      final c = server.controller(account: 'owner');
-      await c.refresh();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: SuperTabMachines(controller: c, app: app, onAddAgent: (_) {}),
+  testWidgets(
+    'this Mac\'s own row shows no Set up, Repair or Restart for a Team account, '
+    'and asks its daemon nothing of one',
+    (tester) async {
+      final daemon = _Daemon();
+      final app = createApp(connectionForTest: (_) => daemon, connected: true)
+        ..teamAccountHereForTest = true;
+      app.machineStates['m']!.localOnly = true;
+      // A teammate, so the row has someone whose work it would run.
+      final server = ConversationServer();
+      (server.state['people'] as List).add({
+        'id': 'peer',
+        'email': 'peer@example.com',
+        'role': 'collaborator',
+      });
+      final now = DateTime.now().millisecondsSinceEpoch;
+      Map<String, dynamic> pool(
+        String id,
+        Map<String, dynamic> teamWork, {
+        String? host,
+        int age = 0,
+      }) => {
+        'machineId': id,
+        'name': 'MacBook Pro',
+        'contributorId': 'owner',
+        'scope': 'swarm',
+        'cwd': '/swarm',
+        'engines': ['codex'],
+        'maxAgents': 4,
+        'paused': false,
+        'observation': {'receivedAt': now - age},
+        'hostMachineId': ?host,
+        'teamWork': teamWork,
+      };
+      Map<String, dynamic> refused(String code) => {
+        'allowed': false,
+        'code': code,
+        'reason': 'Refused ($code).',
+      };
+      for (final machines in [
+        // No Team account here: once offered Set up.
+        [pool('m', refused('TEAM_ACCOUNT_REQUIRED'))],
+        // Its Team account offline: once offered Restart.
+        [
+          pool('m', {'allowed': true}),
+          pool(
+            'm-team',
+            refused('MACHINE_OFFLINE'),
+            host: 'm',
+            age: 10 * 60 * 1000,
           ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey('super-machine-team-setup-m')),
-        findsNothing,
-      );
-      for (final word in ['Set up', 'Repair', 'Restart']) {
-        expect(find.widgetWithText(OutlinedButton, word), findsNothing);
+        ],
+      ]) {
+        server.state['machines'] = machines;
+        final c = server.controller(account: 'owner');
+        await c.refresh();
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SuperTabMachines(
+                controller: c,
+                app: app,
+                onAddAgent: (_) {},
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('super-machine-team-setup-m')),
+          findsNothing,
+        );
+        for (final word in ['Set up', 'Repair', 'Restart']) {
+          expect(find.widgetWithText(OutlinedButton, word), findsNothing);
+        }
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
       }
-      await tester.pumpWidget(const SizedBox());
-      await c.flush();
-      c.dispose();
-    }
-    expect(daemon.asked, isEmpty);
-    app.dispose();
-  });
+      expect(daemon.asked, isEmpty);
+      app.dispose();
+    },
+  );
 }

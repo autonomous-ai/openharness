@@ -103,14 +103,7 @@ class _ApproveApi extends ApiClient {
   @override
   Future<Map<String, dynamic>> signInLookup(String code) async {
     looked.add(code);
-    return {
-      'label': 'Lamp',
-      'kind': 'computer',
-      'sameNetwork': sameNetwork,
-      'status': status,
-      'country': 'VN',
-      'ipHint': '9.8.7.x',
-    };
+    return {'label': 'Lamp', 'kind': 'computer', 'sameNetwork': sameNetwork, 'status': status, 'country': 'VN', 'ipHint': '9.8.7.x'};
   }
 
   @override
@@ -374,45 +367,33 @@ void main() {
 
   // A device with no screen (a lamp, #1410) says eight digits aloud; this computer approves it as a
   // phone would, with the same "Sign in …?" before anything is sent.
-  testWidgets(
-    'Approve a device takes the code a device says, and asks before approving',
-    (tester) async {
-      final api = _ApproveApi();
-      app.api = api;
-      await mount(tester);
-      await openPicker(tester);
-      await tester.tap(find.byKey(const Key('machine-picker-approve-device')));
-      await tester.pumpAndSettle();
-      final next = find.byKey(const Key('sign-in-code-continue'));
-      await tester.enterText(
-        find.byKey(const Key('sign-in-code-field')),
-        '1234 567',
-      );
-      await tester.pump();
-      expect(tester.widget<FilledButton>(next).onPressed, isNull);
-      await tester.enterText(
-        find.byKey(const Key('sign-in-code-field')),
-        '1234 5678',
-      );
-      await tester.pump();
-      await tester.tap(next);
-      await tester.pumpAndSettle();
-      expect(api.looked, ['12345678']);
-      expect(find.text('Sign in Lamp?'), findsOneWidget);
-      expect(api.answers, isEmpty);
-      await tester.tap(find.byKey(const Key('approve-sign-in-approve')));
-      await tester.pumpAndSettle();
-      expect(api.answers, ['approve:12345678']);
-    },
-  );
+  testWidgets('Approve a device takes the code a device says, and asks before approving', (tester) async {
+    final api = _ApproveApi();
+    app.api = api;
+    await mount(tester);
+    await openPicker(tester);
+    await tester.tap(find.byKey(const Key('machine-picker-approve-device')));
+    await tester.pumpAndSettle();
+    final next = find.byKey(const Key('sign-in-code-continue'));
+    await tester.enterText(find.byKey(const Key('sign-in-code-field')), '1234 567');
+    await tester.pump();
+    expect(tester.widget<FilledButton>(next).onPressed, isNull);
+    await tester.enterText(find.byKey(const Key('sign-in-code-field')), '1234 5678');
+    await tester.pump();
+    await tester.tap(next);
+    await tester.pumpAndSettle();
+    expect(api.looked, ['12345678']);
+    expect(find.text('Sign in Lamp?'), findsOneWidget);
+    expect(api.answers, isEmpty);
+    await tester.tap(find.byKey(const Key('approve-sign-in-approve')));
+    await tester.pumpAndSettle();
+    expect(api.answers, ['approve:12345678']);
+  });
 
   Future<void> typeCode(WidgetTester tester, String code) async {
     await tester.tap(find.byKey(const Key('machine-picker-approve-device')));
     await tester.pumpAndSettle();
-    expect(
-      find.textContaining('Never type a code someone sent you'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('Never type a code someone sent you'), findsOneWidget);
     await tester.enterText(find.byKey(const Key('sign-in-code-field')), code);
     await tester.pump();
     await tester.tap(find.byKey(const Key('sign-in-code-continue')));
@@ -421,43 +402,32 @@ void main() {
 
   // A code is easily read out over a call or a chat: a device on another network takes a deliberate
   // hold, as on the phone, never one click.
-  testWidgets('a device on another network is approved only by holding', (
-    tester,
-  ) async {
+  testWidgets('a device on another network is approved only by holding', (tester) async {
     final api = _ApproveApi(sameNetwork: false);
     app.api = api;
     await mount(tester);
     await openPicker(tester);
     await typeCode(tester, '12345678');
-    expect(
-      find.textContaining('On another network (VN · 9.8.7.x)'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('On another network (VN · 9.8.7.x)'), findsOneWidget);
     final hold = find.byKey(const Key('approve-sign-in-approve'));
     await tester.tap(hold);
     await tester.pump(const Duration(milliseconds: 300));
     expect(api.answers, isEmpty, reason: 'a click is not a hold');
     final gesture = await tester.startGesture(tester.getCenter(hold));
-    await tester
-        .pump(); // the hold's clock starts on the first frame after the press
+    await tester.pump(); // the hold's clock starts on the first frame after the press
     await tester.pump(const Duration(milliseconds: 2100));
     await gesture.up();
     await tester.pumpAndSettle();
     expect(api.answers, ['approve:12345678']);
   });
 
-  testWidgets('a code someone else answered warns before the device asks', (
-    tester,
-  ) async {
+  testWidgets('a code someone else answered warns before the device asks', (tester) async {
     final api = _ApproveApi(status: 'approved');
     app.api = api;
     await mount(tester);
     await openPicker(tester);
     await typeCode(tester, '12345678');
-    expect(
-      find.textContaining('Someone else already answered this code'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('Someone else already answered this code'), findsOneWidget);
     expect(api.answers, isEmpty);
   });
 

@@ -62,10 +62,7 @@ void main() {
     expect(isDeskId(d1), isTrue);
     expect(memberDeskTabId('s2'), isNot(d1));
     expect(tab().deskTabId('bob'), d1);
-    expect(
-      tab(owner: 'bob', ownerTabId: 'own-tab').deskTabId('bob'),
-      'own-tab',
-    );
+    expect(tab(owner: 'bob', ownerTabId: 'own-tab').deskTabId('bob'), 'own-tab');
     // An Agent Messages tab id the daemons give a member's tab (24 hex) names
     // that derived desk tab; a desk id names itself.
     expect(
@@ -95,25 +92,22 @@ void main() {
     });
   });
 
-  test(
-    'a tab the member closed is never created again here (Review Focus 1)',
-    () {
-      final p = planSharedPlacement(
-        me: 'bob',
-        tabs: [
-          tab(foreign: ['ma/a1', 'ma/a2']),
-        ],
-        deskTabIds: {},
-        deskPaneKeys: {},
-        seen: {
-          's1': {k('ma', 'a1')},
-        },
-      );
-      expect(p.createTabs, isEmpty);
-      expect(p.addPanes, isEmpty);
-      expect(p.seen['s1'], {k('ma', 'a1'), k('ma', 'a2')});
-    },
-  );
+  test('a tab the member closed is never created again here (Review Focus 1)', () {
+    final p = planSharedPlacement(
+      me: 'bob',
+      tabs: [
+        tab(foreign: ['ma/a1', 'ma/a2']),
+      ],
+      deskTabIds: {},
+      deskPaneKeys: {},
+      seen: {
+        's1': {k('ma', 'a1')},
+      },
+    );
+    expect(p.createTabs, isEmpty);
+    expect(p.addPanes, isEmpty);
+    expect(p.seen['s1'], {k('ma', 'a1'), k('ma', 'a2')});
+  });
 
   test('a harness that joins later is placed once', () {
     final p = planSharedPlacement(
@@ -173,19 +167,16 @@ void main() {
     expect(p.seen['s1'], {k('ma', 'a1'), k('ma', 'a2')});
   });
 
-  test(
-    'a harness the desk holds in another tab is not placed on first sight',
-    () {
-      final p = planSharedPlacement(
-        me: 'bob',
-        tabs: [tab()],
-        deskTabIds: {d1, 'other'},
-        deskPaneKeys: {k('ma', 'a1')},
-        seen: {},
-      );
-      expect(p.addPanes, isEmpty);
-    },
-  );
+  test('a harness the desk holds in another tab is not placed on first sight', () {
+    final p = planSharedPlacement(
+      me: 'bob',
+      tabs: [tab()],
+      deskTabIds: {d1, 'other'},
+      deskPaneKeys: {k('ma', 'a1')},
+      seen: {},
+    );
+    expect(p.addPanes, isEmpty);
+  });
 
   test('the owner places a member\'s harness into the tab it shared, never creating one', () {
     final p = planSharedPlacement(
@@ -262,23 +253,20 @@ void main() {
     expect(fresh.seen, isEmpty);
   });
 
-  test(
-    'a tab no longer held is forgotten, so a later invitation places again',
-    () {
-      final p = planSharedPlacement(
-        me: 'bob',
-        tabs: [tab()],
-        deskTabIds: {d1},
-        deskPaneKeys: {k('ma', 'a1')},
-        seen: {
-          'old': {k('mx', 'x1')},
-          's1': {k('ma', 'a1')},
-        },
-      );
-      expect(p.seen.containsKey('old'), isFalse);
-      expect(p.seen['s1'], {k('ma', 'a1')});
-    },
-  );
+  test('a tab no longer held is forgotten, so a later invitation places again', () {
+    final p = planSharedPlacement(
+      me: 'bob',
+      tabs: [tab()],
+      deskTabIds: {d1},
+      deskPaneKeys: {k('ma', 'a1')},
+      seen: {
+        'old': {k('mx', 'x1')},
+        's1': {k('ma', 'a1')},
+      },
+    );
+    expect(p.seen.containsKey('old'), isFalse);
+    expect(p.seen['s1'], {k('ma', 'a1')});
+  });
 
   test('this account\'s own harnesses are never placed', () {
     final p = planSharedPlacement(

@@ -8,8 +8,7 @@ import 'package:harness/ws/ws_conn.dart';
 
 /// Records each measured connection and how it ended, instead of reporting it.
 class _Recorder extends ProductMeasurement {
-  _Recorder()
-    : super(surface: 'desktop', automatic: false, sendSetup: (_) async => {});
+  _Recorder() : super(surface: 'desktop', automatic: false, sendSetup: (_) async => {});
 
   final started = <String>[];
   final ended = <String>[];
@@ -92,10 +91,7 @@ void main() {
     // Connections are measured only for a signed-in account.
     app
       ..status = AppStatus.authenticated
-      ..currentUser = const CurrentUserProfile(
-        id: 'u1',
-        email: 'u1@example.test',
-      );
+      ..currentUser = const CurrentUserProfile(id: 'u1', email: 'u1@example.test');
     app.notifyListeners();
   });
 
@@ -116,23 +112,13 @@ void main() {
       app.connectionStatusForTest(mid, ConnectionStatus.disconnected);
     }
     expect(usage.ended, ['connectAuto:failed', 'remoteConnect:failed']);
-    expect(
-      usage.healthCounts.where(
-        (m) => m == ProductHealthMeasure.connectErrorUnlinked,
-      ),
-      hasLength(1),
-    );
+    expect(usage.healthCounts.where((m) => m == ProductHealthMeasure.connectErrorUnlinked), hasLength(1));
 
     // Linked: the next dial is measured again, and succeeds.
     app.stateOf(mid)!.needsLink = false;
     app.connectionStatusForTest(mid, ConnectionStatus.connecting);
     app.connectionStatusForTest(mid, ConnectionStatus.connected);
-    expect(usage.ended, [
-      'connectAuto:failed',
-      'remoteConnect:failed',
-      'connectAuto:ok',
-      'remoteConnect:ok',
-    ]);
+    expect(usage.ended, ['connectAuto:failed', 'remoteConnect:failed', 'connectAuto:ok', 'remoteConnect:ok']);
   });
 
   test('an ordinary offline machine still counts each dial that ends', () {
@@ -142,10 +128,8 @@ void main() {
     app.connectionStatusForTest(mid, ConnectionStatus.disconnected);
     app.connectionStatusForTest(mid, ConnectionStatus.connecting);
     app.connectionStatusForTest(mid, ConnectionStatus.connected);
-    expect(usage.ended.where((event) => event.startsWith('remoteConnect:')), [
-      'remoteConnect:failed',
-      'remoteConnect:ok',
-    ]);
+    expect(usage.ended.where((event) => event.startsWith('remoteConnect:')),
+        ['remoteConnect:failed', 'remoteConnect:ok']);
   });
 
   // #1378's dead panes redial their machine's link when an open goes unanswered. Each redial took a

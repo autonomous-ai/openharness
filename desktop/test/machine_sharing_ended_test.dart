@@ -239,22 +239,19 @@ void main() {
 
   // A relayed machine that was off waits parked (WsConn.isParked) until it is reported back: the
   // machine list's refresh saying it is online is that word.
-  test(
-    'a machine the list reports online wakes its parked connection',
-    () async {
-      const studio = Machine(
-        machineId: 'studio',
-        authMode: MachineAuthMode.remote,
-        name: 'Studio',
-        status: 'online',
-      );
-      final api = _Api()..listed = const [studio];
-      final woken = <String>[];
-      app = _App(api, onWake: woken.add)..status = AppStatus.authenticated;
-      await app.refreshMachines();
-      expect(woken, contains('studio'));
-    },
-  );
+  test('a machine the list reports online wakes its parked connection', () async {
+    const studio = Machine(
+      machineId: 'studio',
+      authMode: MachineAuthMode.remote,
+      name: 'Studio',
+      status: 'online',
+    );
+    final api = _Api()..listed = const [studio];
+    final woken = <String>[];
+    app = _App(api, onWake: woken.add)..status = AppStatus.authenticated;
+    await app.refreshMachines();
+    expect(woken, contains('studio'));
+  });
 
   // The list's word alone, for a row that already reads online: no node-status change runs, so only the list's own
   // wake can reach the parked connection (review of #2027).

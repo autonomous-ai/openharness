@@ -401,10 +401,7 @@ void main() {
       });
       await tester.pump();
       await tester.pump();
-      expect(
-        find.text('For regression fixes, start with a small failing test.'),
-        findsNothing,
-      );
+      expect(find.text('For regression fixes, start with a small failing test.'), findsNothing);
       memory.handle = null;
       await tester.pump(const Duration(seconds: 30));
       brain.receive('pair_result', {
@@ -413,15 +410,9 @@ void main() {
         'lessons': [],
       });
       await tester.pump();
-      expect(
-        find.text('For regression fixes, start with a small failing test.'),
-        findsOneWidget,
-      );
+      expect(find.text('For regression fixes, start with a small failing test.'), findsOneWidget);
       expect(input, isEmpty);
-      expect(
-        memory.calls.where((c) => ['apply', 'preview'].contains(c['action'])),
-        isEmpty,
-      );
+      expect(memory.calls.where((c) => ['apply', 'preview'].contains(c['action'])), isEmpty);
       await tester.pumpWidget(const SizedBox());
     },
   );

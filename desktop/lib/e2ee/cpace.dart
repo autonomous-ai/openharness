@@ -58,14 +58,7 @@ Uint8List transcriptHash(
   String ci,
   List<int> shareA,
   List<int> shareB,
-) => sha512(
-  lvCat([
-    sid,
-    ci,
-    lvCat([shareA, 'a']),
-    lvCat([shareB, 'b']),
-  ]),
-);
+) => sha512(lvCat([sid, ci, lvCat([shareA, 'a']), lvCat([shareB, 'b'])]));
 
 /// Key-confirmation MAC keys: [adapter] proves the joined machine's side, [web] the joiner's.
 ({Uint8List adapter, Uint8List web}) kcKeys(List<int> isk, String ci) {
@@ -102,8 +95,9 @@ Future<bool> pairBindVerify(
   List<int> pub,
   List<int> transcript,
   List<int> sig,
-) => verifySignature(
-  pub,
-  concatBytes([utf8Bytes('e2e-pair-bind'), transcript]),
-  sig,
-);
+) =>
+    verifySignature(
+      pub,
+      concatBytes([utf8Bytes('e2e-pair-bind'), transcript]),
+      sig,
+    );

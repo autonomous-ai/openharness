@@ -35,10 +35,10 @@ void main() {
           '0123456789abcdef01234567/5f0c2a',
         ),
       )!;
-      expect(
-        (tag.machineId, tag.agentId),
-        ('@mention', '0123456789abcdef01234567/5f0c2a'),
-      );
+      expect((tag.machineId, tag.agentId), (
+        '@mention',
+        '0123456789abcdef01234567/5f0c2a',
+      ));
     });
 
     test('the bare link names no agent', () {

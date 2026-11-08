@@ -6,11 +6,9 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'account_device_detail.dart';
 import 'account_device_history.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import '../state/account_devices.dart'
-    show DeviceConflict, registerRefusalSentence;
+import '../state/account_devices.dart' show DeviceConflict, registerRefusalSentence;
 import '../state/app_state.dart';
-import '../viewer/device_log_sync.dart'
-    show DeviceDepartedCopy, DeviceRemovalCopy, DeviceRemovalNotice;
+import '../viewer/device_log_sync.dart' show DeviceDepartedCopy, DeviceRemovalCopy, DeviceRemovalNotice;
 import 'window_chrome.dart';
 
 /// The band across the top of the window when a device this end had never trusted joined the
@@ -28,31 +26,20 @@ class NewDeviceNotice extends StatelessWidget {
     if (notifier.newDevices.isEmpty) return const SizedBox.shrink();
     final notice = notifier.newDevices.first;
     final more = notifier.newDevices.length - 1;
-    final tint = Color.alphaBlend(
-      grid.AppPalette.warn.withValues(alpha: 0.10),
-      grid.AppPalette.windowBg,
-    );
+    final tint = Color.alphaBlend(grid.AppPalette.warn.withValues(alpha: 0.10), grid.AppPalette.windowBg);
     return WindowDragArea(
       child: Material(
         color: Colors.transparent,
         child: DecoratedBox(
           decoration: BoxDecoration(
             color: tint,
-            border: Border(
-              bottom: BorderSide(
-                color: grid.AppPalette.warn.withValues(alpha: 0.28),
-              ),
-            ),
+            border: Border(bottom: BorderSide(color: grid.AppPalette.warn.withValues(alpha: 0.28))),
           ),
           child: Padding(
             padding: EdgeInsets.fromLTRB(14 + trafficLightClearance, 7, 10, 7),
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final icon = Icon(
-                  AppIcons.shield,
-                  size: 16,
-                  color: grid.AppPalette.warn,
-                );
+                final icon = Icon(AppIcons.shield, size: 16, color: grid.AppPalette.warn);
                 final phone = constraints.maxWidth < _phoneBelow;
                 final sentence = Text(
                   '${notice.sentence}${more > 0 ? ' (+$more more)' : ''} Not yours? Remove it.',
@@ -62,11 +49,7 @@ class NewDeviceNotice extends StatelessWidget {
                   style: grid.AppType.body(color: grid.AppPalette.textPrimary),
                 );
                 // A phone gets a thumb's target; Desktop keeps the theme's compact buttons.
-                final thumb = phone
-                    ? const ButtonStyle(
-                        tapTargetSize: MaterialTapTargetSize.padded,
-                      )
-                    : null;
+                final thumb = phone ? const ButtonStyle(tapTargetSize: MaterialTapTargetSize.padded) : null;
                 final buttons = [
                   TextButton(
                     key: const Key('new-device-dismiss'),
@@ -74,14 +57,7 @@ class NewDeviceNotice extends StatelessWidget {
                     // A fork's suspension is not the banner's to lift (it would be back on the next read):
                     // that device's own page shows it, and lifts it there.
                     onPressed: notice.suspended
-                        ? () => unawaited(
-                            showAccountDeviceDetail(
-                              context,
-                              notifier,
-                              pub: notice.pub,
-                              isNew: true,
-                            ),
-                          )
+                        ? () => unawaited(showAccountDeviceDetail(context, notifier, pub: notice.pub, isNew: true))
                         : () => notifier.dismissNewDevice(notice.pub),
                     child: const Text('It’s mine'),
                   ),
@@ -90,19 +66,8 @@ class NewDeviceNotice extends StatelessWidget {
                     style: thumb,
                     // One new device goes straight to its key code; several go to Machines, where each is a row.
                     onPressed: () => more == 0
-                        ? unawaited(
-                            showAccountDeviceDetail(
-                              context,
-                              notifier,
-                              pub: notice.pub,
-                              isNew: true,
-                            ),
-                          )
-                        : openMachines(
-                            context,
-                            notifier,
-                            devicePub: notice.pub,
-                          ),
+                        ? unawaited(showAccountDeviceDetail(context, notifier, pub: notice.pub, isNew: true))
+                        : openMachines(context, notifier, devicePub: notice.pub),
                     child: Text(more == 0 ? 'Review' : 'Review devices'),
                   ),
                 ];
@@ -114,19 +79,10 @@ class NewDeviceNotice extends StatelessWidget {
                     children: [
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          icon,
-                          const SizedBox(width: 10),
-                          Expanded(child: sentence),
-                        ],
+                        children: [icon, const SizedBox(width: 10), Expanded(child: sentence)],
                       ),
                       const SizedBox(height: 6),
-                      Wrap(
-                        alignment: WrapAlignment.end,
-                        spacing: 6,
-                        runSpacing: 6,
-                        children: buttons,
-                      ),
+                      Wrap(alignment: WrapAlignment.end, spacing: 6, runSpacing: 6, children: buttons),
                     ],
                   );
                 }
@@ -176,19 +132,14 @@ class _DeviceBand extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = red ? grid.AppPalette.dangerFill : grid.AppPalette.warn;
-    final tint = Color.alphaBlend(
-      accent.withValues(alpha: 0.10),
-      grid.AppPalette.windowBg,
-    );
+    final tint = Color.alphaBlend(accent.withValues(alpha: 0.10), grid.AppPalette.windowBg);
     return WindowDragArea(
       child: Material(
         color: Colors.transparent,
         child: DecoratedBox(
           decoration: BoxDecoration(
             color: tint,
-            border: Border(
-              bottom: BorderSide(color: accent.withValues(alpha: 0.28)),
-            ),
+            border: Border(bottom: BorderSide(color: accent.withValues(alpha: 0.28))),
           ),
           child: Padding(
             padding: EdgeInsets.fromLTRB(14 + trafficLightClearance, 7, 10, 7),
@@ -202,12 +153,8 @@ class _DeviceBand extends StatelessWidget {
                     key: textKey,
                     maxLines: maxLines,
                     // An ellipsis needs a line cap to mean "wrap, then cut": uncapped text just wraps.
-                    overflow: maxLines == null
-                        ? TextOverflow.clip
-                        : TextOverflow.ellipsis,
-                    style: grid.AppType.body(
-                      color: grid.AppPalette.textPrimary,
-                    ),
+                    overflow: maxLines == null ? TextOverflow.clip : TextOverflow.ellipsis,
+                    style: grid.AppType.body(color: grid.AppPalette.textPrimary),
                   ),
                 ),
                 for (final a in actions) ...[const SizedBox(width: 8), a],
@@ -233,16 +180,12 @@ class DeviceRemovalNoticeBand extends StatelessWidget {
     final all = notifier.visibleDeviceRemovals;
     if (all.isEmpty) return const SizedBox.shrink();
     // A red one first: one that looks like someone else acting must not sit behind an older neutral one.
-    final DeviceRemovalNotice notice = all.firstWhere(
-      (n) => n.red,
-      orElse: () => all.first,
-    );
+    final DeviceRemovalNotice notice = all.firstWhere((n) => n.red, orElse: () => all.first);
     final more = all.length - 1;
     return _DeviceBand(
       red: notice.red,
       textKey: const Key('device-removal-notice'),
-      text:
-          '${notice.title}. ${notice.sentence}${more > 0 ? ' (+$more more)' : ''}',
+      text: '${notice.title}. ${notice.sentence}${more > 0 ? ' (+$more more)' : ''}',
       actions: [
         TextButton(
           key: const Key('device-removal-dismiss'),
@@ -253,12 +196,7 @@ class DeviceRemovalNoticeBand extends StatelessWidget {
           OutlinedButton(
             key: const Key('device-removal-review'),
             onPressed: () => unawaited(
-              showAccountDeviceDetail(
-                context,
-                notifier,
-                pub: notice.signer,
-                isNew: true,
-              ),
+              showAccountDeviceDetail(context, notifier, pub: notice.signer, isNew: true),
             ),
             child: const Text('Review'),
           ),
@@ -282,17 +220,13 @@ class DeviceDepartedNoticeBand extends StatelessWidget {
     final all = notifier.departedDevices;
     if (all.isEmpty) return const SizedBox.shrink();
     // "Got it" clears every one, so the one read is the one that matters most.
-    final notice = all.firstWhere(
-      notifier.departedIsRed,
-      orElse: () => all.first,
-    );
+    final notice = all.firstWhere(notifier.departedIsRed, orElse: () => all.first);
     final more = all.length - 1;
     final shown = [for (final d in all) d.pub];
     final red = notifier.departedIsRed(notice);
     // A new device that did it is still on the account: its own page is what to look at. Otherwise
     // the History says who did what and when.
-    final signerStillNew =
-        red && notifier.newDevices.any((d) => d.pub == notice.removedBy);
+    final signerStillNew = red && notifier.newDevices.any((d) => d.pub == notice.removedBy);
     return _DeviceBand(
       red: red,
       textKey: const Key('device-departed-notice'),
@@ -307,12 +241,7 @@ class DeviceDepartedNoticeBand extends StatelessWidget {
           key: const Key('device-departed-review'),
           onPressed: () => unawaited(
             signerStillNew
-                ? showAccountDeviceDetail(
-                    context,
-                    notifier,
-                    pub: notice.removedBy,
-                    isNew: true,
-                  )
+                ? showAccountDeviceDetail(context, notifier, pub: notice.removedBy, isNew: true)
                 : showAccountDeviceHistory(context, notifier),
           ),
           child: Text(signerStillNew ? 'Review' : 'History'),
@@ -355,8 +284,7 @@ class DeviceConflictNoticeBand extends StatelessWidget {
         ),
         OutlinedButton(
           key: const Key('device-conflict-review'),
-          onPressed: () =>
-              openMachines(context, notifier, devicePub: conflict.pub),
+          onPressed: () => openMachines(context, notifier, devicePub: conflict.pub),
           child: const Text('Machines'),
         ),
       ],
@@ -386,11 +314,7 @@ void showDeviceListReview(BuildContext context, AppNotifier notifier) =>
 /// refused this app a place on the account for having too many devices: the password is one way in,
 /// the devices list the other. Nothing while neither holds.
 class DeviceListReviewLine extends StatelessWidget {
-  const DeviceListReviewLine({
-    super.key,
-    required this.notifier,
-    this.center = false,
-  });
+  const DeviceListReviewLine({super.key, required this.notifier, this.center = false});
 
   final AppNotifier notifier;
   final bool center;
@@ -402,8 +326,7 @@ class DeviceListReviewLine extends StatelessWidget {
 
   Widget _build(BuildContext context, Widget? _) {
     grid.AppTheme.watch(context);
-    final review = notifier.deviceListNeedsReview,
-        tooMany = notifier.deviceListTooMany;
+    final review = notifier.deviceListNeedsReview, tooMany = notifier.deviceListTooMany;
     if (!review && !tooMany) return const SizedBox.shrink();
     return Wrap(
       alignment: center ? WrapAlignment.center : WrapAlignment.start,

@@ -39,18 +39,9 @@ void main() {
 
   test('a missing slot drops its clause, never shows the slot', () {
     expect(fillDaemonLine('bell in {who}: {q}', who), 'bell in codex@office');
-    expect(
-      fillDaemonLine('silence in {who}: {recap}', who),
-      'silence in codex@office',
-    );
-    expect(
-      fillDaemonLine('{who} finished. {recap}', who),
-      'codex@office finished.',
-    );
-    expect(
-      fillDaemonLine('welcome back. {summary}', const {}),
-      'welcome back.',
-    );
+    expect(fillDaemonLine('silence in {who}: {recap}', who), 'silence in codex@office');
+    expect(fillDaemonLine('{who} finished. {recap}', who), 'codex@office finished.');
+    expect(fillDaemonLine('welcome back. {summary}', const {}), 'welcome back.');
     expect(
       fillDaemonLine('[1]  + done  {who}  {recap}', who),
       '[1]  + done  codex@office',
@@ -65,8 +56,14 @@ void main() {
     // Voice v3: facts first, a short tag at the end. Without the facts the
     // tag alone is not a line.
     expect(fillDaemonLine('{who}: {q}  (bell)', const {}), isNull);
-    expect(fillDaemonLine('{who}: {q}  (bell)', who), 'codex@office  (bell)');
-    expect(fillDaemonLine('{who} failed: {recap}  [exit 1]', const {}), isNull);
+    expect(
+      fillDaemonLine('{who}: {q}  (bell)', who),
+      'codex@office  (bell)',
+    );
+    expect(
+      fillDaemonLine('{who} failed: {recap}  [exit 1]', const {}),
+      isNull,
+    );
     for (final d in daemonRoster.daemons) {
       for (final mood in [DaemonMood.need, DaemonMood.fail]) {
         expect(

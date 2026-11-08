@@ -55,14 +55,11 @@ void main() {
     expect(AlertSoundStore(storage: _Memory()).value, isFalse);
   });
 
-  test(
-    'each kind has its own sound, and the urgent one is not the finished one',
-    () {
-      expect(AlertKind.done.sound, isNotEmpty);
-      expect(AlertKind.needsYou.sound, isNotEmpty);
-      expect(AlertKind.done.sound, isNot(AlertKind.needsYou.sound));
-    },
-  );
+  test('each kind has its own sound, and the urgent one is not the finished one', () {
+    expect(AlertKind.done.sound, isNotEmpty);
+    expect(AlertKind.needsYou.sound, isNotEmpty);
+    expect(AlertKind.done.sound, isNot(AlertKind.needsYou.sound));
+  });
 
   /// A store with the feature switched on — what every playback test needs now that the default
   /// is silence.
@@ -72,25 +69,18 @@ void main() {
     return store;
   }
 
-  test(
-    'plays for a finished agent and for one that is waiting on a person',
-    () async {
-      final store = await switchedOn();
-      final player = sounds(store);
-      player.play(AlertKind.done);
-      player.play(AlertKind.needsYou);
-      await Future<void>.delayed(Duration.zero);
-      expect(played, [AlertKind.done.sound, AlertKind.needsYou.sound]);
-    },
-  );
+  test('plays for a finished agent and for one that is waiting on a person', () async {
+    final store = await switchedOn();
+    final player = sounds(store);
+    player.play(AlertKind.done);
+    player.play(AlertKind.needsYou);
+    await Future<void>.delayed(Duration.zero);
+    expect(played, [AlertKind.done.sound, AlertKind.needsYou.sound]);
+  });
 
   test('says nothing at all while the switch is off', () async {
     final store = AlertSoundStore(storage: _Memory());
-    expect(
-      store.value,
-      isFalse,
-      reason: 'off is the default, not a state a test has to set',
-    );
+    expect(store.value, isFalse, reason: 'off is the default, not a state a test has to set');
     final player = sounds(store);
     player.play(AlertKind.done);
     player.play(AlertKind.needsYou);
@@ -98,32 +88,26 @@ void main() {
     expect(played, isEmpty);
   });
 
-  test(
-    'a batch of agents finishing together is ONE sound, not a burst',
-    () async {
-      // A swarm finishing together is the ordinary case. Ten beeps say nothing that one does not.
-      var at = DateTime(2026, 9, 23, 12);
-      final player = sounds(await switchedOn(), clock: () => at);
-      for (var i = 0; i < 10; i++) {
-        at = at.add(const Duration(milliseconds: 40));
-        player.play(AlertKind.done);
-      }
-      await Future<void>.delayed(Duration.zero);
-      expect(played, hasLength(1));
-    },
-  );
-
-  test(
-    'failed and successful turns share the existing completion sound limit',
-    () async {
-      final player = sounds(await switchedOn());
+  test('a batch of agents finishing together is ONE sound, not a burst', () async {
+    // A swarm finishing together is the ordinary case. Ten beeps say nothing that one does not.
+    var at = DateTime(2026, 9, 23, 12);
+    final player = sounds(await switchedOn(), clock: () => at);
+    for (var i = 0; i < 10; i++) {
+      at = at.add(const Duration(milliseconds: 40));
       player.play(AlertKind.done);
-      player.play(AlertKind.failed);
-      player.play(AlertKind.needsYou);
-      await Future<void>.delayed(Duration.zero);
-      expect(played, [AlertKind.done.sound, AlertKind.needsYou.sound]);
-    },
-  );
+    }
+    await Future<void>.delayed(Duration.zero);
+    expect(played, hasLength(1));
+  });
+
+  test('failed and successful turns share the existing completion sound limit', () async {
+    final player = sounds(await switchedOn());
+    player.play(AlertKind.done);
+    player.play(AlertKind.failed);
+    player.play(AlertKind.needsYou);
+    await Future<void>.delayed(Duration.zero);
+    expect(played, [AlertKind.done.sound, AlertKind.needsYou.sound]);
+  });
 
   test('the rate limit is per sound, so a stuck agent is never swallowed by a busy one', () async {
     var at = DateTime(2026, 9, 23, 12);
@@ -147,34 +131,28 @@ void main() {
     expect(played, hasLength(2));
   });
 
-  test(
-    'the choice survives a restart, and only a real "on" unmutes the app',
-    () async {
-      final memory = _Memory();
-      final store = AlertSoundStore(storage: memory);
-      await store.set(true);
-      final reopened = AlertSoundStore(storage: memory);
-      await reopened.load();
-      expect(reopened.value, isTrue);
+  test('the choice survives a restart, and only a real "on" unmutes the app', () async {
+    final memory = _Memory();
+    final store = AlertSoundStore(storage: memory);
+    await store.set(true);
+    final reopened = AlertSoundStore(storage: memory);
+    await reopened.load();
+    expect(reopened.value, isTrue);
 
-      // A truncated or hand-edited value lands on the default rather than starting to make noises.
-      memory.values['app_alert_sounds'] = 'o';
-      final garbled = AlertSoundStore(storage: memory);
-      await garbled.load();
-      expect(garbled.value, isFalse);
-    },
-  );
+    // A truncated or hand-edited value lands on the default rather than starting to make noises.
+    memory.values['app_alert_sounds'] = 'o';
+    final garbled = AlertSoundStore(storage: memory);
+    await garbled.load();
+    expect(garbled.value, isFalse);
+  });
 
-  test(
-    'a platform that cannot make a noise does not break the frame that asked',
-    () async {
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(channel, (call) async {
-            throw PlatformException(code: 'NO_AUDIO');
-          });
-      final player = sounds(await switchedOn());
-      expect(() => player.play(AlertKind.done), returnsNormally);
-      await Future<void>.delayed(Duration.zero);
-    },
-  );
+  test('a platform that cannot make a noise does not break the frame that asked', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          throw PlatformException(code: 'NO_AUDIO');
+        });
+    final player = sounds(await switchedOn());
+    expect(() => player.play(AlertKind.done), returnsNormally);
+    await Future<void>.delayed(Duration.zero);
+  });
 }

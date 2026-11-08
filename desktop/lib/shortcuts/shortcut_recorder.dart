@@ -64,7 +64,6 @@ class _ShortcutRecorderState extends State<ShortcutRecorder> {
 
   String get _command => widget.lesson.command;
   KeymapContext get _context => widget.lesson.context;
-
   /// Linux and the native Windows app: Ctrl and Alt are the chord keys, and
   /// the terminal owns the Ctrl+Shift clipboard keys.
   bool get _pcKeyboard =>

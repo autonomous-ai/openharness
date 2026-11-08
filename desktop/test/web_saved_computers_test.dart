@@ -309,34 +309,30 @@ void main() {
       ..notifyListeners();
     await pumpEventQueue();
 
-    expect(
-      storage.values.keys.where((k) => k.startsWith('super_tab.view')),
-      isEmpty,
-    );
+    expect(storage.values.keys.where((k) => k.startsWith('super_tab.view')), isEmpty);
   });
 
-  testWidgets(
-    'the web frame keeps the computers from the app\'s start, before any workspace',
-    (tester) async {
-      final storage = MemoryStore();
-      final app = createApp(store: storage)..status = AppStatus.unauthenticated;
-      addTearDown(app.dispose);
-      await tester.runAsync(() async {
-        await SavedComputers(storage).claim('ann');
-        await SavedComputers(storage).write('ann', _macs);
-      });
+  testWidgets('the web frame keeps the computers from the app\'s start, before any workspace', (
+    tester,
+  ) async {
+    final storage = MemoryStore();
+    final app = createApp(store: storage)..status = AppStatus.unauthenticated;
+    addTearDown(app.dispose);
+    await tester.runAsync(() async {
+      await SavedComputers(storage).claim('ann');
+      await SavedComputers(storage).write('ann', _macs);
+    });
 
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [appStateProvider.overrideWithValue(app)],
-          child: const KeptComputers(child: SizedBox.shrink()),
-        ),
-      );
-      await tester.runAsync(pumpEventQueue);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appStateProvider.overrideWithValue(app)],
+        child: const KeptComputers(child: SizedBox.shrink()),
+      ),
+    );
+    await tester.runAsync(pumpEventQueue);
 
-      expect(storage.values['web.computers.ann'], isNull);
-    },
-  );
+    expect(storage.values['web.computers.ann'], isNull);
+  });
 
   group('the connect page', () {
     late _Account app;

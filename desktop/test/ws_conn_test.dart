@@ -383,48 +383,42 @@ void main() {
     {'error': 'SESSION_NOT_IDLE', 'activity': 'working'},
     {'error': 'HISTORY_NOT_SAVED', 'detail': 'Not enough free disk space.'},
   ]) {
-    test(
-      'close preserves ${failure['error']} across the real WebSocket',
-      () async {
-        hub = await FakeHub.start();
-        hub.closeResponse = failure;
-        conn = WsConn(
-          wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
-          autonomousEnv: 'test',
-          machineId: 'm',
-          accessTokenProvider: (_, _) async => '',
-          onAuthFailure: (_) {},
-          onEvent: (_) {},
-          onStatus: (_) {},
-          transportKind: WsTransportKind.localPlaintext,
-          allowLocalTcpFixture: true,
-          localWsUri: Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws'),
-        );
-        final app = createApp(connected: true, connectionForTest: (_) => conn!);
-        addTearDown(app.dispose);
-        final agent = Agent(
-          id: 'a0',
-          engine: 'codex',
-          name: 'Work',
-          sessionId: 'conversation-a0',
-          createdAt: DateTime.utc(2026, 10, 1),
-          closeSupported: true,
-          terminalAvailable: true,
-        );
-        app.stateOf('m')!.agents = [agent];
-        await conn!.connect();
-        final result = await app.prepareSessionClose('m', agent)('idle');
-        for (final entry in failure.entries) {
-          expect(result[entry.key], entry.value);
-        }
-        expect(app.stateOf('m')!.agents.single.isStopped, isFalse);
-        expect(
-          hub.frames.where((f) => f['type'] == 'agent_close'),
-          hasLength(1),
-        );
-        expect(hub.frames.where((f) => f['type'] == 'agents_list'), isEmpty);
-      },
-    );
+    test('close preserves ${failure['error']} across the real WebSocket', () async {
+      hub = await FakeHub.start();
+      hub.closeResponse = failure;
+      conn = WsConn(
+        wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
+        autonomousEnv: 'test',
+        machineId: 'm',
+        accessTokenProvider: (_, _) async => '',
+        onAuthFailure: (_) {},
+        onEvent: (_) {},
+        onStatus: (_) {},
+        transportKind: WsTransportKind.localPlaintext,
+        allowLocalTcpFixture: true,
+        localWsUri: Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws'),
+      );
+      final app = createApp(connected: true, connectionForTest: (_) => conn!);
+      addTearDown(app.dispose);
+      final agent = Agent(
+        id: 'a0',
+        engine: 'codex',
+        name: 'Work',
+        sessionId: 'conversation-a0',
+        createdAt: DateTime.utc(2026, 10, 1),
+        closeSupported: true,
+        terminalAvailable: true,
+      );
+      app.stateOf('m')!.agents = [agent];
+      await conn!.connect();
+      final result = await app.prepareSessionClose('m', agent)('idle');
+      for (final entry in failure.entries) {
+        expect(result[entry.key], entry.value);
+      }
+      expect(app.stateOf('m')!.agents.single.isStopped, isFalse);
+      expect(hub.frames.where((f) => f['type'] == 'agent_close'), hasLength(1));
+      expect(hub.frames.where((f) => f['type'] == 'agents_list'), isEmpty);
+    });
   }
 
   test('forceReconnect() sends forceReconnect:true on the next machine_select, only for local transport', () async {
@@ -541,89 +535,74 @@ void main() {
 
   // The browser reads its version from the host's release file at start-up; a socket dialled while that read is out
   // waits for it a moment, so the web build's first sockets carry it too (the e2e harness counts them per kind).
-  test(
-    'a socket waits up to a second for the version read, then dials with it',
-    () async {
-      hub = await FakeHub.start();
-      final read = Completer<void>();
-      appVersionRead = read.future;
-      addTearDown(() {
-        appVersionRead = null;
-        declaredAppVersion = null;
-      });
-      conn = WsConn(
-        wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
-        autonomousEnv: 'prod',
-        machineId: 'm1',
-        accessTokenProvider: (_, _) async => 'access-token',
-        onAuthFailure: (_) {},
-        onEvent: (_) {},
-        onStatus: (_) {},
-      );
-      unawaited(conn!.connect());
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-      declaredAppVersion = '1.3.58';
-      read.complete();
-      await conn!.request('agents_list');
-      expect(hub.declaredVersions, ['1.3.58']);
-    },
-  );
+  test('a socket waits up to a second for the version read, then dials with it', () async {
+    hub = await FakeHub.start();
+    final read = Completer<void>();
+    appVersionRead = read.future;
+    addTearDown(() {
+      appVersionRead = null;
+      declaredAppVersion = null;
+    });
+    conn = WsConn(
+      wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
+      autonomousEnv: 'prod',
+      machineId: 'm1',
+      accessTokenProvider: (_, _) async => 'access-token',
+      onAuthFailure: (_) {},
+      onEvent: (_) {},
+      onStatus: (_) {},
+    );
+    unawaited(conn!.connect());
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    declaredAppVersion = '1.3.58';
+    read.complete();
+    await conn!.request('agents_list');
+    expect(hub.declaredVersions, ['1.3.58']);
+  });
 
-  test(
-    'a version read that never ends holds a dial for a second at most',
-    () async {
-      hub = await FakeHub.start();
-      appVersionRead = Completer<void>().future;
-      addTearDown(() => appVersionRead = null);
-      conn = WsConn(
-        wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
-        autonomousEnv: 'prod',
-        machineId: 'm1',
-        accessTokenProvider: (_, _) async => 'access-token',
-        onAuthFailure: (_) {},
-        onEvent: (_) {},
-        onStatus: (_) {},
-      );
-      final started = DateTime.now();
-      await conn!.connect();
-      await conn!.request('agents_list');
-      expect(
-        DateTime.now().difference(started),
-        lessThan(const Duration(seconds: 2)),
-      );
-      expect(hub.declaredVersions, [null]);
-    },
-  );
+  test('a version read that never ends holds a dial for a second at most', () async {
+    hub = await FakeHub.start();
+    appVersionRead = Completer<void>().future;
+    addTearDown(() => appVersionRead = null);
+    conn = WsConn(
+      wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
+      autonomousEnv: 'prod',
+      machineId: 'm1',
+      accessTokenProvider: (_, _) async => 'access-token',
+      onAuthFailure: (_) {},
+      onEvent: (_) {},
+      onStatus: (_) {},
+    );
+    final started = DateTime.now();
+    await conn!.connect();
+    await conn!.request('agents_list');
+    expect(DateTime.now().difference(started), lessThan(const Duration(seconds: 2)));
+    expect(hub.declaredVersions, [null]);
+  });
 
   // Review of #2044: a read that never ends costs the first dial its second, not every dial after it.
-  test(
-    'after a version read times out once, later dials do not wait',
-    () async {
-      hub = await FakeHub.start();
-      appVersionRead = Completer<void>().future;
-      addTearDown(() => appVersionRead = null);
-      WsConn dialer() => WsConn(
-        wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
-        autonomousEnv: 'prod',
-        machineId: 'm1',
-        accessTokenProvider: (_, _) async => 'access-token',
-        onAuthFailure: (_) {},
-        onEvent: (_) {},
-        onStatus: (_) {},
-      );
-      final first = dialer();
-      addTearDown(first.close);
-      await first.connect();
-      conn = dialer();
-      final started = DateTime.now();
-      await conn!.connect();
-      await conn!.request('agents_list');
-      expect(
-        DateTime.now().difference(started),
-        lessThan(const Duration(milliseconds: 500)),
-      );
-    },
-  );
+  test('after a version read times out once, later dials do not wait', () async {
+    hub = await FakeHub.start();
+    appVersionRead = Completer<void>().future;
+    addTearDown(() => appVersionRead = null);
+    WsConn dialer() => WsConn(
+      wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
+      autonomousEnv: 'prod',
+      machineId: 'm1',
+      accessTokenProvider: (_, _) async => 'access-token',
+      onAuthFailure: (_) {},
+      onEvent: (_) {},
+      onStatus: (_) {},
+    );
+    final first = dialer();
+    addTearDown(first.close);
+    await first.connect();
+    conn = dialer();
+    final started = DateTime.now();
+    await conn!.connect();
+    await conn!.request('agents_list');
+    expect(DateTime.now().difference(started), lessThan(const Duration(milliseconds: 500)));
+  });
 
   // Prod, 2026-10-28: a laptop removed from the account in September was still selected every few
   // seconds. Through this computer's daemon the refusal arrives as the relay's close, with the
@@ -669,36 +648,33 @@ void main() {
   // A relayed machine that is off was redialled on the 15–30 s backoff for as long as the app ran,
   // each dial refused at once: about 2.7 a minute for every machine that was off. It now waits for
   // word that the machine is back, and rechecks on its own only every 1, 2, 4, 8, then 15 minutes.
-  test(
-    'a relayed machine that is off waits to be woken instead of redialling',
-    () async {
-      // The reason is what counts: a current daemon closes with 1013, an older one with 1011 (a
-      // dart:io server cannot send 1013, a reserved code).
-      hub = await FakeHub.start(closeCodeOnSelect: 1011);
-      hub.closeReasonOnSelect = 'MACHINE_OFFLINE';
-      conn = WsConn(
-        wsBaseUrl: 'wss://unused.example',
-        autonomousEnv: 'prod',
-        machineId: 'm1',
-        accessTokenProvider: (_, _) async => 'sso-token',
-        onAuthFailure: (_) {},
-        onEvent: (_) {},
-        onStatus: (_) {},
-        transportKind: WsTransportKind.localPlaintext,
-        allowLocalTcpFixture: true,
-        localWsUri: Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws'),
-      );
-      await conn!.connect();
-      await Future<void>.delayed(const Duration(milliseconds: 3200));
-      expect(hub.protocols, hasLength(1));
-      expect(conn!.isParked, isTrue);
-      expect(conn!.isClosed, isFalse);
+  test('a relayed machine that is off waits to be woken instead of redialling', () async {
+    // The reason is what counts: a current daemon closes with 1013, an older one with 1011 (a
+    // dart:io server cannot send 1013, a reserved code).
+    hub = await FakeHub.start(closeCodeOnSelect: 1011);
+    hub.closeReasonOnSelect = 'MACHINE_OFFLINE';
+    conn = WsConn(
+      wsBaseUrl: 'wss://unused.example',
+      autonomousEnv: 'prod',
+      machineId: 'm1',
+      accessTokenProvider: (_, _) async => 'sso-token',
+      onAuthFailure: (_) {},
+      onEvent: (_) {},
+      onStatus: (_) {},
+      transportKind: WsTransportKind.localPlaintext,
+      allowLocalTcpFixture: true,
+      localWsUri: Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws'),
+    );
+    await conn!.connect();
+    await Future<void>.delayed(const Duration(milliseconds: 3200));
+    expect(hub.protocols, hasLength(1));
+    expect(conn!.isParked, isTrue);
+    expect(conn!.isClosed, isFalse);
 
-      conn!.wake('machine online');
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-      expect(hub.protocols, hasLength(2));
-    },
-  );
+    conn!.wake('machine online');
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    expect(hub.protocols, hasLength(2));
+  });
 
   // The first recheck is the relay's own retry-after (30 s): a machine back online that a wake reached while the relay
   // still answered from its refusal parks again, and must not wait a minute more (review of #2027).
@@ -742,7 +718,11 @@ void main() {
       );
       await conn!.connect();
       await Future<void>.delayed(const Duration(milliseconds: 650));
-      expect(dials, greaterThanOrEqualTo(4), reason: 'backoff would allow one');
+      expect(
+        dials,
+        greaterThanOrEqualTo(4),
+        reason: 'backoff would allow one',
+      );
     },
   );
 
@@ -763,7 +743,7 @@ void main() {
       onEvent: (_) {},
       onStatus: statuses.add,
       transportKind: WsTransportKind.localPlaintext,
-      allowLocalTcpFixture: true,
+        allowLocalTcpFixture: true,
       localWsUri: Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws'),
     );
     await conn!.connect();

@@ -42,7 +42,10 @@ void main() {
     for (final paragraph in tester.renderObjectList<RenderParagraph>(
       find.byType(RichText),
     )) {
-      expect(paragraph.text.style?.decoration, isNot(TextDecoration.underline));
+      expect(
+        paragraph.text.style?.decoration,
+        isNot(TextDecoration.underline),
+      );
     }
   });
 

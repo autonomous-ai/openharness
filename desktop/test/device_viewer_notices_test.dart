@@ -387,35 +387,32 @@ void main() {
     expect(api.machineReads, greaterThan(beforeResume));
   });
 
-  test(
-    'signing in by hand as another account starts that account\'s list over',
-    () async {
-      // Account A: this browser joined its log.
-      await backend.add(box2, 'machine', 'b' * 32, 'box2');
-      await openAs(backend, backend.acct, byHand: true);
-      final me = b64e((await keys.identity()).pub);
-      expect(backend.state.active[me]?.kind, 'viewer');
+  test('signing in by hand as another account starts that account\'s list over', () async {
+    // Account A: this browser joined its log.
+    await backend.add(box2, 'machine', 'b' * 32, 'box2');
+    await openAs(backend, backend.acct, byHand: true);
+    final me = b64e((await keys.identity()).pub);
+    expect(backend.state.active[me]?.kind, 'viewer');
 
-      // Signed in as B in the same browser, by hand: B's log is another account's, and this sign-in is
-      // new — a new list, not a backend that lies. A fresh sign-in's profile names the same account
-      // as its signed log; restored-session profile mismatches are exercised below.
-      final other = _Backend('acct-2');
-      await other.add(phone, 'viewer', '', 'Phone');
-      final b = await openAs(other, other.acct, byHand: true);
-      final listing = await logOf(b).list();
-      expect(
-        listing.frozen,
-        isNull,
-        reason: 'a new local sign-in is a new list, not a backend that lies',
-      );
-      expect(
-        other.state.active[me]?.kind,
-        'viewer',
-        reason: 'this browser joined B\'s log',
-      );
-      expect(listing.members.map((m) => m.member.label), contains('Phone'));
-    },
-  );
+    // Signed in as B in the same browser, by hand: B's log is another account's, and this sign-in is
+    // new — a new list, not a backend that lies. A fresh sign-in's profile names the same account
+    // as its signed log; restored-session profile mismatches are exercised below.
+    final other = _Backend('acct-2');
+    await other.add(phone, 'viewer', '', 'Phone');
+    final b = await openAs(other, other.acct, byHand: true);
+    final listing = await logOf(b).list();
+    expect(
+      listing.frozen,
+      isNull,
+      reason: 'a new local sign-in is a new list, not a backend that lies',
+    );
+    expect(
+      other.state.active[me]?.kind,
+      'viewer',
+      reason: 'this browser joined B\'s log',
+    );
+    expect(listing.members.map((m) => m.member.label), contains('Phone'));
+  });
 
   test('a restored session whose /me id differs does not reset the list', () async {
     await backend.add(box2, 'machine', 'b' * 32, 'box2');
@@ -527,14 +524,7 @@ void main() {
     // box2 (on the account before this app) confirmed the tablet; the log is read again (the push).
     api.acks.add(
       (await signDevAck(
-        DevAck(
-          v: 1,
-          acct: _acct,
-          pub: b64e(tablet.pub),
-          addSeq: backend.state.active[b64e(tablet.pub)]!.seq,
-          signer: b64e(box2.pub),
-          at: 9000,
-        ),
+        DevAck(v: 1, acct: _acct, pub: b64e(tablet.pub), addSeq: backend.state.active[b64e(tablet.pub)]!.seq, signer: b64e(box2.pub), at: 9000),
         box2,
       )).toJson(),
     );
@@ -542,14 +532,8 @@ void main() {
     await settle();
     expect(app.newDevices.map((d) => d.label), ['Chrome']);
     final devices = (await app.loadDevices())!;
-    expect(
-      devices.devices.firstWhere((d) => d.pub == b64e(tablet.pub)).confirmedOn,
-      'box2',
-    );
-    expect(
-      devices.devices.firstWhere((d) => d.pub == b64e(phone.pub)).confirmedOn,
-      isNull,
-    );
+    expect(devices.devices.firstWhere((d) => d.pub == b64e(tablet.pub)).confirmedOn, 'box2');
+    expect(devices.devices.firstWhere((d) => d.pub == b64e(phone.pub)).confirmedOn, isNull);
 
     // Opening the list (Review) marks what it showed as seen here, and tells nobody.
     app.seenNewDevices();
