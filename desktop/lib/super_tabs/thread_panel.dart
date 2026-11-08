@@ -509,7 +509,12 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                   Expanded(
                     child: Semantics(
                       header: true,
-                      child: Text('Thread', style: SwarmType.name(context)),
+                      // A task's thread is named by its number, as its card is (Swarm v4).
+                      child: Text(
+                        RegExp(r'^#\d+').stringMatch(root?.text ?? '') ??
+                            'Thread',
+                        style: SwarmType.name(context),
+                      ),
                     ),
                   ),
                   AppIconButton(
