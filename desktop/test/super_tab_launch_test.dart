@@ -2593,6 +2593,8 @@ void main() {
       'newProject': false,
       'visibility': 'public',
       'projectId': 'lead',
+      // Saved just now: a request saved half an hour ago is dropped as dead.
+      'savedAt': DateTime.now().millisecondsSinceEpoch,
       ...extra,
     };
 

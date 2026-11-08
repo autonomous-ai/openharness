@@ -35,11 +35,23 @@ class SuperTabLaunch {
     this.swarmId,
     this.accountId,
     this.key,
-    this.saved,
-  );
+    this.saved, {
+    this.olderKey,
+  });
   final AppNotifier app;
   final String swarmId, accountId, key;
   final Map<String, dynamic> saved;
+
+  /// Where an older Desktop kept this conversation's request, under its tab,
+  /// when [key] is the Swarm's; [discard] clears it too, so it cannot come
+  /// back as the next request.
+  final String? olderKey;
+
+  /// A started or locked request saved this long ago is dropped when its form
+  /// opens (anh Dee 11-08: New agent kept a request that never joined). A
+  /// start answers within minutes, and a harness that did start keeps running
+  /// on its machine.
+  static const staleAfter = Duration(minutes: 30);
 
   static Future<HarnessLaunchIntegration> open(
     AppNotifier app,
@@ -70,6 +82,27 @@ class SuperTabLaunch {
     }
     if (app.currentUser?.id != account) {
       throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+    }
+    final olderKey = key == perTab ? null : perTab;
+    if (raw != null) {
+      final kept = SuperTabLaunch._(
+        app,
+        tab.id,
+        account,
+        key,
+        superTabMap(jsonDecode(raw)),
+        olderKey: olderKey,
+      );
+      if (kept.stale) {
+        // Dead, so it goes as Discard anyway would take it, and the form opens fresh.
+        await kept.discard(anyway: true);
+        appLog.info(
+          'super-tabs',
+          'Dropped a launch request saved over '
+              '${staleAfter.inMinutes} minutes ago',
+        );
+        raw = null;
+      }
     }
     // A project with no coordinator gets its Product Manager from New Harness
     // in its chat, the person's first message going to it (River, 11-03,
@@ -119,7 +152,14 @@ class SuperTabLaunch {
             if (!newProject) 'projectId': 'lead',
           }
         : superTabMap(jsonDecode(raw));
-    final launch = SuperTabLaunch._(app, tab.id, account, key, saved);
+    final launch = SuperTabLaunch._(
+      app,
+      tab.id,
+      account,
+      key,
+      saved,
+      olderKey: olderKey,
+    );
     final recovering =
         saved['phase'] == 'starting' || saved['phase'] == 'joining';
     // An agent joining a project with instructions names its role; an older
@@ -388,6 +428,16 @@ class SuperTabLaunch {
   /// A native start was asked for, so the journal must outlive this form.
   bool get started =>
       saved['phase'] == 'starting' || saved['phase'] == 'joining';
+
+  /// Started, or with its agent kind locked, and saved over [staleAfter] ago.
+  /// An older Desktop saved no time of its own: then the time its agent was
+  /// asked for counts, and with neither the request is older still.
+  bool get stale {
+    if (!started && saved['newAgentAt'] == null) return false;
+    final at = saved['savedAt'] ?? saved['newAgentAt'];
+    return at is! int ||
+        DateTime.now().millisecondsSinceEpoch - at > staleAfter.inMilliseconds;
+  }
 
   /// The coordinator as the project calls it: never "Lead" on screen (Naming
   /// System; River, #2458).
@@ -1084,6 +1134,7 @@ class SuperTabLaunch {
     checkAccount();
     // A discarded request stays gone: a write still on its way must not bring it back (hotfix #4647).
     if (_dropped) return;
+    saved['savedAt'] = DateTime.now().millisecondsSinceEpoch;
     await app.superTabs.storage.write(key, jsonEncode(saved));
     checkAccount();
   }
@@ -1672,12 +1723,20 @@ class SuperTabLaunch {
       }
       nothingWillJoin = true;
     }
-    if (nothingWillJoin) {
-      await _deleteEmptyProject();
-      await _archiveEmptyChat();
+    try {
+      if (nothingWillJoin) {
+        await _deleteEmptyProject();
+        await _archiveEmptyChat();
+      }
+    } finally {
+      // Whatever the cleanup met, the request goes, with any copy an older
+      // Desktop kept under its tab (anh Dee 11-08: that one came back next).
+      _dropped = true;
+      await app.superTabs.storage.delete(key);
+      if (olderKey case final older?) {
+        await app.superTabs.storage.delete(older);
+      }
     }
-    _dropped = true;
-    await app.superTabs.storage.delete(key);
     checkAccount();
     return null;
   }

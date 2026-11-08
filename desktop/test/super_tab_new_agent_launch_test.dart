@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/super_tabs/controller.dart' show SuperTabFailure;
@@ -239,6 +241,108 @@ void main() {
       expect(await storage.read(swarmKey), isNull);
       final fresh = await _newAgent(f);
       expect(fresh.integration!.pending, isFalse);
+    });
+
+    // anh Dee 11-08: after Discard anyway, New agent opened on another old request, its agent kind locked.
+    test('one press also clears an older request its tab kept, so neither '
+        'comes back', () async {
+      final f = SuperTabLaunchFixture()..connection.failCreation = true;
+      final first = await _newAgent(f);
+      expect(await first.create(), NewHarnessOutcome.failed);
+      final storage = f.app.superTabs.storage;
+      final swarmKey =
+          'super_tab.launch.${f.app.currentUser!.id}.swarm:$tabId.new-agent';
+      // An older Desktop kept a request of its own under the tab.
+      await storage.write(perTab(f), (await storage.read(swarmKey))!);
+      final recovered = await _newAgent(f);
+      expect(recovered.integration!.pending, isTrue);
+      expect(await recovered.discardPending(anyway: true), isNull);
+      expect(await storage.read(perTab(f)), isNull);
+      final fresh = await _newAgent(f);
+      expect(fresh.integration!.pending, isFalse);
+      expect(fresh.integration!.agentKindLocked, isFalse);
+    });
+  });
+
+  // anh Dee 11-08 (Mac 3): New agent kept reopening a request that never joined, Check status could not finish it,
+  // and its agent kind stayed locked. A request untouched for half an hour is dead: the form drops it, as Discard
+  // anyway does, and opens fresh.
+  group('a request untouched for half an hour', () {
+    String swarmKey(SuperTabLaunchFixture f) =>
+        'super_tab.launch.${f.app.currentUser!.id}.swarm:$tabId.new-agent';
+
+    int minutesAgo(int minutes) => DateTime.now()
+        .subtract(Duration(minutes: minutes))
+        .millisecondsSinceEpoch;
+
+    Future<void> change(
+      SuperTabLaunchFixture f,
+      void Function(Map<String, dynamic> saved) edit,
+    ) async {
+      final storage = f.app.superTabs.storage;
+      final saved = jsonDecode(
+        (await storage.read(swarmKey(f)))!,
+      ) as Map<String, dynamic>;
+      edit(saved);
+      await storage.write(swarmKey(f), jsonEncode(saved));
+    }
+
+    Future<SuperTabLaunchFixture> failedStart() async {
+      final f = SuperTabLaunchFixture()..connection.failCreation = true;
+      final first = await _newAgent(f);
+      expect(await first.create(), NewHarnessOutcome.failed);
+      return f;
+    }
+
+    test('opens fresh, with its agent kind free again', () async {
+      final f = await failedStart();
+      await change(f, (saved) => saved['savedAt'] = minutesAgo(31));
+      final fresh = await _newAgent(f);
+      expect(fresh.integration!.pending, isFalse);
+      expect(fresh.integration!.agentKindLocked, isFalse);
+      expect(fresh.canDiscardPending, isFalse);
+      expect(await f.app.superTabs.storage.read(swarmKey(f)), isNull);
+    });
+
+    test('one that never started opens fresh too, and its empty chat is '
+        'archived', () async {
+      final f = await failedStart();
+      await change(f, (saved) {
+        saved.remove('phase');
+        saved['savedAt'] = minutesAgo(31);
+      });
+      final fresh = await _newAgent(f);
+      expect(fresh.integration!.agentKindLocked, isFalse);
+      expect(
+        _commands(f).where((c) => c['type'] == 'conversation.archive'),
+        hasLength(1),
+      );
+    });
+
+    test('one an older Desktop saved goes by when its agent was asked for, '
+        'or by nothing at all', () async {
+      for (final asked in [minutesAgo(31), null]) {
+        final f = await failedStart();
+        await change(f, (saved) {
+          saved.remove('savedAt');
+          if (asked == null) {
+            saved.remove('newAgentAt');
+          } else {
+            saved['newAgentAt'] = asked;
+          }
+        });
+        final fresh = await _newAgent(f);
+        expect(fresh.integration!.pending, isFalse, reason: '$asked');
+        expect(fresh.integration!.agentKindLocked, isFalse, reason: '$asked');
+      }
+    });
+
+    test('a request saved within it is still recovered', () async {
+      final f = await failedStart();
+      await change(f, (saved) => saved['savedAt'] = minutesAgo(29));
+      final recovered = await _newAgent(f);
+      expect(recovered.integration!.pending, isTrue);
+      expect(recovered.integration!.agentKindLocked, isTrue);
     });
   });
 

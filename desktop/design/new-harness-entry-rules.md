@@ -263,6 +263,10 @@ worktree: the retry selects that worktree's branch with Worktree off.
 - A request awaiting confirmation is the exception: restore its exact values and
   receipt. A new task must not silently turn an uncertain start into a duplicate.
   In-flight and uncertain requests cannot be replaced while open.
+- A started or locked request saved more than 30 minutes ago is dead: opening
+  the form drops it as **Discard anyway** does and starts fresh, and a harness
+  that did start keeps running on its machine. Discard also clears the copy an
+  older Desktop kept under its tab, so no old request comes back.
 - Pending receipts belong to their original source context. Closing keeps them
   recoverable. Opening a nested picker or returning from advanced options keeps
   the currently open form and its destination.
