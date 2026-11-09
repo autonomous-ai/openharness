@@ -148,6 +148,7 @@ class SuperTabView extends StatefulWidget {
     this.app,
     this.onNewProject,
     this.onNewAgent,
+    this.onAttachAgent,
     this.rightPane,
     this.onNewSwarm,
     this.onChooseAgentTerminal,
@@ -184,6 +185,10 @@ class SuperTabView extends StatefulWidget {
   /// + New agent (task #4196): opens the workspace's Cmd-N form with Member or
   /// Lead. Null shows no + New agent.
   final VoidCallback? onNewAgent;
+
+  /// Attach beside + New agent (Swarm v4): the picker of agents already running on its person's own computers. Null shows
+  /// no Attach.
+  final VoidCallback? onAttachAgent;
 
   /// The Desktop's right pane (Swarm v3's Tasks, task #4119): always shown, never collapsing, in the pane layout's right
   /// slot. Given, the chat of the selected agent or project is in the middle; without it the right pane keeps the Board's
@@ -2088,6 +2093,7 @@ class _SuperTabViewState extends State<SuperTabView>
     app: widget.app,
     onNewProject: widget.onNewProject,
     onNewAgent: widget.onNewAgent,
+    onAttachAgent: widget.board ? widget.onAttachAgent : null,
     onOpenAgentChat: _openAgentChat,
     onOpenAgentTerminal: _openAgentTerminal,
     onNewSwarm: widget.onNewSwarm,
