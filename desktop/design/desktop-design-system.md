@@ -495,14 +495,28 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   lighter shade as text in dark, its darker in light), then who opened it and
   how long ago (`69tc · 6h`, with the face of the agent its builder label names
   before it) and, at the right, how many comments it has (a speech bubble and
-  the count, none for no comments). The board shows what it last read at once
+  the count, none for no comments). A task with an open pull request (one
+  that closes it, "Closes #14", else one on its builder's branch for it,
+  `pip/14`) shows it at the card's top right (`SwarmPullChip`,
+  `super_tabs/pull_chip.dart`): the pull request's icon, number and one word in
+  a capsule of its colour at 14%, by the rule Harness merges by
+  (`super_tabs/github_pulls.dart`): Draft and Checks (running) in muted grey,
+  Review (green checks, no READ-OK on its head yet) in the accent, Failing and
+  Conflict in the error red, Held (a reader's last word is a HOLD) in `warn`,
+  and Merging (a READ-OK on its head from someone other than its builder, two
+  for TWO READS, checks green) in `online`; in a narrow column the word
+  shortens, never the task's number. No pull request, no chip. The open pull
+  requests are one GraphQL read after the issues (the newest 50), and a read
+  of them that fails keeps the last chips. The board shows what it last read at once
   and brings the rest: the newest hundred first, then the others, but only
   where nothing shows yet: a list already shown stays whole while a refresh is
   read, one refresh at a time. A refresh that fails keeps the cards and says
   why in the bar, in 12 metadata grey, with a retry icon (`Try again`).
   A card opens its issue in the board's place (`SwarmIssuePanel`,
   `super_tabs/issue_panel.dart`), titled by its number, with Open in GitHub:
-  its title, its agent, state and who opened it, its labels, then its text and
+  its title, its agent, state and who opened it, its labels, its open pull
+  request as a row (the chip, its title and branch, and Open, which goes to it
+  on GitHub), then its text and
   comments as posts, each under the face and name its first words sign it with
   (`Migrate, 09:3x: …`) and its GitHub login. It reads the newest 30
   comments; the rest are one tap away (`1,546 earlier comments` and Show,
