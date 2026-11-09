@@ -147,9 +147,11 @@ class Intern3Swarm extends ChangeNotifier {
     await _startBuddy();
   });
 
-  /// Claude Code's first-run questions on Intern 3 answered for the person, never shown (owner, 2026-11-06): its theme Dark
-  /// mode, as its screen first offers, and full mode accepted, which a Swarm's agents run in (cli engines/launchPrep.ts
-  /// answerFirstRun). A Harness from before has no such answer: its Buddy's screen asks, as before.
+  /// Claude Code's first-run screens on Intern 3 answered for the person, never shown (owner, 2026-11-06): its theme Dark
+  /// mode, as its screen first offers, and the screens done (cli engines/launchPrep.ts answerFirstRun). No permission
+  /// setting: the Buddy runs in its owner's own mode (task #4215); `acceptFullMode` is still sent for the test builds of
+  /// this setup that asked for it, and read as nothing since. A Harness from before has no such answer: its Buddy's screen
+  /// asks, as before.
   Future<void> _answerFirstRun() async {
     if (!_needsFirstRun) return;
     try {
