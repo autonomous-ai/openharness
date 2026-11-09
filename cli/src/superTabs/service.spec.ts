@@ -353,7 +353,6 @@ it('gives every agent the same help, with no rule the server dropped', async () 
   expect((help.commands as Array<{ type: string }>).map(c => c.type)).toEqual(expect.arrayContaining(['decision.ask']))
   // Task #4547: a person's chat with their own agent is theirs alone; no help text teaches the retired private line.
   expect(JSON.stringify(help)).not.toContain('person.tell')
-  expect(help.plan).toEqual(expect.stringMatching(/^plan \[JSON\]/))
   const dropped = /prefer stop|agree an order|Only its project's Lead|without a routeDecisionId is refused|hard rule|top tier|steps the task up|"name":"Builder"|role "reviewer"/i
   expect(JSON.stringify(help)).not.toMatch(dropped)
   expect(Object.values(help).filter(v => typeof v === 'string').join('\n')).not.toMatch(dropped)
@@ -1273,8 +1272,8 @@ describe('mentions on a post', () => {
 
   const help = async (t: ReturnType<typeof setup>, payload: Record<string, unknown>) => object(object(await t.ask({ action: 'help', ...payload }, owner)).help)
   const mention = '[--mention PERSON]...'
-  // Project instructions, phase 4: any agent of the project tags people, asks a batch and plans; the server says where not.
-  it('offers --mention, plan and a batch of questions in every agent\'s help', async () => {
+  // Project instructions, phase 4: any agent of the project tags people and asks a batch; the server says where not.
+  it('offers --mention and a batch of questions in every agent\'s help', async () => {
     const t = setup()
     swarm(t, t.agentId)
     const lead = await help(t, { tabId: 'tab', agentId: t.agentId })
@@ -1287,7 +1286,6 @@ describe('mentions on a post', () => {
     // The server reads tags from the text too (backend mentions.ts).
     expect(lead.post).toContain('An @username in TEXT tags that person as well, outside code and links. Never type a person\'s email.')
     expect(lead.post).not.toMatch(/email shown|@email/)
-    expect(String(lead.plan)).toContain('plan [JSON]: the best plan for all your open groups')
     expect(await help(t, { tabId: 'tab', harnessId: 'native' })).toEqual(lead)
     // An agent that coordinates nothing reads the same, and so does help outside a tab or with a caller that cannot be read.
     swarm(t, 'new-lead')

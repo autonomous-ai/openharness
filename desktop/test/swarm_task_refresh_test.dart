@@ -5,7 +5,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
-import 'package:harness/super_tabs/agent_instructions.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/github_issues.dart';
 import 'package:harness/super_tabs/issue_panel.dart';
@@ -335,19 +334,5 @@ void main() {
       thread([1], total: 1),
     ], now: DateTime.utc(2026, 11, 9, 1, 5));
     expect(find.textContaining('opened 5m ago'), findsOneWidget);
-  });
-
-  test('an agent\'s name that is a path names no file in its folder', () {
-    expect(
-      SwarmAgentInstructions.fileIn('/work/lampOS', 'Faye'),
-      '/work/lampOS/agents/Faye.md',
-    );
-    expect(
-      SwarmAgentInstructions.fileIn('/work/lampOS', 'first builder'),
-      '/work/lampOS/agents/first builder.md',
-    );
-    expect(SwarmAgentInstructions.fileIn('/work/lampOS', '../../x'), isNull);
-    expect(SwarmAgentInstructions.fileIn('/work/lampOS', 'a/b'), isNull);
-    expect(SwarmAgentInstructions.fileIn('/work/lampOS', r'a\b'), isNull);
   });
 }

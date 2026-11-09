@@ -39,6 +39,11 @@ abstract final class SwarmLayout {
   /// A task's title, above its text and comments.
   static const double titleSize = 16;
 
+  /// A card in a chat that is nobody's bubble, as GitHub's words to an agent (super_tabs/github_row.dart): the gap above it,
+  /// and the gap under its file line.
+  static const double chatCardTop = 12;
+  static const double chatCardLineGap = 6;
+
   /// The agents-only line under a project's channel, where a composer would be.
   static const EdgeInsets agentsOnlyMargin = EdgeInsets.fromLTRB(28, 6, 28, 18);
 

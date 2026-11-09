@@ -47,6 +47,20 @@ describe('a guest session', () => {
     ])
   })
 
+  it('is refused an agent\'s instructions file, even its own harness\'s, and the service never hears it', async () => {
+    const { socket, ask, answered } = session('kim@acme.io')
+    socket.agentGuest = (agentId) => (agentId === 'mine' ? 'kim@acme.io' : null)
+    const routed = vi.fn(() => true)
+    socket.serviceRouter = routed
+    await ask('agent_instructions_read', { agentId: 'mine', name: 'Faye' })
+    await ask('agent_instructions_write', { agentId: 'mine', name: 'Faye', text: 'planted', version: '' })
+    expect(routed).not.toHaveBeenCalled()
+    expect(answered()).toEqual([
+      { type: 'agent_instructions_read', payload: expect.objectContaining({ error: 'GUEST_NOT_ALLOWED' }) },
+      { type: 'agent_instructions_write', payload: expect.objectContaining({ error: 'GUEST_NOT_ALLOWED' }) },
+    ])
+  })
+
   it('may ask what is allowed, as no owner, saying whose guest it is', async () => {
     const { socket, ask } = session('kim@acme.io')
     const askers: unknown[] = []
