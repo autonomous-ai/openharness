@@ -772,9 +772,10 @@ fn attach(
             .chain(args.iter().cloned())
             .collect::<Vec<_>>(),
     );
-    // The child's own job, so a respawned child never shares one with the child it replaced.
+    // The child's own job, so a respawned child never shares one with the child it replaced. A
+    // Cygwin/MSYS root gets a job without breakaway (`breakaway_allowed`).
     #[cfg(windows)]
-    let job = Arc::new(crate::job::Job::new()?);
+    let job = Arc::new(crate::job::Job::for_program(program)?);
     let options = Options {
         shell: Some(Shell::new(program.clone(), args.to_vec())),
         working_directory: spec.cwd.clone(),
