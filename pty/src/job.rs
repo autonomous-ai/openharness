@@ -5,8 +5,22 @@
 //! child gets a copy): when the host dies, every pane's tree dies with it, as a tmux server's
 //! panes do when it crashes (spec §4). Without it, a shell still starting when the host died
 //! could outlive the host with its console, unreachable (Task 17). The vendored ConPTY spawn puts
-//! the child in the job while it is still suspended (`alacritty_terminal::tty::Options::job`),
-//! and the job does not allow breakaway, so nothing it starts escapes it.
+//! the child in the job while it is still suspended (`alacritty_terminal::tty::Options::job`).
+//!
+//! The job also allows **explicit** breakaway (`JOB_OBJECT_LIMIT_BREAKAWAY_OK`), and only that:
+//! a pane's tree stays whole unless a program inside it asks with `CREATE_BREAKAWAY_FROM_JOB`.
+//! Without the flag Windows refuses that request with `ERROR_ACCESS_DENIED`, and an engine that
+//! starts a long-lived helper of its own dies at once — Hermes exits 2 with
+//! `Gateway inaccessible: windows_breakaway_unavailable` on DESKTOP-0TFH0OJ (2026-11-09), because
+//! its gateway daemon is spawned with breakaway. What is given up: a process that breaks away on
+//! purpose is no longer listed by `pids()` and is not ended by `end()` — which is exactly what
+//! asking to outlive the pane means.
+//!
+//! A pane whose program is a Cygwin/MSYS one (Git Bash) is the exception, and gets no
+//! `BREAKAWAY_OK` (`breakaway_allowed`): Cygwin reads that flag off a foreign job and then passes
+//! `CREATE_BREAKAWAY_FROM_JOB` to every child it starts (`setup_user_rlimits`, winsup/cygwin/
+//! resource.cc, read 2026-11-09), so an ordinary `sleep 30` in a Git Bash pane would leave the job
+//! — `pids()` would stop listing it and `end()` would stop ending it.
 
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
@@ -14,28 +28,82 @@ use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, GetLastError};
 use windows_sys::Win32::System::JobObjects::{
-    CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_PROCESS_ID_LIST,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicProcessIdList,
-    JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
-    TerminateJobObject,
+    CreateJobObjectW, JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOBOBJECT_BASIC_PROCESS_ID_LIST, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation, QueryInformationJobObject,
+    SetInformationJobObject, TerminateJobObject,
 };
 
 /// How often `end` looks whether the job is empty.
 const POLL: Duration = Duration::from_millis(50);
 
+/// Whether [program]'s job may allow explicit breakaway: not when it is a Cygwin/MSYS one.
+///
+/// Cygwin keeps its own per-user rlimits job, and to join it from a foreign job it must break away;
+/// so it reads `BREAKAWAY_OK` off the job it was started in and, when it is set, passes
+/// `CREATE_BREAKAWAY_FROM_JOB` to **every** child it starts (`setup_user_rlimits`,
+/// winsup/cygwin/resource.cc). In a Harness pane that would take an ordinary `npm run dev` out of
+/// the pane's job: `jobPids` would stop listing it and `end()` would stop ending it.
+pub fn breakaway_allowed(program: &str) -> bool {
+    match on_path(program) {
+        Some(file) => !beside_cygwin_dll(&file),
+        // Not on PATH: whichever program Windows finds, it is not one this check can see.
+        None => true,
+    }
+}
+
+/// Whether a Cygwin/MSYS DLL sits beside [program] or in the `usr\bin` beside it, as Git for
+/// Windows lays them out (`bin\bash.exe`, the DLL in `usr\bin`).
+fn beside_cygwin_dll(program: &std::path::Path) -> bool {
+    let Some(dir) = program.parent().filter(|dir| !dir.as_os_str().is_empty()) else {
+        return false;
+    };
+    ["msys-2.0.dll", "cygwin1.dll"].iter().any(|dll| {
+        dir.join(dll).is_file() || dir.join("..").join("usr").join("bin").join(dll).is_file()
+    })
+}
+
+/// [program] as the path Windows would run: itself when it names a path, else the first match on
+/// `PATH`.
+fn on_path(program: &str) -> Option<std::path::PathBuf> {
+    let path = std::path::Path::new(program);
+    if path.components().count() > 1 {
+        return Some(path.to_path_buf());
+    }
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join(program))
+        .find(|candidate| candidate.is_file())
+}
+
 pub struct Job(OwnedHandle);
 
 impl Job {
-    /// A new, unnamed job that ends its processes when its last handle closes. Its handle is not
-    /// inheritable (no security attributes), so only the host has one.
+    /// A new, unnamed job that ends its processes when its last handle closes, and that lets a
+    /// process inside it break away when it asks. Its handle is not inheritable (no security
+    /// attributes), so only the host has one.
     pub fn new() -> io::Result<Job> {
+        Job::with_breakaway(true)
+    }
+
+    /// The job for the program [program] (its path or bare name): breakaway except for a
+    /// Cygwin/MSYS one, which takes it for every child (`breakaway_allowed`).
+    pub fn for_program(program: &str) -> io::Result<Job> {
+        Job::with_breakaway(breakaway_allowed(program))
+    }
+
+    fn with_breakaway(breakaway: bool) -> io::Result<Job> {
         let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
         if handle.is_null() {
             return Err(io::Error::last_os_error());
         }
         let job = Job(unsafe { OwnedHandle::from_raw_handle(handle as _) });
         let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            | if breakaway {
+                JOB_OBJECT_LIMIT_BREAKAWAY_OK
+            } else {
+                0
+            };
         let ok = unsafe {
             SetInformationJobObject(
                 job.0.as_raw_handle() as _,
@@ -159,7 +227,7 @@ mod tests {
         assert_ne!(ok, 0, "{}", io::Error::last_os_error());
         assert_eq!(
             limits.BasicLimitInformation.LimitFlags,
-            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK
         );
         // Not inheritable: no child of the host gets a handle that would keep the job open.
         let mut flags = 0u32;
@@ -168,6 +236,47 @@ mod tests {
             0
         );
         assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
+    }
+
+    /// The limit flags a job reports, as `QueryInformationJobObject` gives them.
+    fn limit_flags(job: &Job) -> u32 {
+        use windows_sys::Win32::System::JobObjects::QueryInformationJobObject;
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        let ok = unsafe {
+            QueryInformationJobObject(
+                job.handle() as _,
+                JobObjectExtendedLimitInformation,
+                (&mut limits as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_ne!(ok, 0, "{}", io::Error::last_os_error());
+        limits.BasicLimitInformation.LimitFlags
+    }
+
+    /// A Git Bash pane keeps its tree: Cygwin passes breakaway to every child it starts, so the
+    /// flag is left off there and an ordinary background job stays in the job.
+    #[test]
+    fn a_cygwin_root_gets_no_breakaway() {
+        // A directory laid out as Git for Windows lays it out: bin\bash.exe, DLL in usr\bin.
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(dir.path().join("usr").join("bin")).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        let bash = bin.join("bash.exe");
+        std::fs::write(&bash, b"").unwrap();
+        std::fs::write(dir.path().join("usr").join("bin").join("msys-2.0.dll"), b"").unwrap();
+
+        let job = Job::for_program(bash.to_str().unwrap()).unwrap();
+        assert_eq!(limit_flags(&job), JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE);
+
+        // A native shell keeps the flag: its own children are not asked to break away.
+        let cmd = std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".into());
+        assert_eq!(
+            limit_flags(&Job::for_program(&cmd).unwrap()),
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK
+        );
     }
 
     #[test]

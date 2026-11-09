@@ -193,7 +193,7 @@ export function refuseOverBudget(before: string, after: string, budget: Instruct
 
 /** Lines one revision's History keeps (River, 11-05): a rewrite of the whole document lists its first 500. */
 export const MAX_DROPPED_LINES = 500
-/** How the coordinator sorted a line it dropped (pmSchedule.ts, the daily tidy): kept elsewhere with who said it, or a step
+/** How the coordinator sorted a line it dropped: kept elsewhere with who said it, or a step
  *  or date that passed. `rule`: a person's rule, dropped with their approval. `unsorted`: nobody said, and its words are not
  *  kept elsewhere; listed so the History never hides a line. */
 export type DropKind = 'merged' | 'expired' | 'rule' | 'unsorted'

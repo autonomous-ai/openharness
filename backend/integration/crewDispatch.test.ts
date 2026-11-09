@@ -235,28 +235,6 @@ describe('the crew dispatch pass', () => {
     await vi.waitFor(async () => expect((await readGroup(s.tab, s.tasks.Next!)).assignment?.agentId).toBe(s.crew.Ash), { timeout: 5_000, interval: 100 })
   })
 
-  it('uses each project’s progress clock without changing another project’s seed', async () => {
-    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/a.ts' })
-    const other = String((await s.execute({ type: 'project.create', name: 'Phone', visibility: 'public', brief: '' })).result.projectId)
-    const projects = (await db.swarmHead.findUniqueOrThrow({ where: { tabId_key: { tabId: s.tab, key: 'head' } } })).data as unknown as { projects: { id: string; leadConversationId: string }[] }
-    const chat = projects.projects.find(p => p.id === other)!.leadConversationId
-    const mobile = String((await s.execute({ type: 'agent.add', conversationId: chat, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Phone worker', configuration: config, lead: false })).result.agentId)
-    await s.execute({ type: 'crew.add', agentId: mobile, lane: 'mobile', role: 'Engineer' })
-    const phone = String((await s.execute({ type: 'conversation.create', projectId: other, title: 'Phone', checks: [], task: { goal: 'Phone.', changes: 'Change.', constraints: 'None.', owns: ['mobile/a.dart'] } })).result.conversationId)
-    await save(s, 0, { lanes: [{ name: 'firmware', owns: ['backend/'] }], dispatch: { ...SEED_RULES.dispatch, nudgeAfterMs: 60_000, returnAfterMs: 120_000 } })
-    await s.execute({ type: 'work.assign', conversationId: s.tasks.Api!, agentId: s.crew.Ash! })
-    await s.execute({ type: 'work.assign', conversationId: phone, agentId: mobile })
-    s.advance(60_000)
-    await s.store.runTimeChecks(s.tab)
-    const messages = (await s.store.messages(owner, s.tab, s.tasks.Api!, {}, s.crew.Ash)).messages
-    expect(messages.filter(m => (m.source as { kind?: string })?.kind === 'crew-nudge')).toHaveLength(1)
-    s.advance(60_000)
-    await s.store.runTimeChecks(s.tab)
-    expect((await readGroup(s.tab, s.tasks.Api!)).assignment?.status).toBe('lost')
-    expect((await readGroup(s.tab, phone)).assignment?.status).toBe('working')
-    expect((await readGroup(s.tab, phone)).handOutLane).toBe('mobile')
-  })
-
   // Task #3964: the store reads the project's machine rules for a start, an assignment and the dispatch pass.
   it('follows the project\'s machine rules from its record in a start, an assignment and the dispatch pass', async () => {
     const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })

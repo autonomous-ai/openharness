@@ -6,14 +6,12 @@
  * Otherwise the task says so once: for Linux, CI's Linux unit checks stand in; for Windows nothing does, and a person's check
  * is owed (docs/windows-rules.md). The time checks open the step once such a machine is there. Mac steps open as before.
  */
-import { agentDisplayName } from './agentNames.js'
 import { isBuddy } from './buddies.js'
 import { machineOffline, machineProjectRefusal, swarmMachines } from './machines.js'
-import { activeWork, stableId, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { agentProjectId, groupProject, onTeamAccount, teamAccountPool, type SwarmProject } from './projects.js'
-import { OS_PLACE, reportsOs, type PlannedStep, type StepOs } from './reviewTable.js'
-import { openReviewStep, type StepPull } from './stepOpen.js'
-import { stepName, stepsOf } from './steps.js'
+import { type Conversation, type SuperTabState } from './model.js'
+import { agentProjectId, onTeamAccount, teamAccountPool, type SwarmProject } from './projects.js'
+import { reportsOs, type PlannedStep, type StepOs } from './reviewTable.js'
+import { type StepPull } from './stepOpen.js'
 
 /** The OSes whose test step waits for a machine of its own. */
 export type WaitingOs = 'linux' | 'windows'
@@ -65,29 +63,3 @@ export function stopWaiting(task: Conversation, os: WaitingOs): void {
   delete task[FIELD[os]]
 }
 
-/**
- * The time checks' pass (store.ts runTimeChecks): each open task's waiting step of each OS opens once its project can test on
- * that OS, and the PM hears it in the task, to give it a Tester there. Written as the PM; a project with none keeps waiting.
- */
-export function openWaitingSteps(state: SuperTabState, now: number): MessageDraft[] {
-  const can = new Map<string, boolean>()
-  const able = (project: SwarmProject, os: WaitingOs) => {
-    const key = `${os}:${project.id}`
-    return can.get(key) ?? can.set(key, testsOn(state, project, now, os)).get(key)!
-  }
-  return state.conversations.filter(task => !task.archived && activeWork(task)).flatMap(task => (Object.keys(FIELD) as WaitingOs[]).flatMap(os => {
-    const waiting = task[FIELD[os]]
-    if (!waiting) return []
-    const project = groupProject(state, task), pm = coordinatorOf(state, project)
-    if (!pm || !able(project, os)) return []
-    const { step, pulls } = waiting
-    stopWaiting(task, os)
-    // One its PM opened by hand meanwhile is that step.
-    if (stepsOf(state, task.id).some(s => !s.archived && stepName(s) === step.name)) return []
-    const author: Author = { kind: 'agent', id: pm.id, name: pm.name, displayName: agentDisplayName(state.agents, pm.id), membershipGeneration: pm.membershipGeneration }
-    const id = stableId(task.id, `${os}-step`, ...pulls.map(pull => pull.head ?? ''))
-    const { brief } = openReviewStep(state, task, step, pulls, id, author)
-    return [brief, { id: stableId(id, 'told'), conversationId: task.id, author, replyTo: null, recipients: [pm.id], source: { kind: 'system' as const },
-      text: `${step.name} of #${task.number} is open: ${OS_PLACE[os]} is here now. Give it a Tester there.` }]
-  }))
-}

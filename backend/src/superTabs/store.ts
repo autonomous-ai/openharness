@@ -5,7 +5,7 @@ import { legacyAsks } from './boardRights.js'
 import { canReadProject } from './projects.js'
 import { proposalMeasures, proposalMessageMeasures } from './proposalMetrics.js'
 import { timeCommand, timedPhase, type CommandPhases } from './commandTiming.js'
-import { advanceProposalCards, pmAcceptsMessage, legacyProposalId, migrateLegacyProposals, type LegacyProposalAsk } from './proposalCards.js'
+import { pmAcceptsMessage, legacyProposalId, type LegacyProposalAsk } from './proposalCards.js'
 import { defaultBuddy } from './buddies.js'
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
 import { applyCrewKeep, crewMoveRequest, crewNeedsMachine, type CrewDeps } from './crewKeep.js'
@@ -14,7 +14,7 @@ import { isCrew } from './crew.js'
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
 import { phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
-import { admitMachineStart, accountMachineName, availableSlots, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, ownAccountWork, ownAccountNote, type MachineObservation } from './machines.js'
+import { admitMachineStart, accountMachineName, availableSlots, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, ownAccountWork, ownAccountNote, type MachineObservation } from './machines.js'
 import { expireAccess } from './machineAccess.js'
 import { authorForAgent, lazyUsernames, namesPerson, rowForAgent, shownNameOf } from './personNames.js'
 import { machineSuspensionReason, readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
@@ -79,7 +79,6 @@ import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest } from './projectUpdates.js'
 import { cloneData } from './cloneData.js'
-import { digestDue, digestMessageId, digestOf, digestRequest, digestSince } from './digest.js'
 import { moveChatMark } from './read/threadMarkSeeds.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { sessionRows } from './memberRows.js'
@@ -87,14 +86,12 @@ import { RefusalMemory } from './dispatchRefusals.js'
 import { tasksHoldingMoves } from './ruleGuard.js'
 import { candidatesFor, dispatchRules, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type DispatchLookup, type DispatchRules, type Skip } from './dispatch.js'
 import { buddySleepCandidates, sleepBuddies } from './buddySleep.js'
-import { openWaitingSteps } from './osSteps.js'
-import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, recordTaskState, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
+import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, recordTaskState, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
-import { owedAsk } from './timeChecks.js'
 import { ledgerGroupIds, settleReleases, type ReleaseFacts, type ReleaseRules, type SettledReleases } from './releases.js'
 import { groupsOf, archivable, archiveLine, archiveWaitsFor, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadGroupsByKey, loadLightGroups, loadMachineParts, loadNamed, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
-import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
+import { groupsBy, listingDrops, readBy, withoutHints } from './parts/indexed.js'
 import { autoJoinSwarms, machineSwarms, memberSwarms } from './swarmRows.js'
 import type { MachineRename } from './machineRenames.js'
 import { otherAccountsOnComputer, sameComputerKey, type ComputerMove, type ComputerSignIn, type LeftMove, type MachineKeys } from './computerMoves.js'
@@ -116,27 +113,21 @@ import { DIRECT, readLastChangedAt, readParts, type ReadNamed } from './cachedRe
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import { activeMember, addMember, hasWorkspaceAccess, latestRemovalAt, listWorkspaces, memberId, removedFromWorkspace, WORKSPACE_ACCESS_REVOKED, workspaceForNewSwarm, requireWorkspaceAccess, requireWorkspaceRole, SwarmWorkspaces } from './workspaceStore.js'
 import { WORKSPACE_LABEL, workspaceCan, type WorkspaceRole } from './workspaces.js'
-import { STATUS_LABELS,
-  activeWork, handed, occupiesAgent, actorKey, agent, agentOnly, appendCodePullRequestUrls, appendPullRequestUrls, codePullRequests, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
-  SuperTabError, isLeads, knownKind, parkLaterConversations, type Actor, type Agent, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type Person, type SuperTabState,
-  projectPullRequestUrl, pullRequestLinks,
-} from './model.js'
+import { STATUS_LABELS, activeWork, handed, occupiesAgent, actorKey, agent, agentOnly, appendCodePullRequestUrls, appendPullRequestUrls, codePullRequests, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker, SuperTabError, isLeads, knownKind, parkLaterConversations, type Actor, type Agent, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type Person, type SuperTabState, projectPullRequestUrl } from './model.js'
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
-import { agentPost, digestIsDue, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredMessage, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
-import { recordTidy, recordWake, scheduleRequest, tidyRequest } from './pmSchedule.js'
+import { agentPost, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredMessage, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, startedHolds, tokenTask, type WorkHold } from '../github/holds.js'
 import { accrueLent, addLent, lentAgents, lentProjects } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
 import { costRows, failedStarts, summarizeCosts } from './costs/read.js'
 import { MAX_PROPOSALS, proposalQuestion, proposalTitle, REASK_DAYS, reflectionMessageId, routingReflection, type ReflectionInput } from './costs/reflection.js'
-import { readEvidence, recordEvidence } from './evidence/store.js'
+import { recordEvidence } from './evidence/store.js'
 import { closeAssignment, closeUnassignedStart, LIST_SIZE, newestConversations, newestDecisions, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
-import { answeredAgents, dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByAnswer, resolveByReply, resolveTags, resolveWhenWorked, writeMentions } from './mentions.js'
-import { stuckAlerts } from './stuck.js'
+import { answeredAgents, dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByAnswer, resolveByReply, resolveWhenWorked, writeMentions } from './mentions.js'
 import { OVERDUE_PER_PASS, overdueDecisions, dueDefaultDecisions } from './overdueDecisions.js'
-import { answerableBy, askDecisions, BUDDY_SEND, closeDecisions, DECISION_ASKED_KIND, keepWaiting, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingConversations, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
+import { answerableBy, askDecisions, BUDDY_SEND, closeDecisions, DECISION_ASKED_KIND, keepWaiting, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingConversations, waitingFor, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
 import { recordMessageReach } from './messageReachStats.js'
@@ -4868,11 +4859,7 @@ export class SuperTabStore {
     }
     return transaction(this.db, async tx => {
       let loaded = await this.load(tx, user, tabId)
-      // Work finished since the last digest and archived or asleep since still shipped, but ordinary loads leave it out
-      // (#1757 review, 4): a due digest loads it. A paused Swarm sends none (digest.ts digestRequest), so its digest stays
-      // due: it loads nothing for it, or every poll repeats the loads over a growing window (Diego's issue file, 2026-10-27).
       const led = ledProject(loaded.state, agentId)
-      let asked: Array<{ conversationId: string; personId: string; count: number }> = []
       // What this coordinator gathered, oldest first (noticeDigest.ts): one indexed read per coordinator poll.
       let gathered = led ? await agentGatheredDeliveries(tx, tabId, agentId, NOTICE_DIGEST_MAX) : []
       // A read that sends no turn, from a PM whose machine says its host does (#3545): the people's messages and crew needs it
@@ -4886,92 +4873,28 @@ export class SuperTabStore {
         gathered = gathered.filter(d => !requeued.has(d.id))
       }
       const release = inboxDue(gathered, this.now(), turn) ? gathered : []
-      // A due digest reads its notices where they were written: a group asleep since is not cancelled for not being loaded.
       const groupIds = new Set(release.map(d => d.conversationId))
-      const due = led && !loaded.state.paused ? digestDue(led, this.now()) : null
-      // A day's digest stored while its project was not marked sent (its time moved later that day, on an older server) went
-      // out: it only gets marked, or every poll would read for it again and fail on the duplicate (prod slow log, 2026-10-28).
-      const sentAlready = !!due && !!await tx.superTabMessage.findUnique({ where: { id: digestMessageId(tabId, led!.id, due) }, select: { id: true } })
-      if (led && due && !sentAlready) {
-        const finished = await groupsBy(tx, 'project', [{ $match: quietSince(tabId, led.id, digestSince(led, this.now())) },
-          { $project: { _id: 0, key: 1 } }]) as unknown as Array<{ key: string }>
-        // A decision waits in its conversation even once that conversation went quiet.
-        asked = await waitingInProject(tx, tabId, led.id)
-        for (const id of [...finished.map(g => g.key), ...asked.map(d => d.conversationId)]) groupIds.add(id)
-      }
-      // One load for both: a second would drop the first's groups.
       if (groupIds.size) loaded = await this.ensure(tx, loaded, { groupIds: [...groupIds] })
       const state = cloneData(loaded.state)
-      if (sentAlready) {
-        const project = projectOf(state, led!.id)
-        project.digest = { ...digestOf(project)!, lastOn: due! }
-      }
       author(state, await this.actor(tx, user, state, agentId), true)
       const target = agent(state, agentId)
       // The time checks and idle notices run in the backend worker (runTimeChecks), so they go on while this poll does not.
       const written: MessageDraft[] = []
       // Same rules as a listed delivery; a refused row ends as a refused one does.
       const { notices, refused } = await this.releasableNotices(tx, state, target, release)
-      let digestDraft: MessageDraft | undefined
       if (notices.length) {
         // After this page's cancels, before its rows are marked: all that remain, less what this digest names.
         const more = gathered.length === NOTICE_DIGEST_MAX ? await agentGatheredCount(tx, tabId, agentId) - notices.length : 0
         const lines = (section: InboxSection) => notices.filter(n => n.section === section).map(n => n.line)
         const text = digestText(notices[0]!.delivery.createdAt, lines('results'), more, notices.some(n => n.otherAccount),
           led ? owedLines(state, projectOf(state, led.id), this.now()) : [], { people: lines('people'), crew: lines('crew') })
-        digestDraft = digestMessage(agentId, gathered[0]!.id, projectOf(state, led!.id).leadConversationId, author(state, { kind: 'agent', agentId, machineOwnerId: target.machineOwnerId }), text, notices.length)
-        written.push(digestDraft)
+        written.push(digestMessage(agentId, gathered[0]!.id, projectOf(state, led!.id).leadConversationId, author(state, { kind: 'agent', agentId, machineOwnerId: target.machineOwnerId }), text, notices.length))
         // By status too: two polls racing digest each row once. One by one: no `in` on this hot collection (hotFilters).
         for (const { delivery } of notices) await tx.superTabDelivery.updateMany({ where: { id: delivery.id, tabId, status: 'gathered' }, data: { status: 'digested' } })
         afterCommit(tx, () => logger.info('[swarm-deliveries] notice digest', { tabId, count: notices.length, cancelled: refused, more, length: text.length }))
       } else if (refused) {
         // Every row of the page refused: no digest, and still seen.
         afterCommit(tx, () => logger.info('[swarm-deliveries] notice digest', { tabId, count: 0, cancelled: refused }))
-      }
-      // The built-in schedule (pmSchedule.ts), only when one of its jobs is due: its slot is recorded in this same write,
-      // woken or held back, so two racing polls wake the coordinator once. Its lines go into the notice digest when there is one,
-      // so the PM gets one turn; none while its last wake is still unread, so a PM deep in a long turn finds one, not one
-      // per slot.
-      const scheduled = led ? scheduleRequest(state, target, this.now()) : null
-      if (scheduled) {
-        const project = projectOf(state, led!.id)
-        let wakeId = project.schedule?.wakeId
-        let placed: 'digest' | 'own' | 'skipped-open'
-        // The message that carried the last wake, by its delivery's primary key (writeMessages: one row per message and
-        // recipient): still unread is queued, claimed or uncertain.
-        const last = wakeId ? await tx.superTabDelivery.findUnique({ where: { id: stableId(wakeId, agentId) }, select: { status: true } }) : null
-        const open = !!last && ['queued', 'claimed', 'uncertain'].includes(last.status)
-        const into = open ? null : digestDraft ?? null
-        if (open) placed = 'skipped-open'
-        else if (into) {
-          into.text = `${into.text}\n\n${scheduled.draft.text}`
-          into.source = { ...into.source, schedule: scheduled.slot }
-          placed = 'digest'
-          wakeId = into.id
-        } else {
-          written.push(scheduled.draft)
-          placed = 'own'
-          wakeId = scheduled.draft.id
-        }
-        // Held back, only its slot: the people and tidy jobs stay due for the next one (pmSchedule.ts recordWake).
-        recordWake(project, scheduled, this.now(), open ? null : wakeId!)
-        afterCommit(tx, () => logger.info('[swarm-deliveries] schedule request', { tabId, slot: scheduled.slot, placed, jobs: scheduled.jobs.join(',') }))
-      }
-      // The daily tidy, in its own message (pmSchedule.ts tidyRequest): once a local date, recorded in this same write, so two
-      // racing polls ask once.
-      const tidy = led ? tidyRequest(state, target, this.now()) : null
-      if (tidy) {
-        written.push(tidy.draft)
-        recordTidy(projectOf(state, led!.id), tidy)
-        afterCommit(tx, () => logger.info('[swarm-deliveries] tidy request', { tabId, day: tidy.day, skipped: tidy.skipped }))
-      }
-      // The morning digest is due once a day; recording it as sent is part of this same write, so it is sent once.
-      const digest = digestRequest(state, target, this.now(), asked)
-      if (digest) {
-        const project = projectOf(state, digest.source!.projectId as string)
-        // A default digest is stored with its first send (digest.ts digestOf).
-        project.digest = { ...digestOf(project)!, lastOn: digest.source!.on as string, lastAt: this.now() }
-        written.push(digest)
       }
       // The poll also frees agents whose task the checks just lost, and any an older server left marked running (each poll; a
       // second finds none).
@@ -5646,35 +5569,27 @@ export class SuperTabStore {
   }
 
   /**
-   * The Swarm's time checks, run by the backend worker every 30 s (timeChecks.ts): lost and stalled work and failed starts
-   * (liveness.ts sweepForLead), then each project's idle agents (tidy.ts idleNotices), written as each project's PM to its PM.
-   * They ran on the PM's own poll before, so a PM that hung stopped them too (task #3385: five people's asks waited 3 to 10
-   * hours). Whatever they find is recorded in this same write, so a second run, or one racing it, finds nothing new. The
-   * messages written.
+   * The Swarm's time checks, run by the backend worker every 30 s (timeChecks.ts). Since Swarm v4 (anh Dee, 2026-11-09) they
+   * run only v4's jobs: every agent gets its 1:1 chat, the stops v3 asked for are withdrawn once, and the PM's "owes an answer"
+   * note v3 kept for its host's restart is cleared. Each run is one write, so a second run, or one racing it, finds nothing new.
+   * They write no messages.
    */
-  async runTimeChecks(tabId: string, dueCards: string[] = []): Promise<number> {
+  async runTimeChecks(tabId: string): Promise<number> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
       if (!row || row.deletedAt || row.format !== 2) return 0
-      let loaded = await loadRow(tx, requireParts(row), { groupIds: dueCards })
-      const migration = new Map<string, LegacyProposalAsk[]>()
-      for (const project of projectsOf(loaded.state).filter(p => p.boardMode)) {
-        const bodies = await this.legacyProposalBodies(tx, loaded.state, project.id)
-        if (bodies.length) migration.set(project.id, bodies)
-      }
-      if (migration.size) loaded = await this.ensure(tx, loaded, { groupIds: [...dueCards,
-        ...[...migration].flatMap(([id, bodies]) => bodies.map(a => legacyProposalId(id, a.messageId)))] })
-      loaded = await this.proposalNoticeParts(tx, loaded)
-      // A task its sweep may lose says Stuck in its project chat's thread (taskLine.ts endedReply, task #2693).
-      const chats = taskLineChats(loaded.state)
-      if (chats.length) loaded = await this.ensure(tx, loaded, { groupIds: [...loaded.state.conversations.map(c => c.id), ...chats] })
-      // Every agent's 1:1 chat with its person (agentChats.ts), looked for among its conversations, dormant ones too, for an
-      // agent that keeps none; the checks below read only what they loaded.
+      const loaded = await loadRow(tx, requireParts(row), {})
+      // Swarm v4 (anh Dee 2026-11-09): the server runs no v3 rule on its own (no lost-work sweeps, stuck alerts, proposal
+      // cards or PM reminders). It gives every agent its 1:1 chat with its person (agentChats.ts), looked for among its
+      // conversations, dormant ones too, for an agent that keeps none.
       const chatless = chatlessAgents(loaded.state)
       const all = chatless.length ? (await this.ensure(tx, loaded, { agentIds: chatless })).state : loaded.state
       const state = cloneData(loaded.state), now = this.now()
       giveAgentsChats(state, now, all)
-      // Swarm v4: the stops the v3 rules asked for, withdrawn once, with the run and session records that hold them (agentStops.ts).
+      // A PM's "owes an answer" note told its host to restart it while it hung (v3). Nothing writes it now, so a stale one would
+      // restart a PM forever: it goes, once.
+      for (const project of projectsOf(state)) delete project.owed
+      // The stops the v3 rules asked for, withdrawn once, with the run and session records that hold them (agentStops.ts).
       const stopping = v3Stopping(state)
       // A host closing one holds its close lease: that stop stands. Once per Swarm, one read by id each.
       const closing = new Set<string>()
@@ -5688,35 +5603,8 @@ export class SuperTabStore {
         await tx.superTabSessionScope.updateMany({ where: { id: stableId('swarm-session', state.environment, stop.machineOwnerId, stop.agentId),
           stopReleaseId: stop.releaseId }, data: { stopReleaseId: null } })
       }
-      const rulesFor = await this.projectDispatch(tx, state)
-      // A Linux or Windows test step that waited for a machine of its OS opens once one is there (osSteps.ts, tasks #4278, #4410).
-      const written = [...sweepForLead(state, now, rulesFor), ...advanceProposalCards(state, now), ...openWaitingSteps(state, now)]
-      for (const [id, bodies] of migration) written.push(...migrateLegacyProposals(state, projectsOf(state).find(p => p.id === id)!, bodies, now))
-      // Stuck work, told once to its PM and its people in a line that tags them, and cleared when fixed (stuck.ts, task #3915).
-      const stuck = stuckAlerts(state, now)
-      written.push(...stuck.rows)
-      // What each PM owes people, for its host's watchdog: written only when it changes, so a steady Swarm writes nothing. A
-      // project that lost its PM owes nothing until it has one again (review of #3213, Minor 4).
-      for (const project of projectsOf(state)) {
-        const pm = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
-        const owed = pm ? await owedAsk(tx, tabId, pm, now) : null
-        if (owed?.messageId === project.owed?.messageId && owed?.since === project.owed?.since) continue
-        if (owed) project.owed = owed
-        else delete project.owed
-      }
-      // It frees the agents whose task the checks just lost, as the PM's poll did.
-      await this.endRuns(tx, tabId, loaded.state, state)
-      await recordAttempts(tx, tabId, loaded.state, state, now)
-      await recordEvidence(tx, tabId, loaded.state, state, now)
-      const sequences = numberMessages(state, written, now)
-      // A loss or a start's failure was judged from a machine's report: a newer report makes this write retry.
-      await this.save(tx, loaded, state, clock.next(), judgedMachines(loaded.state, state, written))
-      await this.writeMessages(tx, tabId, state, written, sequences, true)
-      // Its tags put the line in their Needs you and on their phones; a fixed line's tags resolve.
-      const tags = await writeMentions(tx, tabId, state, stuck.rows, now)
-      await resolveTags(tx, tabId, stuck.resolved, now)
-      this.tellPhones(tx, tabId, state, { replies: [], tags }, stuck.rows)
-      return written.length
+      await this.save(tx, loaded, state, clock.next())
+      return 0
     })
   }
 

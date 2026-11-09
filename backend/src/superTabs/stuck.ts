@@ -8,10 +8,8 @@
  * their Needs you; when it is fixed one line says so and the tags resolve. The record on the task is the deduplication.
  */
 import { agentDisplayName } from './agentNames.js'
-import { isBuddyChat } from './buddies.js'
 import { MAX_MENTIONS } from './mentions.js'
-import { codePullRequests, isLeads, stableId, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { canReadGroup, projectsOf } from './projects.js'
+import { codePullRequests, type Conversation, type SuperTabState } from './model.js'
 import { stepName, stepsOf } from './steps.js'
 
 /** How long a task whose agent went down waits for a taker before its people hear it. */
@@ -67,57 +65,5 @@ export function stuckOf(state: SuperTabState, task: Conversation, now: number): 
   return null
 }
 
-/** A task the checks read: a task of a project with work, never a step, a chat, a private chat or one archived. */
-const flaggable = (state: SuperTabState, chats: ReadonlySet<string>, group: Conversation) =>
-  !group.archived && !group.reviewOf && !group.kind && !group.audience && !isLeads(group) && !isBuddyChat(group) && !chats.has(group.id)
-  && projectsOf(state).some(p => p.id === (group.projectId ?? 'lead'))
 
-/** Tags a stuck line resolves once its task is fixed or ends: in [conversationId], [messageId]'s tags of [personIds]. */
-export interface ResolvedTags { conversationId: string; messageId: string; personIds: string[] }
 
-/**
- * Each task's change since its record: a new reason posts its line, as the project's PM to the PM, tagging its requester and
- * writers who can read it, at most MAX_MENTIONS; a reason gone posts "No longer stuck" to the PM, tagging nobody, and hands back
- * the old line's tags to resolve. A task that ended while stuck says nothing, and its tags resolve. A project with no PM is left
- * until it has one. Records the change on the task in the caller's write.
- */
-export function stuckAlerts(state: SuperTabState, now: number): { rows: MessageDraft[]; resolved: ResolvedTags[] } {
-  const rows: MessageDraft[] = [], resolved: ResolvedTags[] = []
-  const projects = projectsOf(state)
-  const chats = new Set(projects.map(p => p.leadConversationId))
-  for (const task of state.conversations) {
-    if (!task.stuck && !task.assignment) continue
-    // Ended: archived, cancelled, stopped or merged. Its tags resolve and nothing is said.
-    const status = task.assignment?.status
-    const live = flaggable(state, chats, task) && status !== 'cancelled' && status !== 'stopped' && !(status === 'done' && task.ledger?.mergedAt != null)
-    const chat = live ? state.conversations.find(c => c.id === projects.find(p => p.id === (task.projectId ?? 'lead'))!.leadConversationId) : undefined
-    const pm = chat?.leadId ? state.agents.find(a => a.id === chat.leadId) : undefined
-    const was = task.stuck
-    const reason = live ? stuckOf(state, task, now) : null
-    if (reason?.key === was?.key || (live && !pm)) continue
-    if (was) {
-      resolved.push({ conversationId: task.id, messageId: was.messageId, personIds: was.tagged })
-      delete task.stuck
-    }
-    if (!pm) continue
-    const author = { kind: 'agent' as const, id: pm.id, name: pm.name, displayName: agentDisplayName(state.agents, pm.id), membershipGeneration: pm.membershipGeneration }
-    const recipients = task.agentIds.includes(pm.id) ? [pm.id] : []
-    if (reason) {
-      const tagged = [...new Set([task.requesterId, ...task.writers ?? []])].filter((id): id is string => !!id).filter(id => {
-        const person = state.people.find(p => p.id === id)
-        return !!person && canReadGroup(state, { kind: 'person', userId: person.id, email: person.email }, task)
-      }).slice(0, MAX_MENTIONS)
-      // One id an episode: the same reason coming back after its fix is a new line, and its tags new rows (security review 1 of
-      // #3431: a repeated id made writeMentions refuse the tags and stopped the Swarm's time checks). The record is in this same
-      // write, so a pass racing it on another server conflicts and retries instead of writing it twice.
-      const id = stableId('stuck', task.id, reason.key, String(now))
-      rows.push({ id, conversationId: task.id, author, text: reason.text, replyTo: null, recipients, ...tagged.length ? { mentions: tagged } : {},
-        source: { kind: 'system' } })
-      task.stuck = { key: reason.key, messageId: id, tagged, fixed: reason.fixed }
-    } else if (was) {
-      rows.push({ id: stableId('stuck-fixed', was.messageId), conversationId: task.id, author, text: `No longer stuck: ${was.fixed}.`, replyTo: null,
-        recipients, source: { kind: 'system' } })
-    }
-  }
-  return { rows, resolved }
-}

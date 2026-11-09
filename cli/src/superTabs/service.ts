@@ -96,8 +96,6 @@ const HELP = {
   commands: [
     { type: 'project.report', projectId: 'PROJECT', through: { GROUP: 214031 }, text: 'The whole status card, one short line per active task; it replaces the last one and posts nothing. Use null when the card is still right.' },
     { type: 'project.repository', projectId: 'PROJECT', repositoryUrl: 'https://github.com/OWNER/REPOSITORY' },
-    // The morning digest, at a person's local time; time null turns it off.
-    { type: 'project.digest', projectId: 'PROJECT', time: '08:00', timeZone: 'Asia/Ho_Chi_Minh' },
     { type: 'tab.tidy', enabled: false, askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } },
     { type: 'message.send', conversationId: 'GROUP', text: 'A message addressed to an agent', replyTo: null, recipientIds: ['AGENT'] },
     { type: 'conversation.create', title: 'Outcome', priority: 'P0|P1|P2|P3', requesterId: 'PERSON', task: { goal: 'An independently assignable result', changes: 'What changes', constraints: 'What must stay true', owns: ['Paths or code areas'],

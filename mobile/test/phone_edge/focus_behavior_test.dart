@@ -1723,6 +1723,64 @@ void main() {
     });
   });
 
+  // Codex's update prompt words its footer `enter continue · esc skip`, which the page did not read
+  // as a dialog's: its answers had no bands, and a tap on "1. Update now" pressed nothing.
+  group('Codex\'s update prompt', () {
+    const update =
+        '\r\n'
+        '  \x1b[1mUpdate available\x1b[0m · 0.165.0 → 0.167.0\r\n'
+        '  Release notes:\r\n'
+        '  https://github.com/openai/codex/releas\r\n'
+        '  es/latest\r\n'
+        '\r\n'
+        '\x1b[36m› 1. Update now (runs `npm install -g\r\n'
+        '     @openai/codex`)\x1b[0m\r\n'
+        '  2. Skip\r\n'
+        '  3. Skip until next version\r\n'
+        '\r\n'
+        '  \x1b[2menter continue · esc skip\x1b[0m';
+
+    Future<_Focus> asked(WidgetTester tester) async {
+      final focus = await _Focus.open(
+        tester,
+        agents: [edgeAgent('a', engine: 'codex')],
+      );
+      focus.session.terminal.write(update);
+      await frames(tester);
+      return focus;
+    }
+
+    testWidgets('a tap on "1. Update now" presses 1, with no Return after it', (
+      tester,
+    ) async {
+      final focus = await asked(tester);
+      await focus.tapRow('1. Update now');
+      await frames(tester);
+      expect(focus.typed, contains('1'));
+      expect(focus.typed, isNot(contains('\r')));
+      await focus.close();
+    });
+
+    testWidgets('a tap on the line its first answer wrapped onto presses 1', (
+      tester,
+    ) async {
+      final focus = await asked(tester);
+      await focus.tapRow('@openai/codex`)');
+      await frames(tester);
+      expect(focus.typed, contains('1'));
+      await focus.close();
+    });
+
+    testWidgets('a tap on "2. Skip" presses 2', (tester) async {
+      final focus = await asked(tester);
+      await focus.tapRow('2. Skip');
+      await frames(tester);
+      expect(focus.typed, contains('2'));
+      expect(focus.typed, isNot(contains('1')));
+      await focus.close();
+    });
+  });
+
   testWidgets('a dialog the page cannot read: a tap anywhere on it raises the '
       'keyboard', (tester) async {
     final focus = await _Focus.open(tester);

@@ -59,8 +59,7 @@ enum { RENDER_MODEL, RENDER_POWER, RENDER_DAMAGE, RENDER_RASTER, RENDER_DMA,
        RENDER_SUBMIT, RENDER_HEALTH, RENDER_WAIT };
 static atomic_uint render_stage, render_progress_ms;
 static esp_timer_handle_t render_guard;
-// The CO5300's power-on register sequence. The Pro has no equivalent here: the ST7703's own
-// init lives inside waveshare/esp_lcd_st7703 and is applied by esp_lcd_panel_init().
+// The CO5300's power-on register sequence.
 static const co5300_lcd_init_cmd_t init_cmds[] = {
     {0xFE, (uint8_t[]){0x20}, 1, 0},
     {0x19, (uint8_t[]){0x10}, 1, 0},
@@ -183,24 +182,15 @@ void habitat_perf_get(habitat_perf_t *out)
     *out = stats;
     portEXIT_CRITICAL(&stats_lock);
 }
-// THE DMA FENCE, in the two shapes the two panels report it.
-//
-// Both say the same thing — the pixels draw_bitmap was given have landed, so the buffer the CPU handed
-// over is free again — and both give the same semaphore, which is the only thing the strip loop waits
-// on. The dial reports it on the panel IO (a QSPI transfer finished); the Pro reports it on the DPI
-// panel (a copy into the scanned framebuffer finished).
-//
-// On the Pro this MUST be on_color_trans_done and not on_refresh_done. The latter fires when the panel
-// has finished SCANNING a frame, which is what a buffer-switch scheme waits for; ours copies, so
-// waiting on the scan would fence against the wrong event and stall the first strip forever. The same
-// distinction is written up at length in ui/panel_pro.c, which learned it the hard way.
+// THE DMA FENCE. The panel IO reports a finished QSPI transfer: the pixels draw_bitmap was given have
+// landed, so the buffer the CPU handed over is free again. It gives the semaphore the strip loop waits on.
 static bool fence_release(void)
 {
     ui_perf_flush_done();
     BaseType_t wake = pdFALSE;
     xSemaphoreGiveFromISR(dma_done, &wake);
-    // Both drivers act on this return to decide whether to yield out of the ISR — the QSPI IO one and
-    // the DPI one (esp_lcd_panel_dpi.c). Saying so is the contract; yielding here as well is not.
+    // The QSPI IO driver acts on this return to decide whether to yield out of the ISR. Saying so is the
+    // contract; yielding here as well is not.
     return wake == pdTRUE;
 }
 static bool color_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *event,
@@ -491,4 +481,3 @@ void display_init(void)
              HT_WIDTH, HT_WIDTH * STRIP_LINES * 2,
              "40MHz QSPI");
 }
-void display_init_ota(void) { display_init(); }

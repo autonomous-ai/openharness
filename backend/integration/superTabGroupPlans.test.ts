@@ -55,7 +55,7 @@ afterAll(async () => {
   await replica?.stop()
 })
 
-/** A Swarm on two machines of the owner's: a Lead with a digest due, a worker running work on the other, a finished
+/** A Swarm on two machines of the owner's: a Lead, a worker running work on the other, a finished
  *  conversation, a second project and a third with no conversations; then QUIET_LEAD and QUIET_OTHER quiet conversations,
  *  the n-th last active n days ago (mod 28), and OPEN open ones without work. */
 async function scene() {
@@ -75,7 +75,6 @@ async function scene() {
   // A Reviewer kept for more work, in the conversations that go quiet below: the Lead's poll reads those (store.ts fullDeliveries).
   const reviewer = s.add('reviewer-harness', done, false, ownerActor, machineId, owner.sub)
   s.edit(state => {
-    state.projects![0]!.digest = { time: '00:00', timeZone: 'UTC' }
     Object.assign(state.agents.find(a => a.id === reviewer)!, { role: 'reviewer', workDecision: 'keep' })
   })
   const tabId = `tab-${randomUUID()}`
@@ -338,20 +337,6 @@ describe('hot SwarmGroup reads name their index and read only what they return (
       const held = [...s.quietLead, ...s.quietOther].filter(r => r.lastActivityAt.getTime() >= weekStart(since) && (projectId === 'lead' ? s.quietLead : projectId === s.other ? s.quietOther : []).includes(r)).length
       expect(reads[0]!.docsExamined, `${projectId} ${JSON.stringify(reads)}`).toBeLessThanOrEqual(held)
     }
-  })
-
-  it('a Lead\'s poll with a digest due reads the quiet conversations its project finished since the last one by index, and none for its agents', async () => {
-    clock = MIGRATED + 60_000
-    const expected = s.quietLead.filter(r => r.lastActivityAt.getTime() >= clock - DAY).length
-    const all = await profiled(() => store.deliveries(owner, s.tabId, s.lead))
-    const reads = where(all, ['tabId', 'dormant', 'lastActivityAt', 'projectId'])
-    expect(reads).toHaveLength(1)
-    expectIndexed(reads)
-    expect(reads[0]!.returned).toBe(expected)
-    expect(reads[0]!.docsExamined, JSON.stringify(reads)).toBeLessThanOrEqual(expected)
-    // It reads no quiet conversation for its project's agents, its kept Reviewer's included: only loaded tasks' active work
-    // keeps an agent from being idle, and the server stops none (tidy.ts idleNotices; project instructions, phase 4).
-    expect(where(all, ['tabId', 'dormant', 'agentIds'])).toEqual([])
   })
 
   it('the host\'s wake check finds a change that concerns its machine, reading only the conversations changed since the cursor', async () => {

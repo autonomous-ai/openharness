@@ -33,23 +33,3 @@ export function expireProposalQuestion(state: SuperTabState, card: ProposalCard,
   return [{ id, conversationId: card.id, author: sender, text: q.defaultAnswer, recipients: card.leadId ? [card.leadId] : [], replyTo: null,
     source: { kind: 'proposal-answer', questionId: q.id, defaulted: true, applied: true } }]
 }
-export function advanceProposalCards(state: SuperTabState, now: number): MessageDraft[] {
-  const messages: MessageDraft[] = []
-  for (const group of state.conversations) {
-    if (!group.proposal || group.proposal.mergedInto) continue
-    const card = group as ProposalCard, record = card.proposal
-    if (record.decision?.kind === 'later' && now >= record.decision.revisitAt!) {
-      const date = record.decision.revisitAt!
-      delete record.decision
-      record.waitSince = now
-      delete record.overdue
-      card.archived = false
-      messages.push({ id: stableId(card.id, 'revisit', String(date)), conversationId: card.id, author: clockAuthor(state, card), text: 'This proposal is due for another decision.',
-        recipients: card.leadId ? [card.leadId] : [], replyTo: null, source: { kind: 'proposal-card', priority: card.priority } })
-    }
-    for (const q of record.questions) messages.push(...expireProposalQuestion(state, card, q, now))
-    // Overdue shows on the card alone: no line in the project owner's private chat (task #4558).
-    if (!record.decision && !record.overdue && now >= (record.waitSince ?? record.createdAt) + PROPOSAL_WAIT_MS) record.overdue = true
-  }
-  return messages
-}
