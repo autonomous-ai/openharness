@@ -77,7 +77,11 @@ shipped issues by priority. No title, branch, path or repository name leaves the
 Limits kept on purpose: a rename starts the label afresh, so the weeks before it keep the issues that carried the old name and the
 current week is read under the new one only (an agent's old-name issues of that week do not count); an agent whose name is not a
 label (over 50 characters with `builder:`, or a quote, comma or backslash) never ships; an agent that is away more than 9 weeks
-loses the weeks it was not read for.
+loses the weeks it was not read for. A revert is found by "revert" in its title, which is how GitHub's own Revert button writes it
+(`Revert "<title>"`); one that says so only in its body, under another title, is not seen, because a search of bodies would match
+every pull request whose template has a revert plan. A computer reads at most 50 agents of a Swarm and 20 of its repositories. An
+agent with more than 500 issues closed in one week is read as too many (`TOO_MANY`): it fails alone, and the other agents of its
+Swarm are reported.
 
 Self-reported numbers: the server cannot check GitHub (no App, by decision), so it bounds a report (counts, weeks, agents) and
 accepts it only for the sender's own agents. Someone who inflates their own counts cheats the people of their own Swarm only.
