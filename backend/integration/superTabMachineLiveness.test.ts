@@ -238,10 +238,12 @@ describe('a post to an agent whose session is down', () => {
       memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS',
       gpuPercent: null }, quotas: [], tools: {}, runningHarnessIds: running, stoppedHarnessIds: [] })
     const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
-    const ada = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId: 'mac', harnessId: 'h-ada', name: 'Ada', configuration: config,
+    // A task of its own, where the agent is a member a person can name.
+    const task = String((await execute({ type: 'conversation.create', title: 'Fix login', brief: 'Fix it', checks: [] })).result.conversationId)
+    const ada = String((await execute({ type: 'agent.add', conversationId: task, machineId: 'mac', harnessId: 'h-ada', name: 'Ada', configuration: config,
       lead: false }, host)).result.agentId)
     const adaName = async () => { const found = (await store.read(owner, tab)).state.agents.find(a => a.id === ada)!; return found.displayName ?? found.name }
-    const post = (text: string, recipientIds = [ada]) => execute({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds })
+    const post = (text: string, recipientIds = [ada]) => execute({ type: 'message.send', conversationId: task, text, replyTo: null, recipientIds })
     const queued = () => db.superTabDelivery.count({ where: { tabId: tab, agentId: ada, status: 'queued' } })
     const told = async () => `${await adaName()} is offline; it will read this when it is back.`
     await beat(['h-ada'])
