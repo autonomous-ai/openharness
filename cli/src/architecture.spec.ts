@@ -106,8 +106,8 @@ const SWARM_DOORS: Readonly<Record<string, readonly string[]>> = {
   // Its side of the services that act on it, in their own processes, and its own service's process, which the master
   // starts only while it is on (harnessd/services.ts `servicesOn`).
   'serviceProcess.ts': ['superTabs/inServices.ts', 'services/superTabsProcess.ts'],
-  // `harness super-tab` and git's credential helper in a Swarm session: from the sources every daemon process runs cli.ts.
-  'cli.ts': ['superTabs/command.ts', 'superTabs/gitCredential.ts'],
+  // `harness super-tab` in a Swarm session: from the sources every daemon process runs cli.ts.
+  'cli.ts': ['superTabs/command.ts'],
 }
 /** The Swarm's code (Super Tabs): its folder, its libraries and its service. */
 const isSwarmCode = (file: string): boolean => /^superTabs\//.test(file) || /^lib\/swarm/.test(file) || /^services\/superTabs(Process)?\.ts$/.test(file)

@@ -15,7 +15,6 @@ import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 import { AGENT_ATTRIBUTION_LINE, HARNESS_INSTRUCTIONS } from './agentAttribution.js'
 import { prepareSwarmSkill } from './swarmSkills.js'
 import { swarmEngineArgs } from './swarmEngineArgs.js'
-import { swarmGitHubLaunch } from './swarmGitHub.js'
 import { writeMachineMcp } from './machineMcp.js'
 
 const GRID: GridLaunchOverride = {
@@ -50,7 +49,7 @@ function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
     // consult the config.toml of whoever is running the suite.
     readCodexConfig: () => null,
     // The Swarm on, as by default (`HARNESS_SWARM`); a test of it off leaves it out.
-    swarm: { prepare: (workspace, saved) => prepareSwarmSkill(workspace, saved), github: (key) => swarmGitHubLaunch(key), args: swarmEngineArgs },
+    swarm: { prepare: (workspace, saved) => prepareSwarmSkill(workspace, saved), args: swarmEngineArgs },
     ...overrides,
   }
   return { d, calls }
@@ -549,21 +548,21 @@ describe('buildLaunchOverrides — what the app is told about web search', () =>
   })
 })
 
-describe('buildLaunchOverrides — a Swarm session on the Harness GitHub App', () => {
-  const skill = { role: 'agent' as const, key: 'harness-claude-github-fixture', github: true as const }
+describe('buildLaunchOverrides — a Swarm session', () => {
+  // A row saved while sessions could use the Harness GitHub App holds its flag: read as nothing.
+  const skill = { role: 'agent' as const, key: 'harness-claude-old-flag', github: true as const } as never
   const workspace = () => mkdtempSync(join(tmpdir(), 'overrides-github-'))
 
-  it('relaunches with the app\'s git and gh, and clears inherited GitHub token variables', async () => {
+  it('relaunches a row that holds the old GitHub App flag on this machine\'s own git and gh', async () => {
     const { d } = deps()
     const result = await buildLaunchOverrides(d, 'claude', { cwd: workspace(), swarmSkill: skill }, 'agent-1', () => true)
     if (!result.ok) throw new Error(result.error)
-    const session = join(env.ADAPTER_DATA_DIR, 'swarm-github', 'sessions', skill.key)
-    expect(result.overrides.env).toMatchObject({ GH_CONFIG_DIR: join(session, 'gh'), HARNESS_SWARM_GITHUB_DIR: session, GIT_TERMINAL_PROMPT: '0' })
-    expect(result.overrides.env.GIT_CONFIG_PARAMETERS).toContain(`'core.hookspath'='${join(env.ADAPTER_DATA_DIR, 'swarm-github', 'hooks')}'`)
-    expect(result.overrides.clearEnv).toEqual(expect.arrayContaining(['GH_TOKEN', 'GITHUB_TOKEN']))
+    expect(result.overrides.env).not.toHaveProperty('GIT_CONFIG_PARAMETERS')
+    expect(result.overrides.env).not.toHaveProperty('GH_CONFIG_DIR')
+    expect(result.overrides.clearEnv).not.toContain('GH_TOKEN')
   })
 
-  it('relaunches a session without the flag exactly as before', async () => {
+  it('relaunches a session without the old flag exactly as before', async () => {
     const { d } = deps()
     const result = await buildLaunchOverrides(d, 'claude', { cwd: workspace(), swarmSkill: { role: 'agent', key: 'harness-claude-plain' } }, 'agent-1', () => true)
     if (!result.ok) throw new Error(result.error)
@@ -593,17 +592,6 @@ describe('buildLaunchOverrides — a Swarm session on the Harness GitHub App', (
     expect(calls).toEqual([])
     // A session the Swarm never started relaunches as it always did.
     expect(await buildLaunchOverrides(d, 'claude', { cwd: workspace() }, 'agent-1', () => true)).toMatchObject({ ok: true })
-  })
-
-  it('refuses the relaunch when the app\'s files cannot be written', async () => {
-    const root = join(env.ADAPTER_DATA_DIR, 'swarm-github')
-    rmSync(root, { recursive: true, force: true })
-    writeFileSync(root, 'not a folder')
-    try {
-      const { d } = deps()
-      expect(await buildLaunchOverrides(d, 'claude', { cwd: workspace(), swarmSkill: skill }, 'agent-1', () => true))
-        .toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED' })
-    } finally { rmSync(root, { force: true }) }
   })
 })
 

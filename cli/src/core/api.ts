@@ -1217,13 +1217,12 @@ export type SwarmAgents = Required<Pick<CoreApi['agents'], 'closeSwarm' | 'keepL
 
 type SwarmSkill = NonNullable<RegisteredSession['swarmSkill']>
 /** The Swarm's part of an agent's start (superTabs/inCore/launch.ts), handed to the launches while the Swarm is on: the
- *  roles and skill modes a start may ask for, the role's skill written into the project folder (what the engine is told
- *  to read), and the Harness GitHub App's git and gh for another person's project work (null where it has none). */
+ *  roles and skill modes a start may ask for, and the role's skill written into the project folder (what the engine is told
+ *  to read). */
 export interface SwarmLaunch {
   role(value: unknown): value is SwarmSkill['role']
   mode(value: unknown): value is NonNullable<SwarmSkill['mode']>
   prepare(cwd: string, skill: SwarmSkill): { instructions: string }
-  github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
   /** The engine's arguments for a session the Swarm starts, never for a person's own (lib/swarmEngineArgs.ts). */
   args(engine: string): string[]
 }

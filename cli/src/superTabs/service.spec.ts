@@ -970,25 +970,19 @@ describe('a Lead\'s terminal result', () => {
   })
 })
 
-describe('GitHub App tokens through the service', () => {
-  it('gives a local agent its task\'s token, never one asked for through the relay', async () => {
+describe('a connected service', () => {
+  // The Harness GitHub App is gone: no action gives an agent a token, and the server is asked for none.
+  it('has no githubToken action: it is refused, and no token is asked of the server', async () => {
     const call = vi.fn<CoreApi['account']['backend']>(async (method, path) => ({ status: 200, body: { success: true, data: method === 'GET' && path.includes('/hosts/machine-1/changes')
-      ? hostForm([{ tabId: 'tab-1', agent: { id: 'agent-1', machineId: 'machine-1', harnessId: 'native' } }])
-      : { token: 'ghs_fixtureToken0000001', expiresAt: '2026-10-24T13:00:00.000Z', repository: 'acme/app', trailers: [] } } }))
+      ? hostForm([{ tabId: 'tab-1', agent: { id: 'agent-1', machineId: 'machine-1', harnessId: 'native' } }]) : {} } }))
     const service = superTabService(fakeCore({ account: { backend: call }, agents: { byAgent: vi.fn(() => ({ agentId: 'native' }) as never) } }),
-      { githubTokens: () => ({ start: vi.fn(), stop: vi.fn() }) })
-    expect(await service.requests.super_tabs({ action: 'githubToken', harnessId: 'native' }, owner))
-      .toMatchObject({ ok: true, value: { token: 'ghs_fixtureToken0000001', tabId: 'tab-1', agentId: 'agent-1' } })
-    expect(call).toHaveBeenCalledWith('POST', '/api/super-tabs/tab-1/github-token?asAgentId=agent-1', { machineId: 'machine-1' })
-    const calls = call.mock.calls.length
-    expect(await service.requests.super_tabs({ action: 'githubToken', harnessId: 'native' }, { local: false, owner: true, accountOwner: true } as never))
-      .toEqual({ error: 'OWNER_REQUIRED' })
-    expect(await service.requests.super_tabs({ action: 'githubToken', harnessId: 'native' }, visitor)).toEqual({ error: 'OWNER_REQUIRED' })
-    expect(call.mock.calls.length).toBe(calls)
+      { teamEngines: () => ({ start: vi.fn(), stop: vi.fn() }) })
+    expect(await service.requests.super_tabs({ action: 'githubToken', harnessId: 'native' }, owner)).toEqual({ error: 'INVALID_REQUEST' })
+    expect(call.mock.calls.some(([, path]) => String(path).includes('github-token'))).toBe(false)
   })
 
   it('runs a team daemon\'s Swarm host from its first connection, and a person\'s only once it hosts Swarm work', () => {
-    const quiet = { githubTokens: () => ({ start: vi.fn(), stop: vi.fn() }), teamEngines: () => ({ start: vi.fn(), stop: vi.fn() }) }
+    const quiet = { teamEngines: () => ({ start: vi.fn(), stop: vi.fn() }) }
     const started = (team: boolean) => {
       const start = vi.fn()
       const service = superTabService(fakeCore({ dataDir: mkdtempSync(join(tmpdir(), 'team-wake-')) }),
@@ -1001,24 +995,21 @@ describe('GitHub App tokens through the service', () => {
     expect(started(false)).toBe(0)
   })
 
-  it('keeps the tokens fresh while connected, and stops with the service', () => {
-    const tokens = { start: vi.fn(), stop: vi.fn() }
+  it('reports its engines while connected, and stops with the service', () => {
+    // In a Harness Team account, the engines installed and signed in are reported to its owner (team/engines.ts).
     const engines = { start: vi.fn(), stop: vi.fn() }
-    const service = superTabService(fakeCore(), { githubTokens: () => tokens, teamEngines: () => engines })
+    const service = superTabService(fakeCore(), { teamEngines: () => engines })
     service.port.connected()
-    expect(tokens.start).toHaveBeenCalledTimes(1)
-    // And, in a Harness Team account, reports its own engines to its owner (team/engines.ts).
     expect(engines.start).toHaveBeenCalledTimes(1)
     service.port.disconnected()
     service.port.stop()
-    expect(tokens.stop).toHaveBeenCalledTimes(2)
     expect(engines.stop).toHaveBeenCalledTimes(2)
   })
 })
 
 describe('the Harness Team account\'s own tmux', () => {
   it('is looked at as the service connects, and not again once there or installed; a failure again later', async () => {
-    const quiet = { githubTokens: () => ({ start: vi.fn(), stop: vi.fn() }) as never, teamEngines: () => ({ start: vi.fn(), stop: vi.fn() }) as never }
+    const quiet = { teamEngines: () => ({ start: vi.fn(), stop: vi.fn() }) as never }
     const installed = vi.fn(async () => 'installed' as const)
     const service = superTabService(fakeCore(), { ...quiet, teamTmux: installed })
     service.port.connected()

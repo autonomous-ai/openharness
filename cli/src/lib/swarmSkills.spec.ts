@@ -216,9 +216,8 @@ describe('Swarm sessions without skill files (task #4673)', () => {
     // An unknown mode is dropped, not refused: the session keeps its role and launches as before modes.
     expect(parseSwarmSkill({ role: 'dev', key: 'x', mode: 'light' })).toEqual({ role: 'agent', key: 'x' })
     expect(parseSwarmSkill({ role: 'dev', key: 'x', mode: 'orchestration' })).toEqual({ role: 'agent', key: 'x', mode: 'orchestration' })
-    // The Harness GitHub App's flag is kept for relaunches, and only as true.
-    expect(parseSwarmSkill({ role: 'dev', key: 'x', github: true })).toEqual({ role: 'agent', key: 'x', github: true })
-    expect(parseSwarmSkill({ role: 'dev', key: 'x', github: 'yes' })).toEqual({ role: 'agent', key: 'x' })
+    // A row saved while sessions could use the Harness GitHub App holds its flag: read as nothing.
+    expect(parseSwarmSkill({ role: 'dev', key: 'x', github: true })).toEqual({ role: 'agent', key: 'x' })
     expect(() => prepareSwarmSkill(fixture(), { role: 'lead', key: '' })).toThrow()
   })
 

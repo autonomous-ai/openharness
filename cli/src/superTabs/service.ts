@@ -18,7 +18,6 @@ import { ClaudeSignIns } from './claudeSignIn.js'
 import { answerFirstRun } from '../engines/launchPrep.js'
 import { messageIdOf } from './attach.js'
 import { cardId, SwarmCards, type CardChat } from './cards.js'
-import { GitHubTokenRefresher, githubToken } from './github.js'
 import { GitHubMentions, githubReader, watchedAgents } from './githubMentions.js'
 import { teamEngineReporter, type TeamEngineReporter } from '../team/engines.js'
 import { readTeamConfig } from '../team/config.js'
@@ -145,7 +144,7 @@ async function readGroupAsAgent(core: CoreApi, path: string, id: string, identit
   return group && typeof group === 'object' ? object(group) : null
 }
 /** A Swarm read as `GET /api/super-tabs/:id` answered it, `lastChangedAt` in place of `revision` (design 2026-10-26 5.3). */
-const answerOf = (read: SwarmRead) => ({ lastChangedAt: read.lastChangedAt, state: read.state, ...(read.githubApp ? { githubApp: true } : {}) })
+const answerOf = (read: SwarmRead) => ({ lastChangedAt: read.lastChangedAt, state: read.state })
 const OFF_ROSTER = 'This agent is not on this machine\'s Swarm roster right now. That can mean this machine has no access to it, or its billing does not allow it. Check how this machine is shared.'
 /** A Buddy's help: the same, with its post passing the message as TEXT itself (BUDDY_POST_HELP) and its command the JSON in
  *  quotes (BUDDY_COMMAND_HELP): no stdin anywhere. */
@@ -266,8 +265,6 @@ export interface SuperTabServiceOptions {
   reservations?: (core: CoreApi, machineId: string) => ReservationBook
   /** The Swarm cards' reader (superTabs/cards.ts), for a spec. */
   cards?: (core: CoreApi, machineId: string) => SwarmCards
-  /** What keeps Swarm sessions' GitHub tokens fresh (superTabs/github.ts), for a spec. */
-  githubTokens?: (core: CoreApi) => Pick<GitHubTokenRefresher, 'start' | 'stop'> & Partial<Pick<GitHubTokenRefresher, 'assigned'>>
   /** What reports the Harness Team account's own engines to its owner (team/engines.ts), for a spec. */
   teamEngines?: () => Pick<TeamEngineReporter, 'start' | 'stop'>
   /** Whether this daemon runs team work only (a Harness Team account, `harness team on`), for a spec. */
@@ -294,11 +291,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   let held: SwarmSources | null = null
   const sources = (): SwarmSources => {
     const machine = core.daemon.machineId()
-    if (held?.feed.machineId !== machine) {
-      held = { feed: new HostFeed(core, machine), reads: new SwarmReads(core) }
-      // A task's GitHub token is fetched as the host first sees the task, not at the refresher's next minute (github.ts).
-      held.feed.watch(read => tokens.assigned?.(read))
-    }
+    if (held?.feed.machineId !== machine) held = { feed: new HostFeed(core, machine), reads: new SwarmReads(core) }
     return held
   }
   let host: SuperTabHost | null = null
@@ -343,8 +336,6 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     }
     return swarmCards
   }
-  // Sessions doing another person's project work keep a live GitHub App token while their task lasts, and none after.
-  const tokens = (options.githubTokens ?? (api => new GitHubTokenRefresher(api, sources)))(core)
   // In the Harness Team account only: whether its Claude Code and Codex are installed and signed in, for its owner to read.
   const engines = (options.teamEngines ?? teamEngineReporter)()
   // In the Harness Team account: a tmux and a gh of its own when it has none it can run (team/tmux.ts, team/gh.ts). Looked
@@ -366,10 +357,9 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   }
   // The server's word that one of this machine's Swarms changed, heard while no host runs (Amon, #3215).
   let hostWake: (() => void) | null = null
-  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; mentions.stop(); held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop(); engines.stop() }
+  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; mentions.stop(); held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; engines.stop() }
   const port = {
     connected: () => {
-      tokens.start()
       engines.start()
       checkTmux()
       // A daemon that runs team work only is there for its Swarms: its host runs from its first connection. Its Mac's daemon adds
@@ -413,12 +403,6 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           return await wake().prepareNative(payload.tabId, payload.contextId, payload.action === 'renewNative', closed)
         }
         if (!asker.owner || (!asker.local && asker.accountOwner !== true)) return { error: 'OWNER_REQUIRED' }
-        // `harness git-credential` in a local agent's shell (superTabs/gitCredential.ts): the token of that agent's task,
-        // which goes to this computer's own processes alone, never to another machine through the relay.
-        if (payload.action === 'githubToken') {
-          if (!asker.local) return { error: 'OWNER_REQUIRED' }
-          return await githubToken(core, String(payload.harnessId ?? ''), sources())
-        }
         // Why this Mac's Harness Team account has not joined a Swarm, while adding it fails (host.ts joinTeams), and Retry on the
         // row (Amon, #3215: "joining" for good, the reason only in the log). Only a client on this computer asks.
         // The status starts nothing; Retry starts the host if it never ran, which then reads its roster as any start does.

@@ -88,18 +88,20 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     expect(t.calls[3][1]).toEqual({ agentId: 'h1', replacementId: 'h2', changeId, targetEngine: 'claude' })
   })
 
-  it('recreates the PM as a Swarm PM: its role, skill mode, GitHub token, start prompt, then the handoff', async () => {
+  // The PM's row still holds the GitHub App flag it was saved with (PM above): the replacement reads it as nothing.
+  it('recreates the PM as a Swarm PM: its role, skill mode, start prompt, then the handoff, with no GitHub App', async () => {
     const t = setup()
     await t.switches.serve(row())
     const create = t.calls.find(c => c[0] === 'agent_create')![1]
-    expect(create).toMatchObject({ swarmRole: 'lead', swarmSkillMode: 'orchestration', swarmGitHub: true, startedBy: 'agent', name: 'PM' })
+    expect(create).toMatchObject({ swarmRole: 'lead', swarmSkillMode: 'orchestration', startedBy: 'agent', name: 'PM' })
+    expect(create).not.toHaveProperty('swarmGitHub')
     const prompt = String(create.prompt)
     expect(prompt.startsWith('You are the Product Manager of the project whose conversation is conv1')).toBe(true)
-    expect(prompt).toContain('Harness GitHub App token')
-    expect(prompt.indexOf('Context handoff')).toBeGreaterThan(prompt.indexOf('Harness GitHub App token'))
+    expect(prompt).not.toContain('GitHub App')
+    expect(prompt.indexOf('Context handoff')).toBeGreaterThan(0)
   })
 
-  it('keeps a PM without GitHub off the token and names the role the row gives', async () => {
+  it('names the role the row gives, and no skill mode for a row without one', async () => {
     const t = setup({ old: { swarmSkill: { role: 'coordinator', key: 'swarm-lead' } } })
     await t.switches.serve(row({}, { roleName: 'Lead dev' }))
     const create = t.calls.find(c => c[0] === 'agent_create')![1]

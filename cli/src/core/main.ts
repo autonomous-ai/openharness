@@ -2437,7 +2437,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     downloading: (engine) => engineDownloading(engine),
   })
   const launchOverridesDeps: LaunchOverridesDeps = {
-    // A Swarm session's skill and GitHub App on every relaunch; off, such a session is not relaunched.
+    // A Swarm session's skill on every relaunch; off, such a session is not relaunched.
     ...(swarm ? { swarm: swarm.SWARM_LAUNCH } : {}),
     publishConfig: publishGridConfigDir,
     machine: gridLaunchMachine,

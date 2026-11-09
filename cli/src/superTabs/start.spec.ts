@@ -26,7 +26,7 @@ const noPause = async () => {}
  *  account signed in there both its owner's. */
 const OWN_HOST = { hostDispatch: true, signedIn: 'peer' } as const
 const ownMachine = (f: { start: Record<string, unknown> }) => Object.assign(f.start, { machineOwnerId: 'peer', contributorId: 'peer', hostGrant: null })
-function fixture(options: { state?: Record<string, unknown> | Error; refused?: string; loseClose?: boolean; githubApp?: boolean; refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; acceptedLaunchModel?: { model: string | null; effort: string | null }; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string }; screen?: string } = {}) {
+function fixture(options: { state?: Record<string, unknown> | Error; refused?: string; loseClose?: boolean; refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; acceptedLaunchModel?: { model: string | null; effort: string | null }; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string }; screen?: string } = {}) {
   const start = { creationId: 'super-native-receipt', error: null as string | null, request: { machineId: 'target', conversationId: 'group', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }, dispatched: false }
   let nativeState = 'missing', lostJoin = false
@@ -34,7 +34,7 @@ function fixture(options: { state?: Record<string, unknown> | Error; refused?: s
     if (payload.action === 'startStatus') return { ok: true, value: structuredClone(start) }
     if (payload.action === 'status') {
       if (options.state instanceof Error) throw options.state
-      return { ok: true, value: { revision: 1, state: options.state ?? { conversations: [{ id: 'group' }] }, ...(options.githubApp ? { githubApp: true } : {}) } }
+      return { ok: true, value: { revision: 1, state: options.state ?? { conversations: [{ id: 'group' }] } } }
     }
     const cmd = payload.command as Record<string, unknown>
     if (cmd.type === 'agent.startDispatch') start.dispatched = true
@@ -513,16 +513,15 @@ it('starts a plain Buddy for a thread session whose thread is not an id', async 
   expect(payload.prompt).not.toContain('--thread')
 })
 
-it('starts a Buddy with its owner\'s own permission settings, and never with the GitHub App\'s token (tasks #2832, #4215)', async () => {
+it('starts a Buddy with its owner\'s own permission settings (tasks #2832, #4215)', async () => {
   for (const engine of ['claude', 'codex'] as const) {
     const f = fixture()
     f.start.request = { ...f.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
     ownMachine(f)
-    await startAgent({ ...OWN_HOST, action: 'start', tabId: 'tab', operationId: `buddy-${engine}`, request: f.start.request, github: { requester: 'peer' } } as never,
+    await startAgent({ ...OWN_HOST, action: 'start', tabId: 'tab', operationId: `buddy-${engine}`, request: f.start.request } as never,
       f.scoped, where, f.open)
     const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
-    expect([engine, payload.permissionMode, payload.bypassPermission, payload.swarmGitHub]).toEqual([engine, undefined, false, undefined])
-    expect(payload.prompt).not.toContain('GitHub')
+    expect([engine, payload.permissionMode, payload.bypassPermission]).toEqual([engine, undefined, false])
   }
 })
 
@@ -612,14 +611,15 @@ describe('a Buddy launches only on its owner\'s own machine', () => {
   })
 })
 
-it('starts a project\'s Product Manager with the swarm-lead skill, as the Lead of its project\'s conversation, with the GitHub App\'s token', async () => {
+it('starts a project\'s Product Manager with the swarm-lead skill, as the Lead of its project\'s conversation', async () => {
   const f = fixture()
   f.start.request = { ...f.start.request, leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } } as typeof f.start.request
+  // A host from before the GitHub App's removal still sends what it readied: it is read as nothing.
   await startAgent({ action: 'start', tabId: 'tab', operationId: 'lead-prompt', request: f.start.request, hostDispatch: true, github: { requester: 'owner' } } as never,
     f.scoped, where, f.open)
   const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
   expect(payload.swarmRole).toBe('lead')
-  expect(payload.swarmGitHub).toBe(true)
+  expect(payload).not.toHaveProperty('swarmGitHub')
   expect(payload.prompt).toContain('harness super-tab --tab tab instructions')
   expect(payload.prompt).not.toContain('swarm-lead')
   expect(payload.prompt).toContain(`You are the Product Manager of the project whose conversation is ${f.start.request.conversationId}, started by the Swarm`)
@@ -1337,57 +1337,28 @@ it('waits as before when the screen cannot be read, or asks nothing', async () =
   }
 })
 
-describe('Swarm starts for another person\'s project', () => {
+describe('a Swarm start for another person\'s project', () => {
   const state = { ownerId: 'owner-1', people: [{ id: 'owner-1', email: 'owner@example.com' }, { id: 'host-1', email: 'host@example.com' }],
     projects: [{ id: 'lead', ownerId: 'host-1' }, { id: 'p1', ownerId: 'owner-1', skillMode: 'default' }], conversations: [{ id: 'group', projectId: 'p1' }] }
-  const started = async (options: Parameters<typeof fixture>[0], machineOwnerId = 'host-1') => {
-    const f = fixture(options)
-    Object.assign(f.start, { machineOwnerId })
-    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
-    return f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
-  }
 
-  it('wires the Harness GitHub App, naming nobody, when the project\'s owner is not the machine\'s', async () => {
-    const payload = await started({ state, githubApp: true })
-    expect(payload).toMatchObject({ swarmRole: 'dev', swarmSkillMode: 'default', swarmGitHub: true })
-    expect(String(payload.prompt)).toMatch(/not this computer's own GitHub login\. Each task's message ends with the line to start its pull request bodies with\.$/)
-    // Whom the work is for comes with each task (backend projects.ts requestedByLine): the start names nobody, so an agent reused
-    // for another person's task never names the one before (security review 2 of #2492).
-    expect(String(payload.prompt)).not.toMatch(/Requested by|@example\.com/)
-  })
-
-  it('reads a Swarm from before projects as its owner\'s', async () => {
-    const legacy = { ownerId: 'owner-1', people: state.people, conversations: [{ id: 'group' }] }
-    expect(await started({ state: legacy, githubApp: true })).toMatchObject({ swarmGitHub: true })
-  })
-
-  it('on a contributed machine, goes by what its host readied: the app for whom it named, nothing when it named no one', async () => {
-    const hosted = async (github: unknown) => {
-      const f = fixture({ state, githubApp: true })
+  // The Harness GitHub App is gone: such a start launches as any other, on this machine's own git and gh.
+  it('wires nothing of the GitHub App and names it nowhere in the prompt, whatever its host readied', async () => {
+    for (const github of [{ requester: 'olive@example.com' }, undefined]) {
+      const f = fixture({ state })
       Object.assign(f.start, { machineOwnerId: 'host-1' })
-      expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start', hostDispatch: true, ...(github === undefined ? {} : { github }) }, f.scoped, where, f.open)).toMatchObject({ ok: true })
-      return f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
-    }
-    const payload = await hosted({ requester: 'olive@example.com' })
-    expect(payload).toMatchObject({ swarmRole: 'dev', swarmGitHub: true })
-    expect(String(payload.prompt)).toContain('Each task\'s message ends with the line to start its pull request bodies with.')
-    expect(String(payload.prompt)).not.toMatch(/Requested by|olive/)
-    for (const github of [undefined, null, {}, { requester: '' }]) expect(await hosted(github)).not.toHaveProperty('swarmGitHub')
-  })
-
-  it('launches as before for the machine owner\'s own project, on a server without the app, or when the Swarm cannot be read', async () => {
-    for (const [options, owner] of [[{ state, githubApp: true }, 'owner-1'], [{ state }, 'host-1'], [{ state: new Error('offline'), githubApp: true }, 'host-1'],
-      [{ state: { ...state, conversations: [{ id: 'other' }] }, githubApp: true }, 'host-1'], [{ state: { ...state, people: [] }, githubApp: true }, 'host-1']] as const) {
-      const payload = await started(options, owner)
+      expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start', hostDispatch: true, ...(github ? { github } : {}) } as never, f.scoped, where, f.open))
+        .toMatchObject({ ok: true })
+      const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
+      expect(payload).toMatchObject({ swarmRole: 'dev' })
       expect(payload).not.toHaveProperty('swarmGitHub')
-      expect(String(payload.prompt)).not.toContain('GitHub App')
+      expect(String(payload.prompt)).not.toContain('GitHub')
     }
   })
 })
 
 describe('a start that fails before its agent exists', () => {
   const requirements = { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: ['round'], quotaRequired: false }
-  const TOKEN = 'The Harness GitHub App token is not in the form GitHub gives.'
+  const WHY = 'The project could not be cloned on this machine.'
   /** A backend with contributed machines whose hosts fail a start in preparation, as the round-device group saw. */
   function backend(options: { fails?: string[] } = {}) {
     const starts = new Map<string, Record<string, unknown>>()
@@ -1399,7 +1370,7 @@ describe('a start that fails before its agent exists', () => {
         if (!start) return { error: 'NOT_FOUND', detail: 'This agent start is unavailable.' }
         // The host readies a queued start on its next pass: a machine whose app token cannot be had fails it there.
         const request = start.request as Record<string, unknown>
-        if (start.read && fails.has(String(request.machineId))) start.error = TOKEN
+        if (start.read && fails.has(String(request.machineId))) start.error = WHY
         start.read = true
         return { ok: true, value: structuredClone(start) }
       }
@@ -1425,7 +1396,7 @@ describe('a start that fails before its agent exists', () => {
   // notice, decide what happens next; this client moves nothing.
   it('reports a failed start and moves it nowhere', async () => {
     const b = backend()
-    expect(await b.lead(b.first)).toEqual({ error: 'START_FAILED', startId: 'first-start', detail: TOKEN })
+    expect(await b.lead(b.first)).toEqual({ error: 'START_FAILED', startId: 'first-start', detail: WHY })
     // Resumed later, the same answer, and still nothing else is sent.
     expect(await b.lead({ action: 'resume', tabId: 'tab', startId: 'first-start' })).toMatchObject({ error: 'START_FAILED' })
     expect(b.of('agent.start')).toHaveLength(1)

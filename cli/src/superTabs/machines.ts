@@ -17,7 +17,7 @@ import { readCapabilities, quotaOf, meteredEngine, quotaUnknownReason } from './
 import { startAgent, type ScopedRequest } from './start.js'
 import { copySetup } from './memberSetup.js'
 import { settleHiddenScreen } from './startScreen.js'
-import { PrepareRetryError, prepareSwarmStart } from './projectFolder.js'
+import { prepareSwarmStart } from './projectFolder.js'
 import { readAuthSession } from '../lib/authSession.js'
 import { createSwarmCloneTrustRepair, swarmCloneRoots } from './cloneTrust.js'
 import { git, sweepOne, WorktreeKept } from '../lib/worktreeSweep.js'
@@ -141,9 +141,8 @@ const folderGone = (path: string) => realpath(path).then(() => false, (error: No
 export interface MachineDeps {
   backend: typeof backend; open: typeof openDaemon; capabilities: typeof readCapabilities; start: typeof startAgent; now: () => number
   log?: (message: string) => void; env?: NodeJS.ProcessEnv
-  /** Readies a queued start before its agent is created (superTabs/projectFolder.ts `prepareSwarmStart`): whom the
-   *  work is for when it uses the Harness GitHub App, else null. */
-  prepare?: (core: CoreApi, row: Record<string, unknown>, start: Record<string, unknown>) => Promise<{ requester: string } | null | void>
+  /** Readies a queued start before its agent is created (superTabs/projectFolder.ts `prepareSwarmStart`). */
+  prepare?: (core: CoreApi, row: Record<string, unknown>, start: Record<string, unknown>) => Promise<void>
   /** Whether this daemon runs team work only (a Harness Team account, `harness team on`): it has no git login of its own. */
   team?: () => boolean
   /** The Harness Team account's privacy check (team/privacy.ts): null for the owner's own daemon. */
@@ -785,22 +784,11 @@ export class ContributedMachines {
                     error: `This computer's Harness Team account is not private (${privacy.item}): ${privacy.detail} Its owner can remove it: \`harness team remove\`.` } })
                 continue
               }
-              // Another person's project is cloned and fetched with the Harness GitHub App's token, never this machine's own
-              // git login; a token that cannot be had fails the start (superTabs/projectFolder.ts).
-              let github: { requester: string } | null = null
+              // The project's checkout is made here before the start launches, with this machine's own GitHub login
+              // (superTabs/projectFolder.ts); one that cannot be made fails the start.
               if (!start.dispatched) {
-                try {
-                  github = (await (this.deps.prepare ?? ((core, pooled, queued) => prepareSwarmStart(core, pooled, queued,
-                    { backend: this.deps.backend, team: (this.deps.team ?? (() => readAuthSession()?.kind === 'team'))() })))(this.core, row, start)) ?? null
-                } catch (error) {
-                  // A token call that got no answer is tried again on the next passes, on the clock of a refused start, and
-                  // fails it with the last reason once that runs out (Diego's Mac, 2026-10-30: one timeout failed a start).
-                  if (error instanceof PrepareRetryError) {
-                    const since = this.refusedSince.get(start.id) ?? began
-                    this.refusedSince.set(start.id, since)
-                    this.noteWaiting(start.id, error.message)
-                    if (began - since < START_REFUSED_MS) continue
-                  }
+                try { await (this.deps.prepare ?? prepareSwarmStart)(this.core, row, start) }
+                catch (error) {
                   await scoped({ action: 'command', operationId: `prepare-failed-${start.id}`,
                     command: { type: 'agent.startFailed', startId: start.id,
                       error: error instanceof Error ? error.message : 'Could not prepare this project on the machine.' } })
@@ -816,7 +804,7 @@ export class ContributedMachines {
               // Its Member's commands reach a helper only from a Member this machine's Swarm started here (security review 1 of #3579),
               // and only in a worktree of its own.
               const memberHere = beforeJoin ? helperRequest.worktree === true && !!this.worktreeOf(String(row.tabId), String(helperOf.harnessId)) : null
-              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, signedIn, ...(github ? { github } : {}), ...(beforeJoin ? { beforeJoin, memberHere } : {}) },
+              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, signedIn, ...(beforeJoin ? { beforeJoin, memberHere } : {}) },
                 scoped, where, this.deps.open)
               this.refused.delete(String(start.id))
               const refused = result.ok !== true && !start.dispatched && !NOT_REFUSED.has(String(result.error))

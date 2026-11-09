@@ -1,7 +1,7 @@
 /**
  * What a machine's Swarms want of its host, read as the host form (design 2026-10-26-swarm-state-parts section 4.10): for
- * each Swarm its roster rows, its pool of this machine and the assignments running here. It replaces the three rosters the
- * host, the machine pass and the GitHub tokens each read on their own, every one loading up to 100 whole Swarms every 1–5 s.
+ * each Swarm its roster rows, its pool of this machine and the assignments running here. It replaces the rosters the
+ * host and the machine pass each read on their own, every one loading up to 100 whole Swarms every 1–5 s.
  * In between, only the Swarms with a change that matters to this machine come back; a full read at start and at least every
  * minute also catches a share or billing change, which lives outside the parts.
  */
@@ -10,7 +10,7 @@ import type { HostChanges, HostChangesRequest, HostTabRows } from './readContrac
 import { backend, object, readable } from './wire.js'
 
 type Json = Record<string, unknown>
-export interface HostRead { roster: Json[]; pools: Json[]; assignments: Json[] }
+interface HostRead { roster: Json[]; pools: Json[]; assignments: Json[] }
 
 /** The bound on a roster that lags a revoked share (design section 8, Q2), and on one that missed a push. */
 export const HOST_FULL_MS = 60_000
@@ -37,8 +37,6 @@ export class HostFeed {
   private pushUntil = -Infinity
   /** Told of a change since the last read began. */
   private told = false
-  /** Told of every read the feed makes ([watch]). */
-  private readonly watchers = new Set<(read: HostRead) => void>()
 
   constructor(private readonly core: CoreApi, readonly machineId: string, options: { now?: () => number; backend?: typeof backend } = {}) {
     this.now = options.now ?? Date.now
@@ -55,13 +53,6 @@ export class HostFeed {
   async fresh(): Promise<HostRead> {
     await this.running?.catch(() => {})
     return this.refresh()
-  }
-
-  /** [watcher] is told of each read this feed makes, once it is held; returns what stops it. A watcher that throws is
-   *  passed over: it never fails the read. */
-  watch(watcher: (read: HostRead) => void): () => void {
-    this.watchers.add(watcher)
-    return () => { this.watchers.delete(watcher) }
   }
 
   /** Whether the server pushes: its last word that it does is under HOST_PUSH_LEASE_MS old. */
@@ -129,11 +120,7 @@ export class HostFeed {
     this.cursor = answer.cursor
     if (full) this.fullAt = startedAt
     this.readAt = this.now()
-    const read = this.snapshot()
-    for (const watcher of this.watchers) {
-      try { watcher(read) } catch { /* A watcher's failure is its own. */ }
-    }
-    return read
+    return this.snapshot()
   }
 
   /** Every Swarm's rows in one list each; a Swarm whose lists are not lists gives none, and never stops the others'. */
