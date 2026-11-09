@@ -40,6 +40,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: brightness),
         home: Scaffold(
           body: SuperTabView(
+            board: false,
             controller: c,
             onInvite: () {},
             onAddAgent: (_) {},

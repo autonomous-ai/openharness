@@ -21,7 +21,7 @@ const _dee = {'kind': 'person', 'id': 'dee', 'name': 'dee@example.com'};
 const _shrike = {'kind': 'agent', 'id': 'shrike2', 'name': 'Shrike2'};
 
 ConversationServer _server({bool assigned = true}) {
-  final server = ConversationServer();
+  final server = ConversationServer.chat();
   final state = server.state;
   (state['people'] as List).add({
     'id': 'dee',

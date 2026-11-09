@@ -10,7 +10,7 @@ import 'support/super_tab_fixture.dart';
 /// minutes; a bubble's exact time is on its tooltip.
 void main() {
   ConversationServer server() {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     final now = DateTime.now().toUtc();
     for (final (text, minutesAgo) in [
       ('First', 30),
