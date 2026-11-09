@@ -11,7 +11,6 @@ import '../widgets/engine_identity.dart';
 import '../widgets/finger_target.dart';
 import 'attachment_chips.dart';
 import 'chat/bubble.dart';
-import 'chat/fold.dart';
 import 'composer_newline.dart';
 import 'identity.dart';
 import 'identity_card.dart';
@@ -87,6 +86,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.readerId = '',
     this.reactorName,
     this.onReact,
+    this.reactions = true,
     this.headerStatus,
     this.dimmed = false,
     this.thread,
@@ -199,6 +199,10 @@ class SuperTabMessageRow extends StatefulWidget {
   final String readerId;
   final SuperTabReactorName? reactorName;
   final ValueChanged<SuperTabReactionEmoji>? onReact;
+
+  /// Whether the reactions under a message, and the button that gives one, are drawn. Swarm v4 draws none: the host's 👀
+  /// receipt sat under every message of a person's agent chat (anh Dee, 2026-11-09), and people do not react to agents.
+  final bool reactions;
 
   /// This message's link, for the More menu's Copy link to message. Without
   /// it the menu is not offered.
@@ -609,11 +613,6 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
         (message.text.isNotEmpty && !voiceMessage);
   }
 
-  /// An agent's long message folds after about six lines, with More; a
-  /// person's never does (anh Dee's mockup, 11-07, #4529).
-  Widget _folded(Widget text) =>
-      widget.message.fromAgent ? SwarmFold(child: text) : text;
-
   /// The message's full date and time, on its bubble's tooltip: the chat
   /// shows a time only after a pause.
   String get _clock {
@@ -942,27 +941,26 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                                           const BoxConstraints(
                                                             maxWidth: 960,
                                                           ),
-                                                      child: _folded(
-                                                        SuperTabMessageText(
-                                                          message.text,
-                                                          ink: own
-                                                              ? SwarmBubble
-                                                                    .ownInk
-                                                              : null,
-                                                          references:
-                                                              widget.references,
-                                                          onOpenGroup: widget
-                                                              .onOpenGroup,
-                                                          mentions:
-                                                              widget.mentions,
-                                                          agents:
-                                                              widget.agentNames,
-                                                          addresses: widget
-                                                              .mentionAddresses,
-                                                          labels: widget
-                                                              .mentionLabels,
-                                                          taggedYou: taggedYou,
-                                                        ),
+                                                      // The whole message, never folded behind More (anh Dee, 2026-11-09).
+                                                      child: SuperTabMessageText(
+                                                        message.text,
+                                                        ink: own
+                                                            ? SwarmBubble
+                                                                  .ownInk
+                                                            : null,
+                                                        references:
+                                                            widget.references,
+                                                        onOpenGroup:
+                                                            widget.onOpenGroup,
+                                                        mentions:
+                                                            widget.mentions,
+                                                        agents:
+                                                            widget.agentNames,
+                                                        addresses: widget
+                                                            .mentionAddresses,
+                                                        labels:
+                                                            widget.mentionLabels,
+                                                        taggedYou: taggedYou,
                                                       ),
                                                     ),
                                                   ),
@@ -1018,14 +1016,15 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                                 resolve: resolve,
                                                 onOpen: open,
                                               ),
-                                          SuperTabReactionBar(
-                                            message: message,
-                                            readerId: widget.readerId,
-                                            nameOf:
-                                                widget.reactorName ??
-                                                (_, id) => id,
-                                            onReact: widget.onReact,
-                                          ),
+                                          if (widget.reactions)
+                                            SuperTabReactionBar(
+                                              message: message,
+                                              readerId: widget.readerId,
+                                              nameOf:
+                                                  widget.reactorName ??
+                                                  (_, id) => id,
+                                              onReact: widget.onReact,
+                                            ),
                                         ],
                                         ...widget.receipts,
                                       ],
@@ -1088,8 +1087,9 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              if (widget.onReact case final react?)
-                                SuperTabReactionPicker(onReact: react),
+                              if (widget.reactions)
+                                if (widget.onReact case final react?)
+                                  SuperTabReactionPicker(onReact: react),
                               if (widget.onReply != null)
                                 fingerTarget(
                                   enabled: phone,

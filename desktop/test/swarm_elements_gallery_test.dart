@@ -595,14 +595,6 @@ class _Gallery extends StatelessWidget {
                           action: 'Read',
                           details: SizedBox.shrink(),
                         ),
-                        const SizedBox(height: 8),
-                        SwarmFold(
-                          child: Text(
-                            [for (var i = 1; i <= 9; i++) 'Line $i of a plan.']
-                                .join('\n'),
-                            style: SwarmType.body(context),
-                          ),
-                        ),
                       ],
                     ),
                   ),

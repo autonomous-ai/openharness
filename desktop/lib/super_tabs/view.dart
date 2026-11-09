@@ -4208,9 +4208,9 @@ class _SuperTabViewState extends State<SuperTabView>
           item('Crew', () => _groupAction('crew', group)),
           if (editable && owner)
             item('Sharing', () => _groupAction('sharing', group)),
+          _notifyMenu(group),
+          const AppMenuDivider(),
         ],
-        _notifyMenu(group),
-        const AppMenuDivider(),
         item(
           'Project settings…',
           () => unawaited(_projectSettings(group, project)),
@@ -4825,6 +4825,7 @@ class _SuperTabViewState extends State<SuperTabView>
               final person? => person.shownName,
               null => 'Someone',
             },
+      reactions: !widget.board,
       // An older Buddy chat is kept to read: no reaction there (security review 1 of #2437).
       onReact:
           c.canWrite &&

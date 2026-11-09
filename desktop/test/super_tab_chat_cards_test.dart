@@ -96,39 +96,20 @@ void main() {
     final long = [for (var i = 1; i <= 14; i++) 'Line $i of the plan.']
         .join('\n\n');
 
-    testWidgets('from an agent folds after about six lines, with More', (
+    testWidgets('from an agent shows whole, never folded behind More', (
       tester,
     ) async {
       final server = ConversationServer()..append(long, agent: true);
       await showView(tester, server);
-      expect(find.text('More'), findsOneWidget);
-      expect(find.text('Line 14 of the plan.').hitTestable(), findsNothing);
-      await tester.tap(find.text('More'));
-      await tester.pumpAndSettle();
       expect(find.text('More'), findsNothing);
       expect(find.text('Line 14 of the plan.').hitTestable(), findsOneWidget);
     });
 
-    testWidgets('fades out above More, so no line shows cut in half', (
-      tester,
-    ) async {
-      final server = ConversationServer()..append(long, agent: true);
-      await showView(tester, server);
-      final fade = find.byKey(const ValueKey('swarm-fold-fade'));
-      expect(fade, findsOneWidget);
-      expect(
-        tester.getBottomLeft(fade).dy,
-        lessThanOrEqualTo(tester.getTopLeft(find.text('More')).dy),
-      );
-      await tester.tap(find.text('More'));
-      await tester.pumpAndSettle();
-      expect(fade, findsNothing);
-    });
-
-    testWidgets('from a person is never folded', (tester) async {
+    testWidgets('from a person shows whole too', (tester) async {
       final server = ConversationServer()..append(long);
       await showView(tester, server);
       expect(find.text('More'), findsNothing);
+      expect(find.text('Line 14 of the plan.').hitTestable(), findsOneWidget);
     });
   });
 
