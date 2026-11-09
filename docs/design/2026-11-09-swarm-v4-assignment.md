@@ -134,6 +134,8 @@ Harness asks readers for, and merges, only the team's own pull requests: a build
 (openharness has dozens open at a time, by people and their own agents). A reader asked 2 hours ago with no verdict since
 is no longer counted on: another is asked too, and the first READ-OK on
 the head counts, whoever's (agents read within minutes of the ask that wakes them, so one that has not is stopped or stuck).
+With nobody else to ask, the silent reader is asked again, at most twice for a head and two hours apart: one stopped when
+it was asked never heard it, as GitHub news reads what is said from when its agent runs again.
 Nobody able to read it is said once.
 
 ## Taking work back (built)

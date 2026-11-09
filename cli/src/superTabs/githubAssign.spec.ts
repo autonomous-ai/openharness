@@ -236,6 +236,31 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(asks(f)).toHaveLength(1)
     })
 
+    it('asks the only reader again after 2 silent hours, at most twice more for a head, after a restart too', async () => {
+      const HOUR = 60 * 60_000
+      const askedAt = (at: string) => comment(`Harness, ${at.slice(11, 16)}, to **Faye**: please read this pull request, and start your `
+        + 'comment with READ-OK f6edb44 or HOLD f6edb44 (with the file, line and fix).', { created_at: at })
+      // Pip builds alone; Faye, its PM, was asked three hours ago and has said nothing since (stopped when it was asked).
+      const f = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
+      f.github.state.pulls = [pull()]
+      const iso = (ms: number) => new Date(ms).toISOString()
+      const first = iso(f.clock.now - 3 * HOUR)
+      f.github.state.comments.set(30, [askedAt(first)])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Faye\*\*: please read this pull request/)])
+      f.github.state.comments.set(30, [askedAt(first), askedAt(iso(f.clock.now))])
+      f.clock.now += HOUR
+      await f.assigner.tick()
+      expect(asks(f)).toHaveLength(1)
+      f.clock.now += HOUR + 60_000
+      await f.make().tick()
+      expect(asks(f)).toHaveLength(2)
+      f.github.state.comments.set(30, [askedAt(first), askedAt(iso(f.clock.now - 2 * HOUR)), askedAt(iso(f.clock.now))])
+      f.clock.now += 3 * HOUR
+      await f.make().tick()
+      expect(asks(f)).toHaveLength(2)
+    })
+
     it('measures a reader asked again after a push from that ask, and one that never answered from its last', async () => {
       const f = setup([], { crew: team })
       f.github.state.pulls = [pull()]

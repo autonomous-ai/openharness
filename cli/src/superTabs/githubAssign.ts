@@ -40,8 +40,9 @@ const FLOW_LABELS: ReadonlyArray<{ name: string; color: string; description: str
 ]
 /** How many open pull requests are read for readers each pass, as the merger reads them. */
 const MAX_PULLS = 30
-/** How long a reader asked for a head has to read it before another reader is asked too. */
-const READ_WAIT_MS = 2 * 60 * 60_000
+/** How long a reader asked for a head has to read it before another reader is asked too, or, with no other, it again; and
+ *  how many asks one reader gets for one head. */
+const READ_WAIT_MS = 2 * 60 * 60_000, READ_ASKS = 3
 /** How Harness's ask about a quiet task begins, after the builder's name: a restart finds it by these words. */
 const QUIET_ASKED = 'nothing has moved on this task for '
 /** Harness's ask of a reader, as askReaders writes it: who was asked, and for which head. */
@@ -248,9 +249,13 @@ export class GitHubAssign {
       // Who Harness asked, for which heads, and when.
       const now = this.now()
       const asked = new Map<string, Map<string, number>>()
+      // How often each was asked for this head, and its name as written.
+      const onThisHead = new Map<string, number>(), written = new Map<string, string>()
       for (const c of comments) {
         const found = ASKED.exec(String(c.body ?? ''))
         if (!found) continue
+        written.set(found[1]!.toLowerCase(), found[1]!)
+        if (head.startsWith(found[2]!)) onThisHead.set(found[1]!.toLowerCase(), (onThisHead.get(found[1]!.toLowerCase()) ?? 0) + 1)
         const heads = asked.get(found[1]!.toLowerCase()) ?? new Map<string, number>()
         // GitHub dates every comment; one it did not is taken as asked now, as before.
         const at = Date.parse(String(c.created_at ?? ''))
@@ -280,7 +285,17 @@ export class GitHubAssign {
         const builder = readerFor(read, author, skip)
         const pm = project.pm.toLowerCase()
         const reader = builder ?? (pm !== author && !skip.has(pm) ? { id: pm, name: project.pm } : null)
-        if (!reader) { this.once(`[super-tab] Task assignment: NO_READER ${repo}#${number}: nobody but its author can read it`); break }
+        if (!reader) {
+          // Nobody new can read it: the reader asked longest ago, with no verdict on this head, is asked again, at most twice
+          // for a head and two hours apart. One stopped when it was asked never heard it: GitHub news reads what is said from
+          // when its agent runs again (the swarm-sandbox, 2026-11-10: Juno, its PM and only reader, was asked while stopped).
+          const again = [...asked.keys()].filter(name => name !== author && (onThisHead.get(name) ?? 0) < READ_ASKS
+            && !(readers.has(name) && onHead(readers.get(name)!.sha)) && now - lastAsk(name, false) >= READ_WAIT_MS)
+            .sort((a, b) => lastAsk(a, false) - lastAsk(b, false))[0]
+          if (again) await this.ask(repo, number, head, written.get(again) ?? again, 'please read this pull request', onThisHead.get(again) ?? 0)
+          else this.once(`[super-tab] Task assignment: NO_READER ${repo}#${number}: nobody but its author can read it`)
+          break
+        }
         skip.add(reader.id)
         skip.add(reader.name.toLowerCase())
         await this.ask(repo, number, head, reader.name, 'please read this pull request')
@@ -363,8 +378,8 @@ export class GitHubAssign {
 
   /** One ask of a reader, once per pull request, head and reader: a comment naming it, with the head it reads. One GitHub
    *  refuses is said, and asked again next pass. */
-  private async ask(repo: string, number: number, head: string, name: string, what: string): Promise<void> {
-    const key = `${repo}#${number}@${head}:${name.toLowerCase()}`
+  private async ask(repo: string, number: number, head: string, name: string, what: string, nth = 0): Promise<void> {
+    const key = `${repo}#${number}@${head}:${name.toLowerCase()}${nth ? `:${nth}` : ''}`
     if (this.asks.has(key)) return
     const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${this.clock()}, to **${name}**: ${what}, `
       + `and start your comment with READ-OK ${head.slice(0, 7)} or HOLD ${head.slice(0, 7)} (with the file, line and fix).` })
