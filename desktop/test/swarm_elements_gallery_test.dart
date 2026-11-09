@@ -587,6 +587,15 @@ class _Gallery extends StatelessWidget {
                           details: SizedBox.shrink(),
                         ),
                         const SizedBox(height: 8),
+                        // What GitHub said to your agent (github_row.dart).
+                        const SwarmChatCard(
+                          icon: AppIcons.gitPullRequest,
+                          label: 'PR #4 · deehw',
+                          title: 'Juno, 14:20, to Pip: READ-OK f6edb44',
+                          action: 'Read',
+                          details: SizedBox.shrink(),
+                        ),
+                        const SizedBox(height: 8),
                         SwarmFold(
                           child: Text(
                             [for (var i = 1; i <= 9; i++) 'Line $i of a plan.']
