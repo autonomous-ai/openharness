@@ -50,6 +50,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: SuperTabView(
+            board: false,
             controller: c,
             onInvite: () {},
             onAddAgent: (_) {},
@@ -113,6 +114,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: SuperTabView(
+              board: false,
               controller: controller,
               onInvite: () {},
               onAddAgent: (_) {},
@@ -152,6 +154,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: SuperTabView(
+              board: false,
               controller: controller,
               onInvite: () {},
               onAddAgent: (_) {},
@@ -211,6 +214,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: SuperTabView(
+            board: false,
             controller: controller,
             onInvite: () {},
             onAddAgent: (_) {},
@@ -279,6 +283,7 @@ void main() {
         ),
         home: Scaffold(
           body: SuperTabView(
+            board: false,
             controller: controller,
             onInvite: () {},
             onAddAgent: (_) {},
@@ -319,6 +324,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: SuperTabView(
+              board: false,
               controller: controller,
               onInvite: () {},
               onAddAgent: (_) {},
@@ -356,6 +362,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: SuperTabView(
+              board: false,
               controller: controller,
               onInvite: () {},
               onAddAgent: (_) {},
@@ -409,6 +416,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: SuperTabView(
+            board: false,
             controller: controller,
             onInvite: () {},
             onAddAgent: (_) {},
@@ -453,6 +461,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: SuperTabView(
+            board: false,
             controller: controller,
             onInvite: () {},
             onAddAgent: (_) {},
@@ -501,6 +510,7 @@ void main() {
           MaterialApp(
             home: Scaffold(
               body: SuperTabView(
+                board: false,
                 controller: controller,
                 onInvite: () {},
                 onAddAgent: (_) {},
@@ -578,6 +588,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: SuperTabView(
+              board: false,
               controller: controller,
               onInvite: () {},
               onAddAgent: (_) {},
@@ -646,6 +657,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: SuperTabView(
+              board: false,
               controller: controller,
               onInvite: () {},
               onAddAgent: (_) {},
@@ -716,6 +728,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: SuperTabView(
+              board: false,
               controller: controller,
               onInvite: () {},
               onAddAgent: (_) {},

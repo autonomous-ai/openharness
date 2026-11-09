@@ -39,6 +39,7 @@ void main() {
           chrome: chrome,
           child: Scaffold(
             body: SuperTabView(
+              board: false,
               controller: c,
               onInvite: () {},
               onAddAgent: (_) {},
