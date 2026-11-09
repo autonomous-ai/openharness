@@ -1,15 +1,20 @@
 import { emptyPorts, type BackendNotice, type DaemonAddress } from '../core/api.js'
 import type { LastTurnText } from '../lib/normalize.js'
+import { object, SuperTabHostError } from '../superTabs/wire.js'
 import { startSuperTabs } from './superTabs.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { agentsIn, daemonIn, processCoreApi, type ShownAgent } from './processCoreApi.js'
 import { turnsLink } from './turnsLink.js'
 
-/** The turn the core gave for `last_turn`, or null when it is none: both its texts are text. */
+/** The turn the core gave for `last_turn`, or null when it has none. A query that comes back as an error (an older core has no
+ *  such question, or this process may not ask it), or as no turn at all, is a failure with a name: read as no turn it would leave
+ *  every answer owed and never posted, with nothing in the log (the host says why it could not read the answer). */
 function lastTurnIn(answer: Record<string, unknown>): LastTurnText | null {
-  const turn = answer.turn as Record<string, unknown> | null | undefined
-  return turn && typeof turn.userMessage === 'string' && typeof turn.assistantText === 'string'
-    ? { userMessage: turn.userMessage, assistantText: turn.assistantText } : null
+  if (typeof answer.error === 'string') throw new SuperTabHostError(answer.error, 'The core could not give the last turn.', 502)
+  if (answer.turn === null) return null
+  const { userMessage, assistantText } = object(answer.turn)
+  if (typeof userMessage === 'string' && typeof assistantText === 'string') return { userMessage, assistantText }
+  throw new SuperTabHostError('INVALID_ANSWER', 'The core answered the last turn with something that is not one.', 502)
 }
 
 export interface SuperTabsServiceOptions {
@@ -44,7 +49,7 @@ export function runSuperTabsService(options: SuperTabsServiceOptions): ServicePr
   // harness cannot receive work through a stale process-side snapshot.
   const api = { ...base,
     // The answer of the turn that ended is the core's to read from the transcript (core/experimentQueries.ts `last_turn`), as the
-    // recaps' is. One that cannot be asked for rejects, so the host names why it could not post the answer.
+    // recaps' is. One that cannot be had rejects (lastTurnIn), so the host names why it could not post the answer.
     transcripts: { ...base.transcripts, lastTurn: async (sessionId: string) => lastTurnIn(await ask('last_turn', { sessionId })) },
     account: { ...base.account, backend: async (method: string, path: string, body?: unknown) => {
       await ready()
