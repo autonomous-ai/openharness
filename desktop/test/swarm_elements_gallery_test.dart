@@ -477,7 +477,8 @@ class _Gallery extends StatelessWidget {
                         SuperTabQuietHeading.org('autonomous.ai', onTap: () {}),
                         SuperTabQuietHeading(
                           'Your Team',
-                          onTap: null,
+                          collapsed: false,
+                          onTap: () {},
                           onAdd: () {},
                           addTooltip: 'New agent',
                         ),
@@ -498,7 +499,16 @@ class _Gallery extends StatelessWidget {
                             unread: unread,
                             onTap: () {},
                           ),
-                        SuperTabQuietHeading('Top Teams', onTap: () {}),
+                        SuperTabQuietHeading(
+                          'Your Machines',
+                          collapsed: true,
+                          onTap: () {},
+                        ),
+                        SuperTabQuietHeading(
+                          'Top Teams',
+                          collapsed: false,
+                          onTap: () {},
+                        ),
                         SuperTabQuietRow(
                           leading: SuperTabAvatar.person(
                             _person,

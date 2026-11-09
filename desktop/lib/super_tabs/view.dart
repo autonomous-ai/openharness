@@ -2089,6 +2089,10 @@ class _SuperTabViewState extends State<SuperTabView>
     places: SuperTabPlaces.of(c),
     attention: SuperTabAttention.of(c),
     onManage: _openManage,
+    onManageMachines: () {
+      _openManage();
+      _chooseManageTab(SuperTabManageTab.machines);
+    },
     manageSelected: _manageOpen,
     // On every platform: the Mac's menu bar and Dock still say what waits,
     // and the sidebar lists it as Slack does (task #2996).
