@@ -212,10 +212,16 @@ it('routes through the caller and prints the decision, or the parse failure as a
   expect(await superTabCommand(['--tab', 'tab', 'route', 'g1', '{nope'], deps)).toBe(1)
   expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toMatch(/JSON/)
 })
-it('has no plan command: it is refused with a usage line that does not offer it', () => {
-  expect(() => parseSuperTabArgs([...prefix, 'plan'], where)).toThrow(/^harness super-tab --tab ID/)
-  expect(() => parseSuperTabArgs([...prefix, 'plan', '{"groups":{}}'], where)).toThrow(/^harness super-tab --tab ID/)
-  expect(() => parseSuperTabArgs([...prefix, 'plan'], where)).not.toThrow(/plan \[JSON\]/)
+it('has no plan command: it is refused with the usage line, which does not offer it, and nothing is asked of the daemon', async () => {
+  for (const tail of [['plan'], ['plan', '{"groups":{}}']]) {
+    expect(() => parseSuperTabArgs([...prefix, ...tail], where)).toThrow(/^harness super-tab --tab ID/)
+    const print = vi.fn(), open = vi.fn()
+    expect(await superTabCommand(['--tab', 'tab', ...tail], { where: () => where, pane: undefined, open: open as never, print })).toBe(1)
+    expect(open).not.toHaveBeenCalled()
+    const refusal = String(JSON.parse(print.mock.calls.at(-1)![0]).error)
+    expect(refusal).toMatch(/^harness super-tab --tab ID/)
+    expect(refusal).not.toContain('plan [JSON]')
+  }
 })
 it('posts a reply to one message with --reply-to, and rejects a bad id', () => {
   expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', '--reply-to', 'msg-1'], where).payload.command)
