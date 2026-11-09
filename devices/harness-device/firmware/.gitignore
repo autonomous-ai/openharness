@@ -22,6 +22,14 @@ sdkconfig.defaults.stamp
 # The release build dir (scripts/upload-firmware.sh, scripts/flash-station.sh).
 build-prod/
 
+# Leftovers from older builds that may still sit in a checkout: the two-board build dirs and configs,
+# and the Wi-Fi provisioning header, which held a password. Kept ignored so `git add -A` never takes them.
+build.dial/
+build.pro/
+sdkconfig.dial*
+sdkconfig.pro*
+main/provisioned_config.h*
+
 # Design mockups: HTML frames used to agree on a layout BEFORE writing code. They are a
 # conversation, not a build input — nothing here compiles or ships.
 mockup/

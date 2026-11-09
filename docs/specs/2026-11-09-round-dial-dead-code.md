@@ -30,7 +30,8 @@ Paths are relative to `devices/harness-device/firmware/` unless they start with 
   `-DDEVICE_FORCE_PROD=1` that `scripts/upload-firmware.sh` passes.
 - `screen.html`, `device-stages.html`, and `docs/` (three LVGL-era notes).
 - `tools/generate_engine_icons.py` (writes a file that no longer exists, from a retired repo).
-- `scripts/gen_fonts.sh`, `fonts/Geist-Medium.ttf`, `fonts/Geist-SemiBold.ttf` (the old LVGL faces).
+- `scripts/gen_fonts.sh` and `fonts/Geist-Medium.ttf` (the old LVGL faces). `fonts/Geist-SemiBold.ttf` stays:
+  `mobile/scripts/build_play_graphics.py` draws the Play Store graphics with it.
 - `assets/sparkle.png` (only `sparkle_fill.png` is read), with `assets/README.md`.
 - `prototype/habitat/assets/GeistMono-Regular.ttf` (byte-identical copy of `fonts/`), with `FONTS.md`.
 
