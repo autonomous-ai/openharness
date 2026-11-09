@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { TurnDelivery } from '../core/api.js'
+import type { TurnDelivery, TurnEnd } from '../core/api.js'
+import { ANSWER_KEEP_MAX } from '../core/turns/ends.js'
+import { promptHash } from '../lib/promptIdentity.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { adoptReplies, AgentReplies, NAME_MAX, OWED_GIVE_UP_MS, OWED_MAX, OWED_PER_AGENT, READ_WAIT_MS, REPLY_RETRY_MS, REPLY_TEXT_MAX, REPLY_WAIT_MS, type Owed } from './agentReplies.js'
 import { SuperTabHostError } from './wire.js'
@@ -7,46 +9,51 @@ import { SuperTabHostError } from './wire.js'
 const ok = { status: 200, body: { success: true, data: { result: {} } } }
 const refused = (status: number, code: string) => ({ status, body: { success: false, error: { code, message: `the server said ${code}` } } })
 const SECRET = 'the-agents-own-words-never-in-a-log'
-/** What the host passes: the server's refusals no resend changes (host.ts `ackRefused`). */
+/** What the turn that was asked 'Ship it.' ends with, as the core tells it. */
+const PROMPT = promptHash('Ship it.')
+/** What the host passes: the server's refusals no resend changes (host.ts `receiptRefused`). */
 const refused_ = (error: unknown) => error instanceof SuperTabHostError && [400, 403, 404, 409].includes(error.status)
 
 beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => { vi.useRealTimers() })
 
-/** A host's side of one agent: its chat, its journal and what the core reads and the backend answers. */
+/** A host's side of one agent: its chat, its journal and what the core answers and the backend takes. */
 function setup() {
   let clock = 1_000_000
   const journal: { replies?: Record<string, Owed> } = {}
   const log = vi.fn(), save = vi.fn()
-  const lastTurn = vi.fn(async () => ({ userMessage: 'Ship it.', assistantText: 'Shipped.' }) as { userMessage: string; assistantText: string } | null)
+  const answerOf = vi.fn(async (_sessionId: string, _prompt: string) => 'Shipped.' as string | null)
   const backend = vi.fn(async (..._args: unknown[]) => ok as { status: number; body: Record<string, unknown> })
-  const core = fakeCore({ transcripts: { lastTurn }, account: { backend } as never })
+  const core = fakeCore({ turns: { answerOf }, account: { backend } as never })
   const deps = { now: () => clock, log, save, typedId: (id: string) => `typed:${id}`, refused: refused_ }
   const replies = new AgentReplies(core, journal, deps)
   // Each agent runs in a terminal of its own, by the id the core knows it by.
   const owe = (deliveryId = 'd1', text = 'Ship it.', message: Record<string, unknown> = {}, agentId = 'agent') =>
     replies.owe({ deliveryId, tabId: 'tab', agentId, harnessId: agentId === 'agent' ? 'harness' : `harness-${agentId}`, name: 'Mia' },
       { id: `m-${deliveryId}`, conversationId: 'chat', ...message }, text)
-  const end = (event: Partial<{ agentId: string; sessionId: string; aborted: boolean }> = {}) =>
-    replies.ended({ agentId: 'harness', sessionId: 'session', aborted: false, ...event })
+  const end = (event: Partial<TurnEnd> = {}) => replies.ended({ agentId: 'harness', sessionId: 'session', aborted: false, prompt: PROMPT, ...event })
+  /** The end of the turn that was asked [text]. */
+  const endOf = (text: string, event: Partial<TurnEnd> = {}) => end({ prompt: promptHash(text), ...event })
   const posts = () => backend.mock.calls.filter(([method, path]) => method === 'POST' && String(path).endsWith('/commands'))
   /** The operation of each post, in the order they were made. */
   const operations = () => posts().map(([, , body]) => (body as { operationId: string }).operationId)
   const lines = () => log.mock.calls.map(([line]) => String(line))
-  return { replies, journal, log, save, lastTurn, backend, owe, end, posts, operations, lines, deps, wait: (ms: number) => { clock += ms }, core }
+  return { replies, journal, log, save, answerOf, backend, owe, end, endOf, posts, operations, lines, deps, wait: (ms: number) => { clock += ms }, core }
 }
 /** The server turning a post away, the first [count] times it is asked. */
 const turnedAway = (t: ReturnType<typeof setup>, response: { status: number; body: Record<string, unknown> }, count = 1) => {
   for (let i = 0; i < count; i++) t.backend.mockResolvedValueOnce(response)
 }
 const NOTE = 'Mia\'s answer could not be posted.'
+/** What each post said, in the order the posts were made. */
+const texts = (t: ReturnType<typeof setup>) => t.posts().map(([, , body]) => (body as { command: { text: string } }).command.text)
 
 describe('a reply owed to a person in their agent\'s own chat', () => {
   it('posts the final answer of the turn that ended, as the agent, right below the message it answers', async () => {
     const t = setup()
     t.owe()
     await t.end()
-    expect(t.lastTurn).toHaveBeenCalledWith('session')
+    expect(t.answerOf).toHaveBeenCalledWith('session', PROMPT)
     expect(t.posts()).toEqual([['POST', '/api/super-tabs/tab/commands', {
       operationId: 'reply-d1', asAgentId: 'agent',
       command: { type: 'message.send', conversationId: 'chat', text: 'Shipped.', replyTo: null, answers: 'm-d1', recipientIds: [] },
@@ -85,23 +92,25 @@ describe('a reply owed to a person in their agent\'s own chat', () => {
     expect(JSON.stringify(saved)).not.toContain('Ship it')
     t.replies.stop()
     await t.end()
-    expect(t.lastTurn).not.toHaveBeenCalled()
+    expect(t.answerOf).not.toHaveBeenCalled()
     const restarted: { replies?: Record<string, Owed> } = { replies: adoptReplies(saved.replies, t.log) }
     const next = new AgentReplies(t.core, restarted, t.deps)
-    await next.ended({ agentId: 'harness', sessionId: 'session', aborted: false })
+    await next.ended({ agentId: 'harness', sessionId: 'session', aborted: false, prompt: PROMPT })
     expect(t.posts()).toHaveLength(1)
     expect(restarted.replies).toBeUndefined()
     // Posted, so what that host saved after it holds nothing: one that starts from it owes nothing, and posts nothing.
     const after = new AgentReplies(t.core, { replies: adoptReplies(JSON.parse(JSON.stringify(restarted)).replies, t.log) }, t.deps)
-    await after.ended({ agentId: 'harness', sessionId: 'session', aborted: false })
+    await after.ended({ agentId: 'harness', sessionId: 'session', aborted: false, prompt: PROMPT })
     expect(t.posts()).toHaveLength(1)
   })
 
-  it('posts nothing for a turn that was asked something else, and keeps the reply owed for the turn that was asked it', async () => {
+  it('reads nothing and posts nothing for a turn that was asked something else, and keeps the reply owed for the turn that was asked it', async () => {
     const t = setup()
     t.owe()
-    t.lastTurn.mockResolvedValueOnce({ userMessage: 'Something typed in the terminal.', assistantText: 'Done.' })
-    await t.end()
+    // A turn its person typed in the terminal, or an automatic one; interrupted or not.
+    await t.end({ prompt: promptHash('Something typed in the terminal.') })
+    await t.end({ prompt: promptHash('Something typed in the terminal.'), aborted: true })
+    expect(t.answerOf).not.toHaveBeenCalled()
     expect(t.posts()).toHaveLength(0)
     expect(Object.keys(t.journal.replies!)).toEqual(['d1'])
     expect(t.lines()).toEqual([])
@@ -109,72 +118,86 @@ describe('a reply owed to a person in their agent\'s own chat', () => {
     expect(t.posts()).toHaveLength(1)
   })
 
-  it('posts nothing for a turn with no answer to read, and for no agent it owes nothing', async () => {
+  it('reads nothing for the end of an agent it owes nothing', async () => {
     const t = setup()
     t.owe()
-    t.lastTurn.mockResolvedValueOnce(null)
-    await t.end()
-    expect(t.posts()).toHaveLength(0)
-    expect(t.journal.replies).toBeDefined()
     await t.end({ agentId: 'another-agent' })
-    expect(t.lastTurn).toHaveBeenCalledTimes(1)
+    expect(t.answerOf).not.toHaveBeenCalled()
+    await setup().end()
   })
 
-  // A queued follow-up begins the moment a turn ends, and its prompt may be written before the answer is read: the last turn
-  // is then one that has said nothing yet, and it is not over for certain.
-  it('keeps the reply owed for a turn that has said nothing yet, and posts it when that turn has', async () => {
+  it('says a turn that ended with no answer is not answered, and takes its reply off what is owed: nothing more will come of it', async () => {
     const t = setup()
     t.owe()
-    t.lastTurn.mockResolvedValueOnce({ userMessage: 'Ship it.', assistantText: ' \n ' })
+    t.answerOf.mockResolvedValueOnce(null)
     await t.end()
     expect(t.posts()).toHaveLength(0)
-    expect(Object.keys(t.journal.replies!)).toEqual(['d1'])
-    expect(t.lines()).toEqual([])
-    await t.end()
-    expect(t.posts()).toHaveLength(1)
+    expect(t.journal.replies).toBeUndefined()
+    expect(t.lines()).toEqual(['No reply posted for delivery d1 of agent agent: its turn ended without an answer.'])
   })
 
-  it('names a turn the person interrupted, takes its reply off what is owed and posts nothing', async () => {
+  // A queued follow-up begins the moment a turn ends, and its prompt, and what it says first, may be in the transcript before that
+  // end is heard. The turn that ended is named by its end, so each message is answered by its own turn, whenever that is read, and
+  // the first is never answered with what the second has said, nor dropped.
+  it('answers each of two messages queued one behind the other from its own turn, in the order they were asked, none dropped', async () => {
+    const t = setup()
+    t.owe('d1', 'First.')
+    t.wait(10)
+    t.owe('d2', 'Second.')
+    t.answerOf.mockImplementation(async (_sessionId, prompt) => prompt === promptHash('First.') ? 'The first answer.' : prompt === promptHash('Second.') ? 'The second answer.' : null)
+    await t.endOf('First.')
+    expect(texts(t)).toEqual(['The first answer.'])
+    expect(Object.keys(t.journal.replies!)).toEqual(['d2'])
+    await t.endOf('Second.')
+    expect(texts(t)).toEqual(['The first answer.', 'The second answer.'])
+    expect(t.operations()).toEqual(['reply-d1', 'reply-d2'])
+    expect(t.journal.replies).toBeUndefined()
+    expect(t.lines()).toEqual([])
+  })
+
+  it('names a turn the person interrupted, takes its reply off what is owed, reads nothing and posts nothing', async () => {
     const t = setup()
     t.owe()
     await t.end({ aborted: true })
+    expect(t.answerOf).not.toHaveBeenCalled()
     expect(t.posts()).toHaveLength(0)
     expect(t.journal.replies).toBeUndefined()
     expect(t.lines()).toEqual(['No reply posted for delivery d1 of agent agent: its turn was interrupted.'])
   })
 
-  it('matches the prompt the engine recorded, with or without the markers Claude Code puts around a paste and however it spaces lines', async () => {
-    for (const recorded of ['Ship it.', '  Ship it.\r\n', '<pasted_content id="1c18">\nShip it.\n</pasted_content id="1c18">', 'Ship\tit.']) {
-      const t = setup()
-      t.owe()
-      t.lastTurn.mockResolvedValueOnce({ userMessage: recorded, assistantText: 'Shipped.' })
-      await t.end()
-      expect(t.posts(), recorded).toHaveLength(1)
-    }
-    const words = setup()
-    words.owe('d1', 'Ship it.\n\nAnd then the logout.')
-    words.lastTurn.mockResolvedValueOnce({ userMessage: '<pasted_content id="ab">\nShip it.\n\n\nAnd then the logout.\n</pasted_content id="ab">', assistantText: 'Both shipped.' })
-    await words.end()
-    expect(words.posts()).toHaveLength(1)
-  })
-
-  it('posts an answer cut to what the backend takes, trimmed, with an ellipsis and never in the middle of an emoji', async () => {
+  it('posts nothing when the host stops while the answer is being read, and keeps the reply owed for the host that starts from the journal', async () => {
     const t = setup()
     t.owe()
-    t.lastTurn.mockResolvedValueOnce({ userMessage: 'Ship it.', assistantText: `\n  ${'a'.repeat(REPLY_TEXT_MAX + 50)}  \n` })
+    let give!: (answer: string) => void
+    t.answerOf.mockImplementationOnce(() => new Promise<string>(resolve => { give = resolve }))
+    const done = t.end()
+    await vi.advanceTimersByTimeAsync(0)
+    t.replies.stop()
+    give('Shipped.')
+    await done
+    expect(t.posts()).toHaveLength(0)
+    expect(Object.keys(t.journal.replies!)).toEqual(['d1'])
+  })
+
+  it('posts an answer cut to what the backend takes, with an ellipsis and never in the middle of an emoji', async () => {
+    // The core keeps one character more than a message takes, so that an answer that was cut can be told (core/turns/ends.ts).
+    expect(ANSWER_KEEP_MAX).toBe(REPLY_TEXT_MAX + 1)
+    const t = setup()
+    t.owe()
+    t.answerOf.mockResolvedValueOnce('a'.repeat(ANSWER_KEEP_MAX))
     await t.end()
     const long = (t.posts()[0]![2] as { command: { text: string } }).command.text
     expect(long).toHaveLength(REPLY_TEXT_MAX)
     expect(long.endsWith('a…')).toBe(true)
     const emoji = setup()
     emoji.owe()
-    emoji.lastTurn.mockResolvedValueOnce({ userMessage: 'Ship it.', assistantText: `${'a'.repeat(REPLY_TEXT_MAX - 2)}😀tail` })
+    emoji.answerOf.mockResolvedValueOnce(`${'a'.repeat(REPLY_TEXT_MAX - 2)}😀tail`)
     await emoji.end()
     const cut = (emoji.posts()[0]![2] as { command: { text: string } }).command.text
     expect(cut).toBe(`${'a'.repeat(REPLY_TEXT_MAX - 2)}…`)
     const exact = setup()
     exact.owe()
-    exact.lastTurn.mockResolvedValueOnce({ userMessage: 'Ship it.', assistantText: 'b'.repeat(REPLY_TEXT_MAX) })
+    exact.answerOf.mockResolvedValueOnce('b'.repeat(REPLY_TEXT_MAX))
     await exact.end()
     expect((exact.posts()[0]![2] as { command: { text: string } }).command.text).toBe('b'.repeat(REPLY_TEXT_MAX))
   })
@@ -187,8 +210,8 @@ describe('a reply owed to a person in their agent\'s own chat', () => {
     t.wait(10)
     t.owe('d3', 'Second.')
     for (const [asked, said] of [['First.', 'one'], ['Second.', 'two'], ['Second.', 'three']]) {
-      t.lastTurn.mockResolvedValueOnce({ userMessage: asked!, assistantText: said! })
-      await t.end()
+      t.answerOf.mockResolvedValueOnce(said!)
+      await t.endOf(asked!)
     }
     expect(t.posts().map(([, , body]) => { const b = body as { operationId: string; command: { answers: string; text: string } }; return [b.operationId, b.command.answers, b.command.text] }))
       .toEqual([['reply-d1', 'm-d1', 'one'], ['reply-d2', 'm-d2', 'two'], ['reply-d3', 'm-d3', 'three']])
@@ -202,8 +225,8 @@ describe('a reply owed to a person in their agent\'s own chat', () => {
     t.owe('d2', 'Second.')
     t.wait(10)
     t.owe('d3', 'Third.', {}, 'another-agent')
-    t.lastTurn.mockResolvedValueOnce({ userMessage: 'Second.', assistantText: 'Only this one.' })
-    await t.end()
+    t.answerOf.mockResolvedValueOnce('Only this one.')
+    await t.endOf('Second.')
     expect(t.posts().map(([, , body]) => (body as { operationId: string }).operationId)).toEqual(['reply-d2'])
     expect(Object.keys(t.journal.replies!)).toEqual(['d3'])
     expect(t.lines()).toEqual(['No reply posted for delivery d1 of agent agent: its turn went on without it.'])
@@ -212,9 +235,9 @@ describe('a reply owed to a person in their agent\'s own chat', () => {
   it('never says what a person or an agent said in the log', async () => {
     const t = setup()
     t.owe('d1', SECRET)
-    t.lastTurn.mockResolvedValueOnce({ userMessage: SECRET, assistantText: SECRET })
+    t.answerOf.mockResolvedValueOnce(SECRET)
     t.backend.mockRejectedValue(new SuperTabHostError('SWARM_BUSY', `busy ${'x'}`, 503))
-    await t.end()
+    await t.endOf(SECRET)
     await vi.advanceTimersByTimeAsync(REPLY_RETRY_MS.reduce((sum, ms) => sum + ms, 0))
     expect(t.lines().length).toBeGreaterThan(0)
     expect(t.lines().join('\n')).not.toContain(SECRET)
@@ -371,7 +394,7 @@ describe('a reply the backend does not take at once', () => {
     // And hears nothing more.
     t.owe('d2')
     await t.end()
-    expect(t.lastTurn).toHaveBeenCalledTimes(1)
+    expect(t.answerOf).toHaveBeenCalledTimes(1)
   })
 
   it('does not retry a post whose failure is heard after the host stopped, and says it was dropped', async () => {
@@ -391,27 +414,20 @@ describe('a reply the backend does not take at once', () => {
 })
 
 describe('an answer that cannot be read', () => {
-  it('names the failure of a read that throws or takes too long, and keeps the reply owed', async () => {
-    const t = setup()
-    t.owe()
-    t.lastTurn.mockRejectedValueOnce(new Error('Core disconnected'))
-    await t.end()
-    t.lastTurn.mockImplementationOnce(() => new Promise(() => {}))
-    const done = t.end()
-    await vi.advanceTimersByTimeAsync(READ_WAIT_MS)
-    await done
-    // A core that answers with an error, by its code (superTabsProcess.ts).
-    t.lastTurn.mockRejectedValueOnce(new SuperTabHostError('UNKNOWN_QUERY', 'The core could not read the last turn.', 502))
-    await t.end()
-    expect(t.lines()).toEqual([
-      'Could not read the answer of the turn that ended for agent agent: Error.',
-      'Could not read the answer of the turn that ended for agent agent: TIMEOUT.',
-      'Could not read the answer of the turn that ended for agent agent: UNKNOWN_QUERY.',
-    ])
-    expect(Object.keys(t.journal.replies!)).toEqual(['d1'])
-    expect(t.posts()).toHaveLength(0)
-    await t.end()
-    expect(t.posts()).toHaveLength(1)
+  it('names the failure of a read that throws, takes too long or is refused by the core, and takes the reply off what is owed: its turn is over', async () => {
+    const refusedByCore = Object.assign(new Error('The core could not give the answer of the turn.'), { name: 'UNKNOWN_QUERY' })
+    for (const [read, name] of [[() => Promise.reject(new Error('Core disconnected')), 'Error'], [() => new Promise<string>(() => {}), 'TIMEOUT'],
+      [() => Promise.reject(refusedByCore), 'UNKNOWN_QUERY'], [() => Promise.reject('not an error'), 'ERROR']] as const) {
+      const t = setup()
+      t.owe()
+      t.answerOf.mockImplementationOnce(read as never)
+      const done = t.end()
+      await vi.advanceTimersByTimeAsync(READ_WAIT_MS)
+      await done
+      expect(t.lines()).toEqual([`Could not read the answer of the turn that ended for agent agent: ${name}.`])
+      expect(t.journal.replies).toBeUndefined()
+      expect(t.posts()).toHaveLength(0)
+    }
   })
 })
 

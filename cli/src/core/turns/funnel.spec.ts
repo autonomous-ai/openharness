@@ -9,6 +9,9 @@ type Event = Parameters<ReturnType<typeof funnelFor>>[1][number]
 const started = (userMessage = 'go'): Event => ({ type: 'turn_started', payload: { userMessage } }) as Event
 const text = (value = 'working on it'): Event => ({ type: 'text_delta', payload: { content: value } })
 const ended = (aborted = false): Event => ({ type: 'turn_ended', payload: { aborted } }) as Event
+const tool = (parentToolUseId?: string): Event => ({ type: 'tool_start', payload: { id: 't1', tool: 'Bash', input: {}, ...(parentToolUseId ? { parentToolUseId } : {}) } })
+/** What the turn-end collaborator is told, in the order it is told it. */
+const fakeEnds = () => ({ started: vi.fn(), said: vi.fn(), worked: vi.fn(), ended: vi.fn() })
 
 /**
  * Every collaborator writes to one log, so a test reads the order the funnel called them in, across all
@@ -129,27 +132,45 @@ describe('the event funnel', () => {
   })
 
   // The Swarm host posts an agent's answer into its person's 1:1 chat when the turn ends (superTabs/agentReplies.ts): every
-  // real end, a queued follow-up's included, and never one read back from disk.
+  // real end, a queued follow-up's included, and never one read back from disk. The turn is told as it goes, so that its end says
+  // which turn it was and the answer is what it said, whatever the transcript shows by the time anyone asks.
   it('tells those that hear turn ends each live end, a boundary before a queued follow-up too, and never a re-read', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    const ended_ = vi.fn()
-    const { funnel } = setup('codex', { ends: { ended: ended_ } })
+    const ends = fakeEnds()
+    const { funnel } = setup('codex', { ends })
     funnel('s1', [started(), text(), ended()])
     funnel('s1', [started(), ended(true)])
     funnel('s1', [ended(), started()])
     funnel('s1', [started(), ended()], { replay: true })
     funnel('s1', [started(), ended()], { resumed: true })
-    expect(ended_.mock.calls).toEqual([
+    expect(ends.ended.mock.calls).toEqual([
       [{ agentId: 'a1', sessionId: 's1', aborted: false }],
       [{ agentId: 'a1', sessionId: 's1', aborted: true }],
       [{ agentId: 'a1', sessionId: 's1', aborted: false }],
     ])
   })
 
+  it('tells them each live turn as it goes: its prompt, what its agent said, and the tools it called, but not a sub-agent\'s', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const ends = fakeEnds()
+    const { funnel } = setup('claude', { ends })
+    funnel('s1', [started('Ship it.'), text('Let me look.'), tool(), tool('sub-agent-call'), text('Shipped.'), ended()])
+    expect(ends.started.mock.calls).toEqual([['s1', 'Ship it.', false]])
+    expect(ends.said.mock.calls).toEqual([['s1', 'Let me look.'], ['s1', 'Shipped.']])
+    expect(ends.worked.mock.calls).toEqual([['s1']])
+    // A turn picked up at attach is told as one whose first part was not seen; nothing else of a re-read is told at all.
+    funnel('s1', [started('Picked up.'), text('Said before the restart.'), tool(), ended()], { resumed: true })
+    funnel('s1', [started('History.'), text('Old.'), tool(), ended()], { replay: true })
+    expect(ends.started.mock.calls).toEqual([['s1', 'Ship it.', false], ['s1', 'Picked up.', true]])
+    expect(ends.said).toHaveBeenCalledTimes(2)
+    expect(ends.worked).toHaveBeenCalledTimes(1)
+    expect(ends.ended).toHaveBeenCalledTimes(1)
+  })
+
   it('tells them after the input has settled the turn, and carries on past one that throws', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const { funnel, calls } = setup('claude', { ends: { ended: vi.fn(() => { calls.push('ends'); throw new Error('listener failed') }) } })
+    const { funnel, calls } = setup('claude', { ends: { ...fakeEnds(), ended: vi.fn(() => { calls.push('ends'); throw new Error('listener failed') }) } })
     funnel('s1', [started(), ended()])
     expect(calls.slice(calls.indexOf('send turn_ended'))).toEqual([
       'send turn_ended', 'search', 'device ended', 'deviceInput ended', 'input ended', 'questions stop', 'ends', 'mirror', 'device stream',
