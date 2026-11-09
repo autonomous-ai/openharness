@@ -366,6 +366,22 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(f.log).toHaveBeenCalledWith('[super-tab] asked Juno about quiet acme/app#1')
     })
 
+    it('asks nothing while its pull request waits for its readers or its merge, and asks once a HOLD stands on its head', async () => {
+      const f = setup([issue(1, ['size:s', 'builder:juno', 'status:taken'])])
+      f.github.state.open[0]!.updated_at = ago(f, 5)
+      const head = `f6edb44${'0'.repeat(33)}`
+      f.github.state.pulls = [{ number: 9, draft: false, base: { ref: 'main' }, labels: [{ name: 'builder:juno' }], head: { sha: head, ref: 'juno/1' },
+        body: 'Closes #1', updated_at: ago(f, 5) }]
+      f.github.state.comments.set(9, [{ body: 'Pip, 02:31, to **Juno**: READ-OK f6edb44', created_at: ago(f, 5), author_association: 'OWNER' }])
+      await f.assigner.tick()
+      expect(quietAsks(f)).toEqual([])
+      // A HOLD on its head: the builder's turn, and nothing has moved since.
+      f.github.state.comments.set(9, [{ body: 'Pip, 02:31, to **Juno**: HOLD f6edb44 app.ts:3 add the test', created_at: ago(f, 5),
+        author_association: 'OWNER' }])
+      await f.assigner.tick()
+      expect(quietAsks(f)).toEqual([[1, expect.stringContaining('to **Juno**: nothing has moved on this task for 5 h')]])
+    })
+
     it('asks nothing while a pull request for it moves, and stands down once its builder answers', async () => {
       const busy = setup([issue(1, ['size:s', 'builder:juno', 'status:taken'])])
       busy.github.state.open[0]!.updated_at = ago(busy, 5)

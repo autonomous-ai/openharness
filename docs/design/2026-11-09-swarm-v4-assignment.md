@@ -138,7 +138,8 @@ builder whose subscription has less room than a small task until a reset more th
 for it, never what it took (`outOfQuota`): the plan would only hold it until the reset. A task its builder took that
 nothing touched for 4 hours (no comment or label on the issue, no change to a pull request for it, drafts included) gets
 one ask of its builder by name; with no word 4 hours after, it goes to another (`takenTasks`, `githubAssign.ts askQuiet`).
-A restart (each release restarts every PM's daemon) finds its own ask as the issue's last touch, so it neither asks twice
+A task whose pull request waits for its readers or its merge (ready, with no HOLD on its head) is not its builder's to move,
+and is never asked about. A restart (each release restarts every PM's daemon) finds its own ask as the issue's last touch, so it neither asks twice
 nor waits 4 hours more. status:taken comes off before the builder label: a task left taken with no builder is one nobody
 plans, while one left queued for its builder is taken back again next pass. A take back or an ask GitHub refuses is logged
 once (`TAKE_BACK_REFUSED`, `ASK_REFUSED`) and tried again next pass.

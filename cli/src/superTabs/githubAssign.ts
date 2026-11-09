@@ -8,7 +8,7 @@
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { DEEP, nextPicks, outOfQuota, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readProblem, reasonOf, startedAt, takeBacks, takenTasks, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
+import { DEEP, nextPicks, outOfQuota, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
@@ -129,8 +129,8 @@ export class GitHubAssign {
     if (short.length < read.problem.builders.length) await this.takeBack(repo, issues, short)
     // Open pull requests, drafts included: a draft is where a task's work shows before it is read.
     const pulls = await this.reads.current(repo, `/repos/${repo}/pulls?state=open&per_page=${MAX_PULLS}`, 1)
-    await this.askReaders(project, read, pulls)
-    await this.askQuiet(repo, issues, pulls, crew)
+    const withReaders = await this.askReaders(project, read, pulls)
+    await this.askQuiet(repo, issues, pulls, crew, withReaders)
     if (!read.free.size) return
     // Nobody can take a task while every list is full: no plan, so a backlog costs no CPU each minute (the daemon at rest
     // keeps under 1% of a core).
@@ -194,8 +194,10 @@ export class GitHubAssign {
    * (githubMerge.ts), so its reader is asked to read the new head, once. Nothing while a HOLD stands on the head itself: its
    * author fixes first. Each ask is one comment naming the reader, which GitHub news brings it (githubMentions.ts).
    */
-  private async askReaders(project: LedProject, read: Read, open: Json[]): Promise<void> {
+  private async askReaders(project: LedProject, read: Read, open: Json[]): Promise<Set<number>> {
     const { repo } = project
+    // The tasks whose pull request waits for its readers or its merge, not for its builder (askQuiet).
+    const withReaders = new Set<number>()
     const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
     const pulls = open.filter(pull => pull.draft !== true && String((pull.base as Json | undefined)?.ref ?? '') === base)
     for (const pull of pulls) {
@@ -206,6 +208,7 @@ export class GitHubAssign {
       const author = authorOf(pull)
       const onHead = (sha: string) => head.startsWith(sha)
       if ([...readers.values()].some(r => r.verdict === 'HOLD' && onHead(r.sha))) continue
+      for (const task of tasksOf(pull)) withReaders.add(task)
       // Who Harness asked, for which heads.
       const asked = new Map<string, Set<string>>()
       for (const c of comments) {
@@ -233,6 +236,7 @@ export class GitHubAssign {
         await this.ask(repo, number, head, reader.name, 'please read this pull request')
       }
     }
+    return withReaders
   }
 
   /** Learns how long finished tasks took: for a few closed sized issues a pass not measured yet, from its builder's
@@ -256,9 +260,11 @@ export class GitHubAssign {
    * brings it; quiet for [QUIET_BACK_MS] after that, it goes to another builder. Harness's own ask is no activity; an
    * answer, a push or a label is.
    */
-  private async askQuiet(repo: string, issues: Json[], pulls: Json[], crew: Crew): Promise<void> {
+  private async askQuiet(repo: string, issues: Json[], pulls: Json[], crew: Crew, withReaders: ReadonlySet<number>): Promise<void> {
     const now = this.now()
-    const taken = takenTasks(issues, pulls, crew.builders)
+    // A task whose pull request waits for its readers or its merge is not its builder's to move (askReaders); the
+    // sandbox's dry run asked Pip about #16 while its pull request had its READ-OK, minutes before Harness merged it.
+    const taken = takenTasks(issues, pulls, crew.builders).filter(task => !withReaders.has(task.number))
     const open = new Set(taken.map(t => `${repo}#${t.number}`))
     for (const key of [...this.quiet.keys()]) if (key.startsWith(`${repo}#`) && !open.has(key)) this.quiet.delete(key)
     for (const task of taken) {

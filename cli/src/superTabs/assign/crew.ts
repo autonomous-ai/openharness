@@ -314,17 +314,22 @@ export function outOfQuota(read: Read): AwayBuilder[] {
 /** A task a builder of the team took, and when it was last touched: its issue, or a pull request for it. */
 export interface Taken { number: number; label: string; name: string; touched: number }
 
+/** The tasks a pull request is for: the issues it closes, and its builder's branch for one (`pip/14`). */
+export function tasksOf(pull: Json): number[] {
+  const branch = /^[^/]+\/(\d+)$/.exec(String((pull.head as Json | undefined)?.ref ?? ''))?.[1]
+  const closes = [...String(pull.body ?? '').matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi)].map(m => Number(m[1]))
+  return [...new Set([...closes, ...branch ? [Number(branch)] : []])]
+}
+
 /** The tasks builders of the team took, each with its last touch: a comment or label on the issue, or a change to a pull
- *  request for it (one that closes it, or on its builder's branch for it, `pip/14`). */
+ *  request for it (tasksOf). */
 export function takenTasks(issues: Json[], pulls: Json[], builders: CrewBuilder[]): Taken[] {
   const byLabel = new Map(builders.map(b => [b.label, b]))
   const touched = new Map<number, number>()
   for (const pull of pulls) {
     const at = Date.parse(String(pull.updated_at ?? ''))
     if (!Number.isFinite(at)) continue
-    const branch = /^[^/]+\/(\d+)$/.exec(String((pull.head as Json | undefined)?.ref ?? ''))?.[1]
-    const closes = [...String(pull.body ?? '').matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi)].map(m => Number(m[1]))
-    for (const number of [...closes, ...branch ? [Number(branch)] : []]) touched.set(number, Math.max(touched.get(number) ?? 0, at))
+    for (const number of tasksOf(pull)) touched.set(number, Math.max(touched.get(number) ?? 0, at))
   }
   const out: Taken[] = []
   for (const issue of issues) {
