@@ -1226,17 +1226,10 @@ class SuperTabLaunch {
           app.superTabs.peek(tab)?.snapshot ??
           await app.superTabs.readSnapshot(tab);
       checkAccount();
-      final taken = {
-        for (final agent in snapshot.agents) ...[
-          agent.name,
-          ?agent.displayName,
-        ],
-      };
-      final label = base == 'codex' ? 'Codex' : 'Claude Code';
-      var name = label;
-      for (var n = 2; taken.contains(name); n++) {
-        name = '$label $n';
-      }
+      // Its own name, which its chat, its start line and its join share (prepare).
+      final name = saved['agentName'] ??= freshAgentName([
+        for (final agent in snapshot.agents) agent.displayName ?? agent.name,
+      ]);
       saved['chatRequest'] = {
         // A chat opened again after the last one went has an operation of its own: the same one would answer with the gone
         // chat's receipt (hotfix #4647).
