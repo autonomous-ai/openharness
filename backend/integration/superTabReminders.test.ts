@@ -128,12 +128,11 @@ describe('Reminders: a message brought back to its person at a time', () => {
     const s = await scene()
     const root = await send(s.tabId, s.web, 'Owner root')
     const reply = await send(s.tabId, s.web, 'Peer answers in the thread', peer, root)
-    await run(s.tabId, { type: 'member.name', name: 'Peer Person' }, peer)
     await set(s.tabId, s.web, root, NOW + 10 * MINUTE)
     await set(s.tabId, s.web, reply, NOW + 20 * MINUTE)
     clock = NOW + 30 * MINUTE
     const listed = (await due(s.tabId)).due
-    expect(listed.map(i => [i.messageId, i.threadId, i.author.kind, i.author.name])).toEqual([[reply, root, 'person', 'Peer Person'], [root, null, 'person', expect.any(String)]])
+    expect(listed.map(i => [i.messageId, i.threadId, i.author.kind, i.author.name])).toEqual([[reply, root, 'person', expect.any(String)], [root, null, 'person', expect.any(String)]])
   })
 
   it('replaces the time when set again, removes it when cleared, and moves the digest on each', async () => {

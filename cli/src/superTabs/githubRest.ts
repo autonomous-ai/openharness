@@ -8,7 +8,7 @@ import { ghError, ghRun, type Run } from '../lib/github.js'
 
 export interface GitHubReply { status: number; etag: string | null; body: unknown; resetAt: number | null }
 export type GitHubGet = (path: string, etag: string | null) => Promise<GitHubReply>
-export type GitHubSend = (method: 'POST' | 'PUT' | 'PATCH', path: string, body: unknown) => Promise<GitHubReply>
+export type GitHubSend = (method: 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, body?: unknown) => Promise<GitHubReply>
 
 export function githubRest(run: Run = ghRun, request: typeof fetch = fetch, now: () => number = Date.now): { get: GitHubGet; send: GitHubSend } {
   let token: string | null = null
