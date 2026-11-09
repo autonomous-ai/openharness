@@ -126,8 +126,8 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
     const labels = labelsOf(issue)
     const held = labels.filter(label => label.startsWith('builder:'))
     const holder = held.map(label => byLabel.get(label)).find(Boolean)
-    // Held by a label that names no builder of this team: someone else's to plan.
-    if (held.length && !holder) continue
+    // Held by a label that names no builder of this team, or taken with none (a person on it): someone else's to plan.
+    if ((held.length && !holder) || (!holder && labels.includes('status:taken'))) continue
     const sized = valueOf(labels, 'size:')
     const size = sized === 's' || sized === 'm' || sized === 'l' ? sized : undefined
     // Not sized: the PM has not made it a task yet. One a builder holds counts as a middle one.

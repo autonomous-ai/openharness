@@ -91,13 +91,18 @@ export class GitHubAssign {
 
   private async assign(project: LedProject): Promise<void> {
     const { repo } = project
-    const issues = await this.reads.current(repo, `/repos/${repo}/issues?state=open&per_page=${PAGE}`, 3)
-    // A task GitHub now shows labelled is no longer one this pass may have given and not yet seen.
-    for (const issue of issues) {
-      const key = `${repo}#${issue.number}`
-      if (this.given.has(key) && labelNames(issue).some(name => name.startsWith('builder:'))) this.given.delete(key)
-    }
-    const read = readProblem({ now: this.now(), issues: issues.filter(issue => !this.given.has(`${repo}#${issue.number}`)),
+    const listed = await this.reads.current(repo, `/repos/${repo}/issues?state=open&per_page=${PAGE}`, 3)
+    // A task given and not yet shown labelled (GitHub's lists can lag) is read with its label, so it counts in its builder's
+    // list and is never given twice; once shown, or closed, it is forgotten.
+    const open = new Set(listed.map(issue => `${repo}#${issue.number}`))
+    for (const key of [...this.given.keys()]) if (key.startsWith(`${repo}#`) && !open.has(key)) this.given.delete(key)
+    const issues = listed.map(issue => {
+      const key = `${repo}#${issue.number}`, label = this.given.get(key)
+      if (!label) return issue
+      if (labelNames(issue).some(name => name.startsWith('builder:'))) { this.given.delete(key); return issue }
+      return { ...issue, labels: [...(Array.isArray(issue.labels) ? issue.labels : []), { name: label }] }
+    })
+    const read = readProblem({ now: this.now(), issues,
       closed: await this.reads.current(repo, `/repos/${repo}/issues?state=closed&sort=updated&direction=desc&per_page=${PAGE}`, 1),
       crew: await this.deps.crew(project) })
     if (!read.free.size || !read.problem.builders.length) return

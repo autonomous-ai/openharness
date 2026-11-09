@@ -76,6 +76,22 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(f.said()).toHaveLength(1)
   })
 
+  it('keeps two deep while GitHub\'s list lags behind the labels it gave', async () => {
+    const f = setup([issue(1, ['size:s']), issue(2, ['size:s']), issue(3, ['size:s']), issue(4, ['size:s']), issue(5, ['size:s']), issue(6, ['size:s'])])
+    await f.assigner.tick()
+    // The list still shows no labels: nobody gets a third task.
+    f.github.state.open.push(issue(7, ['size:s']))
+    await f.assigner.tick()
+    const count = (label: string) => f.labelled().filter(([, l]) => l === label).length
+    expect([count('builder:pip'), count('builder:juno')]).toEqual([2, 2])
+  })
+
+  it('leaves a task a person took without a builder label', async () => {
+    const f = setup([issue(1, ['size:s', 'status:taken']), issue(2, ['size:s'])])
+    await f.assigner.tick()
+    expect(f.labelled().map(([n]) => n)).toEqual([2])
+  })
+
   it('never moves a task its PM or a person gave, and counts it in that builder\'s list', async () => {
     const f = setup([issue(1, ['size:m', 'builder:juno']), issue(2, ['size:m', 'builder:juno', 'status:taken']), issue(3, ['size:s'])])
     await f.assigner.tick()
