@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:harness/super_tabs/github_issues.dart';
+import 'package:harness/super_tabs/instructions_link.dart';
+import 'package:harness/ws/ws_conn.dart';
 
 import '../super_tab_activity_lists_test.dart' show swarm;
 import 'super_tab_fixture.dart';
@@ -368,3 +370,52 @@ SwarmGitHub swarmV4GitHub({List<List<String>>? calls}) => SwarmGitHub(
     );
   },
 );
+
+/// An agent's computer, as it answers the instructions link in these tests (Swarm v4): the files it holds, by agent
+/// id and name, and every request it was sent. A computer changes a file by itself (`files[...] = ...`), as its agent does.
+class SwarmV4Computer {
+  SwarmV4Computer({Map<String, String>? files}) : files = files ?? {};
+
+  /// `harnessId/name` -> the file's text.
+  final Map<String, String> files;
+  final requests =
+      <(String machineId, String type, Map<String, Object?> payload)>[];
+
+  /// A code to refuse every request with (`UNSUPPORTED`, `OFFLINE`, ...) until it is null again.
+  String? refuse;
+
+  /// A code the app's own gate refuses with before anything is sent (`UPDATE_HERE`), until it is null again.
+  String? gate;
+
+  /// The next save is applied but its answer never comes, as when a link drops after the computer wrote the file.
+  bool loseNextReply = false;
+
+  static String versionOf(String? text) =>
+      text == null ? '' : 'v${text.hashCode}';
+
+  late final link = SwarmInstructionsLink(gate: (_) => gate, (
+    machineId,
+    type,
+    payload,
+  ) async {
+    requests.add((machineId, type, payload));
+    if (refuse case final code?) {
+      throw WsRequestFailure(responseType: '${type}_result', code: code);
+    }
+    final key = '${payload['agentId']}/${payload['name']}';
+    final text = files[key];
+    if (type == 'agent_instructions_read') {
+      return {'text': text, 'version': versionOf(text)};
+    }
+    if (payload['version'] != versionOf(text)) {
+      throw WsRequestFailure(responseType: '${type}_result', code: 'CHANGED');
+    }
+    final next = payload['text'] as String;
+    files[key] = next;
+    if (loseNextReply) {
+      loseNextReply = false;
+      throw const WsRequestTimeout('agent_instructions_write');
+    }
+    return {'version': versionOf(next)};
+  });
+}

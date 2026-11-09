@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { durationShards, readTimingHints } from './ciShards.test-support.js'
 
@@ -35,5 +36,15 @@ describe('CI shards of the Super Tab integration suite (task #2459)', () => {
     expect(() => readTimingHints({ schema: 1, defaultDurationMs: 1, durationMs: { 'src/a.test.ts': 5 } })).toThrow('src/a.test.ts')
     expect(() => readTimingHints({ schema: 1, defaultDurationMs: 1, durationMs: { 'integration/../x.test.ts': 5 } })).toThrow()
     expect(() => readTimingHints({ schema: 1, defaultDurationMs: 1, durationMs: { 'integration/a.test.ts': -1 } })).toThrow()
+  })
+
+  // The config lists the files by hand, one a line, and Vitest skips a name that matches no file: a deleted test's line left
+  // in, or a new test's line left out, went unseen (#3596 and #3603 left three stale; a test never listed never runs).
+  it('lists every integration test file once, and no file that is gone', () => {
+    const config = readFileSync(new URL('../../vitest.super-tabs.config.ts', import.meta.url), 'utf8')
+    const listed = [...config.matchAll(/'(integration\/[^']+\.test\.ts)'/g)].map(match => match[1]!)
+    const present = readdirSync(new URL('../../integration/', import.meta.url)).filter(name => name.endsWith('.test.ts')).map(name => `integration/${name}`)
+    expect(listed.filter((file, i) => listed.indexOf(file) !== i)).toEqual([])
+    expect([...listed].sort()).toEqual(present.sort())
   })
 })

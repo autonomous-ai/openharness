@@ -94,6 +94,7 @@ import 'agent_instructions.dart';
 import '../core/test_run.dart';
 import 'github_issues.dart';
 import 'github_row.dart';
+import 'instructions_link.dart';
 import 'issue_panel.dart';
 import 'task_board.dart';
 import 'thread_panel.dart';
@@ -154,6 +155,7 @@ class SuperTabView extends StatefulWidget {
     this.voiceRecorder,
     this.paneStore,
     this.github,
+    this.instructions,
     this.board = false,
   });
   final SuperTabController controller;
@@ -203,6 +205,9 @@ class SuperTabView extends StatefulWidget {
 
   /// Reads a project's tasks, its GitHub issues, with `gh` on this computer; tests give their own.
   final SwarmGitHub? github;
+
+  /// How an agent's instructions file is asked of its computer; the app's own link unless a test brings one.
+  final SwarmInstructionsLink? instructions;
 
   @override
   State<SuperTabView> createState() => _SuperTabViewState();
@@ -3814,6 +3819,14 @@ class _SuperTabViewState extends State<SuperTabView>
   ({String channel, String repository, int number})? _issue;
 
   late final SwarmGitHub _github = widget.github ?? SwarmGitHub();
+  late final SwarmInstructionsLink? _instructions =
+      widget.instructions ??
+      (widget.app == null
+          ? null
+          : SwarmInstructionsLink(
+              widget.app!.askMachine,
+              gate: widget.app!.instructionsGate,
+            ));
 
   /// An agent's instructions file, open beside its chat (Swarm v4).
   bool _instructionsOpen = false;
@@ -4174,24 +4187,28 @@ class _SuperTabViewState extends State<SuperTabView>
       consumeOutsideTap: false,
       alignmentOffset: Offset.zero,
       children: [
-        item(
-          'Status',
-          project.status == null
-              ? null
-              : () => unawaited(
-                  showSuperTabProjectStatus(context, c, project.id),
-                ),
-          trailing: const Icon(AppIcons.chevronRight, size: 14),
-        ),
-        item('Pull requests', _openPullRequests),
-        // Every member reads the project's instructions; a backend without
-        // them sends no coordinatorName.
-        if (project.hasInstructions)
-          item('Instructions', () => _groupAction('instructions', group)),
-        // The crew the Swarm keeps alive (task #3397): every member reads it.
-        item('Crew', () => _groupAction('crew', group)),
-        if (editable && owner)
-          item('Sharing', () => _groupAction('sharing', group)),
+        // Swarm v4 (anh Dee, 2026-11-09): a project has its notifications and its settings; its status, pull requests,
+        // instructions document, crew and sharing are v3. The browser still draws the v3 layout, so it keeps them.
+        if (!widget.board) ...[
+          item(
+            'Status',
+            project.status == null
+                ? null
+                : () => unawaited(
+                    showSuperTabProjectStatus(context, c, project.id),
+                  ),
+            trailing: const Icon(AppIcons.chevronRight, size: 14),
+          ),
+          item('Pull requests', _openPullRequests),
+          // Every member reads the project's instructions; a backend without
+          // them sends no coordinatorName.
+          if (project.hasInstructions)
+            item('Instructions', () => _groupAction('instructions', group)),
+          // The crew the Swarm keeps alive (task #3397): every member reads it.
+          item('Crew', () => _groupAction('crew', group)),
+          if (editable && owner)
+            item('Sharing', () => _groupAction('sharing', group)),
+        ],
         _notifyMenu(group),
         const AppMenuDivider(),
         item(
@@ -4272,9 +4289,9 @@ class _SuperTabViewState extends State<SuperTabView>
             'Not set',
       ),
       // The project's numbers, read only (task #3393): every member reads them; the PM changes them when asked.
-      row('Project rules', 'rules'),
-      // Who may write in its chat, once it works from the Board (#3820).
-      if (project.boardMode)
+      if (!widget.board) row('Project rules', 'rules'),
+      // Who may write in its chat, once it works from the Board (#3820). In v4 only agents post in a project's channel.
+      if (!widget.board && project.boardMode)
         row(
           'People',
           'people',
@@ -4293,7 +4310,7 @@ class _SuperTabViewState extends State<SuperTabView>
           'switch-pm',
           value: leadId == null ? 'Starting…' : c.snapshot!.agentName(leadId),
         ),
-      if (_mayHaveArchived(group.projectId))
+      if (!widget.board && _mayHaveArchived(group.projectId))
         row(
           'Archived conversations',
           'archived',
@@ -6310,7 +6327,7 @@ class _SuperTabViewState extends State<SuperTabView>
                               : instructionsAgent != null
                               ? SwarmAgentInstructions(
                                   agent: instructionsAgent,
-                                  app: widget.app,
+                                  link: _instructions,
                                   machineName: widget.machineName(
                                     instructionsAgent.machineId,
                                   ),
