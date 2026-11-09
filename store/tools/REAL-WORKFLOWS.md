@@ -24,7 +24,7 @@ catalog workflow and verify the live catalog after each accepted release.
 | 5 | data-studio | User data and a question → saved analysis, source-linked results and repeatable report | Implemented and validated; relisted in this change. See [acceptance evidence](../agents/data-studio/test/ACCEPTANCE.md). |
 | 6 | home-assistant | Desired behavior and entity inventory → actual Core-engine tests, understandable traces, editable automations and reviewed installation handoff | Implemented and validated with example devices; relisted in this change. See [acceptance evidence](../agents/home-assistant/test/ACCEPTANCE.md). No real installation or hardware was accessed. |
 | 7 | gis | User geographic data and a decision → reproducible spatial analysis and exported results | Not started; unlisted |
-| 8 | web-studio | User application brief → useful app with durable data and a runnable handoff | Not started; unlisted |
+| 8 | web-studio | User application brief → useful app with durable data and a runnable handoff | Rebuild not started. Listed early by the owner (2026-11-09), an exception to the gate above: it is how an Intern 3's web work is viewed from another computer (New Harness installs it with its viewer, on any engine such as OpenCode). |
 | 9 | sheet-docs | User document/data requirements → editable, recalculated and reconciled deliverables | Not started; unlisted |
 | 10 | godot-studio | Original game brief → revised gameplay, verified playable build and distributable project | Not started; unlisted |
 | 11 | quantum-studio | User circuit/experiment question → reproducible experiment, quantitative checks and portable program | Not started; unlisted |
