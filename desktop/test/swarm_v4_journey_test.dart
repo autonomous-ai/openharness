@@ -21,6 +21,19 @@ void main() {
     await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final server = swarmV4Server();
+    (server.state['people'] as List).add({
+      'id': 'dee',
+      'email': 'dee@example.com',
+      'role': 'collaborator',
+    });
+    server.leaderboard = {
+      'projectId': 'lead',
+      'week': 0,
+      'people': [
+        {'personId': 'dee', 'points': 120, 'rank': 1},
+        {'personId': 'owner', 'points': 12, 'rank': 2},
+      ],
+    };
     final terminals = <String>[];
     final c = server.controller(
       account: 'owner',
@@ -109,6 +122,15 @@ void main() {
     await tester.pumpAndSettle();
     expect(key('swarm-issue-panel'), findsNothing);
 
+    // Top Teams folds; a person in it opens the whole board.
+    expect(key('super-human-dee'), findsNothing);
+    await tester.tap(key('project-sidebar-humans'));
+    await tester.pumpAndSettle();
+    await tester.tap(key('super-human-dee'));
+    await tester.pumpAndSettle();
+    expect(find.text('Leaderboard'), findsWidgets);
+    expect(tester.takeException(), isNull);
+
     // Manage keeps its Machines page.
     await tester.tap(key('super-manage'));
     await tester.pumpAndSettle();
@@ -176,17 +198,20 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
+    expect(offline.error, isNotNull);
+    expect(find.text(offline.error!), findsWidgets);
   });
 
-  testWidgets('the same journey in a narrow window raises no error and keeps '
-      'every way in', (tester) async {
+  testWidgets('in a narrow window the left pane is a drawer, and an agent '
+      'opens from it', (tester) async {
     final (_, c, _) = await open(tester, size: const Size(700, 900));
-    // Below 720 the left pane folds into a drawer; whatever it shows, nothing throws and a chat is reachable.
     expect(tester.takeException(), isNull);
-    expect(c.snapshot, isNotNull);
     expect(find.byType(EditableText), findsNothing);
-    await c.select('agent-chat-second');
+    await tester.tap(find.byTooltip('Conversations'));
     await tester.pumpAndSettle();
+    await tester.tap(key('super-agent-second'));
+    await tester.pumpAndSettle();
+    expect(c.selectedId, 'agent-chat-second');
     expect(find.byType(EditableText), findsOneWidget);
     expect(tester.takeException(), isNull);
   });

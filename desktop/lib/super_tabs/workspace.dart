@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -658,8 +659,8 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
               children: [
                 if (!showTerminal) Offstage(child: terminal),
                 SuperTabView(
-                  // The Board, the Buddy beside it and no Threads, on Desktop
-                  // (anh Dee, task #3787); the browser is unchanged for now.
+                  // Swarm v4's layout on Desktop; the browser draws the v3 layout until the web moves (anh Dee,
+                  // 2026-11-09).
                   board: !kIsWeb,
                   key: ValueKey('${controller.accountId}:$id'),
                   controller: controller,
