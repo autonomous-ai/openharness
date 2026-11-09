@@ -101,6 +101,10 @@ quota, plans with the solver (`cli/src/superTabs/assign/`) and labels `builder:<
 The PM's line "Give a task to the builder who owns its part, is free and has what it needs; keep every builder's list two
 deep" is gone from `PM_BASICS`; the PM still sizes and labels, which is judgment.
 
+**The PM says each hand-off in the project's channel (anh Dee, 2026-11-09)** so people can read the team talk: one line in
+`PM_BASICS`, "Pip, you have #12". It stays a prompt line because the post is in the PM's own words and no code writes in the
+channel today. When `githubAssign.ts` posts that line itself as it labels `builder:<name>`, the prompt line goes.
+
 **Reassign a task when its claim goes quiet is already code:** `liveness.ts` drops a task whose lease runs out (5
 minutes with no progress report, 30 minutes quiet), `dispatch.ts` `candidatesFor` hands it on, and `stuck.ts` alerts
 after 10 minutes. The prompts still say 20 minutes; the code waits 30.
