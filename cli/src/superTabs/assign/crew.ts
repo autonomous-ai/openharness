@@ -274,3 +274,18 @@ export function reasonOf(pick: Pick, read: Read): string {
   return [when, focus ? `it works on ${part}` : '', count ? `it finished ${count} part:${part} ${count === 1 ? 'task' : 'tasks'}` : '']
     .filter(Boolean).join(', ').replace(/, ([^,]*)$/, ', and $1')
 }
+
+/**
+ * Who reads a pull request next (Swarm v4: "a review is never read by its build's model family", design 2026-11-09): a
+ * builder of the team that is not its author and not asked already, of another model family than its author's when one
+ * is free to, then the one holding the fewest tasks. Null when nobody can.
+ */
+export function readerFor(read: Read, author: string | null, skip: ReadonlySet<string>): CrewBuilder | null {
+  const builders = [...read.builders.values()]
+  const own = builders.find(b => author !== null && b.label === labelOf(author))
+  const family = (b: CrewBuilder) => b.engine === 'codex' ? 'openai' : 'anthropic'
+  const candidates = builders.filter(b => b !== own && !skip.has(b.id) && !skip.has(b.name.toLowerCase()))
+  candidates.sort((a, b) => Number(own && family(a) === family(own)) - Number(own && family(b) === family(own))
+    || (read.open.get(a.id) ?? 0) - (read.open.get(b.id) ?? 0) || a.name.localeCompare(b.name))
+  return candidates[0] ?? null
+}

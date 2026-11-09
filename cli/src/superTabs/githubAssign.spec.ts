@@ -12,7 +12,8 @@ const PROJECT = { repo: 'acme/app', pm: 'Faye', tabId: 'tab', pmAgentId: 'faye',
 /** One repository's issues as GitHub's REST API answers them, with ETags, and what was sent to it. Labels sent are kept
  *  only once [applied] says GitHub's lists show them. */
 function fakeGitHub(open: Json[], closed: Json[] = []) {
-  const state = { open, closed, labelAnswer: 200, signedOut: false, applied: false, files: new Map<string, string>(), labels: [] as Json[] }
+  const state = { open, closed, labelAnswer: 200, signedOut: false, applied: false, files: new Map<string, string>(), labels: [] as Json[],
+    pulls: [] as Json[], comments: new Map<number, Json[]>() }
   const sent: Array<{ method: string; path: string; body: Json }> = []
   const get: GitHubGet = async (path, etag) => {
     if (state.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
@@ -21,6 +22,9 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
     const text = file ? state.files.get(decodeURIComponent(file[1]!)) : undefined
     if (file && text === undefined) return { status: 404, etag: null, body: null, resetAt: null }
     const body = file ? { encoding: 'base64', content: Buffer.from(text!).toString('base64') }
+      : url.pathname === '/repos/acme/app' ? { default_branch: 'main' }
+      : url.pathname === '/repos/acme/app/pulls' ? state.pulls
+      : /^\/repos\/acme\/app\/issues\/\d+\/comments$/.test(url.pathname) ? state.comments.get(Number(url.pathname.split('/').at(-2))) ?? []
       : url.pathname === '/repos/acme/app/labels' ? state.labels
       : url.pathname === '/repos/acme/app/issues' ? url.searchParams.get('state') === 'closed' ? state.closed : state.open
       : null
@@ -53,11 +57,12 @@ const crew = (): Crew => ({
 function setup(open: Json[], options: { closed?: Json[]; crew?: Crew } = {}) {
   const github = fakeGitHub(open, options.closed)
   const log = vi.fn()
-  const assigner = new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send,
+  const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send,
     now: () => Date.parse('2026-11-09T07:31:00Z'), log })
+  const assigner = make()
   const labelled = () => github.sent.filter(s => /\/issues\/\d+\/labels$/.test(s.path)).map(s => [Number(s.path.split('/').at(-2)), (s.body.labels as string[])[0]])
   const said = () => github.sent.filter(s => s.path.endsWith('/comments')).map(s => [Number(s.path.split('/').at(-2)), String(s.body.body)])
-  return { github, assigner, log, labelled, said }
+  return { github, assigner, make, log, labelled, said }
 }
 
 describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () => {
@@ -155,6 +160,85 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(f.github.sent.filter(s => s.path === '/repos/acme/app/labels').map(s => s.body)).toEqual([{ name: 'part:mobile', color: 'c5def5', description: 'An area of the project' }])
     await f.assigner.tick()
     expect(f.github.sent.filter(s => s.path === '/repos/acme/app/labels')).toHaveLength(1)
+  })
+
+  describe('readers', () => {
+    const HEAD = 'f6edb44c0ffee0000000000000000000000000ab'
+    const pull = (extra: Json = {}): Json => ({ number: 30, draft: false, base: { ref: 'main' }, head: { sha: HEAD, ref: 'pip/14' },
+      labels: [{ name: 'builder:pip' }], body: 'Closes #14', ...extra })
+    const comment = (body: string, extra: Json = {}): Json => ({ body, author_association: 'MEMBER', user: { login: 'deehw' },
+      created_at: '2026-11-09T07:00:00Z', ...extra })
+    /** Pip (Claude Code) builds; Juno (Claude Code) and Atlas (Codex) can read. */
+    const team: Crew = { builders: [...crew().builders, { id: 'atlas', name: 'Atlas', label: 'builder:atlas', machineId: 'mac', engine: 'codex' }],
+      machines: crew().machines }
+    const asks = (f: ReturnType<typeof setup>) => f.said().filter(([n]) => n === 30).map(([, body]) => String(body))
+
+    it('asks one reader for a pull request, never its author, of another model family first, once', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull()]
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Atlas\*\*: please read this pull request, and start your comment with READ-OK f6edb44 or HOLD f6edb44/)])
+      await f.assigner.tick()
+      expect(asks(f)).toHaveLength(1)
+    })
+
+    it('asks two for TWO READS, none while a HOLD stands or for a draft, and none once its head has its READ-OK', async () => {
+      const two = setup([], { crew: team })
+      two.github.state.pulls = [pull({ body: 'Closes #14. TWO READS' })]
+      await two.assigner.tick()
+      expect(asks(two).map(body => /\*\*(\w+)\*\*/.exec(body)![1]).sort()).toEqual(['Atlas', 'Juno'])
+      const held = setup([], { crew: team })
+      held.github.state.pulls = [pull()]
+      held.github.state.comments.set(30, [comment('Juno, 14:00: HOLD f6edb44: the day count is off by one.')])
+      await held.assigner.tick()
+      expect(asks(held)).toEqual([])
+      const draft = setup([], { crew: team })
+      draft.github.state.pulls = [pull({ draft: true })]
+      await draft.assigner.tick()
+      expect(asks(draft)).toEqual([])
+      const read = setup([], { crew: team })
+      read.github.state.pulls = [pull()]
+      read.github.state.comments.set(30, [comment('Juno, 14:00: READ-OK f6edb44')])
+      await read.assigner.tick()
+      expect(asks(read)).toEqual([])
+    })
+
+    it('counts a reader it asked who has not answered as still reading, and asks again for a new head only when none is', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull()]
+      f.github.state.comments.set(30, [comment('Harness, 07:30, to **Atlas**: please read this pull request, and start your comment with READ-OK f6edb44 or HOLD f6edb44 (with the file, line and fix).')])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([])
+    })
+
+    it('asks a reader again, once, when the head moves past its HOLD or READ-OK, and nobody else', async () => {
+      const NEW = 'abcdef1c0ffee0000000000000000000000000ab'
+      for (const verdict of ['HOLD', 'READ-OK']) {
+        const f = setup([], { crew: team })
+        f.github.state.pulls = [pull({ head: { sha: NEW, ref: 'pip/14' } })]
+        f.github.state.comments.set(30, [comment(`Juno, 14:00: ${verdict} f6edb44${verdict === 'HOLD' ? ': the day count is off by one.' : ''}`)])
+        await f.assigner.tick()
+        expect(asks(f).map(body => body.replace(/^Harness, \d\d:\d\d,/, 'Harness, HH:MM,'))).toEqual([`Harness, HH:MM, to **Juno**: the head is now abcdef1, `
+          + `after your ${verdict} on f6edb44: please read it again, and start your comment with READ-OK abcdef1 or HOLD abcdef1 (with the file, line and fix).`])
+        // Once: GitHub shows the ask, and Juno is still reading.
+        f.github.state.comments.set(30, [...f.github.state.comments.get(30)!, comment(asks(f)[0]!)])
+        await f.make().tick()
+        expect(asks(f)).toHaveLength(1)
+      }
+    })
+
+    it('asks the PM when the team has no other builder, and a builder for the PM\'s own pull request', async () => {
+      const f = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
+      f.github.state.pulls = [pull()]
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Faye\*\*: please read this pull request/)])
+      const own = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
+      own.github.state.pulls = [pull({ labels: [{ name: 'builder:faye' }], head: { sha: 'f6edb44c0ffee0000000000000000000000000ab', ref: 'faye/14' } })]
+      await own.assigner.tick()
+      await own.assigner.tick()
+      expect(asks(own).filter(body => !body.includes('**Pip**'))).toEqual([])
+      expect(own.log.mock.calls.filter(([line]) => String(line).includes('NO_READER'))).toHaveLength(0)
+    })
   })
 
   it('stops while gh is signed out, says so once, and says when it runs again', async () => {
