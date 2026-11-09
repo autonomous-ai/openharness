@@ -205,6 +205,23 @@ it('sends no refusal the server dropped', () => {
   expect(sources.length).toBeGreaterThan(20)
   expect(sources.filter(f => /'(LEAD_REQUIRED|TASK_REQUIRED)'/.test(readFileSync(join(dir, f), 'utf8')))).toEqual([])
 })
+// Swarm v4 (2026-11-09): an agent its person only talks to in their 1:1 chat is never told its Swarm's id, and the basics tell
+// it to post in its project's channel: in its own pane, the one Swarm it is in is meant.
+it('serves an agent in its own pane that leaves its Swarm out, in the one Swarm it is in', async () => {
+  const t = setup()
+  expect(await t.ask({ action: 'status', harnessId: 'native' }, owner)).toMatchObject({ ok: true })
+  expect(t.call).toHaveBeenLastCalledWith('GET', `/api/super-tabs/tab/parts?asAgentId=${t.agentId}`, undefined)
+  expect(await t.ask({ action: 'status', harnessId: 'stranger' }, owner)).toEqual({ error: 'INVALID_REQUEST', detail: 'Name the Swarm with --tab ID.' })
+})
+it('asks an agent in two Swarms to name one', async () => {
+  const agent = { id: 'a', machineId: 'machine-1', harnessId: 'native' }
+  const call = vi.fn<CoreApi['account']['backend']>(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/')
+    ? hostForm([{ tabId: 'tab', agent }, { tabId: 'other', agent }], { tabs: ['tab', 'other'] }) : { state: { agents: [agent] } } } }))
+  const service = superTabService(fakeCore({ account: { backend: call }, agents: { byAgent: vi.fn(() => ({ agentId: 'native' }) as never) } }),
+    { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost })
+  expect(await service.requests.super_tabs({ action: 'status', harnessId: 'native' }, owner))
+    .toEqual({ error: 'SWARM_AMBIGUOUS', detail: 'This agent is in 2 Swarms: name one with --tab (tab, other).' })
+})
 it('resolves a native caller to its exact contribution and rechecks it before every agent command', async () => {
   const t = setup()
   expect(await t.ask({ action: 'messages', tabId: 'tab', harnessId: 'native', conversationId: 'lead' }, owner)).toMatchObject({ ok: true })
@@ -363,9 +380,9 @@ it('lets a machine client prepare only a backend-verified terminal context', asy
 })
 
 // Swarm v4: an agent has the chat's reads and its posts, and no manual. A session from before gets INVALID_REQUEST, as the route's did.
-it('has no agent action but the chat\'s own: each other is refused, and the Swarm and the server are read for none', async () => {
+it('has no agent action but status and the chat\'s own: each other is refused, and the Swarm and the server are read for none', async () => {
   const t = setup()
-  for (const action of ['status', 'mine', 'task', 'decisions', 'instructions', 'costs', 'help', 'startStatus', 'proposalTarget', 'setMachineAgents',
+  for (const action of ['mine', 'task', 'decisions', 'instructions', 'costs', 'help', 'startStatus', 'proposalTarget', 'setMachineAgents',
     'routeContext', 'routeHistory', 'machineRules', 'ciLoad', 'routeJev']) {
     t.call.mockClear()
     expect(await t.ask({ action, tabId: 'tab', agentId: t.agentId, conversationId: 'g1', startId: 'start-1', state: 'open', days: 7, machineId: 'studio', maxAgents: 8 }, owner), action)
@@ -720,10 +737,155 @@ describe('a Harness Team account, which Swarm v3 has none of (#4221)', () => {
       }
     }
     for (const action of ['teamSetupDecline', 'teamSetupStatus']) {
-      expect(await service.requests.super_tabs({ action }, owner)).toEqual({ error: 'INVALID_REQUEST' })
+      expect(await service.requests.super_tabs({ action }, owner)).toEqual({ error: 'INVALID_REQUEST', detail: 'Name the Swarm with --tab ID.' })
     }
     expect(make).not.toHaveBeenCalled()
     expect(backend).not.toHaveBeenCalled()
+  })
+})
+
+// Leads see each other's work (spec 2026-10-23): a Lead's status carries other projects' active work, in the backend's own
+// fields and nothing more; an agent that leads nothing never sees it. Nobody reads the removed Leads conversation (10-31).
+describe('other projects\' work in status', () => {
+  const work = { conversationId: 'docs-roster', projectName: 'Docs', title: 'Roster', owns: ['desktop/lib/super_tabs'], status: 'review',
+    agentName: 'Builder', pr: 'https://github.com/example/project/pull/12' }
+  /** A Swarm whose project Pilot is led, through its Lead conversation, by [leadId]; [groups] are further conversations. */
+  const swarm = (t: ReturnType<typeof setup>, leadId: string | null, groups: Record<string, unknown>[] = [], legacy = false) => {
+    const lead = legacy ? 'lead' : 'pilot'
+    const state = { agents: [t.agent], leadsConversationId: 'leads', ...(legacy ? {} : { projects: [{ id: 'pilot', name: 'Pilot', leadConversationId: 'pilot' }] }),
+      conversations: [{ id: lead, leadId, agentIds: [t.agentId] }, ...groups, { id: 'leads', kind: 'leads', title: 'Leads', leadId: null, agentIds: [t.agentId] }],
+      otherProjectsWork: [{ ...work, assignmentId: 'internal', brief: 'The whole brief' }] }
+    t.call.mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: swarmData(t.agent, path, state) } }))
+  }
+  const status = async (t: ReturnType<typeof setup>) => object(object(object(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).value).state)
+
+  it('shows a Lead each other project\'s active work in the agreed fields alone', async () => {
+    const t = setup()
+    swarm(t, t.agentId)
+    const state = await status(t)
+    expect(state.otherProjectsWork).toEqual([work])
+    // Dee, 10-31: the Leads conversation is removed; a Lead no longer reads it either, even from an older server.
+    expect(state).not.toHaveProperty('leadsConversationId')
+    expect(list(state.conversations).map(c => c.id)).toEqual(['pilot'])
+  })
+
+  it('shows the Lead of a Swarm from before projects that work too', async () => {
+    const t = setup()
+    swarm(t, t.agentId, [], true)
+    expect((await status(t)).otherProjectsWork).toEqual([work])
+  })
+
+  // The review of #1657: the backend's Lead is its project's Lead conversation's. A former Lead still named on an older
+  // work group is not one.
+  it('shows a former Lead that still leads an older work group neither that work nor the Leads conversation', async () => {
+    const t = setup()
+    swarm(t, 'new-lead', [{ id: 'older-work', projectId: 'pilot', leadId: t.agentId, agentIds: [t.agentId] }])
+    const state = await status(t)
+    expect(state).not.toHaveProperty('otherProjectsWork')
+    expect(state).not.toHaveProperty('leadsConversationId')
+    expect(list(state.conversations).map(c => c.id)).toEqual(['pilot', 'older-work'])
+  })
+
+  it('shows an agent that leads nothing neither that work nor the Leads conversation, whatever the server sends', async () => {
+    const t = setup()
+    swarm(t, 'another-lead')
+    const state = await status(t)
+    expect(state).not.toHaveProperty('otherProjectsWork')
+    expect(state).not.toHaveProperty('leadsConversationId')
+    expect(list(state.conversations).map(c => c.id)).toEqual(['pilot'])
+  })
+
+  // Task #3117: a task's priority reaches the PM and every other agent as the backend sends it.
+  it('keeps a task\'s priority, for a Lead and for any other agent', async () => {
+    for (const leadId of ['self', 'another-lead']) {
+      const t = setup()
+      swarm(t, leadId === 'self' ? t.agentId : leadId, [{ id: 'hotfix', projectId: 'pilot', number: 7, title: 'Checkout fails', priority: 'P0', agentIds: [] }])
+      expect(list((await status(t)).conversations).find(c => c.id === 'hotfix'), leadId).toMatchObject({ priority: 'P0' })
+    }
+  })
+})
+
+// A Buddy reads its project's work as its person (Ken, 10-29): its status is a bounded task summary, never the whole Swarm,
+// with pull requests read through its person's own GitHub on their machine; archived tasks and older messages on request.
+describe('a Buddy\'s status', () => {
+  const buddySetup = () => {
+    const t = setup()
+    Object.assign(t.agent, { projectId: 'app', buddyOf: { personId: 'peer', generation: 'g' } })
+    const state = { agents: [t.agent], projects: [{ id: 'app', name: 'App', leadConversationId: 'app-chat' }],
+      conversations: [{ id: 'app-chat', projectId: 'app', title: 'App', leadId: null, agentIds: [], checks: [] },
+        { id: 'offline', projectId: 'app', number: 12, title: 'Offline sync', brief: 'The whole brief', leadId: null, agentIds: [], checks: [],
+          assignment: { status: 'blocked', result: 'Waiting for the sync API' }, pullRequestUrls: ['https://github.com/acme/app/pull/12'] }] }
+    t.call.mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/decisions?') ? { decisions: [], more: false }
+      : path.includes('/groups?dormant=1') ? { groups: [], next: null } : path.includes('/messages?') ? { messages: [], next: null } : swarmData(t.agent, path, state) } }))
+    const pullRequests = vi.fn(async (urls: string[]) => ({ rows: urls.map(url => ({ url, status: 'found' as const, state: 'Open' as const, ci: 'passing' as const })), checkedAt: 'now' }))
+    const service = superTabService(t.core, { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost, pullRequests })
+    return { ...t, pullRequests, ask: service.requests.super_tabs }
+  }
+
+  it('is its project\'s tasks with their pull request state, and no Swarm state', async () => {
+    const t = buddySetup()
+    const value = object(object(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).value)
+    expect(value.state).toBeUndefined()
+    expect(object(value.summary).tasks).toEqual([expect.objectContaining({ number: 12, title: 'Offline sync', status: 'blocked', note: 'Waiting for the sync API',
+      pullRequests: [expect.objectContaining({ url: 'https://github.com/acme/app/pull/12', state: 'Open', ci: 'passing' })] })])
+    expect(JSON.stringify(value)).not.toContain('The whole brief')
+    expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/decisions?state=open&asAgentId=${t.agentId}`, undefined)
+  })
+
+  it('reads its archived tasks a page at a time, in its own project only', async () => {
+    const t = buddySetup()
+    expect(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId, archived: true, before: 'page-2' }, owner)).toMatchObject({ ok: true, value: { summary: { tasks: [], next: null } } })
+    expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/groups?dormant=1&projectId=app&before=page-2&asAgentId=${t.agentId}`, undefined)
+  })
+
+  it('pages a task\'s older messages', async () => {
+    const t = buddySetup()
+    expect(await t.ask({ action: 'messages', tabId: 'tab', agentId: t.agentId, conversationId: 'offline', before: 40, beforeId: 'm-1' }, owner)).toMatchObject({ ok: true })
+    expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/conversations/offline/messages?asAgentId=${t.agentId}&before=40&beforeId=m-1`, undefined)
+    // A cursor that is not one is refused, never read as the newest page.
+    const calls = t.call.mock.calls.length
+    for (const bad of [{ before: 2 ** 53, beforeId: 'm-1' }, { before: 40 }, { before: 40, beforeId: 'a b' }, { before: -1, beforeId: 'm-1' }]) {
+      expect(await t.ask({ action: 'messages', tabId: 'tab', agentId: t.agentId, conversationId: 'offline', ...bad }, owner)).toMatchObject({ error: 'INVALID_REQUEST' })
+    }
+    expect(t.call.mock.calls.slice(calls).filter(([, path]) => String(path).includes('/messages?'))).toEqual([])
+  })
+
+  it('reads one thread, with the main-chat messages a thread session started from, and refuses a thread that is not an id', async () => {
+    const t = buddySetup()
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method: string, path: string) => ({ status: 200, body: { success: true, data:
+      path.includes('/messages?') ? { messages: [{ id: 'root-1', thread: 'root-1' }], next: null, context: [{ id: 'older', text: 'earlier' }] }
+        : swarmData(t.agent, path) } }))
+    expect(await t.ask({ action: 'messages', tabId: 'tab', agentId: t.agentId, conversationId: 'chat', thread: 'root-1' }, owner))
+      .toMatchObject({ ok: true, value: { context: [{ id: 'older', text: 'earlier' }] } })
+    expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/conversations/chat/messages?asAgentId=${t.agentId}&thread=root-1`, undefined)
+    await t.ask({ action: 'messages', tabId: 'tab', agentId: t.agentId, conversationId: 'chat', thread: 'root-1', before: 40, beforeId: 'm-1' }, owner)
+    expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/conversations/chat/messages?asAgentId=${t.agentId}&before=40&beforeId=m-1&thread=root-1`, undefined)
+    const calls = t.call.mock.calls.length
+    expect(await t.ask({ action: 'messages', tabId: 'tab', agentId: t.agentId, conversationId: 'chat', thread: 'a&b=c' }, owner)).toMatchObject({ error: 'INVALID_REQUEST' })
+    expect(t.call.mock.calls.slice(calls).filter(([, path]) => String(path).includes('/messages?'))).toEqual([])
+  })
+
+  it('leaves every other agent\'s status as it was', async () => {
+    const t = setup()
+    const value = object(object(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).value)
+    expect(value.state).toBeDefined()
+    expect(value.summary).toBeUndefined()
+  })
+})
+
+describe('status with steps', () => {
+  it('prints a task\'s steps under it, not as rows', async () => {
+    const t = setup()
+    const conversations = [{ id: 'g1835', number: 1835, title: 'Fix login', archived: false, checks: [] },
+      { id: 'g1918', number: 1918, title: 'Review', reviewOf: 'g1835', step: 'Review', archived: false, checks: [] },
+      { id: 'g9', number: 9, title: 'Old review', reviewOf: 'g1835', archived: false, checks: [] }]
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true,
+      data: swarmData(t.agent, path, { agents: [t.agent], conversations }) } }) as never)
+    const answer = await t.ask({ action: 'status', tabId: 'tab', harnessId: 'native' }, owner) as { value: { state: { conversations: Array<Record<string, unknown>> } } }
+    const rows = answer.value.state.conversations
+    // Every linked group is a step, named or not (Ken, 2026-11-02).
+    expect(rows.map(c => c.id)).toEqual(['g1835'])
+    expect((rows[0]!.steps as Array<Record<string, unknown>>).map(s => s.id)).toEqual(['g1918', 'g9'])
   })
 })
 
@@ -774,7 +936,7 @@ describe('mentions on a post', () => {
     const t = setup()
     swarm(t, t.agentId)
     expect(await post(t, ['dee@example.com', 'someone@example.com'])).toEqual({ error: 'MENTION_UNKNOWN',
-      detail: 'someone@example.com is not a person in this Swarm. Tag a person by their username or id.', status: 400 })
+      detail: 'someone@example.com is not a person in this Swarm. Tag a person by the username or id shown in status.', status: 400 })
     expect(await post(t, [42])).toMatchObject({ error: 'MENTION_UNKNOWN' })
     expect(posted(t)).toEqual([])
   })

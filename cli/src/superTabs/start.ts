@@ -66,20 +66,18 @@ function refusedByBackend(error: unknown): error is Error & { code: string } {
 const LASTING_REFUSALS = new Set(['RULE_BROKEN', 'REQUIREMENT_UNMET', 'REVIEW_REFUSED', 'STEPPED_UP', 'BUILD_REFUSED', 'SWARM_ENGINE',
   'FORBIDDEN', 'HOST_REQUIRED', 'CONTRIBUTION_REVOKED', 'MACHINE_REMOVED', 'OUTSIDE_CONTRIBUTION', 'NOT_SWARM_MACHINE', 'BUDDY_WINDOWS',
   'TEAM_ACCOUNT_REQUIRED', 'PRIVACY_UNCHECKED', 'PRIVACY_CHECK_FAILED', 'MACHINE_IN_OTHER_WORKSPACE'])
-/** A Buddy's start note: its owner's chat, where it talks, and nothing to wait for. */
-/** A project's Product Manager the Swarm started here (backend leadStart.ts): the Lead of the project's conversation, with
- *  the lines Desktop's own-machine launch gives one (desktop super_tabs/launch_prompt.dart). */
-export function leadPrompt(tabId: string, chat: string, roleName: string): string {
-  return `You are the Product Manager of the project whose conversation is ${chat}, started by the Swarm on this machine. ${roleLine(roleName)}Read the conversation with harness super-tab --tab ${tabId} messages ${chat}; if it is empty, ask there what to work on. Reply with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID [--reply-to MESSAGE_ID], and answer each message once. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
-}
-/** The role the project's document names for this agent, when the backend's start request carries it. */
-const roleLine = (roleName: string) => roleName ? `You are joining this project's Swarm as its ${roleName}. ` : ''
-function workerPrompt(tabId: string, chat: string, roleName: string): string {
-  return `You are joining a shared Super Tab. ${roleLine(roleName)}Read the conversation with harness super-tab --tab ${tabId} messages ${chat}. Reply in that conversation using harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
+/** A Product Manager's or an agent's first message (Swarm v4, anh Dee 2026-11-08): its name, as Desktop's own-machine launch
+ *  gives it (desktop super_tabs/launch_prompt.dart). No manual and no command: the Swarm's basics reach it in the engine's own
+ *  instructions (lib/swarmSkills.ts), and each message as it arrives (superTabs/host.ts). A name comes from the Swarm, so it
+ *  is one line, bounded. */
+export const startNote = (name: unknown): string => {
+  const line = typeof name === 'string' ? name.replace(/\s+/g, ' ').trim().slice(0, 80) : ''
+  return line ? `You are ${line}.` : ''
 }
 
 const buddyProposalOffer = `When your discussion has a clear goal, why it matters and how to know it is done, check the project for an existing proposal or task; point to a match instead of duplicating it. Otherwise offer without waiting to be asked: "Want me to propose this to <project>?" Then show the exact proposal as a quoted line after "I'll post this as you:". Send only after your owner says yes to that proposal. One offer per idea; never repeat an ignored or declined offer.`
 
+/** A Buddy's start note: its owner's chat, where it talks, and nothing to wait for. */
 function buddyPrompt(tabId: string, chat: string, mode: SwarmSkillMode | null): string {
   return `You are a person's Buddy in a shared Super Tab. ${mode ? `${BUDDY_SKILL_USE} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Your chat with your owner is conversation ${chat}: read it with harness super-tab --tab ${tabId} messages ${chat}, and reply there with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. Then greet your owner there and ask what they have in mind. ${buddyProposalOffer} If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
@@ -377,8 +375,6 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
       // A Buddy is its owner's right hand (Ken, 11-04, task #2832): on their own machine it launches like their own session and
       // uses their own git and gh. It never gets the Harness GitHub App's token, which is for a task's agents.
       const github = buddy ? null : hosted && typeof hosted.requester === 'string' && hosted.requester ? { requester: hosted.requester } : null
-      // The role's name from the project's document, when the backend's start request has it; one line, bounded.
-      const roleName = typeof request.roleName === 'string' ? request.roleName.replace(/\s+/g, ' ').trim().slice(0, 80) : ''
       // Anh Dee's agent model (task #4698): a Member sets its project up once in its folder; a helper starts from that setup.
       // A helper's Member's commands only when its host found that Member on this computer (machines.ts `memberHere`).
       const memberProject = !buddy && !lead ? text(object(request.member).projectId) : null
@@ -397,7 +393,7 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
           : buddySessionPrompt(String(input.tabId), String(request.conversationId), session, mode)
           : home ? swarmBuddyPrompt(String(input.tabId), String(request.conversationId), home, mode)
           : buddyPrompt(String(input.tabId), String(request.conversationId), mode))
-          : `${lead ? leadPrompt(String(input.tabId), String(request.conversationId), roleName) : workerPrompt(String(input.tabId), String(request.conversationId), roleName)}${setUpLine}${github ? ` ${githubPromptLine()}` : ''}${handoffPrompt}`,
+          : `${startNote(request.name)}${setUpLine}${github ? ` ${githubPromptLine()}` : ''}${handoffPrompt}`,
         ...(homeFolder ? { cwd: homeFolder } : agentFolder ? { cwd: agentFolder } : request.worktree ? { projectSource: 'worktree', gitSource: request.cwd, branchName: `super-tab/${startId}`,
           // No branch named: the repository's default branch, fetched, not the host checkout's old HEAD.
           ...(request.branchRef ? { branchRef: request.branchRef } : { branchBase: 'default' }) } : { cwd: request.cwd }),

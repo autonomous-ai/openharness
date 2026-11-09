@@ -26,12 +26,27 @@ function swarm(extra: (method: string, path: string, body?: unknown) => BackendR
   const reads = () => call.mock.calls.map(c => c[1]).filter(path => /\/parts|\/changes\?cursor|\/super-tabs\/[A-Za-z0-9]+\?/.test(path) && !path.includes('/hosts/'))
   return { call, core, ask: service.requests.super_tabs, reads }
 }
-describe('what each action reads of the Swarm', () => {
+/** What the status action printed before #1726, recorded from that code with the same Swarm; `revision` is gone now. */
+const golden = (who: 'lead' | 'builder') => {
+  const { value, ...rest } = readFixture<{ value: Json }>(`status-${who}`)
+  const { revision: _revision, ...kept } = value
+  return { ...rest, value: { ...kept, lastChangedAt: 1793010101002 } }
+}
+
+describe('status from parts', () => {
+  it('prints for a Lead what it printed before, with lastChangedAt in place of revision', async () => {
+    expect(await swarm().ask({ action: 'status', tabId: T, agentId: FIXTURE.leadId }, owner)).toEqual(golden('lead'))
+  })
+  it('prints for a Builder what it printed before, with lastChangedAt in place of revision', async () => {
+    expect(await swarm().ask({ action: 'status', tabId: T, agentId: FIXTURE.builderId }, owner)).toEqual(golden('builder'))
+  })
   it('finds the caller by its harness, as the roster lists it on this machine', async () => {
     const s = swarm()
-    expect(await s.ask({ action: 'messages', tabId: T, harnessId: FIXTURE.builderHarness, conversationId: FIXTURE.workGroup }, owner)).not.toHaveProperty('error')
-    expect(s.reads()).toEqual([`/api/super-tabs/${T}/parts?asAgentId=${FIXTURE.builderId}`])
+    expect(await s.ask({ action: 'status', tabId: T, harnessId: FIXTURE.builderHarness }, owner)).toEqual(golden('builder'))
   })
+})
+
+describe('what each action reads of the Swarm', () => {
   // Task steps design: a task's newest page shows its steps' rows, so it reads the Swarm, by what changed, to find them.
   it('reads the Swarm once for a conversation\'s newest messages, to find its steps', async () => {
     const s = swarm()
@@ -78,8 +93,9 @@ describe('what each action reads of the Swarm', () => {
   })
   it('tells the person to update Harness when the server needs a newer one', async () => {
     const s = swarm((_method, path) => path.includes('/parts') ? { status: 426, body: { success: false, error: { code: 'UPDATE_REQUIRED' } } } : undefined)
-    expect(await s.ask({ action: 'command', tabId: T, agentId: FIXTURE.leadId, operationId: 'op-4',
-      command: { type: 'message.send', conversationId: FIXTURE.leadGroup, text: 'Please decide', replyTo: null, recipientIds: [], mentions: ['dev@example.com'] } }, owner))
+    expect(await s.ask({ action: 'status', tabId: T, agentId: FIXTURE.leadId }, owner))
       .toEqual({ error: 'UPDATE_REQUIRED', detail: 'Update Harness to keep using this Swarm.', status: 426 })
   })
 })
+
+const object = (v: unknown): Json => v && typeof v === 'object' && !Array.isArray(v) ? v as Json : {}

@@ -25,7 +25,7 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]...'
+const USAGE = 'harness super-tab [--tab ID] [--agent ID] [--port N --machine ID] status [--project NAME] [--archived [PAGE]] | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]...'
 /** A Buddy's guard refuses a post read from stdin (#2358): there its words would skip the secret check. A Buddy that followed
  *  the stdin form here was refused and tried again (#2360 took it out of a Buddy's help), so a Buddy's usage line never offers it. */
 const BUDDY_USAGE = USAGE.replaceAll('TEXT|- OPERATION_ID', 'TEXT OPERATION_ID')
@@ -106,9 +106,19 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     else { positional.push(...argv.slice(i)); break }
   }
   if (!Number.isInteger(target.port) || target.port < 1 || target.port > 65535 || !identifier(target.machineId)) throw usageError()
+  // A person's one Buddy reads one of its projects by its name (status --project NAME, spec 2026-10-31-one-buddy-per-swarm):
+  // taken out first, so it goes with status alone or with --archived.
+  let statusProject: string | undefined
+  const projectAt = positional[0] === 'status' ? positional.indexOf('--project') : -1
+  if (projectAt > 0) {
+    statusProject = positional[projectAt + 1]
+    if (!statusProject || statusProject.length > 200 || /[\u0000-\u001f]/.test(statusProject)) throw usageError()
+    positional.splice(projectAt, 2)
+  }
   const [action, first, second, third] = positional
-  if (!identifier(tabId) || (agentId && !identifier(agentId))) throw usageError()
-  const payload: Record<string, unknown> = { action, tabId, agentId }
+  // --tab may be left out in an agent's own pane: its daemon takes the one Swarm the agent is in (superTabs/service.ts).
+  if ((tabId && !identifier(tabId)) || (agentId && !identifier(agentId))) throw usageError()
+  const payload: Record<string, unknown> = { action, tabId, agentId, ...(statusProject ? { project: statusProject } : {}) }
   if (action === 'messages' && identifier(first) && positional.length === 2) payload.conversationId = first
   // Older messages, a page before the cursor the last page named: its sequence and message id together, as messages may
   // share a sequence and a sequence alone skipped them (security review 2 of #2115).
@@ -122,6 +132,10 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
       && Number.isSafeInteger(Number(positional[5])) && identifier(positional[6])))) {
     Object.assign(payload, { conversationId: first, thread: third,
       ...(positional.length === 7 ? { before: Number(positional[5]), beforeId: positional[6] } : {}) })
+  }
+  // A Buddy's archived tasks, a page at a time from the page the last one named (cli/src/superTabs/buddyStatus.ts).
+  else if (action === 'status' && first === '--archived' && (positional.length === 2 || positional.length === 3 && /^[A-Za-z0-9_-]{1,512}$/.test(second ?? ''))) {
+    Object.assign(payload, { archived: true, ...(second ? { before: second } : {}) })
   }
   else if (action === 'message' && identifier(first) && identifier(second) && positional.length === 3) {
     Object.assign(payload, { conversationId: first, messageId: second })
@@ -179,7 +193,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     if (!text && !keys.length) throw usageError()
     Object.assign(payload, { operationId: `terminal-${randomUUID()}`,
       command: { type: 'agent.input', agentId: first, ...(text ? { text } : {}), ...(keys.length ? { keys } : {}) } })
-  } else {
+  } else if (action !== 'status' || positional.length !== 1) {
     throw usageError()
   }
   return { where: target, payload }

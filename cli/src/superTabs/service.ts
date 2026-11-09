@@ -5,9 +5,9 @@ import { createHash } from 'node:crypto'
 import type { CoreApi, ServiceRequests, SuperTabsPort } from '../core/api.js'
 import { backend, swarmListedFor, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHost, SuperTabHostError, type SuperTabHostOptions, type SwarmSources } from './host.js'
 import { HostFeed } from './hostFeed.js'
-import { SwarmReads } from './swarmReads.js'
+import { SwarmReads, type SwarmRead } from './swarmReads.js'
 import { within } from './wire.js'
-import { isStep } from './agentContext.js'
+import { isCoordinator, isStep } from './agentContext.js'
 import { wireRole } from '../lib/swarmSkills.js'
 import { CapacityReservations, type ReservationBook } from './reservations.js'
 import { ContributionPreparations, ownerRequest, prepareContribution } from './contribution.js'
@@ -30,6 +30,8 @@ import { linkTeamNodeTools, type TeamNodeToolsDeps } from '../team/nodeTools.js'
 import { env as appEnv } from '../config/env.js'
 import { homedir, userInfo } from 'node:os'
 import { delimiter, isAbsolute, join } from 'node:path'
+import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
+import { buddyArchived, buddyStatus, isBuddyIn, isSwarmBuddyIn, projectNamed, type BuddyStatusDeps } from './buddyStatus.js'
 import { peopleNamed } from './personName.js'
 
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
@@ -45,7 +47,33 @@ async function withSteps(page: unknown, steps: Array<Record<string, unknown>>, r
   return { ...object(page), messages: rows, ...(missing.length ? { stepsMissing: missing } : {}) }
 }
 
+/** A Swarm read as `GET /api/super-tabs/:id` answered it, `lastChangedAt` in place of `revision` (design 2026-10-26 5.3). */
+const answerOf = (read: SwarmRead) => ({ lastChangedAt: read.lastChangedAt, state: read.state, ...(read.githubApp ? { githubApp: true } : {}) })
 const OFF_ROSTER = 'This agent is not on this machine\'s Swarm roster right now. That can mean this machine has no access to it, or its billing does not allow it. Check how this machine is shared.'
+const OTHER_WORK_FIELDS = ['conversationId', 'projectName', 'title', 'owns', 'status', 'agentName', 'pr'] as const
+
+/** Leads see each other's work (spec 2026-10-23): a Lead reads other projects' active work in the backend's fields alone;
+ *  any other agent reads none of it. Nobody reads the Leads conversation, removed on 10-31, even from an older server
+ *  that still sends it. */
+function statusView(answer: Record<string, unknown>, agentId: string): Record<string, unknown> {
+  // The PM accounts are the route's (pmAccounts.ts), not a roster line.
+  const { otherProjectsWork, leadsConversationId, pmAccounts: _pmAccounts, ...state } = object(answer.state)
+  const shown = list(state.conversations).filter(c => c.kind !== 'leads' && (leadsConversationId == null || c.id !== leadsConversationId))
+  // A task's steps are printed under it, not as rows of their own (task steps design); one whose task is not here stays a row.
+  const ids = new Set(shown.map(c => c.id))
+  const nested = (c: Record<string, unknown>) => isStep(c) && ids.has(c.reviewOf)
+  const conversations = shown.filter(c => !nested(c)).map(c => {
+    const steps = shown.filter(s => nested(s) && s.reviewOf === c.id)
+    return steps.length ? { ...c, steps } : c
+  })
+  if (isCoordinator(state, agentId)) {
+    return { ...answer, state: { ...state, conversations,
+      ...(Array.isArray(otherProjectsWork) ? { otherProjectsWork: list(otherProjectsWork).map(work =>
+        Object.fromEntries(OTHER_WORK_FIELDS.filter(key => key in work).map(key => [key, work[key]]))) } : {}) } }
+  }
+  return { ...answer, state: { ...state, conversations } }
+}
+
 /** A post's mentions name people by id, username or display name, or (older callers) email (personName.ts peopleNamed); the
  *  backend takes person ids. A name that is nobody in the Swarm, or that two people go by, is refused here, before anything is
  *  sent. Whether this agent may tag them in this conversation is the backend's to judge. Only such a post reads the Swarm,
@@ -55,7 +83,7 @@ async function mentionCommand(command: Record<string, unknown>, swarm: () => Pro
   const people = list((await swarm()).people)
   const ids = command.mentions.map(name => {
     const named = typeof name === 'string' ? peopleNamed(people, name) : []
-    if (!named.length) throw new SuperTabHostError('MENTION_UNKNOWN', `${String(name)} is not a person in this Swarm. Tag a person by their username or id.`, 400)
+    if (!named.length) throw new SuperTabHostError('MENTION_UNKNOWN', `${String(name)} is not a person in this Swarm. Tag a person by the username or id shown in status.`, 400)
     if (named.length > 1) {
       const usernames = named.map(p => String(p.username ?? p.id)).join(', ')
       throw new SuperTabHostError('MENTION_AMBIGUOUS', `${String(name)} is the name of more than one person here (${usernames}). Tag them by username or id.`, 400)
@@ -101,6 +129,8 @@ export interface SuperTabServiceOptions {
   teamGh?: () => Promise<TeamGhOutcome>
   /** What links the Harness Team account's npm and npx (team/nodeTools.ts), for a spec. */
   teamNodeTools?: () => unknown
+  /** What reads a Buddy's pull requests with this machine's own GitHub (lib/pullRequestsStatus.ts), for a spec. */
+  pullRequests?: BuddyStatusDeps['pullRequests']
   /** What reads GitHub for this computer's person's v4 agents (superTabs/githubMentions.ts), for a spec. */
   githubMentions?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubMentions, 'start' | 'stop'>
   /** What merges by rule the pull requests of the projects whose PM runs here (superTabs/githubMerge.ts), for a spec. */
@@ -126,6 +156,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   }
   let host: SuperTabHost | null = null
   let book: ReservationBook | null = null, bookMachine: string | null = null
+  // A Buddy runs only on its person's own machine (backend buddy.create), so this machine's GitHub is its person's. Read once
+  // per daemon, cached 30 seconds a pull request. Each Buddy's last summary, by tab and agent, marks what changed since.
+  let pullRequests: BuddyStatusDeps['pullRequests'] | null = null
+  const buddySince = new Map<string, number | null>()
   const reservations = () => {
     const machine = core.daemon.machineId()
     if (bookMachine !== machine) { book?.stop(); book = null; bookMachine = machine }
@@ -347,7 +381,17 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // --machine to the owner's other Mac, which knew no pane there and served the agent it named. Delivered instructions
         // always name this computer.
         if (!asker.local) return { error: 'AGENT_LOCAL_ONLY', detail: LOCAL_ONLY }
-        if (!identifier(payload.tabId) || !(named ?? hashed)) return { error: 'INVALID_REQUEST' }
+        // An agent in its own pane may leave its Swarm out: the one Swarm its harness is in on this machine is meant. Swarm v4
+        // (2026-11-09): an agent its person only talks to in their 1:1 chat is typed their words alone (#3627) and never told
+        // its Swarm's id, and the basics tell it to post in its project's channel (lib/swarmSkills.ts). In two, it names one.
+        if (!identifier(payload.tabId) && identifier(payload.harnessId) && !named) {
+          const tabs = [...new Set((await sources().feed.refresh()).roster.filter(row => object(row.agent).harnessId === payload.harnessId
+            && object(row.agent).machineId === core.daemon.machineId() && row.closeSession !== true).map(row => row.tabId).filter(identifier))]
+          if (tabs.length > 1) return { error: 'SWARM_AMBIGUOUS', detail: `This agent is in ${tabs.length} Swarms: name one with --tab (${tabs.join(', ')}).` }
+          if (tabs.length === 1) payload.tabId = tabs[0]
+        }
+        if (!identifier(payload.tabId)) return { error: 'INVALID_REQUEST', detail: 'Name the Swarm with --tab ID.' }
+        if (!(named ?? hashed)) return { error: 'INVALID_REQUEST' }
         // The caller is one of this machine's running agents, as the host roster lists it now: no Swarm is read to know that
         // (design 2026-10-26 5.3), and the roster is read again for every call, as the whole Swarm once was, by its changes
         // since the host's last read. A replacement terminal is still its original member, found by its harness.
@@ -375,6 +419,34 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         const identity = `asAgentId=${agentId}`
         const swarm = () => reads.read(String(payload.tabId), agentId)
         wake()
+        if (payload.action === 'status') {
+          const read = await swarm()
+          if (!isBuddyIn(read.state, agentId)) return { ok: true, value: statusView(answerOf(read), agentId) }
+          pullRequests ??= options.pullRequests ?? createPullRequestsStatusReader()
+          const deps: BuddyStatusDeps = { pullRequests: pullRequests!,
+            decisions: () => backend(core, 'GET', `${path}/decisions?state=open&${identity}`) }
+          const project = typeof payload.project === 'string' ? payload.project : undefined
+          if (payload.archived === true) {
+            // A person's one Buddy names the project whose archive it reads (status --project NAME --archived).
+            const named = project ? projectNamed(read.state, project) : undefined
+            if (isSwarmBuddyIn(read.state, agentId) && !named) return { ok: true, value: { lastChangedAt: read.lastChangedAt, summary: { error: 'Name the project: status --project NAME --archived.' } } }
+            const projectId = String(named?.id ?? list(read.state.agents).find(a => a.id === agentId)?.projectId ?? 'lead')
+            const before = typeof payload.before === 'string' && /^[A-Za-z0-9_-]{1,512}$/.test(payload.before) ? `&before=${payload.before}` : ''
+            const page = await backend(core, 'GET', `${path}/groups?dormant=1&projectId=${encodeURIComponent(projectId)}${before}&${identity}`)
+            return { ok: true, value: { lastChangedAt: read.lastChangedAt, summary: await buddyArchived(page, read.state, agentId, deps) } }
+          }
+          const key = `${payload.tabId}:${agentId}`
+          const summary = await buddyStatus({ state: read.state, lastChangedAt: read.lastChangedAt, groupChangedAt: read.groupChangedAt, agentId,
+            since: buddySince.get(key) ?? null, ...(project ? { project } : {}) }, deps)
+          // One project's read leaves the index's "changed since" where it was.
+          if (!project) {
+            buddySince.delete(key)
+            buddySince.set(key, read.lastChangedAt)
+          }
+          // One per Buddy on this machine; a machine runs a few at most, so a small cap only guards against a leak.
+          for (const oldest of buddySince.keys()) { if (buddySince.size <= 64) break; buddySince.delete(oldest) }
+          return { ok: true, value: { lastChangedAt: read.lastChangedAt, summary } }
+        }
         // A Lead's terminal read or typing (`screen`, `type`): the backend answers only the agent that asked.
         if (payload.action === 'terminalResult') {
           if (!identifier(payload.terminalRequestId)) return { error: 'INVALID_REQUEST' }

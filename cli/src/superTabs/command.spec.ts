@@ -11,8 +11,11 @@ it('keeps an explicit stable receipt for agent messages', () => {
   expect(parseSuperTabArgs([...prefix, 'message', 'lead', 'old-question'], where).payload)
     .toMatchObject({ action: 'message', conversationId: 'lead', messageId: 'old-question' })
   expect(parseSuperTabArgs([...prefix, 'post', 'lead', '--tab', 'literal'], where).payload.command).toMatchObject({ text: '--tab' })
-  expect(parseSuperTabArgs(['--tab', 'tab', 'messages', 'lead'], where).payload.agentId).toBe('')
-  for (const argv of [[], ['messages', 'lead'], [...prefix, 'post', 'lead', 'Ready'], [...prefix, 'messages', '../other'],
+  expect(parseSuperTabArgs(['--tab', 'tab', 'status'], where).payload.agentId).toBe('')
+  // An agent in its own pane may leave its Swarm out: its daemon takes the one it is in (service.ts).
+  expect(parseSuperTabArgs(['status'], where).payload).toMatchObject({ action: 'status', tabId: '' })
+  expect(() => parseSuperTabArgs(['--tab', '../other', 'status'], where)).toThrow('harness super-tab')
+  for (const argv of [[], [...prefix, 'post', 'lead', 'Ready'], [...prefix, 'messages', '../other'],
     [...prefix, 'message', 'lead'], [...prefix, 'message', 'lead', '../other'], [...prefix, 'message', 'lead', 'id', 'extra'],
     ['--port', 'no', 'messages', 'lead'], ['--machine', '', 'messages', 'lead'], [...prefix, 'messages', 'lead', 'extra']]) {
     expect(() => parseSuperTabArgs(argv, where)).toThrow('harness super-tab')
@@ -102,19 +105,19 @@ it('uses the existing daemon transport and retains a receipt in an uncertain ans
   expect(JSON.parse(print.mock.calls.at(-1)![0])).toEqual({ error: 'Connection lost', operationId: 'op' })
   expect(close).toHaveBeenCalledTimes(2)
 })
-it('has only messages, message, post, answer, screen and type: every other command is refused with the usage line, which offers no other, and nothing is asked of the daemon', async () => {
-  const gone = [['status'], ['status', '--project', 'Web'], ['status', '--archived'], ['mine'], ['task', 'g1'], ['decisions'], ['decisions', '--answered'], ['instructions'],
+it('has only status, messages, message, post, answer, screen and type: every other command is refused with the usage line, which offers no other, and nothing is asked of the daemon', async () => {
+  const gone = [['mine'], ['task', 'g1'], ['decisions'], ['decisions', '--answered'], ['instructions'],
     ['instructions', 'p1'], ['costs'], ['costs', '--days', '30'], ['react', 'lead', 'msg-1', 'eyes', 'op-1'], ['command', 'op-1', '{"type":"work.assign"}'],
     ['propose', 'op-1', '{"goal":"x"}'], ['start', 'op-1', '{"engine":"codex"}'], ['resume', 'start-1'], ['capacity', 'machine-2', '{}'], ['remove-machine', 'box'],
     ['remove-machine', 'box', '--yes'], ['set-agents', 'studio', '96'], ['help'], ['help', 'tools'], ['plan'], ['route', 'g1', '{}']]
   for (const tail of gone) {
-    expect(() => parseSuperTabArgs([...prefix, ...tail], where), tail.join(' ')).toThrow(/^harness super-tab --tab ID/)
+    expect(() => parseSuperTabArgs([...prefix, ...tail], where), tail.join(' ')).toThrow(/^harness super-tab \[--tab ID\]/)
     const print = vi.fn(), open = vi.fn()
     expect(await superTabCommand(['--tab', 'tab', ...tail], { where: () => where, pane: undefined, open: open as never, print }), tail.join(' ')).toBe(1)
     expect(open).not.toHaveBeenCalled()
     const refusal = String(JSON.parse(print.mock.calls.at(-1)![0]).error)
-    expect(refusal).toMatch(/^harness super-tab --tab ID \[--agent ID\] \[--port N --machine ID\] messages GROUP /)
-    expect(refusal).not.toMatch(/\b(status|mine|task|decisions|instructions|costs|react|command|propose|start|resume|capacity|remove-machine|set-agents|help|plan|route)\b/)
+    expect(refusal).toMatch(/^harness super-tab \[--tab ID\] \[--agent ID\] \[--port N --machine ID\] status \[--project NAME\] \[--archived \[PAGE\]\] \| messages GROUP /)
+    expect(refusal).not.toMatch(/\b(mine|task|decisions|instructions|costs|react|command|propose|start|resume|capacity|remove-machine|set-agents|help|plan|route)\b/)
   }
 })
 it('posts a reply to one message with --reply-to, and rejects a bad id', () => {
@@ -419,14 +422,28 @@ it('takes a pane\'s harness only when the daemon\'s own pane process is among th
   expect(request).toHaveBeenLastCalledWith('super_tabs', expect.objectContaining({ harnessId: 'builder-harness' }), 30_000)
 })
 
-// Ken, 10-29: a task's older messages are read a page at a time, with no new verb.
-it('parses older message pages', () => {
+// A Buddy's read verbs (Ken, 10-29): archived tasks a page at a time, and a task's older messages, with no new verb.
+it('parses archived status pages and older message pages', () => {
   const at = ['--tab', 'tab']
+  expect(parseSuperTabArgs([...at, 'status', '--archived'], where).payload).toMatchObject({ action: 'status', archived: true })
+  expect(parseSuperTabArgs([...at, 'status', '--archived', 'eyJsYSI6MX0'], where).payload).toMatchObject({ action: 'status', archived: true, before: 'eyJsYSI6MX0' })
   // By sequence and message id together: messages may share a sequence, and a sequence alone skipped them (security review 2).
   expect(parseSuperTabArgs([...at, 'messages', 'lead', '--before', '40', 'm-1'], where).payload).toMatchObject({ action: 'messages', conversationId: 'lead', before: 40, beforeId: 'm-1' })
-  for (const argv of [['messages', 'lead', '--before', '-1', 'm-1'], ['messages', 'lead', '--before', 'x', 'm-1'],
+  for (const argv of [['status', '--archived', 'a b'], ['status', '--old'], ['messages', 'lead', '--before', '-1', 'm-1'], ['messages', 'lead', '--before', 'x', 'm-1'],
     ['messages', 'lead', '--before', '40'], ['messages', 'lead', '--before', '9007199254740992', 'm-1'], ['messages', 'lead', '--before', '40', 'a b'], ['messages', 'lead', '--after', '4', 'm-1']]) {
     expect(() => parseSuperTabArgs([...at, ...argv], where)).toThrow('harness super-tab')
+  }
+})
+
+// Spec 2026-10-31-one-buddy-per-swarm: a person's one Buddy reads one of its projects by name, alone or with its archive.
+it('parses status --project NAME, alone or with --archived, and refuses it without a name', () => {
+  expect(parseSuperTabArgs([...prefix, 'status', '--project', 'Web App'], where).payload).toMatchObject({ action: 'status', project: 'Web App' })
+  expect(parseSuperTabArgs([...prefix, 'status', '--project', 'web', '--archived'], where).payload).toMatchObject({ action: 'status', project: 'web', archived: true })
+  expect(parseSuperTabArgs([...prefix, 'status', '--archived', 'eyJsYSI6MX0', '--project', 'web'], where).payload)
+    .toMatchObject({ action: 'status', project: 'web', archived: true, before: 'eyJsYSI6MX0' })
+  expect(parseSuperTabArgs([...prefix, 'status'], where).payload).not.toHaveProperty('project')
+  for (const argv of [['status', '--project'], ['status', '--project', 'a\nb'], ['messages', 'lead', '--project', 'web']]) {
+    expect(() => parseSuperTabArgs([...prefix, ...argv], where)).toThrow('harness super-tab')
   }
 })
 

@@ -8,7 +8,7 @@ import type { Daemon } from '../agentClient/daemon.js'
 import { markBuddyOwner, writeBuddyAccount } from '../lib/buddyGuard.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { processCoreApi } from '../services/processCoreApi.js'
-import { FIXTURE, readFixture } from './fixtures/read/index.js'
+import { readFixture } from './fixtures/read/index.js'
 // Each trust fixture moves the engine homes; do not reuse a login-shell snapshot captured by another fixture.
 vi.mock('../engines/kit/launchExecutable.js', async original => ({ ...await original<object>(),
   launchEnvironment: async () => Object.fromEntries(['HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])) }))
@@ -18,7 +18,7 @@ import { LeadSwitchRequests, profileSignedIn, switchChangeId, type SwitchRow } f
 afterEach(() => { vi.unstubAllEnvs() })
 
 const request = { id: 'sw1', engine: 'claude', profileId: 'p1' }
-const row = (over: Record<string, unknown> = {}, top: Record<string, unknown> = {}): SwitchRow => ({ tabId: 'tab', ledConversationId: 'conv1', roleName: 'Product Manager',
+const row = (over: Record<string, unknown> = {}, top: Record<string, unknown> = {}): SwitchRow => ({ tabId: 'tab', ledConversationId: 'conv1',
   agent: { id: 'a1', harnessId: 'h1', switchRequest: request, ...over }, ...top })
 const NOW = 1_800_000_000_000
 const PM = { agentId: 'h1', sessionId: 'native-old', registeredAt: NOW, engine: 'codex', cwd: '/work', permissionMode: 'ask', bypassPermission: false, defaultName: 'PM', startedBy: 'agent',
@@ -94,19 +94,21 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     const create = t.calls.find(c => c[0] === 'agent_create')![1]
     expect(create).toMatchObject({ swarmRole: 'lead', swarmSkillMode: 'orchestration', swarmGitHub: true, startedBy: 'agent', name: 'PM' })
     const prompt = String(create.prompt)
-    expect(prompt.startsWith('You are the Product Manager of the project whose conversation is conv1')).toBe(true)
+    // Its name alone, as at its first start: no manual and no command (superTabs/start.ts startNote).
+    expect(prompt.startsWith('You are PM. ')).toBe(true)
+    expect(prompt).not.toContain('super-tab')
     expect(prompt).toContain('Harness GitHub App token')
     expect(prompt.indexOf('Context handoff')).toBeGreaterThan(prompt.indexOf('Harness GitHub App token'))
   })
 
-  it('keeps a PM without GitHub off the token and names the role the row gives', async () => {
+  it('keeps a PM without GitHub off the token', async () => {
     const t = setup({ old: { swarmSkill: { role: 'coordinator', key: 'swarm-lead' } } })
-    await t.switches.serve(row({}, { roleName: 'Lead dev' }))
+    await t.switches.serve(row())
     const create = t.calls.find(c => c[0] === 'agent_create')![1]
     expect(create).toMatchObject({ swarmRole: 'lead' })
     expect(create).not.toHaveProperty('swarmGitHub')
     expect(create).not.toHaveProperty('swarmSkillMode')
-    expect(String(create.prompt)).toContain('as its Lead dev')
+    expect(String(create.prompt)).toContain('You are PM.')
   })
 
   it('refuses before closing a PM that has no Swarm skill or no conversation to rebuild its prompt from', async () => {
@@ -262,11 +264,11 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     })
   })
 
-  it('rebuilds the prompt from the chat the backend\'s own host row names', async () => {
+  it('recreates the PM from the backend\'s own host row, which names the chat it leads', async () => {
     const t = setup()
     const real = readFixture<{ tabs: Array<{ roster: Array<Record<string, unknown>> }> }>('host-full').tabs[0].roster.find(r => r.lead === true)!
     await t.switches.serve({ ...real, tabId: 'tab', agent: { id: 'a1', harnessId: 'h1', switchRequest: request } } as unknown as SwitchRow)
-    expect(String(t.calls.find(c => c[0] === 'agent_create')![1].prompt)).toContain(`conversation is ${FIXTURE.leadGroup}`)
+    expect(String(t.calls.find(c => c[0] === 'agent_create')![1].prompt)).toContain('You are PM.')
   })
 
   // A Team daemon's default account was signed in through its owner's relay, which this could not read, so it went
