@@ -181,7 +181,9 @@ interface Entry {
  *  `replies`: what the host owes each person who talked to their agent in its own chat, by delivery: it outlives the delivery's
  *  entry, which goes once the backend has its acknowledgement, so a restart in the middle of a turn still posts its answer
  *  (agentReplies.ts). Older hosts drop it, and then owe none. */
-interface Journal { version: 1; machineId: string; entries: Record<string, Entry>; scrubs?: Record<string, PurgeTarget>; replies?: Record<string, Owed> }
+/** `basics`: the agents told how the team works by a notice (refreshSkill), by agent id, newest last: one is never told again, whatever
+ *  restarts or relaunches follow. Older hosts drop it, and then tell again under the same operation id, which the server writes once. */
+interface Journal { version: 1; machineId: string; entries: Record<string, Entry>; scrubs?: Record<string, PurgeTarget>; replies?: Record<string, Owed>; basics?: string[] }
 /** `roleName` and `instructions` name its project's instructions (backend read/hostRows.ts); an older backend sends neither.
  *  `agent.chatId`: its own 1:1 chat with its person, which the server's time check gives each agent but a Buddy within 30 s of
  *  its joining (backend agentChats.ts); an older backend sends none. `agent.displayName` and `agent.name`: what its person calls it
@@ -279,6 +281,11 @@ async function sessionOfFolder(home: string, sessionId: string, folder: string):
 const JOIN_RETRY_MS = 60_000
 /** How long a skill re-read notice that could not be sent (no open group yet, or the backend failed) waits to retry. */
 const SKILL_RETRY_MS = 60_000
+/** How many agents one pass over the running sessions tells how the team works: a daemon started with many that never were wakes
+ *  them a few at a time, each told its turn's worth of tokens once. The rest go in the passes after, a second apart. */
+const BASICS_PER_PASS = 5
+/** The most agents the journal remembers having told: ids only, the newest kept. */
+const BASICS_TOLD_MAX = 1_000
 /** What a session is told about: a Buddy's own skill, which only a CLI release changes. Plain agents (Swarm v4) are told
  *  nothing: they read only their repo's files. */
 function skillSetOf(_target: HostAgent): string { return 'none' }
@@ -715,6 +722,9 @@ export class SuperTabHost {
       // above are what must be right, and a reply that cannot be read costs one answer, not the host.
       const replies = adoptReplies(saved.replies, this.log)
       if (Object.keys(replies).length) this.journal.replies = replies
+      // Ids only: one that is not an id is no agent this host could have told.
+      const told = Array.isArray(saved.basics) ? saved.basics.filter(identifier).slice(-BASICS_TOLD_MAX) : []
+      if (told.length) this.journal.basics = told
     }
     this.replies = new AgentReplies(core, this.journal, { now: this.now, log: this.log, save: () => this.persist(), typedId: deliveryId => typedId({ deliveryId }), refused: receiptRefused })
     this.persist()
@@ -1432,7 +1442,7 @@ export class SuperTabHost {
     this.watchThreadSessions(data)
     await this.leases()
     // Off the poll, so the backend calls of a notice never delay the next lease renewal. Owed at most once per text release.
-    this.skillsRunning ??= (async () => { for (const target of running) await this.refreshSkill(target) })()
+    this.skillsRunning ??= (async () => { const budget = { basics: BASICS_PER_PASS }; for (const target of running) await this.refreshSkill(target, budget) })()
       .finally(() => { this.skillsRunning = null })
   }
 
@@ -1819,10 +1829,10 @@ export class SuperTabHost {
     return target
   }
 
-  /** What a running Swarm session is told: an agent its person attached, the team's basics, once (Swarm v4); a Buddy, when a
-   *  CLI update ships new text for its skill (task #4673). Told through the Swarm, as any delivery, once it is in an open group.
+  /** What a running Swarm session is told: an agent without the team's basics, them once (Swarm v4); a Buddy, when a CLI update
+   *  ships new text for its skill (task #4673). Told through the Swarm, as any delivery, once it is in an open group.
    *  The operation id names the agent and what it is told, so a retry, a restart or a second daemon never sends it twice. */
-  private async refreshSkill(target: HostAgent): Promise<void> {
+  private async refreshSkill(target: HostAgent, budget: { basics: number }): Promise<void> {
     const session = this.core.agents.byAgent(target.agent.harnessId)
     // Read as every saved row is (project instructions, phase 4): a core from before role kinds answers in the wire's values.
     const skill = parseSwarmSkill(session?.swarmSkill)
@@ -1834,18 +1844,29 @@ export class SuperTabHost {
       this.skillChecks.delete(target.agent.harnessId)
     }
     const due = this.skillChecks.get(target.agent.harnessId) ?? 0
-    // An agent its person attached (Desktop's Attach, Swarm v4) was started outside the Swarm, so without the team's basics
-    // that every agent the Swarm starts gets at launch (lib/swarmSkills.ts SWARM_BASICS): it is told them once, as only it
-    // reads, in its own chat. The operation id names the text, so a restart or a second daemon never tells it twice. A
-    // plain shell is no agent, and a Buddy keeps its own skill.
-    if (session && !skill && (session.engine === 'claude' || session.engine === 'codex') && !isBuddy(object(target.agent)) && this.now() >= due) {
+    // Every agent the Swarm starts gets the team's basics at its launch (lib/swarmSkills.ts SWARM_BASICS), and its row says so. One
+    // its person attached (Desktop's Attach, Swarm v4) was started outside the Swarm, and one a release before 0.5.83 started
+    // has a row without the mark: neither ever read how the team works, so its person saw no agent talk to another (owner,
+    // 2026-11-09). Each is told them once, as only it reads, in its own chat, and the journal remembers it: a restart or a
+    // relaunch never tells it twice, and the operation id names the text, so a second daemon cannot either. A plain shell is no
+    // agent, and a Buddy keeps its own skill.
+    const lacking = !skill || (skill.role !== 'buddy' && skill.basics !== true)
+    if (session && lacking && (session.engine === 'claude' || session.engine === 'codex') && !isBuddy(object(target.agent))
+      && !this.journal.basics?.includes(target.agent.id) && this.now() >= due) {
+      // Left for the next pass, a second on, when this one has told its few.
+      if (budget.basics <= 0) return
+      budget.basics--
       this.skillChecks.set(target.agent.harnessId, Infinity)
       const notice = target.lead === true ? `${SWARM_BASICS}\n${PM_BASICS}` : SWARM_BASICS
       try {
         // Named by its text alone: its own hash, so no Buddy notice shares its id.
         const told = await this.tellSkill(target, { version: createHash('sha256').update(notice).digest('hex'), change: 0, notice }, current)
-        if (!told && current()) this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
-        else if (!told) this.skillChecks.delete(target.agent.harnessId)
+        if (told) {
+          this.journal.basics = [...(this.journal.basics ?? []).filter(id => id !== target.agent.id), target.agent.id].slice(-BASICS_TOLD_MAX)
+          this.persist()
+          this.log(`Told ${shownName(target.agent, 'an agent')} (agent ${target.agent.id}) how the team works: ${skill ? 'its launch did not carry the team\'s basics' : 'it was started outside the Swarm'}.`)
+        } else if (current()) this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
+        else this.skillChecks.delete(target.agent.harnessId)
       } catch (error) {
         this.log(error instanceof Error ? error.message : String(error))
         this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)

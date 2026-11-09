@@ -46,8 +46,9 @@ export function createSwarmSkillAdoption(deps: {
       noRole.add(session.agentId)
       return { row: session, commit: () => {} }
     }
-    // With its project's mode, so the relaunch writes that text and the host owes it no reload.
-    const swarmSkill = { ...grant, key: session.agentId }
+    // With its project's mode, so the relaunch writes that text and the host owes it no reload. Its relaunch carries the team's
+    // basics, as every launch but a Buddy's does, and the row says so (lib/savedSkill.ts `basics`).
+    const swarmSkill = { ...grant, key: session.agentId, ...(grant.role === 'buddy' ? {} : { basics: true as const }) }
     return { row: { ...session, swarmSkill }, commit: () => { deps.save(session.agentId, swarmSkill) } }
   }
   const adopt = async (session: RegisteredSession, current: () => boolean): Promise<RegisteredSession | null> => {

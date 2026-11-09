@@ -3686,10 +3686,13 @@ describe('an agent its person attached', () => {
         agentOnly: true, notice: 'skills' } }])
     t.wait(SKILL_WAIT); await host.tick(); await settle()
     expect(t.told).toHaveLength(1)
-    // A restart asks again under the same operation id, which the backend writes once.
+    // It is named in the log, and the journal remembers it: a restart never tells it again, and neither does a relaunch.
+    expect(t.log).toHaveBeenCalledWith(expect.stringContaining('(agent agent) how the team works: it was started outside the Swarm.'))
+    expect(t.saved().basics).toEqual(['agent'])
     const again = t.open()
     await again.tick(); await settle()
-    expect(t.told.map(c => c.operationId)).toEqual([t.told[0]!.operationId, t.told[0]!.operationId])
+    t.wait(SKILL_WAIT); await again.tick(); await settle()
+    expect(t.told).toHaveLength(1)
   })
 
   it('as its project\'s PM, is told the PM\'s part too', async () => {
@@ -3712,14 +3715,58 @@ describe('an agent its person attached', () => {
   // A release before 0.5.83 saved the same record without the mark: its agent never read how the team works, and without this
   // it stays so until it is relaunched, so its person saw no agent talk to another (owner, 2026-11-09: "i dont see any agent to
   // agent chat").
-  it('is told them too when the Swarm started it before the basics were part of its launch', async () => {
+  it('is told them too when the Swarm started it before the basics were part of its launch, with its PM\'s part when it is the PM', async () => {
     for (const [session, row, basics] of [[{ engine: 'claude', swarmSkill: { role: 'agent', key: 'harness' } }, {}, SWARM_BASICS],
       [{ engine: 'codex', swarmSkill: { role: 'coordinator', key: 'harness' } }, { lead: true }, `${SWARM_BASICS}\n${PM_BASICS}`]] as const) {
       const t = attached(session, row)
       const host = t.open()
       await host.tick(); await settle()
       expect(t.told.map(c => c.command.text)).toEqual([basics])
+      expect(t.log).toHaveBeenCalledWith(expect.stringContaining('(agent agent) how the team works: its launch did not carry the team\'s basics.'))
+      // Once, whatever restarts follow.
+      const again = t.open()
+      await again.tick(); await settle()
+      expect(t.told).toHaveLength(1)
     }
+  })
+
+  // A daemon started with many such agents wakes them a few at a time, never all at once.
+  it('tells a few agents in one pass and the rest in the passes after, each once', async () => {
+    const t = setup()
+    const rows = Array.from({ length: 7 }, (_, i) => ({ tabId: 'tab', agent: { id: `agent-${i}`, harnessId: `harness-${i}`, machineId: 'machine-1', chatId: `chat-${i}` } }))
+    t.core.agents.byAgent = vi.fn(id => ({ agentId: id, cwd: '/work/app', engine: 'claude', swarmSkill: { role: 'agent', key: id } }) as never)
+    const told: string[] = []
+    t.core.account.backend = vi.fn(async (_method: string, path: string, body?: unknown) => {
+      if (path.includes('/hosts/')) return { status: 200, body: { success: true, data: hostForm(rows, { tabs: ['tab'] }) } }
+      if (path.includes('asAgentId=')) {
+        const id = /asAgentId=([^&]+)/.exec(path)![1]!, n = id.split('-')[1]
+        return { status: 200, body: { success: true, data: swarmReply(path, { conversations: [{ id: `chat-${n}`, kind: 'agent-chat', agentIds: [id] }] }) } }
+      }
+      if ((body as any)?.command?.type === 'message.send') told.push((body as any).asAgentId)
+      return { status: 200, body: { success: true, data: {} } }
+    }) as never
+    const host = t.open()
+    await host.tick(); await settle()
+    expect(told).toEqual(['agent-0', 'agent-1', 'agent-2', 'agent-3', 'agent-4'])
+    await host.tick(); await settle()
+    expect(told).toHaveLength(7)
+    await host.tick(); await settle()
+    expect(told).toHaveLength(7)
+    expect(t.saved().basics).toEqual(rows.map(row => row.agent.id))
+  })
+
+  it('remembers at most the newest agents it told, and takes only ids from a saved journal', async () => {
+    const t = setup()
+    t.open()
+    const file = hostJournalFile(t.dir, 'machine-1')
+    writeFileSync(file, JSON.stringify({ ...t.saved(), basics: ['agent', 7, 'not an id!', ...Array.from({ length: 1_100 }, (_, i) => `old-${i}`)] }))
+    t.open()
+    expect(t.saved().basics).toHaveLength(1_000)
+    expect(t.saved().basics.at(-1)).toBe('old-1099')
+    expect(t.saved().basics).not.toContain('agent')
+    writeFileSync(file, JSON.stringify({ ...t.saved(), basics: 'agent' }))
+    t.open()
+    expect(t.saved().basics).toBeUndefined()
   })
 
   it('is told again later when the Swarm could not be read', async () => {

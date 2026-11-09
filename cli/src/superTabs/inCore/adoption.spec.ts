@@ -33,13 +33,14 @@ describe('old Swarm role adoption', () => {
     for (const grant of [{ role: 'coordinator' }, { role: 'agent' }, { role: 'agent', fallback: 'review' }] as const) {
       const t = setup(row({ engine })); t.role.mockResolvedValue(grant)
       expect(await t.adopt(t.saved, t.current)).toMatchObject({ swarmSkill: { ...grant, key: 'old-session' } })
-      expect(t.saved.swarmSkill).toEqual({ ...grant, key: 'old-session' })
+      // Its relaunch carries the team's basics, and its row says so.
+      expect(t.saved.swarmSkill).toEqual({ ...grant, key: 'old-session', basics: true })
     }
   })
   it('adopts the role with its project\'s skill mode, so the restarted session launches on that text', async () => {
     const t = setup(); t.role.mockResolvedValue({ role: 'coordinator', mode: 'default' })
     expect(await t.adopt(t.saved, t.current)).toMatchObject({ swarmSkill: { role: 'coordinator', key: 'old-session', mode: 'default' } })
-    expect(t.saved.swarmSkill).toEqual({ role: 'coordinator', key: 'old-session', mode: 'default' })
+    expect(t.saved.swarmSkill).toEqual({ role: 'coordinator', key: 'old-session', mode: 'default', basics: true })
   })
   it('carries metadata into a stopped resume without requiring a live registry row', async () => {
     const t = setup(row(), null)

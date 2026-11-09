@@ -377,8 +377,11 @@ export function createAgentCreator({
     // What Harness tells the agent (its instructions, and the pull request line for one another agent started), last.
     // A launch an older CLI saved to finish later (a pending intent) names its role in the wire's values (lead, dev, review):
     // read as this release keeps it, so a Reviewer keeps its swarm-review file. Nothing else is one.
-    const swarmSkill = input.swarmRole ? parseSwarmSkill({ role: input.swarmRole, key: label, fallback: input.swarmFallback, mode: input.swarmSkillMode,
+    const saved = input.swarmRole ? parseSwarmSkill({ role: input.swarmRole, key: label, fallback: input.swarmFallback, mode: input.swarmSkillMode,
       github: swarmGitHub ? true : undefined }) : undefined
+    // Every role but a Buddy's launches with the team's basics, and its row says so: a row without the mark is from before them, and
+    // its agent never read them (superTabs/host.ts tells it once).
+    const swarmSkill = saved && saved.role !== 'buddy' ? { ...saved, basics: true as const } : saved
     // Its own words: the Swarm's skill code (and its refusal's text) stays out of the core's bundle (src/leanEntry.spec.ts).
     if (input.swarmRole && !swarmSkill) return { ok: false, error: 'SWARM_SKILL_FAILED', detail: 'This launch names no Swarm role this Harness knows.' }
     let swarmInstructions: string | undefined
