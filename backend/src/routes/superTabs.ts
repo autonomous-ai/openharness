@@ -325,7 +325,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   onComputerSignedIn(signIn => store.computerSignedIn(signIn))
   const reads = options.reads ?? new SwarmReads(store, { githubApp: !!github })
   const hosts = options.hosts ?? new HostReads(store, { githubApp: !!github })
-  const shipping = options.shipping ?? new Shipping(prisma)
+  // The store's own database, as the reads above use it: a route table built on another store (a test's) reads that one.
+  const shipping = options.shipping ?? new Shipping(store.db)
   // Members' apps read a project's GitHub access again when its revision moves (projects.ts githubRevision). A move that
   // fails is logged and changes no answer: the apps then read again within 5 minutes, as before.
   /** One organization check against GitHub for [userId], within OWNER_CHECKS_PER_MINUTE (security reviews of #3201). */
