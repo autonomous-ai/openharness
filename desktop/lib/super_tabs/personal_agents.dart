@@ -1,37 +1,47 @@
-import 'dart:convert';
-
-import 'package:cryptography/dart.dart' show DartSha256;
-
 import '../core/models.dart';
 import '../state/app_state.dart';
 import '../state/swarm.dart';
 import '../state/terminal_pane.dart';
 import 'model.dart';
 
-/// The id the Swarm gives the agent a session on [machineId] becomes when it joins: the first 24 hex digits of the SHA-256 of
-/// the pair as JSON (backend superTabs/model.ts `stableId`). A pane's row wears the face that id draws, so its face is the
-/// same before and after it joins.
-String swarmAgentId(String machineId, String harnessId) => const DartSha256()
-    .hashSync(utf8.encode(jsonEncode([machineId, harnessId])))
-    .bytes
-    .map((b) => b.toRadixString(16).padLeft(2, '0'))
-    .join()
-    .substring(0, 24);
+/// The Swarm's ids for the agents whose rows have drawn: a row asks again on every draw, and a desk holds hundreds of panes.
+final _swarmIds = <(String, String), String>{};
+
+/// The id the Swarm gives the agent a session on [machineId] becomes when it joins (backend `stableId`, here [stableId]): the
+/// pair its join sends. A pane's row wears the face that id draws, so its face is the same before and after it joins.
+String swarmAgentId(String machineId, String harnessId) {
+  if (_swarmIds.length > 512) _swarmIds.clear();
+  return _swarmIds[(machineId, harnessId)] ??= stableId([machineId, harnessId]);
+}
+
+/// One pane of the person's own in one of their tabs.
+typedef OwnPane = ({Swarm tab, TerminalPane pane, MachineState machine});
+
+/// The person's own panes, in their tabs in tab order: a Swarm tab's own views, viewers, a computer shared with them and a
+/// Harness Team account's are left out. A session two tabs show is two entries ([personalAgents] lists it once).
+Iterable<OwnPane> ownPanes(AppNotifier app) sync* {
+  for (final tab in app.swarms) {
+    if (tab.isSuperTab || tab.isUtility) continue;
+    for (final pane in tab.panes) {
+      if (pane.agentId == null || pane.isViewer) continue;
+      final machine = app.stateOf(pane.machineId);
+      if (machine == null ||
+          machine.belongsToOtherAccount ||
+          machine.machine.isTeamAccount) {
+        continue;
+      }
+      yield (tab: tab, pane: pane, machine: machine);
+    }
+  }
+}
 
 /// A pane of the person's own as a row of Your Team in their Personal Swarm (Swarm v4, anh Dee 2026-11-09: every pane they run
 /// is an agent there). It is worked out here, on their Desktop, from the panes their tabs hold: nothing is sent until they open
 /// it, and then it joins the Swarm as an agent.
 class PersonalAgent {
-  PersonalAgent({
-    required this.tab,
-    required this.pane,
-    required this.machine,
-    required this.agent,
-  }) : name = agent.displayName;
+  PersonalAgent({required this.machine, required this.agent})
+    : name = _nameOf(agent);
 
-  /// The tab it is first in.
-  final Swarm tab;
-  final TerminalPane pane;
   final MachineState machine;
 
   /// What its computer says of the session.
@@ -39,8 +49,17 @@ class PersonalAgent {
 
   String get machineId => machine.machine.machineId;
 
-  /// The name where its person already sees it, in the pane's header.
+  /// The name its pane shows, or the folder it works in while that is still "Untitled Pane": two sessions of one repo read as
+  /// what they work on.
   final String name;
+
+  static String _nameOf(Agent agent) {
+    final shown = agent.displayName;
+    final folder = shown == kUntitledPane
+        ? agent.displayProject?.label.trim()
+        : null;
+    return folder == null || folder.isEmpty ? shown : folder;
+  }
 
   String get computer => machine.machine.displayName;
 
@@ -54,8 +73,7 @@ class PersonalAgent {
 }
 
 /// The panes of the person's own that are agents of their Swarm [snapshot] but not in it yet, by name: a Claude Code or Codex
-/// session that runs (the Swarm takes no other) on one of their own computers, each once whatever tabs hold it. A Swarm tab's
-/// own views, viewers, a computer shared with them and a Harness Team account's are left out.
+/// session that runs ([kSwarmEngines]) on one of their own computers, each once whatever tabs hold it.
 List<PersonalAgent> personalAgents(AppNotifier app, SuperTabSnapshot snapshot) {
   final joined = {
     for (final agent in snapshot.agents)
@@ -65,32 +83,20 @@ List<PersonalAgent> personalAgents(AppNotifier app, SuperTabSnapshot snapshot) {
   // Each computer's sessions by id, worked out once for the pass: a desk holds hundreds of panes.
   final sessions = <String, Map<String, Agent>>{};
   final rows = <PersonalAgent>[];
-  for (final tab in app.swarms) {
-    if (tab.isSuperTab || tab.isUtility) continue;
-    for (final pane in tab.panes) {
-      final harnessId = pane.agentId;
-      if (harnessId == null || pane.isViewer) continue;
-      final machine = app.stateOf(pane.machineId);
-      if (machine == null ||
-          machine.belongsToOtherAccount ||
-          machine.machine.isTeamAccount) {
-        continue;
-      }
-      final key = (machineIdKey(pane.machineId), harnessId);
-      if (joined.contains(key) || !seen.add(key)) continue;
-      final agent = (sessions[pane.machineId] ??= {
-        for (final agent in machine.agents) agent.id: agent,
-      })[harnessId];
-      if (agent == null ||
-          (agent.engine != 'claude' && agent.engine != 'codex') ||
-          agent.isStopped ||
-          !agent.terminalAvailable) {
-        continue;
-      }
-      rows.add(
-        PersonalAgent(tab: tab, pane: pane, machine: machine, agent: agent),
-      );
+  for (final entry in ownPanes(app)) {
+    final harnessId = entry.pane.agentId!;
+    final key = (machineIdKey(entry.pane.machineId), harnessId);
+    if (joined.contains(key) || !seen.add(key)) continue;
+    final agent = (sessions[entry.pane.machineId] ??= {
+      for (final agent in entry.machine.agents) agent.id: agent,
+    })[harnessId];
+    if (agent == null ||
+        !kSwarmEngines.contains(agent.engine) ||
+        agent.isStopped ||
+        !agent.terminalAvailable) {
+      continue;
     }
+    rows.add(PersonalAgent(machine: entry.machine, agent: agent));
   }
   return rows..sort((a, b) {
     final byName = a._order.compareTo(b._order);

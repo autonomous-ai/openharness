@@ -24,6 +24,8 @@ import '../widgets/new_harness_paste.dart';
 import '../widgets/terminal_name_prompt.dart';
 import '../widgets/terminal_prompt.dart';
 import '../core/local_key_value_store.dart';
+import '../core/models.dart' show sameMachineId;
+import '../logging/app_log.dart';
 import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
@@ -275,13 +277,30 @@ class _SuperTabViewState extends State<SuperTabView>
     _closeSidebar();
   }
 
-  /// Opens a pane of the person's own listed under Your Team in their Personal Swarm: its tab comes forward with the pane
-  /// focused.
-  void _openPane(PersonalAgent pane) {
+  /// Opens a pane of the person's own listed under Your Team in their Personal Swarm: the tab they last had it focused in
+  /// (else the first that holds it) comes forward with the pane focused.
+  void _openPane(PersonalAgent row) {
     final app = widget.app;
     if (app == null) return;
-    app.selectSwarm(pane.tab.id);
-    app.focusPane(pane.pane.id, reveal: true);
+    final holders = [
+      for (final entry in ownPanes(app))
+        if (entry.pane.agentId == row.agent.id &&
+            sameMachineId(entry.pane.machineId, row.machineId))
+          entry,
+    ];
+    final held =
+        holders.where((e) => e.tab.focusedPaneId == e.pane.id).firstOrNull ??
+        holders.firstOrNull;
+    if (held == null) {
+      // Closed since the list was drawn, which the next draw shows.
+      appLog.info(
+        'super-tabs',
+        'A pane in Your Team was opened after it closed',
+      );
+      return;
+    }
+    app.selectSwarm(held.tab.id);
+    app.focusPane(held.pane.id, reveal: true);
   }
 
   /// Keeps the Board of the project [group] belongs to in the middle, for a

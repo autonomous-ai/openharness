@@ -10,6 +10,7 @@ import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/identity.dart';
+import 'package:harness/super_tabs/model.dart' show stableId;
 import 'package:harness/super_tabs/personal_agents.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/swarm_switcher.dart';
@@ -44,6 +45,7 @@ void main() {
     String status = 'active',
     String? title,
     bool chosen = true,
+    AgentProject? project,
   }) => Agent(
     id: id,
     name: name,
@@ -52,6 +54,7 @@ void main() {
     engine: engine,
     status: status,
     terminalAvailable: status != 'stopped',
+    project: project,
   );
 
   void computer(
@@ -271,6 +274,16 @@ void main() {
       swarmAgentId('0c2d6c8a-3f7e-4d0e-9a52-6f1f6a2f0b11', 'session-ü'),
       '53fc1449b3b28a00489bbf59',
     );
+    expect(swarmAgentId('m', 'h1'), stableId(['m', 'h1']));
+    // The id of a message a person sends is the same function over its three parts.
+    expect(
+      superTabMessageId(
+        tabId: '0123456789abcdef01234567',
+        accountId: 'owner',
+        operationId: 'receipt-1',
+      ),
+      'c48f7b12bbeacb4a0f75c722',
+    );
   });
 
   scene(
@@ -423,6 +436,50 @@ void main() {
       },
     );
 
+    scene('a session two tabs show comes forward in the one it was last focused in, '
+        'else the first', (tester, f, c) async {
+      final swarmTab = f.app.swarms.firstWhere((s) => s.isSuperTab).id;
+      final one = f.app.swarms.firstWhere((t) => t.id == 'one');
+      final two = f.app.swarms.firstWhere((t) => t.id == 'two');
+      final docsInTwo = two.panes.firstWhere((p) => p.agentId == 'docs');
+      two.focusedPaneId = docsInTwo.id;
+      await tester.tap(key('super-pane-m-docs'));
+      await tester.pump();
+      expect(f.app.activeSwarmId, 'two');
+      expect(f.app.focusedPaneId, docsInTwo.id);
+
+      // Focused in neither: the first tab that holds it.
+      one.focusedPaneId = null;
+      two.focusedPaneId = null;
+      f.app.selectSwarm(swarmTab);
+      await changed(tester, f);
+      await tester.tap(key('super-pane-m-docs'));
+      await tester.pump();
+      expect(f.app.activeSwarmId, 'one');
+      expect(
+        f.app.focusedPaneId,
+        one.panes.firstWhere((p) => p.agentId == 'docs').id,
+      );
+    });
+
+    scene(
+      'a click on a row whose pane closed since it was drawn does nothing',
+      (tester, f, c) async {
+        for (final tab in f.app.swarms.where((t) => !t.isSuperTab)) {
+          tab.panes.removeWhere((p) => p.agentId == 'docs');
+        }
+        // The list is not drawn again yet: the row is still there to click.
+        expect(key('super-pane-m-docs'), findsOneWidget);
+        final before = f.app.activeSwarmId;
+        await tester.tap(key('super-pane-m-docs'));
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+        expect(f.app.activeSwarmId, before);
+        await changed(tester, f);
+        expect(key('super-pane-m-docs'), findsNothing);
+      },
+    );
+
     scene(
       'one session name on three computers: three rows, told apart by their '
       'computers, each bringing its own tab forward',
@@ -478,9 +535,11 @@ void main() {
           findsOneWidget,
         );
         expect(
-          inRow('super-pane-m-u', find.text('Untitled Pane')),
+          inRow('super-pane-m-v', find.text('Untitled Pane')),
           findsOneWidget,
         );
+        // One that is still untitled and works in a folder reads as that folder.
+        expect(inRow('super-pane-m-u', find.text('api')), findsOneWidget);
       },
       size: const Size(1024, 700),
       desk: (f) {
@@ -491,13 +550,20 @@ void main() {
             'A session named with far too many words to fit in the left pane of any window at all',
           ),
           session('t', 'harness-7', title: 'Fix the login page', chosen: false),
-          session('u', 'harness-8', chosen: false),
+          session(
+            'u',
+            'harness-8',
+            chosen: false,
+            project: const AgentProject(name: 'api', cwd: '/w/api'),
+          ),
+          session('v', 'harness-9', chosen: false),
         ];
         deskTab(f.app, 'one', [
           pane('m', 'e'),
           pane('m', 'l'),
           pane('m', 't'),
           pane('m', 'u'),
+          pane('m', 'v'),
         ]);
       },
     );
