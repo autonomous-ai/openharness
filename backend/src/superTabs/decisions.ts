@@ -215,8 +215,9 @@ export function answerableBy(state: SuperTabState, actor: Actor, decision: Decis
 }
 
 /** What tells the asking agent and the Lead, whichever of them is still in the conversation. A notice only they read, with
- *  none of the answer in it: the decisions read, which checks who reads it, has the answer (review of #1753). The notices of this
- *  file point to no command for it: the CLI no longer has `decisions`, and a notice names only the verbs it has (noticeCommands.test.ts). */
+ *  none of the answer in it (review of #1753): the decisions read (GET /decisions), which checks who reads it, has the answer. Since
+ *  Swarm v4 the CLI has no verb for that read, so these notices name no command; a notice names only verbs the CLI has
+ *  (noticeCommands.test.ts). */
 export const ANSWERED_NOTICE = 'A decision asked in this conversation was answered.'
 /** The same notice for a decision the person left to the PM, with none of the answer either; [name] is what its project calls
  *  its coordinator (instructions.ts coordinatorNameOf). */

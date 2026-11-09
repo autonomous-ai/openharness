@@ -3,7 +3,7 @@ import { storeOldLeads } from './leads.test-support.js'
 import type { Prisma } from '@prisma/client'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
-import { ANSWERED_NOTICE, askDecisions, checkAsker, decisionsWaiting, listDecisions, mustAgreePassed, overdueNotice, delegatedNotice, answerDecision, withdrawIn, workEnded, workOver, type DecisionTarget } from './decisions.js'
+import { ANSWERED_NOTICE, CLOSED_CHAT_ANSWERED_NOTICE, closedChatDelegatedNotice, askDecisions, checkAsker, decisionsWaiting, listDecisions, mustAgreePassed, overdueNotice, delegatedNotice, answerDecision, withdrawIn, workEnded, workOver, type DecisionTarget } from './decisions.js'
 import { missingVerbs } from './cliVerbs.test-support.js'
 import { buddyChatId } from './buddies.js'
 import { giveOwnBuddy } from './ownBuddy.test-support.js'
@@ -324,8 +324,9 @@ describe('leaving a decision to the PM', () => {
       s => { withBuddy(s); return s.run({ ...answer, delegate: true }, peer, { decision: open(s, { defaultAt: 1000 }), ...timed }).messages[0]!.text },
       s => mustAgreePassed(s.state, peer, open(s, { defaultAt: 1000, mustAgree: true }), 1000).text,
     ]
-    for (const [at, notice] of notices.entries()) {
-      const text = notice(swarm())
+    // And the two a closed Chat with PM gets in its project chat instead.
+    const closed = [CLOSED_CHAT_ANSWERED_NOTICE, closedChatDelegatedNotice('Product Manager')]
+    for (const [at, text] of [...notices.map(notice => notice(swarm())), ...closed].entries()) {
       expect(text, `notice ${at}`).toMatch(/^A decision /)
       expect(missingVerbs(text), text).toEqual([])
     }
