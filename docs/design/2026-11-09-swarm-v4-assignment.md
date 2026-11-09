@@ -1,6 +1,8 @@
 # Swarm v4: who builds what, and when
 
-Status: the solver is built and tested (`cli/src/superTabs/assign/`); its inputs and outputs are next (below).
+Status: built. The solver (`cli/src/superTabs/assign/search.ts`, `schedule.ts`) and the assigner that feeds it and applies
+its plan (`assign/crew.ts`, `githubAssign.ts`) run in the Harness of the person whose agent is the project's PM. Learned
+estimates, CPU cores and moving work are next (below).
 
 anh Dee, 2026-11-09: "this is a classic optimization problem. N tasks. M machines with cpu ssd token. how do we best
 assign them." "The bottleneck is a combination of cpu disk token etc." Assignment is the core of a Swarm: the right task
@@ -71,13 +73,34 @@ Code is everything that can be counted or checked; the PM's guide keeps only jud
   `needs:`, `size:`) and its priority; following a person who asks for a given builder. Code checks those labels: an
   issue missing them is not assigned and the PM is told why.
 
+## The assigner (built)
+
+Every minute, in the PM's person's Harness, for each project its PM leads from there (`githubMerge.ts ledProjects`):
+
+- **Tasks** are the repository's open issues the PM sized (`size:s`, `size:m`, `size:l`) that no builder holds. One a
+  builder holds is queued on it, and one it took (`status:taken`) keeps it busy for half its size. An issue another team's
+  label holds is left alone, as is any `builder:` label a person set. `part:` gives the task's part, `p0`-`p2` its weight
+  (8, 4, 2; 1 for none), "after #N" in its text what must end first, and each `needs:` label a tool, system or GPU its
+  builder's machine must report, else that builder never gets it.
+- **Builders** are the project's regular Claude Code and Codex agents as the PM reads the Swarm (`crewOf`): never the PM,
+  a Buddy, one stopping, one whose machine is down, or another private project's. A builder is quicker in a part where its
+  label was on closed issues: 15% a task, 40% at most.
+- **Machines** give Swarm work 75% of their memory and their project disk less 10 GB; CPU is 8 cores until machines report
+  their count. **Subscriptions** are each machine's engine windows as it reported them, a 20% reserve kept for its person.
+- **Sizes** until estimates are learned: s 30 minutes, 1 core, 2 GB, 1 GB, 3% of a 5-hour window; m 90, 2, 4 GB, 2 GB, 10%;
+  l 240, 4, 8 GB, 4 GB, 25%; a weekly window spends a fifth of that.
+- **The plan** is the solver's, from the last plan (so it changes only where it gains), in a second at most. Each builder
+  gets the free tasks it starts next until it holds two: `builder:<name>` on the issue and one comment, "Harness, 15:40: for
+  **Pip**: it can start now, and it finished 3 part:api tasks." GitHub news then brings each its task.
+- **Failures** are said once: a label GitHub refused (tried again next pass), a task no builder can do and why, gh signed
+  out or rate limited (as the merger: `githubRest.ts`).
+
 ## Next
 
-1. **Inputs.** Each daemon reports its subscription's windows (percent left and resets, nothing else) with its machine's
-   free CPU, memory and disk; the server joins them with the roster into a crew view.
-2. **Estimates.** Each finished task records its real minutes, peak CPU and memory, disk and spend, by part, size and
-   model; estimates take the mean for time and the 80th percentile for memory and disk. Until then the route's size table.
-3. **The assigner** in the PM's daemon: tasks labelled ready, the crew view, the solver, labels and one line of why.
-4. **Moving work** and **reviewers**.
+1. **Estimates.** Each finished task records its real minutes, peak CPU and memory, disk and spend, by part, size and
+   model; estimates take the mean for time and the 80th percentile for memory and disk.
+2. **CPU cores** in each machine's report, so CPU is measured, not assumed.
+3. **Works on**: what a person says their agent works on, beside what it learned.
+4. **Moving work** when a builder stops, stalls or runs out of quota, and **reviewers**.
 5. **Measures** in Desktop: time from label to merge, idle builder-minutes, quota left unspent at resets, overload minutes,
    holds and conflicts.

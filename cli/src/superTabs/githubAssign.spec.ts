@@ -1,0 +1,131 @@
+import { createHash } from 'node:crypto'
+import { describe, expect, it, vi } from 'vitest'
+import type { Crew } from './assign/crew.js'
+import { GitHubAssign } from './githubAssign.js'
+import type { GitHubGet, GitHubSend } from './githubRest.js'
+
+type Json = Record<string, unknown>
+const GiB = 1024 ** 3
+const issue = (number: number, labels: string[], extra: Json = {}): Json => ({ number, labels: labels.map(name => ({ name })), ...extra })
+const PROJECT = { repo: 'acme/app', pm: 'Faye', tabId: 'tab', pmAgentId: 'faye', projectId: 'app' }
+
+/** One repository's issues as GitHub's REST API answers them, with ETags, and what was sent to it. Labels sent are kept
+ *  only once [applied] says GitHub's lists show them. */
+function fakeGitHub(open: Json[], closed: Json[] = []) {
+  const state = { open, closed, labelAnswer: 200, signedOut: false, applied: false }
+  const sent: Array<{ method: string; path: string; body: Json }> = []
+  const get: GitHubGet = async (path, etag) => {
+    if (state.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
+    const url = new URL(`https://api.github.com${path}`)
+    if (url.pathname !== '/repos/acme/app/issues') return { status: 404, etag: null, body: null, resetAt: null }
+    const body = url.searchParams.get('state') === 'closed' ? state.closed : state.open
+    const tag = `"${createHash('sha1').update(JSON.stringify(body)).digest('hex')}"`
+    return etag === tag ? { status: 304, etag: tag, body: null, resetAt: null } : { status: 200, etag: tag, body, resetAt: null }
+  }
+  const send: GitHubSend = async (method, path, body) => {
+    sent.push({ method, path, body: body as Json })
+    const labels = /\/issues\/(\d+)\/labels$/.exec(path)
+    if (labels) {
+      if (state.labelAnswer !== 200) return { status: state.labelAnswer, etag: null, body: {}, resetAt: null }
+      if (state.applied) state.open.find(i => i.number === Number(labels[1]))!.labels = [...(state.open.find(i => i.number === Number(labels[1]))!.labels as Json[]),
+        ...((body as Json).labels as string[]).map(name => ({ name }))]
+      return { status: 200, etag: null, body: [], resetAt: null }
+    }
+    return { status: 201, etag: null, body: {}, resetAt: null }
+  }
+  return { state, sent, get, send }
+}
+
+/** Pip and Juno on one Mac with room and quota. */
+const crew = (): Crew => ({
+  builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' },
+    { id: 'juno', name: 'Juno', label: 'builder:juno', machineId: 'mac', engine: 'claude' }],
+  machines: [{ machineId: 'mac', observation: { resources: { memoryTotalBytes: 64 * GiB, projectDiskFreeBytes: 500 * GiB } } }],
+})
+
+function setup(open: Json[], options: { closed?: Json[]; crew?: Crew } = {}) {
+  const github = fakeGitHub(open, options.closed)
+  const log = vi.fn()
+  const assigner = new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send,
+    now: () => Date.parse('2026-11-09T07:31:00Z'), log })
+  const labelled = () => github.sent.filter(s => s.path.endsWith('/labels')).map(s => [Number(s.path.split('/').at(-2)), (s.body.labels as string[])[0]])
+  const said = () => github.sent.filter(s => s.path.endsWith('/comments')).map(s => [Number(s.path.split('/').at(-2)), String(s.body.body)])
+  return { github, assigner, log, labelled, said }
+}
+
+describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () => {
+  it('gives each builder what it starts next, two deep, labelled, with one line of why', async () => {
+    const f = setup([issue(1, ['size:s', 'p0']), issue(2, ['size:m', 'p1']), issue(3, ['size:m']), issue(4, ['size:m']), issue(5, ['size:m'])])
+    await f.assigner.tick()
+    const given = f.labelled()
+    expect(given).toHaveLength(4)
+    expect(given.filter(([, label]) => label === 'builder:pip')).toHaveLength(2)
+    expect(given.filter(([, label]) => label === 'builder:juno')).toHaveLength(2)
+    // The p0 and the p1 go first, each to a builder that can start it now.
+    expect(given.map(([n]) => n)).toEqual(expect.arrayContaining([1, 2]))
+    const why = new Map(f.said() as Array<[number, string]>)
+    expect(why.get(1)).toMatch(/^Harness, \d\d:\d\d: for \*\*(Pip|Juno)\*\*: it can start now\.$/)
+    expect(f.log).toHaveBeenCalledWith(expect.stringMatching(/^\[super-tab\] gave acme\/app#1 to (Pip|Juno) \(it can start now\)$/))
+  })
+
+  it('gives a task once, though GitHub\'s lists have not caught up with its label yet', async () => {
+    const f = setup([issue(1, ['size:s'])])
+    await f.assigner.tick()
+    await f.assigner.tick()
+    expect(f.labelled()).toHaveLength(1)
+    expect(f.said()).toHaveLength(1)
+  })
+
+  it('never moves a task its PM or a person gave, and counts it in that builder\'s list', async () => {
+    const f = setup([issue(1, ['size:m', 'builder:juno']), issue(2, ['size:m', 'builder:juno', 'status:taken']), issue(3, ['size:s'])])
+    await f.assigner.tick()
+    expect(f.labelled()).toEqual([[3, 'builder:pip']])
+  })
+
+  it('gives nothing the PM has not sized, nothing to a team with no builders, and keeps a full list full', async () => {
+    const unsized = setup([issue(1, ['part:api'])])
+    await unsized.assigner.tick()
+    expect(unsized.github.sent).toEqual([])
+    const nobody = setup([issue(1, ['size:s'])], { crew: { builders: [], machines: [] } })
+    await nobody.assigner.tick()
+    expect(nobody.github.sent).toEqual([])
+    const full = setup([issue(1, ['size:m', 'builder:pip']), issue(2, ['size:m', 'builder:pip']), issue(3, ['size:m', 'builder:juno']),
+      issue(4, ['size:m', 'builder:juno']), issue(5, ['size:s'])])
+    await full.assigner.tick()
+    expect(full.github.sent).toEqual([])
+  })
+
+  it('gives what only one machine can build to a builder on it, and says when none can', async () => {
+    const team: Crew = { builders: [...crew().builders, { id: 'atlas', name: 'Atlas', label: 'builder:atlas', machineId: 'box', engine: 'codex' }],
+      machines: [{ machineId: 'mac', observation: { tools: { xcode: true }, resources: { memoryTotalBytes: 64 * GiB } } }, { machineId: 'box', observation: {} }] }
+    const f = setup([issue(1, ['size:s', 'needs:xcode', 'p0']), issue(2, ['size:s', 'needs:robot-arm'])], { crew: team })
+    await f.assigner.tick()
+    expect(f.labelled().find(([n]) => n === 1)?.[1]).toMatch(/^builder:(pip|juno)$/)
+    expect(f.labelled().some(([n]) => n === 2)).toBe(false)
+    expect(f.log).toHaveBeenCalledWith(expect.stringContaining('UNPLACED acme/app#2'))
+    // Said once, not every pass.
+    await f.assigner.tick()
+    expect(f.log.mock.calls.filter(([line]) => String(line).includes('UNPLACED'))).toHaveLength(1)
+  })
+
+  it('says a label GitHub refused once, and gives the task again on the next pass', async () => {
+    const f = setup([issue(1, ['size:s'])])
+    f.github.state.labelAnswer = 403
+    await f.assigner.tick()
+    await f.assigner.tick()
+    expect(f.said()).toEqual([])
+    expect(f.log.mock.calls.filter(([line]) => String(line).includes('LABEL_REFUSED'))).toHaveLength(1)
+    f.github.state.labelAnswer = 200
+    await f.assigner.tick()
+    expect(f.labelled()).toEqual([[1, 'builder:pip'], [1, 'builder:pip'], [1, expect.stringMatching(/^builder:(pip|juno)$/)]])
+    expect(f.said()).toHaveLength(1)
+  })
+
+  it('stops while gh is signed out, says so once, and says when it runs again', async () => {
+    const f = setup([issue(1, ['size:s'])])
+    f.github.state.signedOut = true
+    await f.assigner.tick()
+    expect(f.log).toHaveBeenCalledWith(expect.stringContaining('Task assignment stopped · GH_SIGNED_OUT'))
+    expect(f.github.sent).toEqual([])
+  })
+})

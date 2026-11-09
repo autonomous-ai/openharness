@@ -90,6 +90,12 @@ stays (#4591, #4598, #4604 among them). The Lead gives each an owner.
 | #4537 Four-part instructions | skills and instructions re-sent on a version change or compaction; the Lead's schedule as server messages |
 | #4534 Review independence (PR #3554, ready to merge) | a reviewer of one security review never gets the other; a stuck step moves without a cancel |
 
+**Who builds which task is code (Swarm v4, anh Dee 2026-11-09):** `cli/src/superTabs/githubAssign.ts` reads the PM's
+labels (`part:`, `needs:`, `size:`, `p0`-`p2`, "after #N"), the project's builders and their machines' memory, disk and
+quota, plans with the solver (`cli/src/superTabs/assign/`) and labels `builder:<name>` with why, keeping every list two deep.
+The PM's line "Give a task to the builder who owns its part, is free and has what it needs; keep every builder's list two
+deep" is gone from `PM_BASICS`; the PM still sizes and labels, which is judgment.
+
 **Reassign a task when its claim goes quiet is already code:** `liveness.ts` drops a task whose lease runs out (5
 minutes with no progress report, 30 minutes quiet), `dispatch.ts` `candidatesFor` hands it on, and `stuck.ts` alerts
 after 10 minutes. The prompts still say 20 minutes; the code waits 30.

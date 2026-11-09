@@ -1,0 +1,234 @@
+/**
+ * A Swarm v4 team's assignment problem as GitHub and the Swarm say it now (docs/design/2026-11-09-swarm-v4-assignment.md):
+ * its tasks are the repository's open issues the PM labelled, its builders the project's agents, its machines and
+ * subscriptions what each machine last reported. The solver (search.ts) plans it; this file reads it in and picks what each
+ * builder starts next. Pure: githubAssign.ts reads GitHub and the Swarm and applies the picks.
+ */
+import type { Account, Builder, Machine, Plan, Problem, QuotaWindow, Task } from './model.js'
+
+type Json = Record<string, unknown>
+const object = (value: unknown): Json => value && typeof value === 'object' && !Array.isArray(value) ? value as Json : {}
+const GiB = 1024 ** 3
+
+/**
+ * What a task of each size takes until finished tasks teach better (the design's Next 2): minutes of work, what it holds of
+ * its machine while it runs, and the percent of a 5-hour window it spends. A weekly window is spent a fifth as fast.
+ */
+export const SIZES: Record<'s' | 'm' | 'l', { minutes: number; cpu: number; ram: number; disk: number; spend: number }> = {
+  s: { minutes: 30, cpu: 1, ram: 2 * GiB, disk: 1 * GiB, spend: 3 },
+  m: { minutes: 90, cpu: 2, ram: 4 * GiB, disk: 2 * GiB, spend: 10 },
+  l: { minutes: 240, cpu: 4, ram: 8 * GiB, disk: 4 * GiB, spend: 25 },
+}
+/** A priority's weight in the plan: a p0 waiting a minute counts as a p2 waiting four. */
+export const WEIGHTS: Record<string, number> = { p0: 8, p1: 4, p2: 2 }
+/** The percent of each window its person keeps for their own work: Swarm work never spends it (AGENTS.md, contributed
+ *  capacity: "their quota is never drained without them knowing"). */
+export const RESERVE = 20
+/** Cores a machine gives Swarm work until hosts report how many they have: two large tasks at once. */
+export const CORES = 8
+/** Of a machine's memory, what Swarm work may hold: its person keeps the rest. */
+export const MEMORY_SHARE = 0.75
+/** Disk its person keeps free whatever the Swarm does. */
+export const DISK_KEPT = 10 * GiB
+/** How deep each builder's list is kept (PM_BASICS: "keep every builder's list two deep"): what it works on and what is next. */
+export const DEEP = 2
+
+/** One of the project's agents that builds, as the PM's read of the Swarm names it. */
+export interface CrewBuilder { id: string; name: string; label: string; machineId: string; engine: string; model?: string | null }
+/** A machine a builder runs on, with its last report (backend machines.ts machineObservationSchema). */
+export interface CrewMachine { machineId: string; name?: string; observation?: Json }
+export interface Crew { builders: CrewBuilder[]; machines: CrewMachine[] }
+
+/** The problem, and what the picks and their reasons need to know of it. */
+export interface Read {
+  problem: Problem
+  /** Each builder's tasks open now: in progress and queued, by builder id. */
+  open: Map<string, number>
+  /** The tasks no builder holds, which this may give. */
+  free: Set<string>
+  /** Each builder's finished tasks by part, from the closed issues its label was on. */
+  done: Map<string, Map<string, number>>
+  /** The builders by id, for their names and labels. */
+  builders: Map<string, CrewBuilder>
+}
+
+/** The label a builder's tasks carry: builder:pip for Pip, as githubMentions.ts builderLabel. */
+export const labelOf = (name: string): string => `builder:${name.trim().toLowerCase().replace(/\s+/g, '-')}`
+
+const labelsOf = (issue: Json): string[] =>
+  (Array.isArray(issue.labels) ? issue.labels.map(object) : []).map(label => String(label.name ?? '')).filter(Boolean)
+const valueOf = (labels: string[], prefix: string): string | undefined =>
+  labels.find(label => label.startsWith(prefix) && label.length > prefix.length)?.slice(prefix.length)
+
+/** The issues an issue's text says must end first: "after #12", "depends on #12", "blocked by #12". */
+export function dependsOn(body: unknown): number[] {
+  const found = new Set<number>()
+  for (const match of String(body ?? '').matchAll(/\b(?:after|depends on|blocked by)\s+#(\d+)/gi)) found.add(Number(match[1]))
+  return [...found]
+}
+
+/** Whether a machine has what a `needs:` label asks: a tool it reports, its system, or a GPU. */
+export function machineHas(observation: Json | undefined, need: string): boolean {
+  const tools = object(observation?.tools), resources = object(observation?.resources)
+  if (tools[need] === true) return true
+  const os = String(resources.os ?? '').toLowerCase()
+  if (['macos', 'mac'].includes(need)) return os.includes('mac') || os.includes('darwin')
+  if (need === 'linux' || need === 'windows') return os.includes(need)
+  if (need === 'gpu') return typeof resources.gpuPercent === 'number'
+  return false
+}
+
+/** Minutes from [now] to a reset as a machine reports it (ISO time or epoch ms), never before now; null when unknown. */
+function minutesUntil(reset: unknown, now: number): number | null {
+  const at = typeof reset === 'number' ? reset : typeof reset === 'string' ? Date.parse(reset) : NaN
+  return Number.isFinite(at) ? Math.max(0, Math.ceil((at - now) / 60_000)) : null
+}
+
+/** How often a window refills, by its name as engines give it: five hours, a week, or unknown. */
+function everyOf(name: string): number | null {
+  if (/5\s*h|five|hour|primary/i.test(name)) return 300
+  if (/week|7\s*d|seven|secondary/i.test(name)) return 7 * 24 * 60
+  return null
+}
+
+/**
+ * The problem as GitHub and the Swarm say it at [now]: the open issues the PM sized and nobody holds are free tasks; those
+ * a builder holds are queued on it (pinned, so the plan sees its list), and the one it has taken keeps it busy for half
+ * its size; an issue another label holds is not this team's to plan.
+ */
+export function readProblem(input: { now: number; issues: Json[]; closed: Json[]; crew: Crew }): Read {
+  const { now, crew } = input
+  const byLabel = new Map(crew.builders.map(b => [b.label, b]))
+  const machines = new Map(crew.machines.map(m => [m.machineId, m]))
+  const open = new Map<string, number>(crew.builders.map(b => [b.id, 0]))
+  const busy = new Map<string, number>()
+  const free = new Set<string>()
+  const done = new Map<string, Map<string, number>>()
+  for (const issue of input.closed) {
+    if (issue.pull_request) continue
+    const labels = labelsOf(issue), part = valueOf(labels, 'part:')
+    const builder = labels.map(label => byLabel.get(label)).find(Boolean)
+    if (!builder || !part) continue
+    const parts = done.get(builder.id) ?? new Map<string, number>()
+    parts.set(part, (parts.get(part) ?? 0) + 1)
+    done.set(builder.id, parts)
+  }
+  const tasks: Task[] = []
+  const issues = input.issues.filter(issue => !issue.pull_request && Number.isSafeInteger(issue.number))
+  const openNumbers = new Set(issues.map(issue => Number(issue.number)))
+  const windowNames = new Set<string>()
+  for (const machine of crew.machines) {
+    for (const quota of Array.isArray(machine.observation?.quotas) ? machine.observation.quotas.map(object) : []) {
+      for (const window of Array.isArray(quota.windows) ? quota.windows.map(object) : []) windowNames.add(String(window.name ?? ''))
+    }
+  }
+  for (const issue of issues) {
+    const labels = labelsOf(issue)
+    const held = labels.filter(label => label.startsWith('builder:'))
+    const holder = held.map(label => byLabel.get(label)).find(Boolean)
+    // Held by a label that names no builder of this team: someone else's to plan.
+    if (held.length && !holder) continue
+    const sized = valueOf(labels, 'size:')
+    const size = sized === 's' || sized === 'm' || sized === 'l' ? sized : undefined
+    // Not sized: the PM has not made it a task yet. One a builder holds counts as a middle one.
+    if (!size && !holder) continue
+    const shape = SIZES[size ?? 'm']
+    const id = `#${issue.number}`
+    if (holder) open.set(holder.id, (open.get(holder.id) ?? 0) + 1)
+    if (holder && labels.includes('status:taken')) {
+      busy.set(holder.id, (busy.get(holder.id) ?? 0) + Math.ceil(shape.minutes / 2))
+      continue
+    }
+    const needs = labels.filter(label => label.startsWith('needs:')).map(label => label.slice('needs:'.length))
+    const unable = crew.builders.filter(b => needs.some(need => !machineHas(machines.get(b.machineId)?.observation, need))).map(b => b.id)
+    const priority = labels.find(label => label in WEIGHTS)
+    tasks.push({
+      id, minutes: shape.minutes, needs: { cpu: shape.cpu, ram: shape.ram, disk: shape.disk },
+      spend: Object.fromEntries([...windowNames].map(name => [name, everyOf(name) === 300 ? shape.spend : shape.spend / 5])),
+      floor: 0, kind: 'build', part: valueOf(labels, 'part:'), weight: priority ? WEIGHTS[priority]! : 1, ready: 0,
+      deps: dependsOn(issue.body).filter(n => openNumbers.has(n)).map(n => `#${n}`),
+      independentOf: [], notBuilders: unable, files: [],
+      ...(holder ? { pinned: holder.id, queuedOn: holder.id } : {}),
+    })
+    if (!holder) free.add(id)
+  }
+  // A dependency on a task this does not plan (taken, or someone else's) is not waited for here.
+  const planned = new Set(tasks.map(task => task.id))
+  for (const task of tasks) task.deps = task.deps.filter(dep => planned.has(dep))
+  const builders: Builder[] = crew.builders.map(b => ({
+    id: b.id, machine: b.machineId, busyUntil: busy.get(b.id) ?? 0,
+    modes: [{ model: b.model || b.engine, family: b.engine === 'codex' ? 'openai' : 'anthropic', speed: 1, cost: 2,
+      quality: { default: 1 }, account: `${b.machineId}:${b.engine}` }],
+    // Each task it finished in a part makes the next there 15% quicker, to 40% at most.
+    context: Object.fromEntries([...done.get(b.id) ?? []].map(([part, count]) => [part, Math.max(0.6, 1 - 0.15 * count)])),
+  }))
+  const problemMachines: Machine[] = [...new Set(crew.builders.map(b => b.machineId))].map(id => {
+    const resources = object(machines.get(id)?.observation?.resources)
+    const memory = typeof resources.memoryTotalBytes === 'number' ? resources.memoryTotalBytes * MEMORY_SHARE : 16 * GiB
+    const free = typeof resources.projectDiskFreeBytes === 'number' ? resources.projectDiskFreeBytes
+      : typeof resources.diskFreeBytes === 'number' ? resources.diskFreeBytes : 60 * GiB
+    return { id, capacity: { cpu: CORES, ram: memory, disk: Math.max(0, free - DISK_KEPT) } }
+  })
+  const accounts: Account[] = [...new Set(crew.builders.map(b => `${b.machineId}:${b.engine}`))].map(id => {
+    const [machineId, engine] = id.split(':') as [string, string]
+    const quota = (Array.isArray(machines.get(machineId)?.observation?.quotas) ? machines.get(machineId)!.observation!.quotas as unknown[] : [])
+      .map(object).find(q => q.engine === engine && q.known === true)
+    const windows: QuotaWindow[] = (Array.isArray(quota?.windows) ? quota.windows.map(object) : []).flatMap(window => {
+      const used = typeof window.usedPercent === 'number' ? window.usedPercent : null
+      const resetsAt = minutesUntil(window.resetsAt, now)
+      return used === null || resetsAt === null ? [] : [{ name: String(window.name ?? ''), left: Math.max(0, 100 - used), resetsAt, every: everyOf(String(window.name ?? '')) }]
+    })
+    return { id, reserve: RESERVE, windows }
+  })
+  return { problem: { now: 0, machines: problemMachines, accounts, builders, tasks, objective: 'weighted', switchCost: 30 }, open, free, done,
+    builders: new Map(crew.builders.map(b => [b.id, b])) }
+}
+
+/**
+ * The team that builds a project, from its PM's read of the Swarm: its person's and their teammates' agents that may work
+ * in it (a private project's own only), never the PM itself, a Buddy, one stopping or one whose machine is down, each with
+ * the machine it runs on. Swarm v4 agents run Claude Code or Codex.
+ */
+export function crewOf(state: Json, project: { pmAgentId: string; projectId: string }): Crew {
+  const agents = Array.isArray(state.agents) ? state.agents.map(object) : []
+  const builders = agents.filter(a => a.regular === true && typeof a.id === 'string' && a.id !== project.pmAgentId && !a.buddyOf
+    && a.workDecision !== 'stop' && !a.downSince && typeof a.machineId === 'string'
+    && (a.privateProjectId === undefined || a.privateProjectId === null || a.privateProjectId === project.projectId)
+    && ['claude', 'codex'].includes(String(object(a.configuration).engine)))
+    .map(a => {
+      const name = String(a.displayName ?? a.name ?? a.id)
+      const model = object(a.configuration).model
+      return { id: String(a.id), name, label: labelOf(name), machineId: String(a.machineId), engine: String(object(a.configuration).engine),
+        model: typeof model === 'string' ? model : null }
+    })
+  const machines = (Array.isArray(state.machines) ? state.machines.map(object) : []).filter(m => typeof m.machineId === 'string')
+    .map(m => ({ machineId: String(m.machineId), name: typeof m.name === 'string' ? m.name : undefined, observation: object(m.observation) }))
+  return { builders, machines }
+}
+
+/** One task to give: its builder, and the minute the plan starts it. */
+export interface Pick { task: string; builder: string; start: number }
+
+/** What each builder starts next among the free tasks, in the plan's order, while its list is under [deep]. */
+export function nextPicks(plan: Plan, read: Read, deep = DEEP): Pick[] {
+  const picks: Pick[] = []
+  const placements = [...plan.placements].sort((a, b) => a.start - b.start || a.task.localeCompare(b.task))
+  const count = new Map(read.open)
+  for (const placement of placements) {
+    if (!read.free.has(placement.task)) continue
+    const has = count.get(placement.builder) ?? 0
+    if (has >= deep) continue
+    count.set(placement.builder, has + 1)
+    picks.push({ task: placement.task, builder: placement.builder, start: placement.start })
+  }
+  return picks
+}
+
+/** Why a builder got a task, in a few words: when it starts it, and what it has done in its part. */
+export function reasonOf(pick: Pick, read: Read): string {
+  const task = read.problem.tasks.find(t => t.id === pick.task)
+  const when = pick.start <= 0 ? 'it can start now' : `it can start in ${pick.start < 90 ? `${pick.start} min` : `${Math.round(pick.start / 60)} h`}`
+  const part = task?.part
+  const count = part ? read.done.get(pick.builder)?.get(part) ?? 0 : 0
+  return count ? `${when}, and it finished ${count} part:${part} ${count === 1 ? 'task' : 'tasks'}` : when
+}
