@@ -1068,9 +1068,9 @@ class _SuperTabViewState extends State<SuperTabView>
     return KeyEventResult.ignored;
   }
 
-  /// The region the view sits in (the quick switcher's) with the unread chat
-  /// keys added, so the keymap runs them: listed, rebindable, and ahead of
-  /// Move pane only while the chat has focus.
+  /// The region the view sits in, if any, with the unread chat keys added, so
+  /// the keymap runs them: listed, rebindable, and ahead of Move pane only
+  /// while the chat has focus.
   Widget _unreadKeys(Widget child) {
     final region = KeymapRegion.of(context);
     return KeymapRegion(

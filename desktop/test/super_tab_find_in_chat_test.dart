@@ -10,8 +10,9 @@ import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'keymap_host_test.dart' show key;
-import 'super_tab_quick_switcher_test.dart' show close, setup;
+import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'support/super_tab_fixture.dart';
+import 'swarm_screen_test.dart' show mount;
 
 /// Find in the open chat (task #2826, Tony): matches in what is loaded,
 /// stepping, older pages read on demand up to 50, accents folded.
@@ -58,6 +59,37 @@ void main() {
       tester.widget<Text>(find.byKey(const ValueKey('super-find-count'))).data!;
   final field = find.byKey(const ValueKey('super-find-field'));
 
+  /// The whole Swarm screen, with the keys given to the chat by a click as a
+  /// person gives them: in its composer, or on the line a project's channel
+  /// shows in its place (Swarm v4: only agents post there).
+  Future<(SuperTabLaunchFixture, SuperTabController)> screen(
+    WidgetTester tester,
+  ) async {
+    final f = SuperTabLaunchFixture(local: true);
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+    final c = await f.app.superTabs.open(tabId);
+    await c.refresh();
+    await mount(tester, f.app);
+    final composer = find.byKey(const ValueKey('super-message-composer'));
+    await tester.tap(
+      composer.evaluate().isNotEmpty
+          ? composer
+          : find.byKey(const ValueKey('super-agents-only')),
+    );
+    await tester.pump();
+    return (f, c);
+  }
+
+  Future<void> leave(
+    WidgetTester tester,
+    SuperTabLaunchFixture f,
+    SuperTabController c,
+  ) async {
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+    f.dispose();
+  }
+
   Future<void> search(WidgetTester tester, String query) async {
     await tester.tap(find.byKey(const ValueKey('super-find-button')));
     await tester.pumpAndSettle();
@@ -95,7 +127,7 @@ void main() {
   });
 
   testWidgets('Cmd+F opens find in the open chat', (tester) async {
-    final (f, c) = await setup(tester);
+    final (f, c) = await screen(tester);
     await key(tester, LogicalKeyboardKey.keyF, cmd: true);
     await tester.pumpAndSettle();
     expect(field, findsOneWidget);
@@ -103,7 +135,18 @@ void main() {
     await key(tester, LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     expect(field, findsNothing);
-    await close(tester, f, c);
+    await leave(tester, f, c);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+  testWidgets('Cmd+K opens nothing in a Swarm chat: it has no switcher', (
+    tester,
+  ) async {
+    final (f, c) = await screen(tester);
+    await key(tester, LogicalKeyboardKey.keyK, cmd: true);
+    await tester.pumpAndSettle();
+    expect(find.byType(Dialog), findsNothing);
+    expect(find.text('Switch conversation'), findsNothing);
+    await leave(tester, f, c);
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
   testWidgets('matches in loaded messages are lit and counted, accents '
