@@ -74,6 +74,14 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
   Hermes harness on that PC never started. Only the launcher is refused — the Python it names runs the package fine — so
   `windowsEngineArgv` steps past it the same way (`lib/windows/hermesLaunch.ts`).
 
+- **A pane's job allows explicit breakaway, so an engine can start a helper of its own.** Without
+  `JOB_OBJECT_LIMIT_BREAKAWAY_OK` Windows refuses `CREATE_BREAKAWAY_FROM_JOB` with `ERROR_ACCESS_DENIED`: Hermes' gateway
+  daemon is started that way, so every Hermes pane exited 2 with `Gateway inaccessible: windows_breakaway_unavailable`
+  on DESKTOP-0TFH0OJ (2026-11-09). A Cygwin/MSYS root (Git Bash) is the exception and gets no flag: Cygwin reads it and
+  then passes breakaway to every child it starts (`setup_user_rlimits`), which would take an ordinary `npm run dev` out
+  of the pane's job (`job::breakaway_allowed`). A program that breaks away on purpose is no longer listed by `jobPids`
+  and is not ended with the pane — that is what asking to outlive it means.
+
 ## 3. Files
 
 - **A file's change time moves when its last handle closes**, after a rename that published it. Measured 2026-11-05: `ctimeNs`
