@@ -151,29 +151,53 @@ void main() {
       reader.dispose();
     });
 
-    test('reads again every few minutes while shown, and not once hidden', () {
-      fakeAsync((time) {
-        final reader = make(every: const Duration(minutes: 5));
-        unawaited(reader.show());
-        time.flushMicrotasks();
-        expect(asked, hasLength(1));
-        time.elapse(const Duration(minutes: 5));
-        time.flushMicrotasks();
-        expect(asked, hasLength(2));
-        reader.hide();
-        time.elapse(const Duration(minutes: 20));
-        expect(asked, hasLength(2));
-        // Shown again, it reads at once and keeps one timer.
-        unawaited(reader.show());
-        unawaited(reader.show());
-        time.flushMicrotasks();
-        expect(asked, hasLength(4));
-        time.elapse(const Duration(minutes: 5));
-        time.flushMicrotasks();
-        expect(asked, hasLength(5));
+    test(
+      'reads again every few minutes with one timer, and not once disposed',
+      () {
+        fakeAsync((time) {
+          final reader = make(every: const Duration(minutes: 5));
+          unawaited(reader.show());
+          unawaited(reader.show());
+          time.flushMicrotasks();
+          expect(asked, hasLength(2));
+          time.elapse(const Duration(minutes: 5));
+          time.flushMicrotasks();
+          expect(asked, hasLength(3));
+          reader.dispose();
+          time.elapse(const Duration(minutes: 20));
+          expect(asked, hasLength(3));
+        });
+      },
+    );
+
+    test(
+      'keeps this week\'s board for Top Teams while all time is shown',
+      () async {
+        final reader = make();
+        await reader.show();
+        final week = reader.week;
+        expect(week!.people.single.points, 2.8);
+        await reader.showAllTime(true);
+        expect(reader.board!.week, isNull);
+        expect(reader.week, same(week));
+        await reader.showAllTime(false);
+        expect(reader.week!.people.single.points, 2.8);
         reader.dispose();
-        time.elapse(const Duration(minutes: 20));
-        expect(asked, hasLength(5));
+      },
+    );
+
+    test('a read that does not answer has failed, and says so', () {
+      fakeAsync((time) {
+        final reader = make();
+        answer = (_) => Completer<Map<String, dynamic>>().future;
+        unawaited(reader.refresh());
+        time.flushMicrotasks();
+        expect(reader.loading, isTrue);
+        time.elapse(SuperTabShippingReader.timeout);
+        time.flushMicrotasks();
+        expect(reader.loading, isFalse);
+        expect(reader.error, "Couldn't read the leaderboard.");
+        reader.dispose();
       });
     });
 

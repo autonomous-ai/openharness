@@ -68,7 +68,7 @@ class SuperTabShipping {
   factory SuperTabShipping.fromJson(Map<String, dynamic> json) {
     final week = json['week'];
     return SuperTabShipping(
-      // The server says 0 for all time.
+      // All time has no week: the server says null (0 is read alike).
       week: week is int && week > 0 ? week : null,
       people: [
         for (final row in json['people'] as List? ?? const [])
@@ -100,8 +100,8 @@ String shippingFailureText(String code) => switch (code) {
 };
 
 /// Reads the Swarm's leaderboard (`GET .../shipping`): this week, or all time. It moves only as daemons report, every quarter
-/// hour or so, so it is read when shown and then every [every] while shown, never on every change of the Swarm. A failed read
-/// keeps the last board and says why.
+/// hour or so, so it is read when shown and then every [every] until disposed, never on every change of the Swarm. A failed
+/// read keeps the last board and says why; a read that does not answer in [timeout] has failed.
 class SuperTabShippingReader extends ChangeNotifier {
   SuperTabShippingReader({
     required this.tabId,
@@ -112,8 +112,13 @@ class SuperTabShippingReader extends ChangeNotifier {
   final String tabId;
   final SuperTabRequest request;
   final Duration every;
+  static const timeout = Duration(seconds: 15);
 
+  /// The board shown: this week's, or all time's.
   SuperTabShipping? board;
+
+  /// This week's board as last read, whichever is shown: Top Teams lists it.
+  SuperTabShipping? week;
   String? error;
   bool loading = false;
   bool _allTime = false;
@@ -124,16 +129,10 @@ class SuperTabShippingReader extends ChangeNotifier {
   /// Whether the board shown is all time, not this week.
   bool get allTime => _allTime;
 
-  /// Shows the board, read now and then every [every] until [hide].
+  /// Shows the board, read now and then every [every] until disposed.
   Future<void> show() {
     _timer ??= Timer.periodic(every, (_) => unawaited(tick()));
     return refresh();
-  }
-
-  /// Stops the reads while the board is not shown; the board stays.
-  void hide() {
-    _timer?.cancel();
-    _timer = null;
   }
 
   /// A timed read.
@@ -159,15 +158,17 @@ class SuperTabShippingReader extends ChangeNotifier {
       final answer = await request(
         'GET',
         '/api/super-tabs/${Uri.encodeComponent(tabId)}/shipping${allTime ? '?all=1' : ''}',
-      );
+      ).timeout(timeout);
       if (read != _read) return;
       board = SuperTabShipping.fromJson(answer);
+      if (!allTime) week = board;
       error = null;
     } on SuperTabFailure catch (failure) {
       if (read != _read) return;
       // A server from before the leaderboard has none, and a Swarm the reader no longer reads is gone from them: nothing to show.
       if (failure.statusCode == 404 || failure.statusCode == 403) {
         board = null;
+        week = null;
         error = null;
       } else {
         error = failure.message;

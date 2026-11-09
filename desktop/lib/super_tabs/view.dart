@@ -405,8 +405,11 @@ class _SuperTabViewState extends State<SuperTabView>
   /// and the left sidebar's Models, so both show one week.
   late SuperTabProjectBoard _board = SuperTabProjectBoard(c);
 
-  /// The Swarm's leaderboard, read for the left pane's Top Teams and the Leaderboard page, so both show one board.
-  late SuperTabShippingBoard _shipping = SuperTabShippingBoard(c);
+  /// The Swarm's leaderboard, read for the left pane's Top Teams and the Leaderboard page, so both show one board. Made when
+  /// first shown: a view torn down before then reads none.
+  SuperTabShippingBoard? _shippingBoard;
+  SuperTabShippingBoard get _shipping =>
+      _shippingBoard ??= SuperTabShippingBoard(c);
 
   /// What this computer's GitHub says of the pull requests on live cards.
   late SuperTabPullRequestFacts _facts = SuperTabPullRequestFacts(
@@ -567,8 +570,8 @@ class _SuperTabViewState extends State<SuperTabView>
     if (oldWidget.controller != c) {
       _board.dispose();
       _board = SuperTabProjectBoard(c);
-      _shipping.dispose();
-      _shipping = SuperTabShippingBoard(c);
+      _shippingBoard?.dispose();
+      _shippingBoard = null;
       oldWidget.controller.threadPaneHidden();
       oldWidget.controller.removeListener(_changed);
       oldWidget.controller.removeListener(_holdVoiceAway);
@@ -1222,7 +1225,7 @@ class _SuperTabViewState extends State<SuperTabView>
     c.threadPaneHidden();
     WidgetsBinding.instance.removeObserver(this);
     _board.dispose();
-    _shipping.dispose();
+    _shippingBoard?.dispose();
     _facts.dispose();
     _tasksLayout.dispose();
     c.removeListener(_changed);

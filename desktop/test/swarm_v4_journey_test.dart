@@ -27,7 +27,7 @@ void main() {
       'role': 'collaborator',
     });
     server.shipping = {
-      'week': 0,
+      'week': 1793577600000,
       'people': [
         {
           'personId': 'dee',

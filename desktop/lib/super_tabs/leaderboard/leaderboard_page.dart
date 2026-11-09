@@ -10,6 +10,7 @@ import '../../shared/widgets/toolbar_pill.dart';
 import '../../widgets/desktop_chrome.dart';
 import '../controller.dart';
 import '../identity.dart';
+import '../model.dart';
 import 'format.dart';
 import 'shipping.dart';
 
@@ -45,10 +46,21 @@ class _LeaderboardState extends State<SuperTabLeaderboardPage> {
   @override
   void initState() {
     super.initState();
-    // After this frame: the left pane's Top Teams listens to the same board, and is not rebuilt in the middle of a build.
+    // After this frame: the left pane's Top Teams listens to the same board, and is not rebuilt in the middle of a build. A
+    // read already on its way is the fresh one.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(_reader.refresh());
+      if (mounted && !_reader.loading) unawaited(_reader.refresh());
     });
+  }
+
+  @override
+  void dispose() {
+    // All time is this page's choice: the board goes back to this week when it closes.
+    if (_reader.allTime) {
+      final reader = _reader;
+      scheduleMicrotask(() => unawaited(reader.showAllTime(false)));
+    }
+    super.dispose();
   }
 
   @override
@@ -148,7 +160,8 @@ class _LeaderboardState extends State<SuperTabLeaderboardPage> {
 
   /// A reading of GitHub that failed on one of this person's computers, which only they are told: the numbers stay.
   Widget _failure(ShippingFailure failure) => Container(
-    key: ValueKey('leaderboard-failure-${failure.machineId}'),
+    // One computer may say two reasons, one for each of its agents.
+    key: ValueKey('leaderboard-failure-${failure.machineId}-${failure.code}'),
     height: 24,
     alignment: Alignment.centerLeft,
     child: Row(
@@ -171,114 +184,120 @@ class _LeaderboardState extends State<SuperTabLeaderboardPage> {
     ),
   );
 
-  Widget _table(SuperTabShipping board) => ListView.builder(
-    itemExtent: _rowHeight,
-    itemCount: board.people.length,
-    itemBuilder: (context, index) {
-      final score = board.people[index];
-      final person = c.snapshot?.people
-          .where((p) => p.id == score.personId)
-          .firstOrNull;
-      // By account, never by name: two teammates can share one.
-      final own = score.personId == c.accountId;
-      return Container(
-        key: ValueKey('leaderboard-row-${score.personId}'),
-        height: _rowHeight,
-        padding: const EdgeInsets.symmetric(
-          horizontal: DesktopChrome.panelPadding / 2,
-        ),
-        decoration: BoxDecoration(
-          color: own ? grid.AppSurface.selectedFill : null,
-          border: Border(bottom: BorderSide(color: grid.AppPalette.divider)),
-        ),
-        child: Row(
-          children: [
-            SizedBox(
-              width: 48,
-              child: Row(
-                children: [
-                  Text(
-                    '${score.rank}',
-                    style: grid.AppType.label(
-                      color: grid.AppPalette.textSecondary,
-                      fontWeight: FontWeight.w700,
-                      fontFeatures: grid.AppFont.tabularFigures,
-                    ),
-                  ),
-                  // The top three's mark sits beside their place, never in place of it (Team and celebration, design
-                  // system); the numeral says which.
-                  if (_places[score.rank] case final place?) ...[
-                    const SizedBox(width: 4),
-                    Icon(
-                      AppIcons.trophy,
-                      size: 14,
-                      color: score.rank == 1
-                          ? grid.AppPalette.swarmAccent
-                          : grid.AppPalette.textSecondary,
-                      semanticLabel:
-                          'Number $place ${board.week == null ? 'of all time' : 'this week'}',
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            if (person != null) SuperTabAvatar.person(person, size: 28),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          person?.shownName ?? score.displayName,
-                          key: ValueKey('leaderboard-person-${score.personId}'),
-                          overflow: TextOverflow.ellipsis,
-                          style: DesktopChrome.text(medium: score.rank == 1),
-                        ),
+  Widget _table(SuperTabShipping board) {
+    final people = {
+      for (final person in c.snapshot?.people ?? const <SuperTabPerson>[])
+        person.id: person,
+    };
+    return ListView.builder(
+      itemExtent: _rowHeight,
+      itemCount: board.people.length,
+      itemBuilder: (context, index) {
+        final score = board.people[index];
+        final person = people[score.personId];
+        // By account, never by name: two teammates can share one.
+        final own = score.personId == c.accountId;
+        return Container(
+          key: ValueKey('leaderboard-row-${score.personId}'),
+          height: _rowHeight,
+          padding: const EdgeInsets.symmetric(
+            horizontal: DesktopChrome.panelPadding / 2,
+          ),
+          decoration: BoxDecoration(
+            color: own ? grid.AppSurface.selectedFill : null,
+            border: Border(bottom: BorderSide(color: grid.AppPalette.divider)),
+          ),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 48,
+                child: Row(
+                  children: [
+                    Text(
+                      '${score.rank}',
+                      style: grid.AppType.label(
+                        color: grid.AppPalette.textSecondary,
+                        fontWeight: FontWeight.w700,
+                        fontFeatures: grid.AppFont.tabularFigures,
                       ),
-                      if (own) ...[
-                        const SizedBox(width: 8),
-                        Text(
-                          'You',
-                          style: grid.AppType.caption(
-                            color: grid.AppPalette.textSecondary,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                  Text(
-                    '${plural(score.agentsShipping, 'agent')} shipping · Level ${score.level}',
-                    key: ValueKey('leaderboard-detail-${score.personId}'),
-                    overflow: TextOverflow.ellipsis,
-                    style: grid.AppType.caption(
-                      color: grid.AppPalette.textSecondary,
                     ),
-                  ),
-                ],
-              ),
-            ),
-            SizedBox(
-              width: 72,
-              child: Text(
-                shippingPoints(score.points),
-                key: ValueKey('leaderboard-points-${score.personId}'),
-                textAlign: TextAlign.right,
-                style: grid.AppType.label(
-                  color: grid.AppPalette.textPrimary,
-                  fontWeight: grid.AppFont.semibold,
-                  fontFeatures: grid.AppFont.tabularFigures,
+                    // The top three's mark sits beside their place, never in place of it (Team and celebration, design
+                    // system); the numeral says which.
+                    if (_places[score.rank] case final place?) ...[
+                      const SizedBox(width: 4),
+                      Icon(
+                        AppIcons.trophy,
+                        size: 14,
+                        color: score.rank == 1
+                            ? grid.AppPalette.swarmAccent
+                            : grid.AppPalette.textSecondary,
+                        semanticLabel:
+                            'Number $place ${board.week == null ? 'of all time' : 'this week'}',
+                      ),
+                    ],
+                  ],
                 ),
               ),
-            ),
-          ],
-        ),
-      );
-    },
-  );
+              if (person != null) SuperTabAvatar.person(person, size: 28),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            person?.shownName ?? score.displayName,
+                            key: ValueKey(
+                              'leaderboard-person-${score.personId}',
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                            style: DesktopChrome.text(medium: score.rank == 1),
+                          ),
+                        ),
+                        if (own) ...[
+                          const SizedBox(width: 8),
+                          Text(
+                            'You',
+                            style: grid.AppType.caption(
+                              color: grid.AppPalette.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    Text(
+                      '${plural(score.agentsShipping, 'agent')} shipping · Level ${score.level}',
+                      key: ValueKey('leaderboard-detail-${score.personId}'),
+                      overflow: TextOverflow.ellipsis,
+                      style: grid.AppType.caption(
+                        color: grid.AppPalette.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(
+                width: 72,
+                child: Text(
+                  shippingPoints(score.points),
+                  key: ValueKey('leaderboard-points-${score.personId}'),
+                  textAlign: TextAlign.right,
+                  style: grid.AppType.label(
+                    color: grid.AppPalette.textPrimary,
+                    fontWeight: grid.AppFont.semibold,
+                    fontFeatures: grid.AppFont.tabularFigures,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
 }
 
 /// Rows of the shape of the answer while it is on its way.

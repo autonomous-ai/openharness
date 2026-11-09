@@ -218,7 +218,7 @@ void main() {
       final reader = SuperTabShippingReader(
         tabId: 'tab',
         request: (method, path, {body}) async => {
-          'week': 0,
+          'week': 1793577600000,
           'people': [
             {
               'personId': 'dee',
@@ -416,7 +416,7 @@ void main() {
       final reader = SuperTabShippingReader(
         tabId: 'tab',
         request: (method, path, {body}) async => {
-          'week': 0,
+          'week': 1793577600000,
           'people': [
             for (final (i, (id, points)) in people.indexed)
               {

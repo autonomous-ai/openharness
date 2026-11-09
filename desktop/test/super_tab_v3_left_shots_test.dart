@@ -129,7 +129,7 @@ void main() {
             {'id': id, 'email': '$id@example.com', 'role': 'collaborator'},
         ]);
         server.shipping = {
-          'week': 0,
+          'week': 1793577600000,
           'people': [
             for (final (i, (id, points)) in [
               ('dee', 4.2),

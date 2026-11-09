@@ -696,9 +696,15 @@ class ProjectSidebar extends StatelessWidget {
   List<Widget> _humans(SuperTabSnapshot? snapshot) {
     final onPage = this.onPage;
     if (snapshot == null || onPage == null) return const [];
-    final scores = [...?leaderboard?.board?.people].take(humansShown).toList();
+    // This week's, whichever the Leaderboard page shows.
+    final board = leaderboard?.week;
+    final scores = [...?board?.people].take(humansShown).toList();
+    // A computer of the reader's that could not read GitHub is why nobody may be shipping: it is said even then.
+    final failures = scores.isEmpty
+        ? [...?board?.failures]
+        : const <ShippingFailure>[];
     // An empty list shows nothing (anh Dee's rule): no heading until someone has points.
-    if (scores.isEmpty) return const [];
+    if (scores.isEmpty && failures.isEmpty) return const [];
     void open() => onPage(SwarmPage.leaderboard);
     final people = {for (final person in snapshot.people) person.id: person};
     return [
@@ -730,6 +736,14 @@ class ProjectSidebar extends StatelessWidget {
                   score.personId == controller.accountId,
               onTap: open,
             ),
+      if (controller.topTeamsGroupOpen)
+        for (final failure in failures.take(1))
+          _iconRow(
+            key: 'super-human-reading',
+            icon: AppIcons.triangleAlert,
+            name: shippingFailureText(failure.code),
+            onTap: open,
+          ),
     ];
   }
 

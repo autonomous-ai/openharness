@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'super_tab_activity_lists_test.dart' show swarm;
@@ -27,7 +28,7 @@ Future<void> _settle(WidgetTester tester) async {
 /// GitHub. All time: the owner leads.
 Map<String, dynamic> board(String path) => path.contains('all=1')
     ? {
-        'week': 0,
+        'week': null,
         'people': [
           person('owner', 1, 9.5, agents: 5, level: 4),
           person('dee', 2, 7.1, agents: 3, level: 3, name: 'Dee'),
@@ -65,10 +66,11 @@ void main() {
   Future<(SuperTabController, ConversationServer)> show(
     WidgetTester tester, {
     Brightness brightness = Brightness.light,
+    Map<String, dynamic> Function(String path) answer = board,
   }) async {
     await tester.binding.setSurfaceSize(const Size(1300, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final server = swarm()..shippingAnswer = board;
+    final server = swarm()..shippingAnswer = answer;
     final c = server.controller(
       account: 'owner',
       initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
@@ -164,7 +166,7 @@ void main() {
         // A computer of the reader's that could not read GitHub says so; the numbers stay.
         expect(
           find.descendant(
-            of: key('leaderboard-failure-mac-1'),
+            of: key('leaderboard-failure-mac-1-GH_SIGNED_OUT'),
             matching: find.text('Mac Studio · GitHub signed out'),
           ),
           findsOneWidget,
@@ -179,9 +181,26 @@ void main() {
           '5 agents shipping · Level 4',
         );
         expect(key('leaderboard-row-ken'), findsNothing);
-        expect(key('leaderboard-failure-mac-1'), findsNothing);
+        expect(key('leaderboard-failure-mac-1-GH_SIGNED_OUT'), findsNothing);
         expect(mark(tester, 'owner'), 'Number one of all time');
+        // Top Teams keeps this week's board while the page shows all time.
+        expect(
+          find.descendant(
+            of: key('super-human-dee'),
+            matching: find.text('4.2'),
+          ),
+          findsOneWidget,
+        );
         await tap(tester, key('leaderboard-week'));
+        expect(text(tester, 'leaderboard-points-dee'), '4.2');
+        // All time chosen and the page left: the next time it opens, it is this week.
+        await tap(tester, key('leaderboard-all'));
+        // Back to the channel it was opened from, then Top Teams again.
+        SuperTabPlaces.of(c).step(-1);
+        await _settle(tester);
+        expect(key('leaderboard-week'), findsNothing);
+        await tap(tester, key('super-human-dee'));
+        expect(server.shippingReads.last, isNot(contains('all=1')));
         expect(text(tester, 'leaderboard-points-dee'), '4.2');
         expect(tester.takeException(), isNull);
         await end(tester, c);
@@ -204,6 +223,52 @@ void main() {
       expect(server.shippingReads.length, reads + 1);
       expect(find.text('No connection.'), findsNothing);
       expect(text(tester, 'leaderboard-points-dee'), '4.2');
+      await end(tester, c);
+    },
+  );
+
+  testWidgets('one computer with two reasons says both', (tester) async {
+    final (c, server) = await show(tester);
+    server.shippingAnswer = (path) => {
+      ...board(path),
+      'failures': [
+        {'machineId': 'mac-1', 'code': 'TOO_MANY'},
+        {'machineId': 'mac-1', 'code': 'RATE_LIMITED'},
+      ],
+    };
+    await tap(tester, key('project-sidebar-humans'));
+    await tap(tester, key('super-human-dee'));
+    expect(find.text('Mac Studio · Too many issues to read'), findsOneWidget);
+    expect(find.text('Mac Studio · GitHub is limiting reads'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await end(tester, c);
+  });
+
+  testWidgets(
+    'nobody shipping while a computer of the reader\'s cannot read GitHub: Top Teams says why, and opens the board',
+    (tester) async {
+      final (c, _) = await show(
+        tester,
+        answer: (_) => {
+          'week': 1793577600000,
+          'people': <dynamic>[],
+          'failures': [
+            {'machineId': 'mac-1', 'code': 'GH_SIGNED_OUT'},
+          ],
+        },
+      );
+      await tap(tester, key('project-sidebar-humans'));
+      expect(
+        find.descendant(
+          of: key('super-human-reading'),
+          matching: find.text('GitHub signed out'),
+        ),
+        findsOneWidget,
+      );
+      await tap(tester, key('super-human-reading'));
+      expect(find.text('Mac Studio · GitHub signed out'), findsOneWidget);
+      expect(find.textContaining('agents shipping'), findsNothing);
+      expect(tester.takeException(), isNull);
       await end(tester, c);
     },
   );
