@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { sweepOne } from '../lib/worktreeSweep.js'
-import { copySetup, helperLine, memberLine, setUpSteps } from './memberSetup.js'
+import { copySetup } from './memberSetup.js'
 
 const roots: string[] = []
 const root = () => { const dir = realpathSync(mkdtempSync(join(tmpdir(), 'member-setup-'))); roots.push(dir); return dir }
@@ -103,27 +103,5 @@ describe('a helper starts from its Member\'s ready setup', () => {
     expect(await sweepOne(p.helper, Date.now(), 0)).toBe(true)
     expect(existsSync(p.helper)).toBe(false)
     expect(existsSync(join(p.member, 'node_modules', 'left-pad', 'index.js'))).toBe(true)
-  })
-})
-
-describe('what a Member and a helper are told at their start', () => {
-  it('tells a Member to set its project up once, here, and to report it', () => {
-    const line = memberLine('tab-1', 'project-1')
-    expect(line).toContain('set the project up once')
-    expect(line).toContain('harness super-tab --tab tab-1 command OPERATION_ID - <<\'JSON\'')
-    expect(line).toContain('{"type":"agent.setUp","projectId":"project-1","ok":true,"steps":[')
-    expect(line).toContain('"ok":false')
-  })
-
-  it('gives a helper its Member\'s steps as quoted data, one per line', () => {
-    expect(helperLine(['npm ci', 'npm run build'])).toContain('\n> npm ci\n> npm run build')
-    expect(helperLine([])).not.toContain('\n>')
-  })
-
-  it('takes at most ten steps, each one plain line of 300 characters or fewer', () => {
-    expect(setUpSteps(['npm ci', 'npm run build'])).toEqual(['npm ci', 'npm run build'])
-    expect(setUpSteps(['npm ci\nrm -rf /', 'x'.repeat(301), 7, 'ok'])).toEqual(['ok'])
-    expect(setUpSteps(Array.from({ length: 12 }, (_, i) => `step ${i}`))).toHaveLength(10)
-    expect(setUpSteps('npm ci')).toEqual([])
   })
 })

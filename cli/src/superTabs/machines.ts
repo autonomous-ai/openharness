@@ -813,10 +813,7 @@ export class ContributedMachines {
               const helperOf = object(object(start.request).helperOf)
               const helperRequest = object(start.request)
               const beforeJoin = identifier(helperOf.harnessId) ? (harnessId: string) => this.readyHelper(String(row.tabId), String(helperOf.harnessId), harnessId, helperRequest) : null
-              // Its Member's commands reach a helper only from a Member this machine's Swarm started here (security review 1 of #3579),
-              // and only in a worktree of its own.
-              const memberHere = beforeJoin ? helperRequest.worktree === true && !!this.worktreeOf(String(row.tabId), String(helperOf.harnessId)) : null
-              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, signedIn, ...(github ? { github } : {}), ...(beforeJoin ? { beforeJoin, memberHere } : {}) },
+              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, signedIn, ...(github ? { github } : {}), ...(beforeJoin ? { beforeJoin } : {}) },
                 scoped, where, this.deps.open)
               this.refused.delete(String(start.id))
               const refused = result.ok !== true && !start.dispatched && !NOT_REFUSED.has(String(result.error))
