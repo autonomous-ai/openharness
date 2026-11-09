@@ -697,9 +697,12 @@ class ProjectSidebar extends StatelessWidget {
     final onPage = this.onPage;
     if (snapshot == null || onPage == null) return const [];
     final scores = [...?leaderboard?.board?.people].take(humansShown).toList();
-    // An empty list shows nothing (anh Dee's rule): no heading until someone has points. A board of zeros is empty too, as a
-    // Personal Swarm of one is before its first task ships.
-    if (!scores.any((score) => score.points > 0)) return const [];
+    // An empty list shows nothing (anh Dee's rule): no heading until someone has points. A Swarm of one person before its first
+    // task ships has a board of one zero, empty too; a team's zeros stay, the way to its Leaderboard.
+    if (scores.isEmpty ||
+        (snapshot.people.length < 2 && (scores.first.points) <= 0)) {
+      return const [];
+    }
     void open() => onPage(SwarmPage.leaderboard);
     final people = {for (final person in snapshot.people) person.id: person};
     return [

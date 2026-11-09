@@ -486,15 +486,22 @@ void main() {
       await tester.runAsync(c.flush);
     });
 
-    testWidgets('a board where nobody has points yet shows nothing: a '
-        'Personal Swarm of one before its first task ships', (tester) async {
+    testWidgets('a Swarm of one person with no points yet shows nothing; a '
+        'team with none keeps the heading, its way to the Leaderboard', (
+      tester,
+    ) async {
       final reader = board([('owner', 0)]);
       await tester.runAsync(() => reader.show('lead'));
       final c = await show(tester, leaderboard: reader);
       expect(key('project-sidebar-humans'), findsNothing);
       expect(find.text('Top Teams'), findsNothing);
-      expect(key('super-human-owner'), findsNothing);
       await tester.runAsync(c.flush);
+
+      final team = board([('dee', 0), ('owner', 0)]);
+      await tester.runAsync(() => team.show('lead'));
+      final c2 = await show(tester, setup: people, leaderboard: team);
+      expect(key('project-sidebar-humans'), findsOneWidget);
+      await tester.runAsync(c2.flush);
     });
 
     testWidgets('before the board is read, nothing: an empty list shows no '
