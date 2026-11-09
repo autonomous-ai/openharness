@@ -66,7 +66,7 @@ export async function ledProjects(deps: { me: string | null; live: (harnessId: s
  *  and whether it asks for two reads. A comment signed by one of its [writers] (`signedAs`) is that writer's, by the name the
  *  pull request gives it: the signature pattern reads one or two plain words, and a name it cannot read (three words, another
  *  script, an apostrophe, an emoji) fell back to the GitHub login every agent of a person shares, so the author read as a reader. */
-export function verdicts(comments: Json[], body: string, writers: readonly string[] = []):
+export function verdicts(comments: Json[], body: string, writers: readonly string[]):
   { readers: Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string }>; twoReads: boolean } {
   const readers = new Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string; at: string }>()
   let twoReads = /\bTWO READS\b/.test(body)
@@ -86,28 +86,37 @@ export function verdicts(comments: Json[], body: string, writers: readonly strin
   return { readers: new Map([...readers].map(([k, v]) => [k, { verdict: v.verdict, sha: v.sha, name: v.name }])), twoReads }
 }
 
-/** One name however it is written: as an agent signs it ("Pip Two"), as its builder label has it (`pip-two`), cased otherwise,
- *  in full-width letters, or with its Latin accents or without. Without it, "pip two" and "pip-two" were two people, so an agent
- *  with a two-word name read its own pull request and the merger merged it (found by the Q3 tester, 2026-11-09). */
-export const sameKey = (name: string): string =>
-  name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
+/** One name however it is written: as an agent signs it ("Pip Two"), as its builder label has it (`pip-two`), or cased
+ *  otherwise. Without it, "pip two" and "pip-two" were two people, so an agent with a two-word name read its own pull request
+ *  and the merger merged it (found by the other session's Q3 tester, 2026-11-09; #3665 reads names more fully). */
+export const sameKey = (name: string): string => name.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
+
+/** Whether [name] is one of a pull request's [writers] (writersOf), however either is written. */
+export const isWriter = (writers: readonly string[], name: string): boolean => writers.some(writer => sameKey(writer) === sameKey(name))
 
 /** How much of a first line is read for a writer's name: enough for any name and its markup, and a line of 60,000 of one
  *  character costs nothing. */
 const SIGNATURE_SCAN = 200
 
-/** Whether [line] is signed [name], however the name is written: the line's first letters and digits, read as `sameKey` reads
- *  them, are the name's, then a comma, colon or bracket ("Đức Anh, 14:20:", "**Pip Two** (builder):", "Atlas Reed Two 🐝,").
- *  The name is read against the line, not the line by a pattern, so a name of any length, script or punctuation is known. */
+/** A character as a name is compared, one at a time: in lower case (a final sigma as any other), and nothing unless a letter or
+ *  a digit. Its text is NFKC first, so letters typed in parts (Hangul jamo, an accent after its letter) are whole. */
+const nameChar = (char: string): string => char.toLowerCase().replace(/ς/g, 'σ').replace(/[^\p{L}\p{N}]/gu, '')
+
+/** Whether [line] is signed [name], however the name is written: the line's first letters and digits are the name's, then,
+ *  before any other letter or digit, a comma, colon or bracket ("Đức Anh, 14:20:", "**Pip Two** (builder):", "Atlas Reed Two 🐝,").
+ *  The name is read against the line, not the line by a pattern, so a name of any length, script or punctuation is known; one
+ *  pass over at most 200 characters, stopped at the first letter that is not the name's. */
 export function signedAs(line: string, name: string): boolean {
-  const want = sameKey(name)
+  const want = [...name.normalize('NFKC')].map(nameChar).join('')
   if (!want) return false
-  let prefix = ''
-  for (const char of line.slice(0, SIGNATURE_SCAN)) {
-    prefix += char
-    const key = sameKey(prefix)
-    if (!want.startsWith(key)) return false
-    if (key === want && /^[\s*_~`]*[,:(]/.test(line.slice(prefix.length))) return true
+  const text = line.slice(0, SIGNATURE_SCAN).normalize('NFKC')
+  let key = '', at = 0
+  for (const char of text) {
+    at += char.length
+    const part = nameChar(char)
+    if (!want.startsWith(part, key.length)) return false
+    key += part
+    if (key === want) return /^[^\p{L}\p{N}]*?[,:(]/u.test(text.slice(at))
   }
   return false
 }
@@ -117,16 +126,11 @@ export function signedAs(line: string, name: string): boolean {
 export function writersOf(pull: Json): string[] {
   const labels = (Array.isArray(pull.labels) ? pull.labels.map(object) : []).map(l => String(l.name ?? '')).filter(name => /^builder:/i.test(name))
   const branch = String(object(pull.head).ref ?? '')
-  return [...labels.map(name => name.slice('builder:'.length)), ...branch.includes('/') ? [branch.split('/')[0]!] : []]
+  return [...labels.map(name => name.slice('builder:'.length)), ...branch.includes('/') ? [branch.split('/')[0]!.toLowerCase()] : []]
 }
 
 /** The pull request's author by name: its builder label, else its branch's first part (`pip/12`). */
-export function authorOf(pull: Json): string | null {
-  const label = (Array.isArray(pull.labels) ? pull.labels.map(object) : []).map(l => String(l.name ?? '')).find(n => n.startsWith('builder:'))
-  if (label) return label.slice('builder:'.length)
-  const branch = String(object(pull.head).ref ?? '')
-  return branch.includes('/') ? branch.split('/')[0]!.toLowerCase() : null
-}
+export const authorOf = (pull: Json): string | null => writersOf(pull)[0] ?? null
 
 /** Whether every check on a head passed (none at all passes), is still running, or failed with which names. */
 export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'running' | 'failed'; failed: string[] } {
@@ -221,8 +225,8 @@ export class GitHubMerge {
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), writers)
       if ([...readers.values()].some(r => r.verdict === 'HOLD')) continue
       // Its writers' own READ-OKs count for nothing, and a reader who signs two ways is one, however the names are written.
-      const own = (name: string) => writers.some(writer => sameKey(writer) === sameKey(name))
-      const reads = new Map([...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && !own(reader)).map(([reader, r]) => [sameKey(reader), r]))
+      const reads = new Map([...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && !isWriter(writers, reader))
+        .map(([reader, r]) => [sameKey(reader), r]))
       if (reads.size < (twoReads ? 2 : 1)) continue
       const runs = object(await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
       const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))

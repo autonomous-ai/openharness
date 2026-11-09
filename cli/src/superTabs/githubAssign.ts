@@ -13,7 +13,7 @@ import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
-import { authorOf, openPullsPath, PULL_PAGES, sameKey, verdicts, writersOf, type LedProject } from './githubMerge.js'
+import { authorOf, isWriter, openPullsPath, PULL_PAGES, sameKey, verdicts, writersOf, type LedProject } from './githubMerge.js'
 import { TEAM } from './githubMentions.js'
 
 type Json = Record<string, unknown>
@@ -282,9 +282,10 @@ export class GitHubAssign {
       // measured from its ask for this head; one that never gave one, from its last ask.
       const lastAsk = (name: string, thisHead: boolean) =>
         Math.max(0, ...[...asked.get(name) ?? []].filter(([sha]) => !thisHead || onHead(sha)).map(([, at]) => at))
-      // Its writers' own verdicts count for nothing, however their names are written (sameKey).
-      const own = (name: string) => writers.some(writer => sameKey(writer) === sameKey(name))
-      const ok = [...readers].filter(([reader, r]) => !own(reader) && r.verdict === 'READ-OK' && onHead(r.sha)).map(([reader]) => reader)
+      // Its writers' own verdicts count for nothing, however their names are written, and a reader who signs two ways counts once,
+      // as the merger counts it.
+      const own = (name: string) => isWriter(writers, name)
+      const ok = [...new Set([...readers].filter(([reader, r]) => !own(reader) && r.verdict === 'READ-OK' && onHead(r.sha)).map(([reader]) => sameKey(reader)))]
       const stale = [...readers].filter(([reader, r]) => !own(reader) && !onHead(r.sha))
       const waiting = [...asked.keys()].filter(name => !readers.has(name) && now - lastAsk(name, false) < READ_WAIT_MS)
       for (const [reader, r] of stale) {
@@ -294,7 +295,8 @@ export class GitHubAssign {
       // A stale reader not asked again yet is asked just now, above.
       const rereading = stale.filter(([reader]) => { const at = lastAsk(reader, true); return at === 0 || now - at < READ_WAIT_MS })
       let need = (twoReads ? 2 : 1) - ok.length - rereading.length - waiting.length
-      const skip = new Set([...asked.keys(), ...readers.keys()])
+      // None of its writers reads it: its label's agent nor its branch's (a task taken over carries both).
+      const skip = new Set([...asked.keys(), ...readers.keys(), ...[...read.builders.values()].filter(b => own(b.name)).map(b => b.id)])
       while (need-- > 0) {
         // A team of one builder still has its PM, who read for it before Harness asked readers (the swarm-sandbox, where
         // Juno, its PM, read every pull request of Pip's).
