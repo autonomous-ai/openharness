@@ -43,7 +43,7 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
   run in workers through [the live transport](../../../docs/design/2026-10-07-engine-streams.md).
 - `turns/`: working/idle, the event funnel, cancel, heartbeats, hooks, and `recaps.ts`, the core's whole
   side of the recaps: the turn lifecycle it tells them, and what it reads back. `ends.ts`: each live turn's
-  end (`CoreApi.turns.onEnd`), which names its turn by a hash of its prompt, told by the funnel to listeners here
+  end (`CoreApi.turns.onEnd`), which names its turn by a hash of its prompt and a number, told by the funnel to listeners here
   and to the services in their own processes that asked (`TURN_END_HEARERS`: the Swarm's host, which posts an
   agent's answer into its person's chat); the funnel tells it each turn as it goes, so it keeps what each of the
   last few turns of a session said (`CoreApi.turns.answerOf`), whatever the transcript shows by the time it is asked.

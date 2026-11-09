@@ -4,7 +4,7 @@
  * Dee, 2026-11-09: "it's a 1:1 conversation, why can't it be just the exact prompt?"). Each message is answered by its own turn,
  * even when the engine queued a second one behind the first and the host heard neither end until both were over. */
 import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { object } from '../src/superTabs/wire.js'
@@ -31,28 +31,38 @@ async function begin(engine: 'claude' | 'codex') {
   const d = await IsolatedDaemon.create({ submissionGate: true, env: {
     BACKEND_WS_URL: relay.wsUrl, WEB_URL: relay.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId,
     ANTHROPIC_API_KEY: 'fixture-not-a-credential', OPENAI_API_KEY: 'fixture-not-a-credential',
+    // The Swarm's process is held still for a while in some of these, which the master must not read as a hang.
+    HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS: '300000',
   } }); daemon = d
   writeFileSync(join(d.engineConfig.codexHome, 'models_cache.json'), readFileSync(join(CLI_ROOT, 'src/lib/__fixtures__/codex-home-0.160/models_cache.json')))
   writeFileSync(join(d.root, 'auth', 'session.json'), JSON.stringify({ version: 1, accessToken: ME.token,
     autonomousEnv: 'prod', computerId: ME.computerId, machineId: ME.machineId,
     expiresAt: Date.now() + 30 * 24 * 3600_000, updatedAt: Date.now(), signInEpoch: 'e2e',
   }), { mode: 0o600 })
-  onTestFailed(() => console.log(d.log().split('\n').slice(-120).join('\n')))
+  onTestFailed(() => {
+    console.log(d.log().split('\n').slice(-120).join('\n'))
+    // And what each engine wrote: the transcripts the daemon read.
+    for (const root of [d.engineConfig.codexHome, join(d.root, 'claude')]) {
+      let files: string[] = []
+      try { files = (readdirSync(root, { recursive: true }) as string[]).filter(name => name.endsWith('.jsonl')) } catch { /* none */ }
+      for (const name of files) console.log(`${name}\n${readFileSync(join(root, name), 'utf8').split('\n').filter(Boolean).slice(-24).map(line => line.slice(0, 220)).join('\n')}`)
+    }
+  })
   const agents: Array<Record<string, any>> = []
   const posts: Array<Record<string, any>> = []
   const deliveries: Array<Record<string, any>> = []
   const refuse = new Set<string>()
-  /** Every request the host made of the Swarm to build a delivery for the agent (its reads as the agent). */
-  const reads: string[] = []
+  /** Every read of the Swarm the host made as the agent, and when. */
+  const reads: Array<{ at: number; raw: string }> = []
   relay.superTabs = overOldRoutes(async (method, raw, body) => {
     const url = new URL(raw, relay.httpUrl), path = url.pathname
     if (path === `/api/super-tabs/hosts/${ME.machineId}/pools` || path === `/api/super-tabs/hosts/${ME.machineId}/assignments`) return { data: [] }
     if (path === `/api/super-tabs/hosts/${ME.machineId}`) return { data: agents.map(agent => ({ tabId: TAB, agent, observers: [] })) }
     if (path === `/api/super-tabs/${TAB}`) {
-      if (url.searchParams.get('asAgentId')) reads.push(raw)
+      if (url.searchParams.get('asAgentId')) reads.push({ at: Date.now(), raw })
       return { data: { revision: 1, state: { id: TAB, agents, conversations: [] } } }
     }
-    if (path.endsWith('/messages')) { reads.push(raw); return { data: { messages: [] } } }
+    if (path.endsWith('/messages')) { reads.push({ at: Date.now(), raw }); return { data: { messages: [] } } }
     if (path === `/api/super-tabs/${TAB}/commands`) {
       const command = object(body.command)
       if (command.type !== 'message.send') throw new Error(`Unexpected command ${String(command.type)}`)
@@ -99,6 +109,9 @@ async function begin(engine: 'claude' | 'codex') {
 it.each(['claude', 'codex'] as const)('types %s what its person typed, and posts its answer into their chat once its turn ends', async engine => {
   const { d, client, agent, memberId, posts, reads, refuse, prompts, ask } = await begin(engine)
   const typed = 'Please say hello to the team, then wait.'
+  // The host looks at an agent that is new to it, and reads the Swarm for its chat to tell it the team's basics once: not for a delivery.
+  await until('the host to look at the new agent', () => reads.length > 0 || null, 20_000, 100).catch(() => undefined)
+  const readsBefore = reads.length
   const first = ask('one', typed)
   await until('the native input acknowledgement', () => first.status === 'delivered' || null, 60_000, 250)
   // Exactly what its person typed, once: no place line, no context lines, no header and no Answer line.
@@ -107,7 +120,7 @@ it.each(['claude', 'codex'] as const)('types %s what its person typed, and posts
   expect(posts).toEqual([{ operationId: 'reply-delivery-one', asAgentId: memberId,
     command: { type: 'message.send', conversationId: CHAT, text: `answer 1: ${typed}`, replyTo: null, answers: 'message-one', recipientIds: [] } }])
   // Its chat is named by its roster row, so nothing of the Swarm was read to type it.
-  expect(reads).toEqual([])
+  expect(reads.length, 'reads of the Swarm to type the message').toBe(readsBefore)
 
   // A second message is its own turn, answered under its own operation, in its own thread when it is in one.
   const second = ask('two', 'And once more, in the thread.', { thread: 'message-one', replyTo: 'message-one' })
@@ -146,6 +159,29 @@ it.each(['claude', 'codex'] as const)('types %s what its person typed, and posts
   expect(posts[6]).toEqual({ operationId: 'dropped-reply-delivery-six', asAgentId: memberId,
     command: { type: 'message.send', conversationId: CHAT, text: 'Mia\'s answer could not be posted.', replyTo: null, answers: 'message-six', recipientIds: [] } })
   expect(posts).toHaveLength(7)
+
+  // Words of every script come back as they were typed; an answer that follows a tool call is the answer, not what was said before
+  // it; and one longer than a message takes is cut with an ellipsis, never in the middle of an emoji.
+  const next = Number(/^answer (\d+):/.exec(posts[5]!.command.text)![1]) + 1
+  const words = 'Ship it 🚀 — naïve café 日本語 مرحبا é'
+  ask('seven', words)
+  await until('the answer in every script', () => posts.length >= 8 || null, 90_000, 100)
+  expect(posts[7]!.command.text).toBe(`answer ${next}: ${words}`)
+  ask('eight', '!tool echo hi')
+  await until('the answer after a tool call', () => posts.length >= 9 || null, 90_000, 100)
+  expect(posts[8]!.command.text).toBe(`answer ${next + 1}: !tool echo hi`)
+  const prefix = `answer ${next + 2}: `
+  const long = `${'a'.repeat(31_998 - prefix.length)}😀${'tail'.repeat(10)}`
+  ask('nine', long)
+  await until('the cut answer', () => posts.length >= 10 || null, 120_000, 100)
+  expect(posts[9]!.command.text).toBe(`${`${prefix}${long}`.slice(0, 31_998)}…`)
+  expect(posts).toHaveLength(10)
+
+  // A compaction in the middle of a turn is no new turn: it is answered once, as one.
+  ask('ten', '!compactmid')
+  await until('the answer of a turn that compacted', () => posts.length >= 11 || null, 90_000, 100)
+  expect(posts[10]!.command.text).toBe(`answer ${next + 3}: !compactmid`)
+  expect(posts).toHaveLength(11)
   // And the journal keeps no words of anybody's.
   const journal = readFileSync(join(d.dataDir, 'super-tabs', `host-${ME.machineId}.json`), 'utf8')
   expect(journal).not.toContain(typed)
@@ -160,7 +196,7 @@ it.each(['claude', 'codex'] as const)('answers each of two messages from its own
   const service = [...d.log().matchAll(/\[harnessd\] service superTabs started \(pid (\d+)\)/g)].at(-1)?.[1]
   expect(service, 'the Swarm service\'s process').toBeDefined()
   const before = ended()
-  const slow = '!slow 6000', queued = 'And this, queued behind it.'
+  const slow = '!slow 15000', queued = 'And this, queued behind it.'
   const first = ask('one', slow)
   await until('the first typed', () => first.status === 'delivered' || null, 60_000, 100)
   ask('two', queued)
@@ -175,5 +211,69 @@ it.each(['claude', 'codex'] as const)('answers each of two messages from its own
   expect(posts.map(post => post.operationId)).toEqual(['reply-delivery-one', 'reply-delivery-two'])
   expect(posts.map(post => post.command.text)).toEqual([`answer 1: ${slow}`, `answer 2: ${queued}`])
   expect(posts.map(post => post.command.answers)).toEqual(['message-one', 'message-two'])
+  expect(posts).toHaveLength(2)
+}, 300_000)
+
+// The same, for two messages of the very same words: only the turn tells them apart, so each is answered by its own, and the
+// second's answer is never the first's.
+it.each(['claude', 'codex'] as const)('answers two messages of the same words each from its own turn, %s, when the host hears neither end until both are over', async engine => {
+  const { d, posts, prompts, ask, ended } = await begin(engine)
+  const service = [...d.log().matchAll(/\[harnessd\] service superTabs started \(pid (\d+)\)/g)].at(-1)?.[1]
+  expect(service, 'the Swarm service\'s process').toBeDefined()
+  const before = ended()
+  const same = '!slow 12000'
+  const first = ask('one', same)
+  await until('the first typed', () => first.status === 'delivered' || null, 60_000, 100)
+  ask('two', same)
+  await until('the second typed into the engine that is busy', () => prompts().filter(prompt => prompt === same).length === 2 || null, 60_000, 100)
+  expect(ended(), 'the first turn is still running').toBe(before)
+  process.kill(Number(service), 'SIGSTOP')
+  try {
+    await until('both turns to be over', () => ended() >= before + 2 || null, 60_000, 100)
+  } finally { process.kill(Number(service), 'SIGCONT') }
+  await until('both answers', () => posts.length >= 2 || null, 60_000, 100)
+  expect(posts.map(post => post.operationId)).toEqual(['reply-delivery-one', 'reply-delivery-two'])
+  expect(posts.map(post => post.command.text)).toEqual([`answer 1: ${same}`, `answer 2: ${same}`])
+  expect(posts.map(post => post.command.answers)).toEqual(['message-one', 'message-two'])
+  expect(posts).toHaveLength(2)
+}, 300_000)
+
+// The core restarts in the middle of the turn: it picks the turn up at attach and never saw its first part, so what the turn answered is
+// read from the transcript when it ends, and still posted.
+it.each(['claude', 'codex'] as const)('answers the message of a turn the core was restarted in the middle of, %s, when that turn ends', async engine => {
+  const { d, memberId, posts, ask } = await begin(engine)
+  const slow = '!slow 30000'
+  const first = ask('one', slow)
+  await until('the first typed', () => first.status === 'delivered' || null, 60_000, 100)
+  const cores = d.coresStarted()
+  process.kill(d.corePid()!, 'SIGKILL')
+  await until('the master to start another core', () => d.coresStarted() > cores || null, 60_000, 200)
+  await until('the answer, posted when the turn ends', () => posts.length >= 1 || null, 150_000, 250)
+  expect(posts).toEqual([{ operationId: 'reply-delivery-one', asAgentId: memberId,
+    command: { type: 'message.send', conversationId: CHAT, text: `answer 1: ${slow}`, replyTo: null, answers: 'message-one', recipientIds: [] } }])
+}, 300_000)
+
+// A turn its person interrupts is not answered, and says so in the host's log; the same words sent again are answered under the new
+// message, never under the stopped one, and the message after it as ever.
+it.each(['claude', 'codex'] as const)('posts no reply for a turn its person interrupted, %s, and answers the same words sent again under the new message', async engine => {
+  const { d, client, agent, memberId, posts, ask } = await begin(engine)
+  const same = '!slow 20000'
+  const first = ask('one', same)
+  await until('the first typed', () => first.status === 'delivered' || null, 60_000, 100)
+  // A cancel from the app ends no turn for the windows, which read the agent as idle; the host is told the turn was interrupted.
+  const idle = client.next(frame => frame.type === 'agent_activity' && frame.agentId === agent.agent.id && frame.payload?.activity?.state === 'idle', 60_000, 'the agent to read as idle')
+  client.send('cancel', { agentId: agent.agent.id })
+  await idle
+  // Until the engine itself has taken the interrupt: a message sent in the same breath can reach the pane before the key does.
+  await until('the engine to take the interrupt', async () => (await d.capture(agent.agent.tmuxPane)).includes('(interrupted)') || null, 30_000, 100)
+  await until('the host to say it posts nothing', () => d.log().includes(`No reply posted for delivery delivery-one of agent ${memberId}: its turn was interrupted.`) || null, 30_000, 100)
+  expect(posts).toEqual([])
+  ask('two', same)
+  await until('the answer of the same words sent again', () => posts.length >= 1 || null, 90_000, 250)
+  expect(posts).toEqual([{ operationId: 'reply-delivery-two', asAgentId: memberId,
+    command: { type: 'message.send', conversationId: CHAT, text: `answer 2: ${same}`, replyTo: null, answers: 'message-two', recipientIds: [] } }])
+  ask('three', 'After the interrupt.')
+  await until('the next answer', () => posts.length >= 2 || null, 60_000, 100)
+  expect(posts[1]).toMatchObject({ operationId: 'reply-delivery-three', command: { text: 'answer 3: After the interrupt.', answers: 'message-three' } })
   expect(posts).toHaveLength(2)
 }, 300_000)

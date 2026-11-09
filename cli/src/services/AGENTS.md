@@ -153,7 +153,7 @@ master too old to run it starts it beside itself, still in its own process (`src
   only when `TURN_DELIVERERS` (`src/core/api.ts`) names it: the experiments (below) and Agent Messages.
   The Swarm's host, which answers a person in their agent's own chat when the agent's turn ends, also hears each
   live turn's end (`core.turns.onEnd`; `TURN_END_HEARERS`, told as `service_event` `turn_end`, never waited on), which
-  names its turn by a hash of its prompt, and asks the core for the answer of that turn (`core.turns.answerOf`, the
+  names its turn by a hash of its prompt and a number, and asks the core for the answer of that turn (`core.turns.answerOf`, the
   `turn_answer` query, core/experimentQueries.ts).
 - A service that graduates from an experiment keeps the same questions to the core and is answered by a link of its
   own, for what it uses alone, never by the experiments' hooks: Agent Messages in the edge host

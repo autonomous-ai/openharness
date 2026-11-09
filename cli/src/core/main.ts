@@ -2741,6 +2741,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     turnStartedAt,
     agentIdFor,
     clients: backend,
+    ends: turnEnds,
   })
   backend.onCancel = id => { void cancelAgent(id) }
   backend.cancelProvider = createCancelRequest((id) => { void cancelAgent(id) })
