@@ -174,9 +174,9 @@ const toPart = <T>(kind: PartKind, row: PartRow): Part<T> => ({ kind, key: row.k
   ordinal: row.ordinal, data: row.data as T })
 
 /** Delivery authority only: no machine reports, starts, progress, or unrelated work. Keep the Lead conversations for
- * ledProject, and the named agents' groups for legacy project identity and native-context privacy checks. These projected
- * groups must never be committed as state; a delivery only touches its authority parts and updates its own row. */
-export async function loadDeliveryParts(tx: Transaction, tabId: string, groupIds: string[], agentIds: string[], nativeAgentId?: string,
+ * ledProject, and the named agents' groups for legacy project identity. These projected groups must never be committed as
+ * state; a delivery only touches its authority parts and updates its own row. */
+export async function loadDeliveryParts(tx: Transaction, tabId: string, groupIds: string[], agentIds: string[],
   receiverId?: string): Promise<SwarmParts> {
   const head = await tx.swarmHead.findUnique({ where: { id: partId(tabId, 'head') } })
   if (!head) throw Object.assign(new Error(`Swarm ${tabId} has no parts`), { code: 'PARTS_MISSING' })
@@ -187,10 +187,8 @@ export async function loadDeliveryParts(tx: Transaction, tabId: string, groupIds
     tx.swarmMember.findMany({ where: { tabId, deleted: false } }),
     tx.swarmAgent.findMany({ where: { tabId, deleted: false } }),
   ])
-  // Modern agents carry their project. Older agents derive it from their first loaded group. Native privacy checks
-  // additionally inspect every group of the terminal's agent, which need not be the delivery's receiver.
-  const related = [...agents.filter(a => agentIds.includes(a.key) && !(a.data as unknown as Agent).projectId).map(a => a.key),
-    ...nativeAgentId ? [nativeAgentId] : []]
+  // Modern agents carry their project. Older agents derive it from their first loaded group.
+  const related = agents.filter(a => agentIds.includes(a.key) && !(a.data as unknown as Agent).projectId).map(a => a.key)
   // One read per index, like loadLight: an $or spanning key and membership indexes would invoke the query planner again.
   const [named, linked] = await Promise.all([
     groupsBy(tx, 'key', [{ $match: { tabId, deleted: false, key: { $in: [...groupIds, ...keys] },
