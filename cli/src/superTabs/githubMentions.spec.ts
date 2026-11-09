@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { builderLabel, GitHubMentions, namesAgent, repositorySlug, signedBy, watchedAgents, type WatchedAgent } from './githubMentions.js'
 import type { GitHubGet } from './githubRest.js'
+import { SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
 const root = mkdtempSync(join(tmpdir(), 'super-tab-github-mentions-'))
@@ -19,10 +20,12 @@ const PIP: WatchedAgent = { tabId: 'tab', agentId: 'pip', chat: 'chat-pip', name
 function fakeGitHub() {
   const comments: Json[] = [], lineComments: Json[] = [], issues: Json[] = [], reviews = new Map<number, Json[]>()
   const calls: string[] = []
-  const state = { signedOut: false, missing: new Set<string>(), files: new Map<string, string>(), labels: [] as Json[] }
+  const state = { signedOut: false, down: false, status: 0, missing: new Set<string>(), files: new Map<string, string>(), labels: [] as Json[] }
   const get: GitHubGet = async (path, etag) => {
     calls.push(path)
     if (state.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
+    if (state.down) throw Object.assign(new Error('fetch failed'), { code: 'ECONNRESET' })
+    if (state.status) return { status: state.status, etag: null, body: null, resetAt: null }
     const url = new URL(`https://api.github.com${path}`)
     if (state.missing.has(url.pathname.split('/').slice(2, 4).join('/'))) return { status: 404, etag: null, body: null, resetAt: null }
     const file = /^\/repos\/acme\/app\/contents\/(.+)$/.exec(url.pathname)
@@ -221,6 +224,119 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
     expect(f.tell).not.toHaveBeenCalled()
   })
 
+  // GitHub names a repository as it is now (its case, its name after a rename); the server refuses a link outside the repository a row
+  // names, so a project written the old way stopped every relay of it, for good (the Harness repository is openharness, a clone's origin
+  // says autonomous-harness).
+  it('names the repository as GitHub does, so a project written in another case or before a rename is still heard', async () => {
+    const f = setup()
+    await f.mentions.tick()
+    f.github.comments.push(comment(2, 10, 'to **Pip**: READ-OK f6edb44', { html_url: 'https://github.com/Acme/App/pull/4#issuecomment-2' }))
+    f.github.issues.push(issue(13, 11, ['builder:pip'], { html_url: 'https://github.com/acme/renamed/issues/13' }))
+    await f.mentions.tick()
+    expect(f.relayed()).toEqual([expect.objectContaining({ event: 'task', repository: 'acme/renamed' }),
+      expect.objectContaining({ event: 'comment', repository: 'Acme/App', url: 'https://github.com/Acme/App/pull/4#issuecomment-2' })])
+  })
+
+  it.each([[400, 'VALIDATION_ERROR'], [403, 'REQUEST_BLOCKED'], [404, 'NOT_FOUND'], [409, 'OPERATION_REUSED']])(
+    'passes over an item the server refuses for good (%s %s), says so once, and still relays the rest', async (status, code) => {
+      const f = setup()
+      await f.mentions.tick()
+      f.github.comments.push(comment(2, 10, 'to **Pip**: not this one'), comment(3, 11, 'to **Pip**: this one'))
+      f.relay.mockRejectedValueOnce(new SuperTabHostError(code, 'The server will not take it.', status))
+      await f.mentions.tick()
+      expect(f.relayed().map(c => c.text)).toEqual(['to **Pip**: not this one', 'to **Pip**: this one'])
+      expect(f.log).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`RELAY_REFUSED acme/app#4 \\(${code}\\)`)))
+      // Never tried again, however many passes follow, nor after a restart.
+      for (let i = 0; i < 3; i++) { f.clock.now += 20_000; await f.mentions.tick() }
+      await f.make().tick()
+      expect(f.relay).toHaveBeenCalledTimes(2)
+      expect(f.log.mock.calls.filter(([line]) => String(line).includes('RELAY_REFUSED'))).toHaveLength(1)
+    })
+
+  it('waits before it hands an item on again that the server could not take now, 30 seconds and longer each time, to 15 minutes', async () => {
+    const f = setup()
+    await f.mentions.tick()
+    f.github.comments.push(comment(2, 10, 'to **Pip**: later'))
+    f.relay.mockRejectedValue(new SuperTabHostError('BACKEND_UNAVAILABLE', 'Try again.', 503))
+    const tries = [] as number[]
+    for (let seconds = 20; seconds <= 1_900; seconds += 20) {
+      f.clock.now = START + seconds * 1000
+      const before = f.relay.mock.calls.length
+      await f.mentions.tick()
+      if (f.relay.mock.calls.length > before) tries.push(seconds)
+    }
+    expect(tries).toEqual([20, 60, 120, 240, 480, 960, 1_860])
+    // Each try is the same operation, which the server writes once.
+    expect(new Set(f.relay.mock.calls.map(([, operationId]) => operationId)).size).toBe(1)
+    expect(f.log).toHaveBeenCalledWith(expect.stringContaining('RELAY_FAILED acme/app: The server will not take it'.replace('The server will not take it', 'Try again.')))
+  })
+
+  it.each([[401, 'UNAUTHORIZED'], [403, 'HOST_UNAVAILABLE'], [408, 'TIMEOUT'], [426, 'UPDATE_REQUIRED'], [429, 'RATE_LIMITED'], [500, 'INTERNAL']] as const)(
+    'does not hand an item on again for 30 seconds when the server could not take it now (%s %s)', async (status, code) => {
+      const f = setup()
+      await f.mentions.tick()
+      f.github.comments.push(comment(2, 10, 'to **Pip**: later'))
+      f.relay.mockRejectedValueOnce(new SuperTabHostError(code, 'Try again.', status))
+      await f.mentions.tick()
+      f.clock.now += 20_000
+      await f.mentions.tick()
+      expect(f.relay).toHaveBeenCalledTimes(1)
+      f.clock.now += 20_000
+      await f.mentions.tick()
+      expect(f.relay).toHaveBeenCalledTimes(2)
+    })
+
+  it('backs off 5 minutes when GitHub refuses this computer\'s login, and says so once, and reads again when it can', async () => {
+    const f = setup()
+    await f.mentions.tick()
+    f.github.state.status = 401
+    f.clock.now += 20_000
+    await f.mentions.tick()
+    expect(f.log).toHaveBeenCalledWith(expect.stringContaining('GH_SIGNED_OUT'))
+    const asked = f.github.calls.length
+    for (let seconds = 40; seconds < 300; seconds += 20) { f.clock.now = START + seconds * 1000; await f.mentions.tick() }
+    expect(f.github.calls.length).toBe(asked)
+    f.github.state.status = 0
+    f.clock.now = START + 330_000
+    await f.mentions.tick()
+    expect(f.github.calls.length).toBeGreaterThan(asked)
+    expect(f.log).toHaveBeenLastCalledWith('[super-tab] GitHub news for agents reads again')
+    expect(f.log.mock.calls.filter(([line]) => String(line).includes('GH_SIGNED_OUT'))).toHaveLength(1)
+  })
+
+  it('waits longer after each pass GitHub did not answer, to 15 minutes, and starts again once it answers', async () => {
+    const f = setup()
+    await f.mentions.tick()
+    f.github.state.down = true
+    const asked = [] as number[]
+    for (let seconds = 20; seconds <= 1_900; seconds += 20) {
+      f.clock.now = START + seconds * 1000
+      const before = f.github.calls.length
+      await f.mentions.tick()
+      if (f.github.calls.length > before) asked.push(seconds)
+    }
+    expect(asked).toEqual([20, 60, 120, 240, 480, 960, 1_860])
+    f.github.state.down = false
+    f.clock.now += 16 * 60_000
+    await f.mentions.tick()
+    expect(f.log).toHaveBeenLastCalledWith('[super-tab] GitHub news for agents reads again')
+    f.github.state.down = true
+    const again = f.github.calls.length
+    f.clock.now += 20_000
+    await f.mentions.tick()
+    f.clock.now += 20_000
+    await f.mentions.tick()
+    // The first miss after an answer waits 30 s, not the 15 minutes the last run of misses had reached.
+    expect(f.github.calls.length - again).toBe(1)
+  })
+
+  it('says a repository it cannot read once, for as long as it cannot, and not that it reads again meanwhile', async () => {
+    const f = setup([{ ...PIP, repos: ['acme/secret', 'acme/app'] }])
+    f.github.state.missing.add('acme/secret')
+    for (let i = 0; i < 5; i++) { f.clock.now += 20_000; await f.mentions.tick() }
+    expect(f.log.mock.calls.map(([line]) => String(line))).toEqual([expect.stringContaining('UNREADABLE acme/secret')])
+  })
+
   it('asks again with ETags, and a restart relays nothing twice', async () => {
     const f = setup()
     await f.mentions.tick()
@@ -270,6 +386,7 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
     f.github.comments.push(comment(2, 10, 'to **Pip**: READ-OK f6edb44'))
     f.relay.mockRejectedValueOnce(new Error('Could not reach this Super Tab.'))
     await f.mentions.tick()
+    f.clock.now += 30_000
     await f.mentions.tick()
     expect(f.relay).toHaveBeenCalledTimes(2)
     expect(f.relay.mock.calls[1]![1]).toBe(f.relay.mock.calls[0]![1])
@@ -284,6 +401,7 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
     f.github.reviews.set(4, [review(7, 11, 'CHANGES_REQUESTED', 'Fix the count.')])
     f.relay.mockRejectedValueOnce(new Error('Could not reach this Super Tab.'))
     await f.mentions.tick()
+    f.clock.now += 30_000
     await f.mentions.tick()
     expect(f.relayed().map(c => [c.event, c.text])).toEqual([['review', 'Fix the count.'], ['review', 'Fix the count.']])
     expect(f.relay.mock.calls[1]![1]).toBe(f.relay.mock.calls[0]![1])

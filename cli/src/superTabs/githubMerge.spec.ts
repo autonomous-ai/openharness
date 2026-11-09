@@ -14,10 +14,12 @@ const pull = (extra: Json = {}): Json => ({ number: 4, draft: false, base: { ref
 function fakeGitHub() {
   const repo = { pulls: [pull()], comments: new Map<number, Json[]>([[4, [comment('Juno, 14:20, to **Pip**: READ-OK f6edb44')]]]),
     runs: new Map<string, Json[]>([[HEAD, [{ name: 'test', status: 'completed', conclusion: 'success' }]]]), statuses: new Map<string, Json[]>(),
-    state: 'clean', mergeAnswer: 200, signedOut: false }
+    state: 'clean', mergeAnswer: 200, signedOut: false, down: false, status: 0 }
   const sent: Array<{ method: string; path: string; body: unknown }> = []
   const get: GitHubGet = async (path, etag) => {
     if (repo.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
+    if (repo.down) throw Object.assign(new Error('fetch failed'), { code: 'ECONNRESET' })
+    if (repo.status) return { status: repo.status, etag: null, body: null, resetAt: null }
     const url = new URL(`https://api.github.com${path}`)
     const p = url.pathname
     const body = p === '/repos/acme/app' ? { default_branch: 'main' }
@@ -42,11 +44,12 @@ function fakeGitHub() {
 function setup() {
   const github = fakeGitHub()
   const log = vi.fn()
+  const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
   const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }], get: github.get, send: github.send,
-    now: () => Date.parse('2026-11-09T07:31:00Z'), log })
+    now: () => clock.now, log })
   const merges = () => github.sent.filter(s => s.method === 'PUT')
   const comments = () => github.sent.filter(s => s.method === 'POST').map(s => String((s.body as Json).body))
-  return { github, merger, log, merges, comments }
+  return { github, merger, log, merges, comments, clock }
 }
 
 describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)', () => {
@@ -116,6 +119,39 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     f.github.repo.mergeAnswer = 200
     await f.merger.tick()
     expect(f.merges()).toHaveLength(2)
+  })
+
+  it('waits longer after each pass GitHub did not answer, 30 seconds to 15 minutes, and a refused login 5 minutes, and says so once', async () => {
+    const down = setup()
+    const told = [] as number[]
+    down.github.repo.down = true
+    for (let seconds = 30; seconds <= 1_900; seconds += 30) {
+      down.clock.now = Date.parse('2026-11-09T07:31:00Z') + seconds * 1000
+      const before = down.log.mock.calls.length
+      await down.merger.tick()
+      if (down.log.mock.calls.length > before) told.push(seconds)
+    }
+    // A line each time its wait changes: 30 s, 1 min, 2, 4, 8, 15, and then the same 15 min, said once.
+    expect(told).toEqual([30, 60, 120, 240, 480, 960])
+    const out = setup()
+    out.github.repo.status = 401
+    await out.merger.tick()
+    expect(out.log).toHaveBeenCalledWith(expect.stringContaining('GH_SIGNED_OUT'))
+    out.github.repo.status = 0
+    out.clock.now += 4 * 60_000
+    await out.merger.tick()
+    expect(out.merges()).toEqual([])
+    out.clock.now += 61_000
+    await out.merger.tick()
+    expect(out.merges()).toHaveLength(1)
+    expect(out.log).toHaveBeenLastCalledWith('[super-tab] merging by rule runs again')
+  })
+
+  it('says a repository it cannot read once, for as long as it cannot, and not that it runs again meanwhile', async () => {
+    const f = setup()
+    f.github.repo.status = 404
+    for (let i = 0; i < 5; i++) { f.clock.now += 30_000; await f.merger.tick() }
+    expect(f.log.mock.calls.map(([line]) => String(line))).toEqual([expect.stringContaining('UNREADABLE acme/app')])
   })
 
   it('stops while gh is signed out and says so once', async () => {
