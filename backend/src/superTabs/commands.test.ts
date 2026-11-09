@@ -3,7 +3,7 @@ import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, tasksNamedIn, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, WORDS, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { readsRawReason } from './startFailure.js'
-import { sweepLiveness } from './liveness.js'
+import { loseTasks, sweepLiveness } from './liveness.js'
 import { REOPEN_OWNER_MS } from './handed.js'
 import { SWITCH_UNCLAIMED_MS } from './tidy.js'
 import { defaultProfileId, hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
@@ -3100,7 +3100,7 @@ describe('Reviewer role', () => {
         evidence: passed ? 'Passed at abc1234' : 'Two findings at abc1234' }, reviewerActor, { now })
       const task = () => f.state.conversations.find(c => c.id === group)!.assignment!
       /** The task's status after the time checks ran at `now`, on a copy. */
-      const swept = (now: number) => { const copy = structuredClone(f.state); sweepLiveness(copy, now); return copy.conversations.find(c => c.id === group)!.assignment!.status }
+      const swept = (now: number) => { const copy = structuredClone(f.state); loseTasks(copy, now); return copy.conversations.find(c => c.id === group)!.assignment!.status }
       return { ...setup, built, builderActor, verdict, task, swept }
     }
 

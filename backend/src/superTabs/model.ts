@@ -850,7 +850,8 @@ export const NOTICE_READERS = {
   // The Lead's wakes and requests, and the worker's "moved" line (liveness.ts, tidy.ts, projectUpdates.ts); two
   // projects changing the same code, to both their Leads in the Leads chat (commands.ts).
   'work-stalled': 'recipients', 'work-lost': 'recipients', 'work-resumed': 'recipients', 'idle-stop': 'recipients',
-  // A crew member's 2 hours without progress on its task, to that member (dispatch.ts crewClock, liveness.ts).
+  // A crew member's 2 hours without progress on its task, to that member (dispatch.ts crewClock): written until Swarm v4, read still.
+  // Delete it with the notice readers of v1-v3 (slice S18).
   'crew-nudge': 'recipients',
   // An agent with no open task for 15 minutes, and a grid attempt's failed first review, told to the coordinator (tidy.ts
   // idleNotices, commands.ts work.check; project instructions, phase 4). `idle-stop` rows are from before.

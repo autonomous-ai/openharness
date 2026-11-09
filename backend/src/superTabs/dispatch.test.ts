@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration, type Conversation, type MessageDraft } from './model.js'
-import { capacityLine, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, laneOf, nudgeLine, pinBuilder, pullRequestPin, returnReason } from './dispatch.js'
+import { capacityLine, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, laneOf, pinBuilder, pullRequestPin, returnReason } from './dispatch.js'
 import type { PullRequestWatch } from './pullRequestEvents.js'
-import { sweepLiveness } from './liveness.js'
+import { loseTasks } from './liveness.js'
 import type { Agent } from './model.js'
 
 /** A lane a crew mark names (crew.ts, #3397). */
@@ -302,7 +302,7 @@ describe('dispatch keeps big or risky work for a strong model', () => {
   })
 })
 
-describe('the crew\'s clocks: 2 hours without progress tells the member, 3 hours puts the task back in its lane', () => {
+describe('the crew\'s clock: 3 hours without progress puts the task back in its lane', () => {
   const HOUR = 3_600_000, AT = 1000
   /** Ash (crew, backend) working on Api since AT; Birch (crew, backend) free. */
   function working(crew = true) {
@@ -310,56 +310,32 @@ describe('the crew\'s clocks: 2 hours without progress tells the member, 3 hours
     if (crew) for (const name of ['Ash', 'Birch']) s.state.agents.find(a => a.id === s.ids[name])!.crew = { role: 'Engineer', lane: 'backend', at: AT, by: 'owner' }
     const api = s.task('Api', ['backend/src/a.ts'])
     s.run({ type: 'work.assign', conversationId: api, agentId: s.ids.Ash! }, s.as(s.pm))
-    /** The liveness sweep at [now], with the machine reporting every session running and busy on screen till then. */
+    /** The loss check at [now], with the machine reporting every session running and busy on screen till then. */
     const sweep = (now: number, rules = DISPATCH_RULES) => {
       s.state.machines = [{ machineId: 'host', name: 'Mac', observation: { runningHarnessIds: s.state.agents.map(a => a.harnessId),
         stoppedHarnessIds: [], receivedAt: now, harnessProgress: Object.fromEntries(s.state.agents.map(a => [a.harnessId, now])) } }] as never
-      return sweepLiveness(s.state, now, () => rules)
+      return loseTasks(s.state, now, undefined, undefined, () => rules)
     }
     const lines = (rows: MessageDraft[]) => rows.filter(r => r.conversationId === api && r.recipients.includes(s.ids.Ash!)).map(r => r.text)
     return { ...s, api, sweep, lines, get state() { return s.state } }
   }
 
-  it('uses a project’s own progress thresholds and names them in notices', () => {
+  it('uses a project’s own return threshold and names it', () => {
     const s = working()
     const rules = { ...DISPATCH_RULES, nudgeAfterMs: 60_000, returnAfterMs: 120_000 }
-    expect(s.lines(s.sweep(AT + 59_999, rules))).toEqual([])
-    expect(s.lines(s.sweep(AT + 60_000, rules))).toEqual([
-      'No progress on this task for 1 minute. Post where it stands, or set it blocked with why; at 2 minutes it goes back to the backend lane.',
-    ])
+    s.sweep(AT + 119_999, rules)
+    expect(s.group(s.api).assignment!.status).toBe('working')
     s.sweep(AT + 120_000, rules)
     expect(s.group(s.api).assignment).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 2 minutes: back in the backend lane' } })
   })
 
-  it.each([true, false])('tells the worker once at 2 hours, reset only after progress (crew: %s)', crew => {
-    const s = working(crew)
-    expect(s.lines(s.sweep(AT + 2 * HOUR - 60_000))).toEqual([])
-    expect(s.lines(s.sweep(AT + 2 * HOUR))).toEqual([nudgeLine('backend')])
-    expect(nudgeLine('backend')).toBe('No progress on this task for 2 hours. Post where it stands, or set it blocked with why; at 3 hours it goes back to the backend lane.')
-    expect(s.lines(s.sweep(AT + 2 * HOUR + 30_000))).toEqual([])
-    expect(s.group(s.api).assignment!.status).toBe('working')
-    // Its own post at 2 h 10 restarts both clocks.
-    s.run({ type: 'message.send', conversationId: s.api, text: 'Halfway: the store is done.', replyTo: null, recipientIds: [] }, s.as(s.ids.Ash!), { now: AT + 2 * HOUR + 10 * 60_000 })
-    expect(s.lines(s.sweep(AT + 3 * HOUR))).toEqual([])
-    expect(s.group(s.api).assignment!.status).toBe('working')
-    expect(s.lines(s.sweep(AT + 4 * HOUR + 10 * 60_000))).toEqual([nudgeLine('backend')])
-  })
-
   it.each([true, false])('returns the task at 3 hours for another worker (crew: %s)', crew => {
     const s = working(crew)
-    s.sweep(AT + 2 * HOUR)
     s.sweep(AT + 3 * HOUR)
     const group = s.group(s.api)
     expect(group.assignment!.status).toBe('lost')
     expect(group.assignment!.lost!.reason).toBe('no progress for 3 hours: back in the backend lane')
     expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, AT + 3 * HOUR).map(p => [p.agentId, p.conversationId])).toEqual([[s.ids.Birch!, s.api]])
-  })
-
-  it.each([true, false])('does not nudge a worker waiting on its own open step (crew: %s)', crew => {
-    const s = working(crew)
-    const step = s.run({ type: 'conversation.create', title: 'Test', brief: 'Test it.', reviewOf: s.api, step: 'Test', checks: [] }).result.conversationId as string
-    s.run({ type: 'work.assign', conversationId: step, agentId: s.ids.Birch! }, s.as(s.pm))
-    expect(s.lines(s.sweep(AT + 2 * HOUR))).toEqual([])
   })
 
   it.each([true, false])('never ticks while blocked or waiting on a person or review (crew: %s)', crew => {
