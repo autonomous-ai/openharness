@@ -14,6 +14,10 @@ describe('commands Swarm v4 no longer has', () => {
     expect(Object.keys(OLD_PAYLOADS).sort()).toEqual([...RETIRED_COMMANDS].sort())
   })
 
+  it('retires what the people chat\'s profile sent: a person\'s status, time zone, username and name', () => {
+    expect(RETIRED_COMMANDS).toEqual(expect.arrayContaining(['member.status', 'member.timeZone', 'member.username', 'member.name']))
+  })
+
   it.each(RETIRED_COMMANDS)('accepts %s as an older client sent it and keeps only its type', type => {
     expect(commandSchema.parse({ type, ...OLD_PAYLOADS[type] })).toEqual({ type })
   })
