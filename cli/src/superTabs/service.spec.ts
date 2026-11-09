@@ -211,7 +211,8 @@ it('serves an agent in its own pane that leaves its Swarm out, in the one Swarm 
   const t = setup()
   expect(await t.ask({ action: 'status', harnessId: 'native' }, owner)).toMatchObject({ ok: true })
   expect(t.call).toHaveBeenLastCalledWith('GET', `/api/super-tabs/tab/parts?asAgentId=${t.agentId}`, undefined)
-  expect(await t.ask({ action: 'status', harnessId: 'stranger' }, owner)).toEqual({ error: 'INVALID_REQUEST', detail: 'Name the Swarm with --tab ID.' })
+  // One in no Swarm is told so: "Name the Swarm with --tab ID." sent it looking for an id it has none of (Q3, 2026-11-09).
+  expect(await t.ask({ action: 'status', harnessId: 'stranger' }, owner)).toEqual({ error: 'INVALID_REQUEST', detail: 'This agent is not in a Swarm.' })
 })
 it('asks an agent in two Swarms to name one', async () => {
   const agent = { id: 'a', machineId: 'machine-1', harnessId: 'native' }
