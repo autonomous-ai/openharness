@@ -60,6 +60,14 @@ on:
         description: 'A P0 only: why this real release runs outside the release window (recorded in the run summary).'
         required: false
         default: ''
+      promote_pty:
+        description: 'Also point the PRODUCTION Windows terminal-host manifest at this version, after the staging read-back verifies it. The staging E2E (docs/testing/windows-cli-e2e.md) is still the gate before using it.'
+        type: boolean
+        default: false
+      promote_pty_allow_downgrade:
+        description: 'With promote_pty: promote an older payload over a newer one (a rollback)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -334,9 +342,11 @@ jobs:
 
   # The Windows half (sub-project B). The pty payload (harness-pty.exe, harness-launch.exe, harness.exe and ConPTY)
   # is built on each architecture's own runner by the Windows workflow. The payload, this release's `cli` entry
-  # and install.ps1 then go to STAGING, never to production: production is the owner's step after the staging E2E
-  # (docs/testing/windows-cli-e2e.md). These jobs are separate from `publish`, so a Windows failure never holds up
-  # the macOS and Linux fleet's release. Like `publish`, they fail loudly, and the next version fixes them.
+  # and install.ps1 then go to STAGING, never to production on their own: production is the owner's step after the
+  # staging E2E (docs/testing/windows-cli-e2e.md), and `promote-pty` below is that step when the dispatch asks for
+  # it (`promote_pty`), on this workflow's own credential rather than a maintainer's laptop. These jobs are separate
+  # from `publish`, so a Windows failure never holds up the macOS and Linux fleet's release. Like `publish`, they
+  # fail loudly, and the next version fixes them.
   pty-build:
     needs: version
     uses: ./.github/workflows/windows.yml
@@ -467,6 +477,64 @@ jobs:
             }
             main().catch((error) => { console.error(`::error::${error.message}`); process.exit(1) })
           JS
+
+  # The owner's production step for the terminal host, on the repository's own credential instead of a laptop's
+  # gcloud. It runs only when the dispatch asks (promote_pty), on a real (not dry-run) metadata path, and only after
+  # `windows-staging` read this release's zips back from the CDN and matched their sha256 and size — so the payload
+  # promoted is the one that job verified. Promotion names the same immutable staging objects; nothing is uploaded
+  # here. A tag push never does this: the host is a binary in every Windows pane, and the staging E2E
+  # (docs/testing/windows-cli-e2e.md) is the owner's gate before it is worth promoting.
+  promote-pty:
+    needs: [version, windows-staging]
+    if: >-
+      inputs.promote_pty &&
+      needs.version.outputs.metadata_path == 'harness/cli/metadata.json'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+      - name: Authenticate to GCP (workload identity federation)
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+      - name: Promote the pty payload
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.promote_pty_allow_downgrade }}" = true ]; then
+            bash cli/scripts/promote-pty-payload.sh --allow-downgrade "$VERSION"
+          else
+            bash cli/scripts/promote-pty-payload.sh "$VERSION"
+          fi
+      # What a Windows machine's updater reads, checked the way it reads it: production now names this version on
+      # both architectures, and the bytes those entries point at are the bytes the manifest describes.
+      - name: Read production back the way the updater does
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://storage.googleapis.com/${GCS_BUCKET}/harness/pty/metadata.json" -o manifest.json
+          node --input-type=commonjs - <<'JS'
+            const fs = require("node:fs"), crypto = require("node:crypto")
+            const main = async () => {
+              const pty = JSON.parse(fs.readFileSync("manifest.json", "utf8")).pty || {}
+              for (const key of ["win32-x64", "win32-arm64"]) {
+                const entry = pty[key]
+                if (!entry || entry.version !== process.env.VERSION) throw new Error(`${key}: ${JSON.stringify(entry)}`)
+                const response = await fetch(entry.url, { cache: "no-store" })
+                if (!response.ok) throw new Error(`${key}: GET ${entry.url} -> ${response.status}`)
+                const bytes = Buffer.from(await response.arrayBuffer())
+                if (crypto.createHash("sha256").update(bytes).digest("hex") !== entry.sha256 || bytes.length !== entry.size) throw new Error(`${key}: served bytes differ`)
+                console.log(`  ${key}: ${entry.version} ok`)
+              }
+            }
+            main().catch((error) => { console.error(`::error::${error.message}`); process.exit(1) })
+          JS
+          echo "### Promoted the terminal host $VERSION to production" >> "$GITHUB_STEP_SUMMARY"
 
   # The GitHub Release. Notes are the tag's OWN message, verbatim — the same rule the desktop repo
   # follows. CI generates nothing: what a human wrote and reviewed at tag time is exactly what
