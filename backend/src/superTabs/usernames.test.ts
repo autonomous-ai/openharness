@@ -232,7 +232,7 @@ describe('member.username', () => {
     f.state.agents.push({ id: 'buddy', projectId: 'lead', machineId: 'machine', harnessId: 'buddy-harness', machineOwnerId: 'owner',
       contributorId: 'owner', membershipGeneration: generation, name: 'Pal', configuration, buddyOf: { personId: 'owner', generation } })
     const view = readerView(split(f.state, { tabId: 'tab', version: 1, now: NOW }), { kind: 'agent', agentId: 'buddy', machineOwnerId: 'owner' },
-      NOW, { teamMachines: [] })
+      NOW, {})
     expect(Object.fromEntries(view.parts.members.map(m => [m.key, m.data.username]))).toEqual({ owner: 'ken15', peer: 'ken' })
     // Its person's machines stay out of what it reads.
     expect(view.parts.agents.map(a => a.data.machineId)).not.toContain('machine')
@@ -245,7 +245,7 @@ describe('member.username', () => {
     const parts = split(f.state, { tabId: 'tab', version: 1, now: NOW })
     // Member parts load in no fixed order (parts/load.ts); their ordinals keep the join order.
     parts.members = [parts.members[0]!, parts.members[2]!, parts.members[1]!]
-    const view = readerView(parts, owner, NOW, { teamMachines: [] })
+    const view = readerView(parts, owner, NOW, {})
     expect(Object.fromEntries(view.parts.members.map(m => [m.key, m.data.username])))
       .toEqual({ owner: 'ken15', earlier: 'ken', rejoined: 'ken2' })
     // So do changes, which send the member as the reader's view has it.
