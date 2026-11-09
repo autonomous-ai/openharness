@@ -568,7 +568,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   around it (an error, a reply being written, the agents-only line) share it,
   each keeping its own 24-point inset inside it, so a pane under 720 is filled
   with 24 each side. The header stays the pane's whole width, and so does the
-  list, so its scrollbar sits at the pane's edge. Two panes open together (a
+  list, so its scrollbar sits at the pane's edge, and the bars across the top
+  of the chat (the connection line, Find, the unread bar) and the Jump to
+  latest button over it. Two panes open together (a
   chat with its terminal, its instructions, a task's thread, or a project's
   tasks and one task) share the width the left pane leaves half and half, the
   column centred in the chat's half. The browser keeps its full-width chat until

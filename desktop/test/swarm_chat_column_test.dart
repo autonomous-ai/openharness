@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -32,6 +33,7 @@ void main() {
     double width = window,
     String chat = 'agent-chat-second',
     Widget? terminal,
+    bool board = true,
   }) async {
     await tester.binding.setSurfaceSize(Size(width, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -53,7 +55,7 @@ void main() {
             machineName: (_) => 'Mac Studio',
             github: swarmV4GitHub(),
             terminal: terminal,
-            board: true,
+            board: board,
           ),
         ),
       ),
@@ -185,6 +187,60 @@ void main() {
     expect(composer.left, moreOrLessEquals(pane.left + gutter, epsilon: .5));
     expect(composer.right, moreOrLessEquals(pane.right - gutter, epsilon: .5));
   });
+
+  testWidgets('the browser keeps its chat at the pane\'s full width', (
+    tester,
+  ) async {
+    // The v3 layout the browser draws until it moves to v4 (`board` is false there): no column.
+    await show(tester, swarmV4Server(), board: false);
+    final pane = centre(tester);
+    expect(pane.width, greaterThan(column + 2 * gutter));
+    expectRows(tester, pane, pane.width);
+  });
+
+  testWidgets(
+    'the mention choices under the list are in the column too, and so is a reply being written',
+    (tester) async {
+      final server = swarmV4Server();
+      // A message from before threads keeps its inline reply, which the chat shows as a line above the composer.
+      server.threads = false;
+      server.append(
+        'Did the memory retest finish?',
+        conversationId: 'agent-chat-third',
+      );
+      server.messages.last['author'] = {
+        'kind': 'agent',
+        'id': 'third',
+        'name': 'third',
+      };
+      await show(tester, server, chat: 'agent-chat-third');
+      final inner = column / 2 - gutter;
+      final pane = centre(tester);
+      // Tagging: the choices list takes the column's width less the gutters.
+      await tester.enterText(key('super-message-composer'), '@t');
+      await tester.pump();
+      final choices = tester.getRect(key('super-composer-completions'));
+      expect(choices.left, greaterThanOrEqualTo(pane.center.dx - inner - .5));
+      expect(choices.right, lessThanOrEqualTo(pane.center.dx + inner + .5));
+      await tester.enterText(key('super-message-composer'), '');
+      await tester.pump();
+      // Reply: the mouse rests on the message, its toolbar shows, and Reply is clicked.
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: Offset.zero);
+      addTearDown(mouse.removePointer);
+      await mouse.moveTo(
+        tester.getCenter(find.text('Did the memory retest finish?')),
+      );
+      await tester.pumpAndSettle();
+      await mouse.moveTo(tester.getCenter(find.byTooltip('Reply')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Reply'));
+      await settle(tester);
+      final preview = tester.getRect(find.byType(SuperTabReplyPreview));
+      expect(preview.left, greaterThanOrEqualTo(pane.center.dx - inner - .5));
+      expect(preview.right, lessThanOrEqualTo(pane.center.dx + inner + .5));
+    },
+  );
 
   group('two panes share the width half and half, and the column is centred in the chat\'s half', () {
     testWidgets('chat and terminal', (tester) async {

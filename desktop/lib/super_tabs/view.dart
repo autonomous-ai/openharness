@@ -5116,7 +5116,9 @@ class _SuperTabViewState extends State<SuperTabView>
   );
 
   /// A v4 chat's rows, composer and the notes around them sit in one centred column ([SwarmChatColumn], anh Dee
-  /// 2026-11-09); the browser keeps its full width until it moves to v4.
+  /// 2026-11-09); the browser keeps its full width until it moves to v4. Everything the chat draws between its list and the
+  /// window's edge, a note under the list included, goes through here; the bars over the list and the buttons floating on it
+  /// stay the pane's width.
   Widget _inColumn(Widget child) =>
       widget.board ? SwarmChatColumn(child: child) : child;
 
