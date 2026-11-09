@@ -562,6 +562,17 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   round send (`SwarmSendButton`, 28, blue) in its place once there is text or
   a file. A thread's box keeps its row under the text, with a grey send until
   there is something to send. No @ button: an @ typed tags.
+- **Chat column.** A chat is one column, at most 720 wide and centred in its
+  pane (`SwarmChatColumn`, `super_tabs/chat/column.dart`; anh Dee, 2026-11-09).
+  Its message rows, day lines, New messages line, composer and the notes
+  around it (an error, a reply being written, the agents-only line) share it,
+  each keeping its own 24-point inset inside it, so a pane under 720 is filled
+  with 24 each side. The header stays the pane's whole width, and so does the
+  list, so its scrollbar sits at the pane's edge. Two panes open together (a
+  chat with its terminal, its instructions, a task's thread, or a project's
+  tasks and one task) share the width the left pane leaves half and half, the
+  column centred in the chat's half. The browser keeps its full-width chat until
+  it moves to v4. `test/swarm_chat_column_test.dart` measures it.
 - **Blue.** Blue is for the main action and for your own bubbles, nothing
   else.
 - **Adding or changing one.** A new or changed element updates this section
