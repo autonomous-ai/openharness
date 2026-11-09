@@ -7,9 +7,6 @@
 // Initialize the QSPI bus, CO5300 panel and LVGL, add the PSRAM object pool,
 // allocate internal-DMA draw buffers, and spawn the handler task.
 void display_init(void);
-// Minimal display for the dedicated OTA boot mode (small draw buffers, no touch) — leaves internal RAM
-// for the big WiFi RX buffers. Pair with ui_ota_boot_show / ui_ota_boot_pct.
-void display_init_ota(void);
 
 // Set the AMOLED brightness (CO5300 DCS 0x51): 0x00 = dimmest, 0xFF = max. Applied live.
 void display_set_brightness(uint8_t level);

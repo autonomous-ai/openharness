@@ -15,9 +15,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-// GT911 is the Pro's, and it is never the ANSWER to a probe — that board has one controller and knows
-// it at build time (board_pro.c). It is in this enum so the shared log line and `hello.hw` can name it.
-typedef enum { TOUCH_NONE = 0, TOUCH_CST9217, TOUCH_CST816S, TOUCH_GT911 } touch_chip_t;
+typedef enum { TOUCH_NONE = 0, TOUCH_CST9217, TOUCH_CST816S } touch_chip_t;
 
 typedef struct {
     const char  *name;          // goes up the cable in `hello.hw`, and into the boot log

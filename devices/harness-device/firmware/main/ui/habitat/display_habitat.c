@@ -491,4 +491,3 @@ void display_init(void)
              HT_WIDTH, HT_WIDTH * STRIP_LINES * 2,
              "40MHz QSPI");
 }
-void display_init_ota(void) { display_init(); }

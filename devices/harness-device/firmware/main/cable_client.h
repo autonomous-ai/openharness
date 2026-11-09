@@ -104,11 +104,6 @@ bool cable_client_start(void);
 // Whether `welcome` has been seen and the session is still believed to be live.
 bool cable_client_is_connected(void);
 
-// The machine's display name, as `welcome` gave it ("" until then). The dial shows the computer it is
-// plugged into, and there is exactly one — the machine picker this firmware used to carry existed for a
-// backend that is no longer part of the design.
-const char *cable_client_machine_name(void);
-
 // Copy the current agent list into `out`. Returns how many were written.
 //
 // The list is whatever the daemon last pushed; there is no request/response to wait on, which is the
@@ -123,17 +118,8 @@ typedef struct {
 // A complete roster and its workspace identity are copied under the same lock.
 // Returns -1 while a new roster is being assembled, leaving the UI intact.
 int cable_client_list_agents_snapshot(project_t *out, int max, cable_agent_snapshot_t *snapshot);
-int cable_client_list_agents(project_t *out, int max);
 uint32_t cable_client_agent_generation(void);
 bool cable_client_request_agents(void);
-
-// How many agents the account has across every machine (`agents.end.total`) — the overview's number. The
-// list above is the active tab; this is the fleet it was cut from.
-int cable_client_agent_total(void);
-
-// Whether a window is open at the far end: `agents.end.tab` names the active tab, and is "" when the app
-// is shut. An empty list with a window is an empty tab; without one it is a closed app — different screens.
-bool cable_client_has_window(void);
 
 // ── WHAT THE DIAL SAYS ──────────────────────────────────────────────────────────────────────────────
 // Message CONSTRUCTION stays in cable_client.c even for messages whose logic lives elsewhere: voice.c
@@ -141,16 +127,9 @@ bool cable_client_has_window(void);
 // emits — is one file's business. A message built in three files is a vocabulary that drifts in three
 // directions.
 
-// Ask for the machine wheel. Mirrors `cable_client_list_agents`'s request half.
-void cable_client_list_machines(void);
-
 // The user tapped a row. ALWAYS answered — `machine.selected` or `machine.error`, never silence, because
 // the dial holds a spinner until one of them lands.
 void cable_client_select_machine(const char *machine_id);
-
-// The cabled computer's own machineId, as `welcome` gave it ("" until then). What `local` is judged
-// against, and what a select of the local row sends.
-const char *cable_client_machine_id(void);
 
 // ── swarms ──────────────────────────────────────────────────────────────────────────────────────────
 // The window's swarms: named groups of agents, one of them on screen. The daemon relays the whole list
@@ -173,25 +152,6 @@ typedef struct {
     // old to send it reports panes==agents, which is the old behaviour exactly.
     int  panes;
 } cable_swarm_t;
-
-/*
- * ONE TILE OF THE SELECTED TAB'S GRID, exactly where the window put it.
- *
- * Unit rectangle in THOUSANDTHS of the grid — integers on the wire, scaled to whatever face reads
- * them. `agent_id` is empty for a tile this device cannot drive (a shell, a viewer); it still holds
- * its place, because a shape with a tile missing is not that shape.
- *
- * RELAYED, NEVER DERIVED. The device used to guess the shape from the agent count via the app's
- * `PanePreset.defaultFor`, which is right until somebody picks a different preset — and it could never
- * express `auto` (whose column count the window MEASURES against its own width) or a hand-dragged
- * resize at all. An empty list means a daemon or a window too old to send one, and the guess is still
- * there behind it.
- */
-#define SWARM_TILES_MAX 24   // the window's own ceiling, same as the rows above
-typedef struct {
-    int16_t x1, y1, x2, y2;   // 0..1000
-    char    agent_id[ID_MAX];
-} cable_tile_t;
 
 // One row of the window's unread list, as `notif.replace` carries it. `summary` is
 // the finished turn's recap or the question's own words. Match the home preview's
@@ -217,8 +177,6 @@ bool cable_client_notification_read(const char *agent_id, const char *read_token
 
 // The user tapped a swarm. Not answered — see above.
 void cable_client_select_swarm(const char *swarm_id);
-// Re-ask for the list (a screen that just opened wants it fresh).
-void cable_client_list_swarms(void);
 
 // ── the Swarms (Super Tabs), named by `swarmCard:"v1"` and `superTab:"wait-v1"` in the hello ───────────
 // The Harness Pro's frames, unchanged (cli/src/cable/cableSession.ts; devices/harness-pro/docs/cable.md):
@@ -339,14 +297,6 @@ void cable_client_fw_accept(void);
 void cable_client_fw_progress(uint32_t written);
 void cable_client_fw_done(void);
 void cable_client_fw_error(const char *message);
-
-// Message-layer health, alongside cable_link_counters()'s framing health.
-//
-// `bad` counts payloads that were not readable JSON or carried no `t`; `unknown` counts well-formed
-// messages this build has no case for, plus frames whose payload TYPE this build does not know. They are
-// separate because they mean opposite things: `bad` is corruption or a bug, `unknown` is a daemon running
-// ahead of this firmware — a version mismatch someone can act on rather than a fault.
-void cable_client_counters(uint32_t *bad, uint32_t *unknown);
 
 // Read one host-owned question; review selections are exact option bitmasks.
 void cable_client_question_read(const char *agent_id, const char *request_id);
