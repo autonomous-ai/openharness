@@ -229,7 +229,7 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
         // Derived on every read: who leads a project, and its role set, live outside the agent's own part.
         roleName: roleNameOf(state, stored),
         // What it is and where its person talks to it, for the left pane's "My agents" (agentKind.ts, task #4116).
-        kind: agentKind(state, stored), chatId: agentChatId(state, stored),
+        kind: agentKind(state, stored), chatId: agentChatId(state, stored, chat => canReadGroup(state, actor, chat)),
         // Whether it is in this reader's My agents, decided here so every client lists the same (task #4192).
         myAgent: inMyAgents(state, actor, stored),
         // Lead or Member, and its main project (agentKind.ts, task #4540).

@@ -1862,7 +1862,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   const openAgentChat = (me: { id: string; generation: string }, title: string): string => {
     const chatId = stableId('agent-chat', me.id, me.generation, operationId)
     state.conversations.push({ id: chatId, kind: 'agent-chat', title, leadId: null, agentIds: [], archived: false, brief: '', checks: [],
-      assignment: null, lastMessageSequence: 0, audience: { people: [{ id: me.id, generation: me.generation }] } })
+      assignment: null, lastMessageSequence: 0, audience: { people: [{ id: me.id, generation: me.generation }] },
+      // Its activity starts with the command that opens it, on the store's clock, as a message's would.
+      lastActivityAt: new Date(context.now).toISOString() })
     return chatId
   }
   /** The first Accept of [personId] in [group]'s project starts their Member there (members.ts, task #4697): on their own
@@ -3614,6 +3616,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           if (!state.conversations.some(c => isAgentChat(c) && c.agentIds.includes(agentId))) {
             pmChat = openAgentChat(contributor, addedName)
             open(state, pmChat).agentIds.push(agentId)
+            state.agents.find(a => a.id === agentId)!.chatId = pmChat
           }
         }
       }

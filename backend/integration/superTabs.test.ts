@@ -660,7 +660,8 @@ describe('deleting abandoned swarm projects', () => {
     expect(await run(tab, command, owner, undefined, deleteId)).toEqual(response.json().data)
     const state = (await store.read(owner, tab)).state
     expect(state.projects!.map(p => p.id)).toEqual(['lead'])
-    expect(state.conversations.map(c => c.id)).toEqual(['lead'])
+    // The PM's own chat with its person (Swarm v4) is no project's, and stays.
+    expect(state.conversations.filter(c => c.kind !== 'agent-chat').map(c => c.id)).toEqual(['lead'])
     // An invitation is to the Swarm: it moves to the project that is left rather than disappearing.
     expect(state.invitations.map(i => [i.email, i.conversationId])).toEqual([['abandoned@example.com', 'lead']])
     for (const id of [conversationId, group]) {
@@ -2388,13 +2389,16 @@ describe('Super Tabs on a real Mongo replica set', () => {
         name: 'Lead', configuration: config, lead: true, initialMessage: 'Hi New PM Personal',
         launchRefused: { model: 'opus', effort: 'xhigh' } } } })
     expect(joined.statusCode, joined.body).toBe(200)
-    const rows = (await app.inject({ url: `/api/super-tabs/${tab}/conversations/lead/messages`, headers })).json().data.messages as
+    const read = async (id: string) => (await app.inject({ url: `/api/super-tabs/${tab}/conversations/${id}/messages`, headers })).json().data.messages as
       Array<{ id: string; text: string }>
-    const first = rows.find(m => m.text === 'Hi New PM Personal')
+    // Swarm v4: the first request is its person's first line in their own chat with the PM; the channel says the model was refused.
+    const agentId = joined.json().data.result.agentId as string
+    const chat = (await storedState(tab)).conversations.find(c => c.kind === 'agent-chat' && c.agentIds.includes(agentId))!
+    const first = (await read(chat.id)).find(m => m.text === 'Hi New PM Personal')
     expect(first?.id).toBe(joined.json().data.result.messageId)
-    const refused = rows.find(m => m.text.includes('could not launch it with them'))
-    expect(refused?.id).toBeDefined()
-    expect(refused?.id).not.toBe(first?.id)
+    const channel = await read('lead')
+    expect(channel.some(m => m.text === 'Hi New PM Personal')).toBe(false)
+    expect(channel.find(m => m.text.includes('could not launch it with them'))?.id).toBeDefined()
     expect((await storedState(tab)).conversations.find(c => c.id === 'lead')?.leadId).toBe(joined.json().data.result.agentId)
   })
 

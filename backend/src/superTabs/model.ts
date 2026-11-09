@@ -59,6 +59,8 @@ export interface Agent {
   name: string
   /** A stable member name; native session and routing names remain in `name`. */
   displayName?: string
+  /** A PM's own chat with its person (Swarm v4), kept here so a light read finds it by key (parts/light.ts). */
+  chatId?: string
   /** The kind an older client started or added it as, kept for older readers. Absent reads as builder (agentRole); the Lead
    *  is derived from leadId. It decides nothing (project instructions, phase 4): roleNameOf names an agent without a role
    *  name by it. */

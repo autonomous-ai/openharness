@@ -158,13 +158,14 @@ describe('a command in a Swarm with many awake conversations (#3146)', () => {
     expect(examined).toBeLessThanOrEqual(4)
   })
 
+  // The awake ones, the project chat, the task and the PM's own chat with its person (Swarm v4).
   it('lists them from the held index alone, examining no document', async () => {
     const f = await swarm(0, AWAKE)
     await posted(f)
     const groups = (await profiled(db, () => posted(f))).filter(e => e.ns.endsWith('.SwarmGroup'))
     const listing = groups.filter(e => JSON.stringify((e.command?.pipeline as unknown[] | undefined)?.[0] ?? null).includes('"dormant":false'))
     expect(listing.map(e => ({ plan: e.planSummary, docs: e.docsExamined, returned: e.nreturned })))
-      .toEqual([{ plan: 'IXSCAN { tabId: 1, dormant: 1, deleted: 1, key: 1, version: 1, changedAt: 1 }', docs: 0, returned: AWAKE + 2 }])
+      .toEqual([{ plan: 'IXSCAN { tabId: 1, dormant: 1, deleted: 1, key: 1, version: 1, changedAt: 1 }', docs: 0, returned: AWAKE + 3 }])
   })
 
   it('still sees a conversation another server changed', async () => {

@@ -51,6 +51,8 @@ async function legacySwarm(edit: (state: SuperTabState, s: ReturnType<typeof ric
   delete web.pullRequestUrls
   web.lastMessageSequence = 30
   state.conversations.find(c => c.id === 'lead')!.lastMessageSequence = 40
+  // A Swarm from before the PM's own chat (Swarm v4), which a rollback refuses as private: these Swarms predate it.
+  state.conversations = state.conversations.filter(c => c.kind !== 'agent-chat')
   edit(state, s)
   const author: Author = { kind: 'person', id: 'owner', name: 'owner@example.com', membershipGeneration: 'tab' }
   const message = (conversationId: string, sequence: number, text: string, at: number): LegacyMessage =>
