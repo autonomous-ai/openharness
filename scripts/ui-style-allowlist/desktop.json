@@ -38,9 +38,6 @@
   "desktop/lib/super_tabs/message_row.dart": {
     "edge-insets": 3
   },
-  "desktop/lib/super_tabs/notifications.dart": {
-    "edge-insets": 8
-  },
   "desktop/lib/super_tabs/profile_sheet.dart": {
     "font-size": 1
   },
