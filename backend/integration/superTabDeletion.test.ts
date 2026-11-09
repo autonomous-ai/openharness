@@ -119,7 +119,7 @@ describe('deleting a Swarm', () => {
   it('is refused alike to a member, its agents and a made-up agent, and to anyone for the owner\'s Personal Swarm', async () => {
     const w = world(), f = await swarm(w)
     const del = { operationId: randomUUID(), command: { type: 'swarm.delete', name: 'Lampos' } as Command }
-    for (const [who, as] of [[member, undefined], [host, f.lead], [host, f.worker], [host, 'ffffffffffffffffffffffff']] as const) {
+    for (const [who, as] of [[member, undefined], [invitee, undefined], [host, f.lead], [host, f.worker], [host, 'ffffffffffffffffffffffff']] as const) {
       expect(await refusal(() => w.store.execute(who, f.tab, { ...del, operationId: randomUUID() }, as))).toEqual(MISSING)
     }
     expect(await listed(w, member)).toContain(f.tab)

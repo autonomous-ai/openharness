@@ -1752,7 +1752,10 @@ export class SuperTabStore {
         }
         return replyOf(prior)
       }
-      if (command.type !== 'invite.accept' && command.type !== 'agent.sessionClosed' && command.type !== 'machine.cleaned') author(original, actor)
+      if (command.type !== 'invite.accept' && command.type !== 'agent.sessionClosed' && command.type !== 'machine.cleaned') {
+        // Whoever is refused on the way to deleting or restoring the Swarm, a stranger to it included, is told what a missing one tells.
+        try { author(original, actor) } catch (error) { if (DELETION_COMMANDS.has(command.type)) notThere(); throw error }
+      }
       const context: CommandContext = { operationId, now: this.now() }
       if (command.type === 'machine.moved' && only.movedTo && actor.kind === 'person') {
         context.computerMove = await this.computerMove(tx, original, actor.userId, command.machineId, only.movedTo)
