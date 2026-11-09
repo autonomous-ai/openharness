@@ -37,9 +37,11 @@ describe('the Windows release workflows', () => {
     expect(release).toContain('OBJECT_PREFIX="$STAGING_PREFIX" METADATA_PATH="$STAGING_PREFIX/pty/metadata.json" bash cli/scripts/publish-pty-payload.sh')
     expect(release).toMatch(/staging=harness\/staging; else staging=harness\/staging-dry-run; fi/)
     // The terminal host reaches production only through a dispatch that asks for it, never on a tag: pushing vX.Y.Z_cli
-    // publishes the CLI, and the host — a binary in every Windows pane — waits for the owner's staging E2E.
+    // publishes the CLI, and the host — a binary in every Windows pane — waits for the owner's staging E2E. It needs
+    // no build job: promote-pty-payload.sh re-checks every zip's sha256 and size itself, so a version released earlier
+    // can be promoted without republishing bytes the bucket holds as immutable.
     expect(release).toMatch(/promote_pty:\n\s+description:[\s\S]*?\n\s+type: boolean\n\s+default: false/)
-    expect(release).toMatch(/promote-pty:\n\s+needs: \[version, windows-staging\]\n\s+if: >-\n\s+inputs\.promote_pty &&\n\s+needs\.version\.outputs\.metadata_path == 'harness\/cli\/metadata\.json'/)
+    expect(release).toMatch(/promote-pty:\n\s+needs: \[version\]\n\s+if: >-\n\s+inputs\.promote_pty &&\n\s+needs\.version\.outputs\.metadata_path == 'harness\/cli\/metadata\.json'/)
     expect(release).toContain('bash cli/scripts/promote-pty-payload.sh')
     expect(release).toMatch(/windows-staging:\n\s+needs: \[version, preflight, publish, pty-build, pty-sign\]/)
     expect(release).toMatch(/github-release:\n\s+needs: \[version, publish\]/)
