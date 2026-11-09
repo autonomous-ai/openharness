@@ -87,6 +87,7 @@ Future<SuperTabController> showView(
   ConversationServer server, {
   String account = 'owner',
   Brightness brightness = Brightness.dark,
+  bool board = true,
 }) async {
   await tester.binding.setSurfaceSize(const Size(1200, 900));
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -106,6 +107,7 @@ Future<SuperTabController> showView(
           onAddAgent: (_) {},
           onOpenTerminal: (_) {},
           machineName: (_) => 'Team Mac',
+          board: board,
         ),
       ),
     ),
@@ -161,7 +163,7 @@ final tagTable = jsonDecode(
 /// A Swarm with diego and ken in it, and two messages from its owner: one
 /// that tags diego, one that tags nobody.
 ConversationServer taggedChat() {
-  final server = ConversationServer();
+  final server = ConversationServer.chat();
   for (final name in ['diego', 'ken']) {
     (server.state['people'] as List).add({
       'id': name,
@@ -217,7 +219,7 @@ Finder notificationsEntry() => find.byKey(const ValueKey('super-mentions'));
 /// A Swarm whose reader is the peer, with the Lead and the peer's own Buddy
 /// chat in the first project, where the PM's private lines reach them.
 ConversationServer swarm() {
-  final server = ConversationServer();
+  final server = ConversationServer.chat();
   server.state['projects'] = [projectFixture('lead', 'web-project', 'lead')];
   server.state['people'] = [
     {'id': 'owner', 'email': 'owner@example.com', 'role': 'owner'},
@@ -253,20 +255,20 @@ void main() {
     });
 
     test('the tab state counts the reader\'s waiting tags', () {
-      final server = ConversationServer();
+      final server = ConversationServer.chat();
       server.state['mentionsWaiting'] = 3;
       expect(SuperTabSnapshot.fromJson(server.state).mentionsWaiting, 3);
     });
 
     test('an older backend\'s state has no waiting tags', () {
-      final server = ConversationServer();
+      final server = ConversationServer.chat();
       expect(SuperTabSnapshot.fromJson(server.state).mentionsWaiting, 0);
     });
   });
 
   group('a fresh check of one tag', () {
     Future<(ConversationServer, SuperTabController)> swarm() async {
-      final server = ConversationServer()..tag('message-1');
+      final server = ConversationServer.chat()..tag('message-1');
       final c = server.controller();
       addTearDown(c.dispose);
       await c.refresh();
@@ -373,7 +375,7 @@ void main() {
     });
 
     test('reads waiting and earlier tags, newest first', () async {
-      final server = ConversationServer()
+      final server = ConversationServer.chat()
         ..tag('m1', text: 'First')
         ..tag('m2', text: 'Second')
         ..tag('m3', text: 'Third');
@@ -397,7 +399,7 @@ void main() {
     });
 
     test('reports a new tag once, never the ones already waiting', () async {
-      final server = ConversationServer()..tag('m1', text: 'Old');
+      final server = ConversationServer.chat()..tag('m1', text: 'Old');
       final controller = server.controller();
       final arrived = <String>[];
       SuperTabMentions.of(controller).onArrived = (m) => arrived.add(m.text);
@@ -414,7 +416,7 @@ void main() {
     });
 
     test('a new tag is read even when the count stays the same', () async {
-      final server = ConversationServer()..tag('m1', text: 'First');
+      final server = ConversationServer.chat()..tag('m1', text: 'First');
       final controller = server.controller();
       final mentions = SuperTabMentions.of(controller);
       final arrived = <String>[];
@@ -436,7 +438,7 @@ void main() {
     });
 
     test('a change during a read is read once more after it', () async {
-      final server = ConversationServer()..tag('m1', text: 'First');
+      final server = ConversationServer.chat()..tag('m1', text: 'First');
       final controller = server.controller();
       final mentions = SuperTabMentions.of(controller);
       final hold = server.holdMentions = Completer<void>();
@@ -458,7 +460,7 @@ void main() {
 
     test('a Swarm change that leaves the count and digest alone reads no '
         'tags and tells nobody', () async {
-      final server = ConversationServer()..tag('m1', text: 'First');
+      final server = ConversationServer.chat()..tag('m1', text: 'First');
       server.state['mentionsDigest'] = 'digest-1';
       final controller = server.controller();
       addTearDown(controller.dispose);
@@ -497,7 +499,7 @@ void main() {
 
     test('a failed read is tried again on the next Swarm change, digest or '
         'not', () async {
-      final server = ConversationServer()..tag('m1', text: 'First');
+      final server = ConversationServer.chat()..tag('m1', text: 'First');
       server.state['mentionsDigest'] = 'digest-1';
       server.failMentions = true;
       final controller = server.controller();
@@ -516,7 +518,7 @@ void main() {
 
     test('without a digest, every Swarm change while a tag waits reads the '
         'lists again, and the same lists tell nobody', () async {
-      final server = ConversationServer()..tag('m1', text: 'First');
+      final server = ConversationServer.chat()..tag('m1', text: 'First');
       final controller = server.controller();
       addTearDown(controller.dispose);
       final mentions = SuperTabMentions.of(controller);
@@ -536,7 +538,7 @@ void main() {
     test(
       'a backend without the list shows an empty list, not an error',
       () async {
-        final server = ConversationServer()..mentionsMissing = true;
+        final server = ConversationServer.chat()..mentionsMissing = true;
         final controller = server.controller();
         final mentions = SuperTabMentions.of(controller);
         await controller.refresh();
@@ -551,7 +553,7 @@ void main() {
     test(
       'a tag that expires empties an open list with no new revision',
       () async {
-        final server = ConversationServer()..tag('m1', text: 'Old');
+        final server = ConversationServer.chat()..tag('m1', text: 'Old');
         final controller = server.controller();
         final mentions = SuperTabMentions.of(controller);
         await controller.refresh();
@@ -568,7 +570,7 @@ void main() {
     );
 
     test('a backend without tags is never asked for them', () async {
-      final server = ConversationServer();
+      final server = ConversationServer.chat();
       final controller = server.controller();
       SuperTabMentions.of(controller);
       await controller.refresh();
@@ -824,7 +826,7 @@ void main() {
     testWidgets('the conversation highlights the people a message tags', (
       tester,
     ) async {
-      final server = ConversationServer()..append('Can you confirm?');
+      final server = ConversationServer.chat()..append('Can you confirm?');
       server.messages.last['mentions'] = ['owner'];
       await showView(tester, server);
       expect(runsOf(tester, '@owner').single?.backgroundColor, isNotNull);
@@ -838,7 +840,8 @@ void main() {
       await store.set(true);
       final system = SystemNotifications(store: store, notifier: notices);
       expect(superTabMentionNotice(system, web: true), isNull);
-      final server = ConversationServer()..tag('message-1', text: 'Ship it?');
+      final server = ConversationServer.chat()
+        ..tag('message-1', text: 'Ship it?');
       superTabMentionNotice(system, web: false)!(
         'tab-1',
         SuperTabMention.fromJson(server.mentions.single),
@@ -879,7 +882,7 @@ void main() {
     );
 
     test('the client hands each new tag of an open Swarm over', () async {
-      final server = ConversationServer()..tag('message-1', text: 'Old');
+      final server = ConversationServer.chat()..tag('message-1', text: 'Old');
       final arrived = <String>[];
       final client = SuperTabClient(
         storage: MemoryStore(),
@@ -900,7 +903,7 @@ void main() {
     });
 
     test('a Swarm tab not opened yet counts and announces new tags', () async {
-      final server = ConversationServer()..tag('message-1', text: 'Old');
+      final server = ConversationServer.chat()..tag('message-1', text: 'Old');
       final arrived = <String>[];
       var counted = 0;
       final client = SuperTabClient(
@@ -943,7 +946,8 @@ void main() {
     test(
       'one Swarm without the list does not stop the others, and is asked again',
       () async {
-        final server = ConversationServer()..tag('message-1', text: 'Here');
+        final server = ConversationServer.chat()
+          ..tag('message-1', text: 'Here');
         var goneMissing = true;
         final client = SuperTabClient(
           storage: MemoryStore(),
@@ -1002,7 +1006,7 @@ void main() {
   });
 
   testWidgets('screenshots for review', (tester) async {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     server.state['projects'] = [projectFixture('lead', 'web-project', 'lead')];
     server.state['people'] = [
       {'id': 'owner', 'email': 'ken@example.com', 'role': 'owner'},
