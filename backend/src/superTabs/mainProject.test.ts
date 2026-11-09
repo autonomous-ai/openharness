@@ -49,7 +49,7 @@ function swarm() {
   const newAgent = (extra: Record<string, unknown>) =>
     run({ type: 'agent.new', engine: 'claude', machineId: 'mate-mac', ...extra } as Command, mate, own('mate'))
   const derived = (reader: Actor, agentId: string) =>
-    readerView(store.split(state, { tabId: 'tab', version: 9_000, now: NOW }), reader, NOW, { teamMachines: [] }).derived.agents[agentId]
+    readerView(store.split(state, { tabId: 'tab', version: 9_000, now: NOW }), reader, NOW, {}).derived.agents[agentId]
   return { run, project, started, newAgent, derived, get state() { return state } }
 }
 
@@ -124,7 +124,7 @@ describe('a main project\'s readers', () => {
     const agentId = f.started(made.result.startId as string, 'h-ada')
     expect(f.derived(mate, agentId)).toMatchObject({ mainProjectId: secret })
     expect(f.derived(outsider, agentId)?.mainProjectId ?? null).toBeNull()
-    const parts = readerView(store.split(f.state, { tabId: 'tab', version: 9_000, now: NOW }), outsider, NOW, { teamMachines: [] }).parts
+    const parts = readerView(store.split(f.state, { tabId: 'tab', version: 9_000, now: NOW }), outsider, NOW, {}).parts
     expect(JSON.stringify(parts.agents)).not.toContain(secret)
   })
 

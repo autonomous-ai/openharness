@@ -4643,7 +4643,7 @@ describe('credentials in every command', () => {
       'conversation.create task.requires.devices[]', 'work.define task.requires.devices[]', 'proposal.decide task.requires.devices[]',
       'conversation.merged pullRequestUrl', 'conversation.merged fixes', 'conversation.unlink pullRequestUrl', 'work.check head', 'work.check base']],
     ['An id, an account key, a time or a time zone', ['agent.add roleId', 'agent.rebind profileId', 'agent.start request.roleId',
-      'machine.access entryId', 'project.closeTab tabOperation', 'project.role.remove roleId', 'project.role.set role.id',
+      'project.closeTab tabOperation', 'project.role.remove roleId', 'project.role.set role.id',
       'project.roles.create roles[].id', 'project.roles.reset roles[].id', 'proposal.create projectId', 'route.override candidateId',
       'route.record decision.candidates[].id', 'route.record decision.pick', 'route.record decision.candidates[].fit.account', 'work.assign roleId',
       'work.queue hold.personId', 'work.status hold.personId', 'rules.set rules.instructionApprovals.topDeciderId',
@@ -4652,8 +4652,6 @@ describe('credentials in every command', () => {
       'rules.set rules.releasePace.backendPause.start', 'rules.set rules.releasePace.backendPause.end', 'rules.set rules.machines[].away.windows[][]',
       'rules.set rules.machines[].away.timeZone']],
     ['The address an invitation goes to, which its person signs in with', ['invite.create email']],
-    // Redacting first would hide the token from that refusal and store the marker instead.
-    ['Refused outright when it looks like a secret (machineAccess.ts ACCESS_SECRET)', ['machine.access name', 'machine.access note', 'machine.access check']],
     ['Written by the server; the command\'s value is dropped (route.record)', ['route.record decision.stepUp.reason', 'route.record decision.sameEngine']],
   ]
 

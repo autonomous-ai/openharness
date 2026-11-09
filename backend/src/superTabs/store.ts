@@ -16,8 +16,7 @@ import { isCrew } from './crew.js'
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
 import { phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
-import { admitMachineStart, accountMachineName, availableSlots, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, ownAccountWork, ownAccountNote, type MachineObservation } from './machines.js'
-import { expireAccess } from './machineAccess.js'
+import { admitMachineStart, accountMachineName, availableSlots, expireRemovals, followAccountName, machineContribution, machineObservationSchema, slotCounter, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, type MachineObservation } from './machines.js'
 import { authorForAgent, lazyUsernames, namesPerson, rowForAgent, shownNameOf } from './personNames.js'
 import { machineSuspensionReason, readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
@@ -380,8 +379,6 @@ const WIDE_WINDOW = 5 * LIST_SIZE
 /** A Lead's start dispatches within seconds of being recorded; one still undispatched after this long was given up. */
 export const ABANDONED_START_MS = 15 * 60_000
 
-/** The commands that start, assign or route work, which read which of the tab's machines are Team machines. */
-const TEAM_WORK_COMMANDS = new Set<Command['type']>(['agent.start', 'agent.new', 'lead.start', 'agent.startDispatch', 'work.assign', 'conversation.agent', 'route.record', 'route.override'])
 /** Whether an agent's command adds an agent to a task by opening it, by posting into it or by naming one there: those joins
  *  check team access as conversation.agent does (commands.ts teamJoin). An ordinary post reads no machine rows. */
 const addsAgent = (state: SuperTabState, actor: Actor, command: Command): boolean => {
@@ -435,9 +432,6 @@ export interface SuperTabStoreHooks {
   /** Whether the Harness GitHub App reaches a project's GitHub repository for this Swarm (github/projectAccess.ts), read before
    *  an agent.start or work.assign (repositoryReach.ts). Absent with no GitHub App. */
   repositoryReach?: (autonomousEnv: string, tabId: string, projectId: string, repositoryUrl: string) => Promise<RepositoryReach | undefined>
-  /** No Harness GitHub App on this server: a Mac's Harness Team account joins no Swarm and takes no teammates' work, since
-   *  it has no git login to fetch or push with (commands.ts `teamAccountsIdle`). */
-  teamAccountsIdle?: boolean
   /** Hand free crew members their next task after the writes that may free one or open a task, and from the 30-second sweep
    *  (store.ts dispatchCrew, task #3400). Off unless a server turns it on. */
   dispatch?: boolean
@@ -716,9 +710,6 @@ export class SuperTabStore {
   get avatars(): AvatarStore | null { return this.attachments?.avatars ?? null }
   /** The folder avatar keys start with (attachments.ts `avatarPrefix`). */
   get avatarPrefix(): string { return trimPrefix(this.attachments?.avatarPrefix ?? this.attachments?.prefix ?? '') }
-  /** No Harness GitHub App on this server: Team accounts take no teammates' work (SuperTabStoreHooks.teamAccountsIdle). Reads
-   *  decide New Project's Product Manager host as its start does (read/views.ts). */
-  get teamAccountsIdle(): boolean { return this.hooks.teamAccountsIdle === true }
   /** Signs the links every read hands out for chat files (fileLinks.ts); null without a bucket. */
   private readonly fileLinks: FileLinks | null
 
@@ -812,8 +803,7 @@ export class SuperTabStore {
       if (target && target.machineId !== team && !onTeamAccount(state, target)) refuse(target)
     }
     switch (command.type) {
-      case 'machine.contribute': case 'machine.pause': case 'machine.remove': case 'machine.moved': case 'machine.engineResume': case 'machine.projects':
-      case 'machine.ownAccountWork': case 'machine.access': return refuse()
+      case 'machine.contribute': case 'machine.pause': case 'machine.remove': case 'machine.moved': case 'machine.engineResume': return refuse()
       case 'machine.cleaned': case 'tab.project': case 'agent.add':
         if (command.machineId !== team) refuse()
         return
@@ -855,24 +845,15 @@ export class SuperTabStore {
     return ids.filter(id => !live.has(id))
   }
 
-  /** The tab's contributed machines whose account row is signed in as a Harness Team account (`Machine.sessionKind`,
-   *  lib/teamSession.ts): one of the two signs routing reads that a machine is a Team machine (machines.ts teamWorkCheck). */
-  /** Shared with the read API (superTabs/read, design section 7.2). */
-  async teamMachines(tx: Transaction, state: SuperTabState): Promise<string[]> {
-    return (await this.machineFacts(tx, state)).team
-  }
-
-  /** The tab's contributed machines' account rows as they are now, in one indexed read: which are signed in as a Harness Team
-   *  account, and the CLI version each one's daemon last connected with (`Machine.clientVersion`). A start records the
-   *  version it was dispatched to, so routing can tell a machine updated since its failed starts (cli routeCommand.ts
-   *  `stalled`): Mac Auto stayed out of every route after Harness bugs later fixed and released (2026-10-29). */
-  async machineFacts(tx: Transaction, state: SuperTabState): Promise<{ team: string[]; versions: Record<string, string> }> {
+  /** The CLI version each of the tab's contributed machines' daemons last connected with (`Machine.clientVersion`), in one indexed
+   *  read of their account rows. A start records the version it was dispatched to, so routing can tell a machine updated since its
+   *  failed starts (cli routeCommand.ts `stalled`): Mac Auto stayed out of every route after Harness bugs later fixed and released
+   *  (2026-10-29). */
+  async machineVersions(tx: Transaction, state: SuperTabState): Promise<Record<string, string>> {
     const ids = (state.machines ?? []).map(m => m.machineId)
-    if (!ids.length) return { team: [], versions: {} }
-    const rows = await tx.machine.findMany({ where: { machineId: { in: ids }, autonomousEnv: state.environment, ...machineAlive },
-      select: { machineId: true, sessionKind: true, clientVersion: true } })
-    return { team: rows.filter(r => r.sessionKind === 'team').map(r => r.machineId),
-      versions: Object.fromEntries(rows.flatMap(r => r.clientVersion ? [[r.machineId, r.clientVersion] as const] : [])) }
+    if (!ids.length) return {}
+    const rows = await tx.machine.findMany({ where: { machineId: { in: ids }, autonomousEnv: state.environment, ...machineAlive }, select: { machineId: true, clientVersion: true } })
+    return Object.fromEntries(rows.flatMap(r => r.clientVersion ? [[r.machineId, r.clientVersion] as const] : []))
   }
 
   /** An older Desktop's account policy read: the built-in policy, whatever the person saved before (project instructions,
@@ -1414,21 +1395,14 @@ export class SuperTabStore {
     const now = this.now()
     const visible = visibleState(state, actor, now)
     const mentions = actor.kind === 'person' ? { mentionsWaiting: await mentionsWaiting(tx, tabId, state, actor, now) } : {}
-    const facts = visible.machines?.length ? await this.machineFacts(tx, state) : { team: [], versions: {} as Record<string, string> }
-    const teamMachines = facts.team
+    const versions = visible.machines?.length ? await this.machineVersions(tx, state) : {} as Record<string, string>
     const slots = slotCounter(state)
     return { lastChangedAt: await readLastChangedAt(tx, view, tabId) ?? 0, state: { ...visible, ...mentions, machines: visible.machines?.map(pool => {
       const stored = state.machines!.find(m => m.machineId === pool.machineId)!
-      // Whether it takes teammates' projects now, and if not why (machines.ts teamWorkRefusal): what routing leaves it
-      // out for, and what Desktop can show on the machine.
-      const refusal = machineTeamWork(stored, now, teamMachines)
       const suspended = suspendedEngines(stored, now)
       const machineSuspended = machineSuspensionReason(stored, now)
       return { ...pool, availableSlots: availableSlots(state, stored, slots(stored)),
-        teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const,
-          // Its owner lets teammates' work run in their own account (machines.ts ownAccountWork): the route says so.
-          ...(ownAccountWork(stored) ? { ownAccount: ownAccountNote(stored, shownNameOf(state, stored.contributorId)) } : {}) },
-        ...(facts.versions[pool.machineId] ? { clientVersion: facts.versions[pool.machineId] } : {}),
+        ...(versions[pool.machineId] ? { clientVersion: versions[pool.machineId] } : {}),
         // What the route leaves out (cli superTabs/routeCommand.ts unreadyPool).
         ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}), ...(machineSuspended ? { machineSuspended } : {}) }
     }) } }
@@ -1488,22 +1462,6 @@ export class SuperTabStore {
       if (error instanceof SuperTabError && error.details?.pushed === true && typeof pushedOn === 'string') {
         await this.executeOnce(user, tabId, { operationId: `team-written-${stableId(input.operationId, pushedOn)}`, command: { type: 'work.teamWritten', conversationId: pushedOn } }, asAgentId, hostMachineId)
           .catch(failure => logger.warn('Team-written mark failed', { tabId, error: String(failure) }))
-      }
-      // A queued start its machine will not take for good — no Harness Team account, or one that is not private — fails
-      // with that reason instead of waiting there: its host would otherwise try to launch it on every pass, and it would
-      // hold a slot. A stale check or an offline machine may pass again by itself, so that start keeps waiting.
-      const command = input.command
-      if (command?.type === 'agent.startDispatch' && hostMachineId && error instanceof SuperTabError && LASTING_TEAM_REFUSALS.includes(error.code)) {
-        // Only one never launched: a repeated dispatch of a launched start is admitted again too, and its agent may be starting.
-        const start = await transaction(this.db, async tx => {
-          const row = await tx.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv }, select: SWARM_ROW })
-          return row?.format === 2 && !row.deletedAt ? (await loadRow(tx, row, { startIds: [command.startId] })).state.starts?.find(s => s.id === command.startId) : undefined
-        })
-        if (start && !start.dispatched && !start.harnessId && !start.error) {
-          await this.executeOnce(user, tabId, { operationId: `team-refused-${command.startId}`,
-            command: { type: 'agent.startFailed', startId: command.startId, error: error.message } }, asAgentId, hostMachineId)
-            .catch(() => { /* Settled by a concurrent pass: the dispatch is refused either way. */ })
-        }
       }
       throw error
     }
@@ -1878,8 +1836,7 @@ export class SuperTabStore {
         context.projectRules = await currentRules(tx, tabId, projectId)
       }
       if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
-        || command.type === 'machine.engineResume' || command.type === 'machine.projects' || command.type === 'machine.ownAccountWork'
-        || command.type === 'machine.access' || command.type === 'rules.set') && command.askedIn) {
+        || command.type === 'machine.engineResume' || command.type === 'rules.set') && command.askedIn) {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.askedIn.messageId, tabId, conversationId: command.askedIn.conversationId } })
         if (asked) context.askedIn = { author: asked.author as unknown as Author, source: !!asked.source, createdAt: asked.createdAt.getTime() }
       }
@@ -1960,12 +1917,8 @@ export class SuperTabStore {
       if ((command.type === 'member.avatar' || command.type === 'agent.avatar') && command.avatar?.kind === 'upload') {
         context.avatarUpload = await this.avatarUpload(tx, tabId, actor, command.avatar.id)
       }
-      // A Ready for review counts the machines the project may use (reviewCapacity.ts), by the same team access as work.assign.
-      if (TEAM_WORK_COMMANDS.has(command.type) || (command.type === 'work.status' && command.status === 'review') || addsAgent(original, actor, command)) {
-        const facts = await this.machineFacts(tx, original)
-        context.teamMachines = facts.team
-        context.machineVersions = facts.versions
-      }
+      // A start records the version of the machine it is dispatched to.
+      if (command.type === 'agent.startDispatch') context.machineVersions = await this.machineVersions(tx, original)
       if (pushOrigin) Object.assign(context, { pushOrigin: pushOrigin.origin, pushOriginPulls: pushOrigin.pulls, ...pushOrigin.task ? { pushOriginTask: pushOrigin.task } : {} })
       if (repositoryReach) context.repositoryReach = repositoryReach
       if (pullRequestFiles && command.type === 'work.status') {
@@ -4084,7 +4037,6 @@ export class SuperTabStore {
   /** What the crew keeper asks of the store (crewKeep.ts CrewDeps): whether a machine admits a crew member's move start now,
    *  under the same checks an agent.start meets, Team-account facts read once per sweep. */
   private async crewDeps(tx: Transaction, state: SuperTabState, now: number): Promise<CrewDeps> {
-    const teamMachines = await this.teamMachines(tx, state)
     // Each crew project's machine rules from its record (machineRules.ts): one indexed read per project with crew (at most
     // the Swarm's 100), only in a sweep where a member needs a machine.
     const rules = new Map<string, readonly MachineRule[]>()
@@ -4095,7 +4047,7 @@ export class SuperTabStore {
       const pool = state.machines?.find(m => m.machineId === machineId)
       const request = pool && crewMoveRequest(state, agent, pool)
       if (!request) return false
-      try { return !!admitMachineStart(state, request, now, undefined, teamMachines) } catch { return false }
+      try { return !!admitMachineStart(state, request, now) } catch { return false }
     } }
   }
 
@@ -4303,8 +4255,6 @@ export class SuperTabStore {
       // A machine that went silent while cleaning takes the fallback before this fresh reading can bring it back: its records
       // go, its cleanup waits for this host, as the next sweep would have done (machines.ts expireRemovals).
       expireRemovals(state, now)
-      // So does an unconfirmed access entry nobody confirmed in a week: the reading writes this machine's part anyway.
-      expireAccess(state, now)
       const stamp = clock.next(), removedIds: string[] = []
       // A reading writes only its machine's part, and an agent's part only when its presence changes (spec); a group's only
       // when a task there is lost.
@@ -4394,7 +4344,7 @@ export class SuperTabStore {
       if (back.length) {
         const elsewhere = await otherRegistrations(tx, state, back.map(r => ({ machineId, harnessId: r.harnessId })))
         const facts = { elsewhere: new Set(back.flatMap(r => { const key = sessionKey(machineId, r.harnessId); return elsewhere.registered.has(key) || elsewhere.confidential.has(key) ? [r.harnessId] : [] })),
-          teamMachines: await this.teamMachines(tx, state) }
+        }
         for (const record of back) {
           const refused = restoreRefusal(state, record, user.sub, now, facts)
           if (refused) { logger.info('[swarm] a reopened session was not restored', { reason: refused }); continue }
