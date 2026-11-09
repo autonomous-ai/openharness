@@ -37,7 +37,7 @@ export const REPLY_RETRY_MS: readonly number[] = [2_000, 10_000, 30_000, 120_000
 export const OWED_GIVE_UP_MS = 24 * 60 * 60_000
 /** The most replies owed one terminal (the oldest go first), and all together: ids and a hash, so a journal stays small. */
 export const OWED_PER_AGENT = 16
-const OWED_MAX = 256
+export const OWED_MAX = 256
 /** The longest name of an agent kept with a reply owed it, which is what its person is told if the reply is dropped. */
 export const NAME_MAX = 80
 
@@ -174,6 +174,8 @@ export class AgentReplies {
       messageId: String(message.id), thread: identifier(message.thread) && message.thread !== message.id, asked: hashOf(text), at: this.deps.now() }
     const mine = this.owedOf(entry.harnessId)
     for (const [id, old] of mine.slice(0, Math.max(0, mine.length - OWED_PER_AGENT))) this.drop(id, old, `more than ${OWED_PER_AGENT} are owed it`)
+    const all = Object.entries(owed).sort((a, b) => a[1].at - b[1].at)
+    for (const [id, old] of all.slice(0, Math.max(0, all.length - OWED_MAX))) this.drop(id, old, `more than ${OWED_MAX} are owed in all`)
   }
 
   /** The host could not save the hand-over of a delivery it had said it owes a reply for: nothing was typed. Nothing is saved. */

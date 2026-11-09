@@ -716,7 +716,7 @@ export class SuperTabHost {
       const replies = adoptReplies(saved.replies, this.log)
       if (Object.keys(replies).length) this.journal.replies = replies
     }
-    this.replies = new AgentReplies(core, this.journal, { now: this.now, log: this.log, save: () => this.persist(), typedId: deliveryId => typedId({ deliveryId }), refused: ackRefused })
+    this.replies = new AgentReplies(core, this.journal, { now: this.now, log: this.log, save: () => this.persist(), typedId: deliveryId => typedId({ deliveryId }), refused: receiptRefused })
     this.persist()
     this.stopHearing = core.turns.onDelivery(event => this.heard(event))
     this.stopEnds = core.turns.onEnd(event => { void this.replies.ended(event) })
