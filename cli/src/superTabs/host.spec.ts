@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { prepareSwarmSkill } from '../lib/swarmSkills.js'
+import { PM_BASICS, prepareSwarmSkill, SWARM_BASICS } from '../lib/swarmSkills.js'
 import { BUDDY_COPIES_FILE, BUDDY_HOME_MANIFEST, buddyHomeRefreshing, refreshBuddyHome, stopBuddyHomeRefresh } from './buddyHome.js'
 import { buddyAccountFile, buddyLaunchFile, buddyReadsOf, forgetBuddyReads, grantBuddyWide } from '../lib/buddyGuard.js'
 import { env } from '../config/env.js'
@@ -3656,6 +3656,78 @@ describe('plain agents: the host tells a Swarm agent nothing, and keeps only a B
   })
 
 })
+
+// Swarm v4: Desktop's Attach brings a session its person started outside the Swarm into their team. The Swarm starts every
+// other agent with the team's basics (lib/swarmSkills.ts); this one is told them once, as only it reads, in its own chat.
+describe('an agent its person attached', () => {
+  function attached(session: Record<string, unknown>, rowFields: Record<string, unknown> = {}) {
+    const t = setup()
+    Object.assign(t.row, rowFields)
+    t.row.agent.chatId = 'chat-a'
+    t.core.agents.byAgent = vi.fn(() => ({ agentId: 'harness', cwd: '/work/app', ...session }) as never)
+    const told: Record<string, any>[] = []
+    const call = t.call
+    t.core.account.backend = vi.fn(async (method: string, path: string, body?: unknown) => {
+      if (path.includes('asAgentId=')) {
+        return { status: 200, body: { success: true, data: swarmReply(path, { conversations: [
+          { id: 'channel', kind: 'channel', agentIds: ['agent'] }, { id: 'chat-a', kind: 'agent-chat', agentIds: ['agent'] }] }) } }
+      }
+      if ((body as any)?.command?.type === 'message.send') { told.push(body as any); return { status: 200, body: { success: true, data: {} } } }
+      return call(method, path, body)
+    }) as never
+    return { ...t, told }
+  }
+  const settle = async () => { for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve)) }
+
+  it('is told the team\'s basics once, as only it reads, in its own chat', async () => {
+    const t = attached({ engine: 'claude' })
+    const host = t.open()
+    await host.tick(); await settle()
+    expect(t.told).toEqual([{ operationId: expect.stringMatching(/^skill-agent-[0-9a-f]{32}$/), asAgentId: 'agent',
+      command: { type: 'message.send', conversationId: 'chat-a', replyTo: null, recipientIds: ['agent'], text: SWARM_BASICS,
+        agentOnly: true, notice: 'skills' } }])
+    t.wait(SKILL_WAIT); await host.tick(); await settle()
+    expect(t.told).toHaveLength(1)
+    // A restart asks again under the same operation id, which the backend writes once.
+    const again = t.open()
+    await again.tick(); await settle()
+    expect(t.told.map(c => c.operationId)).toEqual([t.told[0]!.operationId, t.told[0]!.operationId])
+  })
+
+  it('as its project\'s PM, is told the PM\'s part too', async () => {
+    const t = attached({ engine: 'codex' }, { lead: true })
+    const host = t.open()
+    await host.tick(); await settle()
+    expect(t.told.map(c => c.command.text)).toEqual([`${SWARM_BASICS}\n${PM_BASICS}`])
+  })
+
+  it('is told nothing when the Swarm started it with the basics, nor when it is a plain shell', async () => {
+    for (const session of [{ engine: 'claude', swarmSkill: { role: 'agent', key: 'harness' } }, { engine: 'terminal' }]) {
+      const t = attached(session)
+      const host = t.open()
+      await host.tick(); await settle()
+      expect(t.told).toEqual([])
+    }
+  })
+
+  it('is told again later when the Swarm could not be read', async () => {
+    const t = attached({ engine: 'claude' })
+    let down = true
+    const backend = t.core.account.backend
+    t.core.account.backend = vi.fn(async (method: string, path: string, body?: unknown) => {
+      if (down && path.includes('asAgentId=')) return { status: 503, body: { success: false, error: { code: 'UNAVAILABLE', message: 'Try again' } } }
+      return backend(method, path, body as never)
+    }) as never
+    const host = t.open()
+    await host.tick(); await settle()
+    expect(t.told).toEqual([])
+    down = false
+    t.wait(SKILL_WAIT); await host.tick(); await settle()
+    expect(t.told).toHaveLength(1)
+  })
+})
+/** Past the host's wait before a notice that could not go is tried again (host.ts SKILL_RETRY_MS). */
+const SKILL_WAIT = 61_000
 
 /** A host on this machine whose roster is [rows] (changeable), with the core's keep-alive and member close mocked. */
 function lifeFixture(rows: Record<string, unknown>[], options: SuperTabHostOptions = {}) {

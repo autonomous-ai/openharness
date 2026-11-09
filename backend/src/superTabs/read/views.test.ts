@@ -240,12 +240,18 @@ describe('instructions in the reader\'s view (project instructions, phase 2)', (
     expect(readerView(store.split(s.state, { tabId: 'tab', version: R, now: NOW }), owner, NOW, { teamMachines: [] }).parts.head.data.projects![0]!.coordinatorName)
       .toBe('Lead engineer')
   })
-  // Task #3405: the release list is the server's bookkeeping, like the schedule; no reader gets it.
-  it('sends projects without their release list', () => {
+  // The release list of the release watch Swarm v4 removed is still stored on old projects and tasks: no reader gets it. Nothing would
+  // ever clear a task's `releasing`, so an older app would show it waiting for a release forever.
+  it('sends projects without their release list, and tasks without what they waited for', () => {
     const { s } = scene()
-    s.edit(state => { state.projects![0]!.releases = { pending: [{ groupId: 'g', url: 'https://github.com/o/r/pull/1', mergedAt: NOW }] } })
-    const head = readerView(store.split(s.state, { tabId: 'tab', version: R, now: NOW }), owner, NOW, { teamMachines: [] }).parts.head
-    expect(head.data.projects!.every(p => !('releases' in p))).toBe(true)
+    s.edit(state => {
+      Object.assign(state.projects![0]!, { releases: { pending: [{ groupId: 'g', url: 'https://github.com/o/r/pull/1', mergedAt: NOW }], nextAt: { backend: NOW } } })
+      Object.assign(state.conversations.find(c => c.id === 'lead')!, { releasing: ['desktop'] })
+    })
+    const view = readerView(store.split(s.state, { tabId: 'tab', version: R, now: NOW }), owner, NOW, { teamMachines: [] })
+    expect(view.parts.head.data.projects!.every(p => !('releases' in p))).toBe(true)
+    expect(view.parts.groups.find(g => g.key === 'lead')!.data).not.toHaveProperty('releasing')
+    expect(view.derived).not.toHaveProperty('releaseTimes')
   })
   // Swarm v3's schedule and process note are still stored on old projects: no reader gets them.
   it('sends projects without the schedule and process note an old project still stores', () => {
@@ -274,22 +280,6 @@ describe('the pulse on the read', () => {
     expect(view.parts.groups.find(g => g.key === 'lead')!.data).not.toHaveProperty('pulse')
     const owners = readerView(parts, owner, NOW, { teamMachines: [] })
     expect(Object.keys(owners.derived.pulse ?? {})).toHaveLength(2)
-  })
-
-  // Task #3827: the board's Merged cards say when the next release is due. The server records it on the project's release list
-  // (never sent whole) and the read sends only that: a time per component, for the projects the reader sees.
-  it('sends each visible project\'s next release times, and nothing else of its release list', () => {
-    const { s } = scene()
-    s.edit(state => {
-      state.projects!.find(p => p.name === 'Pilot')!.releases = { pending: [], nextAt: { desktop: 0, backend: NOW + 60 * MINUTE } }
-    })
-    const parts = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
-    const view = readerView(parts, peer, NOW, { teamMachines: [] })
-    const pilot = view.parts.head.data.projects!.find(p => p.name === 'Pilot')!
-    expect(view.derived.releaseTimes).toEqual({ [pilot.id]: { desktop: 0, backend: NOW + 60 * MINUTE } })
-    expect(pilot).not.toHaveProperty('releases')
-    const other = view.parts.head.data.projects!.find(p => p.name !== 'Pilot')
-    if (other) expect(view.derived.releaseTimes).not.toHaveProperty(other.id)
   })
 
   // River, on ReviewPulse2's review of #3209: the pulse's lists name conversations, so a reader gets only those they read; a

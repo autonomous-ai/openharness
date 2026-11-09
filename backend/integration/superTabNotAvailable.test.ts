@@ -96,7 +96,6 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/mentions', `${t}/mentions?state=waiting`),
     json('GET', 'GET /api/super-tabs/:tabId/decisions', `${t}/decisions?state=open`),
     json('GET', 'GET /api/super-tabs/:tabId/leaderboard', `${t}/leaderboard?projectId=${project}`),
-    json('GET', 'GET /api/super-tabs/:tabId/scorecard', `${t}/scorecard?projectId=${project}`),
     json('GET', 'GET /api/super-tabs/:tabId/machine-readings', `${t}/machine-readings`),
     json('GET', 'GET /api/super-tabs/:tabId/proposals', `${t}/proposals?projectId=${project}`),
     json('GET', 'GET /api/super-tabs/:tabId/project-list', `${t}/project-list?invitedTo=${project}`),
@@ -179,8 +178,9 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
     const f = await swarm()
     const real = calls(f.tab, 'lead', 'lead'), missing = calls(MISSING, 'lead', 'lead')
     // Compare against actual registration, so adding a route requires a real refusal test.
-    // The retired full-state read always asks every client to update, without reading a Swarm.
-    expect(new Set([...real.map(c => c.route), 'GET /api/super-tabs/:tabId'])).toEqual(registeredPersonRoutes)
+    // The retired full-state read always asks every client to update, and the retired scorecard read answers no days, each without
+    // reading a Swarm: they are tried alike for everyone in the test below.
+    expect(new Set([...real.map(c => c.route), 'GET /api/super-tabs/:tabId', 'GET /api/super-tabs/:tabId/scorecard'])).toEqual(registeredPersonRoutes)
     for (const [i, call] of real.entries()) {
       const cases = { missing: await answer(missing[i]!, outsider), refused: await answer(call, outsider), revoked: await answer(call, removed) }
       // Approving needs the server's GitHub App, which this server has not: it says so to everyone, before any Swarm is read.
@@ -214,8 +214,7 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
       || JSON.stringify(c.payload ?? '').includes(f.privateChat) || String(c.payload ?? '').includes(f.privateChat))
     expect(named.map(c => c.route)).toEqual(expect.arrayContaining(['POST /api/super-tabs/:tabId/commands', 'GET /api/super-tabs/:tabId/groups/:conversationId',
       'GET /api/super-tabs/:tabId/conversations/:conversationId/messages', 'POST /api/super-tabs/:tabId/attachments',
-      'GET /api/super-tabs/:tabId/projects/:projectId/github', 'GET /api/super-tabs/:tabId/leaderboard',
-      'GET /api/super-tabs/:tabId/scorecard']))
+      'GET /api/super-tabs/:tabId/projects/:projectId/github', 'GET /api/super-tabs/:tabId/leaderboard']))
     // Checked before the chat: a terminal opens for one agent (made up here), and approving needs the server's GitHub App.
     const before = ['POST /api/super-tabs/:tabId/native', 'POST /api/super-tabs/:tabId/projects/:projectId/github/approve',
       'POST /api/super-tabs/:tabId/projects/:projectId/github/repository']
@@ -243,6 +242,19 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
       expect(real.statusCode).toBe(426)
       expect(real.json().error.code).toBe('UPDATE_REQUIRED')
       expect({ status: real.statusCode, body: real.body }).toEqual({ status: missing.statusCode, body: missing.body })
+    }
+  })
+
+  // The scorecard is gone with Swarm v4: an older Desktop's Scorecard tab still reads it, and gets no days, whoever asks and
+  // whatever Swarm or project it names, even one that is missing, so the answer says nothing of any of them.
+  it('answers the retired scorecard read with no days, alike to everyone, naming nothing of the Swarm', async () => {
+    const f = await swarm()
+    const read = (tab: string, project: string, as: AuthUser) => app.inject({ url: `/api/super-tabs/${tab}/scorecard?projectId=${project}&scope=all`, headers: { 'x-user': as.sub } })
+    for (const as of [owner, member, outsider, removed]) {
+      for (const [tab, project] of [[f.tab, 'lead'], [f.tab, f.privateProject], [MISSING, 'lead']] as const) {
+        const res = await read(tab, project, as)
+        expect({ status: res.statusCode, body: res.body }, `${as.email} ${tab} ${project}`).toEqual({ status: 200, body: JSON.stringify({ success: true, data: { days: [] } }) })
+      }
     }
   })
 
