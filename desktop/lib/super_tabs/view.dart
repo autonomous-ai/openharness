@@ -93,7 +93,7 @@ import 'agent_instructions.dart';
 import '../core/test_run.dart';
 import 'github_issues.dart';
 import 'issue_panel.dart';
-import 'task_list.dart';
+import 'task_board.dart';
 import 'thread_panel.dart';
 import 'work_details.dart';
 import 'manage_page.dart';
@@ -6279,7 +6279,7 @@ class _SuperTabViewState extends State<SuperTabView>
                     : issue ??
                           thread ??
                           (taskList
-                              ? SwarmTaskList(
+                              ? SwarmTaskBoard(
                                   controller: c,
                                   conversationId: c.selectedId,
                                   github: _github,
