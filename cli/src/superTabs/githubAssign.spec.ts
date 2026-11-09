@@ -181,6 +181,57 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       machines: crew().machines }
     const asks = (f: ReturnType<typeof setup>) => f.said().filter(([n]) => n === 30).map(([, body]) => String(body))
 
+    it('asks nobody for a pull request that is not the team\'s: a person\'s, or a branch no builder of the team made', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull({ number: 31, head: { sha: HEAD, ref: 'ken/fix-login' }, labels: [], body: '' }),
+        pull({ number: 32, head: { sha: HEAD, ref: 'fix-login' }, labels: [], body: '' })]
+      await f.assigner.tick()
+      expect(f.said()).toEqual([])
+      // Their comments are not even read.
+      expect(f.github.sent).toEqual([])
+    })
+
+    it('asks another reader once the one asked has not read for 2 hours, and nobody more once a READ-OK is on the head', async () => {
+      const ask = (name: string, at: string) => comment(`Harness, ${at.slice(11, 16)}, to **${name}**: please read this pull request, `
+        + 'and start your comment with READ-OK f6edb44 or HOLD f6edb44 (with the file, line and fix).', { created_at: at })
+      // Atlas (Codex) was asked an hour and a half ago: still reading.
+      const recent = setup([], { crew: team })
+      recent.github.state.pulls = [pull()]
+      recent.github.state.comments.set(30, [ask('Atlas', '2026-11-09T06:01:00Z')])
+      await recent.assigner.tick()
+      expect(asks(recent)).toEqual([])
+      // Asked three hours ago with no word since: Juno is asked too.
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull()]
+      f.github.state.comments.set(30, [ask('Atlas', '2026-11-09T04:31:00Z')])
+      await f.assigner.tick()
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Juno\*\*: please read this pull request/)])
+      // Atlas reads after all: its READ-OK counts, and nobody more is asked when Juno's ask is old too.
+      f.github.state.comments.set(30, [ask('Atlas', '2026-11-09T04:31:00Z'), ask('Juno', '2026-11-09T04:40:00Z'),
+        comment('Atlas, 07:30, to **Pip**: READ-OK f6edb44', { created_at: '2026-11-09T07:30:00Z' })])
+      await f.make().tick()
+      expect(asks(f)).toHaveLength(1)
+    })
+
+    it('measures a reader asked again after a push from that ask, and one that never answered from its last', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull()]
+      // Atlas held an older head, was asked again for this one 2.5 hours ago, and has said nothing since.
+      f.github.state.comments.set(30, [comment('Atlas, 04:00, to **Pip**: HOLD 1234567 app.ts:3 add the test', { created_at: '2026-11-09T04:00:00Z' }),
+        comment('Harness, 05:01, to **Atlas**: the head is now f6edb44, after your HOLD on 1234567: please read it again, and start your comment '
+          + 'with READ-OK f6edb44 or HOLD f6edb44 (with the file, line and fix).', { created_at: '2026-11-09T05:01:00Z' })])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Juno\*\*: please read this pull request/)])
+      // Juno, asked for an older head 3 hours ago, never answered: Atlas is asked for this one.
+      const g = setup([], { crew: team })
+      g.github.state.pulls = [pull()]
+      g.github.state.comments.set(30, [comment('Harness, 04:31, to **Juno**: please read this pull request, and start your comment with '
+        + 'READ-OK 1234567 or HOLD 1234567 (with the file, line and fix).', { created_at: '2026-11-09T04:31:00Z' })])
+      await g.assigner.tick()
+      expect(asks(g)).toEqual([expect.stringMatching(/to \*\*Atlas\*\*: please read this pull request/)])
+    })
+
     it('asks one reader for a pull request, never its author, of another model family first, once', async () => {
       const f = setup([], { crew: team })
       f.github.state.pulls = [pull()]

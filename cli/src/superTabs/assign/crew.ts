@@ -75,6 +75,12 @@ export interface Read {
 /** The label a builder's tasks carry: builder:pip for Pip, as githubMentions.ts builderLabel. */
 export const labelOf = (name: string): string => `builder:${name.trim().toLowerCase().replace(/\s+/g, '-')}`
 
+/** The labels of a project's team: its builders' (away ones too) and its PM's. Harness asks readers for, and merges, only
+ *  the team's own pull requests: a person's, or anyone's in a shared repository, is theirs (openharness has dozens open at a
+ *  time, by people and their own agents). */
+export const teamOf = (crew: Crew, pm: string): Set<string> =>
+  new Set([...crew.builders.map(b => b.label), ...(crew.away ?? []).map(a => a.label), labelOf(pm)])
+
 /** An area as its `part:` label names it: "Mobile app" is mobile-app, "part:API" is api. */
 export const areaOf = (word: string): string =>
   word.trim().toLowerCase().replace(/^part:/, '').replace(/[`*_"'.]/g, '').trim().replace(/\s+/g, '-')

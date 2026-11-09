@@ -19,7 +19,7 @@ import { GitHubTokenRefresher, githubToken } from './github.js'
 import { GitHubMentions, watchedAgents } from './githubMentions.js'
 import { githubRest } from './githubRest.js'
 import { GitHubAssign } from './githubAssign.js'
-import { GitHubMerge, ledProjects } from './githubMerge.js'
+import { GitHubMerge, ledProjects, type LedProject } from './githubMerge.js'
 import { crewOf } from './assign/crew.js'
 import { teamEngineReporter, type TeamEngineReporter } from '../team/engines.js'
 import { readTeamConfig } from '../team/config.js'
@@ -192,10 +192,13 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     live: id => !!api.agents.byAgent(id), roster: async () => (await held().feed.current(60_000)).roster,
     read: async (tabId, agentId) => (await held().reads.read(tabId, agentId)).state })
   // Merges by rule the pull requests of those projects (githubMerge.ts).
-  const merges = (options.githubMerge ?? ((api, held) => new GitHubMerge({ projects: led(api, held), get: github.get, send: github.send })))(core, sources)
+  // The crew of a project its PM leads, as the PM reads the Swarm.
+  const crewOfProject = (held: () => SwarmSources) => async (project: LedProject) =>
+    crewOf((await held().reads.read(project.tabId, project.pmAgentId)).state, project)
+  const merges = (options.githubMerge ?? ((api, held) => new GitHubMerge({ projects: led(api, held), crew: crewOfProject(held), get: github.get,
+    send: github.send })))(core, sources)
   // Gives their tasks to their builders (githubAssign.ts), from the crew as the PM reads the Swarm.
-  const assigns = (options.githubAssign ?? ((api, held) => new GitHubAssign({ projects: led(api, held),
-    crew: async project => crewOf((await held().reads.read(project.tabId, project.pmAgentId)).state, project),
+  const assigns = (options.githubAssign ?? ((api, held) => new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held),
     get: github.get, send: github.send })))(core, sources)
   const wake = () => {
     const machine = core.daemon.machineId()
