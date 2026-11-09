@@ -52,8 +52,7 @@ it.each([['claude', false], ['codex', false], ['claude', true]] as const)('types
     if (path === `/api/super-tabs/hosts/${ME.machineId}`) return { data: agents.map(agent => ({ tabId: TAB, agent, observers: [] })) }
     if (path === `/api/super-tabs/${TAB}`) {
       if (url.searchParams.get('asAgentId')) reads.push(raw)
-      const conversations = attached ? [{ id: CHAT, kind: 'agent-chat', agentIds: agents.map(a => a.id), archived: false }] : []
-      return { data: { revision: 1, state: { id: TAB, agents, conversations } } }
+      return { data: { revision: 1, state: { id: TAB, agents, conversations: [] } } }
     }
     if (path.endsWith('/messages')) { reads.push(raw); return { data: { messages: [] } } }
     if (path === `/api/super-tabs/${TAB}/commands`) {
@@ -83,7 +82,7 @@ it.each([['claude', false], ['codex', false], ['claude', true]] as const)('types
   const client = await LocalClient.connect(d, { machineId: ME.machineId }); clients.push(client)
   const cwd = join(d.projectsDir, 'project'); mkdirSync(cwd, { recursive: true })
   // As Desktop's + New agent starts it: with its Swarm role. An agent with none is one its person attached (Desktop's Attach):
-  // the host tells it the team's basics once, and reads its Swarm to do so (#3642).
+  // the host tells it the team's basics once, in the chat its roster row names, and reads nothing to do so (#3642, #3654).
   const agent = await client.request('agent_create', { engine, cwd, bypassPermission: true, ...(attached ? {} : { swarmRole: 'dev' }) }, 90_000)
   expect(agent.error, JSON.stringify(agent)).toBeUndefined()
   const memberId = idFor(agent.agent.id)
@@ -107,16 +106,14 @@ it.each([['claude', false], ['codex', false], ['claude', true]] as const)('types
   await until('the host to post the answer into the chat', () => posts.length >= 1 || null, 60_000, 100)
   expect(posts).toEqual([{ operationId: 'reply-delivery-one', asAgentId: memberId,
     command: { type: 'message.send', conversationId: CHAT, text: `answer 1: ${typed}`, replyTo: null, answers: 'message-one', recipientIds: [] } }])
+  // Its chat is named by its roster row, so nothing of the Swarm was read to type it, nor to tell it anything.
+  expect(reads).toEqual([])
   if (attached) {
-    // The one read of the Swarm is the basics' own, and the one thing it writes is the basics, only for the agent to read, in
-    // its own chat: never anything to type what its person typed.
+    // The one thing the host wrote besides its answers is the basics, only for the agent to read, in its own chat: never anything
+    // to type what its person typed.
     await until('the basics told to the attached agent', () => told.length >= 1 || null, 60_000, 100)
-    expect(reads).toEqual([`/api/super-tabs/${TAB}?asAgentId=${memberId}`])
     expect(told).toEqual([{ operationId: expect.stringMatching(/^skill-/), asAgentId: memberId, command: { type: 'message.send', conversationId: CHAT,
       replyTo: null, recipientIds: [memberId], text: SWARM_BASICS, agentOnly: true, notice: 'skills' } }])
-  } else {
-    // Its chat is named by its roster row, so nothing of the Swarm was read to type it.
-    expect(reads).toEqual([])
   }
 
   // A second message is its own turn, answered under its own operation, in its own thread when it is in one.
