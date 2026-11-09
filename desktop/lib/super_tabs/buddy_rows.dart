@@ -227,6 +227,7 @@ class SuperTabQuietHeading extends StatefulWidget {
 }
 
 class _SuperTabQuietHeadingState extends State<SuperTabQuietHeading> {
+  // The org name's chevron shows only while it is hovered or focused; a section that folds always shows its own.
   bool _hovered = false, _focused = false;
 
   @override
@@ -266,7 +267,7 @@ class _SuperTabQuietHeadingState extends State<SuperTabQuietHeading> {
                     style: style,
                   ),
                 ),
-                if (collapsed != null && (_hovered || _focused)) ...[
+                if (collapsed != null && (!org || _hovered || _focused)) ...[
                   const SizedBox(width: grid.AppDesktop.listRowGap * 2),
                   Icon(
                     collapsed ? AppIcons.chevronRight : AppIcons.chevronDown,

@@ -26,6 +26,16 @@ abstract final class SwarmLayout {
   static const double capsuleRadius = 8;
   static const double capsuleGap = 6;
 
+  /// A board column's heading, which sits level with its cards' left edge.
+  static const EdgeInsets columnHeadPadding = EdgeInsets.fromLTRB(4, 16, 4, 8);
+
+  /// A label chip as github.com draws it: a pill in the label's own colour.
+  static const EdgeInsets chipPadding = EdgeInsets.symmetric(
+    horizontal: 8,
+    vertical: 1,
+  );
+  static const double chipRadius = 999;
+
   /// A task's title, above its text and comments.
   static const double titleSize = 16;
 

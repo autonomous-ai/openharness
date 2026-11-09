@@ -150,7 +150,10 @@ void main() {
       );
       await tester.pumpAndSettle();
       // Humans opens the whole board (task #4466).
+      // Top Teams folds; a person in it opens the whole board.
       await tester.tap(find.byKey(const ValueKey('project-sidebar-humans')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-human-owner')));
       await tester.pumpAndSettle();
       expect(find.text('This week'), findsOneWidget);
       expect(find.byKey(const ValueKey('weekly-person-peer')), findsOneWidget);

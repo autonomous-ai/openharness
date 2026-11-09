@@ -17,13 +17,20 @@ class SwarmAgentInstructions extends StatelessWidget {
     super.key,
     required this.agent,
     required this.app,
+    required this.machineName,
     required this.onClose,
     this.read = _readFile,
   });
 
   final SuperTabAgent agent;
   final AppNotifier? app;
+
+  /// The name of the computer the agent runs on, which a file read there is opened on.
+  final String machineName;
   final VoidCallback onClose;
+
+  /// What its person calls it: the name its file is written under, as it is told "You are `name`.".
+  String get name => agent.displayName ?? agent.name;
 
   /// Reads a file's text, or null when it is not there; tests pass their own.
   final Future<String?> Function(String path) read;
@@ -32,6 +39,10 @@ class SwarmAgentInstructions extends StatelessWidget {
     final file = File(path);
     return await file.exists() ? file.readAsString() : null;
   }
+
+  /// Where [name]'s file is in the project folder [cwd]: null for a name that is a path (`../x`), which names no file there.
+  static String? fileIn(String cwd, String name) =>
+      RegExp(r'[/\\\x00]').hasMatch(name) ? null : '$cwd/agents/$name.md';
 
   /// The file's path, when the agent runs on this computer and its folder is known.
   String? get path {
@@ -42,7 +53,7 @@ class SwarmAgentInstructions extends StatelessWidget {
         .firstOrNull
         ?.project
         ?.cwd;
-    return cwd == null ? null : '$cwd/agents/${agent.name}.md';
+    return cwd == null ? null : fileIn(cwd, name);
   }
 
   @override
@@ -65,7 +76,7 @@ class SwarmAgentInstructions extends StatelessWidget {
             child: Row(
               children: [
                 Text(
-                  'agents/${agent.name}.md',
+                  'agents/$name.md',
                   style: DesktopChrome.text(medium: true),
                 ),
                 const Spacer(),
@@ -80,7 +91,7 @@ class SwarmAgentInstructions extends StatelessWidget {
           ),
           Expanded(
             child: path == null
-                ? _note('Open it on ${agent.name}\'s computer.')
+                ? _note('Open it on $machineName.')
                 : FutureBuilder<String?>(
                     future: read(path),
                     builder: (context, file) => switch (file) {
@@ -97,7 +108,7 @@ class SwarmAgentInstructions extends StatelessWidget {
                         ),
                       AsyncSnapshot(connectionState: ConnectionState.done) =>
                         _note(
-                          'No instructions yet. Tell ${agent.name} how you '
+                          'No instructions yet. Tell $name how you '
                           'want it to work, and it writes them here.',
                         ),
                       _ => const SizedBox.shrink(),
