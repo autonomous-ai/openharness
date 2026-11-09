@@ -8,7 +8,7 @@
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { DEEP, nextPicks, readerFor, readProblem, reasonOf, takeBacks, worksOnOf, type Crew, type Read } from './assign/crew.js'
+import { DEEP, nextPicks, outOfQuota, readerFor, readProblem, reasonOf, takeBacks, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
@@ -102,7 +102,7 @@ export class GitHubAssign {
       if (this.given.has(key) && labelNames(issue).some(name => name.startsWith('builder:'))) this.given.delete(key)
     }
     const crew = await this.deps.crew(project)
-    await this.takeBack(repo, issues, crew)
+    await this.takeBack(repo, issues, crew.away ?? [])
     // What each builder works on in this project: the Works on line of its instructions file here (agents/<Name>.md).
     for (const builder of crew.builders) builder.worksOn = worksOnOf(await this.reads.file(repo, `agents/${builder.name}.md`))
     await this.labelAreas(repo, crew)
@@ -110,6 +110,7 @@ export class GitHubAssign {
       closed: await this.reads.current(repo, `/repos/${repo}/issues?state=closed&sort=updated&direction=desc&per_page=${PAGE}`, 1),
       crew })
     if (!read.problem.builders.length) return
+    await this.takeBack(repo, issues, outOfQuota(read))
     await this.askReaders(project, read)
     if (!read.free.size) return
     // Nobody can take a task while every list is full: no plan, so a backlog costs no CPU each minute (the daemon at rest
@@ -129,8 +130,9 @@ export class GitHubAssign {
    * status:taken when it was taken, come off, with one line of why; the next plan gives each to another builder. Once a
    * task, as the label is gone from the next read.
    */
-  private async takeBack(repo: string, issues: Json[], crew: Crew): Promise<void> {
-    for (const back of takeBacks(issues, crew.away ?? [], this.now())) {
+  private async takeBack(repo: string, issues: Json[], away: AwayBuilder[]): Promise<void> {
+    if (!away.length) return
+    for (const back of takeBacks(issues, away, this.now())) {
       const key = `${repo}#${back.number}:back:${back.label}`
       if (this.said.has(key)) continue
       this.said.add(key)
