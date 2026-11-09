@@ -54,6 +54,7 @@ import 'attachment_chips.dart' show superTabShowsInPlace;
 import 'attachment_image.dart';
 import 'reminders.dart';
 import 'places.dart';
+import 'agent_state.dart';
 import 'attention.dart';
 import 'controller.dart';
 import 'file_links.dart';
@@ -370,6 +371,13 @@ class _SuperTabViewState extends State<SuperTabView>
   /// and the left sidebar's Models, so both show one week.
   late SuperTabProjectBoard _board = SuperTabProjectBoard(c);
 
+  /// What each agent of Your Team is doing, its row's one line (agent_state.dart); read on the Desktop, where an app is.
+  late SwarmAgentStates? _states = _agentStates();
+
+  SwarmAgentStates? _agentStates() => widget.app == null
+      ? null
+      : SwarmAgentStates(controller: c, github: _github);
+
   /// What this computer's GitHub says of the pull requests on live cards.
   late SuperTabPullRequestFacts _facts = SuperTabPullRequestFacts(
     widget.app?.readPullRequestsStatus,
@@ -529,6 +537,8 @@ class _SuperTabViewState extends State<SuperTabView>
     if (oldWidget.controller != c) {
       _board.dispose();
       _board = SuperTabProjectBoard(c);
+      _states?.dispose();
+      _states = _agentStates();
       oldWidget.controller.threadPaneHidden();
       oldWidget.controller.removeListener(_changed);
       oldWidget.controller.removeListener(_holdVoiceAway);
@@ -1182,6 +1192,7 @@ class _SuperTabViewState extends State<SuperTabView>
     c.threadPaneHidden();
     WidgetsBinding.instance.removeObserver(this);
     _board.dispose();
+    _states?.dispose();
     _facts.dispose();
     _tasksLayout.dispose();
     c.removeListener(_changed);
@@ -2074,6 +2085,7 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget _sidebar({String? boardProjectId}) => ProjectSidebar(
     board: widget.board,
     leaderboard: _board,
+    agentStates: widget.board ? _states : null,
     boardProjectId: boardProjectId,
     controller: c,
     compact: _phone,
