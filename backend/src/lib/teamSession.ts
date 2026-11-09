@@ -156,7 +156,8 @@ export const TEAM_ROUTES: readonly TeamRoute[] = [
   { method: 'POST', url: '/api/super-tabs/:tabId/attachments/uploads/:uploadId/complete', scope: 'agent' },
   // Its agent's one-hour GitHub token for the repository of its task (Task 4); the body's machine must be its own.
   { method: 'POST', url: '/api/super-tabs/:tabId/github-token', scope: 'agent', bodyMachine: true },
-  // Commands as one of its agents, its agents' deliveries, stops and native terminals, its agents' role texts.
+  // Commands as one of its agents, its agents' deliveries, stops and native terminals (retired: answered ok and ignored, so an older
+  // team daemon is not refused), its agents' role texts.
   { method: 'POST', url: '/api/super-tabs/:tabId/commands', scope: 'bound' },
   { method: 'GET', url: '/api/super-tabs/:tabId/agents/:agentId/deliveries', scope: 'bound' },
   { method: 'GET', url: '/api/super-tabs/:tabId/agents/:agentId/deliveries/:deliveryId', scope: 'bound' },
