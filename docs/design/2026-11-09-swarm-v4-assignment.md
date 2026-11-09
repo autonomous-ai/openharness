@@ -134,6 +134,8 @@ Harness asks readers for, and merges, only the team's own pull requests: a build
 (openharness has dozens open at a time, by people and their own agents). A reader asked 2 hours ago with no verdict since
 is no longer counted on: another is asked too, and the first READ-OK on
 the head counts, whoever's (agents read within minutes of the ask that wakes them, so one that has not is stopped or stuck).
+With nobody else to ask, the silent reader is asked again, at most twice for a head and two hours apart: one stopped when
+it was asked never heard it, as GitHub news reads what is said from when its agent runs again.
 Nobody able to read it is said once.
 
 ## Taking work back (built)
@@ -143,6 +145,9 @@ machine is down gives back its queued tasks after 30 minutes (a sleep or a resta
 it took after 3 hours (work may be on that machine). Its builder label, and status:taken, come off with one comment
 ("Harness, 23:10: Atlas's machine has been down since 15:40 UTC, so this task goes to the builder who can start it
 next."), and the next plan gives each to another builder (`assign/crew.ts takeBacks`, `githubAssign.ts takeBack`). A
+task whose pull request waits for its readers or its merge is kept: its builder has done its part, and the pull request
+merges without it; another builder would do it again. A builder whose machine is down keeps its tasks while no other
+builder can take them: they would only come back to it. One its person is stopping gives them back all the same. A
 builder whose subscription has less room than a small task until a reset more than two hours off gives back what waits
 for it, never what it took (`outOfQuota`): the plan would only hold it until the reset. A task its builder took that
 nothing touched for 4 hours (no comment or label on the issue, no change to a pull request for it, drafts included) gets
