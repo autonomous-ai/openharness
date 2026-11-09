@@ -2,7 +2,8 @@
  * The crew keeper (task #3398): what the Swarm does for its crew members on its own, decided from the state alone so it can
  * be tested with fake machines. A crew member idle an hour sleeps; one whose machine fails moves to the best fallback in the
  * route's order (project instructions, Order and quota); folders of long-asleep members, and of asleep members on a machine
- * short of disk, are dropped. The numbers are in crewRules.ts. Applying the actions is liveness.ts's (sweepLiveness).
+ * short of disk, are dropped. The numbers are in crewRules.ts. Nothing applies the actions since Swarm v4 (anh Dee, 2026-11-09: the
+ * server runs no v3 job on its own): this module goes with the crew (slice S14).
  */
 import { machineRuleRefusal } from './machineRules.js'
 import type { MachineRule } from './policy.js'
