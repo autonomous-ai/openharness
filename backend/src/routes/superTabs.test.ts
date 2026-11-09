@@ -202,6 +202,32 @@ describe('the retired scorecard read', () => {
   })
 })
 
+// No picture is set any more (2026-11-09), but an older Desktop or phone still uploads one before it sends the retired `member.avatar`
+// or `agent.avatar`. Whoever asks, for whichever Swarm, the upload is refused in words, nothing is read and nothing is kept.
+// integration/superTabProfile.test.ts tries it against the real store.
+describe('the retired picture upload', () => {
+  let app: FastifyInstance
+  beforeEach(async () => {
+    app = Fastify()
+    app.setErrorHandler(errorHandler)
+    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
+    // A store, reads and host reads that fail on any call: the answer must not touch them.
+    await app.register(superTabRoutes, { store: {} as never, github: null, reads: {} as never, hosts: {} as never })
+    await app.ready()
+  })
+  afterEach(async () => { await app.close() })
+
+  it('refuses the form an older app sends, whatever the Swarm, agent or picture, and reads nothing', async () => {
+    const boundary = 'avatar-boundary'
+    const form = (bytes: string) => `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="me.png"\r\nContent-Type: image/png\r\n\r\n${bytes}\r\n--${boundary}--\r\n`
+    for (const [url, bytes] of [['/api/super-tabs/tab-1/avatars', '\x89PNG'], ['/api/super-tabs/tab-2/avatars?asAgentId=agent-1', 'x'.repeat(2 * 1024 * 1024)]]) {
+      const res = await app.inject({ method: 'POST', url, headers: { 'content-type': `multipart/form-data; boundary=${boundary}` }, payload: form(bytes) })
+      expect(res.statusCode, url).toBe(410)
+      expect(res.json(), url).toEqual({ success: false, error: { code: 'AVATARS_RETIRED', message: 'Pictures can’t be changed any more.' } })
+    }
+  })
+})
+
 // Workspaces, the level above Swarms, are gone with Swarm v4: a Swarm is the org already, and no client calls their routes, so none
 // is registered. A new Swarm names no Workspace to be in. integration/superTabNotAvailable.test.ts runs the real store.
 describe('the Workspace routes Swarm v4 removed', () => {

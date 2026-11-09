@@ -46,7 +46,7 @@ import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
 import { closeProposal, databaseProposalReads, openProposalRows, openProposals, proposalChat, type OpenProposal } from './proposals.js'
 import { projectList, type ProjectList } from './projectList.js'
-import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, peekType, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
+import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
 import { makeThumbnail, MAX_READ_BACK_BYTES, pictureFields, THUMBNAILED_TYPES, thumbKeyOf, thumbnailsReserve, type StoredImage } from './thumbnails.js'
 import { FileLinks } from './fileLinks.js'

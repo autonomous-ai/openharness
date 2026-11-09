@@ -784,31 +784,25 @@ Design (`backend/src/superTabs/fileLinks.ts`):
   read alone. The backend logs the storage error's code only.
 - Platforms: backend, CLI host, Desktop (and the web build), phone.
 
-## Avatars, status and celebrations
+## Avatars and celebrations
 
 People and agents each show one avatar wherever they appear: messages, the
-roster, machine rows and mentions. A person sets theirs from their own row in
-the roster. They can pick one of eight pictures or upload a PNG, JPEG or WebP.
-Desktop and the web app crop the upload square and resize it to 256 pixels
-before sending it. The server accepts only those three formats, judged by the
-file's own bytes, and at most 1 MB. Each upload can be used once. An upload not used within a day is removed, and so is
-a chat file attached but never sent: attach it again to send it. Without a picture, a person shows their initial. An
-agent shows a pattern made from its name, the same on every computer, with a
-small Claude or Codex badge. Its contributor changes it from the agent's
-details, and the project's coordinator can change it with `agent.avatar`.
-Wherever an agent shows a role, it is the agent's role name, and the
-coordinator is called by the project's `coordinatorName`; the phone's
-coordinator avatar does not depend on the label.
+roster, machine rows and mentions. Swarm v4 sets no picture, status, name or
+username (2026-11-09): an older app that still sends `member.avatar`,
+`agent.avatar`, `member.status`, `member.timeZone`, `member.username` or
+`member.name` is answered as ignored, and its picture upload
+(`POST /api/super-tabs/:tabId/avatars`) is refused with `AVATARS_RETIRED`. A
+picture, name or username someone set before stays and shows as before; a
+status or time zone set before is no longer read. Without a picture, a person
+shows their initial. An agent shows a pattern made from its name, the same on
+every computer, with a small Claude or Codex badge. Wherever an agent shows a
+role, it is the agent's role name, and the coordinator is called by the
+project's `coordinatorName`; the phone's coordinator avatar does not depend on
+the label. An upload not used within a day is removed, and so is a chat file
+attached but never sent: attach it again to send it.
 
-A person can also set a short status, such as Focusing, Coffee break or their
-own words up to 80 characters. They can let it clear itself after an hour,
-after four hours or at the end of the day. It shows next to their name and as
-a small emoji on their avatar, and disappears at its time even on a page where
-nothing else changes.
-
-Avatars and status reach only the Swarm's members: only a member's read of
-the Swarm carries the link to a picture. Where the link points depends on the
-server:
+Avatars reach only the Swarm's members: only a member's read of the Swarm
+carries the link to a picture. Where the link points depends on the server:
 
 - With a private avatar bucket (`SUPER_TAB_AVATARS_BUCKET`), nobody can read a
   picture directly. Each read carries signed links. A link stays the same for
@@ -822,9 +816,6 @@ server:
   bucket private, a picture's old public address also still opens it. Chat
   files never go in the avatar folder, and the server makes avatar links for
   that folder alone.
-
-A server with no attachments bucket refuses uploads; the eight pictures still
-work.
 
 People and agents react to a message with a small set: 👍 🎉 ❤️ 😄 👀 🚀.
 Counts show under the message, with the reader's own highlighted and the names

@@ -170,7 +170,7 @@ export function imageTypeOf(head: Buffer): string | null {
 
 /** The raster type `body`'s first bytes are, or null, and `body` handed back with those bytes in front, so the store
  * still reads the whole file as a stream. */
-export async function peekType(body: Readable): Promise<{ type: string | null; body: Readable }> {
+async function peekType(body: Readable): Promise<{ type: string | null; body: Readable }> {
   // One iterator for the whole read: leaving a `for await` early would destroy the request stream.
   const source = body[Symbol.asyncIterator]()
   const parts: Buffer[] = []
