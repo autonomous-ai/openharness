@@ -87,11 +87,10 @@ describe('a Regular agent\'s own chat (#4212 finding 1)', () => {
 })
 
 describe('a member\'s computer listed as they joined (#4212 finding 8)', () => {
-  it('reads as taking the owner\'s projects\' work, so the route keeps the member\'s own agents', async () => {
+  it('reads as an ordinary machine, with no team-work verdict, so the route keeps the member\'s own agents', async () => {
     const f = await joined()
-    const row = (await f.store.read(owner, f.tab)).state.machines!.find(m => m.machineId === member.sub) as { teamWork?: unknown }
-    expect(row.teamWork).toEqual({ allowed: true })
-    const derived = (await f.reads.firstLoad(owner, f.tab)) as unknown as { derived?: { machines?: Record<string, { teamWork: unknown }> } }
-    expect(derived.derived?.machines?.[member.sub]?.teamWork).toEqual({ allowed: true })
+    expect((await f.store.read(owner, f.tab)).state.machines!.find(m => m.machineId === member.sub)).not.toHaveProperty('teamWork')
+    const derived = (await f.reads.firstLoad(owner, f.tab)) as unknown as { derived?: { machines?: Record<string, object> } }
+    expect(derived.derived?.machines?.[member.sub]).not.toHaveProperty('teamWork')
   })
 })
