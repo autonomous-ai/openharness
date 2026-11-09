@@ -102,7 +102,9 @@ void main() {
       final (c, server) = await show(tester, board: true, prepare: withPoints);
       // Humans is the Leaderboard's way in (task #4466).
       expect(key('project-sidebar-humans'), findsOneWidget);
+      // Top Teams folds; a person in it opens the board (anh Dee, 2026-11-09).
       await tap(tester, 'project-sidebar-humans');
+      await tap(tester, 'super-human-owner');
       expect(find.text('This week'), findsOneWidget);
       expect(key('weekly-person-owner'), findsOneWidget);
       expect(
@@ -131,6 +133,7 @@ void main() {
     c.openThread('message-1');
     await _settle(tester);
     await tap(tester, 'project-sidebar-humans');
+    await tap(tester, 'super-human-owner');
     expect(find.text('This week'), findsOneWidget);
     c.closeThread();
     await _settle(tester);
@@ -146,6 +149,7 @@ void main() {
     final (c, _) = await show(tester, board: true, prepare: withPoints);
     expect(stepSwarmPlaces(c, -1), isFalse);
     await tap(tester, 'project-sidebar-humans');
+    await tap(tester, 'super-human-owner');
     expect(canStepSwarmPlaces(c, -1), isTrue);
     expect(stepSwarmPlaces(c, -1), isTrue);
     await _settle(tester);
