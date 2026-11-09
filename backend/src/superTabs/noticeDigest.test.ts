@@ -138,10 +138,8 @@ describe('the digest', () => {
 // A new cancel written by hand with the three open statuses would leave a gathered row to wait out the backstop, for nothing.
 describe('every cancel', () => {
   it('ends gathered rows too', () => {
-    for (const file of ['store.ts', 'native.ts']) {
-      const source = readFileSync(join(process.cwd(), 'src/superTabs', file), 'utf8')
-      expect(source).not.toMatch(/status: \{ in: \['queued', 'claimed', 'uncertain'\] \}[^\n]*\n?[^\n]*status: 'cancelled'/)
-      expect(source).not.toMatch(/status: \{ in: \[\.\.\.OPEN_DELIVERY\] \} \},\s*data: \{ status: 'cancelled'/)
-    }
+    const source = readFileSync(join(process.cwd(), 'src/superTabs/store.ts'), 'utf8')
+    expect(source).not.toMatch(/status: \{ in: \['queued', 'claimed', 'uncertain'\] \}[^\n]*\n?[^\n]*status: 'cancelled'/)
+    expect(source).not.toMatch(/status: \{ in: \[\.\.\.OPEN_DELIVERY\] \} \},\s*data: \{ status: 'cancelled'/)
   })
 })

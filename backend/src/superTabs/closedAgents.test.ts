@@ -161,7 +161,7 @@ function restoring(patch: Partial<SuperTabState> = {}, pool: Record<string, unkn
     agents: [], conversations: [removedGroup()], projects: [{ id: 'p', name: 'P', ownerId: 'owner', leadConversationId: 'lead-p', visibility: 'public', members: [] }, { id: 'other', name: 'O', ownerId: 'owner', leadConversationId: 'lead-o', visibility: 'public', members: [] }],
     machines: [{ machineId: 'mac', contributorId: 'owner', name: 'Mac', generation: 'gen', ...pool }], removedSessions: [record()], ...patch } as unknown as SuperTabState
 }
-const facts = { elsewhere: new Set<string>(), teamMachines: [] as string[], otherWorkspaceMachines: [] as string[] }
+const facts = { elsewhere: new Set<string>(), teamMachines: [] as string[] }
 
 // Security review 1 of #2601: a restore takes the rules a person's add takes (commands.ts agent.add).
 describe('what may come back', () => {

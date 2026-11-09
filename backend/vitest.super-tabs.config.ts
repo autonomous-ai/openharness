@@ -9,7 +9,6 @@ export default defineConfig({ test: {
     'integration/superTabAutoJoin.test.ts',
     'integration/superTabGithub.test.ts',
     'integration/superTabTeam.test.ts',
-    'integration/superTabWorkspaces.test.ts',
     'integration/superTabRead.test.ts',
     'integration/superTabPersonalTasksFeed.test.ts',
     'integration/superTabOneGroup.test.ts',

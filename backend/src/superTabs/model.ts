@@ -669,9 +669,6 @@ export interface Invitation {
   role: 'collaborator' | 'viewer'
   conversationId: string
   expiresAt: number
-  /** Who sent it: the Workspace check at acceptance reads their role then (store.ts invite.accept). Absent on invitations
-   *  from before it was recorded. */
-  invitedBy?: string
 }
 /** An agent a machine's report removed as closed: as it was, and where it was (closedAgents.ts). */
 export interface RemovedSession {
@@ -702,10 +699,6 @@ export interface SuperTabState {
   /** Read-only, for the Swarm owner's reads (visibleState): the projects nobody owns, by name and size (projects.ts). */
   ownerlessProjects?: Array<{ id: string; name: string; conversations: number }>
   ownerId: string
-  /** The Workspace it belongs to (workspaceStore.ts); absent on a Swarm from before Workspaces until the migration gives it one. */
-  workspaceId?: string
-  /** Who in the Workspace may find and join it by themselves: `workspace` lets members and up join; absent reads as invite-only. */
-  workspaceVisibility?: 'invite-only' | 'workspace'
   environment: string
   /** Fields this tab overrides from its owner's account routing policy (routingPolicy.ts). */
   routingPolicy?: import('./routingPolicy.js').RoutingOverride
@@ -819,7 +812,7 @@ export interface MessageDraft {
   recipients: string[]
   /** Buddies this row is news for (buddyNews.ts): a delivery each, never listed among its recipients. */
   buddyRecipients?: string[]
-  /** Structured row kind for clients; `native` is written by native.ts, `route`/`route-override` by commands. */
+  /** Structured row kind for clients; `native` rows were written by the terminal recording Swarm v4 removed, `route`/`route-override` by commands. */
   source?: Record<string, unknown>
   attachments?: import('./attachments.js').Attachment[]
   /** People a Lead tagged (mentions.ts). */
