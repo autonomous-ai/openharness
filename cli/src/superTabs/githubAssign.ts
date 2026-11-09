@@ -28,6 +28,8 @@ const SELF = 'Harness'
 const MEASURES_PER_PASS = 5, MAX_MEASURED = 500
 /** How many open pull requests are read for readers each pass, as the merger reads them. */
 const MAX_PULLS = 30
+/** How Harness's ask about a quiet task begins, after the builder's name: a restart finds it by these words. */
+const QUIET_ASKED = 'nothing has moved on this task for '
 /** Harness's ask of a reader, as askReaders writes it: who was asked, and for which head. */
 const ASKED = /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: [^\n]*?please read[^\n]*?READ-OK ([0-9a-f]{7,40})/
 
@@ -150,10 +152,16 @@ export class GitHubAssign {
     for (const back of takeBacks(issues, away, this.now()).map(b => why ? { ...b, why } : b)) {
       const key = `${repo}#${back.number}:back:${back.label}`
       if (this.said.has(key)) continue
-      this.said.add(key)
-      for (const label of [back.label, ...back.taken ? ['status:taken'] : []]) {
-        await this.deps.send('DELETE', `/repos/${repo}/issues/${back.number}/labels/${encodeURIComponent(label)}`)
+      // status:taken first: a task left taken with no builder is one nobody plans (readProblem), while one left queued for
+      // its builder is taken back again next pass. A label already gone is off; anything else GitHub refuses is said, and
+      // tried again next pass.
+      let refused = 0
+      for (const label of [...back.taken ? ['status:taken'] : [], back.label]) {
+        const reply = await this.deps.send('DELETE', `/repos/${repo}/issues/${back.number}/labels/${encodeURIComponent(label)}`)
+        if (reply.status !== 200 && reply.status !== 404) { refused = reply.status; break }
       }
+      if (refused) { this.once(`[super-tab] Task assignment: TAKE_BACK_REFUSED ${repo}#${back.number}: GitHub answered ${refused}`); continue }
+      this.said.add(key)
       await this.deps.send('POST', `/repos/${repo}/issues/${back.number}/comments`,
         { body: `${SELF}, ${this.clock()}: ${back.why}, so this task goes to the builder who can start it next.` })
       this.log(`[super-tab] took ${repo}#${back.number} back: ${back.why}`)
@@ -260,27 +268,46 @@ export class GitHubAssign {
       // Touched after the ask (allowing the ask itself, written a moment after it was decided): it is moving again.
       if (asked && task.touched > asked.askedAt + 2 * 60_000) { this.quiet.delete(key); asked = undefined }
       const since = asked?.since ?? task.touched
-      if (asked && now - asked.askedAt >= QUIET_BACK_MS - QUIET_ASK_MS && now - since >= QUIET_BACK_MS) {
+      if (!asked && now - since >= QUIET_ASK_MS) {
+        // Asked before this daemon restarted (a release restarts every PM's): the ask is then the issue's last touch.
+        const before = await this.quietAskedAt(repo, task.number, task.name, task.touched)
+        if (before !== null) { asked = { since: before - QUIET_ASK_MS, askedAt: before }; this.quiet.set(key, asked) }
+      }
+      if (asked && now - asked.askedAt >= QUIET_BACK_MS - QUIET_ASK_MS && now - asked.since >= QUIET_BACK_MS) {
         this.quiet.delete(key)
         await this.takeBack(repo, issues.filter(issue => Number(issue.number) === task.number),
           [{ name: task.name, label: task.label, why: 'stopping' }], `${task.name} has had no activity on it since it was asked`)
       } else if (!asked && now - since >= QUIET_ASK_MS) {
-        this.quiet.set(key, { since, askedAt: now })
-        await this.deps.send('POST', `/repos/${repo}/issues/${task.number}/comments`, { body: `${SELF}, ${this.clock()}, to **${task.name}**: `
-          + `nothing has moved on this task for ${Math.round((now - since) / 3_600_000)} h. Are you still on it? Say where it stands, or what you need. `
+        const reply = await this.deps.send('POST', `/repos/${repo}/issues/${task.number}/comments`, { body: `${SELF}, ${this.clock()}, to **${task.name}**: `
+          + `${QUIET_ASKED}${Math.round((now - since) / 3_600_000)} h. Are you still on it? Say where it stands, or what you need. `
           + `With no word in ${Math.round((QUIET_BACK_MS - QUIET_ASK_MS) / 3_600_000)} h it goes to another builder.` })
+        if (reply.status >= 300) { this.once(`[super-tab] Task assignment: ASK_REFUSED ${repo}#${task.number}: GitHub answered ${reply.status}`); continue }
+        this.quiet.set(key, { since, askedAt: now })
         this.log(`[super-tab] asked ${task.name} about quiet ${repo}#${task.number}`)
       }
     }
   }
 
-  /** One ask of a reader, once per pull request, head and reader: a comment naming it, with the head it reads. */
+  /** When Harness asked [name] about quiet task [number], if that ask is its last touch (the comments since [touched]). */
+  private async quietAskedAt(repo: string, number: number, name: string, touched: number): Promise<number | null> {
+    const since = new Date(touched - 60_000).toISOString()
+    const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?since=${since}&per_page=${PAGE}`, 1)
+    const asks = comments.filter(c => {
+      const found = /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: (.*)$/m.exec(String(c.body ?? ''))
+      return found?.[1]?.toLowerCase() === name.toLowerCase() && found[2]!.startsWith(QUIET_ASKED)
+    }).map(c => Date.parse(String(c.created_at ?? ''))).filter(Number.isFinite)
+    return asks.length ? Math.max(...asks) : null
+  }
+
+  /** One ask of a reader, once per pull request, head and reader: a comment naming it, with the head it reads. One GitHub
+   *  refuses is said, and asked again next pass. */
   private async ask(repo: string, number: number, head: string, name: string, what: string): Promise<void> {
     const key = `${repo}#${number}@${head}:${name.toLowerCase()}`
     if (this.said.has(key)) return
-    this.said.add(key)
-    await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${this.clock()}, to **${name}**: ${what}, `
+    const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${this.clock()}, to **${name}**: ${what}, `
       + `and start your comment with READ-OK ${head.slice(0, 7)} or HOLD ${head.slice(0, 7)} (with the file, line and fix).` })
+    if (reply.status >= 300) { this.once(`[super-tab] Task assignment: ASK_REFUSED ${repo}#${number}: GitHub answered ${reply.status}`); return }
+    this.said.add(key)
     this.log(`[super-tab] asked ${name} to read ${repo}#${number} at ${head.slice(0, 7)}`)
   }
 

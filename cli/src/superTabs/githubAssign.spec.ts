@@ -12,8 +12,8 @@ const PROJECT = { repo: 'acme/app', pm: 'Faye', tabId: 'tab', pmAgentId: 'faye',
 /** One repository's issues as GitHub's REST API answers them, with ETags, and what was sent to it. Labels sent are kept
  *  only once [applied] says GitHub's lists show them. */
 function fakeGitHub(open: Json[], closed: Json[] = []) {
-  const state = { open, closed, labelAnswer: 200, signedOut: false, applied: false, files: new Map<string, string>(), labels: [] as Json[],
-    pulls: [] as Json[], comments: new Map<number, Json[]>() }
+  const state = { open, closed, labelAnswer: 200, deleteAnswer: 200, commentAnswer: 201, signedOut: false, applied: false,
+    files: new Map<string, string>(), labels: [] as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>() }
   const sent: Array<{ method: string; path: string; body: Json }> = []
   const get: GitHubGet = async (path, etag) => {
     if (state.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
@@ -37,6 +37,7 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
     if (path === '/repos/acme/app/labels') { state.labels.push({ name: (body as Json).name }); return { status: 201, etag: null, body: {}, resetAt: null } }
     const removed = /\/issues\/(\d+)\/labels\/(.+)$/.exec(path)
     if (method === 'DELETE' && removed) {
+      if (state.deleteAnswer !== 200) return { status: state.deleteAnswer, etag: null, body: {}, resetAt: null }
       const target = state.open.find(i => i.number === Number(removed[1]))!
       target.labels = (target.labels as Json[]).filter(l => l.name !== decodeURIComponent(removed[2]!))
       return { status: 200, etag: null, body: [], resetAt: null }
@@ -48,7 +49,7 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
         ...((body as Json).labels as string[]).map(name => ({ name }))]
       return { status: 200, etag: null, body: [], resetAt: null }
     }
-    return { status: 201, etag: null, body: {}, resetAt: null }
+    return { status: path.endsWith('/comments') ? state.commentAnswer : 201, etag: null, body: {}, resetAt: null }
   }
   return { state, sent, get, send }
 }
@@ -253,12 +254,26 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     const f = setup([issue(1, ['size:s', 'builder:juno', 'status:taken']), issue(2, ['size:m', 'builder:juno'])], { crew: team })
     f.github.state.applied = true
     await f.assigner.tick()
-    expect(f.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/1/labels/builder%3Ajuno',
-      '/repos/acme/app/issues/1/labels/status%3Ataken', '/repos/acme/app/issues/2/labels/builder%3Ajuno'])
+    expect(f.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/1/labels/status%3Ataken',
+      '/repos/acme/app/issues/1/labels/builder%3Ajuno', '/repos/acme/app/issues/2/labels/builder%3Ajuno'])
     expect(f.said().filter(([, body]) => String(body).includes('is being stopped')).map(([n]) => n)).toEqual([1, 2])
     // The next plan gives both to Pip, two deep.
     await f.assigner.tick()
     expect(f.labelled().map(([n, label]) => [n, label]).sort()).toEqual([[1, 'builder:pip'], [2, 'builder:pip']])
+  })
+
+  it('says a take back GitHub refuses, leaves the task as it was, and takes it back next pass', async () => {
+    const team: Crew = { ...crew(), builders: [crew().builders[0]!], away: [{ name: 'Juno', label: 'builder:juno', why: 'stopping' }] }
+    const f = setup([issue(1, ['size:s', 'builder:juno', 'status:taken'])], { crew: team })
+    f.github.state.deleteAnswer = 403
+    await f.assigner.tick()
+    await f.assigner.tick()
+    expect(f.said()).toEqual([])
+    expect(f.log.mock.calls.filter(([line]) => String(line).includes('TAKE_BACK_REFUSED acme/app#1: GitHub answered 403'))).toHaveLength(1)
+    f.github.state.deleteAnswer = 200
+    await f.assigner.tick()
+    expect(f.github.state.open[0]!.labels).toEqual([{ name: 'size:s' }])
+    expect(f.said().filter(([, body]) => String(body).includes('is being stopped')).map(([n]) => n)).toEqual([1])
   })
 
   describe('quiet tasks', () => {
@@ -280,9 +295,41 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(f.github.sent.some(s => s.method === 'DELETE')).toBe(false)
       f.clock.now += 2 * HOUR
       await f.assigner.tick()
-      expect(f.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/1/labels/builder%3Ajuno',
-        '/repos/acme/app/issues/1/labels/status%3Ataken'])
+      expect(f.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/1/labels/status%3Ataken',
+        '/repos/acme/app/issues/1/labels/builder%3Ajuno'])
       expect(f.said().some(([, body]) => String(body).includes('Juno has had no activity on it since it was asked'))).toBe(true)
+    })
+
+    it('after a restart, asks no second time, and gives the task to another 4 hours after its ask', async () => {
+      const f = setup([issue(1, ['size:s', 'builder:juno', 'status:taken'])])
+      f.github.state.open[0]!.updated_at = ago(f, 5)
+      await f.assigner.tick()
+      const [[, ask]] = quietAsks(f) as [[number, string]]
+      // GitHub keeps the ask, and it is the issue's last touch.
+      f.github.state.comments.set(1, [{ body: ask, created_at: new Date(f.clock.now).toISOString(), author_association: 'OWNER' }])
+      f.github.state.open[0]!.updated_at = new Date(f.clock.now + 1_000).toISOString()
+      f.clock.now += 2 * HOUR
+      const restarted = f.make()
+      await restarted.tick()
+      expect(quietAsks(f)).toHaveLength(1)
+      expect(f.github.sent.some(s => s.method === 'DELETE')).toBe(false)
+      f.clock.now += 2 * HOUR + 60_000
+      await restarted.tick()
+      expect(quietAsks(f)).toHaveLength(1)
+      expect(f.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/1/labels/status%3Ataken',
+        '/repos/acme/app/issues/1/labels/builder%3Ajuno'])
+    })
+
+    it('says an ask GitHub refuses, and asks again next pass', async () => {
+      const f = setup([issue(1, ['size:s', 'builder:juno', 'status:taken'])])
+      f.github.state.open[0]!.updated_at = ago(f, 5)
+      f.github.state.commentAnswer = 403
+      await f.assigner.tick()
+      expect(f.log.mock.calls.filter(([line]) => String(line).includes('ASK_REFUSED acme/app#1: GitHub answered 403'))).toHaveLength(1)
+      f.github.state.commentAnswer = 201
+      await f.assigner.tick()
+      expect(quietAsks(f)).toHaveLength(2)
+      expect(f.log).toHaveBeenCalledWith('[super-tab] asked Juno about quiet acme/app#1')
     })
 
     it('asks nothing while a pull request for it moves, and stands down once its builder answers', async () => {
