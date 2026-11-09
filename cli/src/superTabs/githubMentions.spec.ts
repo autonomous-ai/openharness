@@ -20,7 +20,7 @@ const PIP: WatchedAgent = { tabId: 'tab', agentId: 'pip', chat: 'chat-pip', name
 function fakeGitHub() {
   const comments: Json[] = [], lineComments: Json[] = [], issues: Json[] = [], reviews = new Map<number, Json[]>()
   const calls: string[] = []
-  const state = { signedOut: false, down: false, status: 0, missing: new Set<string>(), files: new Map<string, string>(), labels: [] as Json[] }
+  const state = { signedOut: false, down: false, status: 0, odd: new Map<string, number>(), missing: new Set<string>(), files: new Map<string, string>(), labels: [] as Json[] }
   const get: GitHubGet = async (path, etag) => {
     calls.push(path)
     if (state.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
@@ -28,6 +28,8 @@ function fakeGitHub() {
     if (state.status) return { status: state.status, etag: null, body: null, resetAt: null }
     const url = new URL(`https://api.github.com${path}`)
     if (state.missing.has(url.pathname.split('/').slice(2, 4).join('/'))) return { status: 404, etag: null, body: null, resetAt: null }
+    const odd = state.odd.get(url.pathname.split('/').slice(2, 4).join('/'))
+    if (odd) return { status: odd, etag: null, body: null, resetAt: null }
     const file = /^\/repos\/acme\/app\/contents\/(.+)$/.exec(url.pathname)
     if (file) {
       const text = state.files.get(decodeURIComponent(file[1]!))
@@ -237,7 +239,7 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
       expect.objectContaining({ event: 'comment', repository: 'Acme/App', url: 'https://github.com/Acme/App/pull/4#issuecomment-2' })])
   })
 
-  it.each([[400, 'VALIDATION_ERROR'], [403, 'REQUEST_BLOCKED'], [404, 'NOT_FOUND'], [409, 'OPERATION_REUSED']])(
+  it.each([[400, 'VALIDATION_ERROR'], [403, 'REQUEST_BLOCKED'], [403, 'FORBIDDEN'], [404, 'NOT_FOUND'], [409, 'OPERATION_REUSED']])(
     'passes over an item the server refuses for good (%s %s), says so once, and still relays the rest', async (status, code) => {
       const f = setup()
       await f.mentions.tick()
@@ -268,7 +270,7 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
     expect(tries).toEqual([20, 60, 120, 240, 480, 960, 1_860])
     // Each try is the same operation, which the server writes once.
     expect(new Set(f.relay.mock.calls.map(([, operationId]) => operationId)).size).toBe(1)
-    expect(f.log).toHaveBeenCalledWith(expect.stringContaining('RELAY_FAILED acme/app: The server will not take it'.replace('The server will not take it', 'Try again.')))
+    expect(f.log).toHaveBeenCalledWith(expect.stringContaining('RELAY_FAILED acme/app: Try again. (again in 30 s)'))
   })
 
   it.each([[401, 'UNAUTHORIZED'], [403, 'HOST_UNAVAILABLE'], [408, 'TIMEOUT'], [426, 'UPDATE_REQUIRED'], [429, 'RATE_LIMITED'], [500, 'INTERNAL']] as const)(
@@ -335,6 +337,60 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
     f.github.state.missing.add('acme/secret')
     for (let i = 0; i < 5; i++) { f.clock.now += 20_000; await f.mentions.tick() }
     expect(f.log.mock.calls.map(([line]) => String(line))).toEqual([expect.stringContaining('UNREADABLE acme/secret')])
+  })
+
+  // What the server refuses of one item is not its state: an older backend, or a firewall in front of this computer, refuses all of them,
+  // and dropping those would lose the news for good. Only when something else of the repository went through is an item the server's
+  // refusal of it.
+  it('holds the repository, and drops nothing, when the server refuses everything it is handed', async () => {
+    for (const refusal of [new SuperTabHostError('REQUEST_BLOCKED', 'The server\'s firewall refused this.', 403),
+      new SuperTabHostError('VALIDATION_ERROR', 'command: Invalid discriminator value. Expected \'message.send\'', 400)]) {
+      const f = setup()
+      await f.mentions.tick()
+      f.github.comments.push(comment(2, 10, 'to **Pip**: one'), comment(3, 11, 'to **Pip**: two'))
+      f.relay.mockRejectedValue(refusal)
+      await f.mentions.tick()
+      expect(f.log).not.toHaveBeenCalledWith(expect.stringContaining('RELAY_REFUSED'))
+      expect(f.log).toHaveBeenCalledWith(expect.stringContaining('RELAY_FAILED acme/app'))
+      // The server takes them later: both go, in order, and none was lost.
+      f.relay.mockReset()
+      f.relay.mockResolvedValue({})
+      f.clock.now += 30_000
+      await f.mentions.tick()
+      expect(f.relayed().map(c => c.text)).toEqual(['to **Pip**: one', 'to **Pip**: two'])
+    }
+  })
+
+  it('asks an agent which area to focus on for a task it was handed, not for one the server refused', async () => {
+    const f = setup()
+    f.github.state.labels = [{ name: 'part:api' }]
+    await f.mentions.tick()
+    f.github.issues.push(issue(13, 10, ['builder:pip']))
+    f.github.comments.push(comment(2, 11, 'to **Pip**: READ-OK f6edb44'))
+    f.relay.mockImplementation(async (_tab, _operationId, command) => {
+      if (command.event === 'task') throw new SuperTabHostError('VALIDATION_ERROR', 'url: Link to the comment or issue on GitHub.', 400)
+      return {}
+    })
+    await f.mentions.tick()
+    expect(f.relayed().map(c => c.event)).toEqual(['task', 'comment'])
+    expect(f.log).toHaveBeenCalledWith(expect.stringContaining('RELAY_REFUSED acme/app#13 (VALIDATION_ERROR)'))
+    expect(f.tell).not.toHaveBeenCalled()
+  })
+
+  it('leaves out a repository GitHub answers oddly, and reads the others; GitHub failing on its own side stops them all', async () => {
+    const f = setup([{ ...PIP, repos: ['acme/odd', 'acme/app'] }])
+    f.github.state.odd.set('acme/odd', 409)
+    await f.mentions.tick()
+    f.github.comments.push(comment(2, 10, 'to **Pip**: READ-OK f6edb44'))
+    f.clock.now += 20_000
+    await f.mentions.tick()
+    expect(f.log).toHaveBeenCalledWith(expect.stringContaining('GH_FAILED acme/odd'))
+    expect(f.relay).toHaveBeenCalledTimes(1)
+    const down = setup([{ ...PIP, repos: ['acme/odd', 'acme/app'] }])
+    down.github.state.odd.set('acme/odd', 503)
+    await down.mentions.tick()
+    expect(down.log).toHaveBeenCalledWith(expect.stringContaining('GH_FAILED GitHub answered 503'))
+    expect(down.github.calls.every(path => path.includes('acme/odd'))).toBe(true)
   })
 
   it('asks again with ETags, and a restart relays nothing twice', async () => {
@@ -462,6 +518,8 @@ describe('names, labels and repositories', () => {
     expect(builderLabel('Big Pip')).toBe('builder:big-pip')
     expect(repositorySlug('https://github.com/acme/app.git')).toBe('acme/app')
     expect(repositorySlug('git@github.com:acme/app.git')).toBe('acme/app')
+    // GitHub reads a repository in any case, and two spellings of one are one repository here.
+    expect(repositorySlug('https://github.com/Acme/App.git')).toBe('acme/app')
     expect(repositorySlug('https://github.com/acme/app/')).toBe('acme/app')
     expect(repositorySlug('https://gitlab.com/acme/app')).toBeNull()
     expect(repositorySlug('https://github.com/acme')).toBeNull()

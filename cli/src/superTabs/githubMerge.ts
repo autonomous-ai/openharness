@@ -17,7 +17,7 @@
  * each head, so the GitHub news brings it to its author (githubMentions.ts).
  */
 import type { GitHubGet, GitHubSend } from './githubRest.js'
-import { GitHubReads, GitHubStop, PAGE, retryIn, waitWords } from './githubRest.js'
+import { GitHubReads, GitHubStop, PAGE, Waits, waitWords } from './githubRest.js'
 import { repositorySlug, TEAM } from './githubMentions.js'
 import { identifier, object } from './wire.js'
 
@@ -103,11 +103,8 @@ export class GitHubMerge {
   private timer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
   private readonly reads: GitHubReads
-  /** Until when each repository is left alone: one this login cannot read, or one whose pass failed. */
-  private readonly unreadable = new Map<string, number>()
-  /** How many passes in a row each repository's failed, and how many passes in a row stopped for every repository. */
-  private readonly failing = new Map<string, number>()
-  private stops = 0
+  /** How long each repository is left alone after it failed: one this login cannot read, or one whose pass failed. */
+  private readonly waits = new Waits()
   /** What each pull request was last told, by head and reason, so it is told once for each head. */
   private readonly told = new Map<string, string>()
   private projects: { at: number; list: LedProject[] } | null = null
@@ -148,28 +145,21 @@ export class GitHubMerge {
     let held = false
     try {
       for (const project of this.projects.list) {
-        if ((this.unreadable.get(project.repo) ?? 0) > this.now()) { held = true; continue }
-        try { await this.mergeReady(project); this.failing.delete(project.repo) } catch (error) {
+        if (this.waits.held(project.repo, this.now())) { held = true; continue }
+        try { await this.mergeReady(project); this.waits.ok(project.repo) } catch (error) {
           this.reads.forget(project.repo)
           if (error instanceof GitHubStop && error.everywhere) throw error
           held = true
-          let wait: number
-          if (error instanceof GitHubStop) wait = error.until - this.now()
-          else {
-            // Its pass failed (a send that threw): this repository waits, 30 seconds and doubling to 15 minutes.
-            const misses = (this.failing.get(project.repo) ?? 0) + 1
-            this.failing.set(project.repo, misses)
-            wait = retryIn(misses)
-          }
-          this.unreadable.set(project.repo, this.now() + wait)
+          // This repository waits, 30 seconds and doubling to 15 minutes (longer if GitHub says so).
+          const wait = this.waits.miss(project.repo, this.now(), error instanceof GitHubStop ? error.until - this.now() : 0)
           this.note(error instanceof GitHubStop ? error.code : 'MERGE_FAILED', `${project.repo}: ${error instanceof Error ? error.message : String(error)} (again in ${waitWords(wait)})`)
         }
       }
-      this.stops = 0
+      this.waits.ran()
       if (!held) this.note('', '')
     } catch (error) {
       if (!(error instanceof GitHubStop)) throw error
-      const wait = Math.max(error.until - this.now(), retryIn(++this.stops))
+      const wait = this.waits.stop(error.until - this.now())
       this.offUntil = this.now() + wait
       this.note(error.code, `${error.message} (again in ${waitWords(wait)})`)
     }
@@ -217,9 +207,10 @@ export class GitHubMerge {
   private async tellOnce(repo: string, number: number, head: string, author: string | null, what: string): Promise<void> {
     const key = `${repo}#${number}`, said = `${head}\n${what}`
     if (this.told.get(key) === said) return
+    await this.comment(repo, number, `${SELF}, ${this.clock()}${author ? `, to **${author}**` : ''}: not merged yet: ${what}`)
+    // Once GitHub has answered: a comment that never reached it (the pass failed, and is tried again) is not told.
     this.told.set(key, said)
     if (this.told.size > 1_000) this.told.delete(this.told.keys().next().value!)
-    await this.comment(repo, number, `${SELF}, ${this.clock()}${author ? `, to **${author}**` : ''}: not merged yet: ${what}`)
   }
 
   private async comment(repo: string, number: number, body: string): Promise<void> {

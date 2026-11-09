@@ -14,7 +14,7 @@ const pull = (extra: Json = {}): Json => ({ number: 4, draft: false, base: { ref
 function fakeGitHub() {
   const repo = { pulls: [pull()], comments: new Map<number, Json[]>([[4, [comment('Juno, 14:20, to **Pip**: READ-OK f6edb44')]]]),
     runs: new Map<string, Json[]>([[HEAD, [{ name: 'test', status: 'completed', conclusion: 'success' }]]]), statuses: new Map<string, Json[]>(),
-    state: 'clean', mergeAnswer: 200, signedOut: false, down: false, status: 0 }
+    state: 'clean', mergeAnswer: 200, signedOut: false, down: false, status: 0, sendFails: 0 }
   const sent: Array<{ method: string; path: string; body: unknown }> = []
   const get: GitHubGet = async (path, etag) => {
     if (repo.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
@@ -34,6 +34,7 @@ function fakeGitHub() {
     return etag === tag ? { status: 304, etag: tag, body: null, resetAt: null } : { status: 200, etag: tag, body, resetAt: null }
   }
   const send: GitHubSend = async (method, path, body) => {
+    if (method === 'POST' && repo.sendFails > 0) { repo.sendFails--; throw Object.assign(new Error('fetch failed'), { code: 'ECONNRESET' }) }
     sent.push({ method, path, body })
     if (method === 'PUT') return { status: repo.mergeAnswer, etag: null, body: { merged: repo.mergeAnswer === 200 }, resetAt: null }
     return { status: 201, etag: null, body: {}, resetAt: null }
@@ -152,6 +153,21 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     f.github.repo.status = 404
     for (let i = 0; i < 5; i++) { f.clock.now += 30_000; await f.merger.tick() }
     expect(f.log.mock.calls.map(([line]) => String(line))).toEqual([expect.stringContaining('UNREADABLE acme/app')])
+  })
+
+  it('tells the author again when its pass failed before the comment went', async () => {
+    const f = setup()
+    f.github.repo.state = 'behind'
+    f.github.repo.sendFails = 1
+    await f.merger.tick()
+    expect(f.comments()).toEqual([])
+    expect(f.log).toHaveBeenCalledWith(expect.stringContaining('MERGE_FAILED acme/app'))
+    f.clock.now += 30_000
+    await f.merger.tick()
+    expect(f.comments()).toEqual([expect.stringContaining('it is behind main')])
+    f.clock.now += 30_000
+    await f.merger.tick()
+    expect(f.comments()).toHaveLength(1)
   })
 
   it('stops while gh is signed out and says so once', async () => {

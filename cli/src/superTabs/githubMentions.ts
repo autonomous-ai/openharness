@@ -19,7 +19,8 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { worksOnOf } from './assign/crew.js'
-import { GitHubReads, GitHubStop, PAGE, retryIn, waitWords, type GitHubGet } from './githubRest.js'
+import { GitHubReads, GitHubStop, PAGE, Waits, waitWords, type GitHubGet } from './githubRest.js'
+import { permanentRefusal } from './retries.js'
 import { identifier, object, SuperTabHostError } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -75,16 +76,19 @@ const repositoryOf = (url: unknown): string | null => {
   const m = typeof url === 'string' ? /^https:\/\/github\.com\/([A-Za-z0-9_.-]{1,100})\/([A-Za-z0-9_.-]{1,100})(?:[/#?]|$)/.exec(url) : null
   return m ? `${m[1]}/${m[2]}` : null
 }
-/** A refusal the server makes of one item and would make of it again: a bad request, a firewall, a chat that is gone, an id used for
- *  other words. A sign-in, a timeout, throttling, an update, a busy server or a lapsed billing say nothing of the item. */
-const refusedForGood = (error: unknown): error is SuperTabHostError =>
-  error instanceof SuperTabHostError && error.code !== 'HOST_UNAVAILABLE' && ([400, 403, 404].includes(error.status) || error.code === 'OPERATION_REUSED')
+/** A refusal the server makes of one item and would make of it again: a bad request, a firewall, a chat that is gone, an id used for other
+ *  words. By its code, not its status: a sign-in, a timeout, throttling, an update, a busy server and a lapsed billing say nothing of the
+ *  item, and a backend that does not know the command yet (a discriminator it does not recognise) refuses every item. */
+const REFUSED_CODES: ReadonlySet<string> = new Set(['VALIDATION_ERROR', 'REQUEST_BLOCKED', 'FORBIDDEN', 'HUMAN_REQUIRED', 'OPERATION_REUSED'])
+const refusedForGood = (error: unknown): error is SuperTabHostError => error instanceof SuperTabHostError && error.status < 500
+  && (permanentRefusal(error) || REFUSED_CODES.has(error.code) && !(error.code === 'VALIDATION_ERROR' && /discriminator|Unrecognized key/i.test(error.message)))
 
-/** owner/name of a github.com repository's address, https or ssh; null for any other host or shape. */
+/** owner/name of a github.com repository's address, https or ssh, in lower case (GitHub reads it in any case, and two spellings of one
+ *  repository are one here); null for any other host or shape. */
 export function repositorySlug(url: unknown): string | null {
   if (typeof url !== 'string') return null
   const m = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9_.-]{1,100})\/([A-Za-z0-9_.-]{1,100}?)(?:\.git)?\/?$/.exec(url.trim())
-  return m ? `${m[1]}/${m[2]}` : null
+  return m ? `${m[1]}/${m[2]}`.toLowerCase() : null
 }
 
 /** This computer's person's v4 agents running here, from the host's roster and each agent's own read of its Swarm. */
@@ -117,11 +121,8 @@ export class GitHubMentions {
   private timer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
   private readonly reads: GitHubReads
-  /** Until when each repository is left alone: one this login cannot read, or one whose news the server could not take. */
-  private readonly unreadable = new Map<string, number>()
-  /** How many passes in a row each repository's news failed, and how many passes in a row stopped for every repository. */
-  private readonly failing = new Map<string, number>()
-  private stops = 0
+  /** How long each repository is left alone after it failed: one this login cannot read, or one whose news the server could not take. */
+  private readonly waits = new Waits()
   /** The items the server refused for good, each named once in the log. */
   private readonly refused = new Set<string>()
   private readonly threads = new Map<string, number[]>()
@@ -175,37 +176,31 @@ export class GitHubMentions {
     const byRepo = new Map<string, WatchedAgent[]>()
     for (const agent of agents) for (const repo of agent.repos) byRepo.set(repo, [...byRepo.get(repo) ?? [], agent])
     // Every repository left alone for now: nothing is read, and the file is neither read nor written for it.
-    if ([...byRepo.keys()].slice(0, MAX_REPOS).every(repo => (this.unreadable.get(repo) ?? 0) > this.now())) return
+    const repos = [...byRepo].slice(0, MAX_REPOS)
+    if (repos.every(([repo]) => this.waits.held(repo, this.now()))) return
     const memory = this.load()
-    const relays = { left: MAX_RELAYS }
+    const relays = { left: MAX_RELAYS, sent: 0 }
     // Whether a repository is being left alone: the pass then says nothing of reading again.
     let held = false
     try {
-      for (const [repo, watching] of [...byRepo].slice(0, MAX_REPOS)) {
-        if ((this.unreadable.get(repo) ?? 0) > this.now()) { held = true; continue }
-        try { await this.readRepo(repo, watching, memory, relays); this.failing.delete(repo) } catch (error) {
+      for (const [repo, watching] of repos) {
+        if (this.waits.held(repo, this.now())) { held = true; continue }
+        try { await this.readRepo(repo, watching, memory, relays); this.waits.ok(repo) } catch (error) {
           // What was read but not handed on is read again next pass: an ETag kept now would answer it with a 304.
           this.reads.forget(repo)
           if (error instanceof GitHubStop && error.everywhere) throw error
           held = true
-          let wait: number
-          if (error instanceof GitHubStop) wait = error.until - this.now()
-          else {
-            // The server could not take its news now: this repository waits, 30 seconds and doubling to 15 minutes, and what it owes goes then.
-            const misses = (this.failing.get(repo) ?? 0) + 1
-            this.failing.set(repo, misses)
-            wait = retryIn(misses)
-          }
-          this.unreadable.set(repo, this.now() + wait)
+          // This repository waits, 30 seconds and doubling to 15 minutes (longer if GitHub says so), and what it owes goes then.
+          const wait = this.waits.miss(repo, this.now(), error instanceof GitHubStop ? error.until - this.now() : 0)
           this.tell(error instanceof GitHubStop ? error.code : 'RELAY_FAILED', `${repo}: ${error instanceof Error ? error.message : String(error)} (again in ${waitWords(wait)})`)
         }
       }
-      this.stops = 0
+      this.waits.ran()
       if (!held) this.tell('', '')
     } catch (error) {
       if (!(error instanceof GitHubStop)) throw error
       // More news than one pass relays is no failure: the rest goes at the next.
-      const wait = error.code === 'BUSY' ? 0 : Math.max(error.until - this.now(), retryIn(++this.stops))
+      const wait = error.code === 'BUSY' ? 0 : this.waits.stop(error.until - this.now())
       this.offUntil = this.now() + wait
       this.tell(error.code, `${error.message}${wait ? ` (again in ${waitWords(wait)})` : ''}`)
     } finally {
@@ -214,7 +209,10 @@ export class GitHubMentions {
     }
   }
 
-  private async readRepo(repo: string, agents: WatchedAgent[], memory: Memory, relays: { left: number }): Promise<void> {
+  private async readRepo(repo: string, agents: WatchedAgent[], memory: Memory, relays: { left: number; sent: number }): Promise<void> {
+    /** What the server refused for good of this repository's news, and what to record of each if it is passed over (see `passOver`). */
+    const refused: Array<{ error: SuperTabHostError; number: number; key: string; record: () => void }> = []
+    const sentBefore = relays.sent
     const at = new Date(this.now()).toISOString()
     // First read of a repository: from now on, nothing before it.
     const kept = memory.repos[repo] ??= { comments: at, reviewComments: at, issues: at, seen: [], tasks: {}, owned: {}, usedAt: this.now() }
@@ -246,9 +244,11 @@ export class GitHubMentions {
     for (const { agent, issue } of tasks) {
       // Only the repository's people can label an issue: a labelled one is the team's task, whoever opened it.
       const association = TEAM.has(issue.author_association) ? String(issue.author_association) : 'COLLABORATOR'
-      await this.hand(repo, agent, Number(issue.number), relays, `t:${issue.number}`, { event: 'task', on: 'issue', number: Number(issue.number),
+      const refusal = await this.hand(repo, agent, Number(issue.number), relays, `t:${issue.number}`, { event: 'task', on: 'issue', number: Number(issue.number),
         url: String(issue.html_url ?? ''), login: String(object(issue.user).login ?? ''), association, text: cut(String(issue.title ?? ''), TITLE_MAX) })
-      kept.tasks[agent.agentId]!.push(Number(issue.number))
+      const record = () => { kept.tasks[agent.agentId]!.push(Number(issue.number)) }
+      if (refusal) { refused.push({ error: refusal, number: Number(issue.number), key: `t:${issue.number}`, record }); continue }
+      record()
       await this.askFocus(repo, agent, kept)
     }
 
@@ -286,12 +286,16 @@ export class GitHubMentions {
       if (kept.seen.includes(item.key) || !TEAM.has(item.association) || !Number.isSafeInteger(item.number)) continue
       if ((item.event === 'comment' && item.createdAt < kept.comments) || (item.event === 'review-comment' && item.createdAt < kept.reviewComments)) continue
       const owners = kept.owned[String(item.number)] ?? []
+      let refusal: SuperTabHostError | null = null
       for (const agent of agents) {
         const relay = 'lines' in item ? reviewFor(item as Review, agent, owners.includes(agent.label)) : sayingFor(item, agent, owners.includes(agent.label))
-        if (relay) await this.hand(repo, agent, item.number, relays, item.key, relay)
+        if (relay) refusal = await this.hand(repo, agent, item.number, relays, item.key, relay) ?? refusal
       }
-      kept.seen.push(item.key, ...('lines' in item ? (item as Review).lines.map(line => line.key) : []))
+      const record = () => { kept.seen.push(item.key, ...('lines' in item ? (item as Review).lines.map(line => line.key) : [])) }
+      if (refusal) { refused.push({ error: refusal, number: item.number, key: item.key, record }); continue }
+      record()
     }
+    this.passOver(repo, refused, relays.sent > sentBefore)
     if (kept.seen.length > MAX_SEEN) kept.seen.splice(0, kept.seen.length - MAX_SEEN)
     // Each feed moves on only once all it brought was handed on: a pass that failed reads the same again (its ETags are
     // forgotten), and what went is not sent twice (seen, tasks). The issue feed moving on first lost a failed review for good
@@ -325,14 +329,14 @@ export class GitHubMentions {
   }
 
   /** Hands one relay to the backend, once per agent and item: a retry after a failure sends the same operation id, which the
-   *  backend writes once. */
-  private async hand(repo: string, agent: WatchedAgent, number: number, relays: { left: number }, key: string, item: Json): Promise<void> {
+   *  backend writes once. What the server refuses for good of it is returned, not thrown (see `passOver`). */
+  private async hand(repo: string, agent: WatchedAgent, number: number, relays: { left: number; sent: number }, key: string, item: Json): Promise<SuperTabHostError | null> {
     if (relays.left <= 0) throw new GitHubStop('BUSY', 'More GitHub news than one pass relays: the rest goes next pass.', true, this.now())
     const thread = `${agent.agentId}\n${repo}#${number}`
     const recent = (this.threads.get(thread) ?? []).filter(at => this.now() - at < LOOP_WINDOW_MS)
     if (recent.length >= LOOP_RELAYS) {
       this.tell('LOOP', `${repo}#${number} relayed ${LOOP_RELAYS} times in 10 minutes to one agent: paused there`)
-      return
+      return null
     }
     const operationId = `github-${createHash('sha256').update(`${repo}\n${key}\n${agent.agentId}`).digest('hex').slice(0, 40)}`
     try {
@@ -341,18 +345,31 @@ export class GitHubMentions {
       await this.deps.relay(agent.tabId, operationId, { type: 'github.relay', conversationId: agent.chat, agentId: agent.agentId,
         repository: repositoryOf(item.url) ?? repo, ...item })
     } catch (error) {
-      // The server says the same of it every time (a link it refuses, a comment its firewall refuses, a chat that is gone): it is passed
-      // over, named once, and the rest of the repository's news goes on. Held here, it stopped every pass for good.
-      if (!refusedForGood(error)) throw error
-      if (!this.refused.has(operationId)) {
-        this.refused.add(operationId)
-        if (this.refused.size > MAX_SEEN) this.refused.delete(this.refused.values().next().value!)
-        this.log(`[super-tab] GitHub news for agents passed over one item · RELAY_REFUSED ${repo}#${number} (${error.code}): ${error.message.slice(0, 200)}`)
-      }
-      return
+      if (refusedForGood(error)) return error
+      throw error
     }
     this.threads.set(thread, [...recent, this.now()])
     relays.left--
+    relays.sent++
+    return null
+  }
+
+  /** What the server refused for good of a repository's news this pass (a link it will not take, a comment its firewall refuses, a chat
+   *  that is gone), once the pass is over: if something else of the repository went through, these are what the server refuses of them,
+   *  not its state, so they are passed over, named once in the log, and the rest has gone on. If nothing did, the refusal may be the
+   *  server's (an older backend, a firewall in front of this computer), and dropping them would lose the news for good: the repository
+   *  waits as for any failure and they are handed on again. */
+  private passOver(repo: string, refused: Array<{ error: SuperTabHostError; number: number; key: string; record: () => void }>, wentThrough: boolean): void {
+    if (!refused.length) return
+    if (!wentThrough) throw refused[0]!.error
+    for (const { error, number, key, record } of refused) {
+      record()
+      const id = `${repo}\n${key}`
+      if (this.refused.has(id)) continue
+      this.refused.add(id)
+      if (this.refused.size > MAX_SEEN) this.refused.delete(this.refused.values().next().value!)
+      this.log(`[super-tab] GitHub news for agents passed over one item · RELAY_REFUSED ${repo}#${number} (${error.code}): ${error.message.slice(0, 200)}`)
+    }
   }
 
   private tell(code: string, detail: string): void {
