@@ -181,9 +181,14 @@ export class GitHubAssign {
       let need = (twoReads ? 2 : 1) - ok.length - stale.length - waiting.length
       const skip = new Set([...asked.keys(), ...readers.keys()])
       while (need-- > 0) {
-        const reader = readerFor(read, author, skip)
-        if (!reader) { this.once(`[super-tab] Task assignment: NO_READER ${repo}#${number}: no builder of the team but its author can read it`); break }
+        // A team of one builder still has its PM, who read for it before Harness asked readers (the swarm-sandbox, where
+        // Juno, its PM, read every pull request of Pip's).
+        const builder = readerFor(read, author, skip)
+        const pm = project.pm.toLowerCase()
+        const reader = builder ?? (pm !== author && !skip.has(pm) ? { id: pm, name: project.pm } : null)
+        if (!reader) { this.once(`[super-tab] Task assignment: NO_READER ${repo}#${number}: nobody but its author can read it`); break }
         skip.add(reader.id)
+        skip.add(reader.name.toLowerCase())
         await this.ask(repo, number, head, reader.name, 'please read this pull request')
       }
     }

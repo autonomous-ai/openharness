@@ -227,13 +227,17 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       }
     })
 
-    it('says once when nobody but its author can read it', async () => {
+    it('asks the PM when the team has no other builder, and a builder for the PM\'s own pull request', async () => {
       const f = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
       f.github.state.pulls = [pull()]
       await f.assigner.tick()
-      await f.assigner.tick()
-      expect(asks(f)).toEqual([])
-      expect(f.log.mock.calls.filter(([line]) => String(line).includes('NO_READER acme/app#30'))).toHaveLength(1)
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Faye\*\*: please read this pull request/)])
+      const own = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
+      own.github.state.pulls = [pull({ labels: [{ name: 'builder:faye' }], head: { sha: 'f6edb44c0ffee0000000000000000000000000ab', ref: 'faye/14' } })]
+      await own.assigner.tick()
+      await own.assigner.tick()
+      expect(asks(own).filter(body => !body.includes('**Pip**'))).toEqual([])
+      expect(own.log.mock.calls.filter(([line]) => String(line).includes('NO_READER'))).toHaveLength(0)
     })
   })
 
