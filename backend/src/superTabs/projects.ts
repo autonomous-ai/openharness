@@ -285,7 +285,15 @@ export function canReadProject(state: SuperTabState, actor: Actor, project: Swar
     if (!target || target.machineOwnerId !== actor.machineOwnerId) return false
     // A Swarm-wide Buddy reads every project its person reads now, at the membership it was added in (Dee, 10-31).
     if (isSwarmBuddy(target)) return !!buddyPerson(state, target, project)
-    return agentProjectId(state, target) === project.id
+    const home = agentProjectId(state, target)
+    // Swarm v4 (anh Dee, 2026-11-08): an agent acts for its person. In no project and holding no task (tasks are GitHub
+    // issues), it reads every project its person reads, at the membership it was added in, so it talks in their channels; a
+    // task, while it holds one, keeps it to that task's project. Before, every new agent was out of every channel.
+    if (target.regular && home === NO_PROJECT) {
+      const person = state.people.find(p => p.id === target.contributorId && p.generation === target.membershipGeneration)
+      return !!person && canReadProject(state, { kind: 'person', userId: person.id, email: person.email }, project)
+    }
+    return home === project.id
   }
   const member = state.people.find(p => p.id === actor.userId)
   return !!member && (project.visibility === 'public' || ownsProject(state, member.id, project) ||

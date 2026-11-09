@@ -986,7 +986,12 @@ export function joinsProject(state: SuperTabState, group: Conversation, agentId:
 export function joinsChannel(state: SuperTabState, group: Conversation, agentId: string): boolean {
   const project = projectsOf(state).find(p => p.leadConversationId === group.id)
   const target = state.agents.find(a => a.id === agentId)
-  return !!project && !!target && !isBuddy(target) && target.workDecision !== 'stop' && agentProjectId(state, target) === project.id
+  if (!project || !target || isBuddy(target) || target.workDecision === 'stop') return false
+  // A v4 agent in no project joins any channel its person reads (projects.ts canReadProject).
+  if (target.regular && agentProjectId(state, target) === NO_PROJECT) {
+    return canReadProject(state, { kind: 'agent', agentId, machineOwnerId: target.machineOwnerId }, project)
+  }
+  return agentProjectId(state, target) === project.id
 }
 /** Whether agent [agentId] does work in [group], its project's chat: an agent of that project, never a Buddy, not stopping,
  *  assigned a task or step of the project that is not archived and did not end lost, stopped or cancelled. A done task counts
