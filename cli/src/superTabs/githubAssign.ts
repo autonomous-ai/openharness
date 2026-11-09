@@ -264,7 +264,9 @@ export class GitHubAssign {
     for (const issue of closed) {
       const key = `${repo}#${issue.number}`
       const size = labelNames(issue).find(name => /^size:[sml]$/.test(name))?.slice('size:'.length)
-      if (issue.pull_request || !size || this.took.has(key)) continue
+      // Only work that was done: a task closed as not planned (a duplicate, one dropped) ended without its work, and would
+      // pull its size's time down.
+      if (issue.pull_request || !size || this.took.has(key) || (issue.state_reason !== undefined && issue.state_reason !== null && issue.state_reason !== 'completed')) continue
       if (reads++ >= MEASURES_PER_PASS) break
       const comments = await this.reads.current(repo, `/repos/${repo}/issues/${issue.number}/comments?per_page=${PAGE}`, 1)
       const began = startedAt(comments), ended = Date.parse(String(issue.closed_at ?? ''))
