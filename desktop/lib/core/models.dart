@@ -99,8 +99,10 @@ class SharedHarness {
 /// keyed by — keeps them (`d11a1f3b-ca2a-44e9-…`). The same id, written two
 /// ways, and a plain `==` between them never matches. Anything comparing an id
 /// that crossed that boundary has to come through here.
-bool sameMachineId(String a, String b) =>
-    a.replaceAll('-', '').toLowerCase() == b.replaceAll('-', '').toLowerCase();
+bool sameMachineId(String a, String b) => machineIdKey(a) == machineIdKey(b);
+
+/// [id] as [sameMachineId] compares it, for a set or a map keyed by computers.
+String machineIdKey(String id) => id.replaceAll('-', '').toLowerCase();
 
 /// A whole machine another account shares with this one (backend lib/machineAccess.ts): its owner
 /// named this account's address ([via] `email`), or shared it with everyone at their domain and this

@@ -1,6 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { CLEANUP_CLOSED_KEEP_MS, CLEANUP_CLOSED_MAX, cleanupClosed, cleanupClosesFile, recordCleanupClose } from './cleanupCloses.js'
 
@@ -23,7 +23,12 @@ it('names the sessions the idle cleanup closed for a while, privately, and forge
 
 it('keeps the newest, reads a damaged file as none, and says, never throwing, when it cannot write', () => {
   const dir = root(), now = 1_000_000
-  for (let i = 0; i <= CLEANUP_CLOSED_MAX; i++) recordCleanupClose(dir, `h${i}`, now + i)
+  // A full record written at once, then one more close: filling it close by close read and rewrote the file a thousand
+  // times, which ran past five seconds in a loaded run of the whole folder (2026-11-10).
+  mkdirSync(dirname(cleanupClosesFile(dir)), { recursive: true })
+  writeFileSync(cleanupClosesFile(dir), JSON.stringify({ version: 1,
+    closed: Object.fromEntries(Array.from({ length: CLEANUP_CLOSED_MAX }, (_, i) => [`h${i}`, now + i])) }))
+  expect(recordCleanupClose(dir, `h${CLEANUP_CLOSED_MAX}`, now + CLEANUP_CLOSED_MAX)).toBe(true)
   const kept = cleanupClosed(dir, now + CLEANUP_CLOSED_MAX)
   expect(kept.size).toBe(CLEANUP_CLOSED_MAX)
   expect(kept.has('h0')).toBe(false)

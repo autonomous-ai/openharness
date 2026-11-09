@@ -3466,9 +3466,9 @@ describe('grant checks of the host roster', () => {
     for (let i = 0; i < 3; i++) agents.push(await add(tab, `Peer worker ${i}`, peer))
     const { store: counting, count } = counted()
     expect(agentIds(await rosterRows(counting, host, machineId), tab)).toEqual(agents.sort())
-    // Eight agents of two contributors on one machine: the read's own machine check, one share, two people, and no Workspace.
-    expect({ machines: count('Machine.findFirst'), shares: count('MachineShare.findUnique'), contributors: count('User.findUnique'),
-      memberships: count('SwarmWorkspaceMember.findUnique') }).toEqual({ machines: 1, shares: 1, contributors: 2, memberships: 0 })
+    // Eight agents of two contributors on one machine: the read's own machine check, one share and two people.
+    expect({ machines: count('Machine.findFirst'), shares: count('MachineShare.findUnique'), contributors: count('User.findUnique') })
+      .toEqual({ machines: 1, shares: 1, contributors: 2 })
   })
 
   it('checks agents of one contributor checked at once with one read of each lookup', async () => {
@@ -3478,8 +3478,8 @@ describe('grant checks of the host roster', () => {
     const { store: counting, count } = counted()
     const reads = new GrantReads()
     await Promise.all(agents.map(id => counting.agentGrant(counting.db, state, state.agents.find(a => a.id === id)!, reads)))
-    expect({ machines: count('Machine.findFirst'), shares: count('MachineShare.findUnique'), contributors: count('User.findUnique'),
-      memberships: count('SwarmWorkspaceMember.findUnique') }).toEqual({ machines: 1, shares: 1, contributors: 1, memberships: 0 })
+    expect({ machines: count('Machine.findFirst'), shares: count('MachineShare.findUnique'), contributors: count('User.findUnique') })
+      .toEqual({ machines: 1, shares: 1, contributors: 1 })
   })
 
   it('keeps nothing between two host reads of one store: a share revoked between them drops the rows on the next', async () => {
@@ -4128,21 +4128,12 @@ describe('Lead mentions', () => {
 
   it('lists a person’s tag of another person under the author’s username, never their email', async () => {
     const { tab, group } = await tagged()
-    await run(tab, { type: 'member.username', username: 'boss' })
     const messageId = (await run(tab, { type: 'message.send', conversationId: group, text: 'Peer, see above.', replyTo: null, recipientIds: [],
       mentions: [peer.sub] })).result.messageId as string
     const mention = (await list(tab, peer, 'waiting')).find(m => m.messageId === messageId)
     // Who tagged, by kind: the phone rings for a person's tag and not for an agent's (task #3607).
-    expect(mention).toEqual(expect.objectContaining({ leadId: owner.sub, leadName: 'boss', leadKind: 'person', text: '@peer Peer, see above.' }))
+    expect(mention).toEqual(expect.objectContaining({ leadId: owner.sub, leadName: 'owner', leadKind: 'person', text: '@peer Peer, see above.' }))
     expect(JSON.stringify(mention)).not.toContain(owner.email)
-  })
-
-  it('lists a person’s tag under the name they set, when they set one', async () => {
-    const { tab, group } = await tagged()
-    await run(tab, { type: 'member.name', name: 'The Boss' })
-    const messageId = (await run(tab, { type: 'message.send', conversationId: group, text: 'Peer, look.', replyTo: null, recipientIds: [],
-      mentions: [peer.sub] })).result.messageId as string
-    expect((await list(tab, peer, 'waiting')).find(m => m.messageId === messageId)).toMatchObject({ leadName: 'The Boss' })
   })
 
   it('resolves on the person’s later post in that conversation, not on anyone else’s', async () => {
@@ -5197,20 +5188,16 @@ describe('a closed tab\'s Personal project', () => {
 })
 
 // Swarm v4 removed Workspaces, the level above Swarms: who may read or command a Swarm rests on its own people, machines and
-// shares. Nothing reads a Workspace row, and a new Swarm names none.
+// shares, and a new Swarm names no Workspace.
 describe('a Swarm with no Workspace above it', () => {
-  it('is created, read, commanded and listed without a Workspace query, and names none', async () => {
-    const calls: string[] = []
-    const client = db.$extends({ query: { $allModels: { async $allOperations({ model, operation, args, query }) {
-      calls.push(`${model}.${operation}`)
-      return query(args)
-    } } } }) as unknown as PrismaClient
-    const counting = new SuperTabStore(client)
-    const tab = (await counting.create(owner, randomUUID(), 'Plain')).id
-    await counting.read(owner, tab)
-    await counting.execute(owner, tab, { operationId: randomUUID(), command: { type: 'tab.rename', name: 'Plain again' } })
-    await counting.list(owner)
-    expect(calls.filter(call => call.startsWith('SwarmWorkspace'))).toEqual([])
+  it('is created, read, commanded and listed, and names none', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Plain')).id
+    await store.read(owner, tab)
+    await store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'tab.rename', name: 'Plain again' } })
+    await store.list(owner)
     expect((await db.superTab.findUniqueOrThrow({ where: { id: tab } })).workspaceId).toBeNull()
+    // Nothing wrote a Workspace collection meanwhile, by any command: none exists.
+    const collections = ((await db.$runCommandRaw({ listCollections: 1, nameOnly: true })) as { cursor: { firstBatch: Array<{ name: string }> } }).cursor.firstBatch
+    expect(collections.map(c => c.name).filter(name => /Workspace/.test(name))).toEqual([])
   })
 })

@@ -25,7 +25,7 @@ interface MachineUse extends Span { needs: Resources }
 /** Why [task] can never run on [builder] in [mode], or null when it can. */
 export function unfit(task: Task, builder: Builder, mode: Mode, machine: Machine | undefined): string | null {
   if (task.pinned && task.pinned !== builder.id) return 'it is pinned to another builder'
-  if (task.notBuilders.includes(builder.id)) return 'this builder is its author'
+  if (task.notBuilders.includes(builder.id)) return task.notWhy ?? 'this builder is its author'
   if (!machine) return 'its builder\'s machine is not in the plan'
   if ((mode.quality[task.kind] ?? mode.quality.default ?? 0) < task.floor) return 'no model of this builder is good enough for it'
   const { cpu, ram, disk } = machine.capacity

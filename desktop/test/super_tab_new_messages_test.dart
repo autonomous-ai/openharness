@@ -68,6 +68,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.dark),
         home: Scaffold(
           body: SuperTabView(
+            board: false,
             controller: c,
             onInvite: () {},
             onAddAgent: (_) {},
@@ -726,6 +727,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.dark),
         home: Scaffold(
           body: SuperTabView(
+            board: false,
             controller: c,
             onInvite: () {},
             onAddAgent: (_) {},

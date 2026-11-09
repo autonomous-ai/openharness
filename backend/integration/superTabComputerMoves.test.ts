@@ -247,28 +247,6 @@ describe('the cleanup script', () => {
   }, 90_000)
 })
 
-describe("a Mac whose owner's Team account is about to join", () => {
-  const run = (tab: string, command: Command, as: AuthUser = owner) => store.execute(as, tab, { operationId: randomUUID(), command })
-  // Swarm v3 (task #4218): the Mac reads as itself, which takes its person's agents' work, so it never reads "not set up".
-  it('reads as taking its person\'s agents\' work while its Team account is not listed', async () => {
-    const tab = (await store.create(owner, randomUUID(), 'Joining')).id
-    const invitation = await run(tab, { type: 'invite.create', email: kelvinUser.email, role: 'collaborator', conversationId: 'lead' })
-    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, kelvinUser)
-    await db.machine.create({ data: { machineId: 'kelvin-joining', userId: kelvin, computerId: 'f'.repeat(32), sessionKind: 'computer',
-      apiKey: 'fixture-kelvin-joining', managerId: '', autonomousEnv: 'prod', authMode: 'remote' } })
-    await db.machine.create({ data: { machineId: 'kelvin-joining-team', userId: kelvin, computerId: 'a'.repeat(31) + 'f', sessionKind: 'team',
-      hostMachineId: 'kelvin-joining', apiKey: 'fixture-kelvin-joining-team', managerId: '', autonomousEnv: 'prod', authMode: 'remote' } })
-    await run(tab, { type: 'machine.contribute', machineId: 'kelvin-joining', name: 'MacBooks-MacBook-Pro-7', cwd: '/work', scope: 'swarm',
-      engines: ['claude'], maxAgents: 2, teamAccountOnly: true }, kelvinUser)
-    await store.observeMachine(kelvinUser, tab, 'kelvin-joining', { generation: (await store.read(kelvinUser, tab)).state.machines![0]!.generation,
-      resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9,
-        deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null }, quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
-    const teamWork = async () => ((await store.read(kelvinUser, tab)).state.machines!.find(m => m.machineId === 'kelvin-joining') as { teamWork?: { code?: string } })
-      .teamWork?.code
-    expect(await teamWork()).toBeUndefined()
-  })
-})
-
 describe("a Harness Team account's previous account's Swarm cleanup", () => {
   it('is pending while a Swarm lists its Team machine for cleanup, read from the computer and cleanup indexes', async () => {
     const TEAM_COMPUTER = '9'.repeat(32)

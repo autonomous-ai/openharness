@@ -45,7 +45,7 @@ void main() {
         });
         await tester.binding.setSurfaceSize(const Size(1100, 720));
         addTearDown(() => tester.binding.setSurfaceSize(null));
-        final server = ConversationServer();
+        final server = ConversationServer.chat();
         final controller = server.controller();
         await controller.refresh();
         addTearDown(controller.dispose);
@@ -88,7 +88,7 @@ void main() {
           final editableRect = editor.localToGlobal(Offset.zero) & editor.size;
           final hint = find.descendant(
             of: field,
-            matching: find.text('Message #Pilot'),
+            matching: find.text('Message Lead'),
           );
           measurements[name] = {
             'surfaceHeight': rect.height,

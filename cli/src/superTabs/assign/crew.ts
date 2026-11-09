@@ -24,7 +24,7 @@ export const WEIGHTS: Record<string, number> = { p0: 8, p1: 4, p2: 2 }
 /** The percent of each window its person keeps for their own work: Swarm work never spends it (AGENTS.md, contributed
  *  capacity: "their quota is never drained without them knowing"). */
 export const RESERVE = 20
-/** Cores a machine gives Swarm work until hosts report how many they have: two large tasks at once. */
+/** Cores a machine is planned with when its daemon reports none (one before 0.5.86): two large tasks at once. */
 export const CORES = 8
 /** Of a machine's memory, what Swarm work may hold: its person keeps the rest. */
 export const MEMORY_SHARE = 0.75
@@ -32,12 +32,32 @@ export const MEMORY_SHARE = 0.75
 export const DISK_KEPT = 10 * GiB
 /** How deep each builder's list is kept (PM_BASICS: "keep every builder's list two deep"): what it works on and what is next. */
 export const DEEP = 2
+/** A builder's time in an area its person says it works on: half, so it gets those tasks first, and another builder takes
+ *  one only when it is well behind (anh Dee, 2026-11-09: "do you assign agents to their area of expertise?"). */
+export const FOCUS = 0.5
+/** And in an area it does not work on, once its person named some: it takes other work only when its own has none. */
+export const AWAY = 1.5
 
-/** One of the project's agents that builds, as the PM's read of the Swarm names it. */
-export interface CrewBuilder { id: string; name: string; label: string; machineId: string; engine: string; model?: string | null }
+/** One of the project's agents that builds, as the PM's read of the Swarm names it, with the areas its instructions say it
+ *  works on in this project ([worksOnOf]; empty for anything, absent when unread or unsaid). */
+export interface CrewBuilder { id: string; name: string; label: string; machineId: string; engine: string; model?: string | null
+  worksOn?: string[] | null }
 /** A machine a builder runs on, with its last report (backend machines.ts machineObservationSchema). */
 export interface CrewMachine { machineId: string; name?: string; observation?: Json }
-export interface Crew { builders: CrewBuilder[]; machines: CrewMachine[] }
+/** A builder of the team that cannot work now: its person is stopping it, its machine has been down since [since], or its
+ *  subscription has no room until [until] (minutes from now). */
+export interface AwayBuilder { name: string; label: string; why: 'stopping' | 'down' | 'quota'; since?: string; until?: number }
+export interface Crew { builders: CrewBuilder[]; machines: CrewMachine[]; away?: AwayBuilder[] }
+
+/** How long a builder's machine is down before its queued tasks go to others, and before the ones it took do too: a sleep
+ *  or a restart is back well within the first; a task taken may have work on that machine, so it waits longer. */
+export const QUEUED_AWAY_MS = 30 * 60_000, TAKEN_AWAY_MS = 3 * 60 * 60_000
+/** A subscription with less room than a small task until a reset further off than this keeps no queued tasks. */
+export const QUOTA_WAIT_MINUTES = 120
+/** A task taken and quiet this long (no comment, no change to its pull request) gets one ask of its builder; quiet this long
+ *  after the ask, it goes to another. Agents post when they start, open a pull request and answer reviews, so four quiet
+ *  hours is rare for one at work. */
+export const QUIET_ASK_MS = 4 * 60 * 60_000, QUIET_BACK_MS = 8 * 60 * 60_000
 
 /** The problem, and what the picks and their reasons need to know of it. */
 export interface Read {
@@ -54,6 +74,30 @@ export interface Read {
 
 /** The label a builder's tasks carry: builder:pip for Pip, as githubMentions.ts builderLabel. */
 export const labelOf = (name: string): string => `builder:${name.trim().toLowerCase().replace(/\s+/g, '-')}`
+
+/** The labels of a project's team: its builders' (away ones too) and its PM's. Harness asks readers for, and merges, only
+ *  the team's own pull requests: a person's, or anyone's in a shared repository, is theirs (openharness has dozens open at a
+ *  time, by people and their own agents). */
+export const teamOf = (crew: Crew, pm: string): Set<string> =>
+  new Set([...crew.builders.map(b => b.label), ...(crew.away ?? []).map(a => a.label), labelOf(pm)])
+
+/** An area as its `part:` label names it: "Mobile app" is mobile-app, "part:API" is api. */
+export const areaOf = (word: string): string =>
+  word.trim().toLowerCase().replace(/^part:/, '').replace(/[`*_"'.]/g, '').trim().replace(/\s+/g, '-')
+
+/**
+ * The areas an agent's instructions file says it works on in its project (agents/<Name>.md, which its person reads and
+ * changes beside its chat): its `Works on:` line, one of the first lines, as areas ("Mobile, backend" is mobile and
+ * backend). Empty for anything; null when the file says nothing, which is when its agent asks its person
+ * (githubMentions.ts).
+ */
+export function worksOnOf(text: string | null | undefined): string[] | null {
+  if (typeof text !== 'string') return null
+  const line = text.split('\n').slice(0, 40).map(l => /^\s*(?:[-*>]\s*)?\**\s*works on\s*\**\s*:\s*\**\s*(.*?)\s*$/i.exec(l)).find(Boolean)
+  if (!line) return null
+  const areas = [...new Set(line[1]!.split(/,|;|\/|\band\b|&/i).map(areaOf).filter(Boolean))]
+  return areas.length === 0 || areas.includes('anything') || areas.includes('everything') ? [] : areas
+}
 
 const labelsOf = (issue: Json): string[] =>
   (Array.isArray(issue.labels) ? issue.labels.map(object) : []).map(label => String(label.name ?? '')).filter(Boolean)
@@ -96,7 +140,7 @@ function everyOf(name: string): number | null {
  * a builder holds are queued on it (pinned, so the plan sees its list), and the one it has taken keeps it busy for half
  * its size; an issue another label holds is not this team's to plan.
  */
-export function readProblem(input: { now: number; issues: Json[]; closed: Json[]; crew: Crew }): Read {
+export function readProblem(input: { now: number; issues: Json[]; closed: Json[]; crew: Crew; minutes?: Partial<Record<'s' | 'm' | 'l', number>> }): Read {
   const { now, crew } = input
   const byLabel = new Map(crew.builders.map(b => [b.label, b]))
   const machines = new Map(crew.machines.map(m => [m.machineId, m]))
@@ -132,7 +176,8 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
     const size = sized === 's' || sized === 'm' || sized === 'l' ? sized : undefined
     // Not sized: the PM has not made it a task yet. One a builder holds counts as a middle one.
     if (!size && !holder) continue
-    const shape = SIZES[size ?? 'm']
+    // The time this project's finished tasks of the size took, once there are enough of them (learnedMinutes).
+    const shape = { ...SIZES[size ?? 'm'], ...input.minutes?.[size ?? 'm'] ? { minutes: input.minutes[size ?? 'm']! } : {} }
     const id = `#${issue.number}`
     if (holder) open.set(holder.id, (open.get(holder.id) ?? 0) + 1)
     if (holder && labels.includes('status:taken')) {
@@ -147,7 +192,7 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
       spend: Object.fromEntries([...windowNames].map(name => [name, everyOf(name) === 300 ? shape.spend : shape.spend / 5])),
       floor: 0, kind: 'build', part: valueOf(labels, 'part:'), weight: priority ? WEIGHTS[priority]! : 1, ready: 0,
       deps: dependsOn(issue.body).filter(n => openNumbers.has(n)).map(n => `#${n}`),
-      independentOf: [], notBuilders: unable, files: [],
+      independentOf: [], notBuilders: unable, ...unable.length ? { notWhy: `its builder's machine lacks one of: ${needs.join(', ')}` } : {}, files: [],
       ...(holder ? { pinned: holder.id, queuedOn: holder.id } : {}),
     })
     if (!holder) free.add(id)
@@ -155,19 +200,21 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
   // A dependency on a task this does not plan (taken, or someone else's) is not waited for here.
   const planned = new Set(tasks.map(task => task.id))
   for (const task of tasks) task.deps = task.deps.filter(dep => planned.has(dep))
+  const parts = new Set([...tasks.map(task => task.part).filter((part): part is string => !!part), ...[...done.values()].flatMap(m => [...m.keys()])])
   const builders: Builder[] = crew.builders.map(b => ({
     id: b.id, machine: b.machineId, busyUntil: busy.get(b.id) ?? 0,
     modes: [{ model: b.model || b.engine, family: b.engine === 'codex' ? 'openai' : 'anthropic', speed: 1, cost: 2,
       quality: { default: 1 }, account: `${b.machineId}:${b.engine}` }],
-    // Each task it finished in a part makes the next there 15% quicker, to 40% at most.
-    context: Object.fromEntries([...done.get(b.id) ?? []].map(([part, count]) => [part, Math.max(0.6, 1 - 0.15 * count)])),
+    context: contextOf([...parts], done.get(b.id), b.worksOn),
   }))
   const problemMachines: Machine[] = [...new Set(crew.builders.map(b => b.machineId))].map(id => {
     const resources = object(machines.get(id)?.observation?.resources)
     const memory = typeof resources.memoryTotalBytes === 'number' ? resources.memoryTotalBytes * MEMORY_SHARE : 16 * GiB
     const free = typeof resources.projectDiskFreeBytes === 'number' ? resources.projectDiskFreeBytes
       : typeof resources.diskFreeBytes === 'number' ? resources.diskFreeBytes : 60 * GiB
-    return { id, capacity: { cpu: CORES, ram: memory, disk: Math.max(0, free - DISK_KEPT) } }
+    // Its cores as it reports them (a daemon since 0.5.86); an older one is planned as CORES.
+    const cores = typeof resources.cpuCores === 'number' && Number.isSafeInteger(resources.cpuCores) && resources.cpuCores > 0 ? resources.cpuCores : CORES
+    return { id, capacity: { cpu: cores, ram: memory, disk: Math.max(0, free - DISK_KEPT) } }
   })
   const accounts: Account[] = [...new Set(crew.builders.map(b => `${b.machineId}:${b.engine}`))].map(id => {
     const [machineId, engine] = id.split(':') as [string, string]
@@ -191,10 +238,15 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
  */
 export function crewOf(state: Json, project: { pmAgentId: string; projectId: string }): Crew {
   const agents = Array.isArray(state.agents) ? state.agents.map(object) : []
-  const builders = agents.filter(a => a.regular === true && typeof a.id === 'string' && a.id !== project.pmAgentId && !a.buddyOf
-    && a.workDecision !== 'stop' && !a.downSince && typeof a.machineId === 'string'
-    && (a.privateProjectId === undefined || a.privateProjectId === null || a.privateProjectId === project.projectId)
+  const team = agents.filter(a => a.regular === true && typeof a.id === 'string' && a.id !== project.pmAgentId && !a.buddyOf
+    && typeof a.machineId === 'string' && (a.privateProjectId === undefined || a.privateProjectId === null || a.privateProjectId === project.projectId)
     && ['claude', 'codex'].includes(String(object(a.configuration).engine)))
+  const away: AwayBuilder[] = team.filter(a => a.workDecision === 'stop' || a.downSince).map(a => {
+    const name = String(a.displayName ?? a.name ?? a.id)
+    return a.workDecision === 'stop' ? { name, label: labelOf(name), why: 'stopping' as const }
+      : { name, label: labelOf(name), why: 'down' as const, since: String(a.downSince) }
+  })
+  const builders = team.filter(a => a.workDecision !== 'stop' && !a.downSince)
     .map(a => {
       const name = String(a.displayName ?? a.name ?? a.id)
       const model = object(a.configuration).model
@@ -203,7 +255,130 @@ export function crewOf(state: Json, project: { pmAgentId: string; projectId: str
     })
   const machines = (Array.isArray(state.machines) ? state.machines.map(object) : []).filter(m => typeof m.machineId === 'string')
     .map(m => ({ machineId: String(m.machineId), name: typeof m.name === 'string' ? m.name : undefined, observation: object(m.observation) }))
-  return { builders, machines }
+  return { builders, machines, away }
+}
+
+/** An open task to take back from a builder that cannot work: its label, whether it was taken, and why, in a few words. */
+export interface TakeBack { number: number; label: string; taken: boolean; why: string }
+
+/**
+ * The open tasks of builders that cannot work, to give to others: all of one its person is stopping; of one whose machine
+ * is down, the queued after [QUEUED_AWAY_MS] and the taken after [TAKEN_AWAY_MS]. A task a person set to that builder is
+ * taken back too: the builder cannot do it.
+ */
+export function takeBacks(issues: Json[], away: AwayBuilder[], now: number): TakeBack[] {
+  const byLabel = new Map(away.map(a => [a.label, a]))
+  const out: TakeBack[] = []
+  for (const issue of issues) {
+    if (issue.pull_request || !Number.isSafeInteger(issue.number)) continue
+    const labels = labelsOf(issue)
+    const builder = labels.map(label => byLabel.get(label)).find(Boolean)
+    if (!builder) continue
+    const taken = labels.includes('status:taken')
+    if (builder.why === 'down') {
+      const since = Date.parse(builder.since ?? '')
+      if (!Number.isFinite(since) || now - since < (taken ? TAKEN_AWAY_MS : QUEUED_AWAY_MS)) continue
+    }
+    // Out of quota: what it took it finishes; what waits for it goes to another.
+    if (builder.why === 'quota' && taken) continue
+    const down = builder.why === 'down' ? `${builder.name}'s machine has been down since ${new Date(Date.parse(builder.since!)).toISOString().slice(11, 16)} UTC`
+      : builder.why === 'quota' ? `${builder.name}'s subscription has no room for ${Math.round((builder.until ?? 0) / 60)} h`
+      : `${builder.name} is being stopped`
+    out.push({ number: Number(issue.number), label: builder.label, taken, why: down })
+  }
+  return out
+}
+
+/**
+ * How fast a builder is in each part, as a factor of its time: each task it finished there makes the next 15% quicker,
+ * to 40% at most; an area its person says it works on halves it ([FOCUS]); once its person named some, any other area
+ * takes it half as long again ([AWAY]).
+ */
+export function contextOf(parts: string[], done: Map<string, number> | undefined, worksOn: string[] | null | undefined): Record<string, number> {
+  const context: Record<string, number> = {}
+  for (const part of parts) {
+    const learned = Math.max(0.6, 1 - 0.15 * (done?.get(part) ?? 0))
+    const factor = !worksOn?.length ? learned : worksOn.includes(part) ? Math.min(learned, FOCUS) : learned * AWAY
+    if (factor !== 1) context[part] = Math.round(factor * 1000) / 1000
+  }
+  return context
+}
+
+/** The builders whose subscription has less room than a small task until a reset more than [QUOTA_WAIT_MINUTES] away, with
+ *  that reset: their queued tasks would wait for it. */
+export function outOfQuota(read: Read): AwayBuilder[] {
+  const out: AwayBuilder[] = []
+  for (const builder of read.problem.builders) {
+    const account = read.problem.accounts.find(a => a.id === builder.modes[0]?.account)
+    const crew = read.builders.get(builder.id)
+    if (!account || !crew) continue
+    // A weekly window is spent a fifth as fast as a 5-hour one (readProblem's spend).
+    const blocked = account.windows.filter(w => w.left - account.reserve < SIZES.s.spend / (w.every === 300 ? 1 : 5) && w.resetsAt > QUOTA_WAIT_MINUTES)
+    if (blocked.length) out.push({ name: crew.name, label: crew.label, why: 'quota', until: Math.max(...blocked.map(w => w.resetsAt)) })
+  }
+  return out
+}
+
+/** A task a builder of the team took, and when it was last touched: its issue, or a pull request for it. */
+export interface Taken { number: number; label: string; name: string; touched: number }
+
+/** The tasks a pull request is for: the issues it closes, and its builder's branch for one (`pip/14`). */
+export function tasksOf(pull: Json): number[] {
+  const branch = /^[^/]+\/(\d+)$/.exec(String((pull.head as Json | undefined)?.ref ?? ''))?.[1]
+  const closes = [...String(pull.body ?? '').matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi)].map(m => Number(m[1]))
+  return [...new Set([...closes, ...branch ? [Number(branch)] : []])]
+}
+
+/** The tasks builders of the team took, each with its last touch: a comment or label on the issue, or a change to a pull
+ *  request for it (tasksOf). */
+export function takenTasks(issues: Json[], pulls: Json[], builders: CrewBuilder[]): Taken[] {
+  const byLabel = new Map(builders.map(b => [b.label, b]))
+  const touched = new Map<number, number>()
+  for (const pull of pulls) {
+    const at = Date.parse(String(pull.updated_at ?? ''))
+    if (!Number.isFinite(at)) continue
+    for (const number of tasksOf(pull)) touched.set(number, Math.max(touched.get(number) ?? 0, at))
+  }
+  const out: Taken[] = []
+  for (const issue of issues) {
+    if (issue.pull_request || !Number.isSafeInteger(issue.number)) continue
+    const labels = labelsOf(issue)
+    const builder = labels.map(label => byLabel.get(label)).find(Boolean)
+    if (!builder || !labels.includes('status:taken')) continue
+    const own = Date.parse(String(issue.updated_at ?? ''))
+    const number = Number(issue.number)
+    out.push({ number, label: builder.label, name: builder.name, touched: Math.max(Number.isFinite(own) ? own : 0, touched.get(number) ?? 0) })
+  }
+  return out
+}
+
+/** Finished tasks of a size needed before their time replaces the size's guess, and the bounds kept on it. */
+export const LEARN_MIN = 3, LEARNED_FLOOR = 10, LEARNED_CEILING = 24 * 60
+
+/** When a closed task's work began: its builder's "taken by" comment (SWARM_BASICS), else Harness's word giving it. */
+export function startedAt(comments: Json[]): number | null {
+  for (const comment of comments) {
+    const first = String(comment.body ?? '').split('\n').find(line => line.trim()) ?? ''
+    if (/\btaken by\b/i.test(first) || /^Harness, \d\d:\d\d: for \*\*/.test(first)) {
+      const at = Date.parse(String(comment.created_at ?? ''))
+      if (Number.isFinite(at)) return at
+    }
+  }
+  return null
+}
+
+/** The minutes each size took in this project, from its finished tasks: the median of [took] by size, once a size has
+ *  [LEARN_MIN] of them, kept between [LEARNED_FLOOR] and [LEARNED_CEILING]. A median, as one task left open over a weekend
+ *  must not move the rest. */
+export function learnedMinutes(took: Array<{ size: string; minutes: number }>): Partial<Record<'s' | 'm' | 'l', number>> {
+  const out: Partial<Record<'s' | 'm' | 'l', number>> = {}
+  for (const size of ['s', 'm', 'l'] as const) {
+    const all = took.filter(t => t.size === size && t.minutes > 0).map(t => t.minutes).sort((a, b) => a - b)
+    if (all.length < LEARN_MIN) continue
+    const middle = all.length % 2 ? all[(all.length - 1) / 2]! : (all[all.length / 2 - 1]! + all[all.length / 2]!) / 2
+    out[size] = Math.round(Math.min(LEARNED_CEILING, Math.max(LEARNED_FLOOR, middle)))
+  }
+  return out
 }
 
 /** One task to give: its builder, and the minute the plan starts it. */
@@ -230,5 +405,22 @@ export function reasonOf(pick: Pick, read: Read): string {
   const when = pick.start <= 0 ? 'it can start now' : `it can start in ${pick.start < 90 ? `${pick.start} min` : `${Math.round(pick.start / 60)} h`}`
   const part = task?.part
   const count = part ? read.done.get(pick.builder)?.get(part) ?? 0 : 0
-  return count ? `${when}, and it finished ${count} part:${part} ${count === 1 ? 'task' : 'tasks'}` : when
+  const focus = part && read.builders.get(pick.builder)?.worksOn?.includes(part)
+  return [when, focus ? `it works on ${part}` : '', count ? `it finished ${count} part:${part} ${count === 1 ? 'task' : 'tasks'}` : '']
+    .filter(Boolean).join(', ').replace(/, ([^,]*)$/, ', and $1')
+}
+
+/**
+ * Who reads a pull request next (Swarm v4: "a review is never read by its build's model family", design 2026-11-09): a
+ * builder of the team that is not its author and not asked already, of another model family than its author's when one
+ * is free to, then the one holding the fewest tasks. Null when nobody can.
+ */
+export function readerFor(read: Read, author: string | null, skip: ReadonlySet<string>): CrewBuilder | null {
+  const builders = [...read.builders.values()]
+  const own = builders.find(b => author !== null && b.label === labelOf(author))
+  const family = (b: CrewBuilder) => b.engine === 'codex' ? 'openai' : 'anthropic'
+  const candidates = builders.filter(b => b !== own && !skip.has(b.id) && !skip.has(b.name.toLowerCase()))
+  candidates.sort((a, b) => Number(own && family(a) === family(own)) - Number(own && family(b) === family(own))
+    || (read.open.get(a.id) ?? 0) - (read.open.get(b.id) ?? 0) || a.name.localeCompare(b.name))
+  return candidates[0] ?? null
 }

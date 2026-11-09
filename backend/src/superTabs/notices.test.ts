@@ -94,7 +94,7 @@ describe('the notices the Swarm writes into a chat', () => {
     // Lead's built-in schedule wake, daily tidy and morning digest, gone the same day, the Lead; the release watch's steps and lines,
     // gone with it, people; the recorded terminal turns, gone with the recording, people.
     const retired = ['idle-stop', 'idle', 'project-report', 'ship', 'machine-left', 'task-line', 'routing-reflection', 'instructions', 'update-request',
-      'proposal-notice', 'proposal-overdue', 'pm-line', 'work-stalled', 'schedule-request', 'tidy-request', 'digest-request', 'release', 'native']
+      'proposal-notice', 'proposal-overdue', 'pm-line', 'work-stalled', 'schedule-request', 'tidy-request', 'digest-request', 'release', 'native', 'others-work-notice']
     expect(Object.keys(NOTICE_READERS).filter(kind => !written.has(kind) && !retired.includes(kind))).toEqual([])
     expect(retired.filter(kind => written.has(kind))).toEqual([])
   })
