@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -30,6 +31,7 @@ class SuperTabWorkspace extends StatefulWidget {
     required this.onAddAgent,
     this.onNewProject,
     this.onNewAgent,
+    this.onAttachAgent,
     this.onNewSwarm,
   });
   final AppNotifier app;
@@ -39,6 +41,9 @@ class SuperTabWorkspace extends StatefulWidget {
 
   /// + New agent: the workspace's Cmd-N form, with Member or Lead (#4196).
   final VoidCallback? onNewAgent;
+
+  /// Attach beside + New agent: the ⌘P picker of agents already running on its person's own computers (Swarm v4).
+  final VoidCallback? onAttachAgent;
   final VoidCallback? onNewSwarm;
 
   @override
@@ -670,6 +675,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                   onAddAgent: widget.onAddAgent,
                   onNewProject: widget.onNewProject,
                   onNewAgent: widget.onNewAgent,
+                  onAttachAgent: widget.onAttachAgent,
                   onNewSwarm: widget.onNewSwarm,
                   onOpenTerminal: (agent) => _focusAgent(
                     controller,

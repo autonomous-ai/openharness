@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/super_tabs/agent_names.dart';
 import 'package:harness/super_tabs/controller.dart' show SuperTabFailure;
@@ -113,6 +114,111 @@ void main() {
     expect(
       f.connection.joins.map((j) => j['operationId']).toSet(),
       hasLength(1),
+    );
+  });
+
+  group('Attach: an agent already running joins its person\'s team', () {
+    Agent running({String name = 'harness-3', bool? chosen}) => Agent(
+      id: 'h1',
+      name: name,
+      nameChosen: chosen,
+      engine: 'claude',
+      modelName: 'Opus 5.5',
+      modelEffort: 'high',
+      terminalAvailable: true,
+    );
+
+    test(
+      'opens its chat, joins it to that chat as itself, and opens it',
+      () async {
+        final f = SuperTabLaunchFixture();
+        f.connection.journaled = false;
+        f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+        await swarmAttachAgent(
+          f.app,
+          tabId,
+          'm',
+          running(),
+          wait: (_) async {},
+        );
+        final chat = _commands(f).singleWhere((c) => c['type'] == 'agent.new');
+        final name = chat['name'] as String;
+        // An automatic name gives way to one of the Swarm's, as + New agent's.
+        expect(agentNames, contains(name));
+        expect(chat, {
+          'type': 'agent.new',
+          'kind': 'regular',
+          'machineId': 'm',
+          'engine': 'claude',
+          'name': name,
+          'local': true,
+        });
+        final chatId =
+            f.connection.server.state['conversations'].cast<Map>().firstWhere(
+                  (g) => g['kind'] == 'agent-chat',
+                )['id']
+                as String;
+        final join = f.connection.joins.single['command'] as Map;
+        expect(join, containsPair('conversationId', chatId));
+        expect(join, containsPair('harnessId', 'h1'));
+        expect(join, containsPair('machineId', 'm'));
+        expect(join, containsPair('name', name));
+        expect(join, containsPair('lead', false));
+        // Nothing is typed into it: it goes on with what it was doing.
+        expect(join.containsKey('initialMessage'), isFalse);
+        expect(join['configuration'], containsPair('engine', 'claude'));
+        expect(join['configuration'], containsPair('model', 'Opus 5.5'));
+        expect(join['configuration'], containsPair('effort', 'high'));
+        // No session is started: it is the one already running.
+        expect(
+          f.connection.calls.where((c) => c.$1 == 'agent_create'),
+          isEmpty,
+        );
+        expect(f.app.superTabs.peek(tabId)!.selectedId, chatId);
+      },
+    );
+
+    test('keeps the name its person gave it', () async {
+      final f = SuperTabLaunchFixture();
+      f.connection.journaled = false;
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      await swarmAttachAgent(
+        f.app,
+        tabId,
+        'm',
+        running(name: 'Docs bot', chosen: true),
+        wait: (_) async {},
+      );
+      expect(
+        _commands(f).singleWhere((c) => c['type'] == 'agent.new')['name'],
+        'Docs bot',
+      );
+      expect((f.connection.joins.single['command'] as Map)['name'], 'Docs bot');
+    });
+
+    test(
+      'a session of another engine is refused before anything is sent',
+      () async {
+        final f = SuperTabLaunchFixture();
+        f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+        await expectLater(
+          swarmAttachAgent(
+            f.app,
+            tabId,
+            'm',
+            const Agent(id: 'h2', name: 'shell', engine: 'terminal'),
+            wait: (_) async {},
+          ),
+          throwsA(
+            isA<SuperTabFailure>().having(
+              (e) => e.code,
+              'code',
+              'SWARM_ENGINE',
+            ),
+          ),
+        );
+        expect(_commands(f), isEmpty);
+      },
     );
   });
 }

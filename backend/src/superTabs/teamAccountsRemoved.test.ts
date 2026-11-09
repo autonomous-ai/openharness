@@ -32,8 +32,7 @@ function swarm() {
   let state: SuperTabState = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
   let sequence = 0
   const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
-    const teamMachines = (state.machines ?? []).filter(m => m.hostMachineId).map(m => m.machineId)
-    const effects = applyCommand(state, actor, command, { now: NOW, operationId: `op-${++sequence}`, teamMachines, ...context })
+    const effects = applyCommand(state, actor, command, { now: NOW, operationId: `op-${++sequence}`, ...context })
     state = effects.state
     return effects
   }
