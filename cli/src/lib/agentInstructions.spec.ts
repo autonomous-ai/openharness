@@ -9,14 +9,24 @@ import { InstructionsError, readInstructions, writeInstructions } from './agentI
 /** The protocol's limit for a file and for a text, written out: the apps are built against this number. */
 const LIMIT = 65_536
 
-// The one rename that can fail after the new bytes are safely on disk, so a spec can watch what is left behind.
-const failRename = vi.hoisted(() => ({ next: null as Error | null }))
+// Two things a real disk will not show on demand: the one rename that can fail after the new bytes are safely on disk,
+// so a spec can watch what is left behind, and how many bytes a read really took from a file, to prove it is bounded.
+const disk = vi.hoisted(() => ({ failRename: null as Error | null, bytesRead: 0 }))
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
-  return { ...actual, rename: vi.fn(async (from: string, to: string) => {
-    if (failRename.next) { const error = failRename.next; failRename.next = null; throw error }
-    return actual.rename(from, to)
-  }) }
+  return {
+    ...actual,
+    rename: vi.fn(async (from: string, to: string) => {
+      if (disk.failRename) { const error = disk.failRename; disk.failRename = null; throw error }
+      return actual.rename(from, to)
+    }),
+    open: vi.fn(async (...args: Parameters<typeof actual.open>) => {
+      const handle = await actual.open(...args)
+      const read = handle.read.bind(handle) as (...call: unknown[]) => Promise<{ bytesRead: number }>
+      handle.read = (async (...call: unknown[]) => { const result = await read(...call); disk.bytesRead += result.bytesRead; return result }) as typeof handle.read
+      return handle
+    }),
+  }
 })
 
 const sha256 = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex')
@@ -34,7 +44,7 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
     await mkdir(cwd)
     await mkdir(outside)
   })
-  afterEach(async () => { failRename.next = null; await rm(join(cwd, '..'), { recursive: true, force: true }) })
+  afterEach(async () => { disk.failRename = null; await rm(join(cwd, '..'), { recursive: true, force: true }) })
 
   const file = (name = 'Faye') => join(cwd, 'agents', `${name}.md`)
   const put = async (text: string | Buffer, name = 'Faye') => { await mkdir(join(cwd, 'agents'), { recursive: true }); await writeFile(file(name), text) }
@@ -75,11 +85,11 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
       expect((await readInstructions(cwd, 'Faye')).text).toHaveLength(LIMIT)
       await put(Buffer.alloc(LIMIT + 1, 97))
       expect(await code(readInstructions(cwd, 'Faye'))).toBe('TOO_LARGE')
-      // A sparse 200 MB file: reading it whole would take a while and a lot of memory; it is refused at the limit.
+      // A sparse 200 MB file is refused having taken one byte past the limit from it, not the file.
       await truncate(file(), 200 * 1024 * 1024)
-      const started = Date.now()
+      disk.bytesRead = 0
       expect(await code(readInstructions(cwd, 'Faye'))).toBe('TOO_LARGE')
-      expect(Date.now() - started).toBeLessThan(2_000)
+      expect(disk.bytesRead).toBe(LIMIT + 1)
     })
 
     it('refuses an agents that is a file, not a folder', async () => {
@@ -264,7 +274,7 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
     it('leaves the old file whole and no temporary file when the last step fails', async () => {
       await put('keep me')
       const { version } = await readInstructions(cwd, 'Faye')
-      failRename.next = Object.assign(new Error('rename failed'), { code: 'EBUSY' })
+      disk.failRename = Object.assign(new Error('rename failed'), { code: 'EBUSY' })
       await expect(writeInstructions(cwd, 'Faye', 'half', version)).rejects.toMatchObject({ code: 'EBUSY' })
       expect(await readFile(file(), 'utf8')).toBe('keep me')
       expect(await readdir(join(cwd, 'agents'))).toEqual(['Faye.md'])

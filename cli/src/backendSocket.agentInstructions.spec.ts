@@ -18,6 +18,9 @@ import { dispatchDown, gatewayOf, relaySocket, upstreamOf } from './testing/rela
 
 type Frame = { type: string; payload: Record<string, unknown> }
 const TYPES = ['agent_instructions_read', 'agent_instructions_write'] as const
+/** How long a reply may take before a spec gives up on it: the daemon's own work is milliseconds, and a busy machine is not
+ *  what these specs are about. */
+const SETTLED = { timeout: 10_000 }
 const sealedFrame = (type: string) => ({ type, payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } })
 
 describe('an agent\'s instructions file through the socket', () => {
@@ -80,11 +83,11 @@ describe('an agent\'s instructions file through the socket', () => {
   it('is answered to the account\'s own computer, sealed to that connection alone, and never in the clear', async () => {
     const { ask, replied, queued } = relayed(true)
     await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })
-    await vi.waitFor(() => expect(replied()).toHaveLength(1))
+    await vi.waitFor(() => expect(replied()).toHaveLength(1), SETTLED)
     const [{ payload: read }] = replied()
     expect(read).toEqual({ text: 'SECRET words', version: expect.stringMatching(/^[0-9a-f]{64}$/) })
     await ask('agent_instructions_write', { agentId: 'a1', name: 'Faye', text: 'SECRET rewrite', version: read.version })
-    await vi.waitFor(() => expect(replied()).toHaveLength(2))
+    await vi.waitFor(() => expect(replied()).toHaveLength(2), SETTLED)
     expect(replied().map((reply) => reply.type)).toEqual(['agent_instructions_read_result', 'agent_instructions_write_result'])
     expect(await readFile(join(cwd, 'agents', 'Faye.md'), 'utf8')).toBe('SECRET rewrite')
     // Whatever reached the relay's queue is the sealed stub, never the text or the version.
@@ -97,7 +100,7 @@ describe('an agent\'s instructions file through the socket', () => {
       const { ask, replied } = relayed(accountOwner, role)
       await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })
       await ask('agent_instructions_write', { agentId: 'a1', name: 'Faye', text: 'planted', version: '' })
-      await vi.waitFor(() => expect(replied()).toHaveLength(2))
+      await vi.waitFor(() => expect(replied()).toHaveLength(2), SETTLED)
       expect(replied().map((reply) => reply.payload), role).toEqual([{ error: 'OWNER_REQUIRED' }, { error: 'OWNER_REQUIRED' }])
       expect(await readFile(join(cwd, 'agents', 'Faye.md'), 'utf8')).toBe('SECRET words')
       vi.restoreAllMocks()
@@ -130,8 +133,8 @@ describe('an agent\'s instructions file through the socket', () => {
       socket.handleLocalFrame('local:w', { type: 'machine_resources', payload: { requestId: 'w-3' } })
       const { ask, replied } = relayed(true)
       await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })
-      await vi.waitFor(() => expect(replied()).toHaveLength(1))
-      await vi.waitFor(() => expect(frames.map((frame) => frame.type)).toEqual(expect.arrayContaining(['agent_instructions_read_result', 'agent_instructions_write_result', 'machine_resources_result'])))
+      await vi.waitFor(() => expect(replied()).toHaveLength(1), SETTLED)
+      await vi.waitFor(() => expect(frames.map((frame) => frame.type)).toEqual(expect.arrayContaining(['agent_instructions_read_result', 'agent_instructions_write_result', 'machine_resources_result'])), SETTLED)
       // The log works for any other request, so the silence above is the exclusion and not a broken spy.
       const types = logged.mock.calls.map(([, , frame]) => frame.type)
       expect(types).toEqual(expect.arrayContaining(['machine_resources', 'machine_resources_result']))
