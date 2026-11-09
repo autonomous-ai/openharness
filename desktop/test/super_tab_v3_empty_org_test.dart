@@ -70,12 +70,6 @@ void main() {
             onOpenTerminal: (_) {},
             machineName: (_) => 'Mac Studio',
             board: true,
-            rightPane: (_) => Center(
-              child: Text(
-                'Tasks (v3)',
-                style: TextStyle(color: grid.AppPalette.textFaint),
-              ),
-            ),
           ),
         ),
       ),

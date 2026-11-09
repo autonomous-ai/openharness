@@ -109,7 +109,6 @@ void main() {
                   onOpenTerminal: (_) {},
                   machineName: (_) => 'Mac Studio',
                   board: true,
-                  rightPane: (_) => const SizedBox(),
                 ),
               ),
             ),

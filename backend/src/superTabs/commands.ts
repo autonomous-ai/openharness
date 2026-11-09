@@ -15,6 +15,7 @@ import { acceptedByRequester, ACCEPT_ALL_REFUSAL, askedByAnother, HELPER_REFUSAL
 import { ownedPath, pathsOverlap } from './ownedPaths.js'
 import { addedAgentName, newAgentName, renameAgentTo } from './agentRename.js'
 import { addCrew, CREW_ROLE_MAX, removeCrew } from './crew.js'
+import { githubRelaySchema, relayGitHub } from './githubRelay.js'
 import { ownsBoard, readsProject, requireCanChat, requirePriorityRight, steers } from './boardRights.js'
 import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
 import { agentWrittenNameOf, setName, shownNameOf } from './personNames.js'
@@ -432,6 +433,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   // Rename Harness on the agent's Mac renames the agent for every reader (task #2912); the contributor or machine owner only.
   z.object({ type: z.literal('agent.rename'), agentId: id, name: z.string().max(200) }).strict(),
   z.object({ type: z.literal('agent.release'), agentId: id, decision: z.enum(['keep', 'stop']) }).strict(),
+  githubRelaySchema,
   z.object({ type: z.literal('crew.add'), agentId: id, role: z.string().trim().min(1).max(CREW_ROLE_MAX).regex(/^[^\x00-\x1f\x7f]+$/).optional(), lane: z.string().trim().min(1).max(80).regex(/^[^\x00-\x1f\x7f]+$/).optional() }).strict(),
   z.object({ type: z.literal('crew.remove'), agentId: id }).strict(),
   z.object({ type: z.literal('agent.sessionClosed'), agentId: id, harnessId: id }).strict(),
@@ -542,6 +544,8 @@ export const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'message.send': ['text'],
   // An edit is a new text in a row everyone reads: cleaned as a send is (security review 2 of #2967).
   'message.edit': ['text'],
+  // A GitHub comment, the file it is on and its link, written into a chat as a send is (githubRelay.ts).
+  'github.relay': ['text', 'path', 'url'],
   'buddy.propose': ['text', 'title', 'goal', 'scope', 'why', 'doneWhen', 'evidence[]'],
   'proposal.create': ['title', 'text', 'goal', 'why', 'doneWhen', 'evidence[]'],
   'member.status': ['status.text'],
@@ -4326,6 +4330,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     case 'agent.rename':
       renameAgentTo(state, actor, agent(state, command.agentId), command.name)
+      break
+    case 'github.relay':
+      relayGitHub(state, actor, command, operationId, effects.messages)
       break
     case 'crew.add':
       addCrew(state, actor, agent(state, command.agentId), command.role, command.lane, context.now, (context.projectRules?.rules ?? SEED_RULES).lanes)
