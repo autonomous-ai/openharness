@@ -99,10 +99,11 @@ export function createTurnEnds(deps: TurnEndsDeps) {
       open.set(sessionId, { prompt: promptHash(userMessage), turnId: ++turns, partial: partial || !wanted(), now: none(), before: none() })
       trim(open)
     },
-    /** Its agent said [content] in the turn running in [sessionId]. */
-    said(sessionId: string, content: string): void {
+    /** Its agent said [content] in the turn running in [sessionId]: on the way ([commentary], what Codex says of what it is about to do)
+     *  or not. What is said on the way is no part of an answer, as its engine reader reads a turn (lastCodexTurnText). */
+    said(sessionId: string, content: string, commentary = false): void {
       const turn = open.get(sessionId)
-      if (!turn || turn.partial) return
+      if (!turn || turn.partial || commentary) return
       const text = content.slice(0, ANSWER_KEEP_MAX).trim()
       if (text) add(turn.now, text)
     },

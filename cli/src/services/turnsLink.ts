@@ -52,7 +52,7 @@ class AnswerFailure extends Error {
 export function turnsLink(query: (query: string, payload: Payload) => Promise<Payload>, log: (line: string) => void = (line) => console.warn(line)) {
   const listeners = new Set<(event: TurnDelivery) => void>()
   const endListeners = new Set<(event: TurnEnd) => void>()
-  let saidOlder = false
+  let saidNoTurn = false
   const tell = (event: TurnDelivery): void => {
     for (const listener of listeners) {
       try { listener(event) } catch (error) {
@@ -95,6 +95,7 @@ export function turnsLink(query: (query: string, payload: Payload) => Promise<Pa
     heard(payload: Payload): boolean {
       const end = endIn(payload)
       if (end) {
+        saidNoTurn = false
         for (const listener of endListeners) {
           try { listener(end) } catch (error) {
             log(`[turns] a turn-end listener failed on ${end.agentId.slice(0, 40)} · ${error instanceof Error ? error.message : String(error)}`)
@@ -102,10 +103,11 @@ export function turnsLink(query: (query: string, payload: Payload) => Promise<Pa
         }
         return true
       }
-      // A core of the release before tells a turn end that names no turn: nothing here can answer for it until that core is restarted.
-      if (payload.kind === 'turn_end' && !saidOlder) {
-        saidOlder = true
-        log('[turns] a turn end named no turn: the core is older than this process, so no reply is posted for a turn until it is restarted')
+      // A core of the release before tells a turn end that names no turn, as does one that sends it wrong: nothing here can answer for
+      // it until that core is restarted. Said once, and again after a core that names its turns was heard.
+      if (payload.kind === 'turn_end' && !saidNoTurn) {
+        saidNoTurn = true
+        log('[turns] a turn end named no turn: the core is older than this process, or sent it wrong, so no reply is posted for a turn like it until the core is restarted')
       }
       const event = deliveryIn(payload)
       if (!event) return false

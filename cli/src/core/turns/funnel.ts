@@ -194,7 +194,7 @@ export function funnelFor({
         // a queued follow-up included: each message is its own turn. Never one re-read from disk.
         if (!replay) outside('turn-ends', () => ends?.ended({ agentId, sessionId, aborted: event.payload.aborted === true }))
       } else if (event.type === 'text_delta') {
-        if (!replay) outside('turn-ends', () => ends?.said(sessionId, event.payload.content))
+        if (!replay) outside('turn-ends', () => ends?.said(sessionId, event.payload.content, event.payload.commentary === true))
       } else if (event.type === 'tool_start' && !event.payload.parentToolUseId) {
         // A tool a sub-agent calls is not the turn's own: what the turn said stays what it said.
         if (!replay) outside('turn-ends', () => ends?.worked(sessionId))
