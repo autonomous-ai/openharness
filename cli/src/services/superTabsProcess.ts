@@ -1,8 +1,16 @@
 import { emptyPorts, type BackendNotice, type DaemonAddress } from '../core/api.js'
+import type { LastTurnText } from '../lib/normalize.js'
 import { startSuperTabs } from './superTabs.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { agentsIn, daemonIn, processCoreApi, type ShownAgent } from './processCoreApi.js'
 import { turnsLink } from './turnsLink.js'
+
+/** The turn the core gave for `last_turn`, or null when it is none: both its texts are text. */
+function lastTurnIn(answer: Record<string, unknown>): LastTurnText | null {
+  const turn = answer.turn as Record<string, unknown> | null | undefined
+  return turn && typeof turn.userMessage === 'string' && typeof turn.assistantText === 'string'
+    ? { userMessage: turn.userMessage, assistantText: turn.assistantText } : null
+}
 
 export interface SuperTabsServiceOptions {
   dataDir: string; socketPath: string; machineId: string; token: string
@@ -34,10 +42,14 @@ export function runSuperTabsService(options: SuperTabsServiceOptions): ServicePr
     onNotice: listener => { notices.add(listener); return () => { notices.delete(listener) } } })
   // Every authority read also refreshes the native registry. A stopped/replaced
   // harness cannot receive work through a stale process-side snapshot.
-  const api = { ...base, account: { ...base.account, backend: async (method: string, path: string, body?: unknown) => {
-    await ready()
-    return base.account.backend(method, path, body)
-  } } }
+  const api = { ...base,
+    // The answer of the turn that ended is the core's to read from the transcript (core/experimentQueries.ts `last_turn`), as the
+    // recaps' is. One that cannot be asked for rejects, so the host names why it could not post the answer.
+    transcripts: { ...base.transcripts, lastTurn: async (sessionId: string) => lastTurnIn(await ask('last_turn', { sessionId })) },
+    account: { ...base.account, backend: async (method: string, path: string, body?: unknown) => {
+      await ready()
+      return base.account.backend(method, path, body)
+    } } }
   const ports = emptyPorts()
   const requests = (options.start ?? startSuperTabs)(api, ports)
   const service = (options.run ?? runServiceProcess)({

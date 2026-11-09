@@ -953,6 +953,7 @@ listed here.
 | Main chat only for news the whole team needs | host.ts:509 | judgment | what is team news is judgment |
 | Ask questions and post results in this conversation | host.ts:2682 | remove | #4537 drops it from the frame; the reply line says where |
 | Replies to delivered instructions must be posted here explicitly | host.ts:2682 | new | backend: a delivery to an agent that is neither answered, reacted to nor followed by a work.status in 30 min shows on the board as owed (pulse.ts tracks this only for the PM's asks today) |
+| Post your answer to a person's message in your own chat, with the Answer line | host.ts:2560 | code | superTabs/agentReplies.ts (2026-11-09): the host types the person's words as typed and posts the final answer of the turn that ended into the chat as the agent (`reply-<delivery id>`, `--answers` or `--reply-to` as the line said); the line stays for every other conversation |
 | Manage agreed work and delegation: run help | host.ts:2681 | remove | #4537 drops it from the frame |
 | Proposal details "for the PM" from a Buddy | host.ts:2647 | remove | Buddy proposal relay; the card holds them (proposalCards.ts) |
 

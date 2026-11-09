@@ -151,6 +151,9 @@ master too old to run it starts it beside itself, still in its own process (`src
   takes one back with `cancelDelivery` (core/deliveries.ts). In its own process `services/turnsLink.ts`
   asks the core over its link, in order, and hears only its own deliveries; the core lets a process deliver
   only when `TURN_DELIVERERS` (`src/core/api.ts`) names it: the experiments (below) and Agent Messages.
+  The Swarm's host, which answers a person in their agent's own chat when the agent's turn ends, also hears each
+  live turn's end (`core.turns.onEnd`; `TURN_END_HEARERS`, told as `service_event` `turn_end`, never waited on) and
+  reads the answer of the turn that ended from the core (`last_turn`, core/experimentQueries.ts).
 - A service that graduates from an experiment keeps the same questions to the core and is answered by a link of its
   own, for what it uses alone, never by the experiments' hooks: Agent Messages in the edge host
   (`src/core/messagesLink.ts`, `MESSAGES_QUERIES` in `src/core/api.ts`) is shown the agents, told how this daemon is

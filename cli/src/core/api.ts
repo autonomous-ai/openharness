@@ -243,6 +243,10 @@ export interface CoreApi {
     /** Hear what becomes of each delivery: queued, written, its turn started, refused and why, or past
      *  knowing. Returns how to stop hearing. */
     onDelivery(listener: (event: TurnDelivery) => void): () => void
+    /** Hear the end of each live turn, whichever engine ran it and whoever started it: never a turn read back from a
+     *  transcript at attach. The Swarm's host reads the turn's answer then and posts it where its person asked
+     *  (superTabs/agentReplies.ts). Returns how to stop hearing. */
+    onEnd(listener: (event: TurnEnd) => void): () => void
     /** Replace a service's short-lived permission to write queued typed deliveries.
      * IDs use `team:service:<service>:`; expired or absent permission means wait.
      * This guards the final terminal write even when its authorizing service stops. */
@@ -577,12 +581,17 @@ export interface DeliveryOptions { answersQuestion?: true; writtenAt?: number }
  *  delivered to, as the delivery named it. */
 export type TurnDelivery = SessionInputDelivery
 
-/** The delivery members of a core that delivers nothing for this service: nothing is written, nothing is
+/** A live turn that ended (`turns.onEnd`): the agent it ran in, its engine session (what `transcripts.lastTurn` reads), and
+ *  whether it was cut short (an interrupt). */
+export interface TurnEnd { agentId: string; sessionId: string; aborted: boolean }
+
+/** The delivery and turn-end members of a core that delivers nothing for this service: nothing is written, nothing is
  *  taken back, and nothing is heard. */
-export const DELIVERIES_OFF: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery' | 'leaseDeliveries'> = {
+export const DELIVERIES_OFF: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery' | 'onEnd' | 'leaseDeliveries'> = {
   deliver: () => {},
   cancelDelivery: () => false,
   onDelivery: () => () => {},
+  onEnd: () => () => {},
   leaseDeliveries: async () => false,
 }
 
@@ -888,6 +897,10 @@ export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[];
  *  and Agent Messages, which left them for the edge host and still types a message into an idle agent. No other
  *  process may: writing into a pane is no other service's to ask. */
 export const TURN_DELIVERERS: readonly string[] = [...Object.keys(EXPERIMENTS), 'messages']
+
+/** The services in their own processes that are told each live turn's end (core/turns/ends.ts): the Swarm's, which posts an
+ *  agent's answer into its person's chat when the turn that answers them ends. No other asks, so none is sent every end. */
+export const TURN_END_HEARERS: readonly string[] = ['superTabs']
 
 /** The core's calls into Share: an observer's frame as the relay handed it over, the relay gone (every observer
  *  with it), and stopping it. */

@@ -7,6 +7,8 @@ import { SuperTabHostError } from './wire.js'
 const ok = { status: 200, body: { success: true, data: { result: {} } } }
 const refused = (status: number, code: string) => ({ status, body: { success: false, error: { code, message: `the server said ${code}` } } })
 const SECRET = 'the-agents-own-words-never-in-a-log'
+/** What the host passes: the server's refusals no resend changes (host.ts `ackRefused`). */
+const refused_ = (error: unknown) => error instanceof SuperTabHostError && [400, 403, 404, 409].includes(error.status)
 
 beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => { vi.useRealTimers() })
@@ -19,7 +21,8 @@ function setup() {
   const lastTurn = vi.fn(async () => ({ userMessage: 'Ship it.', assistantText: 'Shipped.' }) as { userMessage: string; assistantText: string } | null)
   const backend = vi.fn(async (..._args: unknown[]) => ok as { status: number; body: Record<string, unknown> })
   const core = fakeCore({ transcripts: { lastTurn }, account: { backend } as never })
-  const replies = new AgentReplies(core, journal, { now: () => clock, log, save, typedId: id => `typed:${id}` })
+  const deps = { now: () => clock, log, save, typedId: (id: string) => `typed:${id}`, refused: refused_ }
+  const replies = new AgentReplies(core, journal, deps)
   // Each agent runs in a terminal of its own, by the id the core knows it by.
   const owe = (deliveryId = 'd1', text = 'Ship it.', message: Record<string, unknown> = {}, agentId = 'agent') =>
     replies.owe({ deliveryId, tabId: 'tab', agentId, harnessId: agentId === 'agent' ? 'harness' : `harness-${agentId}` },
@@ -28,7 +31,7 @@ function setup() {
     replies.ended({ agentId: 'harness', sessionId: 'session', aborted: false, ...event })
   const posts = () => backend.mock.calls.filter(([method, path]) => method === 'POST' && String(path).endsWith('/commands'))
   const lines = () => log.mock.calls.map(([line]) => String(line))
-  return { replies, journal, log, save, lastTurn, backend, owe, end, posts, lines, wait: (ms: number) => { clock += ms }, core }
+  return { replies, journal, log, save, lastTurn, backend, owe, end, posts, lines, deps, wait: (ms: number) => { clock += ms }, core }
 }
 
 describe('a reply owed to a person in their agent\'s own chat', () => {
@@ -77,12 +80,12 @@ describe('a reply owed to a person in their agent\'s own chat', () => {
     await t.end()
     expect(t.lastTurn).not.toHaveBeenCalled()
     const restarted: { replies?: Record<string, Owed> } = { replies: adoptReplies(saved.replies, t.log) }
-    const next = new AgentReplies(t.core, restarted, { now: () => 1_000_000, log: t.log, save: t.save, typedId: id => `typed:${id}` })
+    const next = new AgentReplies(t.core, restarted, t.deps)
     await next.ended({ agentId: 'harness', sessionId: 'session', aborted: false })
     expect(t.posts()).toHaveLength(1)
     expect(restarted.replies).toBeUndefined()
     // Posted, so what that host saved after it holds nothing: one that starts from it owes nothing, and posts nothing.
-    const after = new AgentReplies(t.core, { replies: adoptReplies(JSON.parse(JSON.stringify(restarted)).replies, t.log) }, { now: () => 1_000_000, log: t.log, save: t.save, typedId: id => id })
+    const after = new AgentReplies(t.core, { replies: adoptReplies(JSON.parse(JSON.stringify(restarted)).replies, t.log) }, t.deps)
     await after.ended({ agentId: 'harness', sessionId: 'session', aborted: false })
     expect(t.posts()).toHaveLength(1)
   })
@@ -265,6 +268,13 @@ describe('a reply the backend does not take at once', () => {
     expect(t.lines()).toEqual([`Could not post the reply to delivery d1 of agent agent: TypeError (try 1 of ${REPLY_RETRY_MS.length + 1}); trying again in ${REPLY_RETRY_MS[0]! / 1_000} s.`])
     await vi.advanceTimersByTimeAsync(REPLY_RETRY_MS[0]!)
     expect(t.posts()).toHaveLength(2)
+    // Whatever it was that failed, never what it said.
+    const odd = setup()
+    odd.owe()
+    odd.backend.mockRejectedValueOnce('a string, not an error')
+    await odd.end()
+    expect(odd.lines()[0]).toContain(': ERROR (try 1 of')
+    expect(odd.lines()[0]).not.toContain('a string')
   })
 
   it('stops waiting on a call that never answers and tries again', async () => {
@@ -280,22 +290,24 @@ describe('a reply the backend does not take at once', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('stops retrying when the host stops, and drops the reply', async () => {
+  it('stops retrying when the host stops, and drops the reply, saying so', async () => {
     const t = setup()
     t.owe()
     t.backend.mockResolvedValue(refused(503, 'SWARM_BUSY'))
     await t.end()
+    t.log.mockClear()
     t.replies.stop()
     await vi.advanceTimersByTimeAsync(REPLY_RETRY_MS[0]! * 10)
     expect(t.posts()).toHaveLength(1)
     expect(vi.getTimerCount()).toBe(0)
+    expect(t.lines()).toEqual(['Dropped the reply to delivery d1 of agent agent: the host stopped.'])
     // And hears nothing more.
     t.owe('d2')
     await t.end()
     expect(t.lastTurn).toHaveBeenCalledTimes(1)
   })
 
-  it('does not retry a post whose failure is heard after the host stopped', async () => {
+  it('does not retry a post whose failure is heard after the host stopped, and says it was dropped', async () => {
     const t = setup()
     t.owe()
     let fail!: () => void
@@ -307,7 +319,7 @@ describe('a reply the backend does not take at once', () => {
     await done
     expect(vi.getTimerCount()).toBe(0)
     expect(t.posts()).toHaveLength(1)
-    expect(t.lines()).toEqual([])
+    expect(t.lines()).toEqual(['Dropped the reply to delivery d1 of agent agent: the host stopped.'])
   })
 })
 
@@ -431,7 +443,7 @@ describe('the replies owed that a journal holds', () => {
     }, log)
     expect(Object.keys(adopted)).toEqual(['good', 'threaded'])
     expect(adopted.good).toEqual(saved())
-    expect(log.mock.calls.map(([line]) => line)).toEqual(['Dropped 11 saved replies owed that this host did not write.'])
+    expect(log.mock.calls.map(([line]) => line)).toEqual(['Dropped 11 saved replies owed that this host could not use.'])
   })
 
   it('adopts none from a journal that holds no such list, or a list of the wrong kind', () => {
@@ -449,11 +461,11 @@ describe('the replies owed that a journal holds', () => {
     // The newest of each: the first of terminal 0 are the oldest rows, and the last ones stay.
     expect(Object.keys(few)).not.toContain('d0')
     expect(Object.keys(few)).toContain('d299')
-    expect(log).toHaveBeenLastCalledWith('Dropped 140 saved replies owed that this host did not write.')
+    expect(log).toHaveBeenLastCalledWith('Dropped 140 saved replies owed that this host could not use.')
     const all = adoptReplies(rows(300, 40), log)
     expect(Object.keys(all)).toHaveLength(256)
     expect(Object.keys(all)).not.toContain('d0')
     expect(Object.keys(all)).toContain('d299')
-    expect(log).toHaveBeenLastCalledWith('Dropped 44 saved replies owed that this host did not write.')
+    expect(log).toHaveBeenLastCalledWith('Dropped 44 saved replies owed that this host could not use.')
   })
 })

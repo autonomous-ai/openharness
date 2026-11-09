@@ -5962,11 +5962,24 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
       expect(typed(t)).toEqual(['ok, ship it', 'ok, ship it'])
       expect(reads(t)).toHaveLength(first)
     })
-    it('keeps the wrapper of a message the Swarm read says is in another kind of conversation', async () => {
+    it('keeps the wrapper of a message the Swarm read says is in another kind of conversation, and reads no more for it than before', async () => {
       const t = newcomer({ id: 'chat' })
       await t.open().tick()
       expect(String(typed(t)[0])).toContain('@Ken, to you:\nok, ship it')
       expect(String(typed(t)[0])).toContain('Answer: ')
+      // The read that said what kind of chat it is gives its context lines: an agent's message there is read for them as often.
+      const agents = setup({ conversationId: 'chat', author: { kind: 'agent', id: 'other', name: 'Builder' }, text: 'ok, ship it' })
+      agents.from('chat')
+      await agents.open().tick()
+      expect(reads(t).length).toBeGreaterThan(0)
+      expect(reads(t)).toEqual(reads(agents))
+    })
+    it('reads nothing of the Swarm for a Buddy, which has no such chat', async () => {
+      const t = newcomer({ id: 'chat', kind: 'agent-chat' })
+      vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', swarmSkill: { role: 'buddy', key: 'k' } } as never)
+      await t.open().tick()
+      expect(String(typed(t)[0])).toContain('@Ken, to you:')
+      expect(reads(t)).toEqual([])
     })
     it('keeps it too when the read fails or is slow, and the person\'s message still goes', async () => {
       const failing = newcomer({ id: 'chat', kind: 'agent-chat' })
@@ -6104,7 +6117,7 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
       expect(() => t.open()).not.toThrow()
       writeFileSync(file, JSON.stringify({ version: 1, machineId: 'machine-1', entries: {}, replies: { odd: { tabId: 4 } } }))
       expect(() => t.open()).not.toThrow()
-      expect(t.log).toHaveBeenCalledWith('Dropped 1 saved replies owed that this host did not write.')
+      expect(t.log).toHaveBeenCalledWith('Dropped 1 saved replies owed that this host could not use.')
       expect(t.saved().replies).toBeUndefined()
     })
     it('is read from the end of each turn only of an agent that is owed one', async () => {

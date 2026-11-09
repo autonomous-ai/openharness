@@ -126,7 +126,7 @@ describe('the core API services stand on', () => {
       tabRelay: TAB_RELAY_OFF,
       connectorVault: CONNECTOR_VAULT_OFF,
       observer: vi.fn(() => true),
-      turns: { send: vi.fn(), stop: vi.fn(), recent: vi.fn(async () => []), asks: vi.fn(async () => []), deliver: vi.fn(), cancelDelivery: vi.fn(() => true), onDelivery: vi.fn(() => () => {}), leaseDeliveries: vi.fn(async () => false) },
+      turns: { send: vi.fn(), stop: vi.fn(), recent: vi.fn(async () => []), asks: vi.fn(async () => []), deliver: vi.fn(), cancelDelivery: vi.fn(() => true), onDelivery: vi.fn(() => () => {}), onEnd: vi.fn(() => () => {}), leaseDeliveries: vi.fn(async () => false) },
       questions: { answer: vi.fn(), answerReviewed: vi.fn(async () => true) },
       machine: { id: vi.fn(() => 'machine-1'), computerId: vi.fn(() => 'computer-1'), name: vi.fn(() => 'Studio') },
       activityText: vi.fn(async () => 'Reading 3 files'),
