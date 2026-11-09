@@ -40,8 +40,9 @@ const FLOW_LABELS: ReadonlyArray<{ name: string; color: string; description: str
 ]
 /** How many open pull requests are read for readers each pass, as the merger reads them. */
 const MAX_PULLS = 30
-/** How long a reader asked for a head has to read it before another reader is asked too. */
-const READ_WAIT_MS = 2 * 60 * 60_000
+/** How long a reader asked for a head has to read it before another reader is asked too, or, with no other, it again; and
+ *  how many asks one reader gets for one head. */
+const READ_WAIT_MS = 2 * 60 * 60_000, READ_ASKS = 3
 /** How Harness's ask about a quiet task begins, after the builder's name: a restart finds it by these words. */
 const QUIET_ASKED = 'nothing has moved on this task for '
 /** Harness's ask of a reader, as askReaders writes it: who was asked, and for which head. */
@@ -58,6 +59,10 @@ export class GitHubAssign {
   private readonly given = new Map<string, string>()
   /** The labels each repository has, or was asked to make, as `repo:name` (labelRepo). */
   private readonly labels = new Set<string>()
+  /** The take backs and the readers' asks made, by task or pull request (`repo#N`), so each is made once; forgotten once
+   *  the task or pull request is no longer open, so the memory stays as large as the open work. */
+  private readonly backs = new Set<string>()
+  private readonly asks = new Set<string>()
   /** What was said of one task (a label refused, no builder able to do it), so each is said once, not every pass. */
   private readonly said = new Set<string>()
   /** Each quiet taken task its builder was asked about: since when it was quiet, and when it was asked. */
@@ -124,6 +129,7 @@ export class GitHubAssign {
     // list and is never given twice; once shown, or closed, it is forgotten.
     const open = new Set(listed.map(issue => `${repo}#${issue.number}`))
     for (const key of [...this.given.keys()]) if (key.startsWith(`${repo}#`) && !open.has(key)) this.given.delete(key)
+    for (const key of [...this.backs]) if (key.startsWith(`${repo}#`) && !open.has(key.slice(0, key.indexOf(':back:')))) this.backs.delete(key)
     const issues = listed.map(issue => {
       const key = `${repo}#${issue.number}`, label = this.given.get(key)
       if (!label) return issue
@@ -131,7 +137,6 @@ export class GitHubAssign {
       return { ...issue, labels: [...(Array.isArray(issue.labels) ? issue.labels : []), { name: label }] }
     })
     const crew = await this.deps.crew(project)
-    await this.takeBack(repo, issues, crew.away ?? [])
     // What each builder works on in this project: the Works on line of its instructions file here (agents/<Name>.md).
     for (const builder of crew.builders) builder.worksOn = worksOnOf(await this.reads.file(repo, `agents/${builder.name}.md`))
     await this.labelRepo(repo, crew)
@@ -139,13 +144,19 @@ export class GitHubAssign {
     await this.measure(repo, closed)
     const minutes = learnedMinutes([...this.took].filter(([key, took]) => key.startsWith(`${repo}#`) && took).map(([, took]) => took!))
     const read = readProblem({ now: this.now(), issues, closed, crew, minutes })
+    // Open pull requests, drafts included: a draft is where a task's work shows before it is read.
+    const pulls = await this.reads.current(repo, `/repos/${repo}/pulls?state=open&per_page=${MAX_PULLS}`, 1)
+    // The tasks whose pull request waits for its readers or its merge, readers asked as needed (with no builder here, its
+    // PM): their builders have done their part, so none is called quiet, and one whose builder went away is kept, as its
+    // pull request merges without it. Another builder would do it again.
+    const withReaders = await this.askReaders(project, read, pulls, crew)
+    // One whose machine is down keeps its tasks while nobody else can take them: they would only come back to it, labels and
+    // comments twice over. One its person is stopping gives them back all the same, for whoever joins.
+    await this.takeBack(repo, issues, (crew.away ?? []).filter(away => away.why !== 'down' || crew.builders.length > 0), undefined, withReaders)
     if (!read.problem.builders.length) return
     // Only while another builder has room: a team's one builder would be given its task straight back.
     const short = outOfQuota(read)
-    if (short.length < read.problem.builders.length) await this.takeBack(repo, issues, short)
-    // Open pull requests, drafts included: a draft is where a task's work shows before it is read.
-    const pulls = await this.reads.current(repo, `/repos/${repo}/pulls?state=open&per_page=${MAX_PULLS}`, 1)
-    const withReaders = await this.askReaders(project, read, pulls, crew)
+    if (short.length < read.problem.builders.length) await this.takeBack(repo, issues, short, undefined, withReaders)
     await this.askQuiet(repo, issues, pulls, crew, withReaders)
     if (!read.free.size) return
     // Nobody can take a task while every list is full: no plan, so a backlog costs no CPU each minute (the daemon at rest
@@ -165,11 +176,11 @@ export class GitHubAssign {
    * status:taken when it was taken, come off, with one line of why; the next plan gives each to another builder. Once a
    * task, as the label is gone from the next read.
    */
-  private async takeBack(repo: string, issues: Json[], away: AwayBuilder[], why?: string): Promise<void> {
+  private async takeBack(repo: string, issues: Json[], away: AwayBuilder[], why?: string, keep: ReadonlySet<number> = new Set()): Promise<void> {
     if (!away.length) return
-    for (const back of takeBacks(issues, away, this.now()).map(b => why ? { ...b, why } : b)) {
+    for (const back of takeBacks(issues, away, this.now()).filter(b => !keep.has(b.number)).map(b => why ? { ...b, why } : b)) {
       const key = `${repo}#${back.number}:back:${back.label}`
-      if (this.said.has(key)) continue
+      if (this.backs.has(key)) continue
       // status:taken first: a task left taken with no builder is one nobody plans (readProblem), while one left queued for
       // its builder is taken back again next pass. A label already gone is off; anything else GitHub refuses is said, and
       // tried again next pass.
@@ -179,7 +190,7 @@ export class GitHubAssign {
         if (reply.status !== 200 && reply.status !== 404) { refused = reply.status; break }
       }
       if (refused) { this.once(`[super-tab] Task assignment: TAKE_BACK_REFUSED ${repo}#${back.number}: GitHub answered ${refused}`); continue }
-      this.said.add(key)
+      this.backs.add(key)
       await this.deps.send('POST', `/repos/${repo}/issues/${back.number}/comments`,
         { body: `${SELF}, ${this.clock()}: ${back.why}, so this task goes to the builder who can start it next.` })
       this.log(`[super-tab] took ${repo}#${back.number} back: ${back.why}`)
@@ -222,6 +233,8 @@ export class GitHubAssign {
     // The tasks whose pull request waits for its readers or its merge, not for its builder (askQuiet).
     const withReaders = new Set<number>()
     const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
+    const openPulls = new Set(open.map(pull => `${repo}#${pull.number}`))
+    for (const key of [...this.asks]) if (key.startsWith(`${repo}#`) && !openPulls.has(key.slice(0, key.indexOf('@')))) this.asks.delete(key)
     const pulls = open.filter(pull => pull.draft !== true && String((pull.base as Json | undefined)?.ref ?? '') === base)
     for (const pull of pulls) {
       const number = Number(pull.number), head = String((pull.head as Json | undefined)?.sha ?? '')
@@ -236,9 +249,13 @@ export class GitHubAssign {
       // Who Harness asked, for which heads, and when.
       const now = this.now()
       const asked = new Map<string, Map<string, number>>()
+      // How often each was asked for this head, and its name as written.
+      const onThisHead = new Map<string, number>(), written = new Map<string, string>()
       for (const c of comments) {
         const found = ASKED.exec(String(c.body ?? ''))
         if (!found) continue
+        written.set(found[1]!.toLowerCase(), found[1]!)
+        if (head.startsWith(found[2]!)) onThisHead.set(found[1]!.toLowerCase(), (onThisHead.get(found[1]!.toLowerCase()) ?? 0) + 1)
         const heads = asked.get(found[1]!.toLowerCase()) ?? new Map<string, number>()
         // GitHub dates every comment; one it did not is taken as asked now, as before.
         const at = Date.parse(String(c.created_at ?? ''))
@@ -268,7 +285,17 @@ export class GitHubAssign {
         const builder = readerFor(read, author, skip)
         const pm = project.pm.toLowerCase()
         const reader = builder ?? (pm !== author && !skip.has(pm) ? { id: pm, name: project.pm } : null)
-        if (!reader) { this.once(`[super-tab] Task assignment: NO_READER ${repo}#${number}: nobody but its author can read it`); break }
+        if (!reader) {
+          // Nobody new can read it: the reader asked longest ago, with no verdict on this head, is asked again, at most twice
+          // for a head and two hours apart. One stopped when it was asked never heard it: GitHub news reads what is said from
+          // when its agent runs again (the swarm-sandbox, 2026-11-10: Juno, its PM and only reader, was asked while stopped).
+          const again = [...asked.keys()].filter(name => name !== author && (onThisHead.get(name) ?? 0) < READ_ASKS
+            && !(readers.has(name) && onHead(readers.get(name)!.sha)) && now - lastAsk(name, false) >= READ_WAIT_MS)
+            .sort((a, b) => lastAsk(a, false) - lastAsk(b, false))[0]
+          if (again) await this.ask(repo, number, head, written.get(again) ?? again, 'please read this pull request', onThisHead.get(again) ?? 0)
+          else this.once(`[super-tab] Task assignment: NO_READER ${repo}#${number}: nobody but its author can read it`)
+          break
+        }
         skip.add(reader.id)
         skip.add(reader.name.toLowerCase())
         await this.ask(repo, number, head, reader.name, 'please read this pull request')
@@ -351,13 +378,13 @@ export class GitHubAssign {
 
   /** One ask of a reader, once per pull request, head and reader: a comment naming it, with the head it reads. One GitHub
    *  refuses is said, and asked again next pass. */
-  private async ask(repo: string, number: number, head: string, name: string, what: string): Promise<void> {
-    const key = `${repo}#${number}@${head}:${name.toLowerCase()}`
-    if (this.said.has(key)) return
+  private async ask(repo: string, number: number, head: string, name: string, what: string, nth = 0): Promise<void> {
+    const key = `${repo}#${number}@${head}:${name.toLowerCase()}${nth ? `:${nth}` : ''}`
+    if (this.asks.has(key)) return
     const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${this.clock()}, to **${name}**: ${what}, `
       + `and start your comment with READ-OK ${head.slice(0, 7)} or HOLD ${head.slice(0, 7)} (with the file, line and fix).` })
     if (reply.status >= 300) { this.once(`[super-tab] Task assignment: ASK_REFUSED ${repo}#${number}: GitHub answered ${reply.status}`); return }
-    this.said.add(key)
+    this.asks.add(key)
     this.log(`[super-tab] asked ${name} to read ${repo}#${number} at ${head.slice(0, 7)}`)
   }
 
