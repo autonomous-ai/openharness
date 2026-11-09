@@ -1,8 +1,9 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { swarmGitHubLaunch } from '../../lib/swarmGitHub.js'
+import { SWARM_BASICS } from '../../lib/swarmSkills.js'
 import { SWARM_LAUNCH } from './launch.js'
 
 // The Harness GitHub App's launch writes files in the daemon's folder (lib/swarmGitHub.ts): never this machine's here.
@@ -19,12 +20,13 @@ it('lets a start ask for the three role kinds and two skill modes, and nothing e
   for (const mode of ['light', 7, null]) expect(SWARM_LAUNCH.mode(mode), String(mode)).toBe(false)
 })
 
-// Swarm v4: no skill file and no launch line; the engine starts plain and reads only the repo's own files.
-it('tells the engine nothing at launch', () => {
+// Swarm v4: no skill file; the engine starts with the team's basics as its launch line and reads the repo's own files.
+it('tells the engine the team\'s basics at launch and writes nothing in its folder', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'swarm-launch-'))
   folders.push(cwd)
   const { instructions } = SWARM_LAUNCH.prepare(cwd, { role: 'agent', fallback: 'review', key: 'harness-claude-1' })
-  expect(instructions).toBe('')
+  expect(instructions).toBe(SWARM_BASICS)
+  expect(readdirSync(cwd)).toEqual([])
   expect(() => SWARM_LAUNCH.prepare(cwd, { role: 'agent', fallback: 'review', key: '' })).toThrow('A Swarm skill needs a role and session key')
 })
 
