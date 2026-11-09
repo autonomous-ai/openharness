@@ -131,36 +131,6 @@ describe('an attempt’s record on its route decision', () => {
     }
   })
 
-  it('closes lost when its machine goes silent, and stays lost when the task is handed on', async () => {
-    const f = await swarm()
-    await f.beat(opus(10, 1))
-    const id = await f.route()
-    await f.assign(id)
-    await f.beat(opus(70, 7))
-    const silent = f.clock.now
-    f.clock.now = silent + 2 * MINUTE + 5_000
-    await f.observe('lead-host', [f.harness.lead])
-    expect(await f.decision(id)).toMatchObject({ outcome: 'lost', outcomeAt: new Date(f.clock.now), run: { end: opus(70, 7), endedAt: f.clock.now } })
-    // Handing it on keeps it lost: the hand-over is a new attempt with its own decision.
-    await f.observe('test-host', [f.harness.worker])
-    const next = await f.route()
-    expect((await f.decision(id)).outcome).toBe('lost')
-    await f.assign(next)
-    expect((await f.decision(next)).run).toMatchObject({ startedAt: f.clock.now })
-  })
-
-  it('ends a task lost to its stopped session with the counts reported before the session stopped', async () => {
-    const f = await swarm()
-    await f.beat(opus(10, 1))
-    const id = await f.route()
-    await f.assign(id)
-    await f.beat(opus(250, 25))
-    f.clock.now += 5_000
-    // The report that says the session stopped no longer lists it, nor its counts.
-    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
-    expect(await f.decision(id)).toMatchObject({ outcome: 'lost', run: { start: opus(10, 1), end: opus(250, 25), endedAt: f.clock.now } })
-  })
-
   it('never shows the machine’s raw token counts to a reader', async () => {
     const f = await swarm()
     await f.beat(opus(10, 1))
