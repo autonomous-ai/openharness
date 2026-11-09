@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
-import { builderLabel, GitHubMentions, namesAgent, repositorySlug, signedBy, watchedAgents, type WatchedAgent } from './githubMentions.js'
+import { builderLabel, GitHubMentions, namesAgent, nameKey, repositorySlug, signatureOf, signedAs, signedBy, watchedAgents, type WatchedAgent } from './githubMentions.js'
 import type { GitHubGet } from './githubRest.js'
 
 type Json = Record<string, unknown>
@@ -360,10 +360,29 @@ describe('names, labels and repositories', () => {
       '> PipTwo, 14:05: built it', '\uff30ip \uff34wo, 14:05: built it', 'P\u00eep Tw\u00f6, 14:05: built it', 'Pip\u200b Two, 14:05: built it']) {
       expect(signedBy(said, ['Pip Two']), said).toBe(true)
     }
-    expect(signedBy('Atlas Reed Two, 14:05: built it', ['Atlas Reed Two']), 'a name of three words').toBe(true)
+    // Whatever the name is made of and however long it is: it is read as the name, not parsed as a pattern.
+    for (const [said, name] of [['Atlas Reed Two, 14:05: built it', 'Atlas Reed Two'], ['Pip \u{1f41d}, 14:05: built it', 'Pip \u{1f41d}'],
+      ['Pip (2), 14:05: built it', 'Pip (2)'], ['A B C D E, 14:05: built it', 'A B C D E'], ['**Pip & Co**: built it', 'Pip & Co'],
+      ['Hold Up, 14:05: built it', 'Hold Up'], ['\u3000> > **Pip**: built it', 'Pip']]) {
+      expect(signedBy(said, [name]), said).toBe(true)
+    }
+    expect(signedBy('> **Pip**: built it', ['\u{1f41d}']), 'a name with no letter or digit is no signature').toBe(false)
     for (const said of ['Juno, 14:05, to **Pip Two**: READ-OK', 'Pip Two Hundred, 14:05: built it', 'Pip, 14:05: built it', 'No signature here, Pip Two']) {
       expect(signedBy(said, ['Pip Two']), said).toBe(false)
     }
+  })
+
+  it('reads names as letters and digits, in the way each script keeps them, and a first line of any length quickly', () => {
+    expect(new Set(['Pip Two', 'pip-two', 'PIP_TWO', 'Pip.Two', '\uff30ip \uff34wo', 'P\u00eep Tw\u00f6'].map(nameKey))).toEqual(new Set(['piptwo']))
+    // What a mark changes in another script stays changed: a dakuten, an Indic vowel sign.
+    expect(nameKey('\u304c')).not.toBe(nameKey('\u304b'))
+    expect(nameKey('\u0915\u093f')).not.toBe(nameKey('\u0915'))
+    expect(nameKey('\u{1f41d}')).not.toBe(nameKey('\u{1f41e}'))
+    // A comment's first line of 60,000 underscores held the event loop for 2.5 s with the signature as one pattern over it.
+    const long = `a${'_'.repeat(60_000)}`
+    const from = performance.now()
+    expect([signatureOf(long), signedBy(long, ['Pip', 'Pip Two']), signedAs(`${long}, x`, 'a')]).toEqual([null, false, false])
+    expect(performance.now() - from).toBeLessThan(1_000)
   })
 
   it('makes the builder label and reads only github.com addresses', () => {

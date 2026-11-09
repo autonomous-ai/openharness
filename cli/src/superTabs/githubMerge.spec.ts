@@ -171,9 +171,11 @@ describe('a pull request\'s author is never its own reader', () => {
     ['its label, capitalised', { labels: [{ name: 'builder:Pip-Two' }] }],
     ['its branch', { labels: [], head: { sha: HEAD, ref: 'pip-two/2' } }],
     ['its branch, capitalised', { labels: [], head: { sha: HEAD, ref: 'Pip-Two/2' } }],
+    ['a label written Builder:', { labels: [{ name: 'Builder:Pip-Two' }] }],
+    ['one of two builder labels', { labels: [{ name: 'builder:juno' }, { name: 'builder:pip-two' }] }],
   ]
-  const signatures = ['Pip Two', 'pip two', 'PIP TWO', 'Pip-Two', 'pip_two', 'PipTwo', 'Pip  Two', 'Pip Two', 'Ｐip Ｔwo', '**Pip Two**',
-    'Pip​ Two', 'Pîp Twö', 'Pip Two (builder)']
+  const signatures = ['Pip Two', 'pip two', 'PIP TWO', 'Pip-Two', 'pip_two', 'PipTwo', 'Pip  Two', 'Pip\u00a0Two', '\uff30ip \uff34wo', '**Pip Two**',
+    'Pip\u200b Two', 'P\u00eep Tw\u00f6', 'Pip Two (builder)', 'Pip.Two', "Pip'Two"]
 
   it.each(authors)('%s, whichever way the reader signs its name', async (_where, extra) => {
     for (const signature of signatures) {
@@ -186,7 +188,7 @@ describe('a pull request\'s author is never its own reader', () => {
     // Another reader still merges it.
     const f = setup()
     f.github.repo.pulls = [pull(extra)]
-    f.github.repo.comments.set(4, [comment('Juno, 14:21: READ-OK f6edb44')])
+    f.github.repo.comments.set(4, [comment('Kai, 14:21: READ-OK f6edb44')])
     await f.merger.tick()
     expect(f.merges()).toHaveLength(1)
   })
@@ -215,10 +217,25 @@ describe('a pull request\'s author is never its own reader', () => {
     expect(f.merges()).toHaveLength(1)
   })
 
-  it('reads a signature in any script and of up to four words, and takes a verdict for no name', () => {
-    const { readers } = verdicts([comment('José María, 14:20: READ-OK f6edb44'), comment('Atlas Reed Two, 14:21: HOLD 1234567'),
-      comment('READ-OK f6edb44, looks good', { user: { login: 'kenmore' } }), comment('小明, 14:22: READ-OK f6edb44'),
+  it('reads a signature of one or two words in any script, and takes a verdict or a sentence for no name', () => {
+    const { readers } = verdicts([comment('Jos\u00e9 Mar\u00eda, 14:20: READ-OK f6edb44'), comment('Hold Up, 14:21: HOLD 1234567'),
+      comment('READ-OK f6edb44, looks good', { user: { login: 'kenmore' } }), comment('\u5c0f\u660e, 14:22: READ-OK f6edb44'),
+      comment('Looks good to me: READ-OK f6edb44', { user: { login: 'faye' } }),
       comment('Harness, 14:31: merged. READ-OK on f6edb44 by juno, checks green.')], '')
-    expect([...readers.keys()]).toEqual(['josemaria', 'atlasreedtwo', 'kenmore', '小明'])
+    expect([...readers.keys()]).toEqual(['josemaria', 'holdup', 'kenmore', '\u5c0f\u660e', 'faye'])
+  })
+
+  it('reads what a pull request\'s writer signed as the writer\'s, whatever the length of its name, so its READ-OK lifts its own HOLD and counts for nothing', async () => {
+    const said = [comment('Atlas Reed Two, 14:20: READ-OK f6edb44'), comment('Juno, 14:21: READ-OK f6edb44'), comment('Atlas Reed Two, 14:22: HOLD f6edb44 wait')]
+    expect([...verdicts(said, '', ['atlas-reed-two']).readers]).toEqual([['atlasreedtwo', { verdict: 'HOLD', sha: 'f6edb44' }],
+      ['juno', { verdict: 'READ-OK', sha: 'f6edb44' }]])
+    for (const [comments, merges] of [[[comment('Atlas Reed Two, 14:20: READ-OK f6edb44')], 0],
+      [[comment('Atlas Reed Two, 14:20: HOLD f6edb44 wait'), comment('Atlas Reed Two, 14:21: READ-OK f6edb44'), comment('Kai, 14:22: READ-OK f6edb44')], 1]] as const) {
+      const f = setup()
+      f.github.repo.pulls = [pull({ labels: [{ name: 'builder:atlas-reed-two' }] })]
+      f.github.repo.comments.set(4, [...comments])
+      await f.merger.tick()
+      expect(f.merges()).toHaveLength(merges)
+    }
   })
 })

@@ -60,30 +60,47 @@ interface RepoMemory { comments: string; reviewComments: string; issues: string;
 interface Memory { repos: Record<string, RepoMemory> }
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-/** A name as every comparison here reads it, so one agent is one name however it is typed: width and accents folded, hidden
- *  characters, spaces, hyphens and underscores dropped, case folded. "Pip Two", "pip-two" (its builder label), "PIP_TWO" and
- *  "Ｐip Ｔwo" are one. The server's own `nameKey` (backend superTabs/usernames.ts) drops spaces but not hyphens, so it keeps
- *  "Pip Two" and "Pip-Two" apart; this reads them as one, the safe way for a rule about who is someone else: an agent whose
- *  label said pip-two was its own reader when it signed "Pip Two" (Q3, 2026-11-09). */
-export const nameKey = (name: string): string => name.normalize('NFKD').replace(/[\p{M}\p{Default_Ignorable_Code_Point}\u2800]/gu, '')
-  .toLowerCase().replace(/[\s\p{Zs}\p{Pd}_@]+/gu, '')
-/** What a name is made of: letters and digits, with accents, hidden characters and the few marks a name has. */
-const NAME_PART = "[\\p{L}\\p{N}][\\p{L}\\p{N}\\p{M}\\p{Default_Ignorable_Code_Point}_'\u2019.-]*"
-/** What stands before a post's first comma, colon or bracket, as an agent signs it: up to four words, and a first line that is a
- *  verdict has none. */
-const SIGNATURE = new RegExp(`^[^\\p{L}\\p{N}]*(${NAME_PART}(?:[\\s\\p{Zs}]+${NAME_PART}){0,3})[*_~\`\\s\\p{Default_Ignorable_Code_Point}]*[,:(]`, 'u')
+/** A name as every comparison here reads it, so one agent is one name however it is typed: width folded, Latin, Greek and Cyrillic
+ *  accents and hidden characters dropped, case folded, and only letters, digits and the marks of other scripts kept, so "Pip Two", "pip-two" (its builder
+ *  label), "PIP_TWO", "Pip.Two" and "Ｐip Ｔwo" are one. The server's own `nameKey` (backend superTabs/usernames.ts) drops spaces
+ *  but not hyphens, so it keeps "Pip Two" and "Pip-Two" apart; this reads them as one, the safe way for a rule about who is
+ *  someone else: an agent whose label said pip-two was its own reader when it signed "Pip Two" (Q3, 2026-11-09). A name with no
+ *  letter or digit (an emoji) is its own text. Look-alike letters of other scripts ("Рip" with a Cyrillic Р) stay different. */
+const letters = (text: string): string =>
+  text.normalize('NFKD').replace(/[\u0300-\u036f\p{Default_Ignorable_Code_Point}\u2800]/gu, '').toLowerCase().replace(/[^\p{L}\p{N}\p{M}]+/gu, '')
+export const nameKey = (name: string): string => letters(name) || name.normalize('NFKC').trim().toLowerCase()
+/** The most of a post's first line that is read for a signature: a name and a time are far shorter, and a pattern over a longer line
+ *  only costs time (a comment's first line of 60,000 underscores held the event loop for 2.5 s). */
+const SIGNATURE_SCAN = 200
+const firstLine = (text: string): string => (text.split('\n').find(line => line.trim()) ?? '').slice(0, SIGNATURE_SCAN)
+/** A word of a name: letters and digits, with accents, hidden characters and the few marks a name has. */
+const NAME_WORD = "[\\p{L}\\p{N}][\\p{L}\\p{N}\\p{M}\\p{Default_Ignorable_Code_Point}_'’.-]*"
+/** What stands before a post's first comma, colon or bracket, as an agent signs it: one word or two. */
+const SIGNATURE = new RegExp(`^[^\\p{L}\\p{N}]*(${NAME_WORD}(?:[\\s\\p{Zs}]+${NAME_WORD})?)[*~\`\\s]*[,:(]`, 'u')
 /** The name [text] is signed with ("Pip, 14:05: ...", "**Pip** (builder): ...", "> Juno, to **Pip**: ..."), or null when its first line
- *  starts with no name. */
+ *  starts with no name, or with a verdict ("READ-OK f6edb44, looks good"). */
 export function signatureOf(text: string): string | null {
-  const first = text.split('\n').find(line => line.trim()) ?? ''
-  const name = SIGNATURE.exec(first)?.[1]?.trim()
-  return name && !/^(?:read-?ok|hold)\b/i.test(name) ? name : null
+  const name = SIGNATURE.exec(firstLine(text))?.[1]?.trim()
+  return name && !/^(?:read-?ok|hold)(?:\s+[0-9a-f]{7,40})?$/i.test(name) ? name : null
+}
+/** Whether [text]'s first line opens with [name] as a signature: the name as `nameKey` reads names, whatever it is made of ("Pip 🐝,
+ *  14:05: ...", "**Pip (2)**: ..."), then a comma, a colon or a bracket. */
+export function signedAs(text: string, name: string): boolean {
+  const target = letters(name), line = firstLine(text)
+  // A name with no letter or digit has no signature to read.
+  if (!target) return false
+  let end = 0
+  for (const char of line) {
+    end += char.length
+    const key = letters(line.slice(0, end))
+    // Characters that are no part of the key (spaces, marks, emoji) are still read, as a name may end in one; a key past the name's is another's.
+    if (key.length > target.length) return false
+    if (key === target && /^[*~`\s]*[,:(]/u.test(line.slice(end))) return true
+  }
+  return false
 }
 /** Whether [body] is the agent's own post: it signs its posts with its name first ("Pip, 14:05: ..."), in any spelling of it. */
-export const signedBy = (body: string, names: readonly string[]): boolean => {
-  const signed = signatureOf(body)
-  return signed !== null && names.some(name => nameKey(name) === nameKey(signed))
-}
+export const signedBy = (body: string, names: readonly string[]): boolean => names.some(name => signedAs(body, name))
 /** Whether [body] names the agent: one of its names as written, as a whole word ("Pip", "@Pip", "**Pip**"). In its own case:
  *  "pip install" names nobody. */
 export const namesAgent = (body: string, names: readonly string[]): boolean =>
@@ -214,7 +231,8 @@ export class GitHubMentions {
     // First read of a repository: from now on, nothing before it.
     const kept = memory.repos[repo] ??= { comments: at, reviewComments: at, issues: at, seen: [], tasks: {}, owned: {}, usedAt: this.now() }
     kept.usedAt = this.now()
-    // An agent new to this repository: its open tasks and pull requests now. Its tasks are told to nobody, since only a task
+    // An agent new to this repository: its open tasks and pull requests now, by its label as GitHub matches it (in any case). Work
+    // another spelling of the label marks (builder:pip two) is found when it next changes. Its tasks are told to nobody, since only a task
     // labelled from now on is news; its pull requests are its own, so what is said on them from now on reaches it.
     for (const agent of agents) {
       if (kept.tasks[agent.agentId]) continue

@@ -18,7 +18,7 @@
  */
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
-import { nameKey, repositorySlug, signatureOf, TEAM } from './githubMentions.js'
+import { nameKey, repositorySlug, signatureOf, signedAs, TEAM } from './githubMentions.js'
 import { identifier, object } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -55,9 +55,11 @@ export async function ledProjects(deps: { me: string | null; live: (harnessId: s
 }
 
 /** What one pull request's comments say: each reader's last verdict, and whether it asks for two reads. A reader is its name as signed
- *  ("Juno, 14:20, to **Pip**: READ-OK f6edb44"), or its GitHub login when unsigned, read as `nameKey` does: "Juno" and "JUNO" are one
- *  reader, one that signs two ways counts once, and the pull request's author, in whatever spelling, is none. */
-export function verdicts(comments: Json[], body: string): { readers: Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string }>; twoReads: boolean } {
+ *  ("Juno, 14:20, to **Pip**: READ-OK f6edb44"), or its GitHub login when unsigned, read as `nameKey` reads names: "Juno" and "JUNO" are
+ *  one reader, and one that signs two ways counts once. What the pull request's own [writers] signed (any of the agents its labels
+ *  and branch name, whatever the length or spelling of the name) is its writer's, so a pull request's author keeps its own HOLD and
+ *  lifts it, and is nobody's reader (mergeReady). */
+export function verdicts(comments: Json[], body: string, writers: readonly string[] = []): { readers: Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string }>; twoReads: boolean } {
   const readers = new Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; at: string }>()
   let twoReads = /\bTWO READS\b/.test(body)
   for (const comment of comments) {
@@ -66,7 +68,8 @@ export function verdicts(comments: Json[], body: string): { readers: Map<string,
     if (/\bTWO READS\b/.test(first)) twoReads = true
     const found = VERDICT.exec(first)
     if (!found) continue
-    const key = nameKey(signatureOf(first) ?? String(object(comment.user).login ?? ''))
+    const writer = writers.find(name => signedAs(first, name))
+    const key = nameKey(writer ?? signatureOf(first) ?? String(object(comment.user).login ?? ''))
     if (!key || key === nameKey(SELF)) continue
     const at = String(comment.created_at ?? '')
     const last = readers.get(key)
@@ -77,10 +80,16 @@ export function verdicts(comments: Json[], body: string): { readers: Map<string,
 
 /** The pull request's author by name: its builder label, else its branch's first part (`pip/12`). */
 export function authorOf(pull: Json): string | null {
-  const label = (Array.isArray(pull.labels) ? pull.labels.map(object) : []).map(l => String(l.name ?? '')).find(n => n.startsWith('builder:'))
-  if (label) return label.slice('builder:'.length)
+  return writersOf(pull).names[0] ?? null
+}
+
+/** Every agent a pull request names as its own, whatever its readers call it: each builder label (GitHub keeps a label's case as
+ *  written, so `Builder:Pip` is one), and its branch's first part (`pip/12`). Nothing of either, the account that opened it. */
+export function writersOf(pull: Json): { names: string[]; account: string } {
+  const labels = (Array.isArray(pull.labels) ? pull.labels.map(object) : []).map(l => String(l.name ?? '')).filter(name => /^builder:/i.test(name))
+    .map(name => name.slice('builder:'.length))
   const branch = String(object(pull.head).ref ?? '')
-  return branch.includes('/') ? branch.split('/')[0]!.toLowerCase() : null
+  return { names: [...labels, ...branch.includes('/') ? [branch.split('/')[0]!.toLowerCase()] : []], account: String(object(pull.user).login ?? '') }
 }
 
 /** Whether every check on a head passed (none at all passes), is still running, or failed with which names. */
@@ -167,11 +176,12 @@ export class GitHubMerge {
       if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head)) continue
       const author = authorOf(pull)
       // Nothing says which agent wrote it (no builder label, no `name/` branch): the account that opened it did.
-      const writer = nameKey(author ?? String(object(pull.user).login ?? ''))
+      const { names, account } = writersOf(pull)
+      const writers = names.length ? names : [account]
       const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 3)
-      const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''))
+      const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), writers)
       if ([...readers.values()].some(r => r.verdict === 'HOLD')) continue
-      const reads = [...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && reader !== writer)
+      const reads = [...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && !writers.some(writer => reader === nameKey(writer)))
       if (reads.length < (twoReads ? 2 : 1)) continue
       const runs = object(await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
       const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))
