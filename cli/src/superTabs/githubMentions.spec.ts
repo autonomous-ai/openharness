@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
-import { builderLabel, GitHubMentions, githubReader, namesAgent, repositorySlug, signedBy, watchedAgents, type GitHubGet, type WatchedAgent } from './githubMentions.js'
+import { builderLabel, GitHubMentions, namesAgent, repositorySlug, signedBy, watchedAgents, type WatchedAgent } from './githubMentions.js'
+import type { GitHubGet } from './githubRest.js'
 
 type Json = Record<string, unknown>
 const root = mkdtempSync(join(tmpdir(), 'super-tab-github-mentions-'))
@@ -204,31 +205,6 @@ describe('whom it reads for (watchedAgents)', () => {
 
   it('reads for nobody while no one is signed in here', async () => {
     expect(await watchedAgents({ me: null, live: () => true, read, roster: async () => [row({})] })).toEqual([])
-  })
-})
-
-describe('reading GitHub as this computer\'s gh login (githubReader)', () => {
-  it('reads the token from gh once, asks with the ETag, and reads the token again after GitHub refuses it', async () => {
-    const run = vi.fn(async () => ({ stdout: 'gho_token\n' }))
-    const request = vi.fn(async (_url: string, init?: RequestInit) => new Response(JSON.stringify([]), {
-      status: (init?.headers as Record<string, string>)['If-None-Match'] ? 401 : 200, headers: { etag: '"v1"' } }))
-    const get = githubReader(run, request as unknown as typeof fetch)
-    expect(await get('/repos/acme/app/issues', null)).toMatchObject({ status: 200, etag: '"v1"', body: [] })
-    expect(await get('/repos/acme/app/issues', '"v1"')).toMatchObject({ status: 401 })
-    await get('/repos/acme/app/issues', null)
-    expect(run).toHaveBeenCalledTimes(2)
-    expect(request.mock.calls[0]![0]).toBe('https://api.github.com/repos/acme/app/issues')
-    expect((request.mock.calls[1]![1]!.headers as Record<string, string>)['If-None-Match']).toBe('"v1"')
-  })
-
-  it('names a rate limit with when it ends, and a missing or signed-out gh by its code', async () => {
-    const limited = githubReader(async () => ({ stdout: 'gho_token' }), (async () => new Response('', { status: 403,
-      headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1800000000' } })) as unknown as typeof fetch)
-    expect((await limited('/repos/acme/app/issues', null)).resetAt).toBe(1_800_000_000_000)
-    const missing = githubReader(async () => { throw Object.assign(new Error('gh was not found'), { code: 'ENOENT', stderr: '' }) })
-    await expect(missing('/repos/acme/app/issues', null)).rejects.toMatchObject({ code: 'GH_MISSING' })
-    const out = githubReader(async () => ({ stdout: '' }))
-    await expect(out('/repos/acme/app/issues', null)).rejects.toMatchObject({ code: 'GH_SIGNED_OUT' })
   })
 })
 
