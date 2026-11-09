@@ -9,15 +9,17 @@ import { InstructionsError, readInstructions, writeInstructions } from './agentI
 /** The protocol's limit for a file and for a text, written out: the apps are built against this number. */
 const LIMIT = 65_536
 
-// Two things a real disk will not show on demand: the one rename that can fail after the new bytes are safely on disk,
-// so a spec can watch what is left behind, and how many bytes a read really took from a file, to prove it is bounded.
-const disk = vi.hoisted(() => ({ failRename: null as Error | null, bytesRead: 0 }))
+// What a real disk will not show on demand: the one rename that can fail after the new bytes are safely on disk, so a spec
+// can watch what is left behind; a rename held at the last step, so a spec can watch what else goes on meanwhile; and how
+// many bytes a read really took from a file, to prove it is bounded.
+const disk = vi.hoisted(() => ({ failRename: null as Error | null, holdRename: null as Promise<void> | null, renameHeld: false, bytesRead: 0 }))
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   return {
     ...actual,
     rename: vi.fn(async (from: string, to: string) => {
       if (disk.failRename) { const error = disk.failRename; disk.failRename = null; throw error }
+      if (disk.holdRename) { const hold = disk.holdRename; disk.holdRename = null; disk.renameHeld = true; await hold; disk.renameHeld = false }
       return actual.rename(from, to)
     }),
     open: vi.fn(async (...args: Parameters<typeof actual.open>) => {
@@ -30,6 +32,28 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 })
 
 const sha256 = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex')
+/** `n` characters of 3 bytes each in UTF-8, and `n` of 4. */
+const cjk = (n: number) => String.fromCodePoint(0x4e2d).repeat(n)
+const emoji = (n: number) => String.fromCodePoint(0x1f600).repeat(n)
+const sup = (n: number) => String.fromCodePoint(n)
+/** An unpaired surrogate is no character: written as UTF-8 it becomes U+FFFD. Built by code, never written out in the source. */
+const lone = (unit: number) => String.fromCharCode(unit)
+
+/** Names that are not one file name that every computer of the account can keep as `<name>.md`, and why. */
+const BAD_NAMES: Array<[string, unknown]> = [
+  ['empty', ''], ['only spaces', '   '], ['not a string', undefined], ['a number', 7], ['null', null], ['an object', { a: 1 }],
+  ['a dot', '.'], ['two dots', '..'], ['a hidden file', '.env'], ['a forward slash', 'a/b'], ['a way up', '../Faye'], ['a back slash', 'a\\b'],
+  ['a NUL', 'a\0b'], ['a new line', 'a\nb'], ['a tab inside', 'a\tb'], ['DEL', 'a\x7fb'], ['a C1 control', 'a\x85b'],
+  ['101 characters', 'x'.repeat(101)],
+  // What Windows will not have in a file name, and which would make the same agent's file a different thing there.
+  ...['<', '>', ':', '"', '|', '?', '*'].map((character): [string, unknown] => [`a ${character}, which Windows forbids`, `Faye${character}Ken`]),
+  ['a trailing dot', 'Faye.'], ['trailing dots', 'Faye..'],
+  // Device names, with or without an extension, in any case: a device and not a file on Windows.
+  ...['CON', 'con', 'Prn', 'AUX', 'nul', 'COM1', 'com9', 'LPT1', 'lpt9', 'COM0', 'LPT0', 'NUL.txt', 'aux.foo.bar'].map((device): [string, unknown] => [`the device name ${device}`, device]),
+  ['a superscript device name', `COM${sup(0xb9)}`],
+  // 200 bytes with `.md` is what a file name of 255 leaves room for, and CJK and emoji names are 3 and 4 bytes a character.
+  ['66 CJK characters (201 bytes with .md)', cjk(66)], ['100 CJK characters', cjk(100)], ['50 emoji (203 bytes with .md)', emoji(50)],
+]
 const posix = process.platform !== 'win32'
 // A folder the account cannot write to is still writable to root, so those cases mean nothing there.
 const unprivileged = posix && process.getuid?.() !== 0
@@ -44,7 +68,10 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
     await mkdir(cwd)
     await mkdir(outside)
   })
-  afterEach(async () => { disk.failRename = null; await rm(join(cwd, '..'), { recursive: true, force: true }) })
+  afterEach(async () => {
+    disk.failRename = null; disk.holdRename = null; disk.renameHeld = false
+    await rm(join(cwd, '..'), { recursive: true, force: true })
+  })
 
   const file = (name = 'Faye') => join(cwd, 'agents', `${name}.md`)
   const put = async (text: string | Buffer, name = 'Faye') => { await mkdir(join(cwd, 'agents'), { recursive: true }); await writeFile(file(name), text) }
@@ -99,17 +126,12 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
       expect(await readFile(join(cwd, 'agents'), 'utf8')).toBe('not a folder')
     })
 
-    it('does not guess at a file that is not UTF-8: saving the guess would change the person\'s bytes', async () => {
+    it('does not guess at a file that is not UTF-8, and says so by name: saving the guess would change the person\'s bytes', async () => {
       await put(Buffer.from([0x66, 0xff, 0xfe, 0x66]))
-      await expect(readInstructions(cwd, 'Faye')).rejects.toMatchObject({ code: 'ERR_ENCODING_INVALID_ENCODED_DATA' })
+      expect(await code(readInstructions(cwd, 'Faye'))).toBe('NOT_UTF8')
     })
 
-    it.each([
-      ['empty', ''], ['only spaces', '   '], ['not a string', undefined], ['a number', 7], ['null', null], ['an object', { a: 1 }],
-      ['a dot', '.'], ['two dots', '..'], ['a hidden file', '.env'], ['a forward slash', 'a/b'], ['a way up', '../Faye'], ['a back slash', 'a\\b'],
-      ['a NUL', 'a\0b'], ['a new line', 'a\nb'], ['a tab inside', 'a\tb'], ['DEL', 'a\u007fb'], ['a C1 control', 'a\u0085b'],
-      ['101 characters', 'x'.repeat(101)],
-    ])('refuses a name that is %s', async (_what, name) => {
+    it.each(BAD_NAMES)('refuses a name that is %s', async (_what, name) => {
       expect(await code(readInstructions(cwd, name))).toBe('BAD_NAME')
     })
 
@@ -120,6 +142,16 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
       expect((await readInstructions(cwd, name)).text).toBe('long')
       await put('space', 'Faye the PM')
       expect((await readInstructions(cwd, 'Faye the PM')).text).toBe('space')
+    })
+
+    // The rules are for the names a disk cannot keep, not for names that merely look like them: an agent called Console,
+    // or Con Man, or COM10, or one with a name in Chinese or with emoji in it, has an instructions file.
+    it.each([
+      ['Console'], ['Auxiliary'], ['nulls'], ['comma'], ['COM10'], ['lpt10'], ['LPT'], ['Con Man'], ['Faye v2'], ['a.b'], ['x'.repeat(100)],
+      [cjk(65)], [emoji(49)], [`${cjk(10)} ${emoji(3)} Faye`],
+    ])('keeps the file of a name like %s', async (name) => {
+      expect(await writeInstructions(cwd, name, 'mine', '')).toEqual({ version: sha256('mine') })
+      expect(await readInstructions(cwd, name)).toEqual({ text: 'mine', version: sha256('mine') })
     })
 
     it.skipIf(!posix)('fails with what the disk said, never as "no file", when the disk cannot look: a project path that loops', async () => {
@@ -222,6 +254,83 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
       await expect(stat(join(cwd, 'agents'))).rejects.toMatchObject({ code: 'ENOENT' })
     })
 
+    // Written as UTF-8 an unpaired surrogate becomes U+FFFD, so the file would not hold what was sent and the version given
+    // back would not be of it: the writer's own editor would then say a change had been made that nobody made.
+    it('refuses text with an unpaired surrogate, whole or cut off, before it touches the disk', async () => {
+      for (const [what, text] of [
+        ['a high one alone', `a${lone(0xd83d)}b`], ['a low one alone', lone(0xde00)], ['an emoji cut off at the end', `ok${lone(0xd83d)}`],
+        ['a pair the wrong way round', lone(0xde00) + lone(0xd83d)],
+      ]) expect(await code(writeInstructions(cwd, 'Faye', text, '')), what).toBe('BAD_TEXT')
+      await expect(stat(join(cwd, 'agents'))).rejects.toMatchObject({ code: 'ENOENT' })
+      // A pair the right way round is one character, and is kept whole.
+      const saved = await writeInstructions(cwd, 'Faye', `fine ${emoji(1)}`, '')
+      expect(saved.version).toBe(sha256(`fine ${emoji(1)}`))
+      expect(await readFile(file(), 'utf8')).toBe(`fine ${emoji(1)}`)
+    })
+
+    // The folder is made once a save is certain to go ahead, so a refused one leaves nothing behind it but the person's own files.
+    it('makes the agents folder only for a save that goes ahead: a refused one leaves none', async () => {
+      for (const [what, attempt, refusal] of [
+        ['a version for a file that is not there', () => writeInstructions(cwd, 'Faye', 'x', sha256('was here')), 'CHANGED'],
+        ['no version for a file that is not there', () => writeInstructions(cwd, 'Faye', 'x', undefined), 'CHANGED'],
+        ['text that is not a string', () => writeInstructions(cwd, 'Faye', 5, ''), 'BAD_TEXT'],
+        ['text over the limit', () => writeInstructions(cwd, 'Faye', 'a'.repeat(LIMIT + 1), ''), 'TOO_LARGE'],
+        ['an unpaired surrogate', () => writeInstructions(cwd, 'Faye', lone(0xd800), ''), 'BAD_TEXT'],
+        ['a name that is not one', () => writeInstructions(cwd, '../Faye', 'x', ''), 'BAD_NAME'],
+      ] as const) {
+        expect(await code(attempt()), what).toBe(refusal)
+        await expect(stat(join(cwd, 'agents')), what).rejects.toMatchObject({ code: 'ENOENT' })
+      }
+      expect(await readdir(cwd)).toEqual([])
+      await writeInstructions(cwd, 'Faye', 'x', '')
+      expect(await readdir(join(cwd, 'agents'))).toEqual(['Faye.md'])
+    })
+
+    describe('two saves of one file', () => {
+      it('take turns: of eight that saw the same version, the first is saved and the other seven are CHANGED', async () => {
+        await put('old')
+        const { version } = await readInstructions(cwd, 'Faye')
+        const results = await Promise.allSettled(Array.from({ length: 8 }, (_, i) => writeInstructions(cwd, 'Faye', `save ${i}`, version)))
+        expect(results.map((result) => result.status)).toEqual(['fulfilled', ...Array(7).fill('rejected')])
+        for (const result of results.slice(1)) expect(result).toMatchObject({ reason: { code: 'CHANGED' } })
+        expect(await readFile(file(), 'utf8')).toBe('save 0')
+        expect(await readdir(join(cwd, 'agents'))).toEqual(['Faye.md'])
+      })
+
+      it('each go through when each names the version of the one before it: none is lost to a race, none is refused', async () => {
+        await put('v0')
+        const texts = ['one', 'two', 'three', 'four']
+        const saved = await Promise.all(texts.map((text, i) => writeInstructions(cwd, 'Faye', text, sha256(i === 0 ? 'v0' : texts[i - 1]))))
+        expect(saved.map((one) => one.version)).toEqual(texts.map(sha256))
+        expect(await readFile(file(), 'utf8')).toBe('four')
+      })
+
+      it('go on after one fails: the next is neither held up nor lost', async () => {
+        await put('old')
+        const { version } = await readInstructions(cwd, 'Faye')
+        disk.failRename = Object.assign(new Error('rename failed'), { code: 'EBUSY' })
+        const [first, second] = await Promise.allSettled([writeInstructions(cwd, 'Faye', 'first', version), writeInstructions(cwd, 'Faye', 'second', version)])
+        expect(first).toMatchObject({ status: 'rejected', reason: { code: 'EBUSY' } })
+        expect(second).toEqual({ status: 'fulfilled', value: { version: sha256('second') } })
+        expect(await readFile(file(), 'utf8')).toBe('second')
+        expect(await readdir(join(cwd, 'agents'))).toEqual(['Faye.md'])
+      })
+
+      it('are no queue for another file: a save of one waits for nobody\'s turn but its own', async () => {
+        await put('old')
+        const { version } = await readInstructions(cwd, 'Faye')
+        let release!: () => void
+        disk.holdRename = new Promise<void>((resolve) => { release = resolve })
+        const slow = writeInstructions(cwd, 'Faye', 'slow', version)
+        await vi.waitFor(() => expect(disk.renameHeld).toBe(true), { timeout: 10_000 })
+        expect(await writeInstructions(cwd, 'Ken', 'quick', '')).toEqual({ version: sha256('quick') })
+        expect(await readFile(file('Faye'), 'utf8')).toBe('old')
+        release()
+        expect(await slow).toEqual({ version: sha256('slow') })
+        expect(await readFile(file('Faye'), 'utf8')).toBe('slow')
+      })
+    })
+
     it('takes text of exactly the limit in bytes and refuses one byte over, counting UTF-8 bytes not characters', async () => {
       const exact = `${'\u{20AC}'.repeat(21_845)}a`
       expect(Buffer.byteLength(exact)).toBe(LIMIT)
@@ -239,15 +348,19 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
       expect((await readFile(file())).length).toBe(LIMIT + 1)
     })
 
-    it('overwrites a file that is not UTF-8 only when the writer names its exact bytes, which no read can give', async () => {
+    // No read can give such a file's text, so no writer has seen it: whatever version it names, a save over it is refused
+    // for what the file is, never as a change somebody else made.
+    it('refuses to save over a file that is not UTF-8, by name, whatever version the writer names', async () => {
       const bytes = Buffer.from([0x66, 0xff, 0xfe, 0x66])
       await put(bytes)
-      expect(await code(writeInstructions(cwd, 'Faye', 'mine', ''))).toBe('CHANGED')
-      expect(await writeInstructions(cwd, 'Faye', 'mine', sha256(bytes))).toEqual({ version: sha256('mine') })
+      for (const seen of ['', sha256(bytes), sha256('older'), undefined]) {
+        expect(await code(writeInstructions(cwd, 'Faye', 'mine', seen)), String(seen)).toBe('NOT_UTF8')
+      }
+      expect(await readFile(file())).toEqual(bytes)
+      expect(await readdir(join(cwd, 'agents'))).toEqual(['Faye.md'])
     })
 
-    it.each([['empty', ''], ['a dot', '.'], ['a way up', '../Faye'], ['a slash', 'a/b'], ['a back slash', 'a\\b'], ['a NUL', 'a\0b'], ['a hidden name', '.Faye'],
-      ['too long', 'x'.repeat(101)], ['not a string', 4]])('refuses a name that is %s, and makes no folder', async (_what, name) => {
+    it.each(BAD_NAMES)('refuses a name that is %s, and makes no folder', async (_what, name) => {
       expect(await code(writeInstructions(cwd, name, 'x', ''))).toBe('BAD_NAME')
       await expect(stat(join(cwd, 'agents'))).rejects.toMatchObject({ code: 'ENOENT' })
       expect(await readdir(cwd)).toEqual([])

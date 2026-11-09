@@ -162,7 +162,8 @@ describe('an agent\'s instructions file', () => {
   async function project() {
     const cwd = await mkdtemp(join(tmpdir(), 'harness-projects-instructions-'))
     folders.push(cwd)
-    const resolve = vi.fn((id: string) => id === 'a1' ? row('a1', cwd) : id === 'a2' ? row('a2', null) : id === 'gone' ? row('gone', join(cwd, 'moved-away')) : undefined)
+    const resolve = vi.fn((id: string) => id === 'a1' ? row('a1', cwd) : id === 'a2' ? row('a2', null) : id === 'gone' ? row('gone', join(cwd, 'moved-away'))
+      : id === 'loop' ? row('loop', join(cwd, 'loop')) : undefined)
     const requests = startProjects(fakeCore({ agents: { resolve } }))
     const ask = (type: string, payload: Record<string, unknown>, asker: Record<string, unknown> = LOCAL_OWNER) => requests[type]!(payload, asker as never)
     return { cwd, resolve, ask, file: join(cwd, 'agents', 'Faye.md') }
@@ -252,19 +253,42 @@ describe('an agent\'s instructions file', () => {
     expect(await ask('agent_instructions_write', { agentId: 'a1', name: 'Faye', text: 'x', version: '' })).toEqual({ error: 'UNSAFE_PATH' })
   })
 
-  it('says READ_FAILED and WRITE_FAILED when the disk will not, and logs what failed, never where or what', async () => {
+  // A file that is not text is not a failure of the disk: it is named, so the app can say what is wrong, and logged by that
+  // name, so nobody has to guess at a bare error.
+  it('says NOT_UTF8 for a file that is not text, whether it is read or saved over, and logs that name and nothing else', async () => {
     const { ask, cwd, file } = await project()
     const log = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       await mkdir(join(cwd, 'agents'))
-      await writeFile(file, Buffer.from([0x66, 0xff, 0xfe, 0x66]))
-      expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({ error: 'READ_FAILED' })
+      const bytes = Buffer.from([0x66, 0xff, 0xfe, 0x66])
+      await writeFile(file, bytes)
+      expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({ error: 'NOT_UTF8' })
+      expect(await ask('agent_instructions_write', { agentId: 'a1', name: 'Faye', text: 'my private words', version: createHash('sha256').update(bytes).digest('hex') })).toEqual({ error: 'NOT_UTF8' })
+      expect(await readFile(file)).toEqual(bytes)
+      expect(log.mock.calls.map((call) => call.join(' '))).toEqual([
+        '[projects] agent_instructions_read failed · NOT_UTF8',
+        '[projects] agent_instructions_write failed · NOT_UTF8',
+      ])
+    } finally { log.mockRestore() }
+  })
+
+  it('says WRITE_FAILED when the disk will not save, and logs its code, never where or what', async () => {
+    const { ask, cwd } = await project()
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
       expect(await ask('agent_instructions_write', { agentId: 'gone', name: 'Faye', text: 'my private words', version: '' })).toEqual({ error: 'WRITE_FAILED' })
       await expect(stat(join(cwd, 'moved-away'))).rejects.toMatchObject({ code: 'ENOENT' })
-      expect(log.mock.calls.map((call) => call.join(' '))).toEqual([
-        '[projects] agent_instructions_read failed · ERR_ENCODING_INVALID_ENCODED_DATA',
-        '[projects] agent_instructions_write failed · ENOENT',
-      ])
+      expect(log.mock.calls.map((call) => call.join(' '))).toEqual(['[projects] agent_instructions_write failed · ENOENT'])
+    } finally { log.mockRestore() }
+  })
+
+  it.skipIf(process.platform === 'win32')('says READ_FAILED when the disk cannot look, and logs its code, never where', async () => {
+    const { ask, cwd } = await project()
+    await symlink('loop', join(cwd, 'loop'))
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      expect(await ask('agent_instructions_read', { agentId: 'loop', name: 'Faye' })).toEqual({ error: 'READ_FAILED' })
+      expect(log.mock.calls.map((call) => call.join(' '))).toEqual(['[projects] agent_instructions_read failed · ELOOP'])
     } finally { log.mockRestore() }
   })
 

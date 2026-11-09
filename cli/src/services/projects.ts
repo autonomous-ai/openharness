@@ -27,8 +27,9 @@ export function startProjects(core: CoreApi): ServiceRequests {
    *  somewhere this daemon runs git. */
   const knownRoots = (): string[] => core.agents.live().flatMap((agent) => agent.cwd ? [agent.cwd] : [])
   const readPullRequests = createPullRequestsStatusReader()
-  /** One of the instructions file's two requests, for an agent in a folder here. A failure of the disk is logged by its
-   *  code alone and answered [failed]: its message names the person's folder. */
+  /** One of the instructions file's two requests, for an agent in a folder here. A refusal that is the person's own
+   *  mistake (a stale version, a bad name) is the reply and no more. A file that is not text is logged by that name, and a
+   *  failure of the disk by its code, and answered [failed]: its message names the person's folder. */
   const instructions = (type: string, failed: string, run: (cwd: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>): ServiceRequest =>
     internalOnThrow(type, async (payload, asker) => {
       if (!accountOwnerOnly(asker)) return { error: 'OWNER_REQUIRED' }
@@ -39,9 +40,10 @@ export function startProjects(core: CoreApi): ServiceRequests {
       try {
         return await run(cwd, payload)
       } catch (error) {
-        if (error instanceof InstructionsError) return { error: error.code }
-        console.error(`[projects] ${type} failed · ${(error as NodeJS.ErrnoException).code ?? 'unknown'}`)
-        return { error: failed }
+        const refusal = error instanceof InstructionsError ? error.code : undefined
+        if (refusal && refusal !== 'NOT_UTF8') return { error: refusal }
+        console.error(`[projects] ${type} failed · ${refusal ?? (error as NodeJS.ErrnoException).code ?? 'unknown'}`)
+        return { error: refusal ?? failed }
       }
     })
   return {
