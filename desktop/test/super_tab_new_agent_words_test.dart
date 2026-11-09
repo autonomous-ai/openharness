@@ -9,7 +9,6 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm_catalog.dart';
-import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 
 import 'keymap_host_test.dart' show MemoryKeymap, key;
@@ -102,11 +101,10 @@ Future<void> tapNewAgent(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
-/// + New agent's form: the role chip and a `New agent` button.
+/// + New agent's form (Swarm v4): a `New agent` button and no role to choose: a PM is New project's.
 void _expectNewAgentForm(WidgetTester tester) {
   expect(_form, findsOneWidget);
-  expect(_kind, findsOneWidget);
-  expect(tester.widget<NewHarnessForm>(_form).controller.agentKind, 'member');
+  expect(_kind, findsNothing);
   expect(
     find.descendant(
       of: find.byKey(const ValueKey('new-harness-field-start')),
@@ -117,60 +115,6 @@ void _expectNewAgentForm(WidgetTester tester) {
 }
 
 void main() {
-  // Audit 1.3.89 finding 11 (task #4445): the role reads as the
-  // left pane names it, Product Manager, and the other role is a plain Agent, never Lead or Member.
-  testWidgets('the role chip and menu say Agent or Product Manager, whole', (
-    tester,
-  ) async {
-    final f = await mountSwarm(tester, textScale: 1.3);
-    await tapNewAgent(tester);
-    // The narrowest window, where the left pane may fold away: the form stays.
-    tester.view.physicalSize = const Size(880, 900);
-    await tester.pumpAndSettle();
-
-    expect(
-      find.descendant(of: _kind, matching: find.text('Agent')),
-      findsOneWidget,
-    );
-    final words = RegExp(r'\b(Lead|Member)\b');
-    expect(
-      find.descendant(of: _form, matching: find.textContaining(words)),
-      findsNothing,
-    );
-
-    await tester.tap(_kind);
-    await tester.pumpAndSettle();
-    final details = {
-      'Agent': 'Works with you in its own chat',
-      'Product Manager': 'Leads a project and its crew',
-    };
-    for (final MapEntry(key: label, value: detail) in details.entries) {
-      final row = find.byKey(
-        ValueKey(
-          'new-harness-agent-kind-${label == 'Agent' ? 'member' : 'lead'}',
-        ),
-      );
-      expect(
-        find.descendant(of: row, matching: find.text(label)),
-        findsOneWidget,
-      );
-      for (final line in [label, detail]) {
-        final paragraph = tester.renderObject<RenderParagraph>(
-          find.descendant(of: row, matching: find.text(line)),
-        );
-        expect(paragraph.didExceedMaxLines, isFalse, reason: '$line is cut');
-      }
-    }
-    await tester.tap(find.byKey(const ValueKey('new-harness-agent-kind-lead')));
-    await tester.pumpAndSettle();
-    expect(
-      find.descendant(of: _kind, matching: find.text('Product Manager')),
-      findsOneWidget,
-    );
-    expect(tester.widget<NewHarnessForm>(_form).controller.agentKind, 'lead');
-    await unmountSwarm(tester, f);
-  });
-
   // Audit 1.3.89 finding 11 (task #4445): in a Swarm, every way to New Agent
   // opens what + New agent opens, so a new agent means one thing.
   final ways = <String, Future<void> Function(WidgetTester)>{
@@ -205,60 +149,4 @@ void main() {
     expect(_form, findsNothing);
     await unmountSwarm(tester, f);
   });
-
-  // Product owner, relayed by the PM (task #4445): the role is chosen where
-  // the agent is started, beside New agent, not among the header's pickers.
-  for (final way in ['+ New agent', 'Cmd-N']) {
-    testWidgets('$way: the role chip sits just left of New agent', (
-      tester,
-    ) async {
-      final f = await mountSwarm(tester);
-      if (way == 'Cmd-N') {
-        await key(tester, LogicalKeyboardKey.keyN, cmd: true);
-        await tester.pumpAndSettle();
-      } else {
-        await tapNewAgent(tester);
-      }
-      final start = find.byKey(const ValueKey('new-harness-field-start'));
-      final chip = tester.getRect(_kind);
-      final button = tester.getRect(start);
-      // Below the task's text, in the box's bottom row: no longer up among
-      // the header's pickers.
-      final task = tester.getRect(
-        find.byKey(const ValueKey('new-harness-task')),
-      );
-      expect(chip.top, greaterThan(task.top), reason: 'Not the header');
-      expect((chip.center.dy - button.center.dy).abs(), lessThan(2));
-      expect(chip.right, lessThanOrEqualTo(button.left));
-      expect(button.left - chip.right, lessThan(16), reason: 'Beside it');
-
-      // Tab goes from the chip to New agent, and its menu still opens.
-      tester.widget<DesktopPill>(_kind).focusNode!.requestFocus();
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
-      await tester.pump();
-      final focused = FocusManager.instance.primaryFocus!.context!;
-      expect(
-        find.descendant(
-          of: start,
-          matching: find.byElementPredicate((e) => e == focused),
-          matchRoot: true,
-        ),
-        findsOneWidget,
-      );
-      await tester.tap(_kind);
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey('new-harness-agent-kind-lead')),
-        findsOneWidget,
-      );
-      await tester.tap(_kind, warnIfMissed: false);
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey('new-harness-agent-kind-lead')),
-        findsNothing,
-      );
-      await unmountSwarm(tester, f);
-    });
-  }
 }

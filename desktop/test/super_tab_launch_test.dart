@@ -68,6 +68,7 @@ class SuperTabFixtureConnection extends WsConn {
   int? maxAvailableAgents = 16;
 
   bool loseCreate = false, loseJoin = false;
+  bool journaled = true;
 
   /// Refuses the next join as the backend would, before anything is written.
   SuperTabFailure? failJoin;
@@ -362,13 +363,16 @@ class SuperTabFixtureConnection extends WsConn {
         );
       }
       cancelledCreation = false;
-      final records = store.values.entries.where(
-        (e) => e.key.startsWith('super_tab.launch.'),
-      );
-      expect(records, hasLength(1));
-      final saved = jsonDecode(records.single.value) as Map;
-      expect(saved['phase'], 'starting');
-      expect(saved['creationId'], payload['creationId']);
+      // The old launch keeps a journal of its start; Swarm v4's New agent keeps none (new_agent.dart).
+      if (journaled) {
+        final records = store.values.entries.where(
+          (e) => e.key.startsWith('super_tab.launch.'),
+        );
+        expect(records, hasLength(1));
+        final saved = jsonDecode(records.single.value) as Map;
+        expect(saved['phase'], 'starting');
+        expect(saved['creationId'], payload['creationId']);
+      }
       native = {
         'id': 'native-lead',
         'name': nativeName,
