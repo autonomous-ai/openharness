@@ -215,7 +215,9 @@ export function agentProjectId(state: SuperTabState, target: Agent): string {
     const main = target.mainProjectId ? projectsOf(state).find(p => p.id === target.mainProjectId) : undefined
     return main && regularMayWorkIn(state, target, main) ? main.id : NO_PROJECT
   }
-  return target.projectId ?? state.conversations.find(c => c.agentIds.includes(target.id))?.projectId ?? 'lead'
+  // Its 1:1 chat with its person (Swarm v4) is in no project: placed by it, an agent fell back to the project 'lead', which a
+  // Swarm whose projects have their own ids does not have, and its host's every read was refused (anh Dee's Mac 3, 2026-11-09).
+  return target.projectId ?? state.conversations.find(c => c.agentIds.includes(target.id) && !isAgentChat(c))?.projectId ?? 'lead'
 }
 /** The project id of an agent in no project: no project has it, so a comparison with one is false and projectOf refuses it. */
 export const NO_PROJECT = ''
