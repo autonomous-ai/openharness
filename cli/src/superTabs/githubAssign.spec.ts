@@ -350,6 +350,18 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       '/repos/acme/app/issues/2/labels/builder%3Ajuno'])
   })
 
+  it('keeps a down builder\'s tasks while nobody else can take them, and gives back a stopping one\'s all the same', async () => {
+    const long = new Date(Date.parse('2026-11-09T07:31:00Z') - 4 * 60 * 60_000).toISOString()
+    const down = setup([issue(1, ['size:s', 'builder:pip']), issue(2, ['size:s', 'builder:pip', 'status:taken'])],
+      { crew: { builders: [], machines: crew().machines, away: [{ name: 'Pip', label: 'builder:pip', why: 'down', since: long }] } })
+    await down.assigner.tick()
+    expect(down.github.sent.filter(s => s.method === 'DELETE')).toEqual([])
+    const stopping = setup([issue(1, ['size:s', 'builder:pip'])],
+      { crew: { builders: [], machines: crew().machines, away: [{ name: 'Pip', label: 'builder:pip', why: 'stopping' }] } })
+    await stopping.assigner.tick()
+    expect(stopping.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/1/labels/builder%3Apip'])
+  })
+
   it('forgets the asks and take backs it made once their pull request or task is no longer open', async () => {
     const team: Crew = { ...crew(), away: [{ name: 'Atlas', label: 'builder:atlas', why: 'stopping' }] }
     const f = setup([issue(1, ['size:s', 'builder:atlas'])], { crew: team })

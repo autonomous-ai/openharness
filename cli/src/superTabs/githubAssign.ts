@@ -149,7 +149,9 @@ export class GitHubAssign {
     // PM): their builders have done their part, so none is called quiet, and one whose builder went away is kept, as its
     // pull request merges without it. Another builder would do it again.
     const withReaders = await this.askReaders(project, read, pulls, crew)
-    await this.takeBack(repo, issues, crew.away ?? [], undefined, withReaders)
+    // One whose machine is down keeps its tasks while nobody else can take them: they would only come back to it, labels and
+    // comments twice over. One its person is stopping gives them back all the same, for whoever joins.
+    await this.takeBack(repo, issues, (crew.away ?? []).filter(away => away.why !== 'down' || crew.builders.length > 0), undefined, withReaders)
     if (!read.problem.builders.length) return
     // Only while another builder has room: a team's one builder would be given its task straight back.
     const short = outOfQuota(read)
