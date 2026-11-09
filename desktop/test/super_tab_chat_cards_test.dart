@@ -15,7 +15,7 @@ import 'support/super_tab_fixture.dart';
 void main() {
   group('a sent brief', () {
     ConversationServer server() {
-      final server = ConversationServer();
+      final server = ConversationServer.chat();
       (server.state['agents'] as List).add({
         'id': 'kai',
         'name': 'Kai',
@@ -89,6 +89,8 @@ void main() {
         ),
       );
       expect(card.width, lessThan(tester.getSize(ship).width / 2));
+      // The read mark's save is on its way: let it land.
+      await tester.pump(const Duration(milliseconds: 300));
     });
   });
 
@@ -99,7 +101,7 @@ void main() {
     testWidgets('from an agent folds after about six lines, with More', (
       tester,
     ) async {
-      final server = ConversationServer()..append(long, agent: true);
+      final server = ConversationServer.chat()..append(long, agent: true);
       await showView(tester, server);
       expect(find.text('More'), findsOneWidget);
       expect(find.text('Line 14 of the plan.').hitTestable(), findsNothing);
@@ -112,7 +114,7 @@ void main() {
     testWidgets('fades out above More, so no line shows cut in half', (
       tester,
     ) async {
-      final server = ConversationServer()..append(long, agent: true);
+      final server = ConversationServer.chat()..append(long, agent: true);
       await showView(tester, server);
       final fade = find.byKey(const ValueKey('swarm-fold-fade'));
       expect(fade, findsOneWidget);
@@ -126,7 +128,7 @@ void main() {
     });
 
     testWidgets('from a person is never folded', (tester) async {
-      final server = ConversationServer()..append(long);
+      final server = ConversationServer.chat()..append(long);
       await showView(tester, server);
       expect(find.text('More'), findsNothing);
     });
@@ -136,7 +138,7 @@ void main() {
     testWidgets('is a card: Decision, its question, and View for the rest', (
       tester,
     ) async {
-      final server = ConversationServer();
+      final server = ConversationServer.chat();
       server.append(
         'River asks owner (#12): Ship it tonight?\n\nOptions: Yes, No\n',
         agent: true,
@@ -193,7 +195,7 @@ void main() {
     testWidgets('More opens with Enter', (tester) async {
       final long = [for (var i = 1; i <= 14; i++) 'Line $i of the plan.']
           .join('\n\n');
-      final server = ConversationServer()..append(long, agent: true);
+      final server = ConversationServer.chat()..append(long, agent: true);
       await showView(tester, server);
       await press(tester, 'More');
       expect(find.text('More'), findsNothing);
