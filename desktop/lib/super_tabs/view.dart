@@ -6301,6 +6301,9 @@ class _SuperTabViewState extends State<SuperTabView>
                               ? SwarmAgentInstructions(
                                   agent: instructionsAgent,
                                   app: widget.app,
+                                  machineName: widget.machineName(
+                                    instructionsAgent.machineId,
+                                  ),
                                   onClose: () =>
                                       setState(() => _instructionsOpen = false),
                                 )
