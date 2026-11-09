@@ -245,6 +245,17 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(asks(f)).toEqual([expect.stringMatching(/to \*\*(Pip|Juno)\*\*: please read this pull request/)])
     })
 
+    // A name the signature pattern cannot read fell back to the shared GitHub login, so its author's own READ-OK read as a reader's.
+    it.each([['Atlas Reed Two', 'builder:atlas-reed-two'], ['Đức Anh', 'builder:đức-anh']])('counts no READ-OK its author %s signed, and asks a reader', async (name, label) => {
+      const own: Crew = { builders: [...crew().builders, { id: 'writer', name, label, machineId: 'mac', engine: 'claude' }], machines: crew().machines }
+      const f = setup([], { crew: own })
+      f.github.state.pulls = [pull({ labels: [{ name: label }], head: { sha: HEAD, ref: 'task/14' } })]
+      f.github.state.comments.set(30, [comment(`${name}, 07:10, to **Juno**: READ-OK f6edb44`)])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/: please read this pull request/)])
+      expect(asks(f)[0]).not.toContain(name)
+    })
+
     it('asks a reader for the team\'s pull request wherever it is among a busy repository\'s hundred and more', async () => {
       const f = setup([], { crew: team })
       const people = Array.from({ length: 119 }, (_, i) => pull({ number: 100 + i, labels: [], head: { sha: HEAD, ref: `fix-${i}` }, body: '' }))

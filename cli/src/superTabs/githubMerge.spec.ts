@@ -72,6 +72,58 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     expect(f.merges()).toEqual([])
   })
 
+  // #3690 read a two-word name as its label does. A name the signature pattern cannot read (three words, another script, an apostrophe,
+  // an emoji, odd spaces) fell back to the GitHub login, which every agent of a person shares, so its author's own READ-OK still counted
+  // as someone else's and merged (Q3, 2026-11-10).
+  const cp = (...points: number[]) => String.fromCodePoint(...points)
+  it.each([
+    ['Atlas Reed Two', 'builder:atlas-reed-two', 'Atlas Reed Two'],
+    ['Đức Anh', 'builder:đức-anh', 'Đức Anh'],
+    ['José', 'builder:josé', 'José'],
+    ['小明', 'builder:小明', '小明'],
+    ["O'Neil", "builder:o'neil", "O'Neil"],
+    ['Pip Two', 'builder:pip-two', 'Pip  Two'],
+    ['Pip Two', 'builder:pip-two', `Pip${cp(0xa0)}Two`],
+    ['Pip Two', 'builder:pip-two', `Pip${cp(0x200b)} Two`],
+    ['Pip Two', 'builder:pip-two', `${cp(0xff30)}ip ${cp(0xff34)}wo`],
+    ['Pip Two', 'builder:pip-two', `**Pip Two** ${cp(0x1f41d)}`],
+    ['Pip Two', 'builder:pip-two', 'Pîp Twö'],
+  ])('never merges on its author\'s own READ-OK: %s, labelled %s, signing %j', async (name, label, signature) => {
+    const f = setup()
+    f.crew.mockResolvedValue({ builders: [{ id: 'writer', name, label, machineId: 'mac', engine: 'claude' }], machines: [] })
+    f.github.repo.pulls = [pull({ labels: [{ name: label }], head: { sha: HEAD, ref: 'task/2' } })]
+    f.github.repo.comments.set(4, [comment(`${signature}, 14:20, to **Juno**: READ-OK f6edb44`)])
+    await f.merger.tick()
+    expect(f.merges()).toEqual([])
+    // Another reader still merges it.
+    f.github.repo.comments.set(4, [comment(`${signature}, 14:20, to **Juno**: READ-OK f6edb44`), comment('Juno, 14:21: READ-OK f6edb44')])
+    await f.merger.tick()
+    expect(f.merges()).toHaveLength(1)
+  })
+
+  it('takes no READ-OK from the agent its branch names when its label names another, nor the other way round', async () => {
+    const f = setup()
+    f.crew.mockResolvedValue({ builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' },
+      { id: 'atlas', name: 'Atlas', label: 'builder:atlas', machineId: 'mac', engine: 'codex' }], machines: [] })
+    f.github.repo.pulls = [pull({ labels: [{ name: 'builder:atlas' }], head: { sha: HEAD, ref: 'pip/2' } })]
+    for (const writer of ['Pip', 'Atlas']) {
+      f.github.repo.comments.set(4, [comment(`${writer}, 14:20: READ-OK f6edb44`)])
+      await f.merger.tick()
+      expect(f.merges(), writer).toEqual([])
+    }
+  })
+
+  it('counts a reader who signs its name two ways once for TWO READS', async () => {
+    const f = setup()
+    f.github.repo.pulls = [pull({ body: 'Closes #2\n\nTWO READS: it changes the default voice.' })]
+    f.github.repo.comments.set(4, [comment('Kai Lee, 14:20: READ-OK f6edb44'), comment('kai-lee, 14:22: READ-OK f6edb44')])
+    await f.merger.tick()
+    expect(f.merges()).toEqual([])
+    f.github.repo.comments.set(4, [comment('Kai Lee, 14:20: READ-OK f6edb44'), comment('Juno, 14:22: READ-OK f6edb44')])
+    await f.merger.tick()
+    expect(f.merges()).toHaveLength(1)
+  })
+
   it('merges the team\'s pull request wherever it is among a busy repository\'s hundred and more', async () => {
     const f = setup()
     const people = Array.from({ length: 119 }, (_, i) => pull({ number: 100 + i, labels: [], head: { sha: HEAD, ref: `fix-${i}` } }))
