@@ -148,6 +148,7 @@ class SuperTabView extends StatefulWidget {
     this.app,
     this.onNewProject,
     this.onNewAgent,
+    this.onAttachAgent,
     this.onNewSwarm,
     this.onChooseAgentTerminal,
     this.linkSwarms,
@@ -155,16 +156,16 @@ class SuperTabView extends StatefulWidget {
     this.paneStore,
     this.github,
     this.instructions,
-    this.board = false,
+    this.board = true,
   });
   final SuperTabController controller;
 
   /// Where pane widths are remembered; the app's local store when null.
   final LocalKeyValueStore? paneStore;
 
-  /// Desktop's layout of task #3787 (anh Dee): a project opens its Board with the person's Buddy beside it, the left
-  /// rail has no Buddy entry and no Threads, and a chat is one flat list (old thread replies inline in time order, a
-  /// reply quoting its message). The web keeps today's layout for now.
+  /// Swarm v4's layout (anh Dee, 2026-11-08), the default: a project's channel that only agents post in, the person's
+  /// own agents in the left pane, their chats and a task's thread beside it. Only the browser still passes false, for
+  /// the v3 layout, until the web moves to v4 (anh Dee, 2026-11-09).
   final bool board;
   final VoidCallback onInvite;
   final ValueChanged<SuperTabConversation> onAddAgent;
@@ -183,6 +184,10 @@ class SuperTabView extends StatefulWidget {
   /// + New agent (task #4196): opens the workspace's Cmd-N form with Member or
   /// Lead. Null shows no + New agent.
   final VoidCallback? onNewAgent;
+
+  /// Attach beside + New agent (Swarm v4): the picker of agents already running on its person's own computers. Null shows
+  /// no Attach.
+  final VoidCallback? onAttachAgent;
 
   /// The existing New Swarm, for the Swarm dropdown atop the left bar; none
   /// without it.
@@ -2081,6 +2086,7 @@ class _SuperTabViewState extends State<SuperTabView>
     app: widget.app,
     onNewProject: widget.onNewProject,
     onNewAgent: widget.onNewAgent,
+    onAttachAgent: widget.board ? widget.onAttachAgent : null,
     onOpenAgentChat: _openAgentChat,
     onOpenAgentTerminal: _openAgentTerminal,
     onNewSwarm: widget.onNewSwarm,
@@ -4838,14 +4844,10 @@ class _SuperTabViewState extends State<SuperTabView>
       receipts: [
         if (message.source['truncated'] == true ||
             message.source['interrupted'] == true)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Text(
-              message.source['truncated'] == true
-                  ? 'Excerpt · open the terminal for the full response'
-                  : 'Response interrupted',
-              style: DesktopChrome.metadata(),
-            ),
+          SuperTabPostNote(
+            message.source['truncated'] == true
+                ? 'Excerpt · open the terminal for the full response'
+                : 'Response interrupted',
           ),
         if (_agentTalk(message.conversationId))
           if (superTabPostOfflineLine(c.snapshot, message) case final line?)
@@ -5044,9 +5046,11 @@ class _SuperTabViewState extends State<SuperTabView>
   /// the rows already shown.
   Set<String> _joined(List<SuperTabMessage> messages, SuperTabMessage? split) {
     // A task (a message with a thread, Swarm v4) stands on its own row, with its name and face, as a tagged one does; so
-    // does a post to a teammate, where "Pip to Juno" shows.
+    // does a post to a teammate, where "Pip to Juno" shows. That reads the message alone, so no roster change regroups a row.
+    final talk =
+        messages.isNotEmpty && _agentTalk(messages.first.conversationId);
     bool tagged(SuperTabMessage m) =>
-        _postTo(m).isNotEmpty ||
+        (talk && m.namesAgents) ||
         switch (c.thread(m.conversationId, m.id)) {
           final thread? => thread.askTag != null || thread.replies > 0,
           null => false,
@@ -5431,7 +5435,8 @@ class _SuperTabViewState extends State<SuperTabView>
                     // A project's channel nobody has posted in says why: an empty page under the project's name read as broken
                     // (anh Dee, 2026-11-09), and the agents' real talk is on GitHub.
                     : widget.board &&
-                          c.snapshot?.isProjectLead(group.id) == true
+                          c.snapshot?.isProjectLead(group.id) == true &&
+                          c.messagesRead(group.id)
                     ? superTabEmptyChannel
                     // Empty means empty (anh Dee's rule 7, task #4465): no words for a chat with nothing in it.
                     : null) {

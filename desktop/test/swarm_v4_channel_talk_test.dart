@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -77,6 +78,25 @@ void main() {
   });
 
   testWidgets(
+    'a channel whose first page is on its way does not say it is empty',
+    (tester) async {
+      final server = swarmV4Channel();
+      say(server, 'Pip', 'free: Pip');
+      await openSwarmV4(tester, server, saved: 'agent-chat-pip');
+      // The channel is opened from the left, and its posts are read after the Swarm: for that time nothing has been said.
+      server.holdMessages = Completer<void>();
+      await tester.tap(key('super-group-channel'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text(emptyLine), findsNothing);
+      server.holdMessages!.complete();
+      await tester.pumpAndSettle();
+      expect(rowOf('free: Pip'), findsOneWidget);
+      expect(find.text(emptyLine), findsNothing);
+    },
+  );
+
+  testWidgets(
     'an agent\'s chat with its person never says the channel is empty',
     (tester) async {
       final server = swarmV4Channel();
@@ -134,13 +154,59 @@ void main() {
     'a post to a deleted agent, or to its own author, reads as no one\'s',
     (tester) async {
       final server = swarmV4Channel();
+      say(server, 'Pip', 'free: Pip');
       final gone = say(server, 'Pip', 'Is @Ghost still here?', to: ['ghost']);
       final itself = say(server, 'Pip', 'Note to self.', to: ['pip']);
       await openSwarmV4(tester, server);
       expect(key('super-message-to-$gone'), findsNothing);
       expect(key('super-message-to-$itself'), findsNothing);
+      // Whether a row stands on its own reads the message alone, not the agents the Swarm has: a post to an agent that is gone
+      // keeps its name, as it did while the agent was there.
+      expect(
+        find.descendant(
+          of: rowOf('Is @Ghost still here?'),
+          matching: find.text('Pip'),
+        ),
+        findsOneWidget,
+      );
     },
   );
+
+  testWidgets('an agent named twice in a post is named once', (tester) async {
+    final server = swarmV4Channel();
+    final twice = say(
+      server,
+      'Faye',
+      '@Juno and @Pip, read #12.',
+      to: ['juno', 'pip', 'juno'],
+    );
+    await openSwarmV4(tester, server);
+    expect(
+      tester.widget<Text>(key('super-message-to-$twice')).data,
+      'to Juno, Pip',
+    );
+    expect(find.text('Juno is offline'), findsOneWidget);
+  });
+
+  testWidgets('a long name and who it is to stay on one line at 700 px', (
+    tester,
+  ) async {
+    const long = 'Bartholomew of the Northern Reaches and Southern Seas Crew';
+    final server = swarmV4Channel(pip: long);
+    final ask = say(server, long, '@Juno can you read #12?', to: ['juno']);
+    await openSwarmV4(tester, server, size: const Size(700, 800));
+    expect(tester.takeException(), isNull);
+    final to = tester.getRect(key('super-message-to-$ask'));
+    final name = tester.getRect(
+      find.descendant(
+        of: rowOf('@Juno can you read #12?'),
+        matching: find.text(long),
+      ),
+    );
+    // Side by side: the name gives way, and who it is to stays beside it.
+    expect(to.left, greaterThanOrEqualTo(name.right));
+    expect((to.center.dy - name.center.dy).abs(), lessThan(8));
+  });
 
   testWidgets('a task\'s chat reads its posts the same way', (tester) async {
     final server = swarmV4Channel();
@@ -179,6 +245,53 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets(
+    'replies to teammates in a task\'s chat each keep their name line',
+    (tester) async {
+      final server = swarmV4Channel();
+      final task = say(
+        server,
+        'Faye',
+        '#12 The voice declines. @Pip yours.',
+        to: ['pip'],
+      );
+      String reply(String text, List<String> to, String at) {
+        final id = swarmV4Post(server, 'Pip', text, thread: task);
+        server.messages.last
+          ..['createdAt'] = at
+          ..['recipientIds'] = to;
+        return id;
+      }
+
+      // Two minutes apart, so that replies by one agent would be one run: each is to someone else.
+      final toJuno = reply('@Juno read #12.', ['juno'], '2026-11-09T02:00:00Z');
+      final toFaye = reply('@Faye done.', ['faye'], '2026-11-09T02:02:00Z');
+      final c = await openSwarmV4(tester, server);
+      await tester.tap(key('super-thread-bar-$task'));
+      await tester.pumpAndSettle();
+      expect(c.openedThread?.root, task);
+      for (final (id, who) in [(toJuno, 'Juno'), (toFaye, 'Faye')]) {
+        expect(
+          find.descendant(
+            of: key('super-thread-panel'),
+            matching: key('super-message-to-$id'),
+          ),
+          findsOneWidget,
+          reason: 'the reply to $who reads as talk',
+        );
+      }
+      // Only the one to the agent whose computer is off waits.
+      expect(
+        find.descendant(
+          of: key('super-thread-panel'),
+          matching: key('super-message-offline-$toJuno'),
+        ),
+        findsOneWidget,
+      );
+      expect(key('super-message-offline-$toFaye'), findsNothing);
+    },
+  );
 
   testWidgets(
     'an ask to an agent whose computer is off says so under it, while it waits',
@@ -296,6 +409,18 @@ void main() {
           'author': {'kind': 'agent', 'id': author, 'name': author},
           'recipientIds': to,
         });
+
+    test('an agent named twice is named once, and an author never', () {
+      final swarm = team({'juno', 'pip'});
+      expect(
+        superTabPostOfflineLine(swarm, ask(['juno', 'juno'])),
+        'Juno is offline',
+      );
+      expect(superTabPostTo(swarm, ask(['juno', 'faye', 'juno', 'pip'])), [
+        'Juno',
+        'Pip',
+      ]);
+    });
 
     test(
       'one, two or three agents are named, in the order they were asked',

@@ -493,6 +493,14 @@ String _backendId(List<String> parts) => const DartSha256()
     .substring(0, 24);
 
 class ConversationServer {
+  ConversationServer();
+
+  /// A Swarm with no project, whose first chat is a plain one a person writes in (Swarm v4: a project's channel is for
+  /// agents), as the chat's own tests need.
+  ConversationServer.chat() {
+    state['projects'] = <dynamic>[];
+  }
+
   int revision = 0;
 
   /// The Swarm reads this server answers, worked out from [state].
@@ -533,6 +541,9 @@ class ConversationServer {
   // While set, a thread's older pages (`thread` and `before`) wait for it, and
   // nothing else does: a slow older read while the page reloads.
   Completer<void>? holdThreadPages;
+  // While set, the read of a conversation's messages waits for it, and nothing else does: the state is
+  // read and the page not yet.
+  Completer<void>? holdMessages;
   // Makes every command answer with this refusal: {code, message}, with
   // [refuseStatus] as its HTTP status.
   Map<String, String>? refuse;
@@ -2012,6 +2023,9 @@ class ConversationServer {
       return result;
     }
     if (holdReads case final hold?) await hold.future;
+    if (holdMessages case final hold? when path.contains('/messages')) {
+      await hold.future;
+    }
     if (failReads) throw StateError('Offline');
     if (failReadsOf case final part? when path.contains(part)) {
       throw StateError('Offline');

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/swarm_layout.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
@@ -810,21 +811,42 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                                 .AppDesktop
                                                 .bubbleNamePadding,
                                             child: Wrap(
-                                              // "Pip to Juno" reads as one phrase.
-                                              spacing: widget.to.isEmpty
-                                                  ? 8
-                                                  : 4,
+                                              spacing: 8,
                                               crossAxisAlignment:
                                                   WrapCrossAlignment.center,
                                               children: [
-                                                _name(nameStyle, finger),
-                                                if (widget.to.isNotEmpty)
-                                                  Text(
-                                                    'to ${widget.to.join(', ')}',
-                                                    key: ValueKey(
-                                                      'super-message-to-${message.id}',
-                                                    ),
-                                                    style: nameStyle,
+                                                if (widget.to.isEmpty)
+                                                  _name(nameStyle, finger)
+                                                else
+                                                  // "Pip to Juno" is one phrase: the name and who it is to stay on a line,
+                                                  // each giving way to the other.
+                                                  Row(
+                                                    mainAxisSize:
+                                                        MainAxisSize.min,
+                                                    children: [
+                                                      Flexible(
+                                                        child: _name(
+                                                          nameStyle,
+                                                          finger,
+                                                        ),
+                                                      ),
+                                                      const SizedBox(
+                                                        width: SwarmLayout
+                                                            .namePhraseGap,
+                                                      ),
+                                                      Flexible(
+                                                        child: Text(
+                                                          'to ${widget.to.join(', ')}',
+                                                          key: ValueKey(
+                                                            'super-message-to-${message.id}',
+                                                          ),
+                                                          maxLines: 1,
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                          style: nameStyle,
+                                                        ),
+                                                      ),
+                                                    ],
                                                   ),
                                                 if (widget.thread?.askTag
                                                     case final tag?)

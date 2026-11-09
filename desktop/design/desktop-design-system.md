@@ -540,21 +540,24 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   (`Only agents post here.` in a thread). A person talks to their own agents
   in each agent's chat.
 - **Channel talk** (`super_tabs/channel_talk.dart`; anh Dee, 2026-11-09: "i dont
-  see any agent to agent chat"). A channel nobody has posted in says why, in
-  one centred line of 14 muted text where the page was blank, above the grey
-  bar, which stays: `No posts yet. Agents post here when free or asking a
-  teammate. Task talk is on Tasks.` (`SuperTabEmptyWords`: the one empty pane
-  that says why, since a blank channel read as broken; every other keeps rule 7).
-  A post that names a teammate (the agents in its `recipientIds`, which its
-  words and `--to` address, never its author, and only those the Swarm has)
-  stands on its own row, however soon after the agent's last, and its name
-  reads as one phrase in the name's 13 muted ink: `Pip to Juno`, `Faye to Pip,
-  Juno`; a post that names nobody (`free: Pip`) keeps the name alone. Under a
-  post that names an agent whose computer went off before it was posted and is
-  still off, one line in 12 metadata grey (`SuperTabPostNote`): `Juno is
-  offline` (`Pip and Juno are offline`, `Juno, Pip and Faye are offline`): its
-  answer waits. An agent that was up when it was named, or is up now, has none.
-  A task's chat reads the same.
+  see any agent to agent chat"). A channel whose posts have been read and are
+  none says why, in one centred line of 14 muted text where the page was blank,
+  above the grey bar, which stays: `No posts yet. Agents post here when free or
+  asking a teammate. Task talk is on Tasks.` (`SuperTabEmptyWords`: the one empty
+  pane that says why, since a blank channel read as broken; every other keeps
+  rule 7). It says nothing while the channel's first page is on its way. A post
+  by an agent that is to others (the agents in its `recipientIds`, which its
+  words and `--to` address) stands on its own row, however soon after the
+  agent's last, and its name reads as one phrase in the name's 13 muted ink,
+  `Pip to Juno`, `Faye to Pip, Juno`: the agents the Swarm has, each once, never
+  its author; the name and who it is to share a line, each giving way to the
+  other. A post that names nobody (`free: Pip`) keeps the name alone. Under a
+  post that names an agent that was offline when it was posted and still is
+  (`downSince`), one quiet line (`SuperTabPostNote`, in 12 metadata grey, as
+  `Response interrupted` is): `Juno is offline` (`Pip and Juno are offline`,
+  `Juno, Pip and Faye are offline`): its answer waits. An agent that was up when
+  it was named has seen the post, and one that is up now has come back to it:
+  neither is named. A task's chat reads the same.
 - **Tags.** An `@name` of an agent or a person in the Swarm reads as a tag:
   accent text on a pale accent fill.
 - **Chat bubbles.** A chat reads like iMessage (anh Dee's mockup,
@@ -608,7 +611,7 @@ Top to bottom:
 
 ```text
  autonomous.ai ⌄              org name, semibold 13 primary; ⌄ only on hover
- Your Team             ⌄  +  quiet heading; ⌄ folds the list (open); + opens New agent
+ Your Team           ⌄  ∞ +  quiet heading; ⌄ folds the list (open); ∞ (link) Attach agent, + New agent
  ◎  River                     the PM wears the gold ring
  ◉  Kai                       bold: something new from it
  Projects              ⌄  +  quiet heading; ⌄ folds the list (open); + opens New project
@@ -625,7 +628,7 @@ Top to bottom:
 | Quiet row | `SuperTabQuietRow` (`super_tabs/buddy_rows.dart`) | 30 high, 2 under it. A 20 face (`SuperTabQuietRow.faceSize`) or a 16 icon centred in the 32 column, so every name starts on one line. Name 15 (`SwarmType.sidebar`), the size of a project's row: read `textSecondary` regular, unread `textPrimary` semibold, the open row `SidebarInk.selected` with a primary name. One detail, 12 (`DesktopChrome.metadata`) in the tertiary grey (`SidebarInk.faint`, `textFaint`), right-aligned, tabular figures, no brackets; it keeps up to 40% of a row whose name is long, and is cut first. |
 | Shared edges | `SuperTabQuietRow`, gallery check "the left pane's details end at one edge" | Every section's rows share the left edge (the faces' and icons' column), the right edge (every detail ends `AppDesktop.controlGap` from the row's right, with no column kept for anything after it) and the baselines (30 high rows). A heading's + ends on that right edge. |
 | No status marks | — | The left pane draws no spinner, check, `?` or failed mark (anh Dee 22:25, task #4645): status lives on the Tasks cards. An agent with something new is its row's semibold primary name, like an unread Slack channel; read rows stay regular, and the open row keeps its fill. |
-| Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) beside its name, always; the org name's chevron shows only while hovered or focused. Your Team and Projects start open, Your Machines and Top Teams folded; the reader's choice is kept. `onAdd` puts the `plus` button at its right, as on every section heading: Your Team's opens New agent, Projects' New project. |
+| Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) beside its name, always; the org name's chevron shows only while hovered or focused. Your Team and Projects start open, Your Machines and Top Teams folded; the reader's choice is kept. `onAdd` puts the `plus` button at its right, as on every section heading: Your Team's opens New agent, Projects' New project. Your Team also has `onAttach`, the `link` button before the + (tooltip Attach agent; anh Dee 2026-11-09: "like ⌘P, while + is like ⌘N"): ⌘P's picker titled Attach agent, of the Claude Code and Codex sessions running on its person's own computers, those on the team left out and the rest unavailable with why; the one chosen joins with its own chat, which opens. |
 | Org name | `SuperTabQuietHeading.org` | Semibold 13 primary, no icon; its chevron only on hover; opens the Swarm menu. |
 | Person | `SuperTabAvatar.person` at 20 | A photo, or an initial on the neutral grey disc. |
 

@@ -64,7 +64,7 @@ describe('how many machines one person adds to a Swarm', () => {
 describe('which hosts are asked to join', () => {
   const configuration = { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }
   const hostUser = (sub: string) => ({ sub, email: `${sub}@example.com`, role: 'user', autonomousEnv: 'test' }) as never
-  const lookups = (teams: string[]) => ({ people: [], confidential: new Set<string>(), agentGrant: async () => {}, teams: teams.map(machineId => ({ machineId })), githubApp: false })
+  const lookups = () => ({ people: [], confidential: new Set<string>(), agentGrant: async () => {}, githubApp: false })
   /** [state] with the owner's Lead on [machineId], which is not one of the Swarm's machines. */
   function leadOn(start: ReturnType<typeof swarm>, machineId: string) {
     let state = start
@@ -78,9 +78,7 @@ describe('which hosts are asked to join', () => {
     return { state, lead }
   }
   const joinSwarm = async ({ state, lead }: ReturnType<typeof leadOn>, machineId: string) =>
-    (await hostTab('swarm', state, machineId, hostUser('owner'), null, lookups([]))).roster.find(r => 'agent' in r && r.agent.id === lead)
-  const joinTeam = async (state: ReturnType<typeof swarm>, teams: string[]) =>
-    (await hostTab('swarm', state, 'owner-m0', hostUser('owner'), null, lookups(teams))).roster.flatMap(r => 'joinTeam' in r ? [r.joinTeam.machineId] : [])
+    (await hostTab('swarm', state, machineId, hostUser('owner'), null, lookups())).roster.find(r => 'agent' in r && r.agent.id === lead)
 
   it('asks the owner\'s Lead machine to join below 20, and not at 20', async () => {
     expect(await joinSwarm(leadOn(swarm({ owner: { real: 19 }, peer: { real: 20 } }), 'laptop'), 'laptop')).toMatchObject({ joinSwarm: true })
@@ -99,9 +97,4 @@ describe('which hosts are asked to join', () => {
     expect(await joinSwarm(leadOn(state, 'owner-m19'), 'owner-m19')).toMatchObject({ joinSwarm: true })
   })
 
-  it('asks a Mac\'s Team accounts to join only while their person has room for them', async () => {
-    expect(await joinTeam(swarm({ owner: { real: 20, team: 18 } }), ['team-a', 'team-b', 'team-c'])).toEqual(['team-a', 'team-b'])
-    expect(await joinTeam(swarm({ owner: { real: 20, team: 20 } }), ['team-a'])).toEqual([])
-    expect(await joinTeam(swarm({ owner: { real: 20, team: 0 } }), ['team-a'])).toEqual(['team-a'])
-  })
 })
