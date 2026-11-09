@@ -132,7 +132,7 @@ import { answerShellQuery } from './shellQueries.js'
 import { createTerminalControl } from './terminals/control.js'
 import { createTerminalRequests } from './terminals/requests.js'
 import { createBrowser } from './terminals/browser.js'
-import { loopbackGet } from '../lib/loopbackGet.js'
+import { loopbackAnswer } from '../lib/loopbackGet.js'
 import { writeBrowserShim } from '../lib/browserShim.js'
 import { createAgentEvents } from './agents/events.js'
 import { createSessionNormalizers } from './transcripts/normalizers.js'
@@ -1197,7 +1197,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     sendTo: (connId, type, payload) => backend.sendViewerFrame(connId, type, payload),
     isLocal: isLocalClientId,
     who: (connId) => backend.remoteClient(connId)?.identity ?? connId,
-    replay: (url) => loopbackGet(url),
+    replay: (url) => loopbackAnswer(url),
     now: Date.now,
     log: (line) => console.log(line),
   })
