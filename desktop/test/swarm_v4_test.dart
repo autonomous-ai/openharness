@@ -54,6 +54,44 @@ void main() {
 
   double width(WidgetTester tester, String k) => tester.getSize(key(k)).width;
 
+  testWidgets(
+    'A project\'s menu holds only what v4 has: its notifications and its settings (rename, details, delete)',
+    (tester) async {
+      await show(tester);
+      await tester.tap(key('super-project-menu'));
+      await tester.pumpAndSettle();
+      expect(key('super-notify-menu'), findsOneWidget);
+      expect(find.text('Project settings…'), findsOneWidget);
+      // The v3 items are gone from v4's menu: status, the pull-request page, the instructions document, the crew, GitHub sharing.
+      for (final gone in [
+        'Status',
+        'Pull requests',
+        'Instructions',
+        'Crew',
+        'Sharing',
+      ]) {
+        expect(find.text(gone), findsNothing, reason: gone);
+      }
+      await tester.tap(find.text('Project settings…'));
+      await tester.pumpAndSettle();
+      for (final kept in [
+        'Rename project',
+        'Project details',
+        'Delete Project',
+      ]) {
+        expect(find.text(kept), findsOneWidget, reason: kept);
+      }
+      // And the v3 rows of its settings: the rules record, who may chat, archived conversations.
+      for (final gone in [
+        'Project rules',
+        'People',
+        'Archived conversations',
+      ]) {
+        expect(find.text(gone), findsNothing, reason: gone);
+      }
+    },
+  );
+
   testWidgets('a project\'s channel: people read it, only agents post', (
     tester,
   ) async {
