@@ -42,8 +42,8 @@ export function agentLaunchArgs(engine: string, _startedBy: StartedBy | null | u
 /**
  * [args] with every appended system prompt joined into one, for an engine that takes Harness's instructions that way:
  * a grid launch and a store harness append their own (lib/gridWebMcp.ts, the DSH's `contextArgs`), and an engine that
- * keeps only the last of a repeated flag would drop the others. Every settings object too, for the same reason: a Swarm's
- * shell guard (lib/agentShellGuard.ts) and Harness's status line (engines/kit/statusLine.ts) are each one.
+ * keeps only the last of a repeated flag would drop the others. Every settings object too, for the same reason: Harness's
+ * status line (engines/kit/statusLine.ts) and the pull request setting are each one.
  */
 export function joinedInstructions(engine: string, given: readonly string[]): string[] {
   const settings = launchContract(engine)?.statusLine
