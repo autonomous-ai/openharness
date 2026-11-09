@@ -10065,8 +10065,6 @@ class AppNotifier extends ChangeNotifier {
   }
 
   void _onConnectionStatus(String machineId, ConnectionStatus nextStatus) {
-    // A socket's last word, its close, comes after the app is gone.
-    if (_disposed) return;
     final machine = machineStates[machineId];
     if (machine == null) return;
     // A refusal being settled against the device log ([_settleTrust]) is still connecting.
@@ -23849,8 +23847,6 @@ class AppNotifier extends ChangeNotifier {
     agentAlerts.dispose();
     agentUnread.dispose();
     _disposed = true;
-    // Its sockets redial on timers of their own: one that outlived the app reported its status to a notifier that was gone.
-    unawaited(_pool?.closeAll());
     _closeAttachmentSessions();
     _sharingDiscoveryTimer?.cancel();
     _machinesPushTimer?.cancel();
@@ -23884,6 +23880,16 @@ class AppNotifier extends ChangeNotifier {
     for (final request in _joinAccountRequests) {
       request.complete(null);
     }
+    // Its sockets redial on timers of their own: one that outlived the app kept redialling and reported to a notifier that was
+    // gone. The sessions above were told to close first, while their sockets are open.
+    unawaited(
+      _pool?.closeAll().catchError((Object error) {
+        appLog.warn(
+          'app',
+          'A socket did not close with the app: ${error.runtimeType}',
+        );
+      }),
+    );
     super.dispose();
   }
 }
