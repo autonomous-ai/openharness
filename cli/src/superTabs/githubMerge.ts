@@ -191,12 +191,12 @@ export class GitHubMerge {
       const runs = object(await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
       const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))
       if (checks.state === 'running') continue
-      if (checks.state === 'failed') { await this.tellOnce(repo, number, head, author, `checks failed on ${head.slice(0, 7)}: ${checks.failed.slice(0, 3).join(', ')}. Fix them and push.`); continue }
+      if (checks.state === 'failed') { await this.tellOnce(repo, number, head, author, `checks failed: ${checks.failed.slice(0, 3).join(', ')}. Fix them and push.`, comments); continue }
       const detail = await this.reads.one(repo, `/repos/${repo}/pulls/${number}`)
       const state = String(detail.mergeable_state ?? 'unknown')
-      if (state === 'behind') { await this.tellOnce(repo, number, head, author, `it is behind ${base}: update the branch and push.`); continue }
-      if (state === 'dirty') { await this.tellOnce(repo, number, head, author, `it conflicts with ${base}: rebase it on ${base} and push.`); continue }
-      if (state === 'blocked') { await this.tellOnce(repo, number, head, author, `GitHub's rules for ${base} block the merge. Ask your person.`); continue }
+      if (state === 'behind') { await this.tellOnce(repo, number, head, author, `it is behind ${base}: update the branch and push.`, comments); continue }
+      if (state === 'dirty') { await this.tellOnce(repo, number, head, author, `it conflicts with ${base}: rebase it on ${base} and push.`, comments); continue }
+      if (state === 'blocked') { await this.tellOnce(repo, number, head, author, `GitHub's rules for ${base} block the merge. Ask your person.`, comments); continue }
       if (!['clean', 'has_hooks', 'unstable'].includes(state)) continue
       const merged = await this.deps.send('PUT', `/repos/${repo}/pulls/${number}/merge`, { merge_method: 'squash', sha: head })
       if (merged.status !== 200) {
@@ -213,12 +213,16 @@ export class GitHubMerge {
   }
 
   /** Tells the pull request's author, by name on the pull request itself, once for each head and reason. */
-  private async tellOnce(repo: string, number: number, head: string, author: string | null, what: string): Promise<void> {
+  /** Says once for a head why it is not merged. It names the head, and a restart finds it among the pull request's comments:
+   *  remembered only in memory, every release (each restarts the PM's daemon, seven on 2026-11-10) said it again. */
+  private async tellOnce(repo: string, number: number, head: string, author: string | null, what: string, comments: Json[]): Promise<void> {
     const key = `${repo}#${number}`, said = `${head}\n${what}`
     if (this.told.get(key) === said) return
     this.told.set(key, said)
     if (this.told.size > 1_000) this.told.delete(this.told.keys().next().value!)
-    await this.comment(repo, number, `${SELF}, ${this.clock()}${author ? `, to **${author}**` : ''}: not merged yet: ${what}`)
+    const line = `not merged yet at ${head.slice(0, 7)}: ${what}`
+    if (comments.some(c => TEAM.has(c.author_association) && String(c.body ?? '').slice(0, 500).includes(line))) return
+    await this.comment(repo, number, `${SELF}, ${this.clock()}${author ? `, to **${author}**` : ''}: ${line}`)
   }
 
   private async comment(repo: string, number: number, body: string): Promise<void> {
