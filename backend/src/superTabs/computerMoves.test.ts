@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor } from './model.js'
 import { swarmBuddyChatId } from './buddies.js'
-import { machineTeamWork, type ContributedMachine } from './machines.js'
+import type { ContributedMachine } from './machines.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const kelvin: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'kelvin', email: 'kelvin@example.com' }
@@ -32,10 +32,11 @@ function setup({ ttMember = true, kelvinOnline = false } = {}) {
     state = effects.state
     return effects
   }
+  /** What an older release recorded on a machine (machine.projects, machine.ownAccountWork and the others-work notice), still stored. */
+  const LEGACY_RECORDS = { projects: ['lead'], ownAccountChoice: { allowed: true, by: 'kelvin', at: '2026-11-04T00:00:00.000Z' }, othersToldWeek: 1 } as object
   const kelvinMac: ContributedMachine = { machineId: 'kelvin-mac', name: 'MacBooks-MacBook-Pro-7', contributorId: 'kelvin', membershipGeneration: 'kelvin-gen',
     generation: 'g0', cwd: '/Users/mac/harness-swarm', scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 3, agents: 'atMost', paused: true,
-    observation: reading(kelvinOnline ? NOW - 1000 : NOW - 3_000_000), teamAccountOnly: true, projects: ['lead'],
-    ownAccountChoice: { allowed: true, by: 'kelvin', at: '2026-11-04T00:00:00.000Z' }, othersToldWeek: 1,
+    observation: reading(kelvinOnline ? NOW - 1000 : NOW - 3_000_000), teamAccountOnly: true, ...LEGACY_RECORDS,
     lent: [{ week: 1, ms: 5000 }] as unknown as ContributedMachine['lent'], engineFailures: { codex: 1 } }
   const kelvinTeam: ContributedMachine = { machineId: 'kelvin-team', name: 'MacBooks-MacBook-Pro-7', contributorId: 'kelvin', membershipGeneration: 'kelvin-gen',
     generation: 'g0', cwd: '/Users/harness-team/harness-swarm', scope: 'swarm', engines: ['claude'], maxAgents: 3, paused: true,
@@ -142,18 +143,5 @@ describe("another account's sign-in on a computer", () => {
     const again = f.run(MOVED, kelvin, moveTo())
     expect(f.state.machines).toEqual(after.machines)
     expect(again.messages).toEqual([])
-  })
-})
-
-// Scholes, 11-05: kelvin added his Mac, Set up showed for a couple of seconds and went away, while his Harness Team account on
-// it joined. Swarm v3 (task #4218): the Mac reads as itself, which takes its person's agents' work, so it never reads "not set up".
-describe('a Mac whose own Harness Team account has not joined the Swarm yet', () => {
-  it('reads as taking its person\'s agents\' work', () => {
-    const f = setup()
-    f.state.machines = f.state.machines!.filter(m => m.machineId === 'kelvin-mac')
-    const pool = f.state.machines[0]!
-    pool.observation = reading(NOW - 1000)
-    delete pool.ownAccountChoice
-    expect(machineTeamWork(pool, NOW, [])).toBeNull()
   })
 })
