@@ -5652,29 +5652,19 @@ export class SuperTabStore {
    * hours). Whatever they find is recorded in this same write, so a second run, or one racing it, finds nothing new. The
    * messages written.
    */
-  async runTimeChecks(tabId: string, dueCards: string[] = []): Promise<number> {
+  async runTimeChecks(tabId: string): Promise<number> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
       if (!row || row.deletedAt || row.format !== 2) return 0
-      let loaded = await loadRow(tx, requireParts(row), { groupIds: dueCards })
-      const migration = new Map<string, LegacyProposalAsk[]>()
-      for (const project of projectsOf(loaded.state).filter(p => p.boardMode)) {
-        const bodies = await this.legacyProposalBodies(tx, loaded.state, project.id)
-        if (bodies.length) migration.set(project.id, bodies)
-      }
-      if (migration.size) loaded = await this.ensure(tx, loaded, { groupIds: [...dueCards,
-        ...[...migration].flatMap(([id, bodies]) => bodies.map(a => legacyProposalId(id, a.messageId)))] })
-      loaded = await this.proposalNoticeParts(tx, loaded)
-      // A task its sweep may lose says Stuck in its project chat's thread (taskLine.ts endedReply, task #2693).
-      const chats = taskLineChats(loaded.state)
-      if (chats.length) loaded = await this.ensure(tx, loaded, { groupIds: [...loaded.state.conversations.map(c => c.id), ...chats] })
-      // Every agent's 1:1 chat with its person (agentChats.ts), looked for among its conversations, dormant ones too, for an
-      // agent that keeps none; the checks below read only what they loaded.
+      const loaded = await loadRow(tx, requireParts(row), {})
+      // Swarm v4 (anh Dee 2026-11-09): the server runs no v3 rule on its own (no lost-work sweeps, stuck alerts, proposal
+      // cards or PM reminders). It gives every agent its 1:1 chat with its person (agentChats.ts), looked for among its
+      // conversations, dormant ones too, for an agent that keeps none.
       const chatless = chatlessAgents(loaded.state)
       const all = chatless.length ? (await this.ensure(tx, loaded, { agentIds: chatless })).state : loaded.state
       const state = cloneData(loaded.state), now = this.now()
       giveAgentsChats(state, now, all)
-      // Swarm v4: the stops the v3 rules asked for, withdrawn once, with the run and session records that hold them (agentStops.ts).
+      // The stops the v3 rules asked for, withdrawn once, with the run and session records that hold them (agentStops.ts).
       const stopping = v3Stopping(state)
       // A host closing one holds its close lease: that stop stands. Once per Swarm, one read by id each.
       const closing = new Set<string>()
@@ -5688,35 +5678,8 @@ export class SuperTabStore {
         await tx.superTabSessionScope.updateMany({ where: { id: stableId('swarm-session', state.environment, stop.machineOwnerId, stop.agentId),
           stopReleaseId: stop.releaseId }, data: { stopReleaseId: null } })
       }
-      const rulesFor = await this.projectDispatch(tx, state)
-      // A Linux or Windows test step that waited for a machine of its OS opens once one is there (osSteps.ts, tasks #4278, #4410).
-      const written = [...sweepForLead(state, now, rulesFor), ...advanceProposalCards(state, now), ...openWaitingSteps(state, now)]
-      for (const [id, bodies] of migration) written.push(...migrateLegacyProposals(state, projectsOf(state).find(p => p.id === id)!, bodies, now))
-      // Stuck work, told once to its PM and its people in a line that tags them, and cleared when fixed (stuck.ts, task #3915).
-      const stuck = stuckAlerts(state, now)
-      written.push(...stuck.rows)
-      // What each PM owes people, for its host's watchdog: written only when it changes, so a steady Swarm writes nothing. A
-      // project that lost its PM owes nothing until it has one again (review of #3213, Minor 4).
-      for (const project of projectsOf(state)) {
-        const pm = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
-        const owed = pm ? await owedAsk(tx, tabId, pm, now) : null
-        if (owed?.messageId === project.owed?.messageId && owed?.since === project.owed?.since) continue
-        if (owed) project.owed = owed
-        else delete project.owed
-      }
-      // It frees the agents whose task the checks just lost, as the PM's poll did.
-      await this.endRuns(tx, tabId, loaded.state, state)
-      await recordAttempts(tx, tabId, loaded.state, state, now)
-      await recordEvidence(tx, tabId, loaded.state, state, now)
-      const sequences = numberMessages(state, written, now)
-      // A loss or a start's failure was judged from a machine's report: a newer report makes this write retry.
-      await this.save(tx, loaded, state, clock.next(), judgedMachines(loaded.state, state, written))
-      await this.writeMessages(tx, tabId, state, written, sequences, true)
-      // Its tags put the line in their Needs you and on their phones; a fixed line's tags resolve.
-      const tags = await writeMentions(tx, tabId, state, stuck.rows, now)
-      await resolveTags(tx, tabId, stuck.resolved, now)
-      this.tellPhones(tx, tabId, state, { replies: [], tags }, stuck.rows)
-      return written.length
+      await this.save(tx, loaded, state, clock.next())
+      return 0
     })
   }
 
