@@ -11,8 +11,8 @@ void display_init(void);
 // Set the AMOLED brightness (CO5300 DCS 0x51): 0x00 = dimmest, 0xFF = max. Applied live.
 void display_set_brightness(uint8_t level);
 
-// Lock/unlock the LVGL mutex. ANY code that touches LVGL objects from outside
-// the LVGL task (e.g. the WiFi/WS tasks via ui_screens.c) must hold this.
+// Lock/unlock the display mutex. ANY code that touches UI state from outside
+// the render task (e.g. the cable tasks via ui_habitat.c) must hold this.
 // `display_lock()` carries the caller's name so a wait past 2s can be logged with who is waiting and
 // who is holding — see display_lock_at. The macro keeps every call site as it was.
 void display_lock_at(const char *who);

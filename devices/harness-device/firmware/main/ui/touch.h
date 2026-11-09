@@ -13,7 +13,7 @@ void touch_init(void);
 // programmatic display activity do not affect it, so callers can cheaply detect real user interaction.
 uint32_t touch_activity_generation(void);
 
-// What the heartbeat prints about touch (display.c, once a minute): whether the controller answers,
+// What the heartbeat prints about touch (display_habitat.c, once a minute): whether the controller answers,
 // how many presses the glass has seen, and how long ago the last one was. Cheap; no lock.
 typedef struct {
     uint32_t presses;

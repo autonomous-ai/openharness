@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Full device firmware release: bump version -> build -> upload to a PUBLIC GCS bucket.
-# Devices fetch the manifest + binary straight from GCS (no backend involved — see main/ota.c /
-# DEVICE_OTA_METADATA_URL) and self-update on their next boot / ~6h check. See RELEASE.md.
+# The daemon reads the same manifest and pushes a newer image to a dial over the cable
+# (cli/src/cable/fwPush.ts).
 #
 # Usage:
 #   bash scripts/upload-firmware.sh              # auto-bump (0.1.2 -> 0.1.3; 0.1.99 -> 0.2.1)
@@ -35,7 +35,7 @@ OTA_KEY="${OTA_KEY:-commander}"   # must match DEVICE_OTA_KEY in main/config_sto
 
 # WHICH SILICON THIS RELEASE IS FOR, NAMED OUT LOUD.
 #
-# One project builds for two boards now, and this script builds into its own fresh directory — so
+# This script builds into its own fresh directory — so
 # nothing in it says which. ESP-IDF then GUESSES, and what it guesses from is a stale `sdkconfig`
 # left in the firmware directory by whoever built last. On this desk that happened to say esp32s3
 # and the release looked fine; on a clean checkout, where no such file exists, IDF falls back to

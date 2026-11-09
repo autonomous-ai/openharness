@@ -44,6 +44,5 @@ const char *board_describe(void);
 // Was a factory reset asked for by holding a button through power-on?
 //
 // A BOARD FACT, not a policy, which is why it lives here. The dial reads BOOT (GPIO0), a button that is
-// up unless somebody is holding it. The Pro has no such button: its only switch is the one that turns the
-// board on, so it is BY DEFINITION held at this moment and can never mean anything else.
+// up unless somebody is holding it.
 bool board_factory_reset_requested(void);

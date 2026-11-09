@@ -37,7 +37,7 @@ static void pulse(int pin)
 }
 
 // Open one touch driver on one reset pin and sample it a few times, idle. Says whether the chip answers,
-// what its id is, and — the part touch.c cares about — what read_data returns with no finger down.
+// what its id is, and — the part touch_habitat.c cares about — what read_data returns with no finger down.
 static void try_touch(const char *name, int rst, bool cst816s)
 {
     i2c_master_bus_handle_t bus = board_i2c_get();

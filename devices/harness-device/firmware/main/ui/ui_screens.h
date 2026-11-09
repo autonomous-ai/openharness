@@ -83,21 +83,18 @@ bool ui_project_id_at(int i, char *buf, size_t n);
 // Number of project tiles currently shown (for naming "Project N").
 int ui_project_count(void);
 // True when a tile for this agent already exists. An UNKNOWN id must not be turned into a tile from an
-// event frame — see the commander_client handlers, which ask for the authoritative list instead.
+// event frame — see the cable_client handlers, which ask for the authoritative list instead.
 bool ui_project_known(const char *project_id);
 // Clear any "Working…" tile orphaned when its turn-done was lost or never produced. Acts on heartbeat
 // absence: a live turn re-emits 'processing' every ~5s (adapter + node), so a tile silent for >25s is gone.
 // A genuinely-live turn keeps stamping and is never cut short. Call from the ~1s refresh loop. Returns #cleared.
 int ui_prune_stale_busy(void);
-// Vertical edge-swipe (touch.c): +1 = up (project → open detail reader), -1 = down (reader top → close).
 // True while a vertical drag should be reported to the computer as a scroll — an agent tile (where the
 // dial itself has nothing to scroll) or the detail reader (where both surfaces move). See the definition
 // for why every other screen says no.
 bool ui_scroll_reportable(void);
 
-// Notification centre (touch.c drives open/close): open = pull-down from the top edge, or a tap on the
-// bell; close = swipe-up / tap. is_open lets the gesture layer route input to the drawer instead of
-// voice/detail. Opens over any carousel page (a tile, the Overview, Settings).
+// Notification centre: opens over any carousel page (a tile, the Overview, Settings).
 void ui_notif_open(void);
 
 // --- The machine wheel (the carousel's last ring) ---
@@ -136,7 +133,7 @@ void ui_machine_selected_ack(const char *machine_id);
 // `NEEDS_LINK` opens the link guide (an instruction, not an error), everything else is a toast.
 void ui_machine_select_error(const char *machine_id, const char *code, const char *message);
 
-// --- Swarms (the window's tabs; see the block in ui_screens.c) ---
+// --- Swarms (the window's tabs; see the block in ui_habitat.c) ---
 // Replace the whole list from one `swarms` frame. `selected` names the one the window has on screen; it
 // is what every tile's swarm line draws. count 0 hides the line. Safe from the reader task.
 void ui_swarms_replace(const cable_swarm_t *rows, int count, const char *selected);

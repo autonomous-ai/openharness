@@ -6,8 +6,7 @@
 #include <stdint.h>
 // THE FACE. One device, one size: the 466 round dial.
 //
-// This was a -D from the build for as long as there were two boards; it is a literal again now that the
-// Pro has its own firmware. Kept as a named pair rather than 466 sprinkled through the compositor,
+// Kept as a named pair rather than 466 sprinkled through the compositor,
 // because the arithmetic that reads it — chords, the rim annulus, the damage bands — is about a face
 // and not about a number.
 #define HT_WIDTH 466
@@ -286,8 +285,8 @@ const char *ht_take_display_line(const char **cursor, int cells, const ht_font_t
 int ht_wrap(ht_scene_t *scene, int x, int y, int width, int lines, int skip, const ht_font_t *font,
             uint16_t fg, const char *text);
 void ht_damage(const ht_scene_t *before, const ht_scene_t *after, ht_damage_t *out);
-// Output is RGB565 in THIS BOARD'S panel order — byte-swapped for the dial's CO5300 over QSPI, native
-// for the Pro's ST7703 DPI framebuffer. See panel16() in terminal.c. Buffer holds region.w * region.h.
+// Output is RGB565 in the panel's order — byte-swapped for the dial's CO5300 over QSPI. See panel16() in
+// terminal.c. Buffer holds region.w * region.h.
 void ht_raster(const ht_scene_t *scene, ht_rect_t region, uint16_t *out);
 uint32_t ht_utf8_next(const char **cursor);
 // Question/answer text must fit in full and contain glyphs available on this device.

@@ -21,7 +21,7 @@ static const char *TAG = "ptt";
 //   • Button A (the PWR key, wired to the AXP2101 PWRON pin — read over I2C, not a GPIO): a tap toggles
 //     the screen. Only where there is an AXP2101; a long press restarts the device in PMIC hardware and
 //     never reaches us.
-// Voice is gesture-driven (touch.c); neither key touches it.
+// Voice is gesture-driven (touch_habitat.c); neither key touches it.
 #define BOOT_LONG_PRESS_MS 800
 
 static void screen_toggle(const char *why)

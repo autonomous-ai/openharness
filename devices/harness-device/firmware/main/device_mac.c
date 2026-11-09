@@ -18,9 +18,7 @@ bool device_mac_str(char *out, size_t cap)
     // stable, unique and needs no pairing. It is what the daemon uses to tell one device from another
     // before a byte of protocol is exchanged.
     //
-    // It used to ask for ESP_MAC_WIFI_STA, which on the dial is the same value. On the Pro it is not a
-    // value at all: the ESP32-P4 has no radio of its own (its Wi-Fi lives in a coprocessor this firmware
-    // never wakes), so that read fails with ESP_ERR_NOT_FOUND and the hello went out carrying "mac":"".
+    // ESP_MAC_WIFI_STA would read the same value on the dial; the base MAC needs no radio at all.
     esp_err_t err = esp_read_mac(mac, ESP_MAC_BASE);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_read_mac failed: %d", (int)err);
