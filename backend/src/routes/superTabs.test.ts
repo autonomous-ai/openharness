@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import Fastify, { type FastifyInstance } from 'fastify'
-import { Prisma } from '@prisma/client'
+import { Prisma, type PrismaClient } from '@prisma/client'
 
 // Real Harness sessions for the sign-in tests below, minted and redeemed through lib/harnessSession.ts against in-memory
 // stores, as routes/control.test.ts does, so the real authentication and team gate run.
@@ -53,6 +53,10 @@ import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { redeemHandoff, startHandoff } from '../lib/harnessSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { SuperTabError } from '../superTabs/model.js'
+import { RETIRED_COMMANDS, RETIRED_NOTE } from '../superTabs/retired.js'
+import { counted, OLD_PAYLOADS } from '../superTabs/retired.test-support.js'
+import { SuperTabStore } from '../superTabs/store.js'
+import { recordingDb, type Query } from '../lib/queryRecorder.test-support.js'
 import { HOT_BODY_LIMIT, NOT_AVAILABLE, READINGS_MAX, superTabRoutes } from './superTabs.js'
 import { machineObservationSchema } from '../superTabs/machines.js'
 import { logger } from '../utils/logger.js'
@@ -101,6 +105,43 @@ describe('Super Tab route failures', () => {
     expect(res.statusCode).toBe(503)
     expect(res.headers['retry-after']).toBe('2')
     expect(res.json().error.code).toBe('SWARM_BUSY')
+  })
+})
+
+// An older app, host or agent still sends a command v4 dropped (superTabs/retired.ts): the route accepts it, and the real
+// store answers it as ignored without a read or a write.
+describe('a command Swarm v4 no longer has, over HTTP', () => {
+  let app: FastifyInstance
+  const queries: Query[] = []
+  beforeEach(async () => {
+    queries.length = 0
+    app = Fastify()
+    app.setErrorHandler(errorHandler)
+    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
+    await app.register(superTabRoutes, { store: new SuperTabStore(recordingDb(queries) as PrismaClient), github: null, reads: {} as never, hosts: {} as never })
+    await app.ready()
+  })
+  afterEach(async () => { await app.close() })
+  const send = (command: object, asAgentId?: string) => app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/commands', headers: { 'x-harness-client': 'desktop/1.2.3' },
+    payload: { operationId: 'op-1', command, ...asAgentId ? { asAgentId } : {} } })
+
+  it.each(RETIRED_COMMANDS)('answers %s ok and ignored, as an agent too, counts the client it declares and touches no data', async type => {
+    const before = await counted(type, 'desktop')
+    for (const asAgentId of [undefined, 'agent-1']) {
+      const res = await send({ type, ...OLD_PAYLOADS[type] }, asAgentId)
+      expect(res.statusCode).toBe(200)
+      expect(res.json()).toEqual({ success: true, data: { result: { ignored: true, note: RETIRED_NOTE }, parts: [] } })
+    }
+    expect(await counted(type, 'desktop')).toBe(before + 2)
+    expect(queries).toEqual([])
+  })
+
+  it('still refuses a type no version had, and a host\'s start route that names no start', async () => {
+    expect((await send({ type: 'project.nonsense', projectId: 'lead' })).statusCode).toBe(400)
+    const host = await app.inject({ method: 'POST', url: '/api/super-tabs/hosts/m1/starts/tab-1/s1',
+      payload: { operationId: 'op-1', command: { type: 'project.digest', ...OLD_PAYLOADS['project.digest'] } } })
+    expect(host.statusCode).toBe(403)
+    expect(queries).toEqual([])
   })
 })
 

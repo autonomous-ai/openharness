@@ -1,0 +1,15 @@
+import { metrics } from '../lib/metrics.js'
+import type { RetiredCommand } from './retired.js'
+
+/** What the last older apps and agents sent for each retired command: the shape its schema had when the command went. A pull
+ *  request that retires another command adds its payload here, and the tests of the store and of the route try it. */
+export const OLD_PAYLOADS = {
+  'process.confirm': { projectId: 'lead', noteId: 'note-3' },
+  'project.digest': { projectId: 'lead', time: '08:00', timeZone: 'Asia/Ho_Chi_Minh' },
+} satisfies Record<RetiredCommand, object>
+
+/** How many [type] commands the retired-commands counter holds for [client]. */
+export async function counted(type: string, client: string): Promise<number> {
+  const line = new RegExp(`^swarm_retired_commands_total\\{type="${type}",client="${client}"\\} (\\d+)$`, 'm').exec(await metrics.registry.metrics())
+  return line ? Number(line[1]) : 0
+}
