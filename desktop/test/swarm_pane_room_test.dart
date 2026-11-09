@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/agent_instructions.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/issue_panel.dart';
+import 'package:harness/super_tabs/task_board.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -20,11 +22,16 @@ void main() {
   late SuperTabController controller;
   var terminalOpen = false;
 
+  /// The window around the Swarm, to open a terminal as the workspace does from elsewhere.
+  late StateSetter setHost;
+
   /// The Swarm of lampOS at [size], at [chat], with the terminal closed: the Terminal button opens a fixture, as the workspace does.
+  /// Without [projects] it is a Swarm of agents alone, as a Personal Swarm starts.
   Future<void> show(
     WidgetTester tester,
     Size size, {
     String chat = 'agent-chat-second',
+    bool projects = true,
   }) async {
     computer = SwarmV4Computer(
       files: {'session-second/second': 'Answer in Vietnamese.\n'},
@@ -33,6 +40,7 @@ void main() {
     await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
     server = swarmV4Server();
+    if (!projects) server.state['projects'] = <Object?>[];
     controller = server.controller(
       account: 'owner',
       initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': chat},
@@ -45,6 +53,7 @@ void main() {
         home: Scaffold(
           body: StatefulBuilder(
             builder: (context, set) {
+              setHost = set;
               return SuperTabView(
                 controller: controller,
                 onInvite: () {},
@@ -262,6 +271,66 @@ void main() {
       expectOpen(tester, find.byType(SwarmAgentInstructions), beside: false);
       await tap(tester, key('swarm-back-to-chat-button'));
       expect(composer(), findsOneWidget);
+    },
+  );
+  testWidgets(
+    'in a Swarm of agents alone, an agent\'s Instructions and Terminal open too',
+    (tester) async {
+      for (final (size, beside) in const [
+        (Size(1024, 700), false),
+        (Size(1440, 900), true),
+      ]) {
+        await show(tester, size, projects: false);
+        await tap(tester, key('swarm-instructions-button'));
+        expectOpen(tester, find.byType(SwarmAgentInstructions), beside: beside);
+        await tap(tester, key('swarm-terminal-button'));
+        expectOpen(tester, find.text('Terminal fixture'), beside: beside);
+      }
+    },
+  );
+
+  testWidgets(
+    'Chat over a terminal in the chat\'s place closes the terminal and leaves the tasks beside',
+    (tester) async {
+      await show(tester, const Size(1200, 800), chat: 'lead');
+      await tap(tester, key('swarm-tasks-button'));
+      expectOpen(tester, key('swarm-task-board'), beside: true);
+      // A terminal the workspace opens: 1200 is too narrow for it beside, so it takes the chat's place.
+      setHost(() => terminalOpen = true);
+      await settle(tester);
+      expect(find.text('Terminal fixture').hitTestable(), findsOneWidget);
+      await tap(tester, key('swarm-back-to-chat-button'));
+      expect(find.text('Terminal fixture'), findsNothing);
+      expectOpen(tester, key('swarm-task-board'), beside: true);
+    },
+  );
+
+  testWidgets('Chat gives the composer its keys back', (tester) async {
+    await show(tester, const Size(1024, 700));
+    await tap(tester, composer());
+    await tap(tester, key('swarm-instructions-button'));
+    expect(composer(), findsNothing);
+    await tap(tester, key('swarm-back-to-chat-button'));
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'Swarm message');
+  });
+
+  testWidgets(
+    'Tasks, and a task opened from them, keep what they read while the window narrows and widens',
+    (tester) async {
+      await show(tester, const Size(1440, 900), chat: 'lead');
+      await tap(tester, key('swarm-tasks-button'));
+      final board = tester.state(find.byType(SwarmTaskBoard));
+      await tester.binding.setSurfaceSize(const Size(1024, 700));
+      await settle(tester);
+      expectOpen(tester, key('swarm-task-board'), beside: false);
+      expect(tester.state(find.byType(SwarmTaskBoard)), same(board));
+      await tester.ensureVisible(key('swarm-task-5759'));
+      await tap(tester, key('swarm-task-5759'));
+      final task = tester.state(find.byType(SwarmIssuePanel));
+      await tester.binding.setSurfaceSize(const Size(1440, 900));
+      await settle(tester);
+      expectOpen(tester, key('swarm-issue-panel'), beside: true);
+      expect(tester.state(find.byType(SwarmIssuePanel)), same(task));
     },
   );
 }
