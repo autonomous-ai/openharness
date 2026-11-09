@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -70,6 +71,17 @@ void main() {
     },
     variant: TargetPlatformVariant.only(TargetPlatform.macOS),
   );
+
+  test('Cmd+K in a Swarm chat is the pane shortcut it is everywhere else', () {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    expect(
+      harnessDefaultKeymap.match(KeymapContext.swarmChat, [
+        KeyStroke.parse('cmd+k'),
+      ]).command,
+      'pane.focus_above',
+    );
+  });
 
   test(
     'a keybindings file from before still loads: its binding for the switcher '
