@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { PM_BASICS, prepareSwarmSkill, SWARM_BASICS } from '../lib/swarmSkills.js'
+import { noteSwarmBasics, PM_BASICS, prepareSwarmSkill, SWARM_BASICS } from '../lib/swarmSkills.js'
 import { BUDDY_COPIES_FILE, BUDDY_HOME_MANIFEST, buddyHomeRefreshing, refreshBuddyHome, stopBuddyHomeRefresh } from './buddyHome.js'
 import { buddyAccountFile, buddyLaunchFile, buddyReadsOf, forgetBuddyReads, grantBuddyWide } from '../lib/buddyGuard.js'
 import { env } from '../config/env.js'
@@ -3712,6 +3712,41 @@ describe('an agent its person attached', () => {
       await host.tick(); await settle()
       expect(t.told).toEqual([])
     }
+  })
+
+  it('when the Swarm started it before the basics changed, is told the new ones once; one started since, nothing', async () => {
+    // Bound at 1, before this computer first ran these basics (now, in the host's clock).
+    const t = attached({ engine: 'codex', swarmSkill: { role: 'agent', key: 'harness' }, boundAt: 1 })
+    t.wait(1_000)
+    const host = t.open()
+    await host.tick(); await settle()
+    expect(t.told.map(c => c.command.text)).toEqual([`The team's ways have changed since you started. From now on:\n${SWARM_BASICS}`])
+    t.wait(SKILL_WAIT); await host.tick(); await settle()
+    await t.open().tick(); await settle()
+    expect(new Set(t.told.map(c => c.operationId)).size).toBe(1)
+    // A session bound after this computer first ran them was launched with them.
+    const fresh = attached({ engine: 'claude', swarmSkill: { role: 'agent', key: 'harness' }, boundAt: 10_000_000_000_000 })
+    await fresh.open().tick(); await settle()
+    expect(fresh.told).toEqual([])
+  })
+
+  it('is told nothing when this daemon launched it with the basics, though it looks only later', async () => {
+    // The daemon starts at 1 s, launches the agent at 2 s and first looks at it at 3 s, with no record of these basics yet.
+    const t = attached({ engine: 'claude', swarmSkill: { role: 'agent', key: 'harness' }, boundAt: 2_000 })
+    t.wait(1_000)
+    const host = t.open()
+    t.wait(2_000)
+    await host.tick(); await settle()
+    expect(t.told).toEqual([])
+  })
+
+  it('is told nothing when its core launched it with the basics before the Swarm\'s service started', async () => {
+    // The core launches the agent at 0.5 s, noting the basics, and it binds at 1 s; the Swarm's service starts on demand at 3 s.
+    const t = attached({ engine: 'codex', swarmSkill: { role: 'agent', key: 'harness' }, boundAt: 1_000 })
+    noteSwarmBasics(t.dir, 500)
+    t.wait(3_000)
+    await t.open().tick(); await settle()
+    expect(t.told).toEqual([])
   })
 
   it('is told again later when the Swarm could not be read, by a backend whose roster row names no chat', async () => {

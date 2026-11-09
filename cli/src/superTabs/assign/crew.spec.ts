@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { contextOf, crewOf, CORES, DEEP, dependsOn, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew } from './crew.js'
+import { contextOf, crewOf, CORES, readerFor, DEEP, dependsOn, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew } from './crew.js'
 import { solve } from './search.js'
 
 type Json = Record<string, unknown>
@@ -164,5 +164,24 @@ describe('what an agent works on (worksOnOf, contextOf)', () => {
     const plain = readProblem({ now: NOW, crew: team(null), closed: [], issues })
     const shared = nextPicks(solve(plain.problem, { seed: 1, budgetMs: 2_000 }).plan, plain)
     expect(shared.filter(p => p.builder === 'juno').length).toBe(2)
+  })
+})
+
+describe('who reads a pull request (readerFor)', () => {
+  const team = (): Crew => ({ builders: [
+    { id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' },
+    { id: 'juno', name: 'Juno', label: 'builder:juno', machineId: 'mac', engine: 'claude' },
+    { id: 'atlas', name: 'Atlas', label: 'builder:atlas', machineId: 'box', engine: 'codex' },
+    { id: 'bo', name: 'Bo', label: 'builder:bo', machineId: 'box', engine: 'codex' }], machines: crew().machines })
+
+  it('never its author; another model family first; then the one holding the fewest tasks; nobody asked twice', () => {
+    const read = readProblem({ now: NOW, crew: team(), closed: [], issues: [issue(1, ['size:s', 'builder:atlas'])] })
+    expect(readerFor(read, 'pip', new Set())?.id).toBe('bo')
+    expect(readerFor(read, 'pip', new Set(['bo']))?.id).toBe('atlas')
+    // Only its own family left.
+    expect(readerFor(read, 'pip', new Set(['bo', 'atlas']))?.id).toBe('juno')
+    expect(readerFor(read, 'pip', new Set(['bo', 'atlas', 'juno']))).toBeNull()
+    // An author outside the team: anyone, the least busy first.
+    expect(readerFor(read, null, new Set())?.id).toBe('bo')
   })
 })
