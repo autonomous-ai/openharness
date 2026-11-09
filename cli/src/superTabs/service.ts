@@ -409,6 +409,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             && object(row.agent).machineId === core.daemon.machineId() && row.closeSession !== true).map(row => row.tabId).filter(identifier))]
           if (tabs.length > 1) return { error: 'SWARM_AMBIGUOUS', detail: `This agent is in ${tabs.length} Swarms: name one with --tab (${tabs.join(', ')}).` }
           if (tabs.length === 1) payload.tabId = tabs[0]
+          // In none, no id would help it.
+          else if (!tabs.length) return { error: 'INVALID_REQUEST', detail: 'This agent is not in a Swarm.' }
         }
         if (!identifier(payload.tabId)) return { error: 'INVALID_REQUEST', detail: 'Name the Swarm with --tab ID.' }
         if (!(named ?? hashed)) return { error: 'INVALID_REQUEST' }
