@@ -42,7 +42,9 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
   and immutable turn snapshots, never edits their engine state. Supervised Claude Code/Codex parsers
   run in workers through [the live transport](../../../docs/design/2026-10-07-engine-streams.md).
 - `turns/`: working/idle, the event funnel, cancel, heartbeats, hooks, and `recaps.ts`, the core's whole
-  side of the recaps: the turn lifecycle it tells them, and what it reads back.
+  side of the recaps: the turn lifecycle it tells them, and what it reads back. `ends.ts`: each live turn's
+  end (`CoreApi.turns.onEnd`), told by the funnel to listeners here and to the services in their own processes
+  that asked (`TURN_END_HEARERS`: the Swarm's host, which posts an agent's answer into its person's chat).
 - `terminals/`: who controls a pane (the control lease), opening a terminal with a literal argv (`open.ts`),
   and the requests about a terminal itself (`requests.ts`: `terminal_info`, `theme_set`).
 - `engines/`: hook coordination, reader ports and live worker coordination. Claude Code/Codex

@@ -21,6 +21,9 @@ import { answerFirstRun } from '../engines/launchPrep.js'
 import { messageIdOf } from './attach.js'
 import { cardId, SwarmCards, type CardChat } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
+import { GitHubMentions, watchedAgents } from './githubMentions.js'
+import { githubRest } from './githubRest.js'
+import { GitHubMerge, mergingProjects } from './githubMerge.js'
 import { teamEngineReporter, type TeamEngineReporter } from '../team/engines.js'
 import { readTeamConfig } from '../team/config.js'
 import { ensureTeamTmux, TMUX_MANIFEST_URL, tmuxRunsAt, untarGz, type TeamTmuxDeps, type TeamTmuxOutcome } from '../team/tmux.js'
@@ -88,8 +91,6 @@ const HELP = {
   screen: 'screen AGENT [--scrollback N]: read another agent\'s terminal in your project as plain text, with up to 200 lines of scrollback. Use it when an agent seems stuck.',
   type: 'type AGENT [TEXT] [--key K]...: type text, then keys (Enter, Esc, Tab, Up, Down, Left, Right, Ctrl-C, 0-9), into another agent\'s terminal in your project. Answer prompts within its task; ask the owner before approving anything risky.',
   capacity: 'capacity MACHINE_ID JSON: inspect machine, engine and quota headroom. JSON uses the start request fields below. Unknown allowances are not reported as free tokens.',
-  // Advisory (docs/plans/2026-10-27-swarm-scheduler.md): a plan for every open group at once, which the route still decides.
-  plan: 'plan [JSON]: the best plan for all your open groups at once, from the scheduler on this machine (Python 3 and OR-Tools; without them it says how to install, and routing works as before). Per group: the machine, engine, model and effort, start order and expected finish, with the finish time and cost against routing one group at a time. JSON (optional): {"groups":{"GROUP":{"difficulty":"low|medium|high","risk":"low|medium|high","size":"small|medium|large","kind":"optional word","after":["GROUP"]}}}; a group you do not assess is planned at medium and listed as an estimate. It leaves out only what cannot run, as the route does, and records nothing: follow it in order by routing each group and starting the plan\'s pick with the route\'s routeDecisionId.',
   startRequest: { conversationId: 'GROUP', machineId: 'MACHINE', engine: 'codex', name: 'AGENT_NAME', roleName: 'ROLE', cwd: '/absolute/repo/on/that/machine', worktree: true, branchRef: 'refs/remotes/origin/BASE_BRANCH', requirements: START_REQUIREMENTS,
     model: 'opus', effort: 'high', routeDecisionId: 'DECISION' },
   command: `command OPERATION_ID JSON: ${COMMAND_ABOUT} The JSON is one argument: when it holds quotes, put - in its place and send it on stdin (command OPERATION_ID - <<'JSON' … JSON). ${COMMAND_RULES}`,
@@ -285,6 +286,10 @@ export interface SuperTabServiceOptions {
   teamNodeTools?: () => unknown
   /** What reads a Buddy's pull requests with this machine's own GitHub (lib/pullRequestsStatus.ts), for a spec. */
   pullRequests?: BuddyStatusDeps['pullRequests']
+  /** What reads GitHub for this computer's person's v4 agents (superTabs/githubMentions.ts), for a spec. */
+  githubMentions?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubMentions, 'start' | 'stop'>
+  /** What merges by rule the pull requests of the projects whose PM runs here (superTabs/githubMerge.ts), for a spec. */
+  githubMerge?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubMerge, 'start' | 'stop'>
 }
 const LOCAL_ONLY = 'An agent speaks to the Swarm through its own computer\'s Harness only, not through another machine.'
 
@@ -316,12 +321,31 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     book ??= (options.reservations ?? ((api, id) => new CapacityReservations(api, id)))(core, machine)
     return book
   }
+  // GitHub as this computer's own gh login, for the news to its person's v4 agents and the merges of their PM's projects:
+  // read and merged while the host runs (no host, no Swarm agents here to read or merge for).
+  const github = githubRest()
+  // GitHub for this computer's person's v4 agents (githubMentions.ts).
+  const mentions = (options.githubMentions ?? ((api, held) => new GitHubMentions({
+    watched: async () => watchedAgents({ me: (await api.account.identity().catch(() => null))?.accountId ?? null, live: id => !!api.agents.byAgent(id),
+      roster: async () => (await held().feed.current(60_000)).roster, read: async (tabId, agentId) => (await held().reads.read(tabId, agentId)).state }),
+    get: github.get,
+    relay: (tabId, operationId, command) => backend(api, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId, command }),
+    file: join(api.dataDir, 'super-tab-github-news.json'),
+  })))(core, sources)
+  // Merges by rule the pull requests of the projects whose PM is this person's agent running here (githubMerge.ts).
+  const merges = (options.githubMerge ?? ((api, held) => new GitHubMerge({
+    projects: async () => mergingProjects({ me: (await api.account.identity().catch(() => null))?.accountId ?? null, live: id => !!api.agents.byAgent(id),
+      roster: async () => (await held().feed.current(60_000)).roster, read: async (tabId, agentId) => (await held().reads.read(tabId, agentId)).state }),
+    get: github.get, send: github.send,
+  })))(core, sources)
   const wake = () => {
     const machine = core.daemon.machineId()
     if (host?.machineId !== machine) { host?.stop(); host = null }
     host ??= (options.host ?? ((api, id, given) => new SuperTabHost(api, id, given)))(core, machine,
       { startReceipt: harnessId => reservations().creationOf(harnessId), sources: sources() })
     host.start()
+    mentions.start()
+    merges.start()
     return host
   }
   // The Swarm cards for a Harness Pro (superTabs/cards.ts), read while a device that shows them is attached and told to the core.
@@ -359,7 +383,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   }
   // The server's word that one of this machine's Swarms changed, heard while no host runs (Amon, #3215).
   let hostWake: (() => void) | null = null
-  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop(); engines.stop() }
+  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; mentions.stop(); merges.stop(); held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop(); engines.stop() }
   const port = {
     connected: () => {
       tokens.start()
@@ -525,7 +549,17 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // --machine to the owner's other Mac, which knew no pane there and served the agent it named. Delivered instructions
         // always name this computer.
         if (!asker.local) return payload.action === 'help' ? { ok: true, help: HELP } : { error: 'AGENT_LOCAL_ONLY', detail: LOCAL_ONLY }
-        if (!identifier(payload.tabId) || !(named ?? hashed)) return { error: 'INVALID_REQUEST' }
+        // An agent in its own pane may leave its Swarm out: the one Swarm its harness is in on this machine is meant. Swarm v4
+        // (2026-11-09): an agent its person only talks to in their 1:1 chat is typed their words alone (#3627) and never told
+        // its Swarm's id, and the basics tell it to post in its project's channel (lib/swarmSkills.ts). In two, it names one.
+        if (!identifier(payload.tabId) && identifier(payload.harnessId) && !named) {
+          const tabs = [...new Set((await sources().feed.refresh()).roster.filter(row => object(row.agent).harnessId === payload.harnessId
+            && object(row.agent).machineId === core.daemon.machineId() && row.closeSession !== true).map(row => row.tabId).filter(identifier))]
+          if (tabs.length > 1) return { error: 'SWARM_AMBIGUOUS', detail: `This agent is in ${tabs.length} Swarms: name one with --tab (${tabs.join(', ')}).` }
+          if (tabs.length === 1) payload.tabId = tabs[0]
+        }
+        if (!identifier(payload.tabId)) return { error: 'INVALID_REQUEST', detail: 'Name the Swarm with --tab ID.' }
+        if (!(named ?? hashed)) return { error: 'INVALID_REQUEST' }
         // The caller is one of this machine's running agents, as the host roster lists it now: no Swarm is read to know that
         // (design 2026-10-26 5.3), and the roster is read again for every call, as the whole Swarm once was, by its changes
         // since the host's last read. A replacement terminal is still its original member, found by its harness.

@@ -353,7 +353,6 @@ it('gives every agent the same help, with no rule the server dropped', async () 
   expect((help.commands as Array<{ type: string }>).map(c => c.type)).toEqual(expect.arrayContaining(['decision.ask']))
   // Task #4547: a person's chat with their own agent is theirs alone; no help text teaches the retired private line.
   expect(JSON.stringify(help)).not.toContain('person.tell')
-  expect(help.plan).toEqual(expect.stringMatching(/^plan \[JSON\]/))
   const dropped = /prefer stop|agree an order|Only its project's Lead|without a routeDecisionId is refused|hard rule|top tier|steps the task up|"name":"Builder"|role "reviewer"/i
   expect(JSON.stringify(help)).not.toMatch(dropped)
   expect(Object.values(help).filter(v => typeof v === 'string').join('\n')).not.toMatch(dropped)
@@ -419,6 +418,23 @@ it('explains to the PM other projects\' work, and points nobody at the removed L
   expect(answer.help.status).toContain('The PM\'s status also lists otherProjectsWork: the active work of the Swarm\'s other projects')
   expect(answer.help).not.toHaveProperty('leads')
   expect(JSON.stringify(answer.help)).not.toMatch(/Leads conversation|leadsConversationId/)
+})
+// Swarm v4 (2026-11-09): an agent its person only talks to in their 1:1 chat is never told its Swarm's id, and the basics tell
+// it to post in its project's channel: in its own pane, the one Swarm it is in is meant.
+it('serves an agent in its own pane that leaves its Swarm out, in the one Swarm it is in', async () => {
+  const t = setup()
+  expect(await t.ask({ action: 'status', harnessId: 'native' }, owner)).toMatchObject({ ok: true })
+  expect(t.call).toHaveBeenLastCalledWith('GET', `/api/super-tabs/tab/parts?asAgentId=${t.agentId}`, undefined)
+  expect(await t.ask({ action: 'status', harnessId: 'stranger' }, owner)).toEqual({ error: 'INVALID_REQUEST', detail: 'Name the Swarm with --tab ID.' })
+})
+it('asks an agent in two Swarms to name one', async () => {
+  const agent = { id: 'a', machineId: 'machine-1', harnessId: 'native' }
+  const call = vi.fn<CoreApi['account']['backend']>(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/')
+    ? hostForm([{ tabId: 'tab', agent }, { tabId: 'other', agent }], { tabs: ['tab', 'other'] }) : { state: { agents: [agent] } } } }))
+  const service = superTabService(fakeCore({ account: { backend: call }, agents: { byAgent: vi.fn(() => ({ agentId: 'native' }) as never) } }),
+    { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost })
+  expect(await service.requests.super_tabs({ action: 'status', harnessId: 'native' }, owner))
+    .toEqual({ error: 'SWARM_AMBIGUOUS', detail: 'This agent is in 2 Swarms: name one with --tab (tab, other).' })
 })
 it('resolves a native caller to its exact contribution and rechecks it before every agent command', async () => {
   const t = setup()
@@ -1202,7 +1218,7 @@ describe('a Harness Team account, which Swarm v3 has none of (#4221)', () => {
       }
     }
     for (const action of ['teamSetupDecline', 'teamSetupStatus']) {
-      expect(await service.requests.super_tabs({ action }, owner)).toEqual({ error: 'INVALID_REQUEST' })
+      expect(await service.requests.super_tabs({ action }, owner)).toEqual({ error: 'INVALID_REQUEST', detail: 'Name the Swarm with --tab ID.' })
     }
     expect(make).not.toHaveBeenCalled()
     expect(backend).not.toHaveBeenCalled()
@@ -1273,8 +1289,8 @@ describe('mentions on a post', () => {
 
   const help = async (t: ReturnType<typeof setup>, payload: Record<string, unknown>) => object(object(await t.ask({ action: 'help', ...payload }, owner)).help)
   const mention = '[--mention PERSON]...'
-  // Project instructions, phase 4: any agent of the project tags people, asks a batch and plans; the server says where not.
-  it('offers --mention, plan and a batch of questions in every agent\'s help', async () => {
+  // Project instructions, phase 4: any agent of the project tags people and asks a batch; the server says where not.
+  it('offers --mention and a batch of questions in every agent\'s help', async () => {
     const t = setup()
     swarm(t, t.agentId)
     const lead = await help(t, { tabId: 'tab', agentId: t.agentId })
@@ -1287,7 +1303,6 @@ describe('mentions on a post', () => {
     // The server reads tags from the text too (backend mentions.ts).
     expect(lead.post).toContain('An @username in TEXT tags that person as well, outside code and links. Never type a person\'s email.')
     expect(lead.post).not.toMatch(/email shown|@email/)
-    expect(String(lead.plan)).toContain('plan [JSON]: the best plan for all your open groups')
     expect(await help(t, { tabId: 'tab', harnessId: 'native' })).toEqual(lead)
     // An agent that coordinates nothing reads the same, and so does help outside a tab or with a caller that cannot be read.
     swarm(t, 'new-lead')

@@ -16,6 +16,7 @@ import type { AutonomousDeviceInput } from '../deviceInput.js'
 import { isDeviceInputBoundary } from '../deviceInput.js'
 import type { SubmissionReader } from '../../lib/submissionReader.js'
 import type { WifiFeed } from '../wifi.js'
+import type { TurnEnds } from './ends.js'
 import type { TurnRecaps } from './recaps.js'
 import type { ShortTurnGuard } from './shortTurnGuard.js'
 import { deviceErrorText } from '../cardText.js'
@@ -69,6 +70,8 @@ export interface FunnelDeps {
   /** Each live turn's start and end, never a re-read: the short-turn guard holds automatic input to an agent that
    *  loops (shortTurnGuard.ts). */
   shortTurns?: Pick<ShortTurnGuard, 'started' | 'ended'>
+  /** Whoever hears each live turn end (`CoreApi.turns.onEnd`, core/turns/ends.ts). */
+  ends?: Pick<TurnEnds, 'ended'>
 }
 
 type OutsideConsumers = (consumer: string, call: () => void) => void
@@ -109,7 +112,7 @@ export function outsideConsumers(options: {
 /** The funnel itself, over what it feeds. */
 export function funnelFor({
   bySession, tokenUsage, agentIdFor, turnActivity, isSubagentSession, clients, search, turnStartedAt, prompts, input,
-  deviceInput, submission, device, startHeartbeat, questionWatcher, mirror, nativeTurns, outside = outsideConsumers(), working, shortTurns,
+  deviceInput, submission, device, startHeartbeat, questionWatcher, mirror, nativeTurns, outside = outsideConsumers(), working, shortTurns, ends,
 }: FunnelDeps) {
   return (sessionId: string, events: Events, opts?: EmitOptions): void => {
     if (!events.length || !bySession(sessionId)?.active) return
@@ -183,6 +186,9 @@ export function funnelFor({
         // Do NOT stop the heartbeat here: the turn is closed but its recap is just being cut (the recaps
         // hear the batch below and say its card is busy). The timer keeps beating for the device's card and
         // stops once mirror.heartbeat() reads it idle, which is at once while the recaps are off.
+        // Whoever answers a person at a turn's end (the Swarm host, superTabs/agentReplies.ts) hears every live end, the one before
+        // a queued follow-up included: each message is its own turn. Never one re-read from disk.
+        if (!replay) outside('turn-ends', () => ends?.ended({ agentId, sessionId, aborted: event.payload.aborted === true }))
       }
     }
     if (nativeTurns) outside('native-turns', () => nativeTurns.ingest(agentIdFor(sessionId), events, !!(opts?.resumed || opts?.replay)))
