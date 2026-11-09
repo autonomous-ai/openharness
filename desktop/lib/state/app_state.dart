@@ -10065,6 +10065,8 @@ class AppNotifier extends ChangeNotifier {
   }
 
   void _onConnectionStatus(String machineId, ConnectionStatus nextStatus) {
+    // A socket's last word, its close, comes after the app is gone.
+    if (_disposed) return;
     final machine = machineStates[machineId];
     if (machine == null) return;
     // A refusal being settled against the device log ([_settleTrust]) is still connecting.
@@ -23847,6 +23849,8 @@ class AppNotifier extends ChangeNotifier {
     agentAlerts.dispose();
     agentUnread.dispose();
     _disposed = true;
+    // Its sockets redial on timers of their own: one that outlived the app reported its status to a notifier that was gone.
+    unawaited(_pool?.closeAll());
     _closeAttachmentSessions();
     _sharingDiscoveryTimer?.cancel();
     _machinesPushTimer?.cancel();
