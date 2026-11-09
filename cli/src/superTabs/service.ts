@@ -187,9 +187,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
       command: { type: 'message.send', conversationId: agent.chat, replyTo: null, recipientIds: [agent.agentId], text, agentOnly: true } }),
     file: join(api.dataDir, 'super-tab-github-news.json'),
   })))(core, sources)
-  // The projects whose PM is this person's agent running here, which the merger and the assigner work for.
+  // The projects whose PM is this person's agent here, running or stopped, which the merger and the assigner work for. The
+  // work needs its person's gh, not its session: while Juno, the swarm-sandbox's PM, was stopped, its #17 waited six hours
+  // with a READ-OK and green checks (2026-11-09). A closed PM's row is gone, and leads nothing.
   const led = (api: CoreApi, held: () => SwarmSources) => async () => ledProjects({ me: (await api.account.identity().catch(() => null))?.accountId ?? null,
-    live: id => !!api.agents.byAgent(id), roster: async () => (await held().feed.current(60_000)).roster,
+    live: async id => !!api.agents.byAgent(id) || await api.agents.stopped?.(id) === true, roster: async () => (await held().feed.current(60_000)).roster,
     read: async (tabId, agentId) => (await held().reads.read(tabId, agentId)).state })
   // Merges by rule the pull requests of those projects (githubMerge.ts).
   // The crew of a project its PM leads, as the PM reads the Swarm.

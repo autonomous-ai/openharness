@@ -773,6 +773,9 @@ export interface CommandContext {
 export const notReachedLine = (names: string[]): string => `Your post was delivered, but not to ${names.join(', ')}: a Harness Team agent wrote this task's code, so an agent in the main account may not join it. `
   + 'Nothing is wrong with your post or with you. Ask the PM to hand the work on, or name an agent in a Team account.'
 export const REACHED_NO_AGENT = 'This post reached no agent; people read it in the conversation. Name an agent with --to or @Name when it must act.'
+/** Told to a post's sender when a recipient's session is down: the post waits in its queue, and it reads it when it is back. */
+export const offlineLine = (names: string[]): string => names.length === 1 ? `${names[0]} is offline; it will read this when it is back.`
+  : `${names.slice(0, -1).join(', ')} and ${names.at(-1)} are offline; they will read this when they are back.`
 
 /** Messages in a row between two agents after which their project's Lead is told, once (project instructions, phase 1:
  *  agents talk to each other directly, so nothing else would notice two of them answering each other for ever). */
@@ -967,20 +970,20 @@ export function worksInProjectChat(state: SuperTabState, group: Conversation, ag
     && !['lost', 'stopped', 'cancelled'].includes(c.assignment.status) && groupProject(state, c).id === project.id)
 }
 /** Who may post in a conversation may also upload a file to it. Writer access is checked by `author(state, actor, true)`. The
- *  open group [actor] may post in: an agent of the group's project that is not in it joins it (joinsProject). An agent with
- *  work in the project posts in its project chat without joining it, so the chat keeps only its coordinator among agents
- *  and opens no second terminal (#2207). */
-export function postable(state: SuperTabState, actor: Actor, conversationId: string) {
+ *  open group [actor] may post in, and the agent that posting there adds to it (`joining`, else null): an agent of the group's
+ *  project that is not in it joins it (joinsProject). An agent with work in the project posts in its project chat without joining
+ *  it, so the chat keeps only its coordinator among agents and opens no second terminal (#2207). It changes nothing: an upload
+ *  asks it of the Swarm as the read cache holds it, which nothing may change, and the command that posts adds the agent. A yes
+ *  to an upload is not a yes to the post that sends it: that asks again, of the Swarm as it is then. */
+export function postable(state: SuperTabState, actor: Actor, conversationId: string): { group: Conversation; joining: string | null } {
   const group = open(state, conversationId)
   requireCanChat(state, actor, group)
-  if (actor.kind === 'agent' && !group.agentIds.includes(actor.agentId)) {
-    if (projectAgent(state, actor, groupProject(state, group).id) && worksInProjectChat(state, group, actor.agentId)) return group
-    if (!joinsProject(state, group, actor.agentId) && !joinsChannel(state, group, actor.agentId)) {
-      fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
-    }
-    group.agentIds.push(actor.agentId)
+  if (actor.kind !== 'agent' || group.agentIds.includes(actor.agentId)) return { group, joining: null }
+  if (projectAgent(state, actor, groupProject(state, group).id) && worksInProjectChat(state, group, actor.agentId)) return { group, joining: null }
+  if (!joinsProject(state, group, actor.agentId) && !joinsChannel(state, group, actor.agentId)) {
+    fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
   }
-  return group
+  return { group, joining: actor.agentId }
 }
 function owner(state: SuperTabState, actor: Actor): void {
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Super Tab owner can manage invitations.', 403)
@@ -4492,10 +4495,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       break
     }
     case 'message.send': {
-      const joining = actor.kind === 'agent' && !state.conversations.find(c => c.id === command.conversationId)?.agentIds.includes(actor.agentId)
-      const group = postable(state, actor, command.conversationId)
+      const { group, joining } = postable(state, actor, command.conversationId)
       // Posting in its project chat joins it nowhere (postable), so it takes no work there either.
-      if (joining && group.agentIds.includes(actor.agentId)) teamJoin(groupProject(state, group), actor.agentId, group)
+      if (joining) {
+        group.agentIds.push(joining)
+        teamJoin(groupProject(state, group), joining, group)
+      }
       const ids = [...new Set(command.attachmentIds ?? [])]
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
@@ -4638,6 +4643,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (buddyDown) buddyDownLine(group, buddyDown)
       if ((poster || excludedPm.length) && !command.agentOnly && !recipients.length) effects.result.reachedNoAgent = REACHED_NO_AGENT
       if (barred.length) effects.result.notReached = notReachedLine(barred.map(id => agent(state, id).displayName ?? agent(state, id).name))
+      // A recipient whose session is down keeps the delivery queued and reads it when it is back, and nothing else tells its sender
+      // the post is waiting. Not an agent-only notice (the sender's own), an agent asleep (it wakes on the message) or one told to stop.
+      const away = command.agentOnly ? [] : recipients.filter(id => !agent(state, id).asleep && agent(state, id).workDecision !== 'stop' && downSince(state, agent(state, id), context.now))
+      if (away.length) effects.result.offline = offlineLine(away.map(id => agentDisplayName(state.agents, id) ?? agent(state, id).name))
       if (excludedPm.length) {
         const names = excludedPm.map(id => agent(state, id).displayName ?? agent(state, id).name).join(', ')
         effects.result.notReached = [effects.result.notReached, `This post did not reach ${names}: the PM takes proposals and proposal answers from cards. Use a proposal card when the PM must act.`].filter(Boolean).join('\n')
