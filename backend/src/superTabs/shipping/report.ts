@@ -53,7 +53,8 @@ export async function applyReport(db: PrismaClient, user: AuthUser, machineId: s
   const current = weekStart(now)
   for (const entry of body.agents) {
     if (!('weeks' in entry)) continue
-    if (entry.from > current || entry.from < current - MAX_RANGE_WEEKS * WEEK_MS) fail('INVALID_REPORT', `A reading starts at most ${MAX_RANGE_WEEKS} weeks back, and never in the future.`, 400)
+    // One week more than the daemon was told to start within: its reading may have begun before a Monday that its report passed.
+    if (entry.from > current || entry.from < current - (MAX_RANGE_WEEKS + 1) * WEEK_MS) fail('INVALID_REPORT', `A reading starts at most ${MAX_RANGE_WEEKS} weeks back, and never in the future.`, 400)
     if (entry.weeks.some(({ week }) => week < entry.from || week > current)) fail('INVALID_REPORT', 'A week of a reading lies between where it starts and this week.', 400)
   }
   await membersOf(db, user, body.tabId)
@@ -63,8 +64,9 @@ export async function applyReport(db: PrismaClient, user: AuthUser, machineId: s
 async function write(tx: Prisma.TransactionClient, user: AuthUser, machineId: string, body: ReportBody, now: number): Promise<ShippingReported> {
   const { tabId } = body, current = weekStart(now), oldest = current - (WEEKS_KEPT - 1) * WEEK_MS
   // The agents this person runs on this machine, live: nobody reports another's, or one from another computer.
-  const mine = new Set((await tx.swarmAgent.aggregateRaw({ pipeline: [{ $match: { tabId, machineId, machineOwnerId: user.sub, deleted: false } }, { $project: { key: 1 } }] }) as unknown as
-    Array<{ key: string }>).map(agent => agent.key))
+  const named = body.agents.map(entry => entry.agentId)
+  const mine = new Set((await tx.swarmAgent.aggregateRaw({ pipeline: [{ $match: { tabId, deleted: false, key: { $in: named }, machineId, machineOwnerId: user.sub } },
+    { $project: { key: 1 } }] }) as unknown as Array<{ key: string }>).map(agent => agent.key))
   const entries = body.agents.filter(entry => mine.has(entry.agentId))
   const skipped = body.agents.length - entries.length
   if (!entries.length) return { applied: 0, skipped, capped: 0 }
@@ -78,8 +80,8 @@ async function write(tx: Prisma.TransactionClient, user: AuthUser, machineId: st
     const totalId = rowId(tabId, entry.agentId, 0), total = stored.get(totalId)
     if (!('weeks' in entry)) {
       await tx.swarmShipping.upsert({ where: { id: totalId },
-        create: { id: totalId, tabId, agentId: entry.agentId, week: 0, personId: user.sub, shipped: counts(none()), settled: 0, failed: entry.failed, failedMachineId: machineId },
-        update: { failed: entry.failed, failedMachineId: machineId } })
+        create: { id: totalId, tabId, agentId: entry.agentId, week: 0, personId: user.sub, shipped: counts(none()), settled: 0, failed: entry.failed, failedMachineId: machineId, failedAt: now },
+        update: { personId: user.sub, failed: entry.failed, failedMachineId: machineId, failedAt: now } })
       continue
     }
     const renamed = total?.name !== undefined && !sameName(total.name, entry.name)
@@ -103,10 +105,11 @@ async function write(tx: Prisma.TransactionClient, user: AuthUser, machineId: st
     if (!total || total.failed || open !== total.settled || total.name !== entry.name || !sameCounts(sum, total.shipped)) {
       await tx.swarmShipping.upsert({ where: { id: totalId },
         create: { id: totalId, tabId, agentId: entry.agentId, week: 0, personId: user.sub, shipped: counts(sum), settled: open, name: entry.name },
-        update: { personId: user.sub, shipped: counts(sum), settled: open, name: entry.name, failed: null, failedMachineId: null } })
+        update: { personId: user.sub, shipped: counts(sum), settled: open, name: entry.name, failed: null, failedMachineId: null, failedAt: null } })
     }
+    // The weeks past the five kept go with the agent's next report: delete on write, so nothing needs a sweep. Only the weeks of an
+    // agent that reports: one that has been away keeps the rows of the weeks it has not been read for, which this report just settled.
+    await tx.swarmShipping.deleteMany({ where: { tabId, agentId: entry.agentId, week: { gt: 0, lt: oldest } } })
   }
-  // The weeks past the five kept go with the next report that comes: delete on write, so nothing needs a sweep.
-  await tx.swarmShipping.deleteMany({ where: { tabId, week: { gt: 0, lt: oldest } } })
   return { applied: entries.length, skipped, capped }
 }

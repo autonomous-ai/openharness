@@ -5,7 +5,7 @@ import { fail } from '../model.js'
 import { readBy } from '../parts/indexed.js'
 import { machineSwarms } from '../swarmRows.js'
 import { membersOf } from './access.js'
-import { BACKFILL_WEEKS, MAX_LISTED, MAX_RANGE_WEEKS, MAX_REPOSITORIES, MAX_SWARMS, WEEKS_READABLE, type BoardQuery, type ReadFailure, type ReportBody, type ShippingBoard,
+import { BACKFILL_WEEKS, FAILURE_FRESH_MS, MAX_LISTED, MAX_RANGE_WEEKS, MAX_REPOSITORIES, MAX_SWARMS, WEEKS_READABLE, type BoardQuery, type ReadFailure, type ReportBody, type ShippingBoard,
   type ShippingReported, type ShippingTargets } from './contract.js'
 import { applyReport } from './report.js'
 import { pointsStages, rankSums } from './score.js'
@@ -66,7 +66,7 @@ export class Shipping {
    *  readings. For the Swarm's people only; a person who left is no longer listed. The sums are made in the database, one row per
    *  person, and the first MAX_LISTED people come back with the reader if they rank lower. */
   async board(user: AuthUser, tabId: string, query: BoardQuery): Promise<ShippingBoard> {
-    const current = weekStart(this.now())
+    const now = this.now(), current = weekStart(now)
     const week = query.all ? 0 : query.week ?? current
     if (!query.all && (weekStart(week) !== week || week > current || week <= current - WEEKS_READABLE * WEEK_MS)) {
       fail('INVALID_WEEK', `Ask for this week or one of the ${WEEKS_READABLE - 1} before it, by its Monday 00:00 UTC.`, 400)
@@ -74,7 +74,7 @@ export class Shipping {
     const members = await membersOf(this.db, user, tabId)
     const [sums, own] = await Promise.all([
       this.db.swarmShipping.aggregateRaw({ pipeline: [{ $match: { tabId, week } }, ...pointsStages()] }) as unknown as Promise<Raw[]>,
-      this.db.swarmShipping.findMany({ where: { tabId, week: 0, personId: user.sub }, select: { failed: true, failedMachineId: true } })])
+      this.db.swarmShipping.findMany({ where: { tabId, week: 0, personId: user.sub }, select: { failed: true, failedMachineId: true, failedAt: true } })])
     const standings = rankSums(sums.filter(row => members.has(String(row._id))).map(row => ({ personId: String(row._id), sum: Number(row.sum), shipping: Number(row.shipping) })))
     const listed = standings.slice(0, MAX_LISTED)
     const reader = standings.find(person => person.personId === user.sub)
@@ -82,11 +82,14 @@ export class Shipping {
     const named = listed.length ? await this.db.swarmMember.aggregateRaw({ pipeline: [{ $match: { tabId, deleted: false, key: { $in: listed.map(person => person.personId) } } },
       { $project: { key: 1, 'data.name': 1, 'data.username': 1, 'data.email': 1 } }] }) as unknown as Raw[] : []
     const names = new Map(named.map(member => {
+      // What the Swarm shows (personNames.ts shownNameOf): the name they set, else their username, else what a default one is made
+      // from, the start of their address. A default's number for two of one name needs every person and agent read: left out.
       const person = (member.data ?? {}) as Raw
       const shown = [person.name, person.username].find((value): value is string => typeof value === 'string' && value.trim() !== '')?.trim()
       return [String(member.key), shown || String(person.email ?? '').split('@')[0] || String(member.key)]
     }))
-    const failures = [...new Map(own.flatMap(row => row.failed && row.failedMachineId ? [[`${row.failedMachineId}:${row.failed}`,
+    // A failure is shown while it is reported: one nobody repeats (a deleted agent, a stopped daemon) goes after FAILURE_FRESH_MS.
+    const failures = [...new Map(own.flatMap(row => row.failed && row.failedMachineId && (row.failedAt ?? 0) >= now - FAILURE_FRESH_MS ? [[`${row.failedMachineId}:${row.failed}`,
       { machineId: row.failedMachineId, code: row.failed as ReadFailure }] as const] : [])).values()]
       .sort((a, b) => a.machineId < b.machineId ? -1 : a.machineId > b.machineId ? 1 : a.code < b.code ? -1 : a.code > b.code ? 1 : 0)
     return { week: query.all ? null : week, people: listed.map(person => ({ ...person, displayName: names.get(person.personId) ?? person.personId })), failures }

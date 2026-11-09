@@ -13,7 +13,7 @@ export type ReadFailure = typeof READ_FAILURES[number]
 
 /** What a report may claim, per priority and agent and week: no agent comes near it, and the server cannot check GitHub. */
 export const MAX_SHIPPED = 1_000
-export const MAX_AGENTS_REPORTED = 100
+export const MAX_AGENTS_REPORTED = 50
 /** Weeks of rows kept: this one and the four before it. The board reads this one and the three before it. */
 export const WEEKS_KEPT = 5
 export const WEEKS_READABLE = 4
@@ -28,6 +28,8 @@ export const MAX_REPOSITORIES = 20
 export const WEEK_CAP = 100
 /** How long after the seventh day a week stays open to a revert, for a report that was read before the week ended. */
 export const SETTLE_SLACK_MS = 60 * 60_000
+/** A failed reading is shown to its person this long after it was last reported (a daemon reports each quarter hour). */
+export const FAILURE_FRESH_MS = 6 * 3_600_000
 /** The board lists this many people, best first, and always the reader. */
 export const MAX_LISTED = 200
 

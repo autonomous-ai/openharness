@@ -48,8 +48,9 @@ shipped issues by priority. No title, branch, path or repository name leaves the
 
 1. **Growth.** One row per agent and week with something shipped, and one all-time row per agent (`SwarmShipping`, about 150
    bytes). A week's row goes five weeks on, in the report that comes next (delete on write, no sweep); the all-time row lives
-   as long as the Swarm and goes with it (`purge.ts`). At most 6 rows for each agent that ever reported, at most 100 agents
-   in a report. A Swarm of 100 agents holds at most 600 rows (90 KB).
+   as long as the Swarm and goes with it (`purge.ts`). At most 6 rows for each agent that ever reported, at most 50 agents
+   in a report. A Swarm of 100 agents holds at most 600 rows (90 KB). The old weeks of an agent go in its own next report, never
+   in another agent's: an agent that was away keeps the rows of the weeks it has not been read for until it is.
 2. **Concurrency.** A report locks one transaction over the rows of the agents it names; two reports of one agent (a computer
    that moved) end as the last one. Reports are sets from GitHub, so the last is at least as fresh as the one before.
 3. **Read cost.** The board reads the Swarm row, the rows of one week (or the all-time rows) by `[tabId, week]`, and the
@@ -72,6 +73,11 @@ shipped issues by priority. No title, branch, path or repository name leaves the
    one. A week the daemon cannot read in full is never reported as a smaller one.
 10. **Platforms.** Backend and CLI daemon on macOS, Linux and Windows (a `gh` run without a window); Desktop on every
     platform it ships on; the web builds read the same board.
+
+Limits kept on purpose: a rename starts the label afresh, so the weeks before it keep the issues that carried the old name and the
+current week is read under the new one only (an agent's old-name issues of that week do not count); an agent whose name is not a
+label (over 50 characters with `builder:`, or a quote, comma or backslash) never ships; an agent that is away more than 9 weeks
+loses the weeks it was not read for.
 
 Self-reported numbers: the server cannot check GitHub (no App, by decision), so it bounds a report (counts, weeks, agents) and
 accepts it only for the sender's own agents. Someone who inflates their own counts cheats the people of their own Swarm only.

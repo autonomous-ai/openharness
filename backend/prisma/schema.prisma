@@ -2061,10 +2061,15 @@ model SwarmShipping {
   /// All-time row only: why the last reading failed (shipping/contract.ts READ_FAILURES), and on which machine; cleared by the next one.
   failed          String?
   failedMachineId String?
+  /// All-time row only: when that failure was last reported (epoch ms): the board shows it for a few hours, so one nobody reports
+  /// any more (a deleted agent, a stopped daemon) goes by itself.
+  failedAt        Float?
 
   /// A board is one week's rows, or the all-time rows (week 0), of a Swarm; a person's own all-time rows (their failed readings) are
-  /// the same index with their id; the delete of old weeks is a range on its first two fields.
+  /// the same index with their id.
   @@index([tabId, week, personId])
+  /// An agent's old weeks, which its own report deletes (shipping/report.ts): a range on its weeks.
+  @@index([tabId, agentId, week])
 }
 
 model ExperimentalSettings {

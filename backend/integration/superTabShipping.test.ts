@@ -193,7 +193,7 @@ describe('a report', () => {
     expect(await bad([row('atlas', [{ week: THIS(), P0: -1 }])])).toBe(400)
     expect(await bad([row('atlas', [{ week: THIS(), P0: 1 }, { week: THIS(), P1: 1 }])])).toBe(400)
     expect(await bad([])).toBe(400)
-    expect(await bad(Array.from({ length: 101 }, (_, i) => row(`a${i}`, [])))).toBe(400)
+    expect(await bad(Array.from({ length: 51 }, (_, i) => row(`a${i}`, [])))).toBe(400)
     expect(await bad([{ agentId: 'atlas', failed: 'NOT_A_CODE' }])).toBe(400)
     expect(await db.swarmShipping.count({ where: { tabId: t } })).toBe(0)
   })
@@ -435,6 +435,68 @@ describe('trying to break it', () => {
   })
 })
 
+describe('what the review of this pull request found', () => {
+  const points = async (t: string, query = '?all=1', as: AuthUser = ann) => (await board(query, as, t)).body.data.people.find((p: { personId: string }) => p.personId === as.sub)?.points
+
+  it('keeps the open weeks of an agent that was away, whatever another agent\'s reports sweep, and counts them once when it returns', async () => {
+    const t = await scene(), base = THIS()
+    // Atlas reports its week and the week before; its machine then goes quiet while Bob's Orion keeps reporting for six weeks.
+    await report(MAC.ann, [row('atlas', [{ week: base - W, P2: 2 }, { week: base, P2: 3 }])], ann, t)
+    expect(await points(t)).toBe(3.2)
+    for (let i = 1; i <= 6; i++) {
+      clock.now = START + i * W
+      await report(MAC.bob, [row('orion', [{ week: THIS(), P3: 1 }])], bob, t)
+    }
+    const atlasRows = async () => (await db.swarmShipping.findMany({ where: { tabId: t, agentId: 'atlas' }, orderBy: { week: 'asc' } })).map(r => r.week)
+    expect(await atlasRows()).toEqual([0, base - W, base])
+    // It comes back: the next reading starts where it was settled, and the two weeks it had are counted once.
+    const from = (await targets(MAC.ann)).body.data.swarms.find((x: { tabId: string }) => x.tabId === t).agents[0].from
+    expect(from).toBe(base - W)
+    await report(MAC.ann, [row('atlas', [{ week: base - W, P2: 2 }, { week: base, P2: 3 }], from)], ann, t)
+    expect(await points(t)).toBe(3.2)
+    expect(await atlasRows()).toEqual([0])
+  })
+
+  it('lands a report whose reading began 8 weeks before the Monday it was told on, now that Monday has passed', async () => {
+    const t = await scene(), base = THIS()
+    await report(MAC.ann, [row('atlas', [{ week: base, P2: 1 }])], ann, t)
+    clock.now = base + 40 * W - 60_000
+    const from = (await targets(MAC.ann)).body.data.swarms.find((x: { tabId: string }) => x.tabId === t).agents[0].from
+    expect(from).toBe(base + 31 * W)
+    clock.now += 120_000
+    expect((await report(MAC.ann, [row('atlas', [], from)], ann, t)).status).toBe(200)
+    expect((await report(MAC.ann, [row('atlas', [], from - W)], ann, t)).status).toBe(400)
+  })
+
+  it('shows a failure to the person it was reported for, for six hours after it was last reported', async () => {
+    const t = await scene()
+    await report(MAC.ann, [{ agentId: 'atlas', failed: 'GH_SIGNED_OUT' }], ann, t)
+    expect((await board('', ann, t)).body.data.failures).toEqual([{ machineId: MAC.ann, code: 'GH_SIGNED_OUT' }])
+    clock.now += 6 * 3_600_000 - 1
+    expect((await board('', ann, t)).body.data.failures.length).toBe(1)
+    clock.now += 2
+    expect((await board('', ann, t)).body.data.failures).toEqual([])
+    // Reported again, it is shown again; and a row that changed hands shows for whoever reports it now.
+    await db.swarmShipping.update({ where: { id: `${t}:atlas:0` }, data: { personId: bob.sub } })
+    await report(MAC.ann, [{ agentId: 'atlas', failed: 'RATE_LIMITED' }], ann, t)
+    expect((await board('', ann, t)).body.data.failures).toEqual([{ machineId: MAC.ann, code: 'RATE_LIMITED' }])
+    expect((await board('', bob, t)).body.data.failures).toEqual([])
+  })
+
+  it('takes the first reading of a whole machine in one go: 50 agents of five weeks', async () => {
+    const t = await scene()
+    await db.swarmAgent.createMany({ data: Array.from({ length: 50 }, (_, i) => agentRow(t, `big${i}`, `Big${i}`, ann, MAC.ann)) })
+    const weeks = (i: number) => [4, 3, 2, 1, 0].map(back => ({ week: THIS() - back * W, P2: 1 + ((i + back) % 3) }))
+    const began = performance.now()
+    const answer = await report(MAC.ann, Array.from({ length: 50 }, (_, i) => row(`big${i}`, weeks(i), THIS() - 4 * W)), ann, t)
+    const ms = Math.round(performance.now() - began)
+    expect(answer.body.data).toEqual({ applied: 50, skipped: 0, capped: 0 })
+    expect(await db.swarmShipping.count({ where: { tabId: t } })).toBe(50 * 6)
+    process.stderr.write(`first report of 50 agents x 5 weeks: ${ms} ms\n`)
+    expect(ms).toBeLessThan(10_000)
+  })
+})
+
 describe('a Swarm of 10,000 agents', () => {
   it('sums in one pass, lists the first 200 people and the reader below them, and says how long it took', async () => {
     const t = `tab-${randomUUID()}`, PEOPLE = 500, PER = 20
@@ -462,7 +524,9 @@ describe('a Swarm of 10,000 agents', () => {
     }
     // A reader who is not ranked sees the first 200 and no row of their own.
     expect(other.body.data.people.length).toBe(200)
-    expect(week.ms).toBeLessThan(1_000)
-    expect(all.ms).toBeLessThan(1_000)
+    // The limit is 100 ms (AGENTS.md): measured at 50 to 110 ms on a Mac at load 11 to 25 under nice, and well below on a quiet one. This
+    // only catches a read that has stopped being one pass, without failing on a busy runner.
+    expect(week.ms).toBeLessThan(250)
+    expect(all.ms).toBeLessThan(250)
   }, 120_000)
 })
