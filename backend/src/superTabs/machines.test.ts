@@ -251,10 +251,11 @@ describe('a machine\'s reading as a report stores it (DB 2.5)', () => {
     expect(kept).toMatchObject({ receivedAt: NOW, sessionKind: 'computer', harnessProgress: { a: 5 }, harnessTokens: { a: tokens },
       preparingStartIds: ['s1'], runningHarnessIds: ['a'], stoppedHarnessIds: ['z'] })
     expect(kept.quotas.map(q => q.engine)).toEqual(['claude'])
-    // Only a team session's privacy check is kept.
-    expect(kept.privacy).toBeUndefined()
+    // A Team daemon's privacy check is accepted in a reading and stored with none (Swarm v4).
+    expect(kept).not.toHaveProperty('privacy')
     const team = storedObservation(pool(), reading({ privacy: { mode: 'dedicated' } }), { team: true, now: NOW, preparable: () => true })
-    expect(team).toMatchObject({ sessionKind: 'team', privacy: { mode: 'dedicated', seenAt: NOW } })
+    expect(team).toMatchObject({ sessionKind: 'team' })
+    expect(team).not.toHaveProperty('privacy')
   })
 
   it('stores only running idle Buddies and makes changed proof run the full decision', () => {

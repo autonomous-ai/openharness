@@ -161,29 +161,29 @@ function restoring(patch: Partial<SuperTabState> = {}, pool: Record<string, unkn
     agents: [], conversations: [removedGroup()], projects: [{ id: 'p', name: 'P', ownerId: 'owner', leadConversationId: 'lead-p', visibility: 'public', members: [] }, { id: 'other', name: 'O', ownerId: 'owner', leadConversationId: 'lead-o', visibility: 'public', members: [] }],
     machines: [{ machineId: 'mac', contributorId: 'owner', name: 'Mac', generation: 'gen', ...pool }], removedSessions: [record()], ...patch } as unknown as SuperTabState
 }
-const facts = { elsewhere: new Set<string>(), teamMachines: [] as string[] }
+const facts = { elsewhere: new Set<string>() }
 
 // Security review 1 of #2601: a restore takes the rules a person's add takes (commands.ts agent.add).
 describe('what may come back', () => {
   it('comes back on an ordinary machine', () => {
-    expect(restoreRefusal(restoring(), record(), 'owner', AT, facts)).toBeNull()
+    expect(restoreRefusal(restoring(), record(), 'owner', facts)).toBeNull()
   })
 
   it('never onto a Team account that serves another project', () => {
     const team = { hostMachineId: 'host-mac', teamAccountOnly: true }
     const onTeam = record({ agent: removedAgent({ teamAccount: true }) })
     const held = [{ agentId: 'b', machineId: 'mac', harnessId: 'b', machineOwnerId: 'owner', heldFor: 'other', since: AT }]
-    expect(restoreRefusal(restoring({ closingSessions: held } as Partial<SuperTabState>, team), onTeam, 'owner', AT, { ...facts, teamMachines: ['mac'] })).toBe('team-other-project')
+    expect(restoreRefusal(restoring({ closingSessions: held } as Partial<SuperTabState>, team), onTeam, 'owner', facts)).toBe('team-other-project')
     const mine = [{ agentId: 'b', machineId: 'mac', harnessId: 'b', machineOwnerId: 'owner', heldFor: 'p', since: AT }]
-    expect(restoreRefusal(restoring({ closingSessions: mine } as Partial<SuperTabState>, team), onTeam, 'owner', AT, { ...facts, teamMachines: ['mac'] })).toBeNull()
+    expect(restoreRefusal(restoring({ closingSessions: mine } as Partial<SuperTabState>, team), onTeam, 'owner', facts)).toBeNull()
   })
 
   // Swarm v3 (task #4120, the PM's ruling): an agent works on any project its person reads, so it comes back to a teammate's
   // project too; one its person no longer reads ends (project-ended, above).
   it('comes back to a teammate\'s project its person reads', () => {
-    expect(restoreRefusal(restoring({}, { hostMachineId: 'host-mac' }), record(), 'owner', AT, facts)).toBeNull()
+    expect(restoreRefusal(restoring({}, { hostMachineId: 'host-mac' }), record(), 'owner', facts)).toBeNull()
     const theirs = restoring({ projects: [{ id: 'p', name: 'P', ownerId: 'mate', leadConversationId: 'lead-p', visibility: 'public', members: [] }] } as unknown as Partial<SuperTabState>, { hostMachineId: 'host-mac' })
-    expect(restoreRefusal(theirs, record(), 'owner', AT, facts)).toBeNull()
+    expect(restoreRefusal(theirs, record(), 'owner', facts)).toBeNull()
   })
 
   // Swarm v3 (task #4120, the PM's ruling): only the project owner's own agent may take over a task a Team agent wrote.

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
-import { admitMachineStart, availableSlots, machineObservationSchema, machineTeamWork, machineSlots, observedPrivacy, PRIVACY_FRESH_MS, removalPreview, teamAccountRequired, teamWorkRefusal, type ContributedMachine, type MachinePrivacy } from './machines.js'
+import { admitMachineStart, availableSlots, machineSlots, removalPreview, type ContributedMachine } from './machines.js'
 import { createSuperTab, SuperTabError, visibleState, type Actor, type AgentConfiguration, type AgentStart, type SuperTabState } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
 
@@ -23,13 +23,10 @@ const config: AgentConfiguration = { engine: 'codex', model: 'fixture-model', ef
 const requirements = { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false }
 const resources = { cpuPercent: 1, memoryTotalBytes: 8, memoryUsedBytes: 1, diskFreeBytes: 8, diskTotalBytes: 8, projectDiskFreeBytes: 8,
   deviceType: null, chip: null, os: null, gpuPercent: null }
-const PASSED: MachinePrivacy = { mode: 'account', passed: true, checkedAt: NOW - MINUTE }
-const FAILED: MachinePrivacy = { mode: 'account', passed: false, item: 'gitconfig', detail: 'The team account could read ~/.gitconfig.', checkedAt: NOW - MINUTE }
 type Reading = NonNullable<ContributedMachine['observation']>
 /** A reading as the store keeps it: stamped with the reporting session's kind and, from a team session, its privacy. */
-const reading = (sessionKind: 'team' | 'computer', privacy?: MachinePrivacy, receivedAt = NOW, seenAt = receivedAt): Reading => ({
-  generation: 'g1', receivedAt, sessionKind, resources, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [],
-  ...(privacy ? { privacy: { ...privacy, seenAt } } : {}) })
+const reading = (sessionKind: 'team' | 'computer', receivedAt = NOW): Reading => ({
+  generation: 'g1', receivedAt, sessionKind, resources, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] })
 const refusal = (body: () => unknown): SuperTabError | null => {
   try { body(); return null } catch (error) { if (error instanceof SuperTabError) return error; throw error }
 }
@@ -40,10 +37,7 @@ function swarm() {
   let state: SuperTabState = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
   let sequence = 0
   const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
-    // As the store reads them (store.ts teamMachines): a machine reporting from a team sign-in has a team account row,
-    // unless a test says which rows are.
-    const teamMachines = (state.machines ?? []).filter(m => m.observation?.sessionKind === 'team').map(m => m.machineId)
-    const effects = applyCommand(state, actor, command, { now: NOW, operationId: `op-${++sequence}`, teamMachines, ...context })
+    const effects = applyCommand(state, actor, command, { now: NOW, operationId: `op-${++sequence}`, ...context })
     state = effects.state
     return effects
   }
@@ -55,7 +49,7 @@ function swarm() {
   state.machines = [
     pool('owner-mac', 'owner', 'Owner Mac', reading('computer')),
     pool('mate-mac', 'mate', 'MacBook Pro', reading('computer')),
-    pool('mate-team', 'mate', 'MacBook Pro · Team', reading('team', PASSED)),
+    pool('mate-team', 'mate', 'MacBook Pro · Team', reading('team')),
   ]
   const mine = String(run({ type: 'project.create', name: 'Mine', visibility: 'public', brief: '' }, mate).result.projectId)
   const group = (projectId = 'lead', actor: Actor = owner) => String(run({ type: 'conversation.create', projectId, title: 'Work', brief: 'Build it.',
@@ -74,99 +68,6 @@ function swarm() {
   return { run, group, member, machine, request, pooled, mine, get state() { return state } }
 }
 
-describe('the privacy field of a machine reading', () => {
-  const { receivedAt: _receivedAt, sessionKind: _kind, ...sent } = reading('computer')
-
-  it('takes each shape the Harness Team account sends, and nothing else', () => {
-    for (const privacy of [PASSED, FAILED, { mode: 'dedicated' }, { ...FAILED, item: 'unchecked', detail: 'The privacy check did not run: EIO' }]) {
-      expect(machineObservationSchema.safeParse({ ...sent, privacy }).success, JSON.stringify(privacy)).toBe(true)
-    }
-    expect(machineObservationSchema.safeParse(sent).success).toBe(true)
-    for (const privacy of [
-      { mode: 'account', passed: true }, { ...PASSED, item: 'gitconfig' }, { ...PASSED, checkedAt: -1 }, { ...PASSED, checkedAt: 'now' },
-      { mode: 'account', passed: false, item: 'gitconfig', checkedAt: NOW }, { ...FAILED, item: 'Git Config' }, { ...FAILED, item: '' },
-      { ...FAILED, detail: 'x'.repeat(1001) }, { mode: 'dedicated', passed: true }, { mode: 'vm' }, { ...PASSED, extra: 1 }, null,
-    ]) expect(machineObservationSchema.safeParse({ ...sent, privacy }).success, JSON.stringify(privacy)).toBe(false)
-  })
-
-  it('is kept only from a team session\'s reading, dated by when this server first received that check', () => {
-    expect(observedPrivacy(undefined, PASSED, true, NOW)).toEqual({ ...PASSED, seenAt: NOW })
-    // An ordinary computer's reading proves nothing about a team account, so what it claims is dropped.
-    expect(observedPrivacy(undefined, PASSED, false, NOW)).toBeUndefined()
-    expect(observedPrivacy({ ...PASSED, seenAt: NOW }, { mode: 'dedicated' }, false, NOW)).toBeUndefined()
-    expect(observedPrivacy({ ...PASSED, seenAt: NOW }, undefined, true, NOW)).toBeUndefined()
-    // The same check sent again keeps its first date, so a check that stops running goes stale whatever the Mac's clock says.
-    expect(observedPrivacy({ ...PASSED, seenAt: NOW - 20 * MINUTE }, PASSED, true, NOW)).toEqual({ ...PASSED, seenAt: NOW - 20 * MINUTE })
-    expect(observedPrivacy({ ...PASSED, seenAt: NOW - 20 * MINUTE }, { ...PASSED, checkedAt: NOW }, true, NOW)).toEqual({ ...PASSED, checkedAt: NOW, seenAt: NOW })
-    expect(observedPrivacy({ ...PASSED, seenAt: NOW - 20 * MINUTE }, { ...FAILED, checkedAt: PASSED.checkedAt }, true, NOW)).toMatchObject({ passed: false, seenAt: NOW })
-    expect(observedPrivacy({ mode: 'dedicated', seenAt: NOW - 20 * MINUTE }, { mode: 'dedicated' }, true, NOW)).toEqual({ mode: 'dedicated', seenAt: NOW - 20 * MINUTE })
-  })
-
-  it('shows a failing check\'s detail only to the machine\'s contributor', () => {
-    const f = swarm()
-    f.machine('mate-team').observation = reading('team', FAILED)
-    const privacy = (actor: Actor) => visibleState(f.state, actor, NOW).machines!.find(m => m.machineId === 'mate-team')!.observation!.privacy
-    expect(privacy(mate)).toMatchObject({ item: 'gitconfig', detail: FAILED.detail })
-    expect(privacy(owner)).toEqual({ mode: 'account', passed: false, item: 'gitconfig', checkedAt: FAILED.checkedAt, seenAt: NOW })
-  })
-})
-
-describe('which machines take a teammate\'s project', () => {
-  const pool = (observation?: Reading) => ({ machineId: 'mac', name: 'MacBook Pro', contributorId: 'mate', membershipGeneration: 'g', generation: 'g1',
-    cwd: '/swarm', engines: ['codex'], maxAgents: 2, paused: false, ...(observation ? { observation } : {}) }) as ContributedMachine
-
-  it('a Team machine whose privacy check passed and is fresh', () => {
-    expect(teamWorkRefusal(pool(reading('team', PASSED)), NOW)).toBeNull()
-    // Fresh up to the bound, measured from when the server first received the check.
-    expect(teamWorkRefusal(pool(reading('team', PASSED, NOW, NOW - PRIVACY_FRESH_MS)), NOW)).toBeNull()
-  })
-
-  it('a machine used only for agents', () => {
-    expect(teamWorkRefusal(pool(reading('team', { mode: 'dedicated' }, NOW, NOW - 60 * MINUTE)), NOW)).toBeNull()
-  })
-
-  it('not with a stale check', () => {
-    expect(teamWorkRefusal(pool(reading('team', PASSED, NOW, NOW - PRIVACY_FRESH_MS - MINUTE)), NOW)).toEqual({ code: 'PRIVACY_CHECK_STALE',
-      reason: 'The privacy check on MacBook Pro last passed 16 minutes ago, so it runs only its owner\'s projects until it passes again.' })
-  })
-
-  it('not with a failing check, naming the item', () => {
-    expect(teamWorkRefusal(pool(reading('team', FAILED)), NOW)).toEqual({ code: 'PRIVACY_CHECK_FAILED',
-      reason: 'The Harness Team account on MacBook Pro is not private (gitconfig: it could read its owner\'s ~/.gitconfig), so it runs only its owner\'s projects.' })
-    expect(teamWorkRefusal(pool(reading('team', { ...FAILED, item: 'standard-user' })), NOW)?.reason).toContain('(standard-user: the team account is an administrator)')
-    expect(teamWorkRefusal(pool(reading('team', { ...FAILED, item: 'unchecked' })), NOW)?.reason).toContain('(unchecked: the check did not run)')
-    expect(teamWorkRefusal(pool(reading('team', { ...FAILED, item: 'icloud' })), NOW)?.reason).toContain('(icloud)')
-    // The items a Linux and a Windows team account check that a Mac's does not (cli/src/team/privacy.ts, windowsTeam.ts).
-    expect(teamWorkRefusal(pool(reading('team', { ...FAILED, item: 'firefox' })), NOW)?.reason).toContain('(firefox: it could list its owner\'s Firefox profile)')
-    expect(teamWorkRefusal(pool(reading('team', { ...FAILED, item: 'edge' })), NOW)?.reason).toContain('(edge: it could list its owner\'s Edge profile)')
-    expect(teamWorkRefusal(pool(reading('team', { ...FAILED, item: 'credentials' })), NOW)?.reason).toContain('(credentials: it could list its owner\'s Windows Credential Manager folder)')
-  })
-
-  // Swarm v3 (task #4120): a person's own agent works on their own computer, in their own account, so a machine that is not a
-  // Team account reads no Team-account rule, even where the rule was required everywhere (task #4218).
-  it('on a machine with no Harness Team account, which runs its own person\'s agents', () => {
-    expect(teamWorkRefusal(pool(reading('computer')), NOW)).toBeNull()
-    // A reading from before readings were stamped with their session is an ordinary machine's.
-    const { sessionKind: _kind, ...unstamped } = reading('computer')
-    expect(teamWorkRefusal(pool(unstamped as Reading), NOW)).toBeNull()
-  })
-
-  it('not on a Team machine that reported no privacy check', () => {
-    expect(teamWorkRefusal(pool(reading('team')), NOW)).toEqual({ code: 'PRIVACY_UNCHECKED',
-      reason: 'MacBook Pro has not reported a privacy check from its Harness Team account, so it runs only its owner\'s projects.' })
-    // Its account row says team, but the reading came from an ordinary sign-in, which carries no privacy.
-    expect(teamWorkRefusal(pool(reading('computer')), NOW, true)?.code).toBe('PRIVACY_UNCHECKED')
-  })
-
-  it('not while offline', () => {
-    expect(teamWorkRefusal(pool(reading('team', PASSED, NOW - 46_000)), NOW)).toEqual({ code: 'MACHINE_OFFLINE',
-      reason: 'MacBook Pro is offline, so it cannot show that its Harness Team account is private.' })
-    // A Mac's team account has its Mac's name, and the Mac may be online: the account is what is offline (third VM run).
-    expect(teamWorkRefusal({ ...pool(), hostMachineId: 'mac' }, NOW, true)).toEqual({ code: 'MACHINE_OFFLINE',
-      reason: 'The Harness Team account on MacBook Pro is offline, so it cannot show that it is private.' })
-  })
-})
-
 // Swarm v3 has no Team accounts (task #4120, the PM's ruling): an agent a person brought works on any task of a project that
 // person can read, in their own account, and a new agent starts only on its own person's computer.
 describe('starting a teammate\'s work', () => {
@@ -184,7 +85,7 @@ describe('starting a teammate\'s work', () => {
   })
 
   it('never starts in a Team account, whatever its privacy check says', () => {
-    for (const observation of [reading('team', PASSED), reading('team', FAILED), reading('team')]) {
+    for (const observation of [reading('team'), reading('team'), reading('team')]) {
       const f = swarm(), group = f.group()
       f.machine('mate-team').observation = observation
       expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-team') }, mate, f.pooled('mate-team')))?.code).toBe('TEAM_ACCOUNTS_REMOVED')
@@ -339,39 +240,6 @@ describe('agents already working in a Team account', () => {
   })
 })
 
-describe('until a team account is required everywhere', () => {
-  beforeEach(() => { delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED })
-  const pool = (observation?: Reading) => ({ machineId: 'mac', name: 'MacBook Pro', contributorId: 'mate', membershipGeneration: 'g', generation: 'g1',
-    cwd: '/swarm', engines: ['codex'], maxAgents: 2, paused: false, ...(observation ? { observation } : {}) }) as ContributedMachine
-
-  it('a machine without a team account takes a teammate\'s project as before, online or not', () => {
-    expect(teamWorkRefusal(pool(reading('computer')), NOW)).toBeNull()
-    expect(teamWorkRefusal(pool(reading('computer', undefined, NOW - 60 * MINUTE)), NOW)).toBeNull()
-    expect(teamWorkRefusal(pool(), NOW)).toBeNull()
-  })
-
-  it('a machine with one already follows the rule, by its reading or its account row', () => {
-    expect(teamWorkRefusal(pool(reading('team', FAILED)), NOW)?.code).toBe('PRIVACY_CHECK_FAILED')
-    expect(teamWorkRefusal(pool(reading('team', PASSED, NOW, NOW - 20 * MINUTE)), NOW)?.code).toBe('PRIVACY_CHECK_STALE')
-    expect(teamWorkRefusal(pool(reading('computer')), NOW, true)?.code).toBe('PRIVACY_UNCHECKED')
-    expect(teamWorkRefusal(pool(reading('team', PASSED)), NOW)).toBeNull()
-  })
-
-})
-
-// Every Swarm alike (2026-11-02). The switch was held to listed owners' Swarms while it was tried on production
-// (SWARM_TEAM_ACCOUNT_OWNERS, 2026-10-27 to 11-02); a value left in a deployment must not hold it back any more.
-describe('the switch, in every Swarm', () => {
-  afterEach(() => { delete process.env.SWARM_TEAM_ACCOUNT_OWNERS })
-
-  it('reads as on in any Swarm, whatever SWARM_TEAM_ACCOUNT_OWNERS says, and off with the switch off', () => {
-    process.env.SWARM_TEAM_ACCOUNT_OWNERS = 'someone@example.com'
-    expect(teamAccountRequired()).toBe(true)
-    delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED
-    expect(teamAccountRequired()).toBe(false)
-  })
-})
-
 // One machine ("One machine" in docs/plans/2026-10-24-swarm-team-account.md): a Mac's Harness Team account is a
 // mechanism under the scenes. Its pool names the Mac it lives on (`hostMachineId`), shows the Mac's name, joins where
 // the Mac was added and follows the Mac's pause, slots and removal. A teammate's project started on the Mac runs in
@@ -389,25 +257,10 @@ describe('one machine: a Mac and its Harness Team account', () => {
     expect(f.state.starts).toEqual([expect.objectContaining({ request: expect.objectContaining({ machineId: 'mate-mac', cwd: '/swarm/lead' }) })])
   })
 
-  // Swarm v3 (task #4218): a teammate's work on the Mac runs as its own person's agent there, never in its Team account, so the
-  // Mac reads as itself: its Team account's privacy check no longer leaves its person's agents out of the route.
-  it('reads a Mac as itself, not as its Harness Team account', () => {
-    const f = oneMachine()
-    f.machine('mate-mac').observation = reading('computer')
-    f.machine('mate-team').observation = reading('team', FAILED)
-    expect(machineTeamWork(f.machine('mate-mac'), NOW, ['mate-team'])).toBeNull()
-    expect(machineTeamWork(f.machine('mate-mac'), NOW, [])).toBeNull()
-    // The account itself reads as itself.
-    expect(machineTeamWork(f.machine('mate-team'), NOW, ['mate-team'])?.code).toBe('PRIVACY_CHECK_FAILED')
-  })
-
-  it('takes nothing in its Team account, whether its account row is still listed or not', () => {
+  it('takes nothing in its Team account', () => {
     const f = oneMachine(), group = f.group()
-    for (const teamMachines of [[], ['mate-team']]) {
-      expect(refusal(() => f.run({ type: 'agent.start', request: { ...f.request(group, 'mate-team'), cwd: '/team-swarm/lead' } }, mate,
-        { ...f.pooled('mate-team'), teamMachines }))?.code).toBe('TEAM_ACCOUNTS_REMOVED')
-    }
-    expect(machineTeamWork(f.machine('mate-team'), NOW, [])?.code).toBe('TEAM_ACCOUNT_REQUIRED')
+    expect(refusal(() => f.run({ type: 'agent.start', request: { ...f.request(group, 'mate-team'), cwd: '/team-swarm/lead' } }, mate,
+      f.pooled('mate-team')))?.code).toBe('TEAM_ACCOUNTS_REMOVED')
     expect(f.state.starts ?? []).toEqual([])
   })
 
@@ -483,8 +336,8 @@ describe('one machine: a Mac whose Harness Team account was made again', () => {
   // pool is still in the Swarm, silent. The Mac joins with the new one too (read/hostRows.ts).
   function remade() {
     const f = swarm()
-    Object.assign(f.machine('mate-team'), { hostMachineId: 'mate-mac', name: 'MacBook Pro', cwd: '/old-team', observation: reading('team', PASSED, NOW - 3_600_000) })
-    f.state.machines!.push({ ...structuredClone(f.machine('mate-team')), machineId: 'mate-team-2', cwd: '/team-swarm', observation: reading('team', PASSED) })
+    Object.assign(f.machine('mate-team'), { hostMachineId: 'mate-mac', name: 'MacBook Pro', cwd: '/old-team', observation: reading('team', NOW - 3_600_000) })
+    f.state.machines!.push({ ...structuredClone(f.machine('mate-team')), machineId: 'mate-team-2', cwd: '/team-swarm', observation: reading('team') })
     return f
   }
 
@@ -528,31 +381,12 @@ describe('a machine added as its person joined', () => {
     expect(f.state.starts).toHaveLength(2)
   })
 
-  // Task #4218: it read "has no Harness Team account yet", and routing left its person's own agents out of every teammate's
-  // project the server would let them work on.
-  it('reads as taking its person\'s agents\' work, so routing keeps them for a teammate\'s project', () => {
-    const f = swarm()
-    f.run(joined, mate, contribution)
-    f.machine('joined-mac').observation = reading('computer')
-    expect(machineTeamWork(f.machine('joined-mac'), NOW, [])).toBeNull()
-    expect(machineTeamWork(f.machine('mate-mac'), NOW, [])).toBeNull()
-  })
-
   it('keeps the rule when its settings are saved again, which sends the contribution without it', () => {
     const f = swarm()
     f.run(joined, mate, contribution)
     const { teamAccountOnly: _rule, ...settings } = joined
     f.run({ ...settings, maxAgents: 2 }, mate, contribution)
     expect(f.machine('joined-mac')).toMatchObject({ maxAgents: 2, teamAccountOnly: true })
-  })
-
-  it('admits a teammate\'s work once its Team account\'s privacy check passed', () => {
-    const f = swarm()
-    f.run(joined, mate, contribution)
-    f.machine('joined-mac').observation = reading('team', PASSED)
-    expect(teamWorkRefusal(f.machine('joined-mac'), NOW)).toBeNull()
-    f.machine('joined-mac').observation = reading('team', FAILED)
-    expect(teamWorkRefusal(f.machine('joined-mac'), NOW)?.code).toBe('PRIVACY_CHECK_FAILED')
   })
 
   it('is a choice only its person makes: the field is refused on any other command shape', () => {
