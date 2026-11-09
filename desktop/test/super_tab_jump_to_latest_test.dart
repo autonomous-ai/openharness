@@ -56,7 +56,7 @@ void main() {
       .controller!;
 
   ConversationServer chat(int count) {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     for (var i = 1; i <= count; i++) {
       server.append('Update $i: checking the offline queue and reconnect.');
     }
@@ -150,7 +150,7 @@ void main() {
   });
 
   ConversationServer threadOf(int replies) {
-    final server = ConversationServer()..threads = true;
+    final server = ConversationServer.chat()..threads = true;
     (server.state['people'] as List).add({
       'id': 'peer',
       'email': 'peer@example.com',
@@ -244,7 +244,7 @@ void main() {
 
   testWidgets('Jump to latest on replies of mixed heights ends on the real '
       'last reply', (tester) async {
-    final server = ConversationServer()..threads = true;
+    final server = ConversationServer.chat()..threads = true;
     (server.state['people'] as List).add({
       'id': 'peer',
       'email': 'peer@example.com',
