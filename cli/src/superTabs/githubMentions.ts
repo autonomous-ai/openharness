@@ -36,6 +36,8 @@ const AGENTS_FRESH_MS = 60_000
 /** A thread that relays this many times to one agent within LOOP_WINDOW_MS is paused for it: an agent that forgets to sign
  *  its posts on its own pull request would otherwise hear itself, answer, and hear that too. */
 const LOOP_RELAYS = 6, LOOP_WINDOW_MS = 10 * 60_000
+/** How far back the first read of a repository looks: the minutes around an agent's start, never its history. */
+const FIRST_READ_MS = 10 * 60_000
 /** A repository no agent here has read for this long is forgotten. */
 const FORGET_MS = 7 * 24 * 60 * 60_000
 const VERDICTS: ReadonlySet<unknown> = new Set(['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED'])
@@ -183,9 +185,11 @@ export class GitHubMentions {
   }
 
   private async readRepo(repo: string, agents: WatchedAgent[], memory: Memory, relays: { left: number }): Promise<void> {
-    const at = new Date(this.now()).toISOString()
-    // First read of a repository: from now on, nothing before it.
-    const kept = memory.repos[repo] ??= { comments: at, reviewComments: at, issues: at, seen: [], tasks: {}, owned: {}, usedAt: this.now() }
+    // First read of a repository: what was said in the last few minutes, and nothing before. An agent's start and Harness's
+    // ask to it can come in the same minute (a PM resumed asks its silent reader at once, githubAssign.ts): read from the
+    // moment of the first read alone, that ask was missed for good.
+    const from = new Date(this.now() - FIRST_READ_MS).toISOString()
+    const kept = memory.repos[repo] ??= { comments: from, reviewComments: from, issues: from, seen: [], tasks: {}, owned: {}, usedAt: this.now() }
     kept.usedAt = this.now()
     // An agent new to this repository: its open tasks and pull requests now. Its tasks are told to nobody, since only a task
     // labelled from now on is news; its pull requests are its own, so what is said on them from now on reaches it.

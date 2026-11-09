@@ -85,6 +85,14 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
       url: 'https://github.com/acme/app/pull/4#issuecomment-2', login: 'deehw', association: 'MEMBER', text: 'Juno, 12:00, to **Pip**: READ-OK f6edb44' })
   })
 
+  it('relays, on its first read, an ask made in the minutes before it, as its agent starts, and nothing older', async () => {
+    const f = setup()
+    f.github.comments.push(comment(1, -20 * 60, 'Harness, 11:40, to **Pip**: please read this pull request, an older ask.'),
+      comment(2, -2 * 60, 'Harness, 11:58, to **Pip**: please read this pull request, and start your comment with READ-OK f6edb44 or HOLD f6edb44.'))
+    await f.mentions.tick()
+    expect(f.relayed().map(command => command.text)).toEqual(['Harness, 11:58, to **Pip**: please read this pull request, and start your comment with READ-OK f6edb44 or HOLD f6edb44.'])
+  })
+
   it('relays nothing a stranger wrote, nor the agent\'s own signed post, nor a word that only looks like its name', async () => {
     const f = setup()
     await f.mentions.tick()
