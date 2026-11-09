@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/agent_instructions.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'package:flutter/gestures.dart';
@@ -234,7 +236,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('agents/second.md'), findsOneWidget);
     // This test's agent runs on no computer the app knows, so its file is read where it runs.
-    expect(find.text('Open it on second\'s computer.'), findsOneWidget);
+    expect(find.text('Open it on Mac Studio.'), findsOneWidget);
     expect(
       width(tester, 'super-right-pane'),
       moreOrLessEquals(width(tester, 'super-center-pane'), epsilon: 2),
@@ -243,6 +245,38 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('agents/second.md'), findsNothing);
   });
+
+  testWidgets(
+    'Instructions of an agent from before v4 are named for what its person calls it, and say where its file is',
+    (tester) async {
+      // A v3 PM: its harness name is Lead, its person calls it Faye, and it runs on Mac 3.
+      final faye = SuperTabAgent.fromJson({
+        'id': 'faye',
+        'name': 'Lead',
+        'displayName': 'Faye',
+        'machineId': 'mac3',
+        'harnessId': 'h',
+        'contributorId': 'owner',
+        'configuration': {'engine': 'claude'},
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.light),
+          home: Scaffold(
+            body: SwarmAgentInstructions(
+              agent: faye,
+              app: null,
+              machineName: 'Mac 3',
+              onClose: () {},
+            ),
+          ),
+        ),
+      );
+      expect(find.text('agents/Faye.md'), findsOneWidget);
+      expect(find.text('Open it on Mac 3.'), findsOneWidget);
+      expect(find.textContaining('Lead'), findsNothing);
+    },
+  );
 
   testWidgets('its person renames an agent by its name in the bar', (
     tester,
