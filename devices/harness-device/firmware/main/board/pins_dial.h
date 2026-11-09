@@ -6,9 +6,6 @@
 #pragma once
 
 // ---- AMOLED panel: CO5300 over QSPI ----
-#define BSP_LCD_H_RES         466
-#define BSP_LCD_V_RES         466
-#define BSP_LCD_BIT_PER_PIXEL 16          // RGB565
 
 #define BSP_LCD_QSPI_CS      12
 #define BSP_LCD_QSPI_SCLK    38

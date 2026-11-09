@@ -16,5 +16,4 @@ typedef ht_character_face_t ht_tim_face_t;
 // Sparse blink deadlines and finite event reactions. No heap, animation thread or hidden-screen work.
 bool ht_tim_motion_tick(ht_tim_motion_t *m, uint32_t now, ht_tim_mood_t mood,
                         bool quiet, bool visible, bool down, int x, unsigned level, uint32_t activity);
-void ht_tim_portrait(ht_scene_t *scene, int y, ht_tim_mood_t mood, uint16_t ink);
 void ht_tim_face(ht_scene_t *scene, const ht_tim_face_t *face);

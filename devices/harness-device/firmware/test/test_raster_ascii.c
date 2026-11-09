@@ -67,10 +67,6 @@ int main(void)
         }
     }
     // The budget follows the widest atlas the face has: 24 slots of 5x10 on the dial, of 8x16 on the Pro.
-#if HT_FACE_PX >= 720
-    assert(ht_glyph_cache_bytes() <= 6400);
-#else
     assert(ht_glyph_cache_bytes() <= 2600);
-#endif
     puts("ASCII raster: 6000 clipped mixed scenes + 252 complete poses match the Unicode renderer; guards and warm reuse pass");
 }

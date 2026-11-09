@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic fixed-cell, 2-bit font atlases. Requires Pillow 12.2.0.
 
-Geist Mono: SIL OFL, vendored beside Geist. Unscii-8: public domain, from LVGL 9.5.0.
+Geist Mono: SIL OFL, vendored beside Geist.
 No font engine runs on the ESP32. Regenerate from the repository root.
 """
 from pathlib import Path
@@ -9,7 +9,6 @@ from PIL import Image, ImageDraw, ImageFont
 root = Path(__file__).resolve().parents[1]
 dest = root / 'main/ui/habitat/fonts.c'
 mono = root / 'fonts/GeistMono-Regular.ttf'
-pixel = root.parent / 'prototype/habitat/assets/unscii-8.ttf'
 # VIETNAMESE COMES FROM THE PROPORTIONAL SIBLING, and it has to.
 #
 # GeistMono carries 10 of the 98 codepoints Vietnamese needs outside Latin-1, and it is missing the
@@ -37,9 +36,9 @@ ENGINES = ['claude','codex','cursor','opencode','grok','copilot','amp','devin','
 VIET_DRAW_W = {'ht_viet_16': 13, 'ht_viet_20': 15, 'ht_viet_24': 18, 'ht_viet_28': 20}
 fonts = [('ht_mono_16',mono,16,10,22,17),('ht_mono_20',mono,20,12,28,22),
          ('ht_mono_24',mono,24,15,32,26),('ht_mono_28',mono,28,17,38,31),
-         ('ht_pixel_40',pixel,40,40,48,40),('ht_open_20',mono,20,12,28,22),
+         ('ht_open_20',mono,20,12,28,22),
          ('ht_nav_32',mono,32,20,44,35),
-         ('ht_lock_dot',pixel,40,40,48,40),('ht_bell_20',mono,20,12,28,22),
+         ('ht_bell_20',mono,20,12,28,22),
          ('ht_bell_28',mono,28,17,38,31),('ht_bell_footer',mono,28,26,38,31),
          ('ht_done_28',mono,28,17,38,31),('ht_failed_28',mono,28,17,38,31),
          ('ht_right_20',mono,20,12,28,22),('ht_right_28',mono,28,17,38,31),
@@ -60,7 +59,7 @@ with dest.open('w') as out:
         data=[]
         bounds=[]
         # Latin-1 keeps common names readable; unknown Unicode renders ?, never changes wire text.
-        first,last=(0xe020,0xe020+len(ENGINES)-1) if name=='ht_engine' else (0xe010,0xe01f) if name=='ht_wave' else (0xe002,0xe002) if name=='ht_spark' else (0x1ea0,0x1ea0+0x59+len(VIET_TAIL)) if name in VIET else (0xe000,0xe000) if name.startswith('ht_bell_') else (0x2713,0x2713) if name=='ht_done_28' else (0x2717,0x2717) if name=='ht_failed_28' else (0x2190,0x2197) if name=='ht_nav_32' else (0x2197,0x2197) if name.startswith('ht_open_') else (0x2192,0x2192) if name.startswith('ht_right_') else (ord('o'),ord('o')) if name=='ht_lock_dot' else (32,255 if name!='ht_pixel_40' else 126)
+        first,last=(0xe020,0xe020+len(ENGINES)-1) if name=='ht_engine' else (0xe010,0xe01f) if name=='ht_wave' else (0xe002,0xe002) if name=='ht_spark' else (0x1ea0,0x1ea0+0x59+len(VIET_TAIL)) if name in VIET else (0xe000,0xe000) if name.startswith('ht_bell_') else (0x2713,0x2713) if name=='ht_done_28' else (0x2717,0x2717) if name=='ht_failed_28' else (0x2190,0x2197) if name=='ht_nav_32' else (0x2197,0x2197) if name.startswith('ht_open_') else (0x2192,0x2192) if name.startswith('ht_right_') else (32,255)
         for cp in range(first,last+1):
             # The tail of the Vietnamese atlas is the eight scattered letters, in VIET_TAIL order.
             glyph = VIET_TAIL[cp-0x1efa] if name in VIET and cp >= 0x1efa else chr(cp)
