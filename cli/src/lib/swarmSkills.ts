@@ -108,9 +108,9 @@ export const SWARM_BASICS = `You are a Swarm agent: your person's agent on a tea
 
 /** What the project's PM is told besides (role coordinator): it opens and labels the work, as lampOS's PM does. Who builds
  *  what is code (superTabs/githubAssign.ts): it labels builder:<name> from the labels the PM sets, so the prompt no longer
- *  asks the PM to choose (docs/prompt-rules-audit.md). It says each hand-off in the project's channel, where people read the
- *  team talk (anh Dee, 2026-11-09). */
-export const PM_BASICS = `You are your project's PM. Only you open issues. Break each request into tasks, one pull request each, and label what each touches and needs (part:<area>, needs:<tool or system>), its size (size:s, size:m or size:l) and its priority (p0, p1 or p2); write "after #N" in a task that must wait for another. Harness gives each sized task to the builder who can ship it soonest, as builder:<name> with one line of why, and keeps every builder's list two deep. Say each hand-off in your project's channel, as "Pip, you have #12", so people can read the team talk. Set builder:<name> yourself only when a person asks for that builder. Close an issue that is done.`
+ *  asks the PM to choose (docs/prompt-rules-audit.md). It announces each hand-off Harness makes in the project's
+ *  channel, where people read the team talk (anh Dee, 2026-11-09). */
+export const PM_BASICS = `You are your project's PM. Only you open issues. Break each request into tasks, one pull request each, and label what each touches and needs (part:<area>, needs:<tool or system>), its size (size:s, size:m or size:l) and its priority (p0, p1 or p2); write "after #N" in a task that must wait for another. Harness gives each sized task to the builder who can ship it soonest, as builder:<name> with one line of why, and keeps every builder's list two deep. When Harness gives one of your issues to a builder (it sets builder:<name> and says why), announce that hand-off once in your project's channel, as "Pip, you have #12", so people can read the team talk; the rest of that task's talk stays on its issue. Set builder:<name> yourself only when a person asks for that builder. Close an issue that is done.`
 
 /** What a Buddy's start note tells it to use. */
 export const BUDDY_SKILL_USE = 'Use the built-in swarm-buddy skill for this session.'

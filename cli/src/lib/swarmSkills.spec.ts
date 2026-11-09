@@ -38,13 +38,13 @@ describe('Swarm sessions without skill files (task #4673)', () => {
   })
 
   // Swarm v4 (anh Dee, 2026-11-09): the team's talk is visible to people only if agents post it. Harness labels who gets a task;
-  // the PM says so in the project's channel, in one line, as "Pip, you have #12". No other agent is told to.
-  it('tells the PM to say each hand-off in the project\'s channel, in plain words, and no other agent', () => {
-    const line = 'Say each hand-off in your project\'s channel, as "Pip, you have #12", so people can read the team talk.'
+  // the PM announces it once in the project's channel, as "Pip, you have #12", and the rest of that task's talk stays on its
+  // issue (the basics' own rule). No other agent is told to.
+  it('tells the PM to announce each hand-off once in the project\'s channel, and no other agent', () => {
     const lead = prepareSwarmSkill(fixture(), { role: 'coordinator', key: 'lead' }).instructions
     expect(lead.split('\n').filter(row => row.includes('hand-off'))).toHaveLength(1)
-    expect(lead).toContain(` ${line} `)
-    expect(lead.endsWith('Close an issue that is done.')).toBe(true)
+    expect(lead).toMatch(/announce that hand-off once in your project's channel, as "Pip, you have #12"/)
+    expect(lead).toContain('the rest of that task\'s talk stays on its issue')
     for (const saved of [{ role: 'agent', key: 'dev' }, { role: 'agent', fallback: 'review', key: 'review' }] as const) {
       expect(prepareSwarmSkill(fixture(), saved).instructions).not.toMatch(/hand-off|you have #/)
     }
