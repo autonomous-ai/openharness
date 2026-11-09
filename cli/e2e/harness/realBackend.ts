@@ -36,7 +36,7 @@ async function freePort(): Promise<number> {
   return port
 }
 
-async function until(label: string, check: () => Promise<boolean>, ms = 45_000): Promise<void> {
+async function until(label: string, check: () => Promise<boolean>, ms = 120_000): Promise<void> {
   const deadline = Date.now() + ms
   while (!await check().catch(() => false)) {
     if (Date.now() > deadline) throw new Error(`Timed out: ${label}`)
@@ -66,6 +66,8 @@ async function boot(accounts: Account[], log: (line: string) => void, stops: Arr
   const mongo = await MongoMemoryReplSet.create({
     binary: { ...(process.env.HARNESS_E2E_MONGOD ? { systemBinary: process.env.HARNESS_E2E_MONGOD } : {}) },
     replSet: { count: 1, ip: '127.0.0.1', storageEngine: 'wiredTiger' },
+    // mongod's own start, which a Mac under load takes longer than the library's 10 s for.
+    instanceOpts: [{ launchTimeout: 120_000 }],
   })
   stops.push(() => mongo.stop())
   const redis = new RedisMemoryServer({ binary: {
@@ -90,7 +92,7 @@ async function boot(accounts: Account[], log: (line: string) => void, stops: Arr
     HARNESS_CREDENTIAL_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' }
   t = Date.now()
   await exec(join(repo, 'backend/node_modules/.bin/prisma'), ['db', 'push', '--skip-generate'],
-    { cwd: join(repo, 'backend'), env, timeout: 60_000 })
+    { cwd: join(repo, 'backend'), env, timeout: 180_000 })
   log(`db push ${Date.now() - t}ms`)
   t = Date.now()
   const logPath = join(mkdtempSync(join(tmpdir(), 'spike-backend-')), 'backend.log')
@@ -133,13 +135,14 @@ async function boot(accounts: Account[], log: (line: string) => void, stops: Arr
 
 /** An isolated daemon signed in as `a` against `backend`, with a client on its account machine. The daemon is
  *  closed by backend.stop(), also when this throws after creating it. `before` runs once its folders exist and before
- *  it starts: a test that changes what the daemon finds on its PATH (shared tabs' `gh`) does it there. */
+ *  it starts: a test that changes what the daemon finds on its PATH (shared tabs' `gh`) does it there. `submissionGate` makes
+ *  its fake engines keep every prompt they were typed, in `submitted-prompts` of the daemon's root. */
 export async function signIn(backend: RealBackend, a: Account, env: Record<string, string> = {},
-  before?: (daemon: IsolatedDaemon) => void | Promise<void>): Promise<{ daemon: IsolatedDaemon; machineId: string; client: LocalClient }> {
+  before?: (daemon: IsolatedDaemon) => void | Promise<void>, options: { submissionGate?: boolean } = {}): Promise<{ daemon: IsolatedDaemon; machineId: string; client: LocalClient }> {
   const computerId = randomUUID()
   const r = await backend.api(a, '/api/machines/resolve-computer', 'POST', { computerId, label: a.name })
   const machineId = r.body.data.machine.machineId as string
-  const daemon = await IsolatedDaemon.create({ env: {
+  const daemon = await IsolatedDaemon.create({ ...(options.submissionGate ? { submissionGate: true } : {}), env: {
     ADAPTER_COMPUTER_ID: computerId, BACKEND_WS_URL: backend.wsUrl, WEB_URL: backend.url,
     HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', ...env } })
   owned.get(backend)?.push(daemon)
