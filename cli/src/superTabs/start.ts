@@ -69,9 +69,9 @@ const LASTING_REFUSALS = new Set(['RULE_BROKEN', 'REQUIREMENT_UNMET', 'REVIEW_RE
 /** A Product Manager's or an agent's first message (Swarm v4, anh Dee 2026-11-08): its name, as Desktop's own-machine launch
  *  gives it (desktop super_tabs/launch_prompt.dart). No manual and no command: the Swarm's basics reach it in the engine's own
  *  instructions (lib/swarmSkills.ts), and each message as it arrives (superTabs/host.ts). A name comes from the Swarm, so it
- *  is one line, bounded. */
+ *  is one line of at most 80 characters: control characters and line breaks are spaces, and an emoji is never cut in half. */
 export const startNote = (name: unknown): string => {
-  const line = typeof name === 'string' ? name.replace(/\s+/g, ' ').trim().slice(0, 80) : ''
+  const line = typeof name === 'string' ? [...name.replace(/[\s\p{Cc}]+/gu, ' ').trim()].slice(0, 80).join('').trim() : ''
   return line ? `You are ${line}.` : ''
 }
 
@@ -195,10 +195,8 @@ export function untrustCheckout(home: string, checkout: string): void {
  */
 export async function startAgent(input: Json, scoped: ScopedRequest, where: Where, open: typeof openDaemon = openDaemon): Promise<Json> {
   const startId = input.startId
-  let routed: unknown
   if (!identifier(startId)) throw new Error('The start has no durable receipt. Do not create an agent without it.')
   const start = requireSuccess(await scoped({ action: 'startStatus', startId }))
-  routed ??= start.routeDecisionId
   const request = object(start.request), creationId = start.creationId
   if (!identifier(request.machineId) || !identifier(creationId)) throw new Error('This start receipt is invalid.')
   if (start.error) return { error: 'START_FAILED', startId, detail: start.error }
@@ -577,13 +575,6 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
         const ran = await ranNow(nativeId, String(request.engine))
         if (ran?.model !== model || ran.effort !== effort) {
           modelWarning = `Started with the engine's own model; switching to ${model} ${effort} failed (${String(reply.error)}).`
-          // The decision log says who was actually started, so it must not keep the model that was asked for.
-          if (identifier(routed)) {
-            const corrected = ran && await scoped({ action: 'command', operationId: `model-result-${startId}`,
-              command: { type: 'route.modelResult', decisionId: routed, startId, model: ran.model, effort: ran.effort } })
-              .then(requireSuccess).then(() => true, () => false)
-            if (!corrected) modelWarning += ' The routing decision log could not be corrected to the model that ran.'
-          }
         }
       }
     }

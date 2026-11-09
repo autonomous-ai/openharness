@@ -47,8 +47,8 @@ describe('the one-time process seed for the requesting Swarm', () => {
 
   it('preserves open release history and settings when filling a preset', () => {
     const before = projects()
-    before[2]!.releases = { pending: [{ groupId: 'task', url: 'https://github.com/acme/app/pull/1', mergedAt: 1 }],
-      steps: { cli: { groupId: 'release', at: 1 } } }
+    Object.assign(before[2]!, { releases: { pending: [{ groupId: 'task', url: 'https://github.com/acme/app/pull/1', mergedAt: 1 }],
+      steps: { cli: { groupId: 'release', at: 1 } } } })
     before[2]!.simpleThrough = 10
     const plan = processSeedPlan(TAB, before)
     expect(plan.projects[2]).toEqual({ ...before[2], process: 'simple' })

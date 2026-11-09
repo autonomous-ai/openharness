@@ -12,7 +12,6 @@ import type { Command } from '../src/superTabs/commands.js'
 import { poolRows } from './hostRows.test-support.js'
 import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
 import { compactDeliveries } from '../src/superTabs/deliveryCompaction.js'
-import { revokeNativeContexts } from '../src/superTabs/native.js'
 import { stableId, type MessageDraft, type SuperTabState } from '../src/superTabs/model.js'
 import { logger } from '../src/utils/logger.js'
 import { plan, profiled, reads } from './plans.test-support.js'
@@ -584,17 +583,6 @@ describe('a gathered row never outlives its reason', () => {
     expect((await deliveryOf(done.id, f.lead)).status).toBe('cancelled')
   })
 
-  it('a revoked native context cancels it', async () => {
-    const f = await swarm()
-    const id = await f.write({ kind: 'idle' }, f.lead)
-    await db.superTabNativeContext.create({ data: { id: `native-${f.tab}`, tabId: f.tab, conversationId: f.group, agentId: f.worker, userId: owner.sub, binding: {}, revoked: false } })
-    await db.superTabDelivery.update({ where: { id: stableId(id, f.lead) }, data: { nativeContextId: `native-${f.tab}` } })
-    const { state } = await f.timed.read(owner, f.tab)
-    const after = { ...state, agents: state.agents.filter(a => a.id !== f.worker) }
-    await transaction(db, tx => revokeNativeContexts(tx, state, after))
-    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: `native-${f.tab}` } })).revoked).toBe(true)
-    expect((await deliveryOf(id, f.lead)).status).toBe('cancelled')
-  })
 })
 
 describe('the settle pass, when the coordinator stopped polling', () => {

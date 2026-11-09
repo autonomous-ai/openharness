@@ -80,18 +80,17 @@ const authenticate = vi.fn(async (token: string, _env?: unknown, opts?: { allowT
 /** A Super Tab store that records what reached it, for every method the routes call. */
 function recorder() {
   const calls: Array<{ method: string; args: unknown[] }> = []
-  const methods = (prefix = ''): Record<string, unknown> => new Proxy({}, { get: (_t, name: string) => name === 'then' ? undefined
-    : name === 'native' && !prefix ? methods('native.')
-      : async (...args: unknown[]) => {
-        calls.push({ method: `${prefix}${name}`, args })
-        // What the GitHub token route goes on to use from a grant (routes/superTabs.ts `github-token`).
-        return name === 'githubAssignment'
-          ? { tabId: 'tab-1', agentId: 'agent-1', assignmentId: 'assignment-1', repositoryUrl: 'https://github.com/example/project',
-            requester: { name: 'Owner', email: 'owner@example.com' }, agentName: 'Builder', machineName: 'MacBook Pro · Team' }
-          : name === 'githubStart'
-            ? { tabId: 'tab-1', startId: 'start-1', repositoryUrl: 'https://github.com/example/project', own: true, requester: { name: 'Owner', email: 'owner@example.com' } }
-            : { ok: true }
-      } })
+  const methods = (): Record<string, unknown> => new Proxy({}, { get: (_t, name: string) => name === 'then' ? undefined
+    : async (...args: unknown[]) => {
+      calls.push({ method: name, args })
+      // What the GitHub token route goes on to use from a grant (routes/superTabs.ts `github-token`).
+      return name === 'githubAssignment'
+        ? { tabId: 'tab-1', agentId: 'agent-1', assignmentId: 'assignment-1', repositoryUrl: 'https://github.com/example/project',
+          requester: { name: 'Owner', email: 'owner@example.com' }, agentName: 'Builder', machineName: 'MacBook Pro · Team' }
+        : name === 'githubStart'
+          ? { tabId: 'tab-1', startId: 'start-1', repositoryUrl: 'https://github.com/example/project', own: true, requester: { name: 'Owner', email: 'owner@example.com' } }
+          : { ok: true }
+    } })
   return { store: methods() as unknown as SuperTabStore, calls }
 }
 
@@ -171,8 +170,6 @@ describe('a team session on its own machine', () => {
     ['GET', '/api/super-tabs/tab-1/agents/agent-1/deliveries/delivery-1', undefined, 'deliveryReceipt'],
     ['POST', '/api/super-tabs/tab-1/agents/agent-1/deliveries/delivery-1', { type: 'claim', claimId: 'claim-1' }, 'delivery'],
     ['POST', '/api/super-tabs/tab-1/stopped', { assignmentId: 'assignment-1', receipt: 'stopped' }, 'stopped'],
-    ['GET', '/api/super-tabs/tab-1/native/context-1', undefined, 'native.read'],
-    ['POST', '/api/super-tabs/tab-1/native/context-1', { turnId: 't1', kind: 'prompt', previousEventId: null, text: 'hi', truncated: false, interrupted: false }, 'native.append'],
     ['GET', '/api/super-tabs/tab-1/projects/project-1/roles/dev', undefined, 'roleText'],
     // The project's instructions, which its agents work by: the launch line runs `instructions`, and the host installs each
     // revision as the agent's swarm-instructions skill (2026-11-02: a teammate's agent read neither, refused here).
@@ -194,6 +191,18 @@ describe('a team session on its own machine', () => {
       expect(res.statusCode, res.body).toBe(200)
       expect(store.calls.map(c => c.method)).toEqual([reached])
       expect(store.calls[0]!.args[0]).toMatchObject({ harnessSessionKind: 'team', harnessComputerId: TEAM_COMPUTER })
+    })
+  }
+
+  // Terminal recording is gone with Swarm v4: an old team daemon's recorder is answered ok and ignored, not refused, and the store
+  // is never reached.
+  for (const [method, url, payload] of [['GET', '/api/super-tabs/tab-1/native/context-1', undefined],
+    ['POST', '/api/super-tabs/tab-1/native/context-1', { turnId: 't1', kind: 'prompt', previousEventId: null, text: 'hi', truncated: false, interrupted: false }]] as const) {
+    it(`${method} ${url} tells an old team daemon's recorder it was ignored`, async () => {
+      const res = await call(method, url, payload)
+      expect(res.statusCode, res.body).toBe(200)
+      expect(res.json().data).toMatchObject({ ok: true, ignored: true })
+      expect(store.calls).toEqual([])
     })
   }
 

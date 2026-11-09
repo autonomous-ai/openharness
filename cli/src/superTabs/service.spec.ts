@@ -258,7 +258,7 @@ it('refuses every agent request that came over the link from another computer, w
   const t = setup()
   const relayed = { local: false, owner: true, accountOwner: true, machine: { machineId: 'studio', label: 'Studio' } }
   const post = { type: 'message.send', conversationId: 'lead', text: 'Ready', replyTo: null, recipientIds: [] }
-  for (const ask of [{ action: 'messages', conversationId: 'lead' }, { action: 'command', operationId: 'op', command: post }, { action: 'message', conversationId: 'lead', messageId: 'm' }]) {
+  for (const ask of [{ action: 'status' }, { action: 'command', operationId: 'op', command: post }, { action: 'message', conversationId: 'lead', messageId: 'm' }]) {
     t.call.mockClear()
     for (const who of [{ agentId: t.agentId }, { harnessId: 'native' }, {}]) {
       expect(await t.ask({ ...ask, tabId: 'tab', ...who }, relayed)).toEqual({ error: 'AGENT_LOCAL_ONLY',

@@ -34,6 +34,11 @@ code. Their safety lines (secrets, temp folders, own processes, other accounts, 
 `instructionsTemplate.ts` are unchanged. The Buddy skill stays: its limits are in no code yet. Appendices B to D keep
 those texts as they were read, marked where removed.
 
+**Since Swarm v4's removal of v1-v3 (anh Dee, 2026-11-09):** much of the code the rows cite is gone: `pmSchedule.ts`,
+`processNotes.ts` and the scheduled wakes (#3596), the merge train (`mergeTrain/`), `releases.ts` and `scorecard/` (S1 of
+the backend removal). A row that names them, and the prompt it describes, is history: a v4 agent starts plain and keeps the
+rules of its project's instructions.
+
 ## Classes
 
 | Class | Means | Rows |

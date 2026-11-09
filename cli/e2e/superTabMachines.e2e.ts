@@ -108,6 +108,17 @@ it.each(['project', 'swarm'])('runs a start queued for a teammate\'s machine wit
   await until('owner completes the queued native receipt', () => starts.get(startId)!.harnessId || null, 90000, 500)
   expect((await onB.request('agents_list')).agents).toHaveLength(1)
   expect((await onA.request('agents_list')).agents).toHaveLength(1)
+  // What a person sees in the new agent's terminal: its first message is its name, with no manual and no command in it.
+  const builder = (await onB.request('agents_list')).agents[0]
+  const shown = await until('the new agent shows its first message', async () => {
+    const screen = await b.tmux.run('capture-pane', '-p', '-J', '-S', '-200', '-t', builder.tmuxPane)
+    return screen.includes('You are Pool builder.') ? screen : null
+  }, 30000, 500)
+  expect(shown).not.toMatch(/super-tab|status until|instructions/)
+  // A command of the old manual is refused by the daemon, not served: nothing of it is left to answer.
+  for (const action of ['mine', 'task', 'decisions', 'instructions', 'costs', 'help']) {
+    expect(await onB.request('super_tabs', { action, tabId: 'pool-tab', harnessId: builder.id, conversationId: 'lead' }, 30000), action).toMatchObject({ error: 'INVALID_REQUEST' })
+  }
   expect((await onB.request('shared_machines', { action: 'get' })).emails).not.toContain(leadMachine.email)
   generation = ''
 })

@@ -1384,7 +1384,7 @@ model SuperTabDecision {
   note           String?
   /// The person asked left it to the PM, who took the recommended option: never shown as their own choice.
   delegated      Boolean?
-  /// With `delegated`: the hourly sweep left it to the PM after 24 hours unanswered, not the person (overdueDecisions.ts).
+  /// With `delegated`: the hourly sweep left it to the PM after 24 hours unanswered, not the person (the sweep Swarm v4 removed).
   overdue        Boolean?
   /// "routing-reflection" for a proposal of the nightly routing reflection (costs/reflection.ts): never a Buddy's to read,
   /// and an approved one is kept past the ledger's weeks. Absent on every other decision.
@@ -1402,7 +1402,7 @@ model SuperTabDecision {
   @@index([tabId, projectId, createdAt])
   /// The decisions waiting in a conversation whose work ended (decisions.ts withdrawIn).
   @@index([tabId, conversationId])
-  /// The hourly overdue sweep reads only the waiting decisions of the last 8 days through it (superTabs/overdueDecisions.ts).
+  /// Read by the hourly overdue sweep Swarm v4 removed (the waiting decisions of the last 8 days); nothing reads it now.
   @@index([answeredAt, createdAt], map: "decision_waiting_created")
   /// Explicit deadlines use their own range so long-lived questions are not missed by the legacy creation window.
   @@index([answeredAt, defaultAt], map: "decision_waiting_default")
@@ -1476,9 +1476,9 @@ model SuperTabOperation {
   @@index([createdAt], map: "operation_expiry")
 }
 
-// A conversation-scoped provenance receipt. It grants no terminal access.
-// Only the recorded execution host can append observations, and every append
-// rechecks the person's membership and both machine grants.
+// A conversation-scoped provenance receipt of the terminal recording Swarm v4 removed. It granted no terminal access. Nothing
+// writes or reads it now: its rows go with a Swarm's purge (purge.ts), and the collection when the removed Swarm collections are
+// dropped (a production write, with the owner's go). `SuperTabDelivery.nativeContextId` names one of them on old delivery rows.
 model SuperTabNativeContext {
   id              String   @id @map("_id")
   tabId           String
@@ -1621,9 +1621,9 @@ model SuperTabRouteDecision {
   @@index([tabId, assignmentId])
 }
 
-/// One project's scorecard for one local day (superTabs/scorecard): counts and minutes only, never text, names or ids. One row
-/// per project and day, about 1 KB; the nightly job deletes a project's rows older than 120 days when it writes (rows.ts
-/// SCORECARD_DAYS_KEPT), and a Swarm's go with its purge (purge.ts).
+/// One project's scorecard for one local day, written by the nightly job Swarm v4 removed: counts and minutes only, never text,
+/// names or ids. One row per project and day, about 1 KB. Nothing writes or prunes them now: a Swarm's go with its purge
+/// (purge.ts), and the collection goes when the removed Swarm collections are dropped (a production write, with the owner's go).
 model SuperTabScorecard {
   id         String   @id @map("_id")
   tabId      String
@@ -1634,7 +1634,7 @@ model SuperTabScorecard {
   figures    Json
   computedAt DateTime
 
-  /// A project's days, and the prune of its old ones.
+  /// A project's days.
   @@index([tabId, projectId, on])
 }
 
