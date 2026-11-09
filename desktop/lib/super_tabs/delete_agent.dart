@@ -7,7 +7,7 @@ import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
 
-/// Delete an agent from the sidebar (Swarm v4, anh Dee 2026-11-09): the Swarm lets go of it, its chat leaves Your agents,
+/// Delete an agent from the sidebar (Swarm v4, anh Dee 2026-11-09): the Swarm lets go of it, its chat leaves Your Team,
 /// and its computer stops its session. The same `agent.remove` Remove from Swarm sends, in the words a person uses.
 Future<void> deleteSwarmAgent(
   BuildContext context,

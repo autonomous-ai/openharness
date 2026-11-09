@@ -116,7 +116,7 @@ void main() {
     return c;
   }
 
-  // Swarm v4 (anh Dee 2026-11-08): the org name, Your agents, Projects, Humans; Manage at the foot. No Decisions, Mentions,
+  // Swarm v4 (anh Dee 2026-11-08): the org name, Your Team, Projects, Top Teams; Manage at the foot. No Decisions, Mentions,
   // Threads, Projects grid or Buddy, and an agent's row is its face and name only.
   group('the v4 left pane', () {
     void lead(ConversationServer server) {
@@ -133,7 +133,7 @@ void main() {
     ];
     double top(WidgetTester tester, String k) => tester.getTopLeft(key(k)).dy;
 
-    testWidgets('org, Your agents, Projects, then Manage', (tester) async {
+    testWidgets('org, Your Team, Projects, then Manage', (tester) async {
       await show(tester, agents: mine);
       final order = [
         'super-swarm-switcher',
@@ -151,7 +151,7 @@ void main() {
       expect(
         find.descendant(
           of: key('project-sidebar-agents'),
-          matching: find.text('Your agents'),
+          matching: find.text('Your Team'),
         ),
         findsOneWidget,
       );
@@ -178,7 +178,7 @@ void main() {
       }
     });
 
-    testWidgets('Your agents lists only the reader\'s agents, face and name, '
+    testWidgets('Your Team lists only the reader\'s agents, face and name, '
         'with no detail', (tester) async {
       await show(tester, agents: mine, setup: lead);
       expect(key('super-agent-kestrel'), findsOneWidget);
@@ -203,7 +203,7 @@ void main() {
       }
     });
 
-    testWidgets('the + on Your agents opens New agent', (tester) async {
+    testWidgets('the + on Your Team opens New agent', (tester) async {
       final created = <String>[];
       await show(tester, agents: mine, created: created);
       await tester.tap(key('project-sidebar-agents-add'));
@@ -243,7 +243,7 @@ void main() {
       expect(
         find.descendant(
           of: key('project-sidebar-humans'),
-          matching: find.text('Humans'),
+          matching: find.text('Top Teams'),
         ),
         findsOneWidget,
       );

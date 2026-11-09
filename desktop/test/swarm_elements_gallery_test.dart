@@ -473,10 +473,10 @@ class _Gallery extends StatelessWidget {
                     width: 280,
                     child: Column(
                       children: [
-                        // The v4 left pane (anh Dee 2026-11-08): your agents by face and name, then projects.
+                        // The v4 left pane (anh Dee 2026-11-08): your team by face and name, then projects.
                         SuperTabQuietHeading.org('autonomous.ai', onTap: () {}),
                         SuperTabQuietHeading(
-                          'Your agents',
+                          'Your Team',
                           onTap: null,
                           onAdd: () {},
                           addTooltip: 'New agent',
@@ -498,7 +498,7 @@ class _Gallery extends StatelessWidget {
                             unread: unread,
                             onTap: () {},
                           ),
-                        SuperTabQuietHeading('Humans', onTap: () {}),
+                        SuperTabQuietHeading('Top Teams', onTap: () {}),
                         SuperTabQuietRow(
                           leading: SuperTabAvatar.person(
                             _person,
