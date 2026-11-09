@@ -54,11 +54,6 @@ class SuperTabPerson {
       generation = row['generation'] as String?,
       joinedVia = row['joinedVia'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
-      status = SuperTabPersonStatus.fromJson(row['status']),
-      timeZone = switch (row['timeZone']) {
-        final String zone when zone.trim().isNotEmpty => zone,
-        _ => null,
-      },
       chosenUsername = row['username'] as String?,
       name = switch (row['name']) {
         final String name when name.trim().isNotEmpty => name,
@@ -74,17 +69,10 @@ class SuperTabPerson {
       generation = person.generation,
       joinedVia = person.joinedVia,
       avatar = person.avatar,
-      status = person.status,
-      timeZone = person.timeZone,
       chosenUsername = person.chosenUsername,
       name = person.name;
   final String id, email, role;
   final SuperTabAvatarPicture? avatar;
-  final SuperTabPersonStatus? status;
-
-  /// Their time zone's IANA name, as their own app told the Swarm (Desktop's
-  /// local_time_zone.dart); null until it has. The phone shows no card yet.
-  final String? timeZone;
 
   /// How the Swarm tags them (`@username`), as the server sends it; from an
   /// older server, their default ([superTabUsernames]). Desktop's rule.
@@ -93,17 +81,13 @@ class SuperTabPerson {
   /// The name the server sent; null from a server without usernames.
   final String? chosenUsername;
 
-  /// The name they set for the Swarm to show (`member.name`, "Minh Nguyen");
-  /// null until they set one, and from an older server.
+  /// The name they set for the Swarm to show ("Minh Nguyen"), before choosing
+  /// one went; null when they never set one, and from an older server.
   final String? name;
 
   /// How the Swarm shows them: their [name], else their [username]. A tag
   /// still types and matches the [username].
   String get shownName => name ?? username;
-
-  /// Their status while it lasts.
-  SuperTabPersonStatus? statusAt(DateTime now) =>
-      status?.shownAt(now) == true ? status : null;
 
   /// This membership: a new one each time the person joins the Swarm. Null
   /// from a backend that does not send it.

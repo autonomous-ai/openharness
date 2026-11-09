@@ -74,18 +74,8 @@ void main() {
       ),
       'members': [
         part(me, 1, person(me)),
-        part('diego', 1, {
-          ...person('diego', role: 'collaborator'),
-          'status': {'text': 'Reviewing PRs', 'emoji': '🎯'},
-        }),
-        part('ken', 1, {
-          ...person('ken', role: 'collaborator'),
-          'status': {
-            'text': 'At lunch',
-            'emoji': '🍽️',
-            'until': '2026-10-01T05:00:00.000Z',
-          },
-        }),
+        part('diego', 1, person('diego', role: 'collaborator')),
+        part('ken', 1, person('ken', role: 'collaborator')),
       ],
     };
     fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');

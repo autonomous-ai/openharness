@@ -82,6 +82,7 @@ void main() {
         part(me, 1, {
           ...person(me),
           'avatar': {'kind': 'preset', 'key': 'fox'},
+          // Which an older server still sends: no face wears it.
           'status': {'text': 'Focusing', 'emoji': '🎯', 'until': null},
         }),
       ],
@@ -216,7 +217,7 @@ void main() {
     expect(within('swarm-task-g2', find.text('🦉')), findsNothing);
   });
 
-  testWidgets("a chat shows each author's face and a person's status", (
+  testWidgets("a chat shows each author's face, and no status on any", (
     tester,
   ) async {
     await pump(
@@ -225,7 +226,7 @@ void main() {
     );
     expect(within('swarm-message-msg-1', find.text('🦉')), findsOneWidget);
     expect(within('swarm-message-msg-2', find.text('🦊')), findsOneWidget);
-    expect(within('swarm-message-msg-2', find.text('🎯')), findsOneWidget);
-    expect(within('swarm-message-msg-1', find.text('🎯')), findsNothing);
+    expect(find.text('🎯'), findsNothing);
+    expect(find.bySemanticsLabel(RegExp('Focusing')), findsNothing);
   });
 }

@@ -53,7 +53,7 @@ import 'swarm_message_receipt.dart';
 import 'swarm_message_row.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_paste.dart';
-import 'swarm_profile_sheet.dart';
+import 'swarm_person_sheet.dart';
 import 'swarm_project_page.dart';
 import 'swarm_reactions.dart';
 import 'swarm_read_marks.dart';
@@ -1093,7 +1093,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       key: ValueKey('swarm-thread-message-${m.id}'),
       message: m,
       name: _nameOf(c, m),
-      look: _lookOf(c, m),
+      picture: c.reader.snapshot?.authorPicture(m),
       role: m.fromAgent && !pm ? view.roles[m.authorId] : null,
       pm: m.fromAgent && view.leads.contains(m.authorId),
       mentions: view.mentions,
@@ -1145,9 +1145,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       child: _Pending(
         key: const ValueKey('swarm-thread-pending'),
         name: mine == null ? 'You' : _nameOf(c, mine),
-        look:
-            c.reader.snapshot?.personLook(c.reader.accountId) ??
-            (picture: null, status: null),
+        picture: c.reader.snapshot?.person(c.reader.accountId)?.avatar,
         text: post.text,
         files: post.files,
         voice: post.voice,
@@ -1830,12 +1828,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     return '$name ($badge) → you';
   }
 
-  SwarmLook _lookOf(SwarmConversation c, SuperTabMessage m) =>
-      c.reader.snapshot?.authorLook(m) ?? (picture: null, status: null);
-
-  static SwarmLook _agentLook(SuperTabAgent? agent) =>
-      (picture: agent?.avatar, status: null);
-
   /// Who gave a reaction, by name and never by email: "You", an agent's
   /// name, another person's shown name.
   String _reactorName(SwarmConversation c, String kind, String id) {
@@ -2191,7 +2183,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               ? const <SwarmThreadFace>[]
               : swarmThreadFaces(snapshot, line);
           final name = _nameOf(c, m);
-          final look = _lookOf(c, m);
+          final picture = snapshot?.authorPicture(m);
           final pm = swarmIsPmLine(c.reader, m);
           // "River (PM) → you" says the role already.
           final role = m.fromAgent && !pm ? view.roles[m.authorId] : null;
@@ -2236,7 +2228,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               ),
               card,
               name,
-              swarmLookKey(look),
+              swarmPictureKey(picture),
               role,
               coordinator,
               grouped,
@@ -2260,14 +2252,14 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               line,
               [
                 for (final who in faces)
-                  '${who.id}:${who.name}:${who.pm}:${swarmLookKey(who.look)}',
+                  '${who.id}:${who.name}:${who.pm}:${swarmPictureKey(who.picture)}',
               ].join(','),
             ),
             () => SwarmMessageRow(
               key: followed ? _targetKey : null,
               message: m,
               name: name,
-              look: look,
+              picture: picture,
               role: role,
               askTag: line?.askTag,
               pm: coordinator,
@@ -2380,7 +2372,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               asker?.id,
               role,
               coordinator,
-              swarmLookKey(_agentLook(asker)),
+              swarmPictureKey(asker?.avatar),
             ),
             () => _Ask(
               session: session,
@@ -2429,9 +2421,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           return _Pending(
             key: ValueKey('$_pendingKey-${post.operationId}'),
             name: mine == null ? 'You' : _nameOf(c, mine),
-            look:
-                c.reader.snapshot?.personLook(c.reader.accountId) ??
-                (picture: null, status: null),
+            picture: c.reader.snapshot?.person(c.reader.accountId)?.avatar,
             text: post.text,
             files: post.files,
             voice: post.voice,
@@ -3456,7 +3446,7 @@ class _Pending extends StatelessWidget {
     required this.quote,
     required this.onSendAgain,
     required this.onDelete,
-    required this.look,
+    this.picture,
   });
 
   final String name, text;
@@ -3470,7 +3460,7 @@ class _Pending extends StatelessWidget {
   final SuperTabVoice? voice;
 
   /// The person's own face.
-  final SwarmLook look;
+  final SuperTabAvatarPicture? picture;
   final SwarmMentions mentions;
   final SwarmPostState state;
   final Widget? quote;
@@ -3488,8 +3478,7 @@ class _Pending extends StatelessWidget {
           name: name,
           id: '',
           agent: false,
-          picture: look.picture,
-          status: look.status,
+          picture: picture,
         ),
         header: SwarmMessageHeader(name: name, agent: false),
         body: [

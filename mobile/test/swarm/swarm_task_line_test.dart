@@ -207,7 +207,6 @@ Future<void> pumpRow(
                       (data['author'] as Map)['kind'] == 'person'
                   ? 'Dee'
                   : 'River',
-              look: (picture: null, status: null),
               role: 'PM',
               askTag: askTag,
               readerId: readerId,

@@ -265,7 +265,7 @@ class SwarmMessageRow extends StatelessWidget {
     super.key,
     required this.message,
     required this.name,
-    required this.look,
+    this.picture,
     required this.role,
     this.askTag,
     this.pm = false,
@@ -298,8 +298,8 @@ class SwarmMessageRow extends StatelessWidget {
   final SuperTabMessage message;
   final String name;
 
-  /// What its author wears.
-  final SwarmLook look;
+  /// What its author wears; null wears the initial.
+  final SuperTabAvatarPicture? picture;
   final String? role;
 
   /// Where the ask it is stands, after the time; null for any other message.
@@ -457,8 +457,7 @@ class SwarmMessageRow extends StatelessWidget {
         id: message.authorId,
         agent: message.fromAgent,
         pm: pm,
-        picture: look.picture,
-        status: look.status,
+        picture: picture,
       ),
       header: SwarmMessageHeader(
         name: name,
@@ -693,8 +692,7 @@ class SwarmRoleBadge extends StatelessWidget {
 
 /// Who wrote a message, in a circle: an agent's initial on its own deep
 /// colour — blue for a Product Manager, as the prototype has River — the
-/// person's on theirs, white on each — or the picture they chose, and a
-/// person's status emoji while it lasts.
+/// person's on theirs, white on each — or the picture they chose.
 class SwarmChatAvatar extends StatelessWidget {
   const SwarmChatAvatar({
     super.key,
@@ -703,7 +701,6 @@ class SwarmChatAvatar extends StatelessWidget {
     required this.agent,
     this.pm = false,
     this.picture,
-    this.status,
     this.diameter = size,
   });
 
@@ -731,9 +728,6 @@ class SwarmChatAvatar extends StatelessWidget {
   /// What they chose to wear; null wears the initial.
   final SuperTabAvatarPicture? picture;
 
-  /// A person's status; null for an agent.
-  final SuperTabPersonStatus? status;
-
   @override
   Widget build(BuildContext context) {
     final fill = !agent
@@ -745,26 +739,21 @@ class SwarmChatAvatar extends StatelessWidget {
     final initial = name.trim().isEmpty
         ? '?'
         : name.trim().characters.first.toUpperCase();
-    return SwarmStatusFace(
-      name: name,
+    return SwarmFace(
+      picture: picture,
       size: diameter,
-      status: status,
-      face: SwarmFace(
-        picture: picture,
-        size: diameter,
-        tint: fill,
-        fallback: Container(
-          width: diameter,
-          height: diameter,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
-          child: Text(
-            initial,
-            style: swarmChatText(
-              13.5 * diameter / size,
-              color: AppInk.onFill,
-              weight: FontWeight.w600,
-            ),
+      tint: fill,
+      fallback: Container(
+        width: diameter,
+        height: diameter,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
+        child: Text(
+          initial,
+          style: swarmChatText(
+            13.5 * diameter / size,
+            color: AppInk.onFill,
+            weight: FontWeight.w600,
           ),
         ),
       ),
