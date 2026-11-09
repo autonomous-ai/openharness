@@ -396,5 +396,12 @@
     "credit": "OpenHarness example",
     "sha256": "6b9deb00f2c2b0568b0e903b93bd86afc149eef135a81a7a4d0873ce9ca46ad0",
     "harness": "autonomous/trailofbits-skills"
+  },
+  {
+    "asset": "web-studio.jpg",
+    "source": "store/showcase/web-studio/starter.jpg",
+    "credit": "OpenHarness example",
+    "sha256": "2e0d4a939d3d86e3432b8cd925a2a5dbc4b4f57de5902a62fae4eea0d7ee8160",
+    "harness": "autonomous/web-studio"
   }
 ]
