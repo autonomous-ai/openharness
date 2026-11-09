@@ -184,8 +184,10 @@ interface Entry {
 interface Journal { version: 1; machineId: string; entries: Record<string, Entry>; scrubs?: Record<string, PurgeTarget>; replies?: Record<string, Owed> }
 /** `roleName` and `instructions` name its project's instructions (backend read/hostRows.ts); an older backend sends neither.
  *  `agent.chatId`: its own 1:1 chat with its person, which the server's time check gives each agent but a Buddy within 30 s of
- *  its joining (backend agentChats.ts); an older backend sends none. */
-interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string; chatId?: unknown; switchLanded?: { id?: unknown; candidateAgentId?: unknown } }; lead?: unknown
+ *  its joining (backend agentChats.ts); an older backend sends none. `agent.displayName` and `agent.name`: what its person calls it
+ *  (shownName), for the line they are told if its answer cannot be posted (agentReplies.ts). */
+interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string; chatId?: unknown; displayName?: unknown; name?: unknown
+  switchLanded?: { id?: unknown; candidateAgentId?: unknown } }; lead?: unknown
   buddySleepManaged?: true; leadsConversationId?: unknown; roleName?: unknown; instructions?: unknown }
 export interface SuperTabHostOptions {
   now?: () => number
@@ -2171,7 +2173,7 @@ export class SuperTabHost {
     // it owes its person is saved by the same write, so a restart in the middle of its turn still posts the answer.
     const before = entry.stage
     entry.stage = 'submitting'
-    if (plain) this.replies.owe(entry, message, text)
+    if (plain) this.replies.owe({ ...entry, name: shownName(target.agent, 'The agent') }, message, text)
     try { this.persist() } catch (error) {
       entry.stage = before
       this.replies.forget(deliveryId)

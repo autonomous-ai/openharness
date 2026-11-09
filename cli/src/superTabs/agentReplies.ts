@@ -10,6 +10,9 @@
  * command each time, so the server takes a repeated post for the first. Nothing is posted twice, and nothing is posted for a
  * turn the person did not ask: an end that is not one of the turns owed leaves them all as they were.
  *
+ * A reply the post of which failed for good (the server refuses it, or every try is spent) is never lost without a word: the
+ * person is told in the same chat, from the agent, where the reply would have been, so they do not wait for it.
+ *
  * Known limit: a message queued behind a running turn starts its own turn the moment the first ends, and an engine may have
  * written that prompt before the answer is read, so the first turn's answer is no longer the last turn the transcript shows.
  * That reply stays owed through that end (the last turn has said nothing yet) and is dropped, with a line saying so, when the
@@ -35,12 +38,16 @@ export const OWED_GIVE_UP_MS = 24 * 60 * 60_000
 /** The most replies owed one terminal (the oldest go first), and all together: ids and a hash, so a journal stays small. */
 export const OWED_PER_AGENT = 16
 const OWED_MAX = 256
+/** The longest name of an agent kept with a reply owed it, which is what its person is told if the reply is dropped. */
+export const NAME_MAX = 80
 
 /** A reply the host owes, by the delivery that typed the message. */
 export interface Owed {
   tabId: string
   /** The member the reply is posted as. */
   agentId: string
+  /** The name its person knows the agent by, for the line they are told if the reply is dropped. */
+  name: string
   /** The terminal its agent runs in, by the id the core knows it by: the turn that ends says which terminal it ran in. */
   harnessId: string
   conversationId: string
@@ -88,8 +95,9 @@ export function adoptReplies(saved: unknown, log: (line: string) => void): Recor
   for (const [id, value] of Object.entries(saved)) {
     const o = object(value)
     if (identifier(id) && identifier(o.tabId) && identifier(o.agentId) && identifier(o.harnessId) && identifier(o.conversationId) && identifier(o.messageId)
+      && typeof o.name === 'string' && o.name.length > 0 && o.name.length <= NAME_MAX
       && typeof o.thread === 'boolean' && typeof o.asked === 'string' && /^[0-9a-f]{32}$/.test(o.asked) && Number.isFinite(o.at)) {
-      rows.push([id, { tabId: o.tabId, agentId: o.agentId, harnessId: o.harnessId, conversationId: o.conversationId, messageId: o.messageId,
+      rows.push([id, { tabId: o.tabId, agentId: o.agentId, name: o.name, harnessId: o.harnessId, conversationId: o.conversationId, messageId: o.messageId,
         thread: o.thread, asked: o.asked, at: o.at as number }])
     } else dropped++
   }
@@ -152,16 +160,17 @@ export class AgentReplies {
     return gone
   }
 
-  /** The host types [text], its person's message [message], into [entry]'s agent: a reply is owed. The host saves the journal
-   *  with the delivery that records the hand-over, so what is owed and what was typed are one write. */
-  owe(entry: { deliveryId: string; tabId: string; agentId: string; harnessId: string }, message: Record<string, unknown>, text: string): void {
+  /** The host types [text], its person's message [message], into [entry]'s agent, which [entry.name] is what its person calls: a
+   *  reply is owed. The host saves the journal with the delivery that records the hand-over, so what is owed and what was typed
+   *  are one write. */
+  owe(entry: { deliveryId: string; tabId: string; agentId: string; harnessId: string; name: string }, message: Record<string, unknown>, text: string): void {
     this.expire()
     const owed = this.journal.replies ??= {}
     // The pane held it and it is typed again, perhaps in another terminal (its member moved to a new session while it waited): the
     // same message, the same reply, owed from where it is typed now.
     const held = owed[entry.deliveryId]
     if (held) { held.harnessId = entry.harnessId; return }
-    owed[entry.deliveryId] = { tabId: entry.tabId, agentId: entry.agentId, harnessId: entry.harnessId, conversationId: String(message.conversationId),
+    owed[entry.deliveryId] = { tabId: entry.tabId, agentId: entry.agentId, name: cut(entry.name, NAME_MAX - 1), harnessId: entry.harnessId, conversationId: String(message.conversationId),
       messageId: String(message.id), thread: identifier(message.thread) && message.thread !== message.id, asked: hashOf(text), at: this.deps.now() }
     const mine = this.owedOf(entry.harnessId)
     for (const [id, old] of mine.slice(0, Math.max(0, mine.length - OWED_PER_AGENT))) this.drop(id, old, `more than ${OWED_PER_AGENT} are owed it`)
@@ -182,7 +191,8 @@ export class AgentReplies {
     this.commit()
   }
 
-  /** A live turn ended. Resolves once its reply, if it owed one, had its first try. */
+  /** A live turn ended. Resolves once its reply, if it owed one, had its first try (and, when the server refused that for good,
+   *  the line that tells its person so). */
   async ended(event: TurnEnd): Promise<void> {
     if (this.stopped || !this.journal.replies) return
     if (this.expire()) this.commit()
@@ -214,24 +224,41 @@ export class AgentReplies {
     await this.attempt(id, owed, answer.length > REPLY_TEXT_MAX ? cut(answer, REPLY_TEXT_MAX - 1) : answer, 0)
   }
 
-  /** One try of the post, as the agent would have made it itself (`harness super-tab post --answers`, superTabs/command.ts): the
-   *  same operation and the same command at each try, so the server answers a try it already took with the first. */
-  private async attempt(deliveryId: string, owed: Owed, text: string, tried: number): Promise<void> {
+  /** A post of [text] in the chat [owed] was owed in, as the agent would have made it itself (`harness super-tab post --answers`,
+   *  superTabs/command.ts): below the message it answers, or in its thread. The same command under the same operation each time,
+   *  so the server answers a post it already took with the first. */
+  private post(operationId: string, owed: Owed, text: string): Promise<unknown> {
     const command = { type: 'message.send', conversationId: owed.conversationId, text, replyTo: owed.thread ? owed.messageId : null,
       ...(owed.thread ? {} : { answers: owed.messageId }), recipientIds: [] }
+    return backend(this.core, 'POST', `/api/super-tabs/${owed.tabId}/commands`, { operationId, asAgentId: owed.agentId, command })
+  }
+
+  /** One try of the reply's post. */
+  private async attempt(deliveryId: string, owed: Owed, text: string, tried: number): Promise<void> {
     try {
-      await bounded(backend(this.core, 'POST', `/api/super-tabs/${owed.tabId}/commands`, { operationId: `reply-${deliveryId}`, asAgentId: owed.agentId, command }), REPLY_WAIT_MS)
+      await bounded(this.post(`reply-${deliveryId}`, owed, text), REPLY_WAIT_MS)
     } catch (error) {
       const dropped = `Dropped the reply to delivery ${deliveryId} of agent ${owed.agentId}`
       if (this.stopped) return this.log(`${dropped}: the host stopped.`)
       const code = named(error), tries = REPLY_RETRY_MS.length + 1
-      if (this.deps.refused(error)) return this.log(`${dropped}: ${code}; no later try changes it.`)
-      if (tried >= REPLY_RETRY_MS.length) return this.log(`${dropped}: ${code} after ${tries} tries.`)
+      const gone = this.deps.refused(error) ? `${code}; no later try changes it` : tried >= REPLY_RETRY_MS.length ? `${code} after ${tries} tries` : null
+      if (gone) { this.log(`${dropped}: ${gone}.`); return this.tell(deliveryId, owed) }
       const wait = REPLY_RETRY_MS[tried]!
       this.log(`Could not post the reply to delivery ${deliveryId} of agent ${owed.agentId}: ${code} (try ${tried + 1} of ${tries}); trying again in ${wait / 1_000} s.`)
       const timer = setTimeout(() => { this.timers.delete(timer); void this.attempt(deliveryId, owed, text, tried + 1) }, wait)
       timer.unref?.()
       this.timers.set(timer, `${dropped}: the host stopped.`)
+    }
+  }
+
+  /** What its person is told when a reply is dropped for good, so they do not wait for it: one line in the chat it was owed in,
+   *  where the reply would have been, from the agent. Only tried: the backend that turned the reply away may turn this away too,
+   *  so it is neither waited on past REPLY_WAIT_MS nor sent again, and a failure is the log's. */
+  private async tell(deliveryId: string, owed: Owed): Promise<void> {
+    try {
+      await bounded(this.post(`dropped-reply-${deliveryId}`, owed, `${owed.name}'s answer could not be posted.`), REPLY_WAIT_MS)
+    } catch (error) {
+      this.log(`Could not tell the person that the reply to delivery ${deliveryId} of agent ${owed.agentId} was dropped: ${named(error)}.`)
     }
   }
 

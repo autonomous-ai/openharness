@@ -1,7 +1,7 @@
 /** A person's message in their agent's own 1:1 chat, on the real native protocol: the real master, core and Swarm service in their
  * own process, a private tmux and fake engines, and a loopback server in place of the backend. The agent is typed exactly what
- * its person typed, and when its turn ends the host posts the answer as the agent, once (anh Dee, 2026-11-09: "it's a 1:1
- * conversation, why can't it be just the exact prompt?"). */
+ * its person typed, and when its turn ends the host posts the answer as the agent, once, or one line saying it could not (anh
+ * Dee, 2026-11-09: "it's a 1:1 conversation, why can't it be just the exact prompt?"). */
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
