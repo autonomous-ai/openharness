@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import Fastify, { type FastifyInstance } from 'fastify'
-import { Prisma } from '@prisma/client'
+import { Prisma, type PrismaClient } from '@prisma/client'
 
 // Real Harness sessions for the sign-in tests below, minted and redeemed through lib/harnessSession.ts against in-memory
 // stores, as routes/control.test.ts does, so the real authentication and team gate run.
@@ -53,6 +53,9 @@ import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { redeemHandoff, startHandoff } from '../lib/harnessSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { SuperTabError } from '../superTabs/model.js'
+import { RETIRED_NOTE } from '../superTabs/retired.js'
+import { SuperTabStore } from '../superTabs/store.js'
+import { recordingDb, type Query } from '../lib/queryRecorder.test-support.js'
 import { HOT_BODY_LIMIT, NOT_AVAILABLE, READINGS_MAX, superTabRoutes } from './superTabs.js'
 import { machineObservationSchema } from '../superTabs/machines.js'
 import { logger } from '../utils/logger.js'
@@ -101,6 +104,36 @@ describe('Super Tab route failures', () => {
     expect(res.statusCode).toBe(503)
     expect(res.headers['retry-after']).toBe('2')
     expect(res.json().error.code).toBe('SWARM_BUSY')
+  })
+})
+
+// An older app, host or agent still sends a command v4 dropped (superTabs/retired.ts): the route accepts it, and the real
+// store answers it as ignored without a read or a write.
+describe('a command Swarm v4 no longer has, over HTTP', () => {
+  let app: FastifyInstance
+  const queries: Query[] = []
+  beforeEach(async () => {
+    queries.length = 0
+    app = Fastify()
+    app.setErrorHandler(errorHandler)
+    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
+    await app.register(superTabRoutes, { store: new SuperTabStore(recordingDb(queries) as PrismaClient), github: null, reads: {} as never, hosts: {} as never })
+    await app.ready()
+  })
+  afterEach(async () => { await app.close() })
+  const send = (command: object) => app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/commands', payload: { operationId: 'op-1', command } })
+
+  it('answers ok and ignored, and touches no data', async () => {
+    const res = await send({ type: 'project.digest', projectId: 'lead', time: '08:00', timeZone: 'Asia/Ho_Chi_Minh' })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ success: true, data: { result: { ignored: true, note: RETIRED_NOTE }, parts: [] } })
+    expect(queries).toEqual([])
+  })
+
+  it('still refuses a type no version had', async () => {
+    const res = await send({ type: 'project.nonsense', projectId: 'lead' })
+    expect(res.statusCode).toBe(400)
+    expect(queries).toEqual([])
   })
 })
 
