@@ -295,6 +295,19 @@ describe('names, labels and repositories', () => {
     expect(signedBy('Juno, 14:05, to **Pip**: READ-OK', ['Pip'])).toBe(false)
   })
 
+  // The same agent is one name however it is typed (nameKey): case, spaces, hyphens, underscores, width, accents and hidden
+  // characters aside, so an agent never hears its own post back because it signed "pip two" for "Pip Two".
+  it('knows its own signature however the name is spelled, and no other name', () => {
+    for (const said of ['pip two, 14:05: built it', 'Pip-Two: built it', '**PIP TWO** (builder): built it', 'Pip  Two, 14:05: built it', 'Pip_Two, 14:05: built it',
+      '> PipTwo, 14:05: built it', '\uff30ip \uff34wo, 14:05: built it', 'P\u00eep Tw\u00f6, 14:05: built it', 'Pip\u200b Two, 14:05: built it']) {
+      expect(signedBy(said, ['Pip Two']), said).toBe(true)
+    }
+    expect(signedBy('Atlas Reed Two, 14:05: built it', ['Atlas Reed Two']), 'a name of three words').toBe(true)
+    for (const said of ['Juno, 14:05, to **Pip Two**: READ-OK', 'Pip Two Hundred, 14:05: built it', 'Pip, 14:05: built it', 'No signature here, Pip Two']) {
+      expect(signedBy(said, ['Pip Two']), said).toBe(false)
+    }
+  })
+
   it('makes the builder label and reads only github.com addresses', () => {
     expect(builderLabel('Big Pip')).toBe('builder:big-pip')
     expect(repositorySlug('https://github.com/acme/app.git')).toBe('acme/app')

@@ -161,3 +161,64 @@ describe('the rule\'s parts', () => {
     expect(found).toEqual([{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }])
   })
 })
+
+// Found by Q3 (2026-11-09): the author of a pull request counted as its own reader when it signed "Pip Two" and its label said
+// builder:pip-two. Names meet one way here (githubMentions.ts nameKey): case, spaces, hyphens, underscores, width, accents and hidden
+// characters aside, so the rule "a READ-OK from someone other than its author" cannot be got round by how a name is typed.
+describe('a pull request\'s author is never its own reader', () => {
+  const authors: Array<[string, Json]> = [
+    ['its label', { labels: [{ name: 'builder:pip-two' }] }],
+    ['its label, capitalised', { labels: [{ name: 'builder:Pip-Two' }] }],
+    ['its branch', { labels: [], head: { sha: HEAD, ref: 'pip-two/2' } }],
+    ['its branch, capitalised', { labels: [], head: { sha: HEAD, ref: 'Pip-Two/2' } }],
+  ]
+  const signatures = ['Pip Two', 'pip two', 'PIP TWO', 'Pip-Two', 'pip_two', 'PipTwo', 'Pip  Two', 'Pip Two', 'Ｐip Ｔwo', '**Pip Two**',
+    'Pip​ Two', 'Pîp Twö', 'Pip Two (builder)']
+
+  it.each(authors)('%s, whichever way the reader signs its name', async (_where, extra) => {
+    for (const signature of signatures) {
+      const f = setup()
+      f.github.repo.pulls = [pull(extra)]
+      f.github.repo.comments.set(4, [comment(`${signature}, 14:21: READ-OK f6edb44`)])
+      await f.merger.tick()
+      expect(f.merges(), `${JSON.stringify(signature)} on a pull request by ${_where}`).toEqual([])
+    }
+    // Another reader still merges it.
+    const f = setup()
+    f.github.repo.pulls = [pull(extra)]
+    f.github.repo.comments.set(4, [comment('Juno, 14:21: READ-OK f6edb44')])
+    await f.merger.tick()
+    expect(f.merges()).toHaveLength(1)
+  })
+
+  it('counts one reader once for TWO READS, and lets its own later word lift its own HOLD, however it spells its name', async () => {
+    const two = setup()
+    two.github.repo.pulls = [pull({ body: 'Closes #2\n\nTWO READS: it changes the default voice.' })]
+    two.github.repo.comments.set(4, [comment('Juno, 14:20: READ-OK f6edb44'), comment('JUNO, 14:22: READ-OK f6edb44'), comment('**juno**: READ-OK f6edb44')])
+    await two.merger.tick()
+    expect(two.merges()).toEqual([])
+    const lifted = setup()
+    lifted.github.repo.comments.set(4, [comment('Kai Lee, 14:10: HOLD f6edb44 fix the test'),
+      comment('KAI-LEE, 14:30: READ-OK f6edb44', { created_at: '2026-11-09T12:30:00Z' })])
+    await lifted.merger.tick()
+    expect(lifted.merges()).toHaveLength(1)
+  })
+
+  it('does not count the account that opened a pull request as its reader when nothing else says who wrote it', async () => {
+    const f = setup()
+    f.github.repo.pulls = [pull({ labels: [], head: { sha: HEAD, ref: 'fix-tests' }, user: { login: 'deehw' } })]
+    f.github.repo.comments.set(4, [comment('READ-OK f6edb44', { user: { login: 'DeeHW' } })])
+    await f.merger.tick()
+    expect(f.merges()).toEqual([])
+    f.github.repo.comments.set(4, [comment('READ-OK f6edb44', { user: { login: 'kenmore' } })])
+    await f.merger.tick()
+    expect(f.merges()).toHaveLength(1)
+  })
+
+  it('reads a signature in any script and of up to four words, and takes a verdict for no name', () => {
+    const { readers } = verdicts([comment('José María, 14:20: READ-OK f6edb44'), comment('Atlas Reed Two, 14:21: HOLD 1234567'),
+      comment('READ-OK f6edb44, looks good', { user: { login: 'kenmore' } }), comment('小明, 14:22: READ-OK f6edb44'),
+      comment('Harness, 14:31: merged. READ-OK on f6edb44 by juno, checks green.')], '')
+    expect([...readers.keys()]).toEqual(['josemaria', 'atlasreedtwo', 'kenmore', '小明'])
+  })
+})
