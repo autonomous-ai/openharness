@@ -60,9 +60,11 @@ export interface Task {
   /** The minute it may start, and the tasks that must end first. */
   ready: number
   deps: string[]
-  /** Tasks it must not share a model family with (a review and its build), and builders it never goes to (its author). */
+  /** Tasks it must not share a model family with (a review and its build), and builders it never goes to, and why (by
+   *  default, its author). */
   independentOf: string[]
   notBuilders: string[]
+  notWhy?: string
   /** Files or folders it is expected to change: two tasks sharing one never run at once on two builders. */
   files: string[]
   /** The only builder it goes to (a person asked for it). */
