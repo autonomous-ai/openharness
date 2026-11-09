@@ -5764,7 +5764,7 @@ class _SuperTabViewState extends State<SuperTabView>
         // Swarm v4 (anh Dee 2026-11-08): only agents post in a project's channel and its tasks' chats. People talk to
         // their own agents.
         if (group != null && widget.board && _agentsOnly(group))
-          // It holds the chat's focus in the composer's place, so the chat's keys (find, unread, the switcher) work.
+          // It holds the chat's focus in the composer's place, so the chat's keys (find and unread) work.
           Focus(
             focusNode: _focus,
             child: GestureDetector(

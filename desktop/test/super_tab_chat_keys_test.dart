@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shortcuts/keymap.dart';
 import 'package:harness/shortcuts/keymap_commands.dart';
 
-import 'keymap_host_test.dart' show key;
+import 'keymap_host_test.dart' show key, MemoryKeymap, terminalKeymapHost;
 import 'support/swarm_chat_screen.dart';
 
 /// The Swarm chat's keys once its quick switcher (Cmd-K, "Switch
@@ -72,6 +72,27 @@ void main() {
     variant: TargetPlatformVariant.only(TargetPlatform.macOS),
   );
 
+  for (final platform in [
+    TargetPlatform.macOS,
+    TargetPlatform.windows,
+    TargetPlatform.linux,
+  ]) {
+    test(
+      'Cmd/Ctrl+K has no Swarm chat default of its own on ${platform.name}',
+      () {
+        debugDefaultTargetPlatformOverride = platform;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
+        final stroke = KeyStroke.parse(
+          platform == TargetPlatform.macOS ? 'cmd+k' : 'ctrl+k',
+        );
+        expect(
+          harnessDefaultKeymap.match(KeymapContext.swarmChat, [stroke]).command,
+          harnessDefaultKeymap.match(KeymapContext.workspace, [stroke]).command,
+        );
+      },
+    );
+  }
+
   test('Cmd+K in a Swarm chat is the pane shortcut it is everywhere else', () {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
@@ -82,6 +103,28 @@ void main() {
       'pane.focus_above',
     );
   });
+
+  // A terminal beside the chat keeps its Cmd+K, as it did beside the switcher.
+  testWidgets('a focused terminal keeps Cmd+K as Move pane up', (tester) async {
+    final map = MemoryKeymap();
+    final focus = FocusNode();
+    var above = 0;
+    await tester.pumpWidget(
+      terminalKeymapHost(
+        map,
+        {'pane.focus_above': () => above++},
+        Focus(focusNode: focus, autofocus: true, child: const Text('Terminal')),
+        terminalFocusNode: focus,
+      ),
+    );
+    await tester.pump();
+    await key(tester, LogicalKeyboardKey.keyK, cmd: true);
+    expect(above, 1);
+    expect(focus.hasFocus, isTrue);
+    await tester.pumpWidget(const SizedBox());
+    focus.dispose();
+    map.dispose();
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
   test(
     'a keybindings file from before still loads: its binding for the switcher '
