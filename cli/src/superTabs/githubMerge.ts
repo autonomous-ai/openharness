@@ -165,6 +165,8 @@ export class GitHubMerge {
     const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
     const pulls = (await this.reads.current(repo, `/repos/${repo}/pulls?state=open&per_page=${MAX_PULLS}`, 1))
       .filter(pull => pull.draft !== true && object(pull.base).ref === base)
+    // The team, read of the PM's Swarm (a changes read on the backend), only when a pull request could merge.
+    if (!pulls.length) return
     const team = teamOf(await this.deps.crew(project), project.pm)
     for (const pull of pulls) {
       const number = Number(pull.number), head = String(object(pull.head).sha ?? '')
