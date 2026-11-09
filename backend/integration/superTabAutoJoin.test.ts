@@ -6,7 +6,7 @@ import { promisify } from 'node:util'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { PrismaClient } from '@prisma/client'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
@@ -14,7 +14,6 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import type { GeneralAccess } from '../src/superTabs/sharing.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
-import { addMember, memberId } from '../src/superTabs/workspaceStore.js'
 
 // Ken's spec docs/specs/2026-11-03-swarm-domain-auto-join.md, "Tests that fail first": people at the owner's own email domain
 // join a Swarm whose owner turned "Add them automatically" on, on their own list read; nobody at a public domain ever does.
@@ -74,10 +73,6 @@ const later = () => { clock += 121_000 }
 const turnOn = (tab: string, role: 'collaborator' | 'viewer' = 'collaborator', owner: AuthUser = current) =>
   save(tab, { mode: 'domain', domain: owner.email.split('@')[1]!, role, autoJoin: true }, owner)
 const personIn = async (tab: string, user: AuthUser) => (await storedState(tab)).people.find(p => p.id === user.sub)
-const workspaceRole = async (tab: string, user: AuthUser) => {
-  const { workspaceId } = await storedState(tab)
-  return (await db.swarmWorkspaceMember.findUnique({ where: { id: memberId(workspaceId!, user.sub) } }))?.role
-}
 const listed = async (user: AuthUser) => (await request('list', undefined, user)).json().data.tabs.map((tab: { id: string }) => tab.id) as string[]
 
 beforeAll(async () => {
@@ -184,7 +179,7 @@ describe('Domain checks on save and join', () => {
 })
 
 describe('Joining by domain on the person\'s own list read', () => {
-  it('joins x@acme.com to the acme Swarm with auto-join on, as a Workspace guest, with the role the owner picked', async () => {
+  it('joins x@acme.com to the acme Swarm with auto-join on, with the role the owner picked', async () => {
     const { x } = await org('one', ['x'])
     const on = await create(), linkOnly = await create(), invited = await create()
     await turnOn(on, 'viewer')
@@ -194,7 +189,6 @@ describe('Joining by domain on the person\'s own list read', () => {
     expect(tabs).not.toContain(linkOnly)
     expect(tabs).not.toContain(invited)
     expect(await personIn(on, x)).toMatchObject({ role: 'viewer', joinedVia: 'domain', email: x.email })
-    expect(await workspaceRole(on, x)).toBe('guest')
     expect(await personIn(linkOnly, x)).toBeUndefined()
   })
 
@@ -208,24 +202,6 @@ describe('Joining by domain on the person\'s own list read', () => {
     expect(await listed(xGmail)).toEqual([])
     expect(await listed(relay)).toEqual([])
     expect(await personIn(own, xGmail)).toBeUndefined()
-  })
-
-  it('joins through the Workspaces list too', async () => {
-    const { y } = await org('two', ['y'])
-    const tab = await create()
-    await turnOn(tab)
-    expect((await request('workspaces', undefined, y)).statusCode).toBe(200)
-    expect(await personIn(tab, y)).toMatchObject({ role: 'collaborator', joinedVia: 'domain' })
-  })
-
-  it('keeps the role of someone already a member of the Workspace', async () => {
-    const { z } = await org('three', ['z'])
-    const tab = await create()
-    await turnOn(tab)
-    const { workspaceId } = await storedState(tab)
-    await db.$transaction(tx => addMember(tx, workspaceId!, { id: z.sub, email: z.email }, 'member', current.sub, randomUUID()))
-    expect(await listed(z)).toContain(tab)
-    expect(await workspaceRole(tab, z)).toBe('member')
   })
 
   it('joins ten Swarms per try, and the rest after two minutes', async () => {
@@ -244,7 +220,6 @@ describe('Joining by domain on the person\'s own list read', () => {
     await turnOn(tab)
     const team = await app.inject({ method: 'GET', url: '/api/super-tabs/list', headers: { authorization: `Bearer team:${t.sub}` } })
     expect(team.statusCode).toBe(403)
-    expect((await app.inject({ method: 'GET', url: '/api/super-tabs/workspaces', headers: { authorization: `Bearer team:${t.sub}` } })).statusCode).toBe(403)
     expect(await personIn(tab, t)).toBeUndefined()
   })
 
@@ -376,118 +351,17 @@ describe('Leaving is final for auto-join', () => {
     await expect(store.join(ousted, tab, { operationId: randomUUID() })).rejects.toMatchObject({ code: 'JOIN_UNAVAILABLE' })
   })
 
-  it('declines someone the Workspace removed instead of joining them, and does not try that Swarm again', async () => {
-    const { banned } = await org('thirteen', ['banned'])
-    const tab = await create()
-    await turnOn(tab)
-    const { workspaceId } = await storedState(tab)
-    await db.swarmWorkspaceMember.create({ data: { id: memberId(workspaceId!, banned.sub), workspaceId: workspaceId!, userId: banned.sub, email: banned.email,
-      role: 'guest', generation: 'old', addedBy: current.sub, addedAt: new Date(), removedAt: new Date(), removedBy: current.sub, purgeAt: null } })
-    expect(await listed(banned)).not.toContain(tab)
-    expect(await personIn(tab, banned)).toBeUndefined()
-    expect(await declinedOf(tab)).toContain(banned.sub)
-    const tried = vi.spyOn(store, 'autoJoinSwarm')
-    later()
-    await listed(banned)
-    expect(tried.mock.calls.filter(([, id]) => id === tab)).toEqual([])
-    tried.mockRestore()
-  })
-
-  it('declines someone who joined by domain and was then removed from the Workspace', async () => {
-    const { wsGone } = await org('fourteen', ['wsGone'])
-    const tab = await create()
-    await turnOn(tab)
-    await listed(wsGone)
-    const { workspaceId } = await storedState(tab)
-    await store.workspaces.remove(current, workspaceId!, wsGone.sub)
-    expect(await personIn(tab, wsGone)).toBeUndefined()
-    expect(await declinedOf(tab)).toContain(wsGone.sub)
-  })
 })
 
-describe('A Workspace removal is final for auto-join', () => {
-  // Security review 2 of #2714: the Workspace's own record of a removal is purged after 30 days (sweeps.ts), so auto-join keeps
-  // its own, on the Workspace, until the person is added back on purpose.
-  it('never pulls back someone the Workspace removed, after the removal record is purged, until a Workspace invitation', async () => {
-    const { fired } = await org('eighteen', ['fired'])
-    const first = await create()
-    await turnOn(first)
-    expect(await listed(fired)).toContain(first)
-    const { workspaceId } = await storedState(first)
-    await store.workspaces.remove(current, workspaceId!, fired.sub)
-    // What the purge leaves: no member row and no removal row.
-    await db.swarmWorkspaceMember.deleteMany({ where: { workspaceId: workspaceId!, userId: fired.sub } })
-    await db.swarmWorkspaceRemoval.deleteMany({ where: { workspaceId: workspaceId!, userId: fired.sub } })
-    const later_ = await create()
-    await turnOn(later_)
-    later()
-    expect(await listed(fired)).not.toContain(later_)
-    expect(await personIn(later_, fired)).toBeUndefined()
-    expect((await db.superTab.findUniqueOrThrow({ where: { id: later_ } })).autoJoinDeclined).toContain(fired.sub)
-    // Invited back to the Workspace on purpose: auto-join may add them again.
-    await store.workspaces.invite(current, workspaceId!, fired.email, 'member')
-    await store.workspaces.accept(fired, workspaceId!)
-    const third = await create()
-    await turnOn(third)
-    later()
-    expect(await listed(fired)).toContain(third)
-  })
-})
-
-// Task #2510 (Diego's Buddy, 11-03): once the purge deleted the removed person's member row, a tokenless domain join link to
-// another domain-shared Swarm of the same Workspace readmitted them in one click, and addMember then cleared the Workspace's
-// decline, so auto-join added them to every other auto-join Swarm too. Someone the Workspace removed comes back only by an
-// invitation (design, Roles).
-describe('A Workspace removal is final for join links', () => {
-  const domainShared = async () => {
-    const tab = await create()
-    await save(tab, { mode: 'domain', domain: current.email.split('@')[1]!, role: 'collaborator' })
-    return tab
-  }
-  /** [person] in the Workspace of a first auto-join Swarm, then removed from it and the removal purged. */
-  const removedAndPurged = async (person: AuthUser) => {
-    const first = await create()
-    await turnOn(first)
-    expect(await listed(person)).toContain(first)
-    const { workspaceId } = await storedState(first)
-    await store.workspaces.remove(current, workspaceId!, person.sub)
-    // What the purge leaves: no member row and no removal row.
-    await db.swarmWorkspaceMember.deleteMany({ where: { workspaceId: workspaceId!, userId: person.sub } })
-    await db.swarmWorkspaceRemoval.deleteMany({ where: { workspaceId: workspaceId!, userId: person.sub } })
-    return workspaceId!
-  }
-
-  it('refuses the removed person a join link and its preview after the purge, keeps the decline, and auto-join adds them nowhere', async () => {
-    const { fired } = await org('twenty', ['fired'])
-    const workspaceId = await removedAndPurged(fired)
-    const linked = await domainShared()
-    await expect(store.join(fired, linked, { operationId: randomUUID() })).rejects.toMatchObject({ code: 'WORKSPACE_ACCESS_REVOKED',
-      message: expect.stringContaining('Ask its owner to invite you.') })
-    await expect(store.previewJoin(fired, linked)).rejects.toMatchObject({ code: 'WORKSPACE_ACCESS_REVOKED' })
-    expect(await personIn(linked, fired)).toBeUndefined()
-    expect((await db.swarmWorkspace.findUniqueOrThrow({ where: { id: workspaceId } })).autoJoinDeclined).toContain(fired.sub)
-    const third = await create()
-    await turnOn(third)
-    later()
-    expect(await listed(fired)).not.toContain(third)
-  })
-
-  it('lets a person the Workspace never removed preview and join a domain-shared Swarm by its link', async () => {
+// The domain's own join link needs no token and no Workspace: someone at the domain previews it and joins like anyone with a link.
+describe('The domain\'s own join link', () => {
+  it('lets a person at the domain preview and join a domain-shared Swarm by its link', async () => {
     const { newcomer } = await org('twentyone', ['newcomer'])
-    const linked = await domainShared()
+    const linked = await create()
+    await save(linked, { mode: 'domain', domain: current.email.split('@')[1]!, role: 'collaborator' })
     expect(await store.previewJoin(newcomer, linked)).toMatchObject({ alreadyMember: false })
     expect(await store.join(newcomer, linked, { operationId: randomUUID() })).toMatchObject({ alreadyMember: false })
     expect(await personIn(linked, newcomer)).toBeDefined()
-  })
-
-  it('lets a removed person invited back to the Workspace join by link again', async () => {
-    const { returning } = await org('twentytwo', ['returning'])
-    const workspaceId = await removedAndPurged(returning)
-    await store.workspaces.invite(current, workspaceId, returning.email, 'member')
-    await store.workspaces.accept(returning, workspaceId)
-    const linked = await domainShared()
-    expect(await store.join(returning, linked, { operationId: randomUUID() })).toMatchObject({ alreadyMember: false })
-    expect(await personIn(linked, returning)).toBeDefined()
   })
 })
 

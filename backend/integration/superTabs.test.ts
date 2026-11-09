@@ -1589,26 +1589,6 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await run(tab, { type: 'project.delete', projectId: other })
     expect(await db.superTabRoleText.count({ where: { tabId: tab, projectId: other } })).toBe(0)
   })
-  it('serves no role text once the reader, or the hosted agent\'s contributor, left the Swarm\'s Workspace, before that removal reaches the Swarm', async () => {
-    const { tab } = await fixture()
-    await invite(tab)
-    await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Worker', configuration: config, lead: false })
-    await seedProject(tab, 'lead', { skillSet: 'custom', skillMode: 'default' }, [{ id: 'lead', name: 'Product Manager', kind: 'lead', text: 'LEAD-TEXT' },
-      { id: 'dev', name: 'Engineer', kind: 'builder', text: 'DEV-TEXT' }])
-    const text = (user: AuthUser) => app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/projects/lead/roles/dev`, headers: { authorization: `Bearer ${user.sub}` } })
-    expect((await text(owner)).statusCode).toBe(200)
-    expect((await text(host)).statusCode).toBe(200)
-    // The owner, who is the project's owner and the Worker's contributor, is marked removed as a removal leaves it before its cleanup.
-    const row = await db.superTab.findUniqueOrThrow({ where: { id: tab } })
-    await db.swarmWorkspaceMember.update({ where: { id: `${row.workspaceId}:${owner.sub}` }, data: { removedAt: new Date() } })
-    try {
-      for (const user of [owner, host]) {
-        const answer = await text(user)
-        expect(answer.statusCode, user.email).not.toBe(200)
-        expect(answer.body).not.toContain('DEV-TEXT')
-      }
-    } finally { await db.swarmWorkspaceMember.update({ where: { id: `${row.workspaceId}:${owner.sub}` }, data: { removedAt: null } }) }
-  })
   it('writes a message to several recipients in two insert commands, preserving each delivery', async () => {
     const { tab, lead } = await fixture()
     // In a task, which holds its coordinator: the project chat holds no other agent (#2207).
@@ -3479,16 +3459,16 @@ describe('grant checks of the host roster', () => {
   }
   const agentIds = (rows: Array<{ tabId: string; agent?: { id: string } }>, tab: string) => rows.filter(r => r.tabId === tab && r.agent).map(r => r.agent!.id).sort()
 
-  it('reads the machine, its share, and each contributor and their Workspace membership once per host read, not once per agent', async () => {
+  it('reads the machine, its share and each contributor once per host read, not once per agent', async () => {
     const { machineId, tab, add } = await sharedMachine()
     const agents = [await add(tab, 'Lead', owner, true)]
     for (let i = 0; i < 4; i++) agents.push(await add(tab, `Owner worker ${i}`, owner))
     for (let i = 0; i < 3; i++) agents.push(await add(tab, `Peer worker ${i}`, peer))
     const { store: counting, count } = counted()
     expect(agentIds(await rosterRows(counting, host, machineId), tab)).toEqual(agents.sort())
-    // Eight agents of two contributors on one machine: the read's own machine check, one share, two people, two memberships.
+    // Eight agents of two contributors on one machine: the read's own machine check, one share, two people, and no Workspace.
     expect({ machines: count('Machine.findFirst'), shares: count('MachineShare.findUnique'), contributors: count('User.findUnique'),
-      memberships: count('SwarmWorkspaceMember.findUnique') }).toEqual({ machines: 1, shares: 1, contributors: 2, memberships: 2 })
+      memberships: count('SwarmWorkspaceMember.findUnique') }).toEqual({ machines: 1, shares: 1, contributors: 2, memberships: 0 })
   })
 
   it('checks agents of one contributor checked at once with one read of each lookup', async () => {
@@ -3499,7 +3479,7 @@ describe('grant checks of the host roster', () => {
     const reads = new GrantReads()
     await Promise.all(agents.map(id => counting.agentGrant(counting.db, state, state.agents.find(a => a.id === id)!, reads)))
     expect({ machines: count('Machine.findFirst'), shares: count('MachineShare.findUnique'), contributors: count('User.findUnique'),
-      memberships: count('SwarmWorkspaceMember.findUnique') }).toEqual({ machines: 1, shares: 1, contributors: 1, memberships: 1 })
+      memberships: count('SwarmWorkspaceMember.findUnique') }).toEqual({ machines: 1, shares: 1, contributors: 1, memberships: 0 })
   })
 
   it('keeps nothing between two host reads of one store: a share revoked between them drops the rows on the next', async () => {
@@ -3524,21 +3504,6 @@ describe('grant checks of the host roster', () => {
     expect(agentIds(await rosterRows(counted().store, host, machineId), tab)).toEqual(mine.sort())
   })
 
-  it('still drops a contributor\'s rows only in the Swarms of the Workspace they left', async () => {
-    const { machineId, tab, add } = await sharedMachine()
-    const mine = [await add(tab, 'Lead', owner, true), await add(tab, 'Owner worker', owner)]
-    await add(tab, 'Peer worker 1', peer)
-    await add(tab, 'Peer worker 2', peer)
-    // The peer's own Swarm, in the peer's own Workspace, on the same machine.
-    const theirs = (await store.create(peer, randomUUID(), 'Peer Swarm')).id
-    const peers = [await add(theirs, 'Peer Lead', peer, true), await add(theirs, 'Peer helper', peer)]
-    const workspaceId = (await db.superTab.findUniqueOrThrow({ where: { id: tab } })).workspaceId!
-    expect((await db.superTab.findUniqueOrThrow({ where: { id: theirs } })).workspaceId).not.toBe(workspaceId)
-    await db.swarmWorkspaceMember.update({ where: { id: `${workspaceId}:${peer.sub}` }, data: { removedAt: new Date() } })
-    const rows = await rosterRows(counted().store, host, machineId)
-    expect(agentIds(rows, tab)).toEqual(mine.sort())
-    expect(agentIds(rows, theirs)).toEqual(peers.sort())
-  })
 })
 
 describe('the Lead reads and types in an agent terminal', () => {
@@ -5219,5 +5184,24 @@ describe('a closed tab\'s Personal project', () => {
     expect(first.result).toMatchObject({ outcome: 'deleted' })
     expect(again.result).toEqual(first.result)
     expect((await store.read(person, tab)).state.projects!.some(p => p.id === projectId)).toBe(false)
+  })
+})
+
+// Swarm v4 removed Workspaces, the level above Swarms: who may read or command a Swarm rests on its own people, machines and
+// shares. Nothing reads a Workspace row, and a new Swarm names none.
+describe('a Swarm with no Workspace above it', () => {
+  it('is created, read, commanded and listed without a Workspace query, and names none', async () => {
+    const calls: string[] = []
+    const client = db.$extends({ query: { $allModels: { async $allOperations({ model, operation, args, query }) {
+      calls.push(`${model}.${operation}`)
+      return query(args)
+    } } } }) as unknown as PrismaClient
+    const counting = new SuperTabStore(client)
+    const tab = (await counting.create(owner, randomUUID(), 'Plain')).id
+    await counting.read(owner, tab)
+    await counting.execute(owner, tab, { operationId: randomUUID(), command: { type: 'tab.rename', name: 'Plain again' } })
+    await counting.list(owner)
+    expect(calls.filter(call => call.startsWith('SwarmWorkspace'))).toEqual([])
+    expect((await db.superTab.findUniqueOrThrow({ where: { id: tab } })).workspaceId).toBeNull()
   })
 })

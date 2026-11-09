@@ -5,11 +5,10 @@
  */
 import { machineSuspensionReason, suspendedEngines } from '../engineHealth.js'
 import { DISPATCH_RULES, laneOf } from '../dispatch.js'
-import { leadChoices } from '../leadStart.js'
 import { heldView } from '../heldReason.js'
 import { buddyCapOf, isBuddyChat, isBuddyReader } from '../buddies.js'
 import { agentForBuddy, agentWithoutMachine, groupForBuddy, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
-import { availableSlots, slotCounter, machineTeamWork, type ContributedMachine } from '../machines.js'
+import { availableSlots, slotCounter, type ContributedMachine } from '../machines.js'
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup, canReadProject, projectsOf } from '../projects.js'
@@ -37,13 +36,7 @@ export interface ReaderView {
   derived: Derived
 }
 export interface ReadExtras {
-  /** Machines whose account row is a Harness Team account (store read helper). */
-  teamMachines: string[]
-  /** Machines also contributed to a Swarm of another Workspace (store.ts otherWorkspaceMachines). */
-  otherWorkspaceMachines?: string[]
-  /** No Harness GitHub App on this server, so Team accounts take no work (store.ts teamAccountsIdle). */
-  teamAccountsIdle?: boolean
-  /** Each contributed machine's CLI version as its daemon last connected (store.ts machineFacts). */
+  /** Each contributed machine's CLI version as its daemon last connected (store.ts machineVersions). */
   machineVersions?: Record<string, string>
   /** A person's open mentions, counted by the store. */
   mentionsWaiting?: number
@@ -60,7 +53,7 @@ export interface ReadExtras {
 }
 
 const HEAD_FIELDS = ['version', 'id', 'name', 'project', 'projects', 'leadsConversationId', 'ownerId', 'environment',
-  'routingPolicy', 'rules', 'paused', 'invitations', 'localModels', 'workspaceId', 'workspaceVisibility', 'buddies', 'removedMachines', 'autoJoin',
+  'routingPolicy', 'rules', 'paused', 'invitations', 'localModels', 'buddies', 'removedMachines', 'autoJoin',
   // How many Buddies each person may have (task #3818): apps offer a new one below it.
   'buddyCap'] as const
 
@@ -180,22 +173,15 @@ const countsOnly = (pulse: Pulse): Pulse => ({ ...pulse, asks: { ...pulse.asks, 
   nextUp: { ...pulse.nextUp, conversationIds: [] }, lost: { ...pulse.lost, conversationIds: [] }, held: { ...pulse.held, list: [] } })
 
 function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now: number, extras: ReadExtras): Derived {
-  // Where New Project's Product Manager would run on each teammate's machine, decided as its start decides (leadStart.ts).
-  const leads = actor.kind === 'person' && state.people.find(p => p.id === actor.userId)?.role !== 'viewer'
-    ? leadChoices(state, actor.userId, { now, teamMachines: extras.teamMachines, otherWorkspaceMachines: extras.otherWorkspaceMachines ?? [],
-      ...(extras.teamAccountsIdle ? { teamAccountsIdle: true } : {}) })
-    : {}
   // Every listed machine's slots from one pass over the Swarm's lists (machines.ts slotCounter).
   const slots = slotCounter(state)
   const machine = (pool: ContributedMachine) => {
     const stored = state.machines!.find(m => m.machineId === pool.machineId)!
-    const refusal = machineTeamWork(stored, now, extras.teamMachines, extras.otherWorkspaceMachines ?? [])
     const version = extras.machineVersions?.[pool.machineId]
     const suspended = suspendedEngines(stored, now)
     const machineSuspended = machineSuspensionReason(stored, now)
-    return [pool.machineId, { availableSlots: availableSlots(state, stored, slots(stored)),
-      teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const }, ...(version ? { clientVersion: version } : {}),
-      ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}), ...(machineSuspended ? { machineSuspended } : {}), ...(leads[pool.machineId] ? { lead: leads[pool.machineId] } : {}) }] as const
+    return [pool.machineId, { availableSlots: availableSlots(state, stored, slots(stored)), ...(version ? { clientVersion: version } : {}),
+      ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}), ...(machineSuspended ? { machineSuspended } : {}) }] as const
   }
   const pulse = pulses(state, visible, actor, isBuddyReader(state, actor))
   // Each visible agent's stored row, looked up once rather than once per derived field.

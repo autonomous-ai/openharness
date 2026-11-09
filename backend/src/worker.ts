@@ -126,8 +126,8 @@ async function start(): Promise<void> {
   stopAttachmentSweep = startAttachmentSweepFrom(prisma, () => attachmentsFromEnv(env))
   // The worker's sweeps and archive write Swarms: they bump the stamps the API processes read by. It reads too little to keep a cache.
   configureSwarmStamps(redisSwarmStamps(), { reads: false })
-  // Archive notes and Workspace removals write messages too: their recipients' hosts hear of them at once, and of the
-  // groups they changed.
+  // What the worker's store writes reaches messages too: their recipients' hosts hear of them at once, and of the groups
+  // they changed.
   // Their tags reach the tagged person's phones too (push/send.ts, task #2905).
   const phones = phoneSendersFromEnv(env)
   const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries, terminalWaiting: announceSwarmTerminal, hostsChanged: announceSwarmHostChanges,
@@ -137,7 +137,7 @@ async function start(): Promise<void> {
   // A failure leaves them compacted, as before, and never stops the worker starting.
   await requeueCompactedAgents(prisma, Date.now()).then(queued => logger.info('[swarm-sweeps] queued compacted agent tombstones for purge', { queued }),
     error => logger.warn('[swarm-sweeps] queuing compacted agent tombstones failed', { error: error instanceof Error ? error.message : String(error) }))
-  stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals())
+  stopSweeps = startSwarmSweeps(prisma)
   // The dead old state of migrated Swarms goes by itself, a few at a time (superTabs/migration/dropLegacyJob.ts).
   stopLegacyDrop = startLegacyDrop(prisma)
   // Every 30 s, each active Swarm's time checks: v4's jobs only (superTabs/timeChecks.ts). Swarm v4 (anh Dee, 2026-11-09) runs
