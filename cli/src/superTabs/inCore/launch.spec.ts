@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { swarmGitHubLaunch } from '../../lib/swarmGitHub.js'
-import { SWARM_BASICS } from '../../lib/swarmSkills.js'
+import { env } from '../../config/env.js'
+import { SWARM_BASICS, swarmBasics, swarmBasicsSince } from '../../lib/swarmSkills.js'
 import { SWARM_LAUNCH } from './launch.js'
 
 // The Harness GitHub App's launch writes files in the daemon's folder (lib/swarmGitHub.ts): never this machine's here.
@@ -28,6 +29,17 @@ it('tells the engine the team\'s basics at launch and writes nothing in its fold
   expect(instructions).toBe(SWARM_BASICS)
   expect(readdirSync(cwd)).toEqual([])
   expect(() => SWARM_LAUNCH.prepare(cwd, { role: 'agent', fallback: 'review', key: '' })).toThrow('A Swarm skill needs a role and session key')
+})
+
+it('notes when this computer first launched an agent with these basics, and keeps that moment', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'swarm-launch-'))
+  folders.push(cwd)
+  SWARM_LAUNCH.prepare(cwd, { role: 'agent', fallback: 'review', key: 'harness-claude-1' })
+  const since = swarmBasicsSince(env.ADAPTER_DATA_DIR, swarmBasics(false).version)
+  expect(since).toBeLessThanOrEqual(Date.now())
+  SWARM_LAUNCH.prepare(cwd, { role: 'coordinator', fallback: 'review', key: 'harness-claude-2' })
+  expect(swarmBasicsSince(env.ADAPTER_DATA_DIR, swarmBasics(false).version)).toBe(since)
+  expect(swarmBasicsSince(env.ADAPTER_DATA_DIR, swarmBasics(true).version)).toBe(since)
 })
 
 it('hands the GitHub App\'s git and gh for the session it is asked for', () => {

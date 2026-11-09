@@ -3,15 +3,22 @@
  * role's skill written into the project folder, and the Harness GitHub App's git and gh for another person's project
  * work. The core is handed it while the Swarm is on, and refuses a start with a Swarm role while it is off.
  */
+import { env } from '../../config/env.js'
 import type { SwarmLaunch } from '../../core/api.js'
 import { swarmEngineArgs } from '../../lib/swarmEngineArgs.js'
 import { swarmGitHubLaunch } from '../../lib/swarmGitHub.js'
-import { isSwarmRole, isSwarmSkillMode, prepareSwarmSkill } from '../../lib/swarmSkills.js'
+import { isSwarmRole, isSwarmSkillMode, noteSwarmBasics, prepareSwarmSkill } from '../../lib/swarmSkills.js'
 
 export const SWARM_LAUNCH: SwarmLaunch = {
   role: isSwarmRole,
   mode: isSwarmSkillMode,
-  prepare: prepareSwarmSkill,
+  // Every launch and relaunch carries this release's basics; the first notes when, so the Swarm's host tells only the
+  // agents launched before then that they changed (lib/swarmSkills.ts noteSwarmBasics).
+  prepare: (workspace, saved) => {
+    const prepared = prepareSwarmSkill(workspace, saved)
+    noteSwarmBasics(env.ADAPTER_DATA_DIR, Date.now())
+    return prepared
+  },
   github: (key) => swarmGitHubLaunch(key),
   args: swarmEngineArgs,
 }
