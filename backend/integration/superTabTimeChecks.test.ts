@@ -192,6 +192,25 @@ describe('the stops from before v4', () => {
   })
 })
 
+describe('a stop no longer under way', () => {
+  it('leaves no mark that refuses the agent\'s session: messaging it in its 1:1 chat works', async () => {
+    const f = await swarm()
+    const helper = String((await f.execute({ type: 'agent.add', conversationId: f.group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Helper', configuration: config, lead: false }, host)).result.agentId)
+    await f.execute({ type: 'agent.release', agentId: helper, decision: 'stop' })
+    const releaseId = (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === helper)!.releaseId!
+    // The stop is gone from the Swarm but its marks stay behind, as after a withdrawal that missed them.
+    const row = await db.swarmAgent.findFirstOrThrow({ where: { tabId: f.tab, key: helper } })
+    const { workDecision: _w, releaseId: _r, ...data } = row.data as Record<string, unknown>
+    await db.swarmAgent.update({ where: { id: row.id }, data: { data: data as never, version: row.version + 1 } })
+    expect(await db.superTabSessionScope.findMany({ where: { stopReleaseId: releaseId } })).toHaveLength(1)
+    await f.timed.runTimeChecks(f.tab)
+    const chatId = (await f.timed.read(host, f.tab)).state.agents.find(a => a.id === helper)!.chatId!
+    await f.execute({ type: 'message.send', conversationId: chatId, text: 'Are you there?', replyTo: null, recipientIds: [] } as Command, host)
+    expect(await db.superTabSessionScope.findMany({ where: { stopReleaseId: releaseId } })).toEqual([])
+  })
+})
+
 describe('the worker\'s pass', () => {
   it('runs the checks of each Swarm active in the last week, and leaves a deleted one alone', async () => {
     const f = await swarm(), quiet = await swarm()

@@ -21,8 +21,19 @@ export async function bindSession(tx: Prisma.TransactionClient, state: SuperTabS
   const prior = await tx.superTabSessionScope.findUnique({ where: { id } })
   if (prior?.releasedTabIds.includes(state.id)) fail('SESSION_RELEASED', 'This session was withdrawn while stopping in this Swarm. Start a new Harness here or use it in another Swarm.')
   if (prior?.closeLeaseUntil && prior.closeLeaseUntil.getTime() > now) fail('CLOSE_PENDING', 'Another Swarm is stopping this session. Wait up to two minutes, then try again.')
+  // A stop this Swarm no longer has (withdrawn, agentStops.ts) leaves its marks behind; they hold only while its agent is stopping
+  // here and the session is no other Swarm's (Swarm v4 hotfix, 2026-11-09: people's agents refused every message).
+  const stale = target.workDecision !== 'stop' && (prior?.scopeIds ?? []).every(other => other === scope)
+  if (prior?.stopReleaseId && stale) {
+    await tx.superTabSessionScope.update({ where: { id }, data: { stopReleaseId: null } })
+    prior.stopReleaseId = null
+  }
   if (prior?.stopReleaseId) fail('STOP_REQUESTED', 'This session is stopping. Wait for its host or withdraw it before contributing another session.')
-  const running = await tx.superTabRun.findUnique({ where: { id: target.id } })
+  let running = await tx.superTabRun.findUnique({ where: { id: target.id } })
+  if (running?.assignmentId.startsWith('release-') && running.tabId === state.id && target.workDecision !== 'stop') {
+    await tx.superTabRun.delete({ where: { id: target.id } })
+    running = null
+  }
   if (running?.assignmentId.startsWith('release-')) fail('STOP_REQUESTED', 'This session is stopping. Wait for its host or force-withdraw it before contributing another session.')
   let scopes = prior?.scopeIds ?? []
   if (!prior) {
