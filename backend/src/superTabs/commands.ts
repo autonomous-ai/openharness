@@ -978,19 +978,20 @@ export function worksInProjectChat(state: SuperTabState, group: Conversation, ag
     && !['lost', 'stopped', 'cancelled'].includes(c.assignment.status) && groupProject(state, c).id === project.id)
 }
 /** Who may post in a conversation may also upload a file to it. Writer access is checked by `author(state, actor, true)`. The
- *  open group [actor] may post in, and whether posting there joins it (`joins`): an agent of the group's project that is not in
- *  it joins it (joinsProject). An agent with work in the project posts in its project chat without joining it, so the chat keeps
- *  only its coordinator among agents and opens no second terminal (#2207). It changes nothing: an upload asks it of the Swarm as
- *  the read cache holds it, which nothing may change, and the command that posts adds the agent. */
-export function postable(state: SuperTabState, actor: Actor, conversationId: string): { group: Conversation; joins: boolean } {
+ *  open group [actor] may post in, and the agent that posting there adds to it (`joining`, else null): an agent of the group's
+ *  project that is not in it joins it (joinsProject). An agent with work in the project posts in its project chat without joining
+ *  it, so the chat keeps only its coordinator among agents and opens no second terminal (#2207). It changes nothing: an upload
+ *  asks it of the Swarm as the read cache holds it, which nothing may change, and the command that posts adds the agent. A yes
+ *  to an upload is not a yes to the post that sends it: that asks again, of the Swarm as it is then. */
+export function postable(state: SuperTabState, actor: Actor, conversationId: string): { group: Conversation; joining: string | null } {
   const group = open(state, conversationId)
   requireCanChat(state, actor, group)
-  if (actor.kind !== 'agent' || group.agentIds.includes(actor.agentId)) return { group, joins: false }
-  if (projectAgent(state, actor, groupProject(state, group).id) && worksInProjectChat(state, group, actor.agentId)) return { group, joins: false }
+  if (actor.kind !== 'agent' || group.agentIds.includes(actor.agentId)) return { group, joining: null }
+  if (projectAgent(state, actor, groupProject(state, group).id) && worksInProjectChat(state, group, actor.agentId)) return { group, joining: null }
   if (!joinsProject(state, group, actor.agentId) && !joinsChannel(state, group, actor.agentId)) {
     fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
   }
-  return { group, joins: true }
+  return { group, joining: actor.agentId }
 }
 function owner(state: SuperTabState, actor: Actor): void {
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Super Tab owner can manage invitations.', 403)
@@ -4515,11 +4516,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       break
     }
     case 'message.send': {
-      const { group, joins } = postable(state, actor, command.conversationId)
+      const { group, joining } = postable(state, actor, command.conversationId)
       // Posting in its project chat joins it nowhere (postable), so it takes no work there either.
-      if (joins && actor.kind === 'agent') {
-        group.agentIds.push(actor.agentId)
-        teamJoin(groupProject(state, group), actor.agentId, group)
+      if (joining) {
+        group.agentIds.push(joining)
+        teamJoin(groupProject(state, group), joining, group)
       }
       const ids = [...new Set(command.attachmentIds ?? [])]
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))

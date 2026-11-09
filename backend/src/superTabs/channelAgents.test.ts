@@ -45,12 +45,12 @@ describe('a v4 agent in a project\'s channel', () => {
   })
 
   // An upload asks whether an agent may post, on the Swarm as the read cache holds it, which nothing may change (store.ts poster).
-  it('answers whether it may post in the channel on a state nobody may change, and says it would join', () => {
+  it('answers whether it may post in the channel on a state nobody may change, and that it would join', () => {
     const f = swarm()
     const pip = f.newAgent(owner, 'Pip')
     const held = structuredClone(f.state)
     freeze(held)
-    expect(postable(held, pip, 'lead').joins).toBe(true)
+    expect(postable(held, pip, 'lead').joining).toBe(pip.agentId)
     expect(held.conversations.find(c => c.id === 'lead')!.agentIds).not.toContain(pip.agentId)
   })
 
