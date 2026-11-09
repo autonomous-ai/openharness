@@ -22,7 +22,6 @@ code = r'''
 #include <stdio.h>
 #include <stdlib.h>
 #include "audio_capture.h"
-#define DEVICE_HABITAT 1
 #define ESP_OK 0
 #define pdPASS 1
 #define ESP_LOGI(...) ((void)0)

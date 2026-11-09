@@ -258,22 +258,4 @@ bool cable_link_send(uint8_t type, const uint8_t *payload, size_t payload_len)
     return false;
 }
 
-bool cable_link_host_present(void)
-{
-    // Guarded on s_running because the driver call is undefined before install, and "no driver" is
-    // indistinguishable from "no host" to everything above: both mean nothing can be said on this port.
-    return s_running && usb_serial_jtag_is_connected();
-}
-
-void cable_link_counters(uint32_t *corrupt_frames, uint32_t *discarded_bytes)
-{
-    if (corrupt_frames) *corrupt_frames = s_decoder.corrupt_frames;
-    if (discarded_bytes) *discarded_bytes = s_decoder.discarded_bytes;
-}
-
 uint32_t cable_link_dropped_logs(void) { return atomic_load(&s_dropped_logs); }
-
-void cable_link_reset_decoder(void)
-{
-    cable_decoder_reset(&s_decoder);
-}

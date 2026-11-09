@@ -29,7 +29,6 @@ def instrument(code, trace_file, main):
 #include "cJSON.h"
 #include "cable_frame.h"
 #include "cable_json_guard.h"
-#define DEVICE_HABITAT 1
 static int64_t s_last_rx_us;
 static uint32_t s_bad, s_unknown;
 static int64_t esp_timer_get_time(void) { return (int64_t)fake_ms * 1000 + 1; }

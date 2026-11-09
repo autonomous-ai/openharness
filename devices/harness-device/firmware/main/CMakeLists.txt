@@ -152,21 +152,6 @@ if(DEVICE_OCTOPUS_BENCH)
     target_sources(${COMPONENT_LIB} PRIVATE "ui/habitat/perf_bench.c")
 endif()
 
-# PROD build override: `idf.py -DDEVICE_FORCE_PROD=1 build` (into a separate build dir) forces the
-# production backend and ignores any local provisioned_config.h — no need to move the header, so the LOCAL
-# and PROD build dirs both stay warm (no CMake-reconfigure churn). See app_main.c's DEVICE_FORCE_PROD.
-if(DEVICE_FORCE_PROD)
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_FORCE_PROD=1)
-endif()
-
-# LOCAL BACKEND override: `idf.py -DDEVICE_BACKEND_URL="ws://<laptop-ip>:8085" build` points the device
-# at a backend on your machine. The URL is otherwise hardcoded to production AND re-forced over whatever
-# NVS holds on every boot (app_main.c), so it is not a setting the device can be talked into — a local
-# build is the only way.
-if(DEVICE_BACKEND_URL)
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_PROD_BACKEND_URL="${DEVICE_BACKEND_URL}")
-endif()
-
 # BRING-UP PROBE: `idf.py -DBOARD_PROBE=1 build` (separate build dir recommended). app_main runs
 # board/board_probe.c before the display comes up and prints what is on the I2C bus, which reset pins
 # do what, and what each touch driver reads idle. Never set for a release image.
