@@ -24,7 +24,7 @@ export const WEIGHTS: Record<string, number> = { p0: 8, p1: 4, p2: 2 }
 /** The percent of each window its person keeps for their own work: Swarm work never spends it (AGENTS.md, contributed
  *  capacity: "their quota is never drained without them knowing"). */
 export const RESERVE = 20
-/** Cores a machine gives Swarm work until hosts report how many they have: two large tasks at once. */
+/** Cores a machine is planned with when its daemon reports none (one before 0.5.86): two large tasks at once. */
 export const CORES = 8
 /** Of a machine's memory, what Swarm work may hold: its person keeps the rest. */
 export const MEMORY_SHARE = 0.75
@@ -212,7 +212,9 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
     const memory = typeof resources.memoryTotalBytes === 'number' ? resources.memoryTotalBytes * MEMORY_SHARE : 16 * GiB
     const free = typeof resources.projectDiskFreeBytes === 'number' ? resources.projectDiskFreeBytes
       : typeof resources.diskFreeBytes === 'number' ? resources.diskFreeBytes : 60 * GiB
-    return { id, capacity: { cpu: CORES, ram: memory, disk: Math.max(0, free - DISK_KEPT) } }
+    // Its cores as it reports them (a daemon since 0.5.86); an older one is planned as CORES.
+    const cores = typeof resources.cpuCores === 'number' && Number.isSafeInteger(resources.cpuCores) && resources.cpuCores > 0 ? resources.cpuCores : CORES
+    return { id, capacity: { cpu: cores, ram: memory, disk: Math.max(0, free - DISK_KEPT) } }
   })
   const accounts: Account[] = [...new Set(crew.builders.map(b => `${b.machineId}:${b.engine}`))].map(id => {
     const [machineId, engine] = id.split(':') as [string, string]
