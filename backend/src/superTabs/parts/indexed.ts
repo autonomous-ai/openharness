@@ -41,15 +41,13 @@ export const NAMED_INDEX = {
     owner: { autonomousEnv: 1, ownerId: 1, _id: 1 },
     /** The Swarms inviting each address (invitedSwarms.ts), and every Swarm with an invitation (the hourly sweep). */
     invited: { autonomousEnv: 1, invitedEmails: 1, _id: 1 },
-    /** A member's Swarms in id order: Swarm lists and Workspace removals. */
+    /** A member's Swarms in id order: Swarm lists. */
     members: { autonomousEnv: 1, memberIds: 1, _id: 1 },
     /** A machine's Swarms, newest first, and those that still list it for cleanup: the host poll. */
     machines: { autonomousEnv: 1, machineIds: 1, updatedAt: 1 },
     cleanup: { autonomousEnv: 1, cleanupMachineIds: 1, updatedAt: 1 },
     /** Swarms by id. */
     id: { _id: 1 },
-    /** A Workspace's Swarms: a Workspace removal reads its deleted ones (workspaceStore.ts). */
-    workspace: { autonomousEnv: 1, workspaceId: 1 },
     /** Deleted Swarms by purge time (deletion.ts): the purge sweep. */
     purge: { purgeAt: 1 },
     /** The Swarms people at a domain join by themselves (autoJoin.ts): one read per person at most every 2 minutes. */

@@ -26,7 +26,7 @@ export type GroupChange = LivePart<GroupView> | Tombstone | DormantStub
  *  invitations filtered (invitations only for the Swarm owner). `autoJoin`: people at the owner's domain join by themselves
  *  (autoJoin.ts), from the sharing the head holds; who declined is never sent. */
 export type HeadView = Pick<SuperTabState, 'version' | 'id' | 'name' | 'project' | 'leadsConversationId' | 'ownerId'
-  | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'workspaceId' | 'workspaceVisibility' | 'buddies' | 'removedMachines'
+  | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'buddies' | 'removedMachines'
   | 'autoJoin'> & {
   /** How many Buddies each person may have (task #3818): always sent, 5 unless the Swarm's owner set another. An older backend
    *  sends none, so an app offers several Buddies only where this is present. */
@@ -242,8 +242,7 @@ export interface CommandReply {
 
 /** GET /api/super-tabs/list[?after=][&mentions=1] */
 export interface SwarmList {
-  /** `workspaceId` names its Workspace (null before the migration); a Swarm whose Workspace the person left is not listed. */
-  tabs: Array<{ id: string; name: string; ownerId: string; workspaceId: string | null; paused: boolean; lastChangedAt: number | null
+  tabs: Array<{ id: string; name: string; ownerId: string; paused: boolean; lastChangedAt: number | null
     /** Only on the reader's own Personal Swarm. */
     personal?: true
     /** With `?mentions=1`: the person's waiting tags in the Swarm and their digest, as the Swarm's own state counts them (a

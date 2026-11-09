@@ -141,6 +141,7 @@ describe('a deleted Swarm', () => {
     const f = deleted()
     const commands: Command[] = [{ type: 'message.send', conversationId: 'lead', text: 'hello', replyTo: null, recipientIds: [] },
       { type: 'tab.rename', name: 'Back' }, { type: 'swarm.delete', name: 'Lampos' }, { type: 'invite.create', email: 'x@example.com', role: 'viewer', conversationId: 'lead' },
+      { type: 'member.remove', userId: 'peer' },
       { type: 'project.create', name: 'New', visibility: 'public', brief: '' } as Command]
     for (const command of commands) for (const actor of [owner, peer]) expect(refusal(f, command, actor)).toEqual(MISSING)
     // An invitation sent before the deletion cannot be accepted either.
@@ -184,21 +185,6 @@ describe('a deleted Swarm', () => {
     // A live Swarm still says what is not waiting.
     const live = fixture()
     expect(refusal(live, { type: 'machine.cleaned', machineId: 'other', removalId: 'r' }, owner)).toMatchObject({ code: 'NOT_FOUND', message: 'This machine has no cleanup waiting.' })
-  })
-
-  it('leaves out of a restore whoever the store read as no longer in the Workspace, never its owner', () => {
-    const f = deleted()
-    f.run({ type: 'swarm.restore' }, owner, { workspaceLost: ['peer', 'owner'] })
-    expect(f.state.people.map(p => p.id)).toEqual(['owner'])
-    expect(indexesOf(f.state).memberIds).toEqual(['owner'])
-  })
-
-  it('lets a Workspace removal take a person out of it, and nothing else', () => {
-    const f = deleted()
-    expect(refusal(f, { type: 'member.remove', userId: 'peer' }, peer)).toEqual(MISSING)
-    f.run({ type: 'member.remove', userId: 'peer' }, peer, { workspaceLeave: true })
-    expect(f.state.people.map(p => p.id)).toEqual(['owner'])
-    expect(f.state.deletion).toBeDefined()
   })
 
   it('cannot be restored once its grace is over', () => {

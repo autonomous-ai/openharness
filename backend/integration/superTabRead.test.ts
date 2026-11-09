@@ -18,7 +18,7 @@ import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { recordPulse } from '../src/superTabs/pulse.js'
-import { decisionsWaiting, MAX_OPEN_DECISIONS, REFLECTION_DECISION } from '../src/superTabs/decisions.js'
+import { decisionsWaiting } from '../src/superTabs/decisions.js'
 import { waitingMentions, waitingTagConversations } from '../src/superTabs/mentions.js'
 import { writeReadMark } from '../src/superTabs/readMarks.js'
 import { buddyChatId } from '../src/superTabs/buddies.js'
@@ -467,7 +467,7 @@ describe('Swarm list and old routes (design 4.9, 4.11)', () => {
   it('lists the caller\'s Swarms with their newest change', async () => {
     const s = await scene()
     const { body } = await get('/api/super-tabs/list', outsider)
-    expect(body.data.tabs).toContainEqual({ id: s.tabId, name: 'Pilot', ownerId: owner.sub, workspaceId: null, paused: false, lastChangedAt: MIGRATED })
+    expect(body.data.tabs).toContainEqual({ id: s.tabId, name: 'Pilot', ownerId: owner.sub, paused: false, lastChangedAt: MIGRATED })
   })
 
   it('sends no empty id list to the database, for a person with no Swarm or with Swarms all in parts', async () => {
