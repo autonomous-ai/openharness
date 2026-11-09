@@ -1317,9 +1317,8 @@ describe('the delivery poll of an agent with nothing waiting', () => {
 // while the host polls each second (Diego, 10-28): the poll answers it from one indexed read while nothing it relied on moved.
 describe('the delivery poll of an agent with a held delivery', () => {
   // The open deliveries, then the grant the host speaks for its agent under, read outside the Swarm (store.ts grantHolds):
-  // its contributor's Workspace membership, its machine and, lent by host to owner here (an agent from before Swarm v3), the
-  // contributor and the share.
-  const HELD_READS = ['SuperTabDelivery.aggregateRaw', 'SwarmWorkspaceMember.findUnique', 'Machine.findFirst', 'User.findUnique', 'MachineShare.findUnique']
+  // its machine and, lent by host to owner here (an agent from before Swarm v3), the contributor and the share.
+  const HELD_READS = ['SuperTabDelivery.aggregateRaw', 'Machine.findFirst', 'User.findUnique', 'MachineShare.findUnique']
   /** A person's message to the Lead, read by a full poll, claimed and held by its host. */
   const held = async (f: Awaited<ReturnType<typeof swarm>>) => {
     const sent = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Status?', replyTo: null, recipientIds: [] })
@@ -1432,7 +1431,7 @@ describe('the delivery poll of an agent with a held delivery', () => {
     expect(counted.ops).toContain('SwarmGroup.aggregateRaw')
   })
 
-  // What no Swarm write records (a machine share revoked, a machine gone, a Workspace left) is read on every poll.
+  // What no Swarm write records (a machine share revoked, a machine gone) is read on every poll.
   it('refuses on the next poll once its host\'s machine share is revoked', async () => {
     const f = await swarm({ lent: true })
     await held(f)
@@ -1485,21 +1484,6 @@ describe('the delivery poll of an agent with a held delivery', () => {
     const held = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
     expect(counted.ops).not.toContain('SwarmGroup.aggregateRaw')
     expect(held.map(row => row.messageId)).toEqual(page.map(row => row.id))
-  })
-
-  // A Workspace removal is read outside the Swarm, as a machine share is (superTabs.test.ts): the next poll meets it.
-  it('refuses on the next poll once the agent\'s contributor is out of the Swarm\'s Workspace', async () => {
-    const f = await swarm({ lent: true })
-    await held(f)
-    const { workspaceId } = (await f.timed.read(owner, f.tab)).state
-    const id = `${workspaceId}:${owner.sub}`
-    await db.swarmWorkspaceMember.update({ where: { id }, data: { removedAt: new Date(), removedBy: owner.sub } })
-    try {
-      f.clock.now += 1_000
-      await expect(f.timed.deliveries(host, f.tab, f.lead)).rejects.toMatchObject({ code: 'WORKSPACE_ACCESS_REVOKED' })
-    } finally {
-      await db.swarmWorkspaceMember.update({ where: { id }, data: { removedAt: null, removedBy: null } })
-    }
   })
 
   it('never answers a team session from its person\'s held answer: the team session meets its own checks', async () => {

@@ -4,7 +4,6 @@ import { z } from 'zod'
 import { engineUnusable, machineSuspensionReason } from './engineHealth.js'
 import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, occupiesAgent, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
-import { WORKSPACE_LABEL } from './workspaces.js'
 import { startFinished } from './parts/write.js'
 import { agentProjectId, isAgentChat, canReadAgent, canReadProject, groupProject, ledProject, ownsProject, projectOf, projectsOf, startProject, teamAccountPool, type SwarmProject } from './projects.js'
 import { isSwarmBuddyChat } from './buddies.js'
@@ -314,10 +313,10 @@ export function observedPrivacy(previous: StoredPrivacy | undefined, reported: M
 }
 
 export type TeamWorkCode = 'TEAM_WRITTEN_WORK' | 'MACHINE_OFFLINE' | 'TEAM_ACCOUNT_REQUIRED' | 'PRIVACY_UNCHECKED' | 'PRIVACY_CHECK_FAILED' | 'PRIVACY_CHECK_STALE'
-  | 'MACHINE_IN_OTHER_WORKSPACE' | 'NOT_SWARM_MACHINE' | 'MACHINE_PROJECTS' | 'ACCESS_MISSING' | 'TEAM_ACCOUNTS_REMOVED' | 'NOT_YOUR_COMPUTER' | 'READ_ONLY' | 'STEP_OS'
+  | 'NOT_SWARM_MACHINE' | 'MACHINE_PROJECTS' | 'ACCESS_MISSING' | 'TEAM_ACCOUNTS_REMOVED' | 'NOT_YOUR_COMPUTER' | 'READ_ONLY' | 'STEP_OS'
 export interface TeamWorkRefusal { code: TeamWorkCode; reason: string }
 /** Refusals that hold until a person acts on the machine; a stale check or an offline machine may pass again by itself. */
-export const LASTING_TEAM_REFUSALS: readonly string[] = ['TEAM_ACCOUNT_REQUIRED', 'PRIVACY_UNCHECKED', 'PRIVACY_CHECK_FAILED', 'MACHINE_IN_OTHER_WORKSPACE']
+export const LASTING_TEAM_REFUSALS: readonly string[] = ['TEAM_ACCOUNT_REQUIRED', 'PRIVACY_UNCHECKED', 'PRIVACY_CHECK_FAILED']
 
 /** What each item of the privacy check (cli/src/team/privacy.ts) could reach when it failed. */
 const PRIVACY_ITEMS: Record<string, string> = {
@@ -347,9 +346,7 @@ export function teamAccountRequired(): boolean {
  *  says it is signed in as a team account (`Machine.sessionKind`), read by the store. A machine that is not a Team account
  *  runs its own person's agents, whatever they work on (teamWorkCheck), so it reads no rule: it read "has no Harness Team
  *  account yet" where the rule was required or it was added at join, and the route left those agents out (task #4218). */
-/** `otherWorkspace`: the machine is contributed to a Swarm of another Workspace too (store.ts otherWorkspaceMachines). Its Team account
- *  runs every teammate's work as one macOS user, so it serves one Workspace's teammates at a time (swarm-workspaces design). */
-export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow = false, otherWorkspace = false): TeamWorkRefusal | null {
+export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow = false): TeamWorkRefusal | null {
   const reading = pool.observation, name = pool.name
   // A Mac's Harness Team account whose machine is no longer a Team machine was removed (`harness team remove` deletes it).
   // Its last reading stays fresh for a minute, and in that minute it read as taking teammates' work and a Lead's route
@@ -359,7 +356,6 @@ export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow =
   // this machine only (River, 11-04).
   if (ownAccountWork(pool)) return null
   if (!teamRow && reading?.sessionKind !== 'team') return null
-  if (otherWorkspace) return { code: 'MACHINE_IN_OTHER_WORKSPACE', reason: `The Harness Team account on ${name} also serves another ${WORKSPACE_LABEL}'s Swarms, ${ONLY_OWN} here.` }
   if (!reading || now - reading.receivedAt > MACHINE_FRESH_MS) {
     // A Mac's team account goes by its Mac's name ("One machine"), and the Mac itself may well be online.
     return { code: 'MACHINE_OFFLINE', reason: pool.hostMachineId
@@ -473,9 +469,8 @@ export function teamPoolOf(state: SuperTabState, pool: ContributedMachine, live?
  * runs in its own person's account there, never in the Mac's Harness Team account (task #4120), so that account's privacy check
  * no longer speaks for the Mac (task #4218).
  */
-export function machineTeamWork(pool: ContributedMachine, now: number, teamMachines: readonly string[],
-  otherWorkspaceMachines: readonly string[] = []): TeamWorkRefusal | null {
-  return teamWorkRefusal(pool, now, teamMachines.includes(pool.machineId), otherWorkspaceMachines.includes(pool.machineId))
+export function machineTeamWork(pool: ContributedMachine, now: number, teamMachines: readonly string[]): TeamWorkRefusal | null {
+  return teamWorkRefusal(pool, now, teamMachines.includes(pool.machineId))
 }
 
 /** The projects with work on [machineId]: its agents' and its pending starts'. */
@@ -800,7 +795,7 @@ export function localModelAllowed(state: SuperTabState, request: AgentStartReque
 /** [forProject]: the project it is for when that is not yet its conversation's, as New Project's Product Manager before the
  *  project exists (leadStart.ts leadChoices). */
 export function admitMachineStart(state: SuperTabState, request: AgentStartRequest, now: number, start?: AgentStart, teamMachines: readonly string[] = [],
-  otherWorkspaceMachines: readonly string[] = [], forProject?: SwarmProject,
+  forProject?: SwarmProject,
   /** A read that admits many machines against one state counts their slots once (leadStart.ts leadChoices). */
   slots: (pool: ContributedMachine) => number = pool => machineSlots(state, pool)) {
   const pool = machineContribution(state, request.machineId)
