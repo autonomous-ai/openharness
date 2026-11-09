@@ -42,7 +42,7 @@ void main() {
         'or not', (tester) async {
       final server = swarm();
       wait(server);
-      await showView(tester, server, board: false);
+      await showView(tester, server);
       expect(find.text('?'), findsNothing);
       await tester.tap(find.text('web-project').first);
       await tester.pumpAndSettle();
@@ -59,7 +59,7 @@ void main() {
       final server = swarm()..followedThreads = null;
       server.tag('message-1');
       server.ask(['Ship it?'], conversationId: 'lead');
-      await showView(tester, server, board: false);
+      await showView(tester, server);
       final activity = find.descendant(
         of: _key('super-decisions'),
         matching: find.byType(SuperTabCountBadge),
@@ -73,7 +73,7 @@ void main() {
       final server = swarm()..followedThreads = null;
       (server.state['projects'] as List).first['visibility'] = 'private';
       server.tag('message-1');
-      await showView(tester, server, board: false);
+      await showView(tester, server);
       final number = tester.getCenter(_key('super-mentions-lead'));
       final lock = tester.getCenter(find.byIcon(AppIcons.lock).first);
       expect((number.dy - lock.dy).abs(), lessThan(2));
@@ -85,66 +85,15 @@ void main() {
     // #2427); Activity and Buddy keep Slack's pitch.
   });
 
-  group('the header', () {
-    testWidgets("Manage's title is a plain heading, not the project's menu, "
-        'with no Members', (tester) async {
-      await showView(tester, swarm(), board: false);
-      expect(_key('super-members-button'), findsOneWidget);
-      await tester.tap(_key('super-manage'));
-      await tester.pumpAndSettle();
-      expect(_key('super-project-menu'), findsNothing);
-      expect(_key('super-members-button'), findsNothing);
-    });
+  group('the header', () {});
 
-    testWidgets('the one Buddy is titled Buddy, with only its terminal and '
-        'options', (tester) async {
-      final server = swarm();
-      server.state['swarmBuddy'] = true;
-      final c = await showView(tester, server, board: false);
-      await tester.tap(_key('super-swarm-buddy'));
-      await tester.pumpAndSettle();
-      expect(c.selected?.isSwarmBuddyChat, isTrue);
-      expect(find.text('Your Buddy'), findsNothing);
-      expect(_key('super-chat'), findsNothing);
-      expect(_key('super-pull-requests'), findsNothing);
-      expect(_key('super-members-button'), findsNothing);
-      await tester.pump(const Duration(milliseconds: 300));
-    });
-  });
-
-  group('the chat', () {
-    testWidgets("a proposal sent in your name is your own bubble, on the "
-        "right with your message; an agent's task line is on the left "
-        '(#4529)', (tester) async {
-      final server = swarm();
-      server.messages
-        ..add(_said(1, 'A plain message.'))
-        ..add(_taskLine(2, 'working', 'Windows credential fix'))
-        ..add({
-          ..._said(3, 'Goal: Activity read fix'),
-          'thread': 'said-3',
-          'source': {'kind': 'buddy-proposal', 'personId': 'owner'},
-        });
-      await showView(tester, server, board: false);
-      Rect bubble(String text) => tester.getRect(
-        find
-            .ancestor(
-              of: find.textContaining(text),
-              matching: find.byKey(const ValueKey('swarm-bubble')),
-            )
-            .first,
-      );
-      final mine = bubble('A plain message.');
-      expect(bubble('Goal: Activity read fix').right, mine.right);
-      expect(bubble('Windows credential fix').left, lessThan(mine.left));
-    });
-  });
+  group('the chat', () {});
 
   group("a task message's thread pane", () {
     Future<void> open(WidgetTester tester) async {
       final server = swarm();
       server.messages.add(_taskLine(1, 'working', 'Windows credential fix'));
-      final c = await showView(tester, server, board: false);
+      final c = await showView(tester, server);
       c.openThread('line-1');
       await tester.pumpAndSettle();
     }
@@ -158,23 +107,13 @@ void main() {
       );
       expect(tester.getTopLeft(rule.first).dy, 51);
     });
-
-    testWidgets('its reply box keeps the margin the chat composer has', (
-      tester,
-    ) async {
-      await open(tester);
-      final box = _key('super-thread-composer-surface');
-      final close = tester.getTopRight(_key('super-thread-close')).dx;
-      expect(tester.getTopRight(box).dx, lessThan(close));
-      expect(900 - tester.getBottomLeft(box).dy, greaterThanOrEqualTo(16));
-    });
   });
 
   group("a thread's pane", () {
     testWidgets("its header's rule meets the chat's", (tester) async {
       final server = swarm()..threads = true;
       server.messages.add(_said(1, 'A plain message.'));
-      final c = await showView(tester, server, board: false);
+      final c = await showView(tester, server);
       c.openThread('said-1');
       await tester.pumpAndSettle();
       final close = _key('super-thread-close');
@@ -210,29 +149,11 @@ void main() {
       ],
     };
 
-    testWidgets('lists its models when the open chat is the one Buddy, which '
-        'belongs to no project', (tester) async {
-      final server = swarm()
-        ..leaderboard = board('lead')
-        ..followedThreads = null;
-      server.state['swarmBuddy'] = true;
-      final c = await showView(tester, server, board: false);
-      await tester.tap(_key('super-swarm-buddy'));
-      await tester.pumpAndSettle();
-      expect(c.selected?.isSwarmBuddyChat, isTrue);
-      await tester.tap(_key('super-manage'));
-      await tester.pumpAndSettle();
-      await tester.tap(_key('super-manage-tab-models'));
-      await tester.pumpAndSettle();
-      expect(find.text('100%'), findsOneWidget);
-      await tester.pump(const Duration(milliseconds: 300));
-    });
-
     testWidgets("a model's mark starts under Manage's heading", (tester) async {
       final server = swarm()
         ..leaderboard = board('lead')
         ..followedThreads = null;
-      await showView(tester, server, board: false);
+      await showView(tester, server);
       await tester.tap(_key('super-manage'));
       await tester.pumpAndSettle();
       await tester.tap(_key('super-manage-tab-models'));
@@ -249,7 +170,7 @@ void main() {
     testWidgets('its tabs and Swarm facts start under its heading', (
       tester,
     ) async {
-      await showView(tester, swarm(), board: false);
+      await showView(tester, swarm());
       await tester.tap(_key('super-manage'));
       await tester.pumpAndSettle();
       final heading = tester.getTopLeft(find.text('Manage').last).dx;

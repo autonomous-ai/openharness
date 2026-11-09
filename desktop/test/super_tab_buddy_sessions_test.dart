@@ -152,9 +152,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: brightness),
         home: Scaffold(
           body: SuperTabView(
-            board: false,
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Mac Studio',
@@ -368,102 +366,6 @@ void main() {
     await tester.tap(send);
     await tester.pumpAndSettle();
     expect(lastCommand(server).containsKey('newSession'), isFalse);
-  });
-
-  testSessions('New session is offered only in the reader\'s own Buddy chat, '
-      'with their Buddy running', (tester) async {
-    // A workgroup's thread.
-    final work = ConversationServer()..threads = true;
-    work.append('A workgroup topic');
-    var c = await show(tester, work, select: false);
-    await openThread(tester, c, 'message-1');
-    expect(newSession, findsNothing);
-    expect(alsoSend, findsOneWidget);
-    await tester.pumpWidget(const SizedBox());
-    await shown.flush();
-
-    // Their Buddy chat, with no Buddy running.
-    c = await show(tester, buddyChat(buddy: false));
-    await openThread(tester, c, 'message-1');
-    expect(newSession, findsNothing);
-  });
-
-  testSessions(
-    'past the old limit of 3 the choice stays on offer and is sent',
-    (tester) async {
-      final server = buddyChat();
-      for (final thread in ['t-a', 't-b', 't-c', 't-d']) {
-        addSession(server, thread, agentId: 'session-$thread');
-      }
-      final c = await show(tester, server);
-      await openThread(tester, c, 'message-1');
-      expect(box(tester, newSession).onChanged, isNotNull);
-      await tester.tap(newSession);
-      await tester.pump();
-      await tester.enterText(composer, 'A fifth');
-      await tester.pump();
-      await tester.tap(send);
-      await tester.pumpAndSettle();
-      expect(lastCommand(server)['newSession'], isTrue);
-    },
-  );
-
-  testSessions('a starting session says so, and its thread offers no choice', (
-    tester,
-  ) async {
-    final server = buddyChat();
-    addSession(server, 'message-1');
-    final c = await show(tester, server);
-    await openThread(tester, c, 'message-1');
-    expect(tester.widget<Text>(state).data, 'Own session · Starting…');
-    expect(newSession, findsNothing);
-    expect(alsoSend.hitTestable(), findsNothing);
-  });
-
-  testSessions('a session on a computer that went offline names it', (
-    tester,
-  ) async {
-    final server = buddyChat();
-    addSession(server, 'message-1', agentId: 'session-1', down: true);
-    final c = await show(tester, server);
-    await openThread(tester, c, 'message-1');
-    // A machine this computer has no row for is not guessed at.
-    expect(
-      tester.widget<Text>(state).data,
-      'Own session · Its computer is offline',
-    );
-    server.state['machines'] = [machine()];
-    server.revision++;
-    await c.refresh();
-    await tester.pumpAndSettle();
-    expect(tester.widget<Text>(state).data, 'Own session · Studio is offline');
-  });
-
-  testSessions('End session is a quiet text action that ends that thread\'s '
-      'session', (tester) async {
-    final server = buddyChat();
-    addSession(server, 'message-1', agentId: 'session-1');
-    final c = await show(tester, server);
-    await openThread(tester, c, 'message-1');
-    expect(end, findsOneWidget);
-    // Not a button: no filled or outlined button anywhere in the line.
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('super-thread-session-message-1')),
-        matching: find.byWidgetPredicate(
-          (w) => w is ButtonStyleButton || w is MaterialButton,
-        ),
-      ),
-      findsNothing,
-    );
-    await tester.tap(end);
-    await tester.pumpAndSettle();
-    expect(lastCommand(server), {
-      'type': 'buddy.sessionEnd',
-      'conversationId': 'offline',
-      'thread': 'message-1',
-      'reason': 'ended',
-    });
   });
 
   testSessions('an ended session\'s thread says why, and a reply must start '

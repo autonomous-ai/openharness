@@ -2,8 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -193,32 +191,6 @@ void main() {
         c.markRead('lead');
         await tester.pumpAndSettle();
         expect(projectNumber(), findsNothing);
-        expect(activity.count, 0);
-        await close(tester, c);
-      });
-
-      testWidgets('a tag in a task conversation raises Activity, not the '
-          'project row; the unread filter keeps it, and the row is bold only '
-          'for its own chat (task #2638)', (tester) async {
-        final server = projectServer();
-        fromLead(server, 'Please look', conversationId: 'offline');
-        server.tag('message-1', conversationId: 'offline', messageSequence: 1);
-        final (c, attention, activity) = await opened(server);
-        await pumpSidebar(tester, c, attention);
-        expect(projectNumber(), findsNothing);
-        expect(activity.count, 1);
-        expect(
-          rowText(tester, 'super-group-lead', 'web-project').style?.fontWeight,
-          isNot(FontWeight.w600),
-        );
-        c.toggleUnreadOnly();
-        await tester.pumpAndSettle();
-        expect(find.byKey(const ValueKey('super-group-lead')), findsOneWidget);
-        // Opening the task clears it from Activity.
-        c.select('offline');
-        await tester.pumpAndSettle();
-        c.markRead('offline');
-        await tester.pumpAndSettle();
         expect(activity.count, 0);
         await close(tester, c);
       });

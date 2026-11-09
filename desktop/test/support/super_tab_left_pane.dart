@@ -3,7 +3,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 
 import '../super_tab_activity_lists_test.dart' show load, swarm;
@@ -57,13 +56,11 @@ Future<SuperTabController> showLeftPane(
             app: app,
             onSelect: c.select,
             onNewAgent: () {},
-            places: SuperTabPlaces.of(c),
             onNewSwarm: () {},
             onNewProject: () {},
             onPage: (_) {},
             attention: activity.attention,
             onManage: () {},
-            board: true,
           ),
         ),
       ),

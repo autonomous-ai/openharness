@@ -2,7 +2,6 @@
 // browser asks the backend itself, with its own sign-in, instead of relaying
 // through one of the person's machines. Run against a real local HTTP server,
 // so the header, the body and the backend's envelope are the real ones.
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 

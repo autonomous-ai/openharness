@@ -100,7 +100,6 @@ void main() {
               ? SuperTabView(
                   controller: c,
                   app: f.app,
-                  onInvite: () {},
                   onAddAgent: (_) {},
                   onOpenTerminal: (_) {},
                   machineName: (_) => 'Team Mac',

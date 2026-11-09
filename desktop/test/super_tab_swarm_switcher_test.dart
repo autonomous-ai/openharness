@@ -425,7 +425,6 @@ void main() {
             body: SuperTabView(
               controller: shown,
               app: app,
-              onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               onNewProject: () {},
@@ -881,7 +880,6 @@ void main() {
             body: SuperTabView(
               controller: alpha,
               app: app,
-              onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               onNewSwarm: dropdown ? () {} : null,
@@ -954,7 +952,6 @@ void main() {
             body: SuperTabView(
               controller: alpha,
               app: app,
-              onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               onNewSwarm: () {},

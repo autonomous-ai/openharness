@@ -9,7 +9,6 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/color_palette.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/identity.dart';
-import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/section_heading.dart';
 
@@ -276,7 +275,6 @@ void main() {
             onNewProject: () {},
             onPage: (_) {},
             attention: activity.attention,
-            places: SuperTabPlaces.of(c),
             onManage: () {},
           ),
         ),

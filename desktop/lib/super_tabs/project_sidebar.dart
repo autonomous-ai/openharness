@@ -1,28 +1,20 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 
 import '../core/models.dart' show Machine;
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import '../shared/widgets/app_icon_button.dart';
 import '../shared/widgets/app_menu.dart';
-import '../shared/theme/appearance_prefs_store.dart';
 import '../state/app_state.dart';
 import '../state/harness_activity.dart';
-import '../terminal/terminal_theme.dart';
-import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
-import '../widgets/harness_activity_mark.dart';
 import 'attention.dart';
 import 'controller.dart';
 import 'delete_agent.dart';
-import 'buddies.dart';
 import 'model.dart';
+import 'places.dart' show SwarmPage;
 import 'my_agents.dart';
 import 'personal_agents.dart';
 import 'personal_projects.dart' show PersonalProjects;
-import 'places.dart';
 import 'buddy_rows.dart';
 import 'identity.dart';
 import 'leaderboard/reader.dart';
@@ -36,18 +28,6 @@ import 'swarm_type.dart';
 /// The reader's one Buddy for the whole Swarm, listed first among the projects
 /// as a channel (Dee, 10-31).
 const kSwarmBuddyChannel = 'buddy';
-
-/// What the # buddy row draws before the reader's one Buddy chat is opened: a
-/// row with nothing in it, which opens the chat on the server when clicked.
-final _unopenedSwarmBuddyChat = SuperTabConversation.fromJson(const {
-  'id': '',
-  'kind': 'swarm-buddy',
-  'title': kSwarmBuddyChannel,
-  'brief': '',
-  'leadId': null,
-  'archived': false,
-  'agentIds': <String>[],
-});
 
 class ProjectSidebar extends StatelessWidget {
   const ProjectSidebar({
@@ -64,10 +44,7 @@ class ProjectSidebar extends StatelessWidget {
     this.onPage,
     this.page,
     this.attention,
-    this.places,
-    this.onOpenBuddyChat,
     this.compact = false,
-    this.board = false,
     this.onNewAgent,
     this.onAttachAgent,
     this.onOpenAgentChat,
@@ -87,9 +64,6 @@ class ProjectSidebar extends StatelessWidget {
 
   /// A phone's layout: its rows keep the app's sizes, not Slack desktop's ([SwarmType]).
   final bool compact;
-
-  /// Desktop's Board layout (anh Dee, task #3787): no Threads row and no Buddy entry, the Buddy being the right pane.
-  final bool board;
 
   /// + New agent (Swarm v3, task #4118): opens the creation dialog, where Regular or PM is chosen. Without it the section
   /// has no + .
@@ -127,16 +101,11 @@ class ProjectSidebar extends StatelessWidget {
   final bool manageSelected;
   final bool devicesSelected;
 
-  /// Opens one of the Swarm's pages, the Leaderboard or Projects.
+  /// Opens one of the Swarm's pages, the Leaderboard.
   final ValueChanged<SwarmPage>? onPage;
 
   /// The page holding the main pane, if one does.
   final SwarmPage? page;
-
-  /// The reader's places, for the back and forward arrows at the top of a
-  /// layout that is not the Desktop's; without it there are none. The
-  /// Desktop has none (anh Dee, task #4192): ⌘[ and ⌘] still step.
-  final SuperTabPlaces? places;
 
   /// What needs the reader, as Slack shows it: each row's red number counts
   /// only tags of them (decisions asked of them among them), and Threads is
@@ -149,7 +118,7 @@ class ProjectSidebar extends StatelessWidget {
   bool get _paneCovered => manageSelected || devicesSelected || page != null;
 
   /// A project's Board holds the Desktop's middle: no chat's row is lit.
-  bool get _boardOpen => board && boardProjectId != null;
+  bool get _boardOpen => boardProjectId != null;
 
   /// Whether [chat]'s row is the open one: its chat holds the main pane.
   bool _chatLit(SuperTabConversation? chat) =>
@@ -158,124 +127,12 @@ class ProjectSidebar extends StatelessWidget {
       !_boardOpen &&
       controller.selectedId == chat.id;
 
-  /// Opens the reader's Buddy chat in a project, by project id; the
-  /// controller's [SuperTabController.openBuddyChat] when not given.
-  final ValueChanged<String>? onOpenBuddyChat;
-
   /// Projects and workgroups share a text column. Only projects use its icon.
   static const _iconColumn = SuperTabSectionHeading.actionWidth;
   static const _rowEnd = 10.0;
 
   /// Under the chat box and under Manage beside it, so the two end on one line.
   static const double footGap = 16;
-
-  /// A sidebar section's heading, as Slack's "Channels": the row's size, medium and muted. A phone keeps the
-  /// heading's own.
-  TextStyle? get _headingStyle => compact
-      ? null
-      : SwarmType.sidebar(
-          compact: false,
-          color: grid.SidebarInk.inkMuted,
-          medium: true,
-        );
-
-  Widget _navigationRow({
-    required String key,
-    required String label,
-    required IconData icon,
-    required VoidCallback? onTap,
-    bool selected = false,
-    Widget? trailing,
-    bool? unread,
-  }) => Padding(
-    padding: const EdgeInsets.only(bottom: 2),
-    child: SuperTabRowGround(
-      color: selected ? grid.SidebarInk.selected : Colors.transparent,
-      child: Semantics(
-        button: true,
-        selected: selected,
-        child: InkWell(
-          key: ValueKey(key),
-          onTap: onTap,
-          hoverColor: grid.SidebarInk.hover,
-          focusColor: Colors.transparent,
-          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-          child: Row(
-            children: [
-              SizedBox(width: SuperTabSectionHeading.indentFor(0)),
-              SizedBox(
-                width: _iconColumn,
-                child: Icon(
-                  icon,
-                  size: AppIcons.inlineSize,
-                  color: onTap == null
-                      ? grid.SidebarInk.inkMuted
-                      : grid.SidebarInk.ink,
-                ),
-              ),
-              Expanded(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    minHeight: SwarmType.sidebarRowHeight(compact: compact),
-                  ),
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      0,
-                      SwarmType.sidebarRowPadding(compact: compact),
-                      12,
-                      SwarmType.sidebarRowPadding(compact: compact),
-                    ),
-                    child: Text(
-                      label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      // A row that reads or not ([unread] given) is drawn as
-                      // conversations are: muted when read, full strength
-                      // and bold when not.
-                      style:
-                          SwarmType.sidebar(
-                            compact: compact,
-                            medium: selected,
-                            color:
-                                onTap == null || (unread == false && !selected)
-                                ? grid.SidebarInk.inkMuted
-                                : grid.SidebarInk.ink,
-                          ).copyWith(
-                            fontWeight: unread == true
-                                ? grid.AppFont.semibold
-                                : null,
-                          ),
-                    ),
-                  ),
-                ),
-              ),
-              if (trailing case final mark?)
-                Padding(padding: const EdgeInsets.only(right: 10), child: mark),
-            ],
-          ),
-        ),
-      ),
-    ),
-  );
-
-  /// Back and forward over the reader's places (⌘[ and ⌘]), at the top.
-  Widget _arrows(SuperTabPlaces places) => Row(
-    children: [
-      SizedBox(width: SuperTabSectionHeading.indentFor(0)),
-      AppIconButton(
-        key: const ValueKey('super-back'),
-        icon: AppIcons.arrowLeft,
-        tooltip: 'Back',
-        onPressed: places.canGoBack ? () => places.step(-1) : null,
-      ),
-      AppIconButton(
-        key: const ValueKey('super-forward'),
-        icon: AppIcons.arrowRight,
-        tooltip: 'Forward',
-        onPressed: places.canGoForward ? () => places.step(1) : null,
-      ),
-    ],
-  );
 
   /// A project reads as a channel; a private one keeps its lock in this mark slot.
   Widget _channelMark({required bool isPrivate}) => isPrivate
@@ -289,10 +146,6 @@ class ProjectSidebar extends StatelessWidget {
             medium: true,
           ),
         );
-
-  void _openBuddyChat(String projectId) => onOpenBuddyChat != null
-      ? onOpenBuddyChat!(projectId)
-      : unawaited(controller.openBuddyChat(projectId));
 
   /// A project row's name opens the project's chat; only the chevron at its
   /// right end shows or hides its conversations (Dee, 2026-10-28).
@@ -515,63 +368,6 @@ class ProjectSidebar extends StatelessWidget {
     );
   }
 
-  /// The signed-in person's Buddy chat in each project, there from the start
-  /// (Lead's ruling, 10-29): the PM's private lines to them land there, and it
-  /// offers to start their Buddy. A viewer, who opens nothing, sees only the
-  /// chats they have. The project is in brackets once there are several.
-  List<Widget> _buddies(
-    List<SuperTabProject> projects,
-    _SidebarReading reading,
-  ) {
-    final listed = [
-      for (final project in projects)
-        if (reading.of(project) case final read
-            when (read.buddyChat != null || controller.canWrite) &&
-                // The Desktop has no unread filter to turn off: one saved on hides nothing there.
-                (board ||
-                    !controller.unreadOnly ||
-                    (read.buddyChat != null && _keptByFilter(read.buddyChat!))))
-          read,
-    ];
-    return [
-      for (final read in listed)
-        board
-            ? _quietBuddy(read, named: listed.length > 1)
-            : _buddy(read, named: listed.length > 1),
-    ];
-  }
-
-  /// A project's Buddy in the Desktop's My agents, from a server before one Buddy per Swarm: the project its one detail
-  /// when there are several, or why it is not running.
-  Widget _quietBuddy(_ProjectReading reading, {required bool named}) {
-    final project = reading.project;
-    final chat = reading.buddyChat;
-    final agent = controller.buddy(project.id);
-    final name = agent == null
-        ? chat?.buddyName ?? 'Your agent'
-        : controller.snapshot!.agentName(agent.id, fallback: agent.name);
-    return SuperTabQuietRow(
-      key: ValueKey('super-buddy-${project.id}'),
-      leading: _face(agent, name),
-      name: name,
-      tooltip: 'Your Buddy · ${project.name}',
-      detail:
-          _detail(agent) ??
-          switch ((agent, controller.buddyStart(project.id))) {
-            (null, {'harnessId': null, 'error': null}) => 'starting',
-            (null, _) => 'not started',
-            _ => named ? project.name : null,
-          },
-      selected: _chatLit(chat),
-      unread: chat != null && controller.unreadShown(chat),
-      onTap: chat != null
-          ? () => onSelect(chat.id)
-          : controller.saving || controller.hasPendingAction
-          ? null
-          : () => _openBuddyChat(project.id),
-    );
-  }
-
   /// An agent's 20 face in a quiet row; a Buddy not running yet has its name's.
   Widget _face(SuperTabAgent? agent, String name, {bool lead = false}) =>
       agent == null
@@ -587,20 +383,6 @@ class ProjectSidebar extends StatelessWidget {
           engineBadge: false,
           lead: lead,
         );
-
-  /// What [agent] is doing, as the Agents list reads it; null with no app to ask, or none running.
-  HarnessActivity? _activity(SuperTabAgent? agent) => agent == null
-      ? null
-      : agent.downSince != null
-      ? HarnessActivity.offline
-      : switch (app) {
-          final app? => harnessActivity(app, agent.machineId, agent.harnessId),
-          null => null,
-        };
-
-  /// An agent's one quiet detail in My agents ([superTabAgentDetail]).
-  String? _detail(SuperTabAgent? agent, {String? leads}) =>
-      superTabAgentDetail(_activity(agent), leads: leads);
 
   Widget _iconRow({
     required String key,
@@ -733,102 +515,6 @@ class ProjectSidebar extends StatelessWidget {
     ];
   }
 
-  Widget _buddy(_ProjectReading reading, {required bool named}) {
-    final snapshot = controller.snapshot!;
-    final project = reading.project;
-    final chat = reading.buddyChat;
-    final agent = controller.buddy(project.id);
-    // With no Buddy running it reads as the name the reader chose for it, or
-    // "Your agent" (task #4568): one name everywhere is the point of renaming
-    // (Lead, 10-29).
-    final name = agent == null
-        ? chat?.buddyName ?? 'Your agent'
-        : snapshot.agentName(agent.id, fallback: agent.name);
-    return SuperTabBuddyRow(
-      key: ValueKey('super-buddy-${project.id}'),
-      agentId: agent?.id,
-      name: name,
-      compact: compact,
-      project: named ? project.name : null,
-      tooltip: 'Your Buddy · ${project.name}',
-      // Where it runs, as the Agents list once showed every Buddy: only its
-      // person reads this line now. The project is in the name when several.
-      detail: agent == null
-          ? null
-          : [
-              if (!named) project.name,
-              '${buddyEngineName(agent.engine)} on ${buddyMachineName(controller, agent.machineId, app: app)}',
-            ].join(' · '),
-      status: agent == null ? null : _buddyMark(agent),
-      note: switch ((agent, controller.buddyStart(project.id))) {
-        (null, {'harnessId': null, 'error': null}) => 'starting',
-        (null, _) => 'not started',
-        (final agent?, _) when agent.downSince != null => 'offline',
-        _ => null,
-      },
-      selected: _chatLit(chat),
-      unread: chat != null && controller.unreadShown(chat),
-      badge: chat == null ? 0 : attention?.mentionsIn(chat.id) ?? 0,
-      badgeTooltip: chat == null ? null : attention?.badgeTooltipIn(chat.id),
-      onTap: chat != null
-          ? () => onSelect(chat.id)
-          : controller.saving || controller.hasPendingAction
-          ? null
-          : () => _openBuddyChat(project.id),
-    );
-  }
-
-  /// The reader's one Buddy for the whole Swarm, the first row under Projects
-  /// (Dee, 10-31; spec 2026-10-31-one-buddy-per-swarm): a channel like the
-  /// projects, `# buddy`, bold with new lines, with its activity mark on the
-  /// right and no chevron. Before its chat is opened the row opens it, as the
-  /// Buddies section's rows did; a viewer, who opens nothing, sees it only
-  /// once they have one.
-  Widget? _swarmBuddyRow() {
-    const key = SuperTabController.kSwarmBuddyKey;
-    final chat = controller.buddyChat(key);
-    if (chat == null && !controller.canWrite) return null;
-    // The unread filter never hides it: it is the person's one Buddy, pinned
-    // like a personal chat, and bold only while it has something unread
-    // (Tony, 11-02: it vanished from the latest Desktop under the filter).
-    final agent = controller.buddy(key);
-    final busy = controller.saving || controller.hasPendingAction;
-    // The Desktop's My agents draws it as every agent, its face and name, never the robot icon (anh Dee, task #4192).
-    if (board) {
-      final muted =
-          chat != null && controller.notifyOf(chat.id) == SuperTabNotify.muted;
-      // Its own name and face, as the header draws it (audit finding 8 of #4436).
-      final name = agent == null
-          ? chat?.buddyName ?? 'Your agent'
-          : controller.snapshot!.agentName(agent.id, fallback: agent.name);
-      return SuperTabQuietRow(
-        key: const ValueKey('super-swarm-buddy'),
-        leading: _face(agent, name),
-        name: name,
-        tooltip: 'Your Buddy',
-        detail: _detail(agent),
-        selected: _chatLit(chat),
-        unread: chat != null && !muted && controller.unreadShown(chat),
-        onTap: switch (chat) {
-          null when busy => null,
-          null => () => _openBuddyChat(key),
-          final chat => () => (onOpenAgentChat ?? onSelect)(chat.id),
-        },
-      );
-    }
-    return _drawRow(
-      chat ?? _unopenedSwarmBuddyChat,
-      label: 'Your agent',
-      key: 'super-swarm-buddy',
-      selected: _chatLit(chat),
-      // Muted, it is greyed and never bold, as every chat (_drawRow).
-      unread: chat != null && controller.unreadShown(chat),
-      trailing: agent == null ? null : _buddyMark(agent),
-      onTap: chat == null ? () => _openBuddyChat(key) : null,
-      tappable: chat != null || !busy,
-    );
-  }
-
   /// My agents (Swarm v3, task #4118): the person's Buddy first, then the agents they brought, each with its face and
   /// name, a Lead's naming the project it leads (task #4421), the name bold while its chat has unread. The heading's +
   /// opens New agent (task #4645), and Attach before it brings an agent already running (Swarm v4); a person with no
@@ -945,48 +631,6 @@ class ProjectSidebar extends StatelessWidget {
     ),
   );
 
-  /// The Buddy's activity mark, drawn as the Agents list draws an agent's.
-  Widget? _buddyMark(SuperTabAgent agent) {
-    final app = this.app;
-    if (app == null) return null;
-    final theme = terminalThemeFor(
-      grid.AppTheme.surfacePalette,
-      terminalThemeStore.value,
-    );
-    final activity = agent.downSince != null
-        ? HarnessActivity.offline
-        : harnessActivity(app, agent.machineId, agent.harnessId) ??
-              HarnessActivity.unknown;
-    return ActivityMark(
-      activity: activity,
-      tooltip: false,
-      showIdle: true,
-      color: activityColor(
-        activity,
-        theme,
-        color: appearancePrefsStore.value.prompt.color,
-      ),
-    );
-  }
-
-  /// Whether the unread filter keeps [read]'s project: its chat or an open
-  /// workgroup is unread or tags the reader, or the open chat is in it. What
-  /// is for a person (#2427), and wider than its row's bold, which is its
-  /// chat's alone (task #2638): a project with an unread task stays listed.
-  bool _hasUnread(_ProjectReading read) =>
-      (!_paneCovered && read.sidebar.selectedProjectId == read.project.id) ||
-      read.unread.isNotEmpty ||
-      read.mentions > 0 ||
-      (read.lead != null && controller.unreadForPeople(read.lead!));
-
-  /// Whether the unread filter keeps a Buddy chat's row: any new message, as
-  /// its row is bold.
-  bool _keptByFilter(SuperTabConversation group) =>
-      !controller.unreadOnly ||
-      (!_paneCovered && controller.selectedId == group.id) ||
-      controller.unreadShown(group) ||
-      (attention?.mentionsIn(group.id) ?? 0) > 0;
-
   /// A Personal project whose panes are all closed (personal_projects.dart
   /// `hidden`, task #3042), unless its chat is the one open now, as the
   /// unread filter keeps it.
@@ -1028,7 +672,6 @@ class ProjectSidebar extends StatelessWidget {
       for (final project in ([...?snapshot?.projects]..sort(_compareProjects)))
         if (reading.of(project) case final read
             when read.lead != null &&
-                (!controller.unreadOnly || _hasUnread(read)) &&
                 !_paneless(project, read.lead!, hidden))
           read,
     ];
@@ -1038,7 +681,7 @@ class ProjectSidebar extends StatelessWidget {
   // shared rows drawn in it.
   @override
   Widget build(BuildContext context) => grid.SidebarInk.scope(
-    child: switch ([?attention, ?places, ?leaderboard]) {
+    child: switch ([?attention, ?leaderboard]) {
       final List<Listenable> sources when sources.isNotEmpty =>
         ListenableBuilder(
           listenable: Listenable.merge(sources),
@@ -1050,7 +693,6 @@ class ProjectSidebar extends StatelessWidget {
 
   Widget _build(BuildContext context) {
     final snapshot = controller.snapshot;
-    final projects = snapshot?.projects ?? const <SuperTabProject>[];
     final reading = _SidebarReading(controller, attention, app);
     final switcher = switch ((app, onNewSwarm)) {
       (final app?, final onNewSwarm?) => SwarmSwitcher(
@@ -1069,20 +711,12 @@ class ProjectSidebar extends StatelessWidget {
               excludeFromSemantics: true,
               positionDelegate: _besideTheRow,
               constraints: const BoxConstraints(maxWidth: 260),
-              child: board
-                  // Plain text, its chevron only on hover (task #4466).
-                  ? SuperTabQuietHeading.org(
-                      label,
-                      key: const ValueKey('super-swarm-switcher'),
-                      onTap: onTap,
-                    )
-                  : _navigationRow(
-                      key: 'super-swarm-switcher',
-                      label: label,
-                      icon: icon,
-                      onTap: onTap,
-                      trailing: trailing,
-                    ),
+              // Plain text, its chevron only on hover (task #4466).
+              child: SuperTabQuietHeading.org(
+                label,
+                key: const ValueKey('super-swarm-switcher'),
+                onTap: onTap,
+              ),
             ),
       ),
       _ => null,
@@ -1098,68 +732,7 @@ class ProjectSidebar extends StatelessWidget {
           Expanded(
             child: LaidOutListView(
               padding: const EdgeInsets.all(8),
-              children: board
-                  ? _desktop(snapshot, reading, switcher: switcher)
-                  : [
-                      if (places case final places?) _arrows(places),
-                      ?switcher,
-                      if (app != null && onNewSwarm != null)
-                        const SizedBox(height: DesktopChrome.controlGap),
-                      const SizedBox(height: 20),
-                      SuperTabSectionHeading(
-                        key: const ValueKey('project-sidebar-projects'),
-                        'Projects',
-                        titleStyle: _headingStyle,
-                        // Slack's unread filter: only chats with something unread.
-                        actions: [
-                          AppIconButton(
-                            key: const ValueKey('super-unread-only'),
-                            icon: AppIcons.listFilter,
-                            selected: controller.unreadOnly,
-                            tooltip: controller.unreadOnly
-                                ? 'Show all chats'
-                                : 'Show unread chats only',
-                            onPressed: controller.toggleUnreadOnly,
-                          ),
-                        ],
-                        onAdd: controller.canWrite ? onNewProject : null,
-                        addTooltip: 'New project',
-                        endInset: 0,
-                      ),
-                      // The reader's one Buddy, the first item under Projects (anh
-                      // Dee, 11-05).
-                      if (controller.oneBuddy) ?_swarmBuddyRow(),
-                      if (snapshot != null && projects.isEmpty)
-                        _noProjects()
-                      else
-                        for (final (_, channel) in _channels(snapshot, reading))
-                          channel,
-                      const SizedBox(height: 16),
-                      // Buddies replaced Chat with PM in every Swarm (Ken, 10-29); where the
-                      // server gives one Buddy for the whole Swarm, it is # buddy above.
-                      if (!controller.oneBuddy) ...[
-                        SuperTabSectionHeading(
-                          'Buddies',
-                          titleStyle: _headingStyle,
-                          onAdd:
-                              controller.canWrite &&
-                                  !controller.saving &&
-                                  !controller.hasPendingAction &&
-                                  buddyProjects(controller).isNotEmpty
-                              ? () => unawaited(
-                                  showAddBuddy(context, controller, app: app),
-                                )
-                              : null,
-                          addTooltip: 'Add a Buddy',
-                          endInset: 0,
-                          collapsed: !controller.buddiesGroupOpen,
-                          onToggleCollapsed: controller.toggleBuddiesGroup,
-                        ),
-                        if (controller.buddiesGroupOpen)
-                          ..._buddies(projects, reading),
-                        const SizedBox(height: 16),
-                      ],
-                    ],
+              children: _desktop(snapshot, reading, switcher: switcher),
             ),
           ),
           // At the foot, however long the list (Quiet Swarm, screen 1).
@@ -1173,21 +746,13 @@ class ProjectSidebar extends StatelessWidget {
                 grid.AppDesktop.controlGap,
                 (compact ? grid.AppDesktop.controlGap : footGap) - 2,
               ),
-              child: board
-                  ? _iconRow(
-                      key: 'super-manage',
-                      icon: AppIcons.settings,
-                      name: 'Manage',
-                      onTap: onManage,
-                      selected: manageSelected,
-                    )
-                  : _navigationRow(
-                      key: 'super-manage',
-                      label: 'Manage',
-                      icon: AppIcons.settings,
-                      onTap: onManage,
-                      selected: manageSelected,
-                    ),
+              child: _iconRow(
+                key: 'super-manage',
+                icon: AppIcons.settings,
+                name: 'Manage',
+                onTap: onManage,
+                selected: manageSelected,
+              ),
             ),
         ],
       ),

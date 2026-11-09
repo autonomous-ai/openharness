@@ -66,7 +66,6 @@ class _Screen {
               Expanded(
                 child: SuperTabView(
                   controller: c,
-                  onInvite: () {},
                   onAddAgent: (_) {},
                   onOpenTerminal: (_) {},
                   machineName: (_) => 'Team Mac',

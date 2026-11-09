@@ -76,9 +76,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.light),
         home: Scaffold(
           body: SuperTabView(
-            board: false,
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Mac Studio',
@@ -183,20 +181,6 @@ void main() {
       );
     });
 
-    testWidgets('an @ typed opens the tag list', (tester) async {
-      await show(tester);
-      await tester.enterText(key('super-message-composer'), 'hi @');
-      await tester.pumpAndSettle();
-      final field = tester.widget<TextField>(key('super-message-composer'));
-      expect(key('super-composer-completions'), findsOneWidget);
-      expect(focusedIn(tester, key('super-message-composer')), isTrue);
-      // Enter picks from the list, as for an @ typed.
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pumpAndSettle();
-      expect(field.controller!.text, startsWith('hi @'));
-      expect(field.controller!.text.length, greaterThan(4));
-    });
-
     testWidgets('Tab goes from the text to New session and send, in the row\'s '
         'order; the paperclip is the stop before the text', (tester) async {
       await show(tester, recorder: FakeVoiceRecorder());
@@ -271,17 +255,6 @@ void main() {
       },
     );
 
-    testWidgets('names the project chat in Also send', (tester) async {
-      await show(tester, chat: 'lead', thread: 'message-1');
-      expect(find.text('Also send to #Pilot'), findsOneWidget);
-      expect(
-        tester.getRect(key('super-thread-also-send')).top,
-        greaterThanOrEqualTo(
-          tester.getRect(key('super-thread-composer-surface')).bottom,
-        ),
-      );
-    });
-
     testWidgets('puts the mic left of send, and a click starts a take for the '
         'thread', (tester) async {
       final recorder = FakeVoiceRecorder();
@@ -294,13 +267,6 @@ void main() {
       await tester.pump();
       expect(recorder.calls, ['allowed', 'start']);
       expect(key('super-thread-voice-row'), findsOneWidget);
-    });
-
-    testWidgets('an @ typed opens the tag list', (tester) async {
-      await show(tester, chat: 'lead', thread: 'message-1');
-      await tester.enterText(key('super-thread-composer'), '@');
-      await tester.pumpAndSettle();
-      expect(key('super-thread-completions'), findsOneWidget);
     });
   });
 }

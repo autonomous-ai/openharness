@@ -49,14 +49,6 @@ ConversationServer project(List<Map<String, dynamic>> rows, {int read = 0}) {
 }
 
 void main() {
-  testWidgets('the PM\'s report no longer sits over a project\'s chat', (
-    tester,
-  ) async {
-    await showView(tester, project([row('m1', 1, 'Hello')]), board: false);
-    expect(find.text('Three fixes are on main tonight.'), findsNothing);
-    expect(find.textContaining('Three fixes'), findsNothing);
-  });
-
   Map<String, dynamic> shipped() => row(
     's1',
     1,
@@ -68,7 +60,7 @@ void main() {
   testWidgets('a Shipped card stays while no line says the task shipped', (
     tester,
   ) async {
-    final c = await showView(tester, project([shipped()]), board: false);
+    final c = await showView(tester, project([shipped()]));
     await c.loadMessages('lead');
     await tester.pumpAndSettle();
     expect(find.byType(SuperTabShipRow), findsOneWidget);
@@ -95,7 +87,6 @@ void main() {
             },
           ),
         ]),
-        board: false,
       );
       await c.loadMessages('lead');
       await tester.pumpAndSettle();
@@ -126,7 +117,6 @@ void main() {
             row('m1', 1, 'A message'),
             row('n1', 2, 'This notice is for the PM', kind: kind),
           ]),
-          board: false,
         );
         await c.loadMessages('lead');
         await tester.pumpAndSettle();
@@ -146,7 +136,6 @@ void main() {
         row('n1', 2, 'This notice is for the PM', kind: 'work-stalled'),
         row('m2', 3, 'New to the reader'),
       ], read: 1),
-      board: false,
     );
     await c.loadMessages('lead');
     await tester.pumpAndSettle();

@@ -12,8 +12,6 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/parts.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
-import 'package:harness/super_tabs/view.dart';
-import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'super_tab_attention_test.dart'
     show
@@ -25,7 +23,6 @@ import 'super_tab_attention_test.dart'
         projectServer,
         rowText,
         unreadThread;
-import 'support/buddy_fixture.dart';
 import 'super_tab_activity_lists_test.dart' show SuperTabActivityTotals;
 import 'support/super_tab_fixture.dart';
 
@@ -572,121 +569,6 @@ void main() {
         await close(tester, c);
       });
     }
-
-    testWidgets('the unread filter lists only unread chats and the open one, '
-        'and hides muted ones', (tester) async {
-      final server = projectServer();
-      // Projects of their own: the sidebar lists project chats, not tasks.
-      for (final id in ['quiet', 'hushed', 'news']) {
-        (server.state['projects'] as List).add(
-          projectFixture(id, '$id-project', id),
-        );
-        (server.state['conversations'] as List).add({
-          ...conversationFixture(id, id),
-          'projectId': id,
-        });
-      }
-      fromLead(server, 'Read', conversationId: 'quiet');
-      server.markReadElsewhere('quiet', server.revision);
-      fromLead(server, 'News', conversationId: 'news');
-      fromLead(server, 'Hushed news', conversationId: 'hushed');
-      final c = await openHere(server);
-      await c.setNotify('hushed', SuperTabNotify.muted);
-      await pumpSidebar(tester, c);
-      expect(find.byKey(const ValueKey('super-group-quiet')), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('super-unread-only')));
-      await tester.pumpAndSettle();
-      expect(c.unreadOnly, isTrue);
-      expect(find.byKey(const ValueKey('super-group-news')), findsOneWidget);
-      // The open chat stays listed.
-      expect(
-        find.byKey(ValueKey('super-group-${c.selectedId}')),
-        findsOneWidget,
-      );
-      expect(find.byKey(const ValueKey('super-group-quiet')), findsNothing);
-      expect(find.byKey(const ValueKey('super-group-hushed')), findsNothing);
-      await close(tester, c);
-    });
-  });
-
-  group('the one Buddy row (#2447) follows the same rules', () {
-    Future<SuperTabController> show(
-      WidgetTester tester,
-      ConversationServer server,
-    ) async {
-      await tester.binding.setSurfaceSize(const Size(1280, 800));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final c = server.controller(account: 'peer');
-      await c.refresh();
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: grid.buildAppTheme(brightness: Brightness.dark),
-          home: Scaffold(
-            body: SuperTabView(
-              board: false,
-              controller: c,
-              onInvite: () {},
-              onAddAgent: (_) {},
-              onOpenTerminal: (_) {},
-              machineName: (_) => 'Kens-MacBook',
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      return c;
-    }
-
-    final buddyRow = find.byKey(const ValueKey('super-swarm-buddy'));
-    Text buddyName(WidgetTester tester) => tester.widget<Text>(
-      find.descendant(of: buddyRow, matching: find.text('Your agent')),
-    );
-
-    testWidgets('muted: greyed with its mark, never bold; first in the next '
-        'unread order', (tester) async {
-      final server = oneBuddySwarm();
-      giveSwarmBuddy(server);
-      server.append('A word from Wren', conversationId: 'swarm-buddy-peer');
-      final c = await show(tester, server);
-      expect(superTabSidebarOrder(c).first, 'swarm-buddy-peer');
-      expect(buddyName(tester).style?.fontWeight, grid.AppFont.semibold);
-      await c.setNotify('swarm-buddy-peer', SuperTabNotify.muted);
-      await tester.pumpAndSettle();
-      expect(buddyName(tester).style?.color, DesktopChrome.muted);
-      expect(buddyName(tester).style?.fontWeight, isNot(grid.AppFont.semibold));
-      expect(
-        find.byKey(const ValueKey('super-muted-swarm-buddy-peer')),
-        findsOneWidget,
-      );
-      expect(
-        c.unreadShown(c.snapshot!.conversation('swarm-buddy-peer')!),
-        isFalse,
-      );
-      await tester.pumpWidget(const SizedBox());
-      await c.flush();
-      c.dispose();
-    });
-
-    testWidgets('the unread filter keeps it shown, bold only while it has '
-        'something unread', (tester) async {
-      final server = oneBuddySwarm();
-      giveSwarmBuddy(server);
-      final c = await show(tester, server);
-      expect(buddyRow, findsOneWidget);
-      c.toggleUnreadOnly();
-      await tester.pumpAndSettle();
-      expect(c.unreadOnly, isTrue);
-      expect(buddyRow, findsOneWidget);
-      expect(buddyName(tester).style?.fontWeight, isNot(grid.AppFont.semibold));
-      server.append('A word from Wren', conversationId: 'swarm-buddy-peer');
-      await c.refresh();
-      await tester.pumpAndSettle();
-      expect(buddyRow, findsOneWidget);
-      expect(buddyName(tester).style?.fontWeight, grid.AppFont.semibold);
-      await tester.pumpWidget(const SizedBox());
-      await c.flush();
-      c.dispose();
-    });
   });
 
   group('Needs you counts what was asked of the reader', () {

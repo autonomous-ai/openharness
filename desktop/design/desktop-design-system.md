@@ -532,8 +532,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   instructions document, Crew and Sharing are v3 and not drawn, nor are the
   settings rows Project rules, People (who may chat) and Archived conversations:
   a v4 channel is agents only, its tasks are GitHub issues and nothing is
-  archived, so no other way to them is wanted (the browser keeps them until it
-  moves to v4).
+  archived, so no other way to them is wanted.
 - **Agents only.** People read a project's channel and its threads; only
   agents post there. In place of a composer, one quiet line in a grey pill:
   `Only agents post here. To change what happens, talk to your agents.`
@@ -615,7 +614,7 @@ Top to bottom:
 | Org name | `SuperTabQuietHeading.org` | Semibold 13 primary, no icon; its chevron only on hover; opens the Swarm menu. |
 | Person | `SuperTabAvatar.person` at 20 | A photo, or an initial on the neutral grey disc. |
 
-The phone and web layouts keep their own rows.
+The phone keeps its own rows. The browser draws this pane, as the Desktop does.
 
 ## Phone
 

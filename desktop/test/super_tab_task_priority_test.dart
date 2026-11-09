@@ -97,7 +97,6 @@ Future<SuperTabController> _view(
     _app(
       SuperTabView(
         controller: c,
-        onInvite: () {},
         onAddAgent: (_) {},
         onOpenTerminal: (_) {},
         machineName: (_) => 'Team Mac',

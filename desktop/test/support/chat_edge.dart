@@ -53,7 +53,6 @@ void chatEdgeTests({ChatEdgeShot? shot}) {
             home: Scaffold(
               body: SuperTabView(
                 controller: c,
-                onInvite: () {},
                 onAddAgent: (_) {},
                 onOpenTerminal: (_) {},
                 machineName: (_) => 'Kens-MacBook',
@@ -133,7 +132,6 @@ void chatEdgeTests({ChatEdgeShot? shot}) {
           home: Scaffold(
             body: SuperTabView(
               controller: c,
-              onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               machineName: (_) => 'Kens-MacBook',

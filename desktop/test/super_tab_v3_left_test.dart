@@ -55,7 +55,6 @@ void main() {
   Future<SuperTabController> show(
     WidgetTester tester, {
     List<Map<String, dynamic>>? agents,
-    bool board = true,
     void Function(ConversationServer server)? setup,
     List<String>? selected,
     List<String>? created,
@@ -98,7 +97,6 @@ void main() {
               },
               onNewAgent: () => created?.add('new'),
               onOpenAgentTerminal: (agent) => terminals?.add(agent.id),
-              places: SuperTabPlaces.of(c),
               onNewSwarm: () {},
               onNewProject: () {},
               onPage: (page) => pages?.add(page),
@@ -107,7 +105,6 @@ void main() {
               leaderboard: leaderboard,
               attention: activity.attention,
               onManage: () {},
-              board: board,
             ),
           ),
         ),
@@ -519,13 +516,11 @@ void main() {
             body: SuperTabView(
               controller: c,
               app: app,
-              onInvite: () {},
               onAddAgent: (_) {},
               onNewAgent: onNewAgent,
               onAttachAgent: onAttachAgent,
               onOpenTerminal: (_) {},
               machineName: (_) => 'Mac Studio',
-              board: true,
             ),
           ),
         ),
@@ -620,11 +615,9 @@ void main() {
           home: Scaffold(
             body: SuperTabView(
               controller: c,
-              onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               machineName: (_) => 'Mac Studio',
-              board: true,
             ),
           ),
         ),

@@ -69,7 +69,6 @@ void main() {
                     onPage: (_) {},
                     attention: activity.attention,
                     onManage: () {},
-                    board: true,
                   ),
                 ),
               );

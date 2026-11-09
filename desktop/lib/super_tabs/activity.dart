@@ -212,37 +212,12 @@ class SuperTabActivity extends ChangeNotifier {
   ) {
     final work = group.assignment;
     return work != null &&
-        _answered[group.id] != _askedBy(group) &&
         !group.closed &&
         !group.isBuddyChat &&
         !decided.contains(group.id) &&
         work['status'] == 'needs_human' &&
         work['askedOf'] == controller.accountId &&
         snapshot.agent(work['agentId'] as String? ?? '') != null;
-  }
-
-  /// The question each waiting task was answered on from Decisions, by its
-  /// chat: it leaves the list until its agent asks again.
-  final _answered = <String, String>{};
-
-  /// Sends [words] in [need]'s task to the agent waiting on the reader, as
-  /// the Decisions page's typed answer (task #2996); the row leaves until the
-  /// agent asks something else. False when it was not sent.
-  Future<bool> answerWaiting(SuperTabNeed need, String words) async {
-    final text = words.trim();
-    final agentId = need.agentId;
-    if (text.isEmpty || agentId == null || need.decision != null) return false;
-    final sent = await controller.command({
-      'type': 'message.send',
-      'conversationId': need.conversationId,
-      'text': text,
-      'replyTo': null,
-      'recipientIds': [agentId],
-    });
-    if (sent == null || _disposed) return false;
-    _answered[need.conversationId] = need.question ?? '';
-    notifyListeners();
-    return true;
   }
 
   /// The question a waiting task carries: its assignment's result text is the

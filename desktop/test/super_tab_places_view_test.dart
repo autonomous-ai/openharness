@@ -69,9 +69,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.light),
         home: Scaffold(
           body: SuperTabView(
-            board: board,
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Mac Studio',

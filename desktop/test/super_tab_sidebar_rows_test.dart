@@ -16,7 +16,6 @@ import 'support/super_tab_fixture.dart';
 /// #2569: they are in the project's Tasks view); in Manage, a machine click
 /// expands it, and its details are in the right-click menu.
 void main() {
-  final dm = find.byKey(const ValueKey('super-buddy-lead'));
   final project = find.byKey(const ValueKey('super-group-lead'));
   final workgroup = find.byKey(const ValueKey('super-group-offline'));
   final machine = find.byKey(const ValueKey('super-machine-studio'));
@@ -37,9 +36,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.light),
         home: Scaffold(
           body: SuperTabView(
-            board: false,
             controller: controller,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Studio',
@@ -64,76 +61,6 @@ void main() {
           w is Icon &&
           (w.icon == AppIcons.chevronRight || w.icon == AppIcons.chevronDown),
     ),
-  );
-
-  testWidgets('a Buddy chat click highlights only that row', (tester) async {
-    final controller = await show(tester, humansSwarm());
-    // Its chat exists already: opening it again is a plain selection.
-    await controller.openBuddyChat('lead');
-    await controller.select('lead');
-    await tester.pumpAndSettle();
-
-    await tester.tap(dm);
-    await tester.pumpAndSettle();
-    expect(controller.selectedId, controller.buddyChat('lead')!.id);
-    expect(workgroup, findsNothing);
-    expect(tester.widget<SuperTabBuddyRow>(dm).selected, isTrue);
-    await close(tester, controller);
-  });
-
-  testWidgets('a Buddy chat opened for the first time is selected', (
-    tester,
-  ) async {
-    final controller = await show(tester, humansSwarm());
-    await tester.tap(dm);
-    await tester.pumpAndSettle();
-    expect(controller.selectedId, controller.buddyChat('lead')!.id);
-    expect(workgroup, findsNothing);
-    await close(tester, controller);
-  });
-
-  testWidgets('a project name click opens its chat, and comes back to it', (
-    tester,
-  ) async {
-    final controller = await show(tester, humansSwarm());
-    await controller.openBuddyChat('lead');
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Pilot'));
-    await tester.pumpAndSettle();
-    expect(controller.selectedId, 'lead');
-    expect(workgroup, findsNothing);
-
-    // The chat left for the Buddy chat: the name comes back to it.
-    await tester.tap(dm);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Pilot'));
-    await tester.pumpAndSettle();
-    expect(controller.selectedId, 'lead');
-    expect(workgroup, findsNothing);
-    await close(tester, controller);
-  });
-
-  testWidgets(
-    'a second click on the open project leaves its chat open and lists no '
-    'tasks',
-    (tester) async {
-      final controller = await show(tester, humansSwarm());
-      await controller.openBuddyChat('lead');
-      await tester.tap(dm);
-      await tester.pumpAndSettle();
-      expect(chevronIn(project), findsNothing);
-
-      await tester.tap(project);
-      await tester.pumpAndSettle();
-      expect(controller.selectedId, 'lead');
-
-      await tester.tap(project);
-      await tester.pumpAndSettle();
-      expect(workgroup, findsNothing);
-      expect(controller.selectedId, 'lead');
-      await close(tester, controller);
-    },
   );
 
   // Unread is a bold name and nothing else drawn (Dee, 2026-10-29): no dot
@@ -249,29 +176,6 @@ void main() {
     semantics.dispose();
   });
 
-  testWidgets('a project holding the open conversation shows as selected', (
-    tester,
-  ) async {
-    final server = humansSwarm();
-    addNumberedWorkgroups(server, 1);
-    final controller = await show(tester, server);
-    await controller.openBuddyChat('lead');
-    Color? projectFill() => tester
-        .widget<Material>(
-          find.ancestor(of: project, matching: find.byType(Material)).first,
-        )
-        .color;
-    await tester.tap(dm);
-    await tester.pumpAndSettle();
-    expect(projectFill(), Colors.transparent);
-
-    await controller.select('g1');
-    await tester.pumpAndSettle();
-    expect(controller.selectedId, 'g1');
-    expect(projectFill(), grid.AppSurface.selectedFill);
-    await close(tester, controller);
-  });
-
   testWidgets('an arrow a project name cannot use moves focus as usual', (
     tester,
   ) async {
@@ -283,20 +187,6 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pumpAndSettle();
     expect(primaryFocus, isNot(same(name)));
-    expect(workgroup, findsNothing);
-    await close(tester, controller);
-  });
-
-  testWidgets('Enter on a project name opens its chat', (tester) async {
-    final controller = await show(tester, humansSwarm());
-    await controller.openBuddyChat('lead');
-    await tester.tap(dm);
-    await tester.pumpAndSettle();
-    Focus.of(tester.element(find.text('Pilot'))).requestFocus();
-    await tester.pumpAndSettle();
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
-    expect(controller.selectedId, 'lead');
     expect(workgroup, findsNothing);
     await close(tester, controller);
   });

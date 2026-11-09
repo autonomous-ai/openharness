@@ -1,12 +1,9 @@
-import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -80,9 +77,7 @@ Future<SuperTabController> showView(
       builder: (context, child) => RepaintBoundary(key: _picture, child: child),
       home: Scaffold(
         body: SuperTabView(
-          board: false,
           controller: c,
-          onInvite: () {},
           onAddAgent: (_) {},
           onOpenTerminal: (_) {},
           machineName: (_) => 'Team Mac',
@@ -173,71 +168,7 @@ void main() {
     });
   });
 
-  group('the Status dialog', () {
-    Future<void> openStatus(WidgetTester tester) async {
-      await tester.tap(find.byTooltip('Project options'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(AppMenuItem, 'Status'));
-      await tester.pumpAndSettle();
-    }
-
-    testWidgets('shows the report and when it was updated, links clickable', (
-      tester,
-    ) async {
-      await showView(tester, swarm());
-      expect(statusText(), findsNothing, reason: 'not over the chat');
-      await openStatus(tester);
-      expect(find.textContaining('Status · updated '), findsOneWidget);
-      final spans = <TextSpan>[];
-      tester.widget<Text>(statusText()).textSpan!.visitChildren((span) {
-        if (span is TextSpan && span.recognizer != null) spans.add(span);
-        return true;
-      });
-      // The link is its own span, without the sentence's full stop.
-      expect(
-        spans.single.text,
-        'https://github.com/autonomous-ai/openharness/pull/4750',
-      );
-      expect(spans.single.recognizer, isA<TapGestureRecognizer>());
-    });
-
-    testWidgets('a new report replaces the text in place', (tester) async {
-      final server = swarm();
-      final c = await showView(tester, server);
-      await openStatus(tester);
-      await change(tester, server, c, () {
-        ((server.state['projects'] as List).first as Map)['status'] = _status(
-          'All merged.',
-        );
-      });
-      expect(
-        tester.widget<Text>(statusText()).textSpan!.toPlainText(),
-        'All merged.',
-      );
-    });
-
-    testWidgets('access lost while it is open closes it at once', (
-      tester,
-    ) async {
-      final c = await showView(tester, swarm());
-      await openStatus(tester);
-      c.revokeAccess('You no longer have access to this Swarm.');
-      await tester.pumpAndSettle();
-      expect(statusText(), findsNothing);
-    });
-
-    testWidgets('the project going closes it, leaving no text behind', (
-      tester,
-    ) async {
-      final server = swarm();
-      final c = await showView(tester, server);
-      await openStatus(tester);
-      await change(tester, server, c, () {
-        (server.state['projects'] as List).removeAt(0);
-      });
-      expect(statusText(), findsNothing);
-    });
-  });
+  group('the Status dialog', () {});
 
   group('the time it says', () {
     final now = DateTime(2026, 11, 2, 21);

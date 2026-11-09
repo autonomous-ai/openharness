@@ -444,7 +444,6 @@ void main() {
       await c.refresh();
       final view = SuperTabView(
         controller: c,
-        onInvite: () {},
         onAddAgent: (_) {},
         onOpenTerminal: (_) {},
         machineName: (_) => 'Team Mac',

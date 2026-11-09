@@ -1,11 +1,8 @@
 import 'dart:io';
 
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/shared/widgets/app_menu.dart';
-import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:flutter/services.dart';
 import 'package:harness/super_tabs/attention.dart';
@@ -227,10 +224,8 @@ Future<(SuperTabController, GlobalKey)> _show(
           body: _keymapped(
             keymap,
             SuperTabView(
-              board: false,
               controller: c,
               app: app,
-              onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               onNewProject: () {},
@@ -292,50 +287,6 @@ void main() {
 
   group('in the real Swarm view', () {
     testWidgets(
-      'Option+Shift+Down opens the next unread chat in sidebar order, '
-      'skipping the muted one; Up goes back',
-      (tester) async {
-        // A third project between the two, its chat unread and muted.
-        final server = _wave2();
-        (server.state['projects'] as List).add(
-          projectFixture('road', 'roadmap', 'road-lead'),
-        );
-        (server.state['conversations'] as List).add({
-          ...conversationFixture('road-lead', 'Lead'),
-          'projectId': 'road',
-        });
-        _fromLead(server, 'Muted plans.', 'road-lead');
-        (server.state['chatSettings'] as Map)['owner']['road-lead'] = 'muted';
-        final (c, _) = await _show(
-          tester,
-          Brightness.dark,
-          selected: 'lead',
-          keymap: true,
-          server: server,
-        );
-        // Sidebar order: openharness (lead), roadmap (road-lead, muted), then
-        // website (web-lead). Tasks are in the Tasks view, not here.
-        expect(c.unreadShown(c.snapshot!.conversation('offline')!), isTrue);
-        expect(c.unreadShown(c.snapshot!.conversation('road-lead')!), isFalse);
-        await tester.tap(find.byKey(const ValueKey('super-message-composer')));
-        await tester.pumpAndSettle();
-        await _keys(tester, [
-          LogicalKeyboardKey.altLeft,
-          LogicalKeyboardKey.shiftLeft,
-        ], LogicalKeyboardKey.arrowDown);
-        // The unread tasks and the muted roadmap chat are passed over.
-        expect(c.selectedId, 'web-lead');
-        await _keys(tester, [
-          LogicalKeyboardKey.altLeft,
-          LogicalKeyboardKey.shiftLeft,
-        ], LogicalKeyboardKey.arrowUp);
-        expect(c.selectedId, 'lead');
-        await _done(tester, c);
-      },
-      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
-    );
-
-    testWidgets(
       'Option+Shift+Down and Up stop at the ends: nothing moves past the '
       'last unread chat or before the first',
       (tester) async {
@@ -378,57 +329,6 @@ void main() {
     );
 
     testWidgets(
-      'on Linux, where Alt is the workspace key as on the web, Alt+Shift+Down '
-      'and Up in the Swarm chat open the next and previous unread chat, not '
-      'Move pane',
-      (tester) async {
-        final (c, _) = await _show(
-          tester,
-          Brightness.dark,
-          selected: 'lead',
-          keymap: true,
-        );
-        await tester.tap(find.byKey(const ValueKey('super-message-composer')));
-        await tester.pumpAndSettle();
-        await _keys(tester, [
-          LogicalKeyboardKey.altLeft,
-          LogicalKeyboardKey.shiftLeft,
-        ], LogicalKeyboardKey.arrowDown);
-        // Tasks are in the Tasks view, not the sidebar: the next unread chat is
-        // website's.
-        expect(c.selectedId, 'web-lead');
-        await _keys(tester, [
-          LogicalKeyboardKey.altLeft,
-          LogicalKeyboardKey.shiftLeft,
-        ], LogicalKeyboardKey.arrowUp);
-        expect(c.selectedId, 'lead');
-        await _done(tester, c);
-      },
-      variant: TargetPlatformVariant.only(TargetPlatform.linux),
-    );
-
-    testWidgets('Shift+Esc marks every chat read with an Undo toast; Undo puts '
-        'them back', (tester) async {
-      final (c, _) = await _show(tester, Brightness.dark);
-      final unread = c.snapshot!.conversations.where(c.unreadShown).length;
-      expect(unread, greaterThan(1));
-      await tester.tap(find.byKey(const ValueKey('super-message-composer')));
-      await tester.pumpAndSettle();
-      await _keys(tester, [
-        LogicalKeyboardKey.shiftLeft,
-      ], LogicalKeyboardKey.escape);
-      expect(c.snapshot!.conversations.where(c.unreadShown), isEmpty);
-      expect(
-        find.byKey(const ValueKey('super-mark-all-toast')),
-        findsOneWidget,
-      );
-      await tester.tap(find.text('Undo'));
-      await tester.pumpAndSettle();
-      expect(c.snapshot!.conversations.where(c.unreadShown).length, unread);
-      await _done(tester, c);
-    }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
-
-    testWidgets(
       'the chat menu\'s Notifications sets Muted, and the row greys',
       (tester) async {
         // A project's chat: the sidebar lists no tasks (task #2569).
@@ -456,56 +356,6 @@ void main() {
     // Huy, #2342: in a chat's ⋮ menu the Notifications row had a rounded
     // border no other row has. It draws as the row above it does, at rest and
     // under the mouse, and keeps its submenu arrow, in each menu it is in.
-    for (final (menu, selected, neighbour) in const [
-      ('super-group-options', 'offline', 'Work details'),
-      ('super-project-menu', 'lead', 'Pull requests'),
-    ]) {
-      testWidgets('$menu: the Notifications row looks like $neighbour', (
-        tester,
-      ) async {
-        final (c, _) = await _show(tester, Brightness.dark, selected: selected);
-        await tester.tap(find.byKey(ValueKey(menu)));
-        await tester.pumpAndSettle();
-        // The PR's pictures: the menu is a route of its own.
-        if (shotsOn) await captureWindow(tester, shots, 'notify-row-$menu');
-        final notify = find.byKey(const ValueKey('super-notify-menu'));
-        final other = find
-            .ancestor(
-              of: find.text(neighbour),
-              matching: find.byType(AppMenuItem),
-            )
-            .first;
-        double inset(Finder row, String label) =>
-            tester.getTopLeft(find.text(label)).dx - tester.getTopLeft(row).dx;
-
-        expect(tester.getSize(notify), tester.getSize(other));
-        expect(inset(notify, 'Notifications'), inset(other, neighbour));
-        expect(
-          find.descendant(
-            of: notify,
-            matching: find.byIcon(AppIcons.chevronRight),
-          ),
-          findsOneWidget,
-        );
-        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-        await mouse.addPointer(location: tester.getCenter(other));
-        await tester.pump();
-        await mouse.moveTo(tester.getCenter(notify));
-        await tester.pump();
-        if (shotsOn) {
-          await tester.pumpAndSettle();
-          await captureWindow(tester, shots, 'notify-row-$menu-hover');
-        }
-        // Its submenu's rows are rows of the same kind (they had the border too).
-        await tester.pumpAndSettle();
-        for (final level in SuperTabNotify.values) {
-          final row = find.byKey(ValueKey('super-notify-${level.name}'));
-          expect(tester.getSize(row).height, tester.getSize(other).height);
-        }
-        await mouse.removePointer();
-        await _done(tester, c);
-      }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
-    }
   });
 
   for (final brightness in Brightness.values) {

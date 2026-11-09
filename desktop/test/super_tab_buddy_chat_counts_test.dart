@@ -22,8 +22,6 @@ import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/model.dart' show SuperTabNotify;
 import 'package:harness/super_tabs/buddy_chat.dart';
 import 'package:harness/super_tabs/buddy_chat_shortcut.dart';
-import 'package:harness/super_tabs/buddy_rows.dart';
-import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 
@@ -462,9 +460,7 @@ void main() {
           theme: grid.buildAppTheme(brightness: Brightness.light),
           home: Scaffold(
             body: SuperTabView(
-              board: false,
               controller: c,
-              onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               machineName: (_) => 'Team Mac',
@@ -482,8 +478,6 @@ void main() {
       c.dispose();
     }
 
-    final entry = find.byKey(const ValueKey('super-buddy-lead'));
-    final sidebar = find.byType(ProjectSidebar);
     final projectRow = find.byKey(const ValueKey('super-group-lead'));
 
     testWidgets(
@@ -539,89 +533,6 @@ void main() {
         find.descendant(of: title, matching: find.text('196')),
       );
       expect(number.style?.color, DesktopChrome.muted);
-      await close(tester, c);
-    });
-
-    testWidgets('has one row per project, with its project named', (
-      tester,
-    ) async {
-      final server = riverSwarm();
-      secondProject(server);
-      final c = await show(tester, server);
-      final mobile = find.byKey(const ValueKey('super-buddy-mobile'));
-
-      for (final (row, project) in [(entry, 'Pilot'), (mobile, 'Mobile')]) {
-        expect(
-          find.descendant(of: row, matching: find.text('Your agent')),
-          findsOne,
-        );
-        expect(
-          find.descendant(of: row, matching: find.text('($project)')),
-          findsOne,
-        );
-        expect(
-          find.descendant(
-            of: row,
-            matching: find.byTooltip('Your Buddy · $project'),
-          ),
-          findsOne,
-        );
-      }
-
-      await tester.tap(find.byKey(const ValueKey('super-buddy-mobile')));
-      await tester.pumpAndSettle();
-      expect(c.selectedId, c.buddyChat('mobile')!.id);
-      await close(tester, c);
-    });
-
-    testWidgets(
-      "shows a Buddy chat's new lines as its own row in bold, with no count there or on the project",
-      (tester) async {
-        final server = pmChatSwarm();
-        final c = await show(tester, server);
-        await tester.tap(entry);
-        await tester.pumpAndSettle();
-        final chat = c.buddyChat('lead')!.id;
-        await tester.tap(find.byKey(const ValueKey('super-group-lead')));
-        await tester.pumpAndSettle();
-
-        pmReply(server, chat, 'Here is the plan.');
-        pmReply(server, chat, 'Shall I ship it?');
-        await c.refresh();
-        await tester.pumpAndSettle();
-
-        expect(tester.widget<SuperTabBuddyRow>(entry).unread, isTrue);
-        expect(
-          find.descendant(of: entry, matching: find.text('2')),
-          findsNothing,
-        );
-        expect(
-          find.descendant(of: projectRow, matching: find.text('2')),
-          findsNothing,
-        );
-        await close(tester, c);
-      },
-    );
-
-    testWidgets("never shows another person's chat or its count", (
-      tester,
-    ) async {
-      final server = pmChatSwarm();
-      final peer = server.controller(account: 'peer');
-      await peer.refresh();
-      await peer.openBuddyChat('lead');
-      final peerChat = peer.buddyChat('lead')!.id;
-      peer.dispose();
-      pmReply(server, peerChat, 'Only for Ken.');
-
-      final c = await show(tester, server, account: 'owner');
-
-      expect(entry, findsOneWidget);
-      expect(c.buddyChat('lead'), isNull);
-      expect(
-        find.descendant(of: sidebar, matching: find.text('ken.tran')),
-        findsNothing,
-      );
       await close(tester, c);
     });
   });
@@ -865,9 +776,7 @@ void main() {
               RepaintBoundary(key: picture, child: child),
           home: Scaffold(
             body: SuperTabView(
-              board: false,
               controller: c,
-              onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               machineName: (_) => 'Team Mac',

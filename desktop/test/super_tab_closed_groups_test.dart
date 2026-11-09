@@ -23,7 +23,6 @@ Widget _app(
       key: _picture,
       child: SuperTabView(
         controller: controller,
-        onInvite: () {},
         onAddAgent: (_) {},
         onOpenTerminal: (_) {},
         machineName: (_) => 'Test Mac',

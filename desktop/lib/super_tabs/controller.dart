@@ -245,7 +245,6 @@ class SuperTabController extends ChangeNotifier {
         (initial['decisionsAside'] as List? ?? const []).whereType<String>(),
       );
       devicesSelected = initial['devicesSelected'] == true;
-      unreadOnly = initial['unreadOnly'] == true;
       machinesGroupOpen = initial['machinesGroupOpen'] as bool? ?? true;
       buddiesGroupOpen = initial['buddiesGroupOpen'] as bool? ?? true;
       agentsGroupOpen = initial['agentsGroupOpen'] as bool? ?? true;
@@ -2771,7 +2770,6 @@ class SuperTabController extends ChangeNotifier {
     'expandedMachines': expandedMachines.toList(),
     'decisionsAside': _decisionsAside.toList(),
     'devicesSelected': devicesSelected,
-    'unreadOnly': unreadOnly,
     'machinesGroupOpen': machinesGroupOpen,
     'buddiesGroupOpen': buddiesGroupOpen,
     'agentsGroupOpen': agentsGroupOpen,
@@ -3840,16 +3838,6 @@ class SuperTabController extends ChangeNotifier {
     _saveSoon();
     _changed();
     return held;
-  }
-
-  /// The sidebar lists only chats with something unread (and the open one):
-  /// Slack's unread filter, kept on this computer.
-  bool unreadOnly = false;
-
-  void toggleUnreadOnly() {
-    unreadOnly = !unreadOnly;
-    _saveSoon();
-    _changed();
   }
 
   /// A visible transcript passes the boundary it displayed. The loaded messages

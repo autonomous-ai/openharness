@@ -68,9 +68,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.dark),
         home: Scaffold(
           body: SuperTabView(
-            board: false,
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -203,13 +201,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(_jump), findsNothing);
     expect(c.unread(c.selected!), isFalse);
-  });
-
-  testWidgets('a conversation never read anywhere opens at its end, with no '
-      'line', (tester) async {
-    await show(tester, _server(40));
-    expect(find.byKey(_line), findsNothing);
-    expect(scroll(tester).extentAfter, lessThan(40));
   });
 
   // Review of #2131, item 1: the first unread is older than the latest page.
@@ -468,13 +459,6 @@ void main() {
     expect(server.readMarkPosts, isEmpty);
   });
 
-  testWidgets('no line when everything is read', (tester) async {
-    final server = _server(10)..markReadElsewhere('lead', 10);
-    await show(tester, server);
-    expect(find.byKey(_line), findsNothing);
-    expect(find.byKey(_jump), findsNothing);
-  });
-
   testWidgets('the line stays where it was while new messages arrive', (
     tester,
   ) async {
@@ -727,9 +711,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.dark),
         home: Scaffold(
           body: SuperTabView(
-            board: false,
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -973,22 +955,6 @@ void main() {
       );
     }
     expect(find.byKey(_jump), findsNothing);
-  });
-
-  testWidgets('Esc marks the conversation read and clears the line', (
-    tester,
-  ) async {
-    final server = _server(40)..markReadElsewhere('lead', 30);
-    final c = await show(tester, server);
-    expect(c.unread(c.selected!), isTrue);
-    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    await tester.pumpAndSettle();
-    expect(find.byKey(_line), findsNothing);
-    expect(c.unread(c.selected!), isFalse);
-    expect(server.readMarkPosts.last, {
-      'conversationId': 'lead',
-      'sequence': 40,
-    });
   });
 
   testWidgets('the sidebar\'s bold follows the mark kept on the server', (

@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/widgets/app_menu.dart';
-import 'package:harness/super_tabs/detail_dialog.dart';
 import 'package:harness/super_tabs/project_rules.dart';
 
 import 'super_tab_mentions_test.dart' show showView;
@@ -150,7 +149,6 @@ void main() {
         tester,
         _swarm(_saved()),
         brightness: brightness,
-        board: false,
       );
       await _openRules(tester);
       await captureWindow(tester, _shots, 'project-rules-${brightness.name}');
@@ -171,106 +169,5 @@ void main() {
       superTabRulesPath('tab 1', 'lead'),
       '/api/super-tabs/tab%201/projects/lead/rules',
     );
-  });
-
-  for (final brightness in Brightness.values) {
-    testWidgets('Project settings opens the rules, read only, with their '
-        'history (${brightness.name})', (tester) async {
-      final server = _swarm(_saved());
-      final c = await showView(
-        tester,
-        server,
-        brightness: brightness,
-        board: false,
-      );
-      await _openRules(tester);
-      expect(server.rulesReads, ['/api/super-tabs/tab/projects/lead/rules']);
-      for (final text in [
-        'Project rules',
-        'openharness · Revision 3',
-        'Releases',
-        '09:00–18:00 Asia/Ho_Chi_Minh',
-        'At most every 2 h · not 09:00–10:00',
-        'After each visible batch',
-        'Reviews',
-        'Every change',
-        '1 read',
-        'Sign-in',
-        '2 reads · **/*auth*, **/*login*, **/*logout*',
-        'Desktop on a Mac',
-        'desktop/**',
-        'Merge train',
-        'On · every 10 minutes',
-        'Crew',
-        'Engineer',
-        'Ledger, Yarrow4',
-        'Caps · Paths · Lanes',
-        'None yet.',
-        'History',
-        'Merge train on',
-        'mergeTrain.enabled  Off → On',
-        'Releases start at 10',
-        'releaseWindow.start  09:00 → 10:00',
-        'To change these, ask the PM in the project chat.',
-      ]) {
-        expect(find.text(text), findsWidgets, reason: text);
-      }
-      expect(
-        find.textContaining('River for dee · 2 hours ago'),
-        findsOneWidget,
-      );
-      expect(find.textContaining('Revision 2 · '), findsOneWidget);
-      // Read only: nothing to type into or save.
-      final dialog = find.byType(SuperTabDetailDialog);
-      expect(
-        find.descendant(of: dialog, matching: find.byType(TextField)),
-        findsNothing,
-      );
-      expect(
-        find.descendant(of: dialog, matching: find.byType(FilledButton)),
-        findsNothing,
-      );
-      await c.flush();
-    }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
-  }
-
-  testWidgets('a project with no save shows the built-in rules', (
-    tester,
-  ) async {
-    final server = _swarm({
-      'projectId': 'lead',
-      'revision': 0,
-      'rules': _rules(),
-      'seeded': true,
-      'history': <dynamic>[],
-    });
-    final c = await showView(tester, server, board: false);
-    await _openRules(tester);
-    expect(find.text('openharness · Built-in rules'), findsOneWidget);
-    expect(find.text('Off · every 10 minutes'), findsOneWidget);
-    expect(find.text('No changes yet.'), findsOneWidget);
-    await c.flush();
-  });
-
-  testWidgets('a backend without rules says so, and a failed read can be '
-      'tried again', (tester) async {
-    final server = _swarm(_saved())..rulesRoute = false;
-    final c = await showView(tester, server, board: false);
-    await _openRules(tester);
-    expect(
-      find.text('Project rules are not available on this server yet.'),
-      findsOneWidget,
-    );
-    await tester.tap(find.byTooltip('Close'));
-    await tester.pumpAndSettle();
-    server.rulesRoute = true;
-    server.projectRules.remove('lead');
-    await _openRules(tester);
-    expect(find.text('Could not read the project rules.'), findsOneWidget);
-    server.projectRules['lead'] = _saved();
-    await tester.tap(find.text('Try again'));
-    await tester.pumpAndSettle();
-    expect(find.text('openharness · Revision 3'), findsOneWidget);
-    await c.flush();
   });
 }
