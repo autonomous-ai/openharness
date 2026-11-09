@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import { REACHED_NO_AGENT, type Command } from './commands.js'
 import { agent } from './model.js'
+import { recordAgentPresence } from './machines.js'
 import { agentChatId } from './agentKind.js'
 import { owner, stepsFixture } from './steps.test-support.js'
 
@@ -220,5 +221,71 @@ describe('a person\'s reply to an agent', () => {
     const other = f.add('other', f.task)
     f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'done', result: 'Done' } as Command, f.as(f.dev))
     expect(reply(f, f.task, other, 'Thanks, and the fixture?')).toEqual([[other]])
+  })
+})
+
+// A post to an agent whose session is down stays queued for it, as it must; its sender is told, in the command's result every CLI
+// prints, instead of hearing nothing (tester Q3, 2026-11-09).
+describe('a post to an agent whose session is down', () => {
+  const sent = (f: ReturnType<typeof stepsFixture>, by: string | null, recipientIds: string[], extra: Record<string, unknown> = {}) =>
+    f.run({ type: 'message.send', conversationId: f.task, text: 'Please rebase on main.', replyTo: null, recipientIds, ...extra } as Command, by ? f.as(by) : owner)
+  /** What a machine's report records (machines.ts recordAgentPresence): every session of the machine but those [running] is down now. */
+  const down = (f: ReturnType<typeof stepsFixture>, running: string[]) => recordAgentPresence(f.state, 'host', running, f.now)
+  const name = (f: ReturnType<typeof stepsFixture>, id: string) => agent(f.state, id).displayName ?? agent(f.state, id).name
+
+  it('tells its sender the recipient is offline and will read it when it is back, and still queues the post for it', () => {
+    const f = stepsFixture()
+    const other = f.add('other', f.task)
+    down(f, ['pm', 'dev'])
+    const done = sent(f, f.dev, [other])
+    expect(done.result.offline).toBe(`${name(f, other)} is offline; it will read this when it is back.`)
+    expect(done.messages.filter(m => m.source?.kind !== 'system').map(m => m.recipients)).toEqual([[other]])
+    // A person's post to the agent says it too.
+    expect(sent(f, null, [other]).result.offline).toBe(`${name(f, other)} is offline; it will read this when it is back.`)
+  })
+
+  it('names two with "and", and three with commas, and says "they"', () => {
+    const f = stepsFixture()
+    const [a, b, c] = ['a', 'b', 'c'].map(id => f.add(id, f.task)) as [string, string, string]
+    down(f, ['pm', 'dev'])
+    expect(sent(f, f.dev, [a, b]).result.offline).toBe(`${name(f, a)} and ${name(f, b)} are offline; they will read this when they are back.`)
+    expect(sent(f, f.dev, [a, b, c]).result.offline).toBe(`${name(f, a)}, ${name(f, b)} and ${name(f, c)} are offline; they will read this when they are back.`)
+  })
+
+  it('names only the recipients that are down, and says nothing when none is', () => {
+    const f = stepsFixture()
+    const [a, b] = ['a', 'b'].map(id => f.add(id, f.task)) as [string, string]
+    down(f, ['pm', 'dev', 'a'])
+    expect(sent(f, f.dev, [a, b]).result.offline).toBe(`${name(f, b)} is offline; it will read this when it is back.`)
+    expect(sent(f, f.dev, [a]).result).not.toHaveProperty('offline')
+    expect(sent(f, f.dev, [f.lead]).result).not.toHaveProperty('offline')
+  })
+
+  it('says nothing of an agent asleep, which wakes on the message, of a post that names no agent, or of an agent-only notice', () => {
+    const f = stepsFixture()
+    const other = f.add('other', f.task)
+    down(f, ['pm', 'dev'])
+    agent(f.state, other).asleep = { since: f.now }
+    expect(sent(f, f.dev, [other]).result).not.toHaveProperty('offline')
+    delete agent(f.state, other).asleep
+    expect(sent(f, f.dev, []).result).not.toHaveProperty('offline')
+    expect(sent(f, f.dev, [f.dev], { agentOnly: true }).result).not.toHaveProperty('offline')
+  })
+
+  it('names no sender among those offline, though its own record says it is down', () => {
+    const f = stepsFixture()
+    const other = f.add('other', f.task)
+    down(f, [])
+    // Everything is down, the Engineer included: it posts, so it is not the one the post waits for.
+    expect(sent(f, f.dev, [f.dev, other]).result.offline).toBe(`${name(f, other)} is offline; it will read this when it is back.`)
+  })
+
+  it('stops saying it once the session is back', () => {
+    const f = stepsFixture()
+    const other = f.add('other', f.task)
+    down(f, ['pm', 'dev'])
+    expect(sent(f, f.dev, [other]).result).toHaveProperty('offline')
+    down(f, ['pm', 'dev', 'other'])
+    expect(sent(f, f.dev, [other]).result).not.toHaveProperty('offline')
   })
 })

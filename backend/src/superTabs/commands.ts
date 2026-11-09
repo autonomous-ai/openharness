@@ -782,6 +782,9 @@ export interface CommandContext {
 export const notReachedLine = (names: string[]): string => `Your post was delivered, but not to ${names.join(', ')}: a Harness Team agent wrote this task's code, so an agent in the main account may not join it. `
   + 'Nothing is wrong with your post or with you. Ask the PM to hand the work on, or name an agent in a Team account.'
 export const REACHED_NO_AGENT = 'This post reached no agent; people read it in the conversation. Name an agent with --to or @Name when it must act.'
+/** Told to a post's sender when a recipient's session is down: the post waits in its queue, and it reads it when it is back. */
+export const offlineLine = (names: string[]): string => names.length === 1 ? `${names[0]} is offline; it will read this when it is back.`
+  : `${names.slice(0, -1).join(', ')} and ${names.at(-1)} are offline; they will read this when they are back.`
 
 /** Messages in a row between two agents after which their project's Lead is told, once (project instructions, phase 1:
  *  agents talk to each other directly, so nothing else would notice two of them answering each other for ever). */
@@ -4662,6 +4665,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (buddyDown) buddyDownLine(group, buddyDown)
       if ((poster || excludedPm.length) && !command.agentOnly && !recipients.length) effects.result.reachedNoAgent = REACHED_NO_AGENT
       if (barred.length) effects.result.notReached = notReachedLine(barred.map(id => agent(state, id).displayName ?? agent(state, id).name))
+      // A recipient whose session is down keeps the delivery queued and reads it when it is back, so its sender is told, as it would
+      // hear nothing: not for an agent asleep, which wakes on the message, nor for the sender itself.
+      const away = command.agentOnly ? [] : recipients.filter(id => id !== poster?.id && !agent(state, id).asleep && downSince(state, agent(state, id), context.now))
+      if (away.length) effects.result.offline = offlineLine(away.map(id => agent(state, id).displayName ?? agent(state, id).name))
       if (excludedPm.length) {
         const names = excludedPm.map(id => agent(state, id).displayName ?? agent(state, id).name).join(', ')
         effects.result.notReached = [effects.result.notReached, `This post did not reach ${names}: the PM takes proposals and proposal answers from cards. Use a proposal card when the PM must act.`].filter(Boolean).join('\n')
