@@ -135,13 +135,14 @@ it took after 3 hours (work may be on that machine). Its builder label, and stat
 ("Harness, 23:10: Atlas's machine has been down since 15:40 UTC, so this task goes to the builder who can start it
 next."), and the next plan gives each to another builder (`assign/crew.ts takeBacks`, `githubAssign.ts takeBack`). A
 builder whose subscription has less room than a small task until a reset more than two hours off gives back what waits
-for it, never what it took (`outOfQuota`): the plan would only hold it until the reset.
+for it, never what it took (`outOfQuota`): the plan would only hold it until the reset. A task its builder took that
+nothing touched for 4 hours (no comment or label on the issue, no change to a pull request for it, drafts included) gets
+one ask of its builder by name; with no word 4 hours after, it goes to another (`takenTasks`, `githubAssign.ts askQuiet`).
 
 ## Next
 
 1. **Estimates.** Each finished task records its real minutes, peak CPU and memory, disk and spend, by part, size and
    model; estimates take the mean for time and the 80th percentile for memory and disk.
 2. **CPU cores** in each machine's report, so CPU is measured, not assumed.
-3. **Moving work** when a builder stalls: no activity on a task it took.
-4. **Measures** in Desktop: time from label to merge, idle builder-minutes, quota left unspent at resets, overload minutes,
+3. **Measures** in Desktop: time from label to merge, idle builder-minutes, quota left unspent at resets, overload minutes,
    holds and conflicts.

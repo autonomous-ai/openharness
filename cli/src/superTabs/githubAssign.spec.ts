@@ -63,12 +63,13 @@ const crew = (): Crew => ({
 function setup(open: Json[], options: { closed?: Json[]; crew?: Crew } = {}) {
   const github = fakeGitHub(open, options.closed)
   const log = vi.fn()
+  const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
   const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send,
-    now: () => Date.parse('2026-11-09T07:31:00Z'), log })
+    now: () => clock.now, log })
   const assigner = make()
   const labelled = () => github.sent.filter(s => /\/issues\/\d+\/labels$/.test(s.path)).map(s => [Number(s.path.split('/').at(-2)), (s.body.labels as string[])[0]])
   const said = () => github.sent.filter(s => s.path.endsWith('/comments')).map(s => [Number(s.path.split('/').at(-2)), String(s.body.body)])
-  return { github, assigner, make, log, labelled, said }
+  return { github, assigner, make, log, labelled, said, clock }
 }
 
 describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () => {
@@ -258,6 +259,49 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     // The next plan gives both to Pip, two deep.
     await f.assigner.tick()
     expect(f.labelled().map(([n, label]) => [n, label]).sort()).toEqual([[1, 'builder:pip'], [2, 'builder:pip']])
+  })
+
+  describe('quiet tasks', () => {
+    const HOUR = 3_600_000
+    const ago = (f: ReturnType<typeof setup>, hours: number) => new Date(f.clock.now - hours * HOUR).toISOString()
+    const quietAsks = (f: ReturnType<typeof setup>) => f.said().filter(([, body]) => String(body).includes('Are you still on it?'))
+
+    it('asks a builder about a task quiet for 4 hours, once, and gives it to another 4 hours after with no word', async () => {
+      const f = setup([issue(1, ['size:s', 'builder:juno', 'status:taken'])])
+      f.github.state.open[0]!.updated_at = ago(f, 5)
+      f.github.state.applied = true
+      await f.assigner.tick()
+      expect(quietAsks(f)).toEqual([[1, expect.stringMatching(/to \*\*Juno\*\*: nothing has moved on this task for 5 h\. Are you still on it\?/)]])
+      // The ask itself touches the issue; that is no answer.
+      f.github.state.open[0]!.updated_at = new Date(f.clock.now + 1_000).toISOString()
+      f.clock.now += 2 * HOUR
+      await f.assigner.tick()
+      expect(quietAsks(f)).toHaveLength(1)
+      expect(f.github.sent.some(s => s.method === 'DELETE')).toBe(false)
+      f.clock.now += 2 * HOUR
+      await f.assigner.tick()
+      expect(f.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/1/labels/builder%3Ajuno',
+        '/repos/acme/app/issues/1/labels/status%3Ataken'])
+      expect(f.said().some(([, body]) => String(body).includes('Juno has had no activity on it since it was asked'))).toBe(true)
+    })
+
+    it('asks nothing while a pull request for it moves, and stands down once its builder answers', async () => {
+      const busy = setup([issue(1, ['size:s', 'builder:juno', 'status:taken'])])
+      busy.github.state.open[0]!.updated_at = ago(busy, 5)
+      busy.github.state.pulls = [{ number: 9, draft: true, base: { ref: 'main' }, head: { sha: 'f6edb44c0ffee0000000000000000000000000ab', ref: 'juno/1' },
+        body: 'Work in progress', updated_at: ago(busy, 1) }]
+      await busy.assigner.tick()
+      expect(quietAsks(busy)).toEqual([])
+      const answered = setup([issue(1, ['size:s', 'builder:juno', 'status:taken'])])
+      answered.github.state.open[0]!.updated_at = ago(answered, 5)
+      await answered.assigner.tick()
+      expect(quietAsks(answered)).toHaveLength(1)
+      answered.clock.now += 30 * 60_000
+      answered.github.state.open[0]!.updated_at = new Date(answered.clock.now).toISOString()
+      answered.clock.now += 4 * HOUR
+      await answered.assigner.tick()
+      expect(answered.github.sent.some(s => s.method === 'DELETE')).toBe(false)
+    })
   })
 
   it('stops while gh is signed out, says so once, and says when it runs again', async () => {
