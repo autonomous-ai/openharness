@@ -45,11 +45,12 @@ function setup() {
   const log = vi.fn()
   // Pip builds; Juno is the PM.
   const crew: Crew = { builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' }], machines: [] }
+  const team = vi.fn(async () => crew)
   const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
-    crew: async () => crew, get: github.get, send: github.send, now: () => Date.parse('2026-11-09T07:31:00Z'), log })
+    crew: team, get: github.get, send: github.send, now: () => Date.parse('2026-11-09T07:31:00Z'), log })
   const merges = () => github.sent.filter(s => s.method === 'PUT')
   const comments = () => github.sent.filter(s => s.method === 'POST').map(s => String((s.body as Json).body))
-  return { github, merger, log, merges, comments }
+  return { github, merger, log, merges, comments, crew: team }
 }
 
 describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)', () => {
@@ -58,6 +59,16 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     await f.merger.tick()
     expect(f.merges()).toEqual([{ method: 'PUT', path: '/repos/acme/app/pulls/4/merge', body: { merge_method: 'squash', sha: HEAD } }])
     expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: merged\. READ-OK on f6edb44 by Juno, checks green\.$/)])
+  })
+
+  it('reads the team only when a pull request is open', async () => {
+    const f = setup()
+    f.github.repo.pulls = [pull({ draft: true })]
+    await f.merger.tick()
+    expect(f.crew).not.toHaveBeenCalled()
+    f.github.repo.pulls = [pull()]
+    await f.merger.tick()
+    expect(f.crew).toHaveBeenCalledTimes(1)
   })
 
   it('merges only the team\'s own pull requests: a person\'s, or a branch no builder of the team made, is theirs to merge', async () => {
