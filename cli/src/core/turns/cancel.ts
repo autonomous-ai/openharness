@@ -63,10 +63,11 @@ export function createCancel({
     turnActivity.observe(sessionId, 'turn_ended')
     const activity = turnActivity.snapshot(sessionId)
     if (activity) clients.send(correlateAgentEvent({ type: 'agent_activity', payload: { activity } }, sessionId, agentIdFor(sessionId)))
-    // The turn is over for whoever answers a person at its end (the Swarm's host), once the interrupt was sent: told as an interrupted
-    // one, so that a message whose turn it was is not owed an answer that never comes, and cannot take that of the same words sent
-    // again. A stop that could not be sent leaves the turn running. Not a turn_ended to the windows, which would recap it, and told
-    // after everything that stops the agent: nothing it does can hold the stop back.
+    // The turn is over for whoever answers a person at its end (the Swarm's host) as it is for the windows above: told as an
+    // interrupted one, so that a message whose turn it was is not owed an answer that never comes, and cannot take that of the same
+    // words sent again. An app's stop is over at once, as the windows read it; a confirmed one (a device's) only once its interrupt
+    // was sent, and one that could not be sent leaves the turn running. Not a turn_ended to the windows, which would recap it, and
+    // told after everything that stops the agent: nothing it does can hold the stop back.
     void cancelled.then(sent => {
       if (!sent) return
       try { ends?.ended({ agentId: agentIdFor(sessionId), sessionId, aborted: true }) } catch (error) {
