@@ -264,6 +264,13 @@ describe('+ New agent, Member started on its own computer', () => {
     expect(code(() => f.run(join(chat, { harnessId: 'h-other' }), mate, own('mate')))).toBe('AGENT_CHAT_TAKEN')
   })
 
+  it('joins under the name its chat was opened with, which is no other agent\'s', () => {
+    const f = swarm()
+    const chat = f.add({ kind: 'regular', name: 'Ada', machineId: 'mate-laptop', local: true }).result.conversationId as string
+    const added = f.run(join(chat), mate, own('mate'))
+    expect(f.state.agents.find(a => a.id === added.result.agentId)!.name).toBe('Ada')
+  })
+
   it('leaves an unused chat for its person to archive, as Desktop\'s Discard does', () => {
     const f = swarm()
     const chat = f.add({ kind: 'regular', name: 'Ada', machineId: 'mate-laptop', local: true }).result.conversationId as string
