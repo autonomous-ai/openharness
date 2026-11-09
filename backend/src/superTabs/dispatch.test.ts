@@ -311,23 +311,14 @@ describe('the crew\'s clock: 3 hours without progress puts the task back in its 
     const api = s.task('Api', ['backend/src/a.ts'])
     s.run({ type: 'work.assign', conversationId: api, agentId: s.ids.Ash! }, s.as(s.pm))
     /** The loss check at [now], with the machine reporting every session running and busy on screen till then. */
-    const sweep = (now: number, rules = DISPATCH_RULES) => {
+    const sweep = (now: number) => {
       s.state.machines = [{ machineId: 'host', name: 'Mac', observation: { runningHarnessIds: s.state.agents.map(a => a.harnessId),
         stoppedHarnessIds: [], receivedAt: now, harnessProgress: Object.fromEntries(s.state.agents.map(a => [a.harnessId, now])) } }] as never
-      return loseTasks(s.state, now, undefined, undefined, () => rules)
+      return loseTasks(s.state, now)
     }
     const lines = (rows: MessageDraft[]) => rows.filter(r => r.conversationId === api && r.recipients.includes(s.ids.Ash!)).map(r => r.text)
     return { ...s, api, sweep, lines, get state() { return s.state } }
   }
-
-  it('uses a project’s own return threshold and names it', () => {
-    const s = working()
-    const rules = { ...DISPATCH_RULES, nudgeAfterMs: 60_000, returnAfterMs: 120_000 }
-    s.sweep(AT + 119_999, rules)
-    expect(s.group(s.api).assignment!.status).toBe('working')
-    s.sweep(AT + 120_000, rules)
-    expect(s.group(s.api).assignment).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 2 minutes: back in the backend lane' } })
-  })
 
   it.each([true, false])('returns the task at 3 hours for another worker (crew: %s)', crew => {
     const s = working(crew)

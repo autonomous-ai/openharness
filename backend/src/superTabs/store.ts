@@ -84,6 +84,7 @@ import { RefusalMemory } from './dispatchRefusals.js'
 import { tasksHoldingMoves } from './ruleGuard.js'
 import { candidatesFor, dispatchRules, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type DispatchRules, type Skip } from './dispatch.js'
 import { buddySleepCandidates, sleepBuddies } from './buddySleep.js'
+import { finishedWakes } from './crewTimes.js'
 import { failRefusedStarts, judgedMachines, recordTaskState, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
 import { groupsOf, archivable, archiveLine, archiveWaitsFor, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
@@ -4251,8 +4252,9 @@ export class SuperTabStore {
       }
       // The starts the server refused this machine's own reports for fail now, with the refusal, not 3 minutes on (#2441); every 30
       // seconds it runs the Swarm's time checks too (liveness.ts sweepLiveness), so they keep running when the Lead's own machine is the
-      // one that died. Swarm v4 loses no task, nudges no worker and keeps no crew here.
-      const checked = [...failRefusedStarts(state, machineId, now), ...sweep ? sweepLiveness(state, now) : []]
+      // one that died. A report loses no task, nudges no worker and keeps no crew now. A woken agent it shows running again clears its
+      // wake mark and has its wake's timing row (crewTimes.ts, task #3462): a Buddy wakes the same way.
+      const checked = [...failRefusedStarts(state, machineId, now), ...sweep ? sweepLiveness(state, now) : [], ...finishedWakes(state, now)]
       const sleepy = observation.idleBuddyHarnessIds?.length ? buddySleepCandidates(state, now).filter(a => a.machineId === machineId) : []
       const busy = new Set<string>()
       for (const agent of sleepy) {

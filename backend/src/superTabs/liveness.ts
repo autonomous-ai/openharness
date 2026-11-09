@@ -15,14 +15,16 @@ import { coordinatorNameOf } from './instructions.js'
 import { waitedOn } from './leaderboard/record.js'
 import { isStep } from './steps.js'
 import { endedReply } from './taskLine.js'
-import { crewClock, DISPATCH_RULES, laneOf, returnReason, type DispatchLookup } from './dispatch.js'
+import { crewClock, DISPATCH_RULES, laneOf, returnReason } from './dispatch.js'
 import { handed, pickUp, unclaimedReason } from './handed.js'
 import { stepCandidates } from './reviewerPick.js'
 import { noTesterFree, stepOs } from './reviewTable.js'
 
 // Work never sits with a dead owner (design: "A Swarm that never stops", 2026-10-26). A worker's active assignment is held
 // by a lease that its progress renews. A dead, stalled or limited worker loses it within minutes: the assignment becomes
-// lost, its agent is fenced off, and the Lead is woken to hand it on. Leads are not covered here.
+// lost, its agent is fenced off, and the Lead is woken to hand it on. Leads are not covered here. Since Swarm v4 (anh Dee,
+// 2026-11-09: the server runs no v3 job on its own) no report or sweep loses a task: loseTasks runs only for the command that
+// hands in a usage limit, and the lease code goes with the task records (slice S13).
 //
 // The agent's own status, checks and posts renew the lease stored on the assignment. Its machine's reports renew it too,
 // but are read from the report its machine part keeps (written on every report anyway), never written into the group: a
@@ -319,7 +321,7 @@ export function unavailableReason(state: SuperTabState, worker: Agent, now: numb
 }
 
 /** Why a worker has lost its task now, or null while it still holds it. */
-function lostReason(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment, now: number, steps: StepIndex, rulesFor: DispatchLookup): string | null {
+function lostReason(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment, now: number, steps: StepIndex): string | null {
   // A handed task waits on its Reviewers and CI, not on its Engineer, which may be down or at work elsewhere (task #3399).
   if (handed(group)) return null
   // A crew member its host is reopening keeps its task for the reopen's grace (crew.ts).
@@ -330,8 +332,7 @@ function lostReason(state: SuperTabState, group: Conversation, worker: Agent, as
   if (unclaimed) return unclaimed
   if (waitingForReview(assignment) || waitingForRevision(state, group) || waitingOnSteps(state, group, steps) || waitingOnPerson(state, group, worker, assignment)) return null
   // A crew member 3 hours without progress of its own puts its task back in its lane (task #3400), however busy its screen.
-  const rules = rulesFor(group.projectId ?? 'lead')
-  if (!rules) return null
+  const rules = DISPATCH_RULES
   if (crewClock(group, worker, assignment, now, rules) === 'return') return returnReason(laneOf(group, rules.lanes), rules)
   const end = leaseEnd(group, assignment, reportRenewedAt(state, worker))
   if (end !== undefined && now > end) {
@@ -380,12 +381,12 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
 /** Loses at once the tasks of the workers `which` picks that have a reason now: an agent that just reported a usage limit,
  *  the agents of a machine that just reported. A task lost to that limit resumes at `resumeAt` when its screen said when the
  *  limit resets (the host types into the same session then, cli superTabs/limitResume.ts). */
-export function loseTasks(state: SuperTabState, now: number, which: (worker: Agent) => boolean = () => true, resumeAt?: string, rulesFor: DispatchLookup = () => DISPATCH_RULES): MessageDraft[] {
+export function loseTasks(state: SuperTabState, now: number, which: (worker: Agent) => boolean = () => true, resumeAt?: string): MessageDraft[] {
   const steps = stepIndex(state)
   return workerTasks(state).filter(t => which(t.worker)).flatMap(({ group, assignment, worker }) => {
     // A step that ended with no write to its task, or was lost earlier in this same pass, ends its Engineer's wait first.
     stepsEnded(state, group, now, steps)
-    const reason = lostReason(state, group, worker, assignment, now, steps, rulesFor)
+    const reason = lostReason(state, group, worker, assignment, now, steps)
     return reason ? loseTask(state, group, worker, reason, now, resumeAt && reason === limitReason(worker, now) ? resumeAt : undefined) : []
   })
 }

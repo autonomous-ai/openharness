@@ -1,9 +1,10 @@
 /**
  * A task whose own merge is recorded is finished work (task #4032, Stepos 11-06): the lane dispatch handed out lost tasks
  * already merged (#3819 9 minutes after PR #3384 merged, #3818 52 minutes after PR #3383), each time an agent spent only to set
- * the task done, and their steps were revived the same way. Such a task is never handed out again (dispatch.ts openTasks); a
- * lost one is set done by the sweep (liveness.ts sweepLiveness), as the merge record sets done one whose builder is gone
- * (commands.ts conversation.merged), and its open steps close with it.
+ * the task done, and their steps were revived the same way. Such a task is never handed out again (dispatch.ts openTasks), and the
+ * merge record sets done one whose builder is gone (commands.ts conversation.merged), its open steps closing with it. A task
+ * already lost when its merge is recorded is no longer closed by a sweep (Swarm v4 runs none): it stays lost, until the task
+ * records go (slice S13).
  */
 import { recordStatus } from './leaderboard/record.js'
 import { codePullRequests, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
