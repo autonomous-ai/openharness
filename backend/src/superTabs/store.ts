@@ -4889,15 +4889,13 @@ export class SuperTabStore {
       const written: MessageDraft[] = []
       // Same rules as a listed delivery; a refused row ends as a refused one does.
       const { notices, refused } = await this.releasableNotices(tx, state, target, release)
-      let digestDraft: MessageDraft | undefined
       if (notices.length) {
         // After this page's cancels, before its rows are marked: all that remain, less what this digest names.
         const more = gathered.length === NOTICE_DIGEST_MAX ? await agentGatheredCount(tx, tabId, agentId) - notices.length : 0
         const lines = (section: InboxSection) => notices.filter(n => n.section === section).map(n => n.line)
         const text = digestText(notices[0]!.delivery.createdAt, lines('results'), more, notices.some(n => n.otherAccount),
           led ? owedLines(state, projectOf(state, led.id), this.now()) : [], { people: lines('people'), crew: lines('crew') })
-        digestDraft = digestMessage(agentId, gathered[0]!.id, projectOf(state, led!.id).leadConversationId, author(state, { kind: 'agent', agentId, machineOwnerId: target.machineOwnerId }), text, notices.length)
-        written.push(digestDraft)
+        written.push(digestMessage(agentId, gathered[0]!.id, projectOf(state, led!.id).leadConversationId, author(state, { kind: 'agent', agentId, machineOwnerId: target.machineOwnerId }), text, notices.length))
         // By status too: two polls racing digest each row once. One by one: no `in` on this hot collection (hotFilters).
         for (const { delivery } of notices) await tx.superTabDelivery.updateMany({ where: { id: delivery.id, tabId, status: 'gathered' }, data: { status: 'digested' } })
         afterCommit(tx, () => logger.info('[swarm-deliveries] notice digest', { tabId, count: notices.length, cancelled: refused, more, length: text.length }))
