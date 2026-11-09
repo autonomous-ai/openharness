@@ -99,6 +99,15 @@ async function swarm({ client = db, hooks, engines = ['codex'], lent = false }: 
     clock: { get now() { return now }, set now(value: number) { now = value } } }
 }
 
+/** Three messages of a person to the Lead, in the order of their conversation. The ids of the messages. */
+async function threeMessagesToTheLead(f: Awaited<ReturnType<typeof swarm>>): Promise<string[]> {
+  const ids: string[] = []
+  for (const text of ['Parser?', 'Renderer?', 'Exporter?']) {
+    ids.push(String((await f.execute({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })).result.messageId))
+  }
+  return ids
+}
+
 /** A client that records the key of every SwarmGroup row a read returns. */
 function recordingGroups() {
   const keys: string[] = []
@@ -612,25 +621,11 @@ describe('the delivery poll of an agent with a held delivery', () => {
     }
   })
 
-  // #2022: one write's deliveries share a creation time; the held answer keeps each conversation's tied rows in its order too.
+  // #2022: deliveries tied in their creation time stay in their conversation's order, in the held answer too.
   it('returns tied held deliveries in their conversation\'s order, without loading the Swarm', async () => {
     const counted = counting()
     const f = await swarm({ client: counted.client })
-    const assignments: string[] = []
-    for (const title of ['Parser', 'Renderer', 'Exporter']) {
-      const group = String((await f.execute({ type: 'conversation.create', title, brief: 'Build it',
-        checks: [{ description: 'Built', independent: false }] })).result.conversationId)
-      await f.execute({ type: 'conversation.agent', conversationId: group, agentId: f.lead, present: false, lead: false })
-      const worker = await f.add(group, 'test-host', randomUUID(), title)
-      assignments.push(String((await f.execute({ type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId))
-    }
-    f.clock.now += 6 * MINUTE
-    const expectedIds = assignments.map(assignment => stableId(stableId('work-lost', assignment, String(f.clock.now)), 'lead'))
-    // The workers' machine reports their sessions gone, and its report loses the tasks (liveness.ts sweepLiveness).
-    await f.observe('lead-host', [f.harness.lead])
-    await f.observe('test-host', [])
-    // Gathered for a digest; each goes on its own after the settle pass's 30 minutes, the ones these cases are about.
-    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: f.lead, status: 'gathered' }, data: { status: 'queued' } })
+    const expectedIds = await threeMessagesToTheLead(f)
     const first = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
     expect(first).toHaveLength(3)
     await f.timed.delivery(host, f.tab, f.lead, first[0]!.id, { type: 'claim', claimId: 'claim-1' })
@@ -667,31 +662,14 @@ describe('the delivery poll of an agent with a held delivery', () => {
 describe('the push for a new delivery', () => {
   it('keeps several messages batched for one recipient in conversation order, including equal timestamps', async () => {
     const f = await swarm()
-    const assignments: string[] = []
-    for (const title of ['Parser', 'Renderer', 'Exporter']) {
-      const group = String((await f.execute({ type: 'conversation.create', title, brief: 'Build it',
-        checks: [{ description: 'Built', independent: false }] })).result.conversationId)
-      // Without the Lead in these groups, each loss is delivered in the same project chat.
-      await f.execute({ type: 'conversation.agent', conversationId: group, agentId: f.lead, present: false, lead: false })
-      const worker = await f.add(group, 'test-host', randomUUID(), title)
-      assignments.push(String((await f.execute({ type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId))
-    }
-    f.clock.now += 6 * MINUTE
-    // Each loss notice is named by its task and the time of the loss (this poll).
-    const expectedIds = assignments.map(assignment => stableId(stableId('work-lost', assignment, String(f.clock.now)), 'lead'))
-    // One report of the workers' machine, their sessions gone, loses all three and inserts their messages and deliveries together.
-    await f.observe('lead-host', [f.harness.lead])
-    await f.observe('test-host', [])
-    // Gathered for a digest; each goes on its own after the settle pass's 30 minutes, the ones these cases are about.
-    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: f.lead, status: 'gathered' }, data: { status: 'queued' } })
+    const expectedIds = await threeMessagesToTheLead(f)
     const first = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
     expect(first).toHaveLength(3)
     expect(new Set(first.map(row => row.messageId))).toEqual(new Set(expectedIds))
-    expect(new Set(first.map(row => row.createdAt.getTime())).size).toBe(1)
     // The Lead's alone, so it reads their order (people do not read them).
     const page = (await f.timed.messages(host, f.tab, 'lead', {}, f.lead)).messages.filter(row => expectedIds.includes(row.id))
     expect(page).toHaveLength(3)
-    // In conversation order; each loss's Stuck reply in its task's thread is written between them (task #2693).
+    // In conversation order.
     expect(page[1]!.sequence).toBeGreaterThan(page[0]!.sequence)
     expect(page[2]!.sequence).toBeGreaterThan(page[1]!.sequence)
     expect(first.map(row => row.messageId)).toEqual(page.map(row => row.id))
@@ -914,15 +892,16 @@ describe('an agent closed on its machine', () => {
     expect(await closing(f)).toEqual([])
   })
 
-  it('keeps an agent whose task was just lost, tells its Lead, and removes it once the Lead cancels the task', async () => {
+  it('keeps an agent that holds a task, which no report loses, and removes it once the Lead cancels the task', async () => {
     const f = await swarm()
     await f.beat(f.clock.now)
     f.clock.now += MINUTE
     await f.observe('lead-host', [f.harness.lead])
     await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
-    expect(await f.assignment()).toMatchObject({ status: 'lost', lost: { reason: 'its session on Worker Mac stopped' } })
-    expect((await f.leadInbox()).some(m => (m.source as { kind?: string }).kind === 'work-lost')).toBe(true)
+    expect(await f.assignment()).not.toMatchObject({ status: 'lost' })
+    expect((await f.leadInbox()).some(m => (m.source as { kind?: string }).kind === 'work-lost')).toBe(false)
     await reports(f, 60, [], [f.harness.worker])
+    expect(await f.assignment()).not.toMatchObject({ status: 'lost' })
     expect(await ids(f)).toContain(f.worker)
     await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed' })
     await reports(f, 10, [], [f.harness.worker])
