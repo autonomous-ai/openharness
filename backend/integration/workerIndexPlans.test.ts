@@ -452,6 +452,3 @@ describe('the time checks\' pass', () => {
     expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(awake)
   })
 })
-
-describe('what a PM owes', () => {
-})
