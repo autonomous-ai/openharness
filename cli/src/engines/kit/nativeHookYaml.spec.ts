@@ -50,6 +50,25 @@ describe('a large settings file', () => {
     expect(readFileSync(join(home, 'config.yaml'), 'utf8')).toContain(`--hermes-home ${home}`)
   })
 
+  // Hermes writes config.yaml with CRLF on Windows (measured 2026-11-09, DESKTOP-0TFH0OJ). Every line then ends with
+  // `\r`, so an exact match on our own marker missed: the block read as somebody else's `hooks:` and was reported foreign
+  // at every launch, the session was never registered, and the harness sat on "confirm native hooks" for ever.
+  it('recognises its own block in a file Windows wrote with CRLF, and does not report it foreign', async () => {
+    writeFileSync(join(profile, 'config.yaml'), 'model: y\r\n')
+    expect(await installNativeYamlHooks(rule(), command)).toBe(true)
+    const installed = readFileSync(join(home, 'config.yaml'), 'utf8')
+    // Rewrite the whole file the way Hermes would: the same text, every line CRLF.
+    writeFileSync(join(home, 'config.yaml'), installed.replaceAll('\n', '\r\n'))
+    const errors: string[] = []
+    vi.mocked(console.error).mockImplementation((line: unknown) => { errors.push(String(line)) })
+    expect(await installNativeYamlHooks(rule(), command)).toBe(true)
+    expect(errors.filter((line) => line.includes('has its own `hooks:` block'))).toEqual([])
+    // One block, not two: a second pass recognised and replaced the first.
+    const after = readFileSync(join(home, 'config.yaml'), 'utf8')
+    expect(after.split('machine-adapter: session discovery').length - 1).toBe(1)
+    expect(after).toContain(`--hermes-home ${home}`)
+  })
+
   it('still refuses one past the limit, and leaves it as it is', async () => {
     const huge = lines(40_000)
     writeFileSync(join(home, 'config.yaml'), huge)

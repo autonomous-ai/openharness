@@ -55,6 +55,14 @@ function prepareAllowlist(rule: NativeYamlHooks, cmd: string, home: string): (at
   return attempt => observed.replace(next, attempt)
 }
 
+/**
+ * [line] without the carriage return a CRLF file ends it with. Windows engines write their own configuration: Hermes'
+ * `config.yaml` on DESKTOP-0TFH0OJ is CRLF throughout (measured 2026-11-09), and `split('\n')` leaves a `\r` on every
+ * line, so our own managed block read as somebody else's `hooks:` and was reported foreign at every launch — the session
+ * was never registered and the harness waited on "confirm native hooks" forever.
+ */
+const bare = (line: string): string => (line.endsWith('\r') ? line.slice(0, -1) : line)
+
 function hooksBlock(rule: NativeYamlHooks, cmd: string): string {
   const entries = rule.events
     .map((event) => `  ${event}:\n    - command: ${JSON.stringify(cmd)}\n      timeout: ${rule.timeout}`)
@@ -64,14 +72,15 @@ function hooksBlock(rule: NativeYamlHooks, cmd: string): string {
 
 /** True for a top-level `hooks:` mapping that is ours (every command runs our notify.mjs for this engine). */
 function isOwnedHooksBody(rule: NativeYamlHooks, body: string[]): boolean {
-  const commands = body.filter((line) => /^\s*- command:/.test(line))
+  const lines = body.map(bare)
+  const commands = lines.filter((line) => /^\s*- command:/.test(line))
   return commands.length > 0 && commands.every(line => {
     try {
       const cmd: unknown = JSON.parse(line.trim().slice('- command:'.length))
       return isManagedHookCommand(cmd) && rule.ownership.every(fragment => (cmd as string).includes(fragment))
     } catch { return false }
   })
-    && body.every(line => !line.trim() || /^\s+- command:/.test(line) || /^\s+timeout:\s+\d+\s*$/.test(line)
+    && lines.every(line => !line.trim() || /^\s+- command:/.test(line) || /^\s+timeout:\s+\d+\s*$/.test(line)
       || rule.events.some(event => line === `  ${event}:`))
 }
 
@@ -88,13 +97,13 @@ function stripOwnedBlocks(rule: NativeYamlHooks, config: string, hookLines: Read
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
-    if (line === rule.begin && hookLines.has(i + 1)) {
+    if (bare(line) === rule.begin && hookLines.has(i + 1)) {
       // A truncated marker gives no evidence about where the person's remaining
       // configuration begins. Keep the whole document until it can be verified.
       let j = i + 1
       while (j < lines.length && lines[j].trim() !== rule.end) j++
       if (j === lines.length) throw new HookPreparationHeld('the managed YAML block has no closing marker')
-      if (lines[i + 1] !== 'hooks:' || !isOwnedHooksBody(rule, lines.slice(i + 2, j))) {
+      if (bare(lines[i + 1]!) !== 'hooks:' || !isOwnedHooksBody(rule, lines.slice(i + 2, j))) {
         throw new HookPreparationHeld('the managed YAML block contains unconfirmed configuration')
       }
       i = j
@@ -103,8 +112,8 @@ function stripOwnedBlocks(rule: NativeYamlHooks, config: string, hookLines: Read
       if (removal && out.at(-1) === '') out.pop()
       continue
     }
-    if (hookLines.has(i) && !/^hooks:\s*$/.test(line)) foreignHooks = true
-    if (hookLines.has(i) && /^hooks:\s*$/.test(line)) {
+    if (hookLines.has(i) && !/^hooks:\s*$/.test(bare(line))) foreignHooks = true
+    if (hookLines.has(i) && /^hooks:\s*$/.test(bare(line))) {
       let j = i + 1
       while (j < lines.length && (lines[j].startsWith(' ') || lines[j].startsWith('\t') || lines[j].trim() === '')) j++
       const body = lines.slice(i + 1, j)
