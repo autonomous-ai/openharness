@@ -38,7 +38,7 @@ describe('what readers get of a person', () => {
     expect(seen).not.toHaveProperty('status')
     expect(seen).not.toHaveProperty('timeZone')
     expect(seen.avatar).toEqual({ kind: 'preset', key: 'fox' })
-    const part = readerView(split(f.state, { tabId: 'tab', version: 1, now: NOW }), peer, NOW, { teamMachines: [] }).parts.members.find(m => m.key === 'owner')!
+    const part = readerView(split(f.state, { tabId: 'tab', version: 1, now: NOW }), peer, NOW, {}).parts.members.find(m => m.key === 'owner')!
     expect(part.data).not.toHaveProperty('status')
     expect(part.data).not.toHaveProperty('timeZone')
     expect(part.data.avatar).toEqual({ kind: 'preset', key: 'fox' })
