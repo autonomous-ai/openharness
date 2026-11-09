@@ -7,8 +7,8 @@ and the rest) under each person's own login.
 Positioning:
 
 - Tell the PM what you want, and your crew ships it.
-- Ken's router fits every agent to a machine with the resources its job needs (CPU, memory, disk, tools, devices,
-  quota), so dozens of agents run at once without choking.
+- A machine takes an agent only when it has the memory, disk and tools the job needs, so dozens of agents run at once
+  without choking.
 - Every lab in one crew, on the team's own machines, reviewed and tested before merge.
 
 Contributed capacity (a machine, its devices, a subscription through a Team account): working within 5 minutes; the
