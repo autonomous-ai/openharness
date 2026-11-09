@@ -11,7 +11,6 @@ import 'controller.dart';
 import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
-import 'project_github.dart';
 import 'project_visibility.dart';
 
 /// The spacing scale's steps (4, 8, 12) from the shared control gap, as the leaderboard rows take them.
@@ -109,12 +108,6 @@ Future<void> _showProjectDetails(
                 value: group?.leadId == null
                     ? 'Starting…'
                     : c.snapshot!.agentName(group!.leadId!),
-              ),
-              // Whether teammates' agents can push to its repository, and what to do about it.
-              ProjectGitHubAccess(
-                controller: c,
-                projectId: project.id,
-                detailRow: true,
               ),
             ],
           ),

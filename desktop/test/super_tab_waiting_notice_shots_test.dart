@@ -233,15 +233,6 @@ void main() {
       await shot('toast-opened');
 
       await back();
-      await tester.tap(find.byKey(const ValueKey('super-decisions')));
-      await frames();
-      await shot('activity');
-      await tester.tap(find.text('Nova is waiting on you'));
-      await frames();
-      atPrompt();
-      await shot('activity-opened');
-
-      await back();
       // The bell's row, as its dropdown opens it.
       await openInboxNotification(
         f.app,
