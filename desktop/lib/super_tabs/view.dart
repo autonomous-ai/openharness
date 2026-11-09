@@ -93,6 +93,7 @@ import 'terminal_row.dart';
 import 'agent_instructions.dart';
 import '../core/test_run.dart';
 import 'github_issues.dart';
+import 'github_row.dart';
 import 'issue_panel.dart';
 import 'task_board.dart';
 import 'thread_panel.dart';
@@ -4600,6 +4601,14 @@ class _SuperTabViewState extends State<SuperTabView>
     bool joinsBelow = false,
   }) {
     _index();
+    if (SuperTabGitHubRow.shows(message)) {
+      return SuperTabGitHubRow(
+        key: ValueKey(
+          '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
+        ),
+        message: message,
+      );
+    }
     if (SuperTabShipRow.shows(message)) {
       return SuperTabShipRow(
         key: ValueKey(
