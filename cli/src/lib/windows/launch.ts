@@ -16,6 +16,7 @@
 import { accessSync, closeSync, constants, openSync, readFileSync, readSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { windowsLaunchCommand } from '../binaryOnPath.js'
+import { hermesArgv } from './hermesLaunch.js'
 
 const BATCH = /\.(?:cmd|bat)$/i
 /** What cmd.exe reads in a command line: Rust's std refuses these in a batch file's arguments (BatBadBut). */
@@ -138,6 +139,12 @@ export function windowsEngineArgv(engine: string, argv: readonly string[], optio
     return resolved
   }
   const program = windowsLaunchCommand(command, environment, platform)
+  // Hermes' installer writes an unsigned uv launcher that Smart App Control refuses: run the Python it starts instead
+  // (lib/windows/hermesLaunch.ts), as gridCommand does for grid.exe.
+  if (engine === 'hermes') {
+    const viaPython = hermesArgv(program, args, { platform })
+    if (viaPython) return runs(viaPython)
+  }
   if (!BATCH.test(program)) return runs([program, ...args])
   let shim: NpmShimTarget | null = null
   try { shim = exists(program) ? parseNpmCmdShim(read(program), dirname(program)) : null } catch { shim = null }
