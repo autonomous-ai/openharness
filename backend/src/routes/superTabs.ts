@@ -255,8 +255,6 @@ async function productionStore(github: GitHubTokens | null, approvals: Approvals
       // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
       workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
       workStarted: (tabId, started) => { void github?.resume(tabId, started).catch(error => logger.warn('[github] resume failed', { tabId, error: String(error) })) },
-      // A team account has no git login of its own: without the app it takes no teammates' work.
-      teamAccountsIdle: !github,
       ...(github ? { pushOrigin: projectPushOrigin(github.app), branchPushOrigin: projectBranchOrigin(github.app) } : {}),
       // When a moved rule's task merged, as GitHub dates it, read at the instructions save (superTabs/ruleMoves.ts, task #3463).
       ...(github ? { pullRequestMerges: (_env: string, _tab: string, _project: string, urls: string[]) => appPullRequestMerges(github.app)(urls) } : {}),
@@ -324,7 +322,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   // Another account's sign-in on a computer moves the computer's Swarm entries to it (computerMoves.ts).
   onComputerSignedIn(signIn => store.computerSignedIn(signIn))
   const reads = options.reads ?? new SwarmReads(store, { githubApp: !!github })
-  const hosts = options.hosts ?? new HostReads(store, { githubApp: !!github, teamAccountsIdle: !github })
+  const hosts = options.hosts ?? new HostReads(store, { githubApp: !!github })
   // Members' apps read a project's GitHub access again when its revision moves (projects.ts githubRevision). A move that
   // fails is logged and changes no answer: the apps then read again within 5 minutes, as before.
   /** One organization check against GitHub for [userId], within OWNER_CHECKS_PER_MINUTE (security reviews of #3201). */
