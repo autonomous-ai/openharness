@@ -4,7 +4,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/devices/device_hosts.dart';
 import 'package:harness/devices/devices_controller.dart';
-import 'package:harness/settings/experimental_features.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/dial_status.dart';
 import 'package:harness/ws/ws_conn.dart';

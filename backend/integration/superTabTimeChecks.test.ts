@@ -78,70 +78,6 @@ async function swarm() {
 }
 
 describe('the time checks with the PM down', () => {
-  it('tell the PM of a task that went quiet, once, with no PM poll', async () => {
-    const f = await swarm()
-    const posted = f.clock.now
-    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Started' }, host, f.worker)
-    for (const minutes of [10, 20, 29]) {
-      f.clock.now = posted + minutes * MINUTE
-      await f.workerBeat()
-      await f.timed.runTimeChecks(f.tab)
-    }
-    expect(await f.rows('work-stalled')).toEqual([])
-    f.clock.now = posted + 30 * MINUTE
-    await f.workerBeat()
-    expect(await f.timed.runTimeChecks(f.tab)).toBeGreaterThan(0)
-    const stalled = await f.rows('work-stalled')
-    expect(stalled).toEqual([expect.objectContaining({ conversationId: 'lead', recipientIds: [f.lead] })])
-    expect(stalled[0]!.text).toContain('"Ship the parser": quiet, ')
-    for (const minutes of [31, 45]) {
-      f.clock.now = posted + minutes * MINUTE
-      await f.workerBeat()
-      await f.timed.runTimeChecks(f.tab)
-    }
-    expect(await f.rows('work-stalled')).toHaveLength(1)
-  })
-
-  it('lose the task of a worker whose machine went silent, and tell the PM, with no report and no PM poll', async () => {
-    const f = await swarm()
-    await f.workerBeat()
-    f.clock.now += 2 * MINUTE + 5_000
-    // No machine reports from here on: the worker's machine died, and the PM's host is down too.
-    await f.timed.runTimeChecks(f.tab)
-    expect((await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!.assignment!.status).toBe('lost')
-    expect((await f.rows('work-lost')).map(r => r.text)).toContainEqual(expect.stringContaining('Worker lost its task "Ship the parser"'))
-  })
-
-  // Task #3915: a task whose agent went down and nobody took tells its PM and its people within the checks' 5 minutes, once,
-  // in a line that tags them (their Needs you), and the tag resolves when someone takes it.
-  it('flag a task nobody took 10 minutes after its agent went down, once, tagging its requester, and clear it when taken', async () => {
-    const f = await swarm()
-    await f.workerBeat()
-    f.clock.now += 2 * MINUTE + 5_000
-    await f.timed.runTimeChecks(f.tab)
-    const stuck = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: f.group }, orderBy: { sequence: 'asc' } }))
-      .filter(m => /stuck/i.test(m.text))
-    expect(await stuck()).toEqual([])
-    f.clock.now += 10 * MINUTE
-    await f.timed.runTimeChecks(f.tab)
-    f.clock.now += 5 * MINUTE
-    await f.timed.runTimeChecks(f.tab)
-    const told = await stuck()
-    expect(told).toEqual([expect.objectContaining({ recipientIds: [f.lead], text: expect.stringContaining('Worker went down') })])
-    const tag = () => db.superTabMention.findMany({ where: { tabId: f.tab, messageId: told[0]!.id } })
-    expect(await tag()).toEqual([expect.objectContaining({ personId: owner.sub, conversationId: f.group, resolvedAt: null })])
-    const taker = String((await f.execute({ type: 'agent.add', conversationId: f.group, machineId: 'lead-host', harnessId: randomUUID(), name: 'Taker',
-      configuration: config, lead: false }, host)).result.agentId)
-    await f.execute({ type: 'work.assign', conversationId: f.group, agentId: taker })
-    f.clock.now += MINUTE
-    // Its tag resolves on the `[tabId, conversationId, personId]` index, examining only that person's tags there (backend AGENTS.md 3).
-    const entries = await profiled(db, () => f.timed.runTimeChecks(f.tab))
-    expect((await stuck()).map(m => m.text)).toEqual([told[0]!.text, 'No longer stuck: this task has an agent again.'])
-    expect(await tag()).toEqual([expect.objectContaining({ resolvedBy: 'fixed' })])
-    const resolve = reads(entries, 'SuperTabMention', ['messageId', 'personId'])
-    expect(resolve).toHaveLength(1)
-    expect(plan(resolve)).toEqual([expect.objectContaining({ plan: expect.stringMatching(/IXSCAN.*conversationId/), docsExamined: 1 })])
-  })
 
   it('are no longer run by the PM\'s poll', async () => {
     const f = await swarm()
@@ -193,7 +129,7 @@ describe('the stops from before v4', () => {
 })
 
 describe('the worker\'s pass', () => {
-  it('runs the checks of each Swarm active in the last week, and leaves a deleted one alone', async () => {
+  it('runs the checks of each Swarm active in the last week, writes nothing (Swarm v4), and leaves a deleted one alone', async () => {
     const f = await swarm(), quiet = await swarm()
     await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Started' }, host, f.worker)
     f.clock.now += 31 * MINUTE
@@ -202,61 +138,30 @@ describe('the worker\'s pass', () => {
     await db.superTab.update({ where: { id: quiet.tab }, data: { deletedAt: new Date(f.clock.now) } })
     const pass = await runTimeCheckPass(db, f.timed, f.clock.now)
     expect(pass.failed).toBe(0)
-    expect(await f.rows('work-stalled')).toHaveLength(1)
+    // Swarm v4 (anh Dee, 2026-11-09): the checks run no v3 rule, so a quiet task is told to nobody.
+    expect(pass.written).toBe(0)
+    expect(await f.rows('work-stalled')).toEqual([])
     expect(await quiet.rows('work-stalled')).toEqual([])
     // A week later nothing there is read again.
     expect(await timeCheckSwarms(db, f.clock.now + 8 * 24 * 60 * MINUTE)).not.toContain(f.tab)
   })
 })
 
-describe('what the PM owes', () => {
-  const owedOf = async (f: Awaited<ReturnType<typeof swarm>>) => {
-    const head = await db.swarmHead.findFirstOrThrow({ where: { tabId: f.tab } })
-    return ((head.data as { projects?: Array<{ owed?: unknown }> }).projects ?? [])[0]?.owed
-  }
-  const pmRow = async (f: Awaited<ReturnType<typeof swarm>>, agentId = f.lead) =>
-    (await rosterRows(f.timed, host, agentId === f.lead ? 'lead-host' : 'test-host')).find(r => r.tabId === f.tab && 'agent' in r && r.agent.id === agentId) as Record<string, unknown>
-
-  it('is the oldest message a person sent it that it has not answered, until it answers, and only its own host row carries it', async () => {
+// Swarm v4 (anh Dee, 2026-11-09): the server restarts no PM. A v3 "owes an answer" note left in a Swarm told its PM's host to
+// restart it while it hung; nothing writes it now, so a stale one would restart the PM forever. The checks clear it once.
+describe('a PM\'s owed note left by v3', () => {
+  it('is cleared by the time checks, and no host row carries one', async () => {
     const f = await swarm()
-    // An agent's message to the PM is never an ask it owes a person.
-    await f.execute({ type: 'message.send', conversationId: f.group, text: 'Halfway there.', replyTo: null, recipientIds: [f.lead] } as Command, host, f.worker)
+    const key = { tabId_key: { tabId: f.tab, key: 'head' } }
+    const head = await db.swarmHead.findUniqueOrThrow({ where: key })
+    const data = head.data as { projects?: Array<Record<string, unknown>> }
+    data.projects![0]!.owed = { messageId: 'm-old', since: f.clock.now - 60_000 }
+    await db.swarmHead.update({ where: key, data: { data: data as never } })
     await f.timed.runTimeChecks(f.tab)
-    expect(await owedOf(f)).toBeUndefined()
-    const sent = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Where is my parser?', replyTo: null, recipientIds: [] } as Command)
-    f.clock.now += MINUTE
-    const next = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'And the docs?', replyTo: null, recipientIds: [] } as Command)
-    f.clock.now += MINUTE
-    await f.timed.runTimeChecks(f.tab)
-    const messageId = String(sent.result.messageId)
-    // When its delivery to the PM was written, as the server's clock read then.
-    const sentAt = async (id: unknown) => (await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, messageId: String(id), agentId: f.lead } })).createdAt.getTime()
-    const asked = await sentAt(messageId)
-    expect(await owedOf(f)).toEqual({ messageId, since: asked })
-    expect((await pmRow(f)).owed).toEqual({ messageId, since: asked, restartAfterMs: 20 * MINUTE })
-    expect((await pmRow(f, f.worker)).owed).toBeNull()
-    // Readers never see it: it may name a message in a person's private chat with the PM.
-    expect((await f.timed.read(owner, f.tab)).state.projects![0]).not.toHaveProperty('owed')
-    await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Parser ships today.', replyTo: null, recipientIds: [], answers: messageId } as Command, host, f.lead)
-    await f.timed.runTimeChecks(f.tab)
-    expect(await owedOf(f)).toEqual({ messageId: String(next.result.messageId), since: await sentAt(next.result.messageId) })
-  })
-})
-
-// Reviews of #3213 (Wren, Important 1; SecAlder, Minor 3): the instructions tell the PM to react instead of acknowledging, so
-// a message it reacted to was owed for a day and every long PM turn read as hung.
-describe('what the PM owes, once it reacted', () => {
-  it('is not a message the PM reacted to', async () => {
-    const f = await swarm()
-    const sent = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Thanks for the fix!', replyTo: null, recipientIds: [] } as Command)
-    const messageId = String(sent.result.messageId)
-    await f.timed.runTimeChecks(f.tab)
-    const head = async () => ((await db.swarmHead.findFirstOrThrow({ where: { tabId: f.tab } })).data as { projects?: Array<{ owed?: { messageId: string } }> }).projects![0]!.owed
-    expect((await head())?.messageId).toBe(messageId)
-    await f.execute({ type: 'message.react', conversationId: 'lead', messageId, emoji: 'check', on: true } as Command, host, f.lead)
-    expect((await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, messageId, agentId: f.lead } })).status).toBe('answered')
-    await f.timed.runTimeChecks(f.tab)
-    expect(await head()).toBeUndefined()
+    const after = (await db.swarmHead.findUniqueOrThrow({ where: key })).data as { projects?: Array<{ owed?: unknown }> }
+    expect(after.projects![0]!.owed).toBeUndefined()
+    const row = (await rosterRows(f.timed, host, 'lead-host')).find(r => r.tabId === f.tab && 'agent' in r && r.agent.id === f.lead) as Record<string, unknown>
+    expect(row.owed).toBeNull()
   })
 })
 

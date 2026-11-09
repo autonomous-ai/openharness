@@ -20,7 +20,6 @@ import 'machine_status.dart' show kSuperTabMachineOfflineAfter;
 import 'model.dart';
 import 'task_groups.dart';
 import 'buddy_chat.dart';
-import 'project_github.dart';
 import 'parts.dart';
 import 'tasks/personal_tasks.dart';
 import 'read_marks.dart';
@@ -1392,114 +1391,6 @@ class SuperTabController extends ChangeNotifier {
   /// try, so it is told apart from one still being read.
   bool quoteGaveUp(String id, String messageId) =>
       (_quoting[id]?[messageId] ?? 0) >= _quoteTries;
-
-  /// What the backend last said of each project's GitHub access (backend github/projectAccess.ts), and when.
-  final Map<String, ({SuperTabProjectGitHub value, DateTime at})> _github = {};
-  final Set<String> _githubReading = {};
-
-  /// When each project's GitHub access was last asked for, answered or not: a failed read is not asked again on every
-  /// rebuild either.
-  final Map<String, DateTime> _githubAsked = {};
-
-  /// The project's GitHub revision each read was asked at ([SuperTabProject.githubRevision]): another one in the
-  /// Swarm read means the access may have changed, so it is read again at once (task #2316).
-  final Map<String, int> _githubRevisionAsked = {};
-
-  /// Whether teammates' agents can push to [projectId]'s repository, as last read; null before a read, or from a
-  /// server too old to say.
-  SuperTabProjectGitHub? githubAccessOf(String projectId) =>
-      _github[projectId]?.value;
-
-  /// Reads [projectId]'s GitHub access, at most every 5 minutes unless the project's GitHub revision moved since the
-  /// last read (someone allowed its repository or installed the app: read again at once); [refresh]: a person checks
-  /// again (the server asks GitHub at once, at most every 15 seconds per repository, and records the answer). A moved
-  /// revision asks GitHub again too, since another server may still keep "not installed", but records nothing. An
-  /// older server has no such read: nothing is shown.
-  Future<void> readGitHubAccess(
-    String projectId, {
-    bool refresh = false,
-  }) async {
-    final revision =
-        snapshot?.projects
-            .where((p) => p.id == projectId)
-            .firstOrNull
-            ?.githubRevision ??
-        0;
-    final readAt = _githubRevisionAsked[projectId];
-    // Read again because the revision moved: asks GitHub again, but records nothing (`record=0`), so servers whose caches
-    // differ cannot move it back and forth (review of #2713). A person's own check records.
-    final moved = !refresh && readAt != null && readAt != revision;
-    final asked = _githubAsked[projectId];
-    if (_disposed ||
-        accessRevoked ||
-        (!refresh &&
-            !moved &&
-            asked != null &&
-            clock.now().difference(asked) < const Duration(minutes: 5))) {
-      return;
-    }
-    // A read already out finishes first; the revision it was asked at still differs, so the next call reads again.
-    if (!_githubReading.add(projectId)) return;
-    _githubAsked[projectId] = clock.now();
-    _githubRevisionAsked[projectId] = revision;
-    try {
-      final answer = await request(
-        'GET',
-        '$_path/projects/${Uri.encodeComponent(projectId)}/github${refresh
-            ? '?refresh=1'
-            : moved
-            ? '?refresh=1&record=0'
-            : ''}',
-      );
-      _github[projectId] = (
-        value: SuperTabProjectGitHub.fromJson(answer),
-        at: clock.now(),
-      );
-      _changed();
-    } catch (error) {
-      appLog.debug('super-tabs', 'project GitHub access not read: $error');
-      // A server without the route (an older backend) shows nothing, as before. Any other failure says it could not
-      // check, and is asked again after 30 seconds, not 5 minutes: a Swarm read in its first seconds came back
-      // empty and Project details showed no GitHub access at all (2026-10-28).
-      final absent =
-          error is SuperTabFailure &&
-          (error.statusCode == 404 || error.code == 'NOT_FOUND');
-      if (absent || _github[projectId] == null) {
-        _github[projectId] = (
-          value: SuperTabProjectGitHub.fromJson({
-            'state': absent ? 'unavailable' : 'unread',
-          }),
-          at: clock.now(),
-        );
-      }
-      if (!absent) {
-        _githubAsked[projectId] = clock.now().subtract(
-          const Duration(minutes: 5) - const Duration(seconds: 30),
-        );
-      }
-      _changed();
-    } finally {
-      _githubReading.remove(projectId);
-    }
-  }
-
-  /// Starts approving [projectId]'s repository for teammates' agents ([scope] `project`, or `swarm` for every project):
-  /// the links that sign the person in to GitHub through the Harness GitHub App, or install it there first. GitHub sends
-  /// them back to the backend, which checks they can push to the repository (backend github/approvals.ts).
-  Future<({String authorizeUrl, String? installUrl})> approveGitHub(
-    String projectId,
-    String scope,
-  ) async {
-    final answer = await request(
-      'POST',
-      '$_path/projects/${Uri.encodeComponent(projectId)}/github/approve',
-      body: {'scope': scope},
-    );
-    return (
-      authorizeUrl: answer['authorizeUrl'] as String,
-      installUrl: answer['installUrl'] as String?,
-    );
-  }
 
   /// Reads one message of [id] only: the backend checks the reader may read
   /// that conversation, as for its pages. A refusal is recorded as the message

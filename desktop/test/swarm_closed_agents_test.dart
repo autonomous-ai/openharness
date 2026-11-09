@@ -86,33 +86,30 @@ void main() {
     },
   );
 
-  test(
-    'a closed parent gets a tab when its agent alone is reopened',
-    () async {
-      final app = createApp();
-      addTearDown(app.dispose);
-      app.renameSwarm(app.activeSwarmId, 'Solid');
-      final origin = app.activeSwarmId;
-      await app.addAgentToSwarm('m', 'a0');
-      await app.addAgentToSwarm('m', 'a1');
-      await app.closePane(app.panes.first.id);
-      final closure = app.closedHistory.single.historyId;
-      await app.closeSwarm(origin);
-      expect(app.reopenClosed(historyId: closure), isTrue);
-      expect(app.activeSwarmId, origin);
-      expect(app.activeSwarm.name, 'Solid');
-      expect(app.panes.single.agentId, 'a0');
-      expect(app.closedHistory.single, isA<ClosedSwarm>());
-      expect(app.reopenClosed(historyId: closure), isFalse);
-      final restored = app.activeSwarm;
-      // Restoring the remaining group returns to the same workspace.
-      expect(app.reopenClosed(), isTrue);
-      expect(app.activeSwarm, same(restored));
-      expect(app.panes.map((pane) => pane.agentId), ['a0', 'a1']);
-      expect(app.swarms.where((swarm) => swarm.name == 'Solid'), hasLength(1));
-      expect(app.swarms.map((s) => s.id).toSet().length, app.swarms.length);
-    },
-  );
+  test('a closed parent gets a tab when its agent alone is reopened', () async {
+    final app = createApp();
+    addTearDown(app.dispose);
+    app.renameSwarm(app.activeSwarmId, 'Solid');
+    final origin = app.activeSwarmId;
+    await app.addAgentToSwarm('m', 'a0');
+    await app.addAgentToSwarm('m', 'a1');
+    await app.closePane(app.panes.first.id);
+    final closure = app.closedHistory.single.historyId;
+    await app.closeSwarm(origin);
+    expect(app.reopenClosed(historyId: closure), isTrue);
+    expect(app.activeSwarmId, origin);
+    expect(app.activeSwarm.name, 'Solid');
+    expect(app.panes.single.agentId, 'a0');
+    expect(app.closedHistory.single, isA<ClosedSwarm>());
+    expect(app.reopenClosed(historyId: closure), isFalse);
+    final restored = app.activeSwarm;
+    // Restoring the remaining group returns to the same workspace.
+    expect(app.reopenClosed(), isTrue);
+    expect(app.activeSwarm, same(restored));
+    expect(app.panes.map((pane) => pane.agentId), ['a0', 'a1']);
+    expect(app.swarms.where((swarm) => swarm.name == 'Solid'), hasLength(1));
+    expect(app.swarms.map((s) => s.id).toSet().length, app.swarms.length);
+  });
 
   test('tab recovery keeps newer choices and shared live sessions', () async {
     final store = MemoryStore();
@@ -205,50 +202,45 @@ void main() {
     },
   );
 
-  test(
-    'a full partial tab keeps its recovery until every view fits',
-    () async {
-      final app = createApp();
-      addTearDown(app.dispose);
-      await app.addAgentToSwarm('m', 'a0');
-      await app.addAgentToSwarm('m', 'a1');
-      await app.addAgentToSwarm('m', 'a2');
-      final origin = app.activeSwarmId;
-      await app.closePane(app.panes.first.id);
-      final agentClosure = app.closedHistory.single.historyId;
-      await app.closeSwarm(origin);
-      final swarmClosure = app.closedHistory.first.historyId;
-      expect(app.reopenClosed(historyId: agentClosure), isTrue);
-      final restored = app.activeSwarm;
-      for (var i = 3; i < AppNotifier.maxPanes + 1; i++) {
-        await app.addAgentToSwarm('m', 'a$i');
-      }
-      final before = restored.panes.toList();
-      expect(before, hasLength(AppNotifier.maxPanes - 1));
-      expect(app.canReopenClosed(swarmClosure), isFalse);
-      expect(app.canReopenClosedSwarm, isFalse);
-      app.reopenClosedSwarm(historyId: swarmClosure);
-      expect(app.reopenClosed(historyId: swarmClosure), isFalse);
-      expect(restored.panes, before);
-      expect(app.closedHistory.single.historyId, swarmClosure);
+  test('a full partial tab keeps its recovery until every view fits', () async {
+    final app = createApp();
+    addTearDown(app.dispose);
+    await app.addAgentToSwarm('m', 'a0');
+    await app.addAgentToSwarm('m', 'a1');
+    await app.addAgentToSwarm('m', 'a2');
+    final origin = app.activeSwarmId;
+    await app.closePane(app.panes.first.id);
+    final agentClosure = app.closedHistory.single.historyId;
+    await app.closeSwarm(origin);
+    final swarmClosure = app.closedHistory.first.historyId;
+    expect(app.reopenClosed(historyId: agentClosure), isTrue);
+    final restored = app.activeSwarm;
+    for (var i = 3; i < AppNotifier.maxPanes + 1; i++) {
+      await app.addAgentToSwarm('m', 'a$i');
+    }
+    final before = restored.panes.toList();
+    expect(before, hasLength(AppNotifier.maxPanes - 1));
+    expect(app.canReopenClosed(swarmClosure), isFalse);
+    expect(app.canReopenClosedSwarm, isFalse);
+    app.reopenClosedSwarm(historyId: swarmClosure);
+    expect(app.reopenClosed(historyId: swarmClosure), isFalse);
+    expect(restored.panes, before);
+    expect(app.closedHistory.single.historyId, swarmClosure);
 
-      await app.closePane(restored.panes.last.id);
-      expect(app.reopenClosed(historyId: swarmClosure), isTrue);
-      expect(app.activeSwarm, same(restored));
-      expect(restored.panes, hasLength(AppNotifier.maxPanes));
-      expect(
-        restored.panes.map((pane) => pane.agentId).toSet(),
-        hasLength(AppNotifier.maxPanes),
-      );
-      expect(
-        restored.panes
-            .skip(AppNotifier.maxPanes - 2)
-            .map((pane) => pane.agentId),
-        ['a1', 'a2'],
-      );
-      expect(app.closedHistory.single, isA<ClosedAgent>());
-    },
-  );
+    await app.closePane(restored.panes.last.id);
+    expect(app.reopenClosed(historyId: swarmClosure), isTrue);
+    expect(app.activeSwarm, same(restored));
+    expect(restored.panes, hasLength(AppNotifier.maxPanes));
+    expect(
+      restored.panes.map((pane) => pane.agentId).toSet(),
+      hasLength(AppNotifier.maxPanes),
+    );
+    expect(
+      restored.panes.skip(AppNotifier.maxPanes - 2).map((pane) => pane.agentId),
+      ['a1', 'a2'],
+    );
+    expect(app.closedHistory.single, isA<ClosedAgent>());
+  });
 
   test('with many tabs open, agent and tab recovery both still fit', () async {
     final app = createApp();
