@@ -226,7 +226,7 @@ describe('a Swarm\'s evidence per model and kind of job', () => {
       if (i % 3 === 0) await f.review(g, a, true)
       f.clock.now += MINUTE
       await f.done(g, a)
-      await f.execute({ type: 'agent.release', agentId: f.worker(g), decision: 'stop' } as Command, host, f.lead)
+      await f.execute({ type: 'agent.release', agentId: f.worker(g), decision: 'stop' } as Command)
     }
     // Attempts 0, 3, 6 and 9 failed; the last ten are attempts 2 to 11.
     expect((await f.evidence()).models[0]!.recent).toEqual([true, false, true, true, false, true, true, false, true, true])
