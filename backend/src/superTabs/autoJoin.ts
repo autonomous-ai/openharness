@@ -12,9 +12,9 @@ export const AUTO_JOIN_EVERY_MS = 120_000
 /** Swarms joined per try; more are joined on later tries. */
 export const AUTO_JOIN_LIMIT = 10
 
-/** What one Swarm's try came to (SuperTabStore.autoJoinSwarm): joined now; nothing to do (off, full, a member, declined
- *  already, or gone); or declined now because the Workspace removed the person. */
-export type AutoJoinOutcome = 'joined' | 'skipped' | 'declined'
+/** What one Swarm's try came to (SuperTabStore.autoJoinSwarm): joined now, or nothing to do (off, full, a member, declined
+ *  already, or gone). */
+export type AutoJoinOutcome = 'joined' | 'skipped'
 
 /** When each person was last tried, shared by every server. `claim` is true when the person may be tried now, and marks them
  *  tried for AUTO_JOIN_EVERY_MS before any read. It may throw: the person is then tried anyway, as other poll memories do. */

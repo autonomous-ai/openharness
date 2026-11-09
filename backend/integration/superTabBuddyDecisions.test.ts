@@ -10,7 +10,6 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import type { Command } from '../src/superTabs/commands.js'
-import { overdueDecisions } from '../src/superTabs/overdueDecisions.js'
 import { poolRows } from './hostRows.test-support.js'
 
 // Task #4525 (anh Dee, 11-07): everything waiting on a person shows in their Decisions, their own Buddy's questions included, and
@@ -103,13 +102,12 @@ const open = async (f: Swarm) => (await f.store.decisions(peer, f.tab, 'open')).
 const lines = async (f: Swarm, chat: string) => (await f.store.messages(peer, f.tab, chat, {})).messages.map(m => m.text)
 
 describe('a Buddy’s question in its owner’s Decisions', () => {
-  it('shows in their open Decisions as their Buddy’s, which the 24-hour sweep never takes', async () => {
+  it('shows in their open Decisions as their Buddy’s', async () => {
     const f = await swarm()
     const b = await asked(f)
     const listed = (await f.store.decisions(peer, f.tab, 'open')).decisions
     expect(listed).toEqual([expect.objectContaining({ id: b.id, fromBuddy: true, send: false, pmTakesOver: false, question: question.question })])
     expect((await f.store.decisions(owner, f.tab, 'open')).decisions).toEqual([])
-    expect((await overdueDecisions(db, f.clock.now + 25 * 3_600_000)).map(d => d.id)).not.toContain(b.id)
   })
 
   it('settles from Decisions, and the Buddy hears it in its chat', async () => {

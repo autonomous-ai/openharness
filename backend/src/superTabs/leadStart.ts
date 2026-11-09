@@ -32,7 +32,6 @@ export interface LeadRequest { engine: string; model?: string; effort?: string; 
 export interface LeadContext {
   now: number
   teamMachines?: readonly string[]
-  otherWorkspaceMachines?: readonly string[]
   /** The slots of each pool, counted once for a read that admits many (machines.ts slotCounter). */
   slots?: (pool: ContributedMachine) => number
 }
@@ -64,7 +63,7 @@ function admitLead(state: SuperTabState, project: SwarmProject, pool: Contribute
   if (!contributedEngines(pool).includes(start.engine)) {
     fail('ENGINE_NOT_OFFERED', `${LEAD_ENGINES[start.engine as keyof typeof LEAD_ENGINES] ?? start.engine} isn’t offered on ${pool.name}.`, 403)
   }
-  admitMachineStart(state, start, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines, project, context.slots)
+  admitMachineStart(state, start, context.now, undefined, context.teamMachines, project, context.slots)
   // Its Team account will serve only this project (machines.ts productManagerOn), so not one running another's work now.
   if (teamAccountPool(pool) && [...projectsOnMachine(state, pool.machineId)].some(id => id !== project.id)) {
     fail('TEAM_ACCOUNT_BUSY', `The Harness Team account on ${pool.name} runs other projects' agents, so it cannot host this ${coordinatorNameOf(project)} now.`, 409)
