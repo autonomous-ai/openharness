@@ -14,6 +14,7 @@ import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
 import { authorOf, openPullsPath, PULL_PAGES, sameKey, verdicts, type LedProject } from './githubMerge.js'
+import { TEAM } from './githubMentions.js'
 
 type Json = Record<string, unknown>
 
@@ -264,7 +265,7 @@ export class GitHubAssign {
       // How often each was asked for this head, and its name as written.
       const onThisHead = new Map<string, number>(), written = new Map<string, string>()
       for (const c of comments) {
-        const found = ASKED.exec(String(c.body ?? ''))
+        const found = ownAsk(c, ASKED)
         if (!found) continue
         written.set(found[1]!.toLowerCase(), found[1]!)
         if (head.startsWith(found[2]!)) onThisHead.set(found[1]!.toLowerCase(), (onThisHead.get(found[1]!.toLowerCase()) ?? 0) + 1)
@@ -384,7 +385,7 @@ export class GitHubAssign {
     const since = new Date(touched - 60_000).toISOString()
     const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?since=${since}&per_page=${PAGE}`, 1)
     const asks = comments.filter(c => {
-      const found = /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: (.*)$/m.exec(String(c.body ?? ''))
+      const found = ownAsk(c, /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: (.*)$/m)
       return found?.[1]?.toLowerCase() === name.toLowerCase() && found[2]!.startsWith(QUIET_ASKED)
     }).map(c => Date.parse(String(c.created_at ?? ''))).filter(Number.isFinite)
     return asks.length ? Math.max(...asks) : null
@@ -398,7 +399,10 @@ export class GitHubAssign {
     if (this.blocked.has(key)) return false
     const line = `nobody can start this yet: ${blocked}`
     const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 1)
-    if (comments.some(c => String(c.body ?? '').includes(line))) { this.blocked.add(key); return false }
+    if (comments.some(c => ownAsk(c, new RegExp(`^Harness, \\d\\d:\\d\\d, to \\*\\*[^*]+\\*\\*: ${line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)))) {
+      this.blocked.add(key)
+      return false
+    }
     const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${this.clock()}, to **${project.pm}**: ${line}.` })
     if (reply.status >= 300) { this.once(`[super-tab] Task assignment: ASK_REFUSED ${repo}#${number}: GitHub answered ${reply.status}`); return false }
     this.blocked.add(key)
@@ -480,6 +484,14 @@ export function blockedWhy(issue: Json | undefined, why: string, crew: Crew, rea
     return 'it needs more than any builder\'s machine has'
   }
   return null
+}
+
+/** The first line of a comment Harness may have written, matched by [pattern]: only a member's, as Harness writes with the PM's
+ *  person's gh, so nobody outside the team can make Harness believe it asked (and never ask), and only its first 500
+ *  characters, as Harness's own are short, so a long comment costs nothing. */
+function ownAsk(comment: Json, pattern: RegExp): RegExpExecArray | null {
+  if (!TEAM.has(comment.author_association)) return null
+  return pattern.exec(String(comment.body ?? '').slice(0, 500))
 }
 
 const labelNames = (issue: Json): string[] =>
