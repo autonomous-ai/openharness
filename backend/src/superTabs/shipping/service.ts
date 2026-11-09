@@ -3,6 +3,9 @@ import type { AuthUser } from '../../lib/ssoAuth.js'
 import { githubRepository } from '../../github/repository.js'
 import { fail } from '../model.js'
 import { readBy } from '../parts/indexed.js'
+import { partId } from '../parts/write.js'
+import { personReadsProject, type SwarmProject } from '../projects.js'
+import type { Person } from '../model.js'
 import { machineSwarms } from '../swarmRows.js'
 import { membersOf } from './access.js'
 import { BACKFILL_WEEKS, FAILURE_FRESH_MS, MAX_LISTED, MAX_RANGE_WEEKS, MAX_REPOSITORIES, MAX_SWARMS, WEEKS_READABLE, type BoardQuery, type ReadFailure, type ReportBody, type ShippingBoard,
@@ -13,16 +16,6 @@ import { WEEK_MS, weekStart } from './week.js'
 
 type Raw = Record<string, unknown>
 const list = (value: unknown): Raw[] => Array.isArray(value) ? value.filter((item): item is Raw => !!item && typeof item === 'object') : []
-
-/** Whether the person with [personId], whose member row is [member] (none: not in the Swarm), reads [project] as projects.ts
- *  canReadProject decides: a public one; a private one they own at this membership (ownsProject: a project from before the owner's
- *  generation was stored matches by id) or are listed in at it. */
-function readsPrivately(project: Raw, personId: string, member: Raw | undefined): boolean {
-  if (project.visibility !== 'private') return true
-  if (!member) return false
-  if (project.ownerId === personId && (project.ownerGeneration === undefined || project.ownerGeneration === member.generation)) return true
-  return list(project.members).some(listed => listed.id === personId && listed.generation === member.generation)
-}
 
 /**
  * The Swarm leaderboard's store (docs/plans/2026-11-09-swarm-v4-leaderboard.md): what a daemon is told to read, what it reports,
@@ -54,15 +47,15 @@ export class Shipping {
     if (!named.length) return { swarms: [] }
     const [heads, totals, memberships] = await Promise.all([
       this.db.swarmHead.aggregateRaw({ pipeline: [{ $match: { tabId: { $in: named }, key: 'head' } }, { $project: { tabId: 1, 'data.projects.visibility': 1,
-        'data.projects.ownerId': 1, 'data.projects.ownerGeneration': 1, 'data.projects.members': 1, 'data.projects.repository.repositoryUrl': 1 } }] }) as unknown as Promise<Raw[]>,
+        'data.projects.ownerId': 1, 'data.projects.ownerGeneration': 1, 'data.projects.members.id': 1, 'data.projects.members.generation': 1, 'data.projects.repository.repositoryUrl': 1 } }] }) as unknown as Promise<Raw[]>,
       this.db.swarmShipping.aggregateRaw({ pipeline: [{ $match: { tabId: { $in: named }, week: 0, personId: user.sub } }, { $project: { tabId: 1, agentId: 1, settled: 1 } }] }) as unknown as Promise<Raw[]>,
       // The person's membership in each, which says what of an earlier membership is no longer theirs.
-      this.db.swarmMember.aggregateRaw({ pipeline: [{ $match: { tabId: { $in: named }, key: user.sub, deleted: false } }, { $project: { tabId: 1, 'data.generation': 1 } }] }) as unknown as Promise<Raw[]>])
-    const membership = new Map(memberships.map(member => [String(member.tabId), (member.data ?? {}) as Raw]))
+      readBy(this.db, 'SwarmMember', 'id', [{ $match: { _id: { $in: named.map(tabId => partId(tabId, user.sub)) }, deleted: false } }, { $project: { tabId: 1, 'data.generation': 1 } }])])
+    const membership = new Map(memberships.map(member => [String(member.tabId), { id: user.sub, generation: (member.data as Raw | undefined)?.generation } as Pick<Person, 'id' | 'generation'>]))
     const repositories = new Map(heads.map(head => [String(head.tabId), [...new Set(list((head.data as Raw | undefined)?.projects)
-      // A private project's repository goes only to a person who reads the project, as projects.ts canReadProject and ownsProject decide:
-      // its owner or a listed member at the membership they have now, never at an earlier one (removed and invited back).
-      .filter(project => readsPrivately(project, user.sub, membership.get(String(head.tabId))))
+      // Only a project the person reads, as the Swarm decides it (projects.ts personReadsProject): never one they read or owned at an
+      // earlier membership (removed and invited back), and none without a member row.
+      .filter(project => { const member = membership.get(String(head.tabId)); return !!member && personReadsProject(member, project as unknown as SwarmProject) })
       .flatMap(project => githubRepository((project.repository as Raw | undefined)?.repositoryUrl as string | undefined)?.fullName ?? []))].sort().slice(0, MAX_REPOSITORIES)]))
     const settled = new Map(totals.map(total => [`${total.tabId}:${total.agentId}`, Number(total.settled ?? 0)]))
     const earliest = current - MAX_RANGE_WEEKS * WEEK_MS
