@@ -156,7 +156,8 @@ once (`TAKE_BACK_REFUSED`, `ASK_REFUSED`) and tried again next pass.
 ## Learned task times (built)
 
 Each pass the assigner reads up to five closed sized issues it has not measured: a task's work runs from its builder's
-"taken by" comment (or Harness's word giving it) to its close. Once a size has three, its median in this project replaces
+"taken by" comment (or Harness's word giving it) to its close. Only a task closed as completed counts: one closed as not
+planned (a duplicate, one dropped) ended without its work. Once a size has three, its median in this project replaces
 the size's guess, kept between 10 minutes and a day; a median, so one task left open over a weekend does not move the
 rest (`assign/crew.ts startedAt`, `learnedMinutes`; `githubAssign.ts measure`).
 
