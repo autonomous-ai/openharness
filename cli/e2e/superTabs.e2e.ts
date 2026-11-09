@@ -54,6 +54,7 @@ it('starts either engine once, posts to its captured group and delivers shared i
     const url = new URL(raw, relay.httpUrl), path = url.pathname
     if (path === `/api/super-tabs/hosts/${ME.machineId}/pools`) return { data: [] }
     if (path === `/api/super-tabs/hosts/${ME.machineId}/assignments`) return { data: assignments }
+    if (path === `/api/super-tabs/hosts/${ME.machineId}/terminal`) return { data: [] }
     if (path.endsWith('/stopped')) { stopReceipts.push(body); assignments.length = 0; return { data: { confirmed: true } } }
     if (path === `/api/super-tabs/hosts/${ME.machineId}`) return { data: allowed ? agents.map(agent => ({ tabId: TAB, agent, stopRequested: agent.workDecision === 'stop', observers: [] })) : [] }
     if (!allowed) return { status: 403, error: { code: 'FORBIDDEN', message: 'The contribution was withdrawn.' } }

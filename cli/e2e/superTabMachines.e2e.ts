@@ -59,6 +59,12 @@ it.each(['project', 'swarm'])('runs a start queued for a teammate\'s machine wit
       else throw new Error(`Unexpected host operation ${c.type}`)
       return { data: { result: {} } }
     }
+    if (path.endsWith('/readings')) {
+      expect(caller.account).toBe('member')
+      for (const reading of body.readings) { expect(reading.observation.generation).toBe(generation); observations++ }
+      return { data: { results: body.readings.map((reading: Record<string, any>) => ({ tabId: reading.tabId, ok: true })) } }
+    }
+    if (path.endsWith('/terminal')) return { data: [] }
     if (path.includes('/hosts/')) return { data: path.endsWith('/assignments') ? [] : agents.filter(a => a.machineId === caller.machineId).map(agent => ({ tabId: 'pool-tab', agent, observers: [] })) }
     if (path.includes('/machines/')) { expect(caller.account).toBe('member'); expect(body.generation).toBe(generation); observations++; return { data: { revision: observations } } }
     if (path === '/api/super-tabs/pool-tab') return { data: { state: { id: 'pool-tab', agents, projects, project: { machineId: memberMachine.machineId, cwd: project, repositoryUrl: null } }, revision: observations } }
