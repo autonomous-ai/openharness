@@ -487,7 +487,8 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   columns, To do (nobody has it), Assigned (its `builder:<name>` label names an
   agent) and On it (its `status:taken` label), each headed by its name and
   count, newest activity first; a narrower pane scrolls sideways (a column is
-  220 wide at least). A card is a hairline (`DesktopChrome.rim`) at radius 12
+  140 wide at least, so all three show beside the channel in the 1280 window the
+  app opens in). A card is a hairline (`DesktopChrome.rim`) at radius 12
   on `cardBg` and holds what github.com's list shows: the issue's number in a
   grey capsule (`AppSurface.recess`, 12 metadata), its title in 14 semibold on
   up to three lines, its labels as chips in their own GitHub colour (the first
@@ -524,7 +525,10 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   later read joins what is held when its newest comments start at one of them,
   else it stands alone: a gap is never hidden. The header says `opened now` or
   `opened 5m ago`. A project with no GitHub repository says so in one line; a failed read says
-  what to do (`Sign in to GitHub: run gh auth login.`) with a retry.
+  what to do (`Sign in to GitHub: run gh auth login.`; `GitHub is limiting
+  requests. Try again in a few minutes.` when GitHub's rate limit answers;
+  `Allow gh in this organisation's SSO on github.com.` when SAML does) with a
+  retry.
 - **Project menu.** A project's channel header, `# name ▾`, opens a menu of
   two things: `Notifications ›` (All new messages, Mentions only, Muted) and,
   below a divider, `Project settings…`, whose rows are Rename project, Project

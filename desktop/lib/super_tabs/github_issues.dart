@@ -518,6 +518,17 @@ class SwarmGitHub {
     if (said.contains('Could not resolve to an Issue')) {
       throw const SwarmGitHubError('That issue is gone.');
     }
+    // GitHub answered, so trying again at once only meets the same limit.
+    if (said.contains('rate limit') || said.contains('HTTP 429')) {
+      throw const SwarmGitHubError(
+        'GitHub is limiting requests. Try again in a few minutes.',
+      );
+    }
+    if (said.contains('SAML')) {
+      throw const SwarmGitHubError(
+        'Allow gh in this organisation\'s SSO on github.com.',
+      );
+    }
     if (said.contains('disabled issues') ||
         said.contains('has disabled issues')) {
       throw SwarmGitHubError('$repository has issues turned off.');

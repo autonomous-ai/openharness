@@ -402,6 +402,31 @@ void main() {
       ),
       'That issue is gone.',
     );
+    // GitHub answered: trying again at once meets the same limit, so the words say to wait.
+    for (final said in [
+      'gh: API rate limit exceeded for user ID 12345. (HTTP 403)',
+      'gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403)',
+      'gh: Too Many Requests (HTTP 429)',
+    ]) {
+      expect(
+        await failure(answering((_) => ProcessResult(1, 1, '', said))),
+        'GitHub is limiting requests. Try again in a few minutes.',
+        reason: said,
+      );
+    }
+    expect(
+      await failure(
+        answering(
+          (_) => ProcessResult(
+            1,
+            1,
+            '',
+            'gh: Resource protected by organization SAML enforcement. You must grant your OAuth token access to this organization. (HTTP 403)',
+          ),
+        ),
+      ),
+      'Allow gh in this organisation\'s SSO on github.com.',
+    );
     expect(
       await failure(
         answering((_) => ProcessResult(1, 1, '', 'something else')),

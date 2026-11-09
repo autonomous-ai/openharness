@@ -53,8 +53,9 @@ class SwarmTaskBoard extends StatefulWidget {
   final Duration? refreshEvery;
   final DateTime Function() now;
 
-  /// The least a column is wide: a narrower pane scrolls sideways.
-  static const columnMinWidth = 220.0;
+  /// The least a column is wide: a narrower pane scrolls sideways. Three of them fit beside the channel in the window the
+  /// app opens in (1280 wide: a pane of 490, 147 a column), so On it, the column people look for, is never out of sight.
+  static const columnMinWidth = 140.0;
 
   /// The project's repository as `owner/name`, or null when it has none on GitHub.
   static String? repositoryOf(
