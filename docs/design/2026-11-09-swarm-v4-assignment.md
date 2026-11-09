@@ -1,8 +1,8 @@
 # Swarm v4: who builds what, and when
 
 Status: built. The solver (`cli/src/superTabs/assign/search.ts`, `schedule.ts`) and the assigner that feeds it and applies
-its plan (`assign/crew.ts`, `githubAssign.ts`) run in the Harness of the person whose agent is the project's PM. Learned
-estimates, CPU cores and moving work are next (below).
+its plan (`assign/crew.ts`, `githubAssign.ts`) run in the Harness of the person whose agent is the project's PM. Moving
+work, learned task times and CPU cores are built; learned memory, disk and spend are next (below).
 
 anh Dee, 2026-11-09: "this is a classic optimization problem. N tasks. M machines with cpu ssd token. how do we best
 assign them." "The bottleneck is a combination of cpu disk token etc." Assignment is the core of a Swarm: the right task
@@ -85,8 +85,9 @@ Every minute, in the PM's person's Harness, for each project its PM leads from t
 - **Builders** are the project's regular Claude Code and Codex agents as the PM reads the Swarm (`crewOf`): never the PM,
   a Buddy, one stopping, one whose machine is down, or another private project's. A builder is quicker in a part where its
   label was on closed issues: 15% a task, 40% at most.
-- **Machines** give Swarm work 75% of their memory and their project disk less 10 GB; CPU is 8 cores until machines report
-  their count. **Subscriptions** are each machine's engine windows as it reported them, a 20% reserve kept for its person.
+- **Machines** give Swarm work 75% of their memory and their project disk less 10 GB, and their cores as their daemon
+  reports them (`cpuCores`, since 0.5.86; a backend before it refuses the field by name, and the daemon leaves it out for
+  ten minutes); a machine whose daemon reports none is planned as 8 cores. **Subscriptions** are each machine's engine windows as it reported them, a 20% reserve kept for its person.
 - **Sizes** until estimates are learned: s 30 minutes, 1 core, 2 GB, 1 GB, 3% of a 5-hour window; m 90, 2, 4 GB, 2 GB, 10%;
   l 240, 4, 8 GB, 4 GB, 25%; a weekly window spends a fifth of that.
 - **The plan** is the solver's, from the last plan (so it changes only where it gains), in a second at most. Each builder
@@ -162,6 +163,5 @@ rest (`assign/crew.ts startedAt`, `learnedMinutes`; `githubAssign.ts measure`).
 ## Next
 
 1. **Estimates of memory, disk and spend** from what finished tasks used, by part, size and model, beside their time.
-2. **CPU cores** in each machine's report, so CPU is measured, not assumed.
-3. **Measures** in Desktop: time from label to merge, idle builder-minutes, quota left unspent at resets, overload minutes,
+2. **Measures** in Desktop: time from label to merge, idle builder-minutes, quota left unspent at resets, overload minutes,
    holds and conflicts.
