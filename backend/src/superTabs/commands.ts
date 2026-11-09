@@ -95,6 +95,7 @@ import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, pr
 import { placeAfter, queueSiblings } from './taskQueue.js'
 import { inThread, leadsGroup, recordAnswered, requireUnanswered } from './answers.js'
 import { laneNamed, pinBuilder, spokenList, stampLane } from './dispatch.js'
+import { retiredCommandSchemas } from './retired.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 /** A route override's reason when its agent gave none, on a decision whose chosen candidate was not a pick (a person's choice, or an older record). */
@@ -545,6 +546,8 @@ export const commandSchema = z.discriminatedUnion('type', [
     // `base`: the branch the checker read the pull request's diff against (security review of #3218, round 5; review round 7):
     // any branch name, never a space or a control character, as it is printed in terminals.
     base: z.string().min(1).max(255).regex(/^[^\s\p{Cc}]+$/u).optional() }).strict(),
+  // Commands v4 no longer has: an older client's is accepted and ignored (retired.ts).
+  ...retiredCommandSchemas,
 ])
 export type Command = z.infer<typeof commandSchema>
 export const operationSchema = z.object({ operationId: id, command: commandSchema }).strict()
