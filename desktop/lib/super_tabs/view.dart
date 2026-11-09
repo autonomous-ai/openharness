@@ -2090,8 +2090,10 @@ class _SuperTabViewState extends State<SuperTabView>
     attention: SuperTabAttention.of(c),
     onManage: _openManage,
     onManageMachines: () {
+      // Set before Manage opens, so a last page of Devices is not opened here only to be left at once.
+      _manageTab = SuperTabManageTab.machines;
       _openManage();
-      _chooseManageTab(SuperTabManageTab.machines);
+      c.leaveDevices();
     },
     manageSelected: _manageOpen,
     // On every platform: the Mac's menu bar and Dock still say what waits,

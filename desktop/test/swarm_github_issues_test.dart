@@ -271,6 +271,69 @@ void main() {
     },
   );
 
+  test(
+    'keeps the lists of the last twenty repositories it read, and no more',
+    () async {
+      final github = answering((_) => page([node(1, '2026-11-01T00:00:00Z')]));
+      for (var i = 0; i <= SwarmGitHub.listsKept; i++) {
+        await github.issues('autonomous-ai/repo$i');
+      }
+      expect(github.kept('autonomous-ai/repo0'), isNull);
+      expect(github.kept('autonomous-ai/repo1'), isNotNull);
+      expect(
+        github.kept('autonomous-ai/repo${SwarmGitHub.listsKept}'),
+        isNotNull,
+      );
+    },
+  );
+
+  test(
+    'a thread it cannot read does not stop the others being read ahead',
+    () async {
+      ProcessResult unreadable() => ProcessResult(
+        1,
+        0,
+        jsonEncode({
+          'data': {
+            'repository': {
+              'issue': {
+                ...node(1, '2026-11-09T05:00:00Z', comments: 1),
+                'body': 'x',
+                'state': 'OPEN',
+                // A cursor that is not text: reading it throws a TypeError, not a GitHub error.
+                'comments': {
+                  'totalCount': 1,
+                  'pageInfo': {'hasPreviousPage': true, 'startCursor': 5},
+                  'nodes': <Object?>[],
+                },
+              },
+            },
+          },
+        }),
+        '',
+      );
+      final github = answering((arguments) {
+        final number = arguments.firstWhere((a) => a.startsWith('number='));
+        return number == 'number=1'
+            ? unreadable()
+            : thread([comment(1, 'deehw', 'Hi.')]);
+      });
+      final issues = [
+        for (final n in [1, 2])
+          SwarmIssue(
+            number: n,
+            title: 'Issue $n',
+            labels: const [],
+            url: 'u$n',
+            updatedAt: DateTime.utc(2026, 11, 9, 5),
+          ),
+      ];
+      await github.prefetch('autonomous-ai/lampOS', issues);
+      expect(github.keptThread('autonomous-ai/lampOS', 1), isNull);
+      expect(github.keptThread('autonomous-ai/lampOS', 2), isNotNull);
+    },
+  );
+
   test('says how to fix each way gh fails', () async {
     Future<String> failure(SwarmGitHub github) async {
       try {

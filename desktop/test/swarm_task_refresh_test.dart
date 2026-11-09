@@ -213,6 +213,7 @@ void main() {
     WidgetTester tester,
     List<ProcessResult> threads, {
     DateTime? now,
+    Future<ProcessResult> Function()? earlier,
   }) async {
     final calls = <List<String>>[];
     var reads = 0;
@@ -221,6 +222,7 @@ void main() {
       run: (arguments) async {
         calls.add(arguments);
         if (arguments.any((a) => a.startsWith('before='))) {
+          if (earlier != null) return earlier();
           return json({
             'repository': {
               'issue': {
@@ -288,6 +290,36 @@ void main() {
       await tester.tap(key('swarm-issue-show-earlier'));
       await flush(tester);
       expect(calls.last, contains('before=b8'));
+    },
+  );
+
+  testWidgets(
+    'an earlier page that comes after a newer read moved the window is not put above it',
+    (tester) async {
+      final gate = Completer<ProcessResult>();
+      await panel(tester, [
+        thread([8, 9, 10], total: 10, before: 'b8'),
+        thread([11, 12, 13], total: 13, before: 'b11'),
+      ], earlier: () => gate.future);
+      // Show asks for the page before comment 8, which has not come when the refresh moves the window past it.
+      await tester.tap(key('swarm-issue-show-earlier'));
+      await flush(tester);
+      await flush(tester, const Duration(seconds: 30));
+      expect(find.textContaining('comment 11'), findsOneWidget);
+      gate.complete(
+        json({
+          'repository': {
+            'issue': {
+              'comments': commentsOf([5, 6, 7]),
+            },
+          },
+        }),
+      );
+      await flush(tester);
+      // That page was of a range the thread no longer holds: it is not put above comments 11 to 13.
+      expect(find.textContaining('comment 5'), findsNothing);
+      expect(find.textContaining('comment 11'), findsOneWidget);
+      expect(find.text('10 earlier comments'), findsOneWidget);
     },
   );
 

@@ -156,9 +156,11 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
     setState(() => _showing = true);
     try {
       final page = await widget.github.earlier(repository, number, cursor);
+      // A newer read that did not join the held comments moved the cursor: this page is of a range no longer held.
       if (!mounted ||
           repository != widget.repository ||
-          number != widget.number)
+          number != widget.number ||
+          cursor != _earlier)
         return;
       setState(() {
         _comments = [...page.comments, ..._comments];

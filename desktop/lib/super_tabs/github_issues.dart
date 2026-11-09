@@ -178,6 +178,9 @@ class SwarmGitHub {
   /// How many threads are kept to open again at once.
   static const threadsKept = 60;
 
+  /// How many repositories' issue lists are kept to show again at once.
+  static const listsKept = 20;
+
   /// `owner/name` of a GitHub repository address (https or ssh, with or without `.git`). Null for anything else.
   static String? repositoryOf(String? url) {
     if (url == null) return null;
@@ -230,10 +233,16 @@ class SwarmGitHub {
           ? info['endCursor'] as String?
           : null;
       if (after != null && issues.length < issuesMax) {
-        onPage?.call(List.of(_newestFirst(issues)));
+        onPage?.call(_newestFirst([...issues]));
       }
     } while (after != null && issues.length < issuesMax);
-    return _lists[repository] = _newestFirst(issues);
+    final list = _newestFirst(issues);
+    _lists.remove(repository);
+    _lists[repository] = list;
+    while (_lists.length > listsKept) {
+      _lists.remove(_lists.keys.first);
+    }
+    return list;
   }
 
   /// Issue [number] of [repository]: its text, and its newest [lastComments] comments, oldest first.
@@ -329,6 +338,12 @@ class SwarmGitHub {
           await thread(repository, number);
         } on SwarmGitHubError {
           // Opening it reads it again and says why it could not be read.
+        } catch (error) {
+          // A thread GitHub sent in a shape this app does not read: opening it says so; the others are still read ahead.
+          appLog.warn(
+            'super-tabs',
+            'GitHub thread not read ahead: ${error.runtimeType}',
+          );
         } finally {
           _reading.remove(key);
         }
