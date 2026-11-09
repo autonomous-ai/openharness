@@ -9,8 +9,8 @@
  * - `creation_status`: read the exact native receipt without exposing its launch request;
  * - `keep_lead_alive`, `close_member`: for the Super Tab service alone, reopen a stopped Swarm Lead and close a member
  *   whose session its backend ended, each only as core/api.ts allows;
- * - `last_turn`: a session's last turn as its engine recorded it (what was asked, the final answer), for the Super Tab
- *   service alone: it posts the answer of the turn that ended into its agent's person's chat;
+ * - `turn_answer`: what the turn of a session that was asked a prompt (by its hash) answered, for the Super Tab service alone:
+ *   it posts the answer of the turn that ended into its agent's person's chat;
  * - `stop_turn`: stop an agent's turn;
  * - `windows`: a change notice for every window on this computer (`orchestrator_changed`);
  * - `daemon`: how an agent's shell reaches this daemon, for the prompts the experiment writes;
@@ -45,7 +45,7 @@ import { nativeTurnCursorIn } from '../lib/nativeTurnObservations.js'
 type Payload = Record<string, unknown>
 type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud' | 'superTabs' | 'transcripts'>
 
-const QUERIES: ReadonlySet<string> = new Set(['shown', 'activity', 'last_turn', 'close_swarm', 'keep_lead_alive', 'close_member', 'stopped', 'gone', 'creation_status', 'native_turns', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention', 'super_tab_cards', 'super_tab_card_recap', 'super_tab_observers', 'super_tab_screen', 'super_tab_input', 'super_tab_input_if_screen'])
+const QUERIES: ReadonlySet<string> = new Set(['shown', 'activity', 'turn_answer', 'close_swarm', 'keep_lead_alive', 'close_member', 'stopped', 'gone', 'creation_status', 'native_turns', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention', 'super_tab_cards', 'super_tab_card_recap', 'super_tab_observers', 'super_tab_screen', 'super_tab_input', 'super_tab_input_if_screen'])
 const METHODS: ReadonlySet<string> = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
@@ -117,13 +117,13 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       const ids = Array.isArray(payload.agentIds) ? payload.agentIds.filter((id): id is string => typeof id === 'string').slice(0, 64) : []
       return { activity: await core.agents.activity(ids) }
     }
-    // The answer of the turn that just ended, which the Swarm host posts into its agent's person's chat (superTabs/agentReplies.ts):
-    // read from the transcript here, as the recaps' is, bounded (core/transcripts/lastTurn.ts).
-    case 'last_turn': {
+    // The answer of the turn that just ended, which the Swarm host posts into its agent's person's chat (superTabs/agentReplies.ts): the
+    // turn its end named by its prompt's hash, as the core heard it said (core/turns/ends.ts).
+    case 'turn_answer': {
       if (service !== 'superTabs') return { error: 'NOT_SUPER_TABS' }
-      const sessionId = text(payload.sessionId)
-      if (!sessionId || sessionId.length > 256) return { error: 'INVALID_REQUEST' }
-      return { turn: await core.transcripts.lastTurn(sessionId) }
+      const sessionId = text(payload.sessionId), prompt = text(payload.prompt)
+      if (!sessionId || sessionId.length > 256 || !/^[0-9a-f]{32}$/.test(prompt)) return { error: 'INVALID_REQUEST' }
+      return { answer: await core.turns.answerOf(sessionId, prompt) }
     }
     case 'stopped':
       return { stopped: !!text(payload.agentId) && await core.agents.stopped?.(text(payload.agentId)) === true }

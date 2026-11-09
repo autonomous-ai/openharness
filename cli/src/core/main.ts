@@ -827,10 +827,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The experiments' turns (the orchestrator's first), and Agent Messages' typed messages (core/api.ts).
     deliverers: new Set(TURN_DELIVERERS),
   })
-  // Each live turn's end, for the services in this process and the Swarm's in its own (core/turns/ends.ts), said by the event funnel.
+  // Each live turn's end, for the services in this process and the Swarm's in its own, and what each turn answered
+  // (core/turns/ends.ts), all said by the event funnel as the turn goes.
   const turnEnds = createTurnEnds({
     hearers: new Set(TURN_END_HEARERS),
     tell: (service, event) => { serviceLinksRef?.notify(service, { type: 'service_event', payload: { kind: 'turn_end', event } }) },
+    lastTurn: sessionId => readLastTurn(sessionId),
   })
   const ports = emptyPorts()
   // The Wi-Fi device's service runs with the dials (services/wifi.ts); what the core reads in line of it
@@ -1054,6 +1056,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       asks: async (agentId) => mirror.recentAsks(registry.resolve(agentId)?.sessionId || agentId),
       ...deliveries.turns,
       onEnd: turnEnds.onEnd,
+      answerOf: turnEnds.answerOf,
     },
     questions: {
       // The device's own object, verbatim: rebuilt as `{ [requestId]: optionId }` it was keyed by the

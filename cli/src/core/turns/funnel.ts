@@ -70,8 +70,9 @@ export interface FunnelDeps {
   /** Each live turn's start and end, never a re-read: the short-turn guard holds automatic input to an agent that
    *  loops (shortTurnGuard.ts). */
   shortTurns?: Pick<ShortTurnGuard, 'started' | 'ended'>
-  /** Whoever hears each live turn end (`CoreApi.turns.onEnd`, core/turns/ends.ts). */
-  ends?: Pick<TurnEnds, 'ended'>
+  /** Whoever hears each live turn end (`CoreApi.turns.onEnd`, core/turns/ends.ts), which is told each turn as it goes: that is how
+   *  an end says which turn it was, and what the turn answered. */
+  ends?: Pick<TurnEnds, 'started' | 'said' | 'worked' | 'ended'>
 }
 
 type OutsideConsumers = (consumer: string, call: () => void) => void
@@ -159,6 +160,8 @@ export function funnelFor({
         outside('devices', () => device()?.turnStarted(agentId))
         startHeartbeat(sessionId)
         questionWatcher.start(sessionId)   // Claude opens its dialog INSIDE a turn
+        // A turn the daemon picks up at attach is told as one whose first part it never saw; a re-read of history is not told at all.
+        if (!opts?.replay) outside('turn-ends', () => ends?.started(sessionId, event.payload.userMessage, !!opts?.resumed))
         // ...and anything already drawn belongs to the turn BEFORE this one — unless this is a turn the
         // daemon is picking back up at attach: a dialog on the pane then is THIS turn's, still waiting,
         // and marking it pre-turn is how a restarted daemon never announced a question Codex had open.
@@ -189,6 +192,11 @@ export function funnelFor({
         // Whoever answers a person at a turn's end (the Swarm host, superTabs/agentReplies.ts) hears every live end, the one before
         // a queued follow-up included: each message is its own turn. Never one re-read from disk.
         if (!replay) outside('turn-ends', () => ends?.ended({ agentId, sessionId, aborted: event.payload.aborted === true }))
+      } else if (event.type === 'text_delta') {
+        if (!replay) outside('turn-ends', () => ends?.said(sessionId, event.payload.content))
+      } else if (event.type === 'tool_start' && !event.payload.parentToolUseId) {
+        // A tool a sub-agent calls is not the turn's own: what the turn said stays what it said.
+        if (!replay) outside('turn-ends', () => ends?.worked(sessionId))
       }
     }
     if (nativeTurns) outside('native-turns', () => nativeTurns.ingest(agentIdFor(sessionId), events, !!(opts?.resumed || opts?.replay)))
