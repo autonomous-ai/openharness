@@ -38,7 +38,7 @@ void main() {
   final picker = find.byKey(const ValueKey('super-composer-completions'));
 
   ConversationServer swarm() {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     server.state['people'] = [
       {'id': 'owner', 'email': 'river@autonomous.ai', 'role': 'owner'},
       {'id': 'ken', 'email': 'ken15@autonomous.ai', 'role': 'collaborator'},

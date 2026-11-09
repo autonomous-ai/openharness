@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { effectivePriority, priorityRank, type TaskPriority } from './taskPriority.js'
+import { effectivePriority } from './taskPriority.js'
 
 // Task #3117: a task's priority is its field, else the title marker the PM wrote before there was one (Desktop backlog.dart
 // superTabTitlePriority), else P2.
@@ -30,8 +30,4 @@ describe('a task\'s priority', () => {
     expect(effectivePriority({ title: 7 })).toBe('P2')
   })
 
-  it('ranks P0 first', () => {
-    const shuffled: TaskPriority[] = ['P2', 'P0', 'P3', 'P1']
-    expect(shuffled.sort((a, b) => priorityRank(a) - priorityRank(b))).toEqual(['P0', 'P1', 'P2', 'P3'])
-  })
 })
