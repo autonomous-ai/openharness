@@ -1,41 +1,9 @@
 import { z } from 'zod'
 import { agent, fail, person, type Actor, type SuperTabState } from './model.js'
-import { knownTimeZone } from './localTime.js'
 import { agentProjectId, projectAgent } from './projects.js'
-
-/** The emoji a status may wear. Desktop offers each with its words (focus, coffee, lunch, out, away, sick). */
-export const STATUS_EMOJI = ['🎯', '☕', '🍽️', '🌴', '🚶', '🤒'] as const
-export const MAX_STATUS_LENGTH = 80
-
-/** A person's short status, shown beside their avatar until `until` passes; then readers drop it. */
-export interface PersonStatus { text: string; emoji: (typeof STATUS_EMOJI)[number] | null; until: string | null }
 
 // Control, format (bidi overrides, zero-width) and line/paragraph separators: words that hide their real shape.
 export const printable = (value: string) => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value)
-export const statusSchema = z.object({
-  text: z.string().trim().min(1).max(MAX_STATUS_LENGTH).refine(printable, 'Use printable words.'),
-  emoji: z.enum(STATUS_EMOJI).nullable().optional(),
-  until: z.iso.datetime().nullable().optional(),
-}).strict()
-
-/** `member.status`: a person sets or clears their own status. Members read it with the rest of the Swarm, nobody else. */
-export function setStatus(state: SuperTabState, actor: Actor, status: z.infer<typeof statusSchema> | null, now: number): void {
-  if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'Only a person has a status.', 403)
-  const member = person(state, actor.userId)
-  if (!status) return void delete member.status
-  const until = status.until ? new Date(status.until).toISOString() : null
-  if (until && Date.parse(until) <= now) fail('STATUS_EXPIRED', 'Choose a time that has not passed yet.', 400)
-  member.status = { text: status.text, emoji: status.emoji ?? null, until }
-}
-
-/** `member.timeZone`: a person's own app tells the Swarm their time zone, or that it knows none. A viewer may too. */
-export function setTimeZone(state: SuperTabState, actor: Actor, timeZone: string | null): void {
-  if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'Only a person has a time zone.', 403)
-  const member = person(state, actor.userId)
-  if (timeZone === null) return void delete member.timeZone
-  if (!knownTimeZone(timeZone)) fail('TIME_ZONE', 'Name a time zone such as Asia/Ho_Chi_Minh.', 400)
-  member.timeZone = timeZone
-}
 
 /** Pictures a person may pick instead of uploading one; Desktop draws each. */
 export const AVATAR_PRESETS = ['fox', 'owl', 'cat', 'panda', 'octopus', 'cactus', 'rocket', 'sun'] as const
@@ -49,6 +17,15 @@ export const avatarView = (avatar: Avatar): AvatarView => avatar.kind === 'uploa
 /** [holder] as readers get it, its avatar's stored key left out. */
 export function withAvatarView<T extends { avatar?: Avatar }>(holder: T): Omit<T, 'avatar'> & { avatar?: AvatarView } {
   return holder.avatar ? { ...holder, avatar: avatarView(holder.avatar) } : holder
+}
+/** A person as readers get them: [withAvatarView], and without the status and time zone that Swarms from before v4 stored for them.
+ *  Nothing sets either any more (2026-11-09) and no app draws them, so a status with no end would only haunt an older app for
+ *  ever. A person with neither stored is read as `withAvatarView` always read them, with no copy. The stored values can go from
+ *  2026-12-09. */
+export function personView<T extends { avatar?: Avatar }>(holder: T): Omit<T, 'avatar'> & { avatar?: AvatarView } {
+  if (!('status' in holder) && !('timeZone' in holder)) return withAvatarView(holder)
+  const { status: _status, timeZone: _timeZone, ...rest } = holder as T & { status?: unknown; timeZone?: unknown }
+  return withAvatarView(rest as T)
 }
 export const avatarChoice = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('upload'), id: z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/) }).strict(),
