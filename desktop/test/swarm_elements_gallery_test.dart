@@ -19,7 +19,7 @@ import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/task_list.dart';
+import 'package:harness/super_tabs/task_board.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
@@ -514,12 +514,12 @@ class _Gallery extends StatelessWidget {
                 ],
               ),
               title(
-                'Tasks: the project\'s GitHub issues, read with gh; a card opens one',
+                'Tasks: a board of the project\'s GitHub issues, read with gh; a card opens one',
               ),
               SizedBox(
-                width: 520,
+                width: 760,
                 height: 330,
-                child: SwarmTaskList(
+                child: SwarmTaskBoard(
                   controller: swarm,
                   conversationId: 'lead',
                   github: swarmV4GitHub(),
