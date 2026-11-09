@@ -15,11 +15,11 @@ String swarmAgentId(String machineId, String harnessId) {
 }
 
 /// One pane of the person's own in one of their tabs.
-typedef OwnPane = ({Swarm tab, TerminalPane pane, MachineState machine});
+typedef _OwnPane = ({Swarm tab, TerminalPane pane, MachineState machine});
 
 /// The person's own panes, in their tabs in tab order: a Swarm tab's own views, viewers, a computer shared with them and a
 /// Harness Team account's are left out. A session two tabs show is two entries ([personalAgents] lists it once).
-Iterable<OwnPane> ownPanes(AppNotifier app) sync* {
+Iterable<_OwnPane> _ownPanes(AppNotifier app) sync* {
   for (final tab in app.swarms) {
     if (tab.isSuperTab || tab.isUtility) continue;
     for (final pane in tab.panes) {
@@ -83,7 +83,7 @@ List<PersonalAgent> personalAgents(AppNotifier app, SuperTabSnapshot snapshot) {
   // Each computer's sessions by id, worked out once for the pass: a desk holds hundreds of panes.
   final sessions = <String, Map<String, Agent>>{};
   final rows = <PersonalAgent>[];
-  for (final entry in ownPanes(app)) {
+  for (final entry in _ownPanes(app)) {
     final harnessId = entry.pane.agentId!;
     final key = (machineIdKey(entry.pane.machineId), harnessId);
     if (joined.contains(key) || !seen.add(key)) continue;

@@ -65,7 +65,7 @@ import 'crew_panel.dart';
 import 'instructions_panel.dart';
 import 'project_rules.dart';
 import 'model.dart';
-import 'new_agent.dart' show swarmAttachAgent, swarmJoinName;
+import 'new_agent.dart' show swarmAttachAgent;
 import 'agent_details.dart';
 import 'identity.dart' show SuperTabAvatar, superTabMachineName;
 import 'identity_card.dart';
@@ -285,11 +285,6 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The panes joining the Swarm now, by the id they get in it: a pane joins once at a time.
   final _joining = <String>{};
 
-  /// The operation each pane's join began with and the name it joins under, kept while it has not finished: a click that tries
-  /// again finishes that one, the same request, and never makes a second chat. At most [_joinsKept].
-  final _joins = <String, ({String operation, String name})>{};
-  static const _joinsKept = 64;
-
   /// Opens a pane of the person's own listed under Your Team in their Personal Swarm (Swarm v4: every pane they run is an agent
   /// there): it joins the Swarm as Attach joins one, its 1:1 chat opens, and its terminal shows beside the chat. A refusal is
   /// said, and the next click finishes the join.
@@ -297,52 +292,43 @@ class _SuperTabViewState extends State<SuperTabView>
     final app = widget.app;
     final controller = c;
     if (app == null || _joining.contains(row.swarmId)) return;
+    // The app's: a refusal is said even when the person left this Swarm meanwhile.
+    final messenger = ScaffoldMessenger.maybeOf(context);
     setState(() => _joining.add(row.swarmId));
-    if (!_joins.containsKey(row.swarmId) && _joins.length >= _joinsKept) {
-      _joins.remove(_joins.keys.first);
-    }
-    final join = _joins[row.swarmId] ??= (
-      operation: superTabOperationId(),
-      name: swarmJoinName(row.agent, controller.snapshot?.agents ?? const []),
-    );
     try {
       final chat = await swarmAttachAgent(
         app,
         controller.tabId,
         row.machineId,
         row.agent,
-        operationId: join.operation,
-        name: join.name,
       );
-      _joins.remove(row.swarmId);
       if (!mounted || c != controller) return;
-      _openAgentChat(chat);
+      // The join opened its chat: what holds the middle steps aside for it.
+      c.leaveDevices();
+      setState(() {
+        _page = null;
+        _showManage = _showTasks = _showPullRequests = false;
+      });
+      _closeSidebar();
       final snapshot = controller.snapshot;
       final agentId = snapshot?.conversation(chat)?.agentIds.firstOrNull;
       final agent = agentId == null ? null : snapshot?.agent(agentId);
       if (agent != null) widget.onOpenTerminal(agent);
     } catch (failure) {
-      // The server takes an operation again only for the request it first had (its engine changed since): the next click
-      // starts over.
-      if (failure is SuperTabFailure && failure.code == 'OPERATION_REUSED') {
-        _joins.remove(row.swarmId);
-      }
       appLog.warn(
         'super-tabs',
         'A pane could not join Your Team '
             '(${failure is SuperTabFailure ? failure.code : failure.runtimeType})',
       );
-      if (mounted) {
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(
-            content: Text(
-              failure is SuperTabFailure
-                  ? failure.message
-                  : "Couldn't join. Try again.",
-            ),
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text(
+            failure is SuperTabFailure
+                ? failure.message
+                : "Couldn't join. Try again.",
           ),
-        );
-      }
+        ),
+      );
     } finally {
       _joining.remove(row.swarmId);
       if (mounted) setState(() {});

@@ -132,28 +132,29 @@ HarnessLaunchIntegration swarmNewAgent(
   return integration;
 }
 
-/// The name an agent already running joins a Swarm under: the one its person gave it, else one of the Swarm's that none of
-/// [agents] has.
-String swarmJoinName(Agent native, Iterable<SuperTabAgent> agents) =>
-    native.nameChosen == true
-    ? native.name
-    : freshAgentName([
-        for (final agent in agents) agent.displayName ?? agent.name,
-      ]);
+/// A join begun on this Desktop and not finished: what it asks the Swarm for, kept so that trying it again is the same request
+/// under the same operation (the server answers an operation again only for the request it first had), so it never makes a
+/// second chat, from whichever view or picker it is tried. By Swarm and session; per app, at most [_joinsKept].
+typedef _Join = ({
+  String operation,
+  String name,
+  String? model,
+  String? effort,
+});
+final _joins = Expando<Map<(String, String, String), _Join>>();
+const _joinsKept = 64;
 
 /// Attach, beside + in Your Team (Swarm v4, anh Dee 2026-11-09: "this is like cmd p. while + is like cmd n"), and a click on a
 /// pane's row in Your Team: an agent already running on one of its person's own computers joins their team as + New agent's
-/// does, with its own 1:1 chat, which opens; the chat's id is the answer. Its name is [name], else [swarmJoinName]'s. Nothing
-/// is typed into it: it goes on with what it was doing, and its daemon tells it the team's ways once it is in (cli
-/// superTabs/host.ts). A join the connection lost is tried again as the same operation, which never adds it twice; a caller
-/// whose join failed passes its [operationId] and [name] again to finish that one, so it never makes a second chat.
+/// does, with its own 1:1 chat, which opens; the chat's id is the answer. Its name is the one its person gave it, else one of
+/// the Swarm's that no agent has and no other join begun here holds. Nothing is typed into it: it goes on with what it was
+/// doing, and its daemon tells it the team's ways once it is in (cli superTabs/host.ts). A join the connection lost is tried
+/// again as the same operation, which never adds it twice; one that failed is finished by the next try ([_Join]).
 Future<String> swarmAttachAgent(
   AppNotifier app,
   String tabId,
   String machineId,
   Agent native, {
-  String? operationId,
-  String? name,
   Future<void> Function(Duration) wait = Future<void>.delayed,
 }) async {
   final engine = native.engine;
@@ -163,11 +164,28 @@ Future<String> swarmAttachAgent(
       'Only Claude Code or Codex can join this Swarm.',
     );
   }
-  final creationId = operationId ?? superTabOperationId();
   final started = DateTime.now();
-  final joinName =
-      name ??
-      swarmJoinName(native, (await app.superTabs.readSnapshot(tabId)).agents);
+  final joins = _joins[app] ??= {};
+  final key = (tabId, machineId, native.id);
+  var join = joins[key];
+  if (join == null) {
+    final agents = native.nameChosen == true
+        ? null
+        : (await app.superTabs.readSnapshot(tabId)).agents;
+    join = joins[key] ??= (
+      operation: superTabOperationId(),
+      name: agents == null
+          ? native.name
+          : freshAgentName([
+              for (final agent in agents) agent.displayName ?? agent.name,
+              for (final other in joins.values) other.name,
+            ]),
+      model: native.modelName,
+      effort: native.modelEffort,
+    );
+    if (joins.length > _joinsKept) joins.remove(joins.keys.first);
+  }
+  final creationId = join.operation;
 
   Future<Map<String, dynamic>> run(
     String step,
@@ -198,7 +216,7 @@ Future<String> swarmAttachAgent(
     'kind': 'regular',
     'machineId': machineId,
     'engine': engine,
-    'name': joinName,
+    'name': join.name,
     'local': true,
   });
   final chatId = chat['conversationId'] as String;
@@ -207,16 +225,18 @@ Future<String> swarmAttachAgent(
     'conversationId': chatId,
     'machineId': machineId,
     'harnessId': native.id,
-    'name': joinName,
+    'name': join.name,
     'lead': false,
     'configuration': {
       'engine': engine,
-      'model': native.modelName,
-      'effort': native.modelEffort,
+      'model': join.model,
+      'effort': join.effort,
       'contextWindow': null,
       'engineVersion': null,
     },
   });
+  // It is in: a later try is a new join.
+  joins.remove(key);
   await app.wakeSuperTabHost(machineId);
   final controller = await app.superTabs.open(tabId);
   await controller.refresh();

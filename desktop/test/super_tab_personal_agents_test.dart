@@ -12,6 +12,7 @@ import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart' show stableId;
+import 'package:harness/super_tabs/new_agent.dart';
 import 'package:harness/super_tabs/personal_agents.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/swarm_switcher.dart';
@@ -843,6 +844,51 @@ void main() {
           session('auto', 'harness-7', chosen: false),
         ];
         deskTab(f.app, 'one', [pane('m', 'auto')]);
+      },
+      joined: const [],
+    );
+
+    scene('a join refused, then tried from elsewhere after the view went (Attach\'s '
+        'picker), finishes the same one: one chat', (tester, f, c) async {
+      f.connection.failJoin = const SuperTabFailure(
+        'HOST_REQUIRED',
+        'Choose your own computer.',
+        statusCode: 403,
+      );
+      await tester.tap(key('super-pane-m-docs'));
+      await joined(tester);
+      // The person leaves this Swarm: the view goes.
+      await tester.pumpWidget(const SizedBox());
+      final docs = f.app.machineStates['m']!.agents.firstWhere(
+        (a) => a.id == 'docs',
+      );
+      await tester.runAsync(() => swarmAttachAgent(f.app, tabId, 'm', docs));
+      expect(f.connection.joins, hasLength(2));
+      expect(
+        f.connection.joins[0]['operationId'],
+        f.connection.joins[1]['operationId'],
+      );
+      expect(chatsMade(f), 1);
+    });
+
+    scene(
+      'two sessions never named, clicked one after the other, join under two names',
+      (tester, f, c) async {
+        await tester.tap(key('super-pane-m-a'));
+        await tester.tap(key('super-pane-m-b'));
+        await joined(tester);
+        final names = [
+          for (final join in f.connection.joins) join['command']['name'],
+        ];
+        expect(names, hasLength(2));
+        expect(names.toSet(), hasLength(2));
+      },
+      desk: (f) {
+        f.app.machineStates['m']!.agents = [
+          session('a', 'harness-1', chosen: false),
+          session('b', 'harness-2', chosen: false),
+        ];
+        deskTab(f.app, 'one', [pane('m', 'a'), pane('m', 'b')]);
       },
       joined: const [],
     );
