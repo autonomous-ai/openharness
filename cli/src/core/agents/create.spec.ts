@@ -353,6 +353,12 @@ describe('creating an agent', () => {
     expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0]).not.toHaveProperty('swarmSkill')
   })
 
+  it('refuses a Buddy\'s unsafe Swarm runtime before opening a pane', async () => {
+    const cwd = folder(['.harness'])
+    expect(await setup().create(request({ cwd, swarmRole: 'buddy' }))).toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED' })
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
+  })
+
   it.each(['local', 'remote', 'nonempty', 'unreadable', 'unreadable before trust', 'revoked', 'revoked before trust', 'changed contents', 'replaced workspace', 'changed after enumeration', 'redirected during enumeration', 'error', 'thrown text', 'no trust contract', 'legacy'] as const)(
     'decides local trust before workspace preparation and writes it before final proof: %s', async mode => {
       const parent = mode === 'redirected during enumeration' ? folder() : root
