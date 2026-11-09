@@ -95,12 +95,29 @@ Every minute, in the PM's person's Harness, for each project its PM leads from t
 - **Failures** are said once: a label GitHub refused (tried again next pass), a task no builder can do and why, gh signed
   out or rate limited (as the merger: `githubRest.ts`).
 
+## What an agent works on (built)
+
+anh Dee, 2026-11-09: "do you assign agents to their area of expertise? like one that focuses on mobile", then "the agent
+must be more proactive and ask the user what area they want the agent to focus on".
+
+- **Where it is said:** the `Works on:` line at the top of the agent's instructions file in each project's repository,
+  `agents/<Name>.md`, which its person reads and changes beside its chat. Areas are the project's `part:` labels' words
+  ("Works on: Mobile, backend"), or `anything`. One place: no setting, no second list.
+- **Who says it:** with its first task in a repository, if its file has no such line, Harness tells the agent (only it
+  reads it) to ask its person, in their chat, which area to focus on, naming the repository's areas so far. Its person
+  answers in plain words; the agent writes the line in a pull request of its own. Once per agent and repository
+  (`githubMentions.ts askFocus`).
+- **What it does:** in the plan an agent takes half the time in its areas and half as long again in others once it named
+  some (`assign/crew.ts FOCUS`, `AWAY`), on top of what it learned. So a mobile agent gets mobile tasks first, others take
+  one only when it is well behind, and it takes other work when its own area has none.
+- **Labels:** an area an agent works on that has no `part:` label yet gets one, made by the assigner, so its PM labels
+  tasks with the same words.
+
 ## Next
 
 1. **Estimates.** Each finished task records its real minutes, peak CPU and memory, disk and spend, by part, size and
    model; estimates take the mean for time and the 80th percentile for memory and disk.
 2. **CPU cores** in each machine's report, so CPU is measured, not assumed.
-3. **Works on**: what a person says their agent works on, beside what it learned.
-4. **Moving work** when a builder stops, stalls or runs out of quota, and **reviewers**.
-5. **Measures** in Desktop: time from label to merge, idle builder-minutes, quota left unspent at resets, overload minutes,
+3. **Moving work** when a builder stops, stalls or runs out of quota, and **reviewers**.
+4. **Measures** in Desktop: time from label to merge, idle builder-minutes, quota left unspent at resets, overload minutes,
    holds and conflicts.

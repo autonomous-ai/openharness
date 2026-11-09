@@ -197,7 +197,23 @@ describe('the automatic removal after a release', () => {
     expect([await kept(migrated), await kept(old)]).toEqual([null, null])
   })
 
+  // The first command of a try lists the removed collections; the old states' count follows.
   it('retries after the database throws, then finishes', async () => {
+    await empty()
+    const swarm = await migratedSwarm()
+    let tries = 0
+    const flaky = new Proxy(db, { get(target, key, receiver) {
+      if (key === '$runCommandRaw' && tries++ === 1) return async () => { throw new Error('connection reset') }
+      return Reflect.get(target, key, receiver)
+    } })
+    const logs: Array<Record<string, unknown>> = []
+
+    expect(await dropLegacyUntilDone(flaky, { pause: noWait, wait: noWait, log: line => logs.push(line) })).toMatchObject({ removed: 1, done: true })
+    expect(await kept(swarm)).toBeNull()
+    expect(logs[0]).toEqual({ failed: 'connection reset' })
+  })
+
+  it('removes the old states though the removed collections could not be listed, and tries those again', async () => {
     await empty()
     const swarm = await migratedSwarm()
     let tries = 0
@@ -206,10 +222,15 @@ describe('the automatic removal after a release', () => {
       return Reflect.get(target, key, receiver)
     } })
     const logs: Array<Record<string, unknown>> = []
+    let waits = 0
 
-    expect(await dropLegacyUntilDone(flaky, { pause: noWait, wait: noWait, log: line => logs.push(line) })).toMatchObject({ removed: 1, done: true })
+    await dropLegacyUntilDone(flaky, { pause: noWait, wait: async () => { waits++ }, log: line => logs.push(line) })
+
+    expect(logs[0]).toEqual({ failed: 'collections: connection reset' })
+    expect(logs[1]).toMatchObject({ removed: 1 })
+    // Done only once the collections were listed too: one more try, which found nothing.
+    expect(waits).toBe(1)
     expect(await kept(swarm)).toBeNull()
-    expect(logs[0]).toEqual({ failed: 'connection reset' })
   })
 
   it('stops between runs when asked to', async () => {

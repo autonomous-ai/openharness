@@ -103,6 +103,7 @@ Future<SuperTabController> show(
       builder: (context, child) => RepaintBoundary(key: _picture, child: child),
       home: Scaffold(
         body: SuperTabView(
+          board: false,
           controller: c,
           onInvite: () {},
           onAddAgent: (_) {},

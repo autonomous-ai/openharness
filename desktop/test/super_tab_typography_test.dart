@@ -42,7 +42,7 @@ double lineOf(TextStyle style) => style.fontSize! * style.height!;
 
 void main() {
   testWidgets('a message body reads at 14 px on 20 px lines', (tester) async {
-    final server = ConversationServer()
+    final server = ConversationServer.chat()
       ..append('Shipped the search field. It wraps when the line runs long.');
     await showView(tester, server);
     final body = styleOf(tester, 'Shipped the search field')!;
@@ -53,7 +53,7 @@ void main() {
 
   testWidgets('another sender is named over their bubble at 13 px, plain, in '
       'secondary ink; your own bubble carries no name', (tester) async {
-    final server = ConversationServer()
+    final server = ConversationServer.chat()
       ..append('Shipped')
       ..append('Thanks', agent: true);
     await showView(tester, server);
@@ -71,7 +71,7 @@ void main() {
   testWidgets('markdown in a message keeps the body size, and code its face', (
     tester,
   ) async {
-    final server = ConversationServer()
+    final server = ConversationServer.chat()
       ..append(
         '- a listed item\n\n> a quoted line\n\n**bold words** and `the code`',
       );
@@ -100,7 +100,7 @@ void main() {
 
   testWidgets('the thread view heads as a name, 13 px semibold, and its '
       'replies read as the chat does', (tester) async {
-    final server = ConversationServer()..threads = true;
+    final server = ConversationServer.chat()..threads = true;
     server.append('Should we do thread replies?');
     server.append('Yes, like Slack.');
     server.messages.last
@@ -118,7 +118,7 @@ void main() {
   });
 
   testWidgets('the composer writes at 14 px on 20 px lines', (tester) async {
-    await showView(tester, ConversationServer());
+    await showView(tester, ConversationServer.chat());
     final field = tester.widget<EditableText>(
       find.descendant(
         of: find.byKey(const ValueKey('super-message-composer')),
@@ -132,7 +132,7 @@ void main() {
   testWidgets('sidebar items read at 15 px on rows 28 px apart, a project 32', (
     tester,
   ) async {
-    await showView(tester, ConversationServer());
+    await showView(tester, ConversationServer(), board: false);
     final side = find.byType(ProjectSidebar);
     final project = find.byKey(const ValueKey('super-group-lead'));
     final name = tester.widget<Text>(
