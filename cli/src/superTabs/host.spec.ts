@@ -56,7 +56,7 @@ function setup(messageFields: Record<string, unknown> = {}, claimFields: Record<
   const listeners = new Set<(e: TurnDelivery) => void>()
   const endListeners = new Set<(e: TurnEnd) => void>()
   const notices = new Set<(notice: BackendNotice) => void>()
-  const row: { tabId: string; agent: { id: string; harnessId: string; machineId: string; chatId?: string }; lead?: boolean; leadsConversationId?: string } =
+  const row: { tabId: string; agent: { id: string; harnessId: string; machineId: string; chatId?: string; displayName?: string }; lead?: boolean; leadsConversationId?: string } =
     { tabId: 'tab', agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }, leadsConversationId: 'leads' }
   /** The conversation the delivery comes from. */
   let from = 'lead'
@@ -5835,12 +5835,16 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
   /** What the host asked of the Swarm to build this delivery (its reads as the agent). */
   const reads = (t: ReturnType<typeof setup>) => vi.mocked(t.call).mock.calls.filter(([method, path]) => method === 'GET' && path.includes('asAgentId=')).map(([, path]) => path)
   const typed = (t: ReturnType<typeof setup>) => vi.mocked(t.core.turns.deliver).mock.calls.map(([, text]) => text)
-  /** The posts the host makes, answered as the backend answers one. */
-  function posting(t: ReturnType<typeof setup>) {
+  /** The posts the host makes, answered as the backend answers one, or with a refusal for those [refuse] names. */
+  function posting(t: ReturnType<typeof setup>, refuse: (post: Record<string, any>) => boolean = () => false) {
     const original = vi.mocked(t.call).getMockImplementation()!
     const posts: Array<Record<string, any>> = []
     vi.mocked(t.call).mockImplementation(async (method, path, body) => {
-      if (method === 'POST' && path.endsWith('/commands')) { posts.push({ path, ...(body as Record<string, unknown>) }); return { status: 200, body: { success: true, data: { result: {} } } } }
+      if (method === 'POST' && path.endsWith('/commands')) {
+        const post = { path, ...(body as Record<string, unknown>) }
+        posts.push(post)
+        return refuse(post) ? { status: 403, body: { success: false, error: { code: 'FORBIDDEN', message: 'Not yours.' } } } : { status: 200, body: { success: true, data: { result: {} } } }
+      }
       return original(method, path, body)
     })
     return posts
@@ -6037,12 +6041,36 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
       expect(posts[0]!.command).toMatchObject({ replyTo: 'message', recipientIds: [] })
       expect(posts[0]!.command).not.toHaveProperty('answers')
     })
+    it('is told to its person in the chat, by the name they know the agent by, when the server turns the reply away for good', async () => {
+      const t = inChat(), posts = posting(t, post => post.operationId === 'reply-delivery')
+      t.row.agent.displayName = 'Mia'
+      answered(t)
+      await t.open().tick()
+      t.end()
+      await vi.waitFor(() => expect(posts).toHaveLength(2))
+      expect(posts[1]).toEqual({ path: '/api/super-tabs/tab/commands', operationId: 'dropped-reply-delivery', asAgentId: 'agent',
+        command: { type: 'message.send', conversationId: 'chat', text: 'Mia\'s answer could not be posted.', replyTo: null, answers: 'message', recipientIds: [] } })
+      expect(t.log).toHaveBeenCalledWith('Dropped the reply to delivery delivery of agent agent: FORBIDDEN; no later try changes it.')
+      // Said once: nothing owed is left, and the line itself is not answered.
+      t.end()
+      await flush()
+      expect(posts).toHaveLength(2)
+      expect(t.saved().replies).toBeUndefined()
+    })
+    it('is told by the agent\'s place-holder name when its roster row gives none', async () => {
+      const t = inChat(), posts = posting(t, post => post.operationId === 'reply-delivery')
+      answered(t)
+      await t.open().tick()
+      t.end()
+      await vi.waitFor(() => expect(posts).toHaveLength(2))
+      expect(posts[1]!.command.text).toBe('The agent\'s answer could not be posted.')
+    })
     it('is owed from the delivery that typed it: the journal keeps ids and a hash, never the words, and the entry may go', async () => {
       const t = inChat({ text: 'a private plan' })
       const host = t.open()
       await host.tick()
       expect(t.saved().replies.delivery).toMatchObject({ tabId: 'tab', agentId: 'agent', harnessId: 'harness', conversationId: 'chat', messageId: 'message', thread: false,
-        asked: expect.stringMatching(/^[0-9a-f]{32}$/), at: expect.any(Number) })
+        name: 'The agent', asked: expect.stringMatching(/^[0-9a-f]{32}$/), at: expect.any(Number) })
       t.event('started')
       await host.tick()
       expect(t.saved().entries).toEqual({})

@@ -53,6 +53,8 @@ it.each(['claude', 'codex'] as const)('types %s what its person typed, and posts
       const command = object(body.command)
       if (command.type !== 'message.send') throw new Error(`Unexpected command ${String(command.type)}`)
       posts.push(body)
+      // The server turns the answer to the sixth message away for good.
+      if (body.operationId === 'reply-delivery-six') return { status: 403, error: { code: 'FORBIDDEN', message: 'Not allowed.' } }
       return { data: { result: {} } }
     }
     const delivery = /\/agents\/([^/]+)\/deliveries(?:\/([^/]+))?$/.exec(path)
@@ -75,7 +77,7 @@ it.each(['claude', 'codex'] as const)('types %s what its person typed, and posts
   const agent = await client.request('agent_create', { engine, cwd, bypassPermission: true }, 90_000)
   expect(agent.error, JSON.stringify(agent)).toBeUndefined()
   const memberId = idFor(agent.agent.id)
-  agents.push({ id: memberId, machineId: ME.machineId, harnessId: agent.agent.id, chatId: CHAT })
+  agents.push({ id: memberId, machineId: ME.machineId, harnessId: agent.agent.id, chatId: CHAT, displayName: 'Mia' })
   // The Swarm's service runs in a process of its own, started when the core is asked for it.
   expect(await client.request('super_tabs', { action: 'wake' })).toMatchObject({ ok: true })
   const prompts = () => { try { return readFileSync(join(d.root, 'submitted-prompts'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line) as string) } catch { return [] } }
@@ -126,6 +128,14 @@ it.each(['claude', 'codex'] as const)('types %s what its person typed, and posts
   expect(posts.slice(3).map(post => post.command.text)).toEqual(['answer 6: First of the queued.', 'answer 7: Second of the queued.'])
   expect(posts.slice(3).map(post => post.command.answers)).toEqual(['message-four', 'message-five'])
   expect(posts).toHaveLength(5)
+
+  // An answer the server turns away is not lost without a word: its person is told in the chat, once, by the agent's name.
+  ask('six', 'A last one, whose answer the server will not take.')
+  await until('the line that tells its person', () => posts.length >= 7 || null, 90_000, 100)
+  expect(posts.slice(5).map(post => post.operationId)).toEqual(['reply-delivery-six', 'dropped-reply-delivery-six'])
+  expect(posts[6]).toEqual({ operationId: 'dropped-reply-delivery-six', asAgentId: memberId,
+    command: { type: 'message.send', conversationId: CHAT, text: 'Mia\'s answer could not be posted.', replyTo: null, answers: 'message-six', recipientIds: [] } })
+  expect(posts).toHaveLength(7)
   // And the journal keeps no words of anybody's.
   const journal = readFileSync(join(d.dataDir, 'super-tabs', `host-${ME.machineId}.json`), 'utf8')
   expect(journal).not.toContain(typed)

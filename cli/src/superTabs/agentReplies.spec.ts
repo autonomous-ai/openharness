@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { adoptReplies, AgentReplies, OWED_GIVE_UP_MS, OWED_PER_AGENT, READ_WAIT_MS, REPLY_RETRY_MS, REPLY_TEXT_MAX, REPLY_WAIT_MS, type Owed } from './agentReplies.js'
+import { adoptReplies, AgentReplies, NAME_MAX, OWED_GIVE_UP_MS, OWED_PER_AGENT, READ_WAIT_MS, REPLY_RETRY_MS, REPLY_TEXT_MAX, REPLY_WAIT_MS, type Owed } from './agentReplies.js'
 import { SuperTabHostError } from './wire.js'
 
 const ok = { status: 200, body: { success: true, data: { result: {} } } }
@@ -25,14 +25,21 @@ function setup() {
   const replies = new AgentReplies(core, journal, deps)
   // Each agent runs in a terminal of its own, by the id the core knows it by.
   const owe = (deliveryId = 'd1', text = 'Ship it.', message: Record<string, unknown> = {}, agentId = 'agent') =>
-    replies.owe({ deliveryId, tabId: 'tab', agentId, harnessId: agentId === 'agent' ? 'harness' : `harness-${agentId}` },
+    replies.owe({ deliveryId, tabId: 'tab', agentId, harnessId: agentId === 'agent' ? 'harness' : `harness-${agentId}`, name: 'Mia' },
       { id: `m-${deliveryId}`, conversationId: 'chat', ...message }, text)
   const end = (event: Partial<{ agentId: string; sessionId: string; aborted: boolean }> = {}) =>
     replies.ended({ agentId: 'harness', sessionId: 'session', aborted: false, ...event })
   const posts = () => backend.mock.calls.filter(([method, path]) => method === 'POST' && String(path).endsWith('/commands'))
+  /** The operation of each post, in the order they were made. */
+  const operations = () => posts().map(([, , body]) => (body as { operationId: string }).operationId)
   const lines = () => log.mock.calls.map(([line]) => String(line))
-  return { replies, journal, log, save, lastTurn, backend, owe, end, posts, lines, deps, wait: (ms: number) => { clock += ms }, core }
+  return { replies, journal, log, save, lastTurn, backend, owe, end, posts, operations, lines, deps, wait: (ms: number) => { clock += ms }, core }
 }
+/** The server turning a post away, the first [count] times it is asked. */
+const turnedAway = (t: ReturnType<typeof setup>, response: { status: number; body: Record<string, unknown> }, count = 1) => {
+  for (let i = 0; i < count; i++) t.backend.mockResolvedValueOnce(response)
+}
+const NOTE = 'Mia\'s answer could not be posted.'
 
 describe('a reply owed to a person in their agent\'s own chat', () => {
   it('posts the final answer of the turn that ended, as the agent, right below the message it answers', async () => {
@@ -238,30 +245,86 @@ describe('a reply the backend does not take at once', () => {
     ])
   })
 
-  it('gives up after its tries, says so once with the name of the failure, and leaves no timer behind', async () => {
+  it('gives up after its tries, says so once with the name of the failure, tells its person once, and leaves no timer behind', async () => {
     const t = setup()
     t.owe()
-    t.backend.mockResolvedValue(refused(503, 'SWARM_BUSY'))
+    turnedAway(t, refused(503, 'SWARM_BUSY'), REPLY_RETRY_MS.length + 1)
     await t.end()
     await vi.advanceTimersByTimeAsync(REPLY_RETRY_MS.reduce((sum, ms) => sum + ms, 0) * 2)
-    expect(t.posts()).toHaveLength(REPLY_RETRY_MS.length + 1)
+    expect(t.operations()).toEqual([...Array<string>(REPLY_RETRY_MS.length + 1).fill('reply-d1'), 'dropped-reply-d1'])
     expect(vi.getTimerCount()).toBe(0)
     expect(t.lines().at(-1)).toBe(`Dropped the reply to delivery d1 of agent agent: SWARM_BUSY after ${REPLY_RETRY_MS.length + 1} tries.`)
     expect(t.lines().filter(line => line.startsWith('Dropped'))).toHaveLength(1)
     expect(t.journal.replies).toBeUndefined()
   })
 
-  it('does not send again what no resend can change, and says so', async () => {
+  it('does not send again what no resend can change, says so, and tells its person', async () => {
     for (const [status, code] of [[400, 'VALIDATION_ERROR'], [403, 'FORBIDDEN'], [404, 'NOT_FOUND'], [409, 'OPERATION_REUSED']] as const) {
       const t = setup()
       t.owe()
-      t.backend.mockResolvedValue(refused(status, code))
+      turnedAway(t, refused(status, code))
       await t.end()
       await vi.advanceTimersByTimeAsync(REPLY_RETRY_MS[0]! * 10)
-      expect(t.posts(), code).toHaveLength(1)
+      expect(t.operations(), code).toEqual(['reply-d1', 'dropped-reply-d1'])
       expect(t.lines()).toEqual([`Dropped the reply to delivery d1 of agent agent: ${code}; no later try changes it.`])
       expect(vi.getTimerCount()).toBe(0)
     }
+  })
+
+  // Its person is waiting for an answer in their chat, so a dropped one is told there, where it would have been, from the agent as
+  // the answer would have been, and says no more than that it is missing (anh Dee's lead, 2026-11-09).
+  it('tells its person in the chat the answer was owed in, below their message or in its thread, as the agent', async () => {
+    const t = setup()
+    t.owe()
+    turnedAway(t, refused(403, 'FORBIDDEN'))
+    await t.end()
+    expect(t.posts()[1]).toEqual(['POST', '/api/super-tabs/tab/commands', { operationId: 'dropped-reply-d1', asAgentId: 'agent',
+      command: { type: 'message.send', conversationId: 'chat', text: NOTE, replyTo: null, answers: 'm-d1', recipientIds: [] } }])
+    const threaded = setup()
+    threaded.owe('d2', 'Ship it.', { thread: 'root' })
+    turnedAway(threaded, refused(403, 'FORBIDDEN'))
+    await threaded.end()
+    expect(threaded.posts()[1]![2]).toEqual({ operationId: 'dropped-reply-d2', asAgentId: 'agent',
+      command: { type: 'message.send', conversationId: 'chat', text: NOTE, replyTo: 'm-d2', recipientIds: [] } })
+    // It was taken: nothing of it in the log.
+    expect(t.lines()).toEqual(['Dropped the reply to delivery d1 of agent agent: FORBIDDEN; no later try changes it.'])
+  })
+
+  it('tries to tell its person once: a line the server turns away, or does not answer, is only in the log, by the name of the failure', async () => {
+    const away = setup()
+    away.owe()
+    turnedAway(away, refused(403, 'FORBIDDEN'), 2)
+    await away.end()
+    await vi.advanceTimersByTimeAsync(REPLY_RETRY_MS.reduce((sum, ms) => sum + ms, 0))
+    expect(away.operations()).toEqual(['reply-d1', 'dropped-reply-d1'])
+    expect(away.lines()).toEqual([
+      'Dropped the reply to delivery d1 of agent agent: FORBIDDEN; no later try changes it.',
+      'Could not tell the person that the reply to delivery d1 of agent agent was dropped: FORBIDDEN.',
+    ])
+    const silent = setup()
+    silent.owe()
+    turnedAway(silent, refused(403, 'FORBIDDEN'))
+    silent.backend.mockImplementationOnce(() => new Promise(() => {}))
+    const done = silent.end()
+    await vi.advanceTimersByTimeAsync(REPLY_WAIT_MS)
+    await done
+    expect(silent.operations()).toEqual(['reply-d1', 'dropped-reply-d1'])
+    expect(silent.lines().at(-1)).toBe('Could not tell the person that the reply to delivery d1 of agent agent was dropped: TIMEOUT.')
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('tells its person nothing of a reply it dropped because the host stopped, or because a turn was interrupted', async () => {
+    const stopped = setup()
+    stopped.owe()
+    turnedAway(stopped, refused(503, 'SWARM_BUSY'))
+    await stopped.end()
+    stopped.replies.stop()
+    await vi.advanceTimersByTimeAsync(REPLY_RETRY_MS.reduce((sum, ms) => sum + ms, 0))
+    expect(stopped.operations()).toEqual(['reply-d1'])
+    const interrupted = setup()
+    interrupted.owe()
+    await interrupted.end({ aborted: true })
+    expect(interrupted.operations()).toEqual([])
   })
 
   it('names the failure of a call that could not reach the backend at all', async () => {
@@ -384,11 +447,20 @@ describe('what is owed, kept small', () => {
     t.owe('d1')
     expect(t.journal.replies!.d1).toEqual(first)
     // Its member moved to a new session while it waited: the turn that ends there is the one that answers it.
-    t.replies.owe({ deliveryId: 'd1', tabId: 'tab', agentId: 'agent', harnessId: 'replacement' }, { id: 'm-d1', conversationId: 'chat' }, 'Ship it.')
+    t.replies.owe({ deliveryId: 'd1', tabId: 'tab', agentId: 'agent', harnessId: 'replacement', name: 'Mia' }, { id: 'm-d1', conversationId: 'chat' }, 'Ship it.')
     expect(t.journal.replies!.d1).toEqual({ ...first, harnessId: 'replacement' })
     expect(Object.keys(t.journal.replies!)).toEqual(['d1'])
     await t.end({ agentId: 'replacement' })
     expect(t.posts()).toHaveLength(1)
+  })
+
+  it('keeps the name its person knows the agent by, to tell them with if its answer is dropped, cut to a few characters', () => {
+    const t = setup()
+    t.owe()
+    expect(t.journal.replies!.d1!.name).toBe('Mia')
+    t.replies.owe({ deliveryId: 'd2', tabId: 'tab', agentId: 'agent', harnessId: 'harness', name: 'N'.repeat(NAME_MAX + 20) }, { id: 'm-d2', conversationId: 'chat' }, 'Ship it.')
+    expect(t.journal.replies!.d2!.name).toBe(`${'N'.repeat(NAME_MAX - 1)}…`)
+    expect(t.journal.replies!.d2!.name).toHaveLength(NAME_MAX)
   })
 
   it('is taken back when the delivery was never typed, and kept when it may have been', () => {
@@ -441,19 +513,20 @@ describe('what is owed, kept small', () => {
 
 describe('the replies owed that a journal holds', () => {
   const saved = (over: Record<string, unknown> = {}) => ({ tabId: 'tab', agentId: 'agent', harnessId: 'harness', conversationId: 'chat', messageId: 'message',
-    thread: false, asked: 'a'.repeat(32), at: 5, ...over })
+    thread: false, asked: 'a'.repeat(32), at: 5, name: 'Mia', ...over })
 
   it('adopts each one this host could have written and drops, saying so, the rest', () => {
     const log = vi.fn()
     const adopted = adoptReplies({
-      good: saved(), threaded: saved({ thread: true }),
+      good: saved(), threaded: saved({ thread: true }), longestName: saved({ name: 'x'.repeat(NAME_MAX) }),
       'bad id!': saved(), badTab: saved({ tabId: '../x' }), badAgent: saved({ agentId: 4 }), badHarness: saved({ harnessId: '' }), badChat: saved({ conversationId: null }),
       badMessage: saved({ messageId: undefined }), badThread: saved({ thread: 'yes' }), badAsked: saved({ asked: 'not a hash' }), badAt: saved({ at: 'now' }),
+      noName: saved({ name: undefined }), emptyName: saved({ name: '' }), numberName: saved({ name: 4 }), longName: saved({ name: 'x'.repeat(NAME_MAX + 1) }),
       notAnObject: 'row', alsoNot: null,
     }, log)
-    expect(Object.keys(adopted)).toEqual(['good', 'threaded'])
+    expect(Object.keys(adopted)).toEqual(['good', 'threaded', 'longestName'])
     expect(adopted.good).toEqual(saved())
-    expect(log.mock.calls.map(([line]) => line)).toEqual(['Dropped 11 saved replies owed that this host could not use.'])
+    expect(log.mock.calls.map(([line]) => line)).toEqual(['Dropped 15 saved replies owed that this host could not use.'])
   })
 
   it('adopts none from a journal that holds no such list, or a list of the wrong kind', () => {
