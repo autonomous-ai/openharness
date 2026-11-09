@@ -9,7 +9,7 @@ void main() {
   testWidgets(
     'a person is named in message headers and replies, never by their address',
     (tester) async {
-      final server = ConversationServer();
+      final server = ConversationServer.chat();
       server.state['people'] = [
         {'id': 'owner', 'email': 'owner@example.com', 'role': 'owner'},
         {'id': 'ivy', 'email': 'ivy@example.com', 'role': 'collaborator'},
@@ -52,7 +52,7 @@ void main() {
   testWidgets('a person who chose a username is shown and tagged by it', (
     tester,
   ) async {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     server.state['people'] = [
       {'id': 'owner', 'email': 'owner@example.com', 'role': 'owner'},
       {

@@ -293,6 +293,7 @@ void main() {
               ),
               home: Scaffold(
                 body: SuperTabView(
+                  board: false,
                   controller: c,
                   onInvite: () {},
                   onAddAgent: (_) {},
