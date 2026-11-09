@@ -120,16 +120,15 @@ function keepRecord(state: SuperTabState, target: Agent, now: number): void {
 export const reopened = (state: SuperTabState, machineId: string, running: readonly string[], now: number): RemovedSession[] =>
   (state.removedSessions ?? []).filter(r => r.machineId === machineId && running.includes(r.harnessId) && now - r.removedAt < REMOVED_KEEP_MS)
 
-/** What a restore's rules read outside the Swarm's state: sessions registered in another Swarm by now, and the machines
- *  commands.ts agent.add's team rules read (store.ts teamMachines). */
-export interface RestoreFacts { elsewhere: ReadonlySet<string>; teamMachines: readonly string[] }
+/** What a restore's rules read outside the Swarm's state: sessions registered in another Swarm by now. */
+export interface RestoreFacts { elsewhere: ReadonlySet<string> }
 
 /**
  * Why [record] may not come back as it was, by a fixed word, or null. The rules a person's add takes (commands.ts agent.add, whose
  * session record and share the caller checks after this), each read from the state this write loaded, as any of it may have
- * changed since: its machine's Team account may serve another project now, and that machine may no longer take a teammate's.
+ * changed since: its machine's Team account may serve another project now, and its person may no longer take that project's work.
  */
-export function restoreRefusal(state: SuperTabState, record: RemovedSession, machineOwnerId: string, now: number, facts: RestoreFacts): string | null {
+export function restoreRefusal(state: SuperTabState, record: RemovedSession, machineOwnerId: string, facts: RestoreFacts): string | null {
   const { agent } = record
   // The record names its own session; a machine reports only its own, and a report is the only way here.
   if (agent.machineId !== record.machineId || agent.harnessId !== record.harnessId || agent.machineOwnerId !== machineOwnerId) return 'not-this-machine'
