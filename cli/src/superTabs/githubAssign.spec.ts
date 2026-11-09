@@ -304,6 +304,17 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     })
   })
 
+  it('plans with the time this project\'s finished tasks of a size took', async () => {
+    const closedAt = (n: number) => ({ ...issue(n, ['size:m', 'builder:juno']), closed_at: '2026-11-09T05:40:00Z' })
+    const one: Crew = { ...crew(), builders: [crew().builders[0]!] }
+    const f = setup([issue(1, ['size:m']), issue(2, ['size:m'])], { crew: one, closed: [closedAt(10), closedAt(11), closedAt(12)] })
+    for (const n of [10, 11, 12]) f.github.state.comments.set(n, [{ body: 'Juno, 12:00, taken by Juno.', created_at: '2026-11-09T05:00:00Z' }])
+    await f.assigner.tick()
+    // Middle tasks took 40 minutes here, not the 90 a size:m is guessed at: Pip's second starts after 40.
+    expect(f.said().map(([, body]) => String(body).replace(/^Harness, \d\d:\d\d: /, '')).sort())
+      .toEqual(['for **Pip**: it can start in 40 min.', 'for **Pip**: it can start now.'])
+  })
+
   it('stops while gh is signed out, says so once, and says when it runs again', async () => {
     const f = setup([issue(1, ['size:s'])])
     f.github.state.signedOut = true

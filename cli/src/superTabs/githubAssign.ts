@@ -8,7 +8,7 @@
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { DEEP, nextPicks, outOfQuota, QUIET_ASK_MS, QUIET_BACK_MS, readerFor, readProblem, reasonOf, takeBacks, takenTasks, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
+import { DEEP, nextPicks, outOfQuota, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readProblem, reasonOf, startedAt, takeBacks, takenTasks, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
@@ -24,6 +24,8 @@ const SOLVE_MS = 1_000
  *  (benchmark, 2026-11-09), so a small team stops early and a large one uses the second. */
 const STEPS_PER_TASK = 400, MAX_STEPS = 200_000
 const SELF = 'Harness'
+/** Closed tasks whose time is read each pass, and how many are remembered: a slow start, never a slow pass. */
+const MEASURES_PER_PASS = 5, MAX_MEASURED = 500
 /** How many open pull requests are read for readers each pass, as the merger reads them. */
 const MAX_PULLS = 30
 /** Harness's ask of a reader, as askReaders writes it: who was asked, and for which head. */
@@ -42,6 +44,8 @@ export class GitHubAssign {
   private readonly said = new Set<string>()
   /** Each quiet taken task its builder was asked about: since when it was quiet, and when it was asked. */
   private readonly quiet = new Map<string, { since: number; askedAt: number }>()
+  /** Each finished task's size and the minutes its work took, by repository and issue; null when it cannot be told. */
+  private readonly took = new Map<string, { size: string; minutes: number } | null>()
   private projects: { at: number; list: LedProject[] } | null = null
   private offUntil = 0
   private logged = ''
@@ -113,9 +117,10 @@ export class GitHubAssign {
     // What each builder works on in this project: the Works on line of its instructions file here (agents/<Name>.md).
     for (const builder of crew.builders) builder.worksOn = worksOnOf(await this.reads.file(repo, `agents/${builder.name}.md`))
     await this.labelAreas(repo, crew)
-    const read = readProblem({ now: this.now(), issues,
-      closed: await this.reads.current(repo, `/repos/${repo}/issues?state=closed&sort=updated&direction=desc&per_page=${PAGE}`, 1),
-      crew })
+    const closed = await this.reads.current(repo, `/repos/${repo}/issues?state=closed&sort=updated&direction=desc&per_page=${PAGE}`, 1)
+    await this.measure(repo, closed)
+    const minutes = learnedMinutes([...this.took].filter(([key, took]) => key.startsWith(`${repo}#`) && took).map(([, took]) => took!))
+    const read = readProblem({ now: this.now(), issues, closed, crew, minutes })
     if (!read.problem.builders.length) return
     await this.takeBack(repo, issues, outOfQuota(read))
     // Open pull requests, drafts included: a draft is where a task's work shows before it is read.
@@ -218,6 +223,22 @@ export class GitHubAssign {
         skip.add(reader.name.toLowerCase())
         await this.ask(repo, number, head, reader.name, 'please read this pull request')
       }
+    }
+  }
+
+  /** Learns how long finished tasks took: for a few closed sized issues a pass not measured yet, from its builder's
+   *  "taken by" to its close. A closed issue does not change, so each is read once; the memory keeps the last few hundred. */
+  private async measure(repo: string, closed: Json[]): Promise<void> {
+    let reads = 0
+    for (const issue of closed) {
+      const key = `${repo}#${issue.number}`
+      const size = labelNames(issue).find(name => /^size:[sml]$/.test(name))?.slice('size:'.length)
+      if (issue.pull_request || !size || this.took.has(key)) continue
+      if (reads++ >= MEASURES_PER_PASS) break
+      const comments = await this.reads.current(repo, `/repos/${repo}/issues/${issue.number}/comments?per_page=${PAGE}`, 1)
+      const began = startedAt(comments), ended = Date.parse(String(issue.closed_at ?? ''))
+      this.took.set(key, began !== null && Number.isFinite(ended) && ended > began ? { size, minutes: (ended - began) / 60_000 } : null)
+      if (this.took.size > MAX_MEASURED) this.took.delete(this.took.keys().next().value!)
     }
   }
 

@@ -139,10 +139,16 @@ for it, never what it took (`outOfQuota`): the plan would only hold it until the
 nothing touched for 4 hours (no comment or label on the issue, no change to a pull request for it, drafts included) gets
 one ask of its builder by name; with no word 4 hours after, it goes to another (`takenTasks`, `githubAssign.ts askQuiet`).
 
+## Learned task times (built)
+
+Each pass the assigner reads up to five closed sized issues it has not measured: a task's work runs from its builder's
+"taken by" comment (or Harness's word giving it) to its close. Once a size has three, its median in this project replaces
+the size's guess, kept between 10 minutes and a day; a median, so one task left open over a weekend does not move the
+rest (`assign/crew.ts startedAt`, `learnedMinutes`; `githubAssign.ts measure`).
+
 ## Next
 
-1. **Estimates.** Each finished task records its real minutes, peak CPU and memory, disk and spend, by part, size and
-   model; estimates take the mean for time and the 80th percentile for memory and disk.
+1. **Estimates of memory, disk and spend** from what finished tasks used, by part, size and model, beside their time.
 2. **CPU cores** in each machine's report, so CPU is measured, not assumed.
 3. **Measures** in Desktop: time from label to merge, idle builder-minutes, quota left unspent at resets, overload minutes,
    holds and conflicts.

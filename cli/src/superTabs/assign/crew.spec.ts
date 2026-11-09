@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { contextOf, crewOf, CORES, outOfQuota, takenTasks, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, DEEP, dependsOn, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew } from './crew.js'
+import { contextOf, crewOf, CORES, learnedMinutes, outOfQuota, startedAt, takenTasks, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, DEEP, dependsOn, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew } from './crew.js'
 import { solve } from './search.js'
 
 type Json = Record<string, unknown>
@@ -239,5 +239,20 @@ describe('the tasks builders took, and when each was last touched (takenTasks)',
       { number: 1, label: 'builder:pip', name: 'Pip', touched: Date.parse(t(2)) },
       { number: 2, label: 'builder:juno', name: 'Juno', touched: Date.parse(t(1)) },
     ])
+  })
+})
+
+describe('how long tasks take, learned (startedAt, learnedMinutes)', () => {
+  it('starts a finished task at its builder\'s "taken by", else at Harness giving it', () => {
+    const c = (body: string, at: string) => ({ body, created_at: at })
+    expect(startedAt([c('Opened by deehw.', '2026-11-09T01:00:00Z'), c('Pip, 09:00, taken by Pip.', '2026-11-09T02:00:00Z')])).toBe(Date.parse('2026-11-09T02:00:00Z'))
+    expect(startedAt([c('Harness, 09:00: for **Pip**: it can start now.', '2026-11-09T03:00:00Z')])).toBe(Date.parse('2026-11-09T03:00:00Z'))
+    expect(startedAt([c('No start here.', '2026-11-09T03:00:00Z')])).toBeNull()
+  })
+
+  it('takes the median of each size once there are three, within ten minutes and a day', () => {
+    expect(learnedMinutes([{ size: 's', minutes: 20 }, { size: 's', minutes: 40 }, { size: 's', minutes: 600 }, { size: 'm', minutes: 50 },
+      { size: 'm', minutes: 70 }, { size: 'l', minutes: 2 }, { size: 'l', minutes: 3 }, { size: 'l', minutes: 4 }])).toEqual({ s: 40, l: 10 })
+    expect(learnedMinutes([{ size: 'm', minutes: 3_000 }, { size: 'm', minutes: 3_000 }, { size: 'm', minutes: 3_000 }, { size: 'm', minutes: 10 }])).toEqual({ m: 1_440 })
   })
 })
