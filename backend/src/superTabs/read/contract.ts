@@ -88,14 +88,11 @@ export interface Derived {
     role: import('../agentKind.js').AgentRole; mainProjectId: string | null }>
   /** Every contributed machine the reader can see. */
   /** `clientVersion`: the CLI version its daemon last connected with (routing reads a machine updated since its failed starts). */
-  machines: Record<string, { availableSlots: number; teamWork: { allowed: true } | { allowed: false; reason: string; [key: string]: unknown }; clientVersion?: string
+  machines: Record<string, { availableSlots: number; clientVersion?: string
     /** Engines suspended there now after failed starts, with why (engineHealth.ts); absent when none. */
     suspendedEngines?: Record<string, string>
     /** Pickup timeout cooldown: applies to every new start, including grid models. */
-    machineSuspended?: string
-    /** A person reading a teammate's machine: where New Project's Product Manager would run there by engine, the machine
-     *  (its Team account or itself), or why it cannot now (leadStart.ts leadChoices). Absent for their own machines. */
-    lead?: Record<string, { machineId: string } | { refused: string }> }>
+    machineSuspended?: string }>
   /** A Lead agent only. */
   otherProjectsWork?: OtherProjectWorkView[]
   /** A project agent only: the account each project's PM runs on, a project it may not read named "another project". */
@@ -304,7 +301,6 @@ export type HostRosterRow =
   | HostAgentRow
   | { tabId: string; agent: { id: string; harnessId: string; machineId: string }; closeSession: true; active: false }
   | { tabId: string; cleanup: { machineId: string; removalId: string } }
-  | { tabId: string; joinTeam: { machineId: string; name: string; maxAgents: number } }
 export interface HostAgentRow {
   /** A main Buddy's private chat, used only by its own host to restart it on another engine. */
   buddyConversationId?: string

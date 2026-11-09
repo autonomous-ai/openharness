@@ -69,6 +69,7 @@ class ProjectSidebar extends StatelessWidget {
     this.compact = false,
     this.board = false,
     this.onNewAgent,
+    this.onAttachAgent,
     this.onOpenAgentChat,
     this.boardProjectId,
     this.onOpenAgentTerminal,
@@ -96,6 +97,10 @@ class ProjectSidebar extends StatelessWidget {
   /// + New agent (Swarm v3, task #4118): opens the creation dialog, where Regular or PM is chosen. Without it the section
   /// has no + .
   final VoidCallback? onNewAgent;
+
+  /// Attach beside + (Swarm v4): picks an agent already running on its person's own computers to join their team.
+  /// Without it the heading has no Attach.
+  final VoidCallback? onAttachAgent;
 
   /// Opens the chat of an agent chosen in My agents in the middle; [onSelect] when not given.
   final ValueChanged<String>? onOpenAgentChat;
@@ -830,10 +835,12 @@ class ProjectSidebar extends StatelessWidget {
 
   /// My agents (Swarm v3, task #4118): the person's Buddy first, then the agents they brought, each with its face and
   /// name, a Lead's naming the project it leads (task #4421), the name bold while its chat has unread. The heading's +
-  /// opens New agent (task #4645); a person with no agents of their own also gets it as a row, to start from.
+  /// opens New agent (task #4645), and Attach before it brings an agent already running (Swarm v4); a person with no
+  /// agents of their own also gets New agent as a row, to start from.
   List<Widget> _myAgents(SuperTabSnapshot? snapshot, _SidebarReading reading) {
     if (snapshot == null) return const [];
     final newAgent = controller.canWrite ? onNewAgent : null;
+    final attachAgent = controller.canWrite ? onAttachAgent : null;
     return [
       SuperTabQuietHeading(
         'Your Team',
@@ -843,6 +850,9 @@ class ProjectSidebar extends StatelessWidget {
         onAdd: newAgent,
         addTooltip: 'New agent',
         addKey: const ValueKey('project-sidebar-agents-add'),
+        onAttach: attachAgent,
+        attachTooltip: 'Attach agent',
+        attachKey: const ValueKey('project-sidebar-agents-attach'),
       ),
       if (controller.agentsGroupOpen)
         for (final (agent, chat) in reading.myAgents)

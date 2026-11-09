@@ -121,7 +121,7 @@ describe('a person switching their Buddy engine', () => {
   it('gives the host each Buddy’s own private chat and keeps its subscription alert there', async () => {
     const f = setup(), second = addBuddy(f)
     const rows = await hostTab('swarm', f.state, 'mac', { sub: 'peer', email: 'peer@example.com' } as never, NOW,
-      { people: [], confidential: new Set(), agentGrant: async () => {}, teams: [], githubApp: false })
+      { people: [], confidential: new Set(), agentGrant: async () => {}, githubApp: false })
     expect(rows.roster.find(r => 'agent' in r && r.agent.id === second.id)).toMatchObject({ buddyConversationId: second.chat })
     expect(rows.roster.find(r => 'agent' in r && r.agent.id === f.id)).toMatchObject({ buddyConversationId: f.chat })
     expect(f.run({ type: 'agent.alert', agentId: second.id, alert: 'limit', active: true }, second.host).messages)
@@ -232,7 +232,7 @@ describe('a person switching their Buddy engine', () => {
   it('gives only its host the Buddy chat needed to restart in place', async () => {
     const f = setup()
     const rows = await hostTab('swarm', f.state, 'mac', { sub: 'peer', email: 'peer@example.com' } as never, NOW,
-      { people: [], confidential: new Set(), agentGrant: async () => {}, teams: [], githubApp: false })
+      { people: [], confidential: new Set(), agentGrant: async () => {}, githubApp: false })
     expect(rows.roster.find(r => 'agent' in r && r.agent.id === f.id)).toMatchObject({ buddyConversationId: f.chat })
   })
 })

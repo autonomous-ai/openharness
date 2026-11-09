@@ -8,7 +8,7 @@ import type { AuthUser } from '../../lib/ssoAuth.js'
 import { activeWork, agent, isLeads, SuperTabError, type Agent, type SuperTabState } from '../model.js'
 import { buddyChatOf, isSwarmBuddy, isSwarmBuddyChat } from '../buddies.js'
 import { buddyEngineChat } from '../buddyEngine.js'
-import { hostLocalGrid, machineContribution, machineLimitReached, machineRoom, type MachineCleanup } from '../machines.js'
+import { hostLocalGrid, machineContribution, machineLimitReached, type MachineCleanup } from '../machines.js'
 import { agentProjectId, agentSetRole, canWatchAgent, confidentialSets, isConfidential, groupProject, ledProject, projectsOf, skillModeOf, startProject, skillSetOf, watchClosed, type ConfidentialSets } from '../projects.js'
 import type { HostAgentRow, HostPool, HostRosterRow, HostTabRows } from './contract.js'
 import { hostEtag } from './hostEtag.js'
@@ -21,8 +21,6 @@ export interface HostLookups {
   confidential: Set<string>
   /** Throws a SuperTabError when the agent's machine grant is gone (store.ts agentGrant). */
   agentGrant(target: Agent): Promise<void>
-  /** This Mac's Harness Team accounts, which join wherever the Mac was added. */
-  teams: Array<{ machineId: string }>
   githubApp: boolean
 }
 
@@ -39,15 +37,6 @@ export async function hostTab(tabId: string, state: SuperTabState, machineId: st
 
 async function roster(tabId: string, state: SuperTabState, machineId: string, user: AuthUser, lastChangedAt: number | null, lookups: HostLookups): Promise<HostRosterRow[]> {
   const rows: HostRosterRow[] = []
-  // Where its owner added this Mac and its team account is missing, this host adds that account (cli/src/superTabs/host.ts).
-  const mac = state.machines?.find(m => m.machineId === machineId && m.contributorId === user.sub && m.scope === 'swarm' && !m.removal && !m.buddyOnly)
-  // Only as many as machine.contribute would take (machines.ts machineRoom): an old CLI retries any refusal but MACHINES_FULL
-  // for good, and stops only once its row goes (#2637).
-  const missing = (mac ? lookups.teams : []).filter(team => !state.machines?.some(m => m.machineId === team.machineId)
-    && !state.machineCleanups?.some(c => c.machineId === team.machineId))
-  for (const team of missing.slice(0, machineRoom(state, user.sub, { team: true }))) {
-    rows.push({ tabId, joinTeam: { machineId: team.machineId, name: mac!.name, maxAgents: mac!.maxAgents } })
-  }
   // Once per read: each row asks it for each person (task #4504). The state is this read's own, so nothing changes it meanwhile.
   const sets = confidentialSets(state)
   for (const target of state.agents.filter(a => a.machineId === machineId && a.machineOwnerId === user.sub)) {

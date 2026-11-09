@@ -64,8 +64,7 @@ export function fullSwarm(now = NOW) {
       resources: { cpuPercent: 1, memoryTotalBytes: 8, memoryUsedBytes: 1, diskFreeBytes: 8, diskTotalBytes: 8, projectDiskFreeBytes: 8,
         deviceType: null, chip: null, os: null, gpuPercent: null },
       tools: {}, quotas: [], runningHarnessIds: ['worker-harness', 'gone-harness'], stoppedHarnessIds: [],
-      harnessTokens: { 'worker-harness': tokens(), 'gone-harness': tokens() },
-      privacy: { mode: 'account', passed: false, item: 'disk-encryption', detail: '/Users/owner/secret', checkedAt: now, seenAt: now } }
+      harnessTokens: { 'worker-harness': tokens(), 'gone-harness': tokens() } }
   })
   const generation = s.state.people.find(p => p.id === peer.userId)!.generation
   const projectId = s.state.projects![0]!.id
