@@ -302,6 +302,14 @@ export function canReadProject(state: SuperTabState, actor: Actor, project: Swar
     project.members.some(p => p.id === member.id && p.generation === member.generation))
 }
 
+/** Whether [target] is an agent of [project]'s channel (Swarm v4, anh Dee 2026-11-08): one that reads the project as an agent
+ *  does (canReadProject), so an agent of the project or a v4 agent in no project, never a Buddy or one stopping. It joins the
+ *  channel by posting there or being named there, by --to or by @Name, and talks there with the others by name. */
+export function inChannelOf(state: SuperTabState, target: Agent, project: SwarmProject): boolean {
+  return !isBuddy(target) && target.workDecision !== 'stop'
+    && canReadProject(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, project)
+}
+
 /** Whether [userId] owns [project] now: its owner, in the Swarm at the membership they owned it in (task #3073). A former
  *  owner who left or was removed and came back owns nothing, as a former member reads nothing. A project from before the
  *  generation was stored matches by id until settleOwners fills it. */

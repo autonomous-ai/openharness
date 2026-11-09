@@ -5,8 +5,8 @@ import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
 import { activeWork, agentOnly, fail, isLeads, person, stableId, type Actor, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { agentProjectId, canReadGroup, canReadProject, groupProject, isAgentChat, projectAgent, projectOf, projectsOf } from './projects.js'
-import { isBuddy, isBuddyChat, isSwarmBuddyChat } from './buddies.js'
+import { canReadGroup, canReadProject, groupProject, inChannelOf, isAgentChat, projectAgent, projectOf, projectsOf } from './projects.js'
+import { isBuddyChat, isSwarmBuddyChat } from './buddies.js'
 import { groupsBy, readBy } from './parts/indexed.js'
 import { deliveredCopies } from './pageReads.js'
 import { shownNameOf } from './personNames.js'
@@ -98,8 +98,7 @@ export function agentsNamedIn(state: SuperTabState, group: Conversation, text: s
   const tokens = tagTokens(text).filter(token => !token.includes('@') && !people.has(token))
   if (!tokens.length) return []
   const project = projectsOf(state).find(p => p.leadConversationId === group.id)
-  const members = state.agents.filter(a => group.agentIds.includes(a.id)
-    || (project && !isBuddy(a) && a.workDecision !== 'stop' && agentProjectId(state, a) === project.id))
+  const members = state.agents.filter(a => group.agentIds.includes(a.id) || (project && inChannelOf(state, a, project)))
   return [...new Set(tokens.flatMap(token => {
     const matches = members.filter(a => a.displayName?.toLowerCase() === token || a.name.toLowerCase() === token)
     return matches.length === 1 ? [matches[0]!.id] : []

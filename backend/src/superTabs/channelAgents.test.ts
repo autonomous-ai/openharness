@@ -43,6 +43,13 @@ describe('a v4 agent in a project\'s channel', () => {
     expect(asked.messages.at(-1)!.recipients).toEqual([juno.agentId])
   })
 
+  it('wakes another person\'s agent named by @Name though it never posted in the channel', () => {
+    const f = swarm()
+    const pip = f.newAgent(owner, 'Pip'), juno = f.newAgent(mate, 'Juno')
+    expect(f.run(post('lead', '@Juno can you review #4?'), pip).messages.at(-1)!.recipients).toEqual([juno.agentId])
+    expect(f.state.conversations.find(c => c.id === 'lead')!.agentIds).toContain(juno.agentId)
+  })
+
   it('stays out of a private project its person does not read', () => {
     const f = swarm()
     const secret = f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).result as { conversationId: string }
