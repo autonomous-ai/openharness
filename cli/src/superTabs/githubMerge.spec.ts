@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { authorOf, checksOf, GitHubMerge, mergingProjects, verdicts } from './githubMerge.js'
+import { authorOf, checksOf, GitHubMerge, ledProjects, verdicts } from './githubMerge.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 
 type Json = Record<string, unknown>
@@ -42,7 +42,7 @@ function fakeGitHub() {
 function setup() {
   const github = fakeGitHub()
   const log = vi.fn()
-  const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno' }], get: github.get, send: github.send,
+  const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }], get: github.get, send: github.send,
     now: () => Date.parse('2026-11-09T07:31:00Z'), log })
   const merges = () => github.sent.filter(s => s.method === 'PUT')
   const comments = () => github.sent.filter(s => s.method === 'POST').map(s => String((s.body as Json).body))
@@ -155,9 +155,9 @@ describe('the rule\'s parts', () => {
   it('merges only for projects whose PM is this person\'s agent running here, on a GitHub repository', async () => {
     const row = (agent: Json, extra: Json = {}) => ({ tabId: 'tab', lead: true, ledConversationId: 'lead', agent: { id: 'juno', harnessId: 'h-juno',
       name: 'Juno', contributorId: 'dee', machineOwnerId: 'dee', ...agent }, ...extra })
-    const read = async () => ({ projects: [{ leadConversationId: 'lead', repository: { repositoryUrl: 'git@github.com:acme/app.git' } }] })
-    const found = await mergingProjects({ me: 'dee', live: id => id === 'h-juno', read, roster: async () => [row({}), row({ id: 'ken', contributorId: 'ken' }),
+    const read = async () => ({ projects: [{ id: 'app', leadConversationId: 'lead', repository: { repositoryUrl: 'git@github.com:acme/app.git' } }] })
+    const found = await ledProjects({ me: 'dee', live: id => id === 'h-juno', read, roster: async () => [row({}), row({ id: 'ken', contributorId: 'ken' }),
       row({ id: 'pip' }, { lead: false }), row({ id: 'gone', harnessId: 'h-gone' })] })
-    expect(found).toEqual([{ repo: 'acme/app', pm: 'Juno' }])
+    expect(found).toEqual([{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }])
   })
 })
