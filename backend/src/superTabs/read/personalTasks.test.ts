@@ -17,7 +17,7 @@ function scene() {
     Object.assign(s.conversations.find(c => c.id === f.secretGroup)!, { requesterId: member.id })
   })
   const stored = parts.split(f.state, { tabId: 'tab', version: 7, now: NOW })
-  const view = (actor: Actor = peer) => readerView(stored, actor, NOW, { teamMachines: [] })
+  const view = (actor: Actor = peer) => readerView(stored, actor, NOW, {})
   return { f, stored, view }
 }
 
@@ -91,7 +91,7 @@ describe('personal Tasks summaries', () => {
     const mine = { ...s.f.state.agents.find(a => a.id === s.f.worker)!, id: 'peer-agent', harnessId: 'peer-harness', contributorId: peer.userId }
     const lent = { ...mine, id: 'lent-agent', harnessId: 'lent-harness', contributorId: owner.userId, machineOwnerId: peer.userId }
     const stored = parts.split({ ...s.f.state, agents: [...s.f.state.agents, mine, lent] }, { tabId: 'tab', version: 7, now: NOW })
-    const view = readerView(stored, peer, NOW, { teamMachines: [] })
+    const view = readerView(stored, peer, NOW, {})
     const work = (agentId: string) => ({ ...s.f.state.conversations.find(c => c.id === s.f.web)!.assignment!, agentId, status: 'done' as const })
     const did = { ...row, dormant: true as const, data: { ...row.data!, requesterId: owner.userId, archived: true, dormant: true, assignment: work(mine.id) } }
     expect(personalTasksFor([did], view, peer)!.upserts).toEqual([expect.objectContaining({ id: row.key, status: 'done', agent: expect.objectContaining({ id: mine.id }) })])
@@ -123,7 +123,7 @@ describe('personal Tasks summaries', () => {
     const agents = Array.from({ length: 250 }, (_, i) => ({ ...template, id: `agent-${String(i).padStart(3, '0')}`, harnessId: `h-${i}`, contributorId: peer.userId }))
     const stored = parts.split({ ...s.f.state, agents: [...s.f.state.agents, ...agents] }, { tabId: 'tab', version: 7, now: NOW })
     let read: string[] = []
-    await personalTasksPage(async ids => { read = ids; return [] }, readerView(stored, peer, NOW, { teamMachines: [] }), peer)
+    await personalTasksPage(async ids => { read = ids; return [] }, readerView(stored, peer, NOW, {}), peer)
     expect(read).toHaveLength(200)
     expect(read).toEqual(expect.arrayContaining([peer.userId, 'agent-249', 'agent-052']))
     expect(read).not.toContain('agent-051')

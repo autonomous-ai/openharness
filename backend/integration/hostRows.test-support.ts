@@ -7,7 +7,7 @@ import type { SuperTabStore } from '../src/superTabs/store.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { HostTabRows } from '../src/superTabs/read/contract.js'
 
-type Options = { teamAccountsIdle?: boolean; githubApp?: boolean }
+type Options = { githubApp?: boolean }
 
 /** A full host read, holding no etags, so every Swarm comes back with its rows. */
 async function hostRead(store: SuperTabStore, user: AuthUser, machineId: string, options: Options = {}): Promise<HostTabRows[]> {

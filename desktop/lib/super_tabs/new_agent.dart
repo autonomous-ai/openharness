@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import '../core/models.dart';
 import '../logging/app_log.dart';
 import '../state/app_state.dart';
 import '../state/harness_launch_integration.dart';
@@ -129,4 +130,90 @@ HarnessLaunchIntegration swarmNewAgent(
     },
   );
   return integration;
+}
+
+/// Attach, beside + in Your Team (Swarm v4, anh Dee 2026-11-09: "this is like cmd p. while + is like cmd n"): an agent
+/// already running on one of its person's own computers joins their team as + New agent's does, with its own 1:1 chat,
+/// which opens. Its name is the one its person gave it, else one of the Swarm's. Nothing is typed into it: it goes on with
+/// what it was doing, and its daemon tells it the team's ways once it is in (cli superTabs/host.ts). A join the connection
+/// lost is tried again as the same operation, which never adds it twice.
+Future<void> swarmAttachAgent(
+  AppNotifier app,
+  String tabId,
+  String machineId,
+  Agent native, {
+  Future<void> Function(Duration) wait = Future<void>.delayed,
+}) async {
+  final engine = native.engine;
+  if (engine != 'claude' && engine != 'codex') {
+    throw const SuperTabFailure(
+      'SWARM_ENGINE',
+      'Only Claude Code or Codex can join this Swarm.',
+    );
+  }
+  final creationId = superTabOperationId();
+  final started = DateTime.now();
+  final snapshot = await app.superTabs.readSnapshot(tabId);
+  final name = native.nameChosen == true
+      ? native.name
+      : freshAgentName([
+          for (final agent in snapshot.agents) agent.displayName ?? agent.name,
+        ]);
+
+  Future<Map<String, dynamic>> run(
+    String step,
+    Map<String, Object?> command,
+  ) async {
+    for (var attempt = 0; ; attempt++) {
+      try {
+        final answer = await app.superTabs.map(
+          'POST',
+          '/api/super-tabs/$tabId/commands',
+          body: {'operationId': '$creationId-$step', 'command': command},
+        );
+        return superTabMap(answer['result']);
+      } catch (failure) {
+        // A refusal is the answer; only a lost connection or a busy server is worth another try.
+        final refused =
+            failure is SuperTabFailure &&
+            failure.statusCode >= 400 &&
+            failure.statusCode < 500;
+        if (refused || attempt == swarmJoinRetries.length) rethrow;
+        await wait(swarmJoinRetries[attempt]);
+      }
+    }
+  }
+
+  final chat = await run('chat', {
+    'type': 'agent.new',
+    'kind': 'regular',
+    'machineId': machineId,
+    'engine': engine,
+    'name': name,
+    'local': true,
+  });
+  final chatId = chat['conversationId'] as String;
+  await run('join', {
+    'type': 'agent.add',
+    'conversationId': chatId,
+    'machineId': machineId,
+    'harnessId': native.id,
+    'name': name,
+    'lead': false,
+    'configuration': {
+      'engine': engine,
+      'model': native.modelName,
+      'effort': native.modelEffort,
+      'contextWindow': null,
+      'engineVersion': null,
+    },
+  });
+  await app.wakeSuperTabHost(machineId);
+  final controller = await app.superTabs.open(tabId);
+  await controller.refresh();
+  await controller.select(chatId);
+  appLog.info(
+    'super-tabs',
+    'Agent attached in ${DateTime.now().difference(started).inMilliseconds} ms',
+  );
 }
