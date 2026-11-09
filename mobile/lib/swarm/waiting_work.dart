@@ -8,10 +8,17 @@ class SwarmWaitingWork {
     this.project,
     this.snapshot, {
     this.promptAgentId,
+    this.requested = false,
   });
   final SuperTabConversation conversation;
   final SuperTabProject project;
   final SuperTabSnapshot snapshot;
+
+  /// The reader also asked for this task (its requester): its stuck or
+  /// needs-you notice is posted only then, so a person in many projects is not
+  /// told of every task in them (anh Dee, 2026-11-09). The list and the badge
+  /// do not read it.
+  final bool requested;
 
   /// The agent at a prompt in its terminal, when that is what waits.
   final String? promptAgentId;
@@ -51,7 +58,8 @@ Map<String, String> swarmPartners(Map<String, dynamic> state) => {
 /// is stuck, and the reader is who it waits on — the conversation's partner
 /// when it has one, else the project's owner (Lead's ruling, 2026-10-27). A
 /// decision or tag asked of a person by name reaches them on its own
-/// (`SwarmAsks`), so it is never counted here for anyone else.
+/// (`SwarmAsks`), so it is never counted here for anyone else. Whether the
+/// reader asked for it too is [SwarmWaitingWork.requested].
 ///
 /// The one place this rule lives: when people's areas reach the phone, the
 /// owner gives way to whoever covers the area here.
@@ -74,7 +82,12 @@ List<SwarmWaitingWork> swarmWaitingWork(
       if (superTabWorkWaits(conversation.assignment?['status']))
         if (snapshot.projectById(conversation.projectId) case final project?)
           if ((partners[conversation.id] ?? project.ownerId) == accountId)
-            SwarmWaitingWork(conversation, project, snapshot),
+            SwarmWaitingWork(
+              conversation,
+              project,
+              snapshot,
+              requested: conversation.requesterId == accountId,
+            ),
     // An agent at a prompt in a task of the reader's: the backend chose them
     // (the task's requester, or the device machine's owner), so no rule here.
     for (final wait in snapshot.promptsWaiting)

@@ -247,6 +247,7 @@ Map<String, dynamic> activityRow(
   String text = '',
   int minute = 0,
   bool read = false,
+  bool rings = false,
 }) => {
   'id': id,
   'kind': kind,
@@ -261,4 +262,5 @@ Map<String, dynamic> activityRow(
   'text': text.isEmpty ? 'Text of $id' : text,
   'createdAt': DateTime.utc(2026, 11, 1, 7, minute).toIso8601String(),
   'read': read,
+  'rings': rings,
 };

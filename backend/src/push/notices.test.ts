@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { phoneNotices, taskSlot } from './notices.js'
 import { swarm, owner, peer } from '../superTabs/read/fixture.test-support.js'
 import { shownNameOf } from '../superTabs/personNames.js'
-import type { MessageDraft } from '../superTabs/model.js'
+import { stableId, type MessageDraft } from '../superTabs/model.js'
 import { openSwarmBuddyChat } from '../superTabs/buddies.js'
 
 function scene() {
@@ -16,17 +16,16 @@ function scene() {
 const draft = (over: Partial<MessageDraft> & Pick<MessageDraft, 'id' | 'conversationId' | 'author'>): MessageDraft =>
   ({ text: 'never in a notice', replyTo: null, recipients: [], ...over })
 const person = (p: typeof peer) => ({ kind: 'person' as const, id: p.userId, name: p.email, membershipGeneration: 'g' })
-const AT = new Date(Date.UTC(2026, 10, 5, 10))
 
 describe('phoneNotices: what a write tells phones (task #2905)', () => {
   it('words a reply as the phone does, and links the thread at the reply', () => {
     const { state, web } = scene()
     const reply = draft({ id: 'r1', conversationId: web, author: person(peer), thread: 'root1' })
     const notices = phoneNotices('tab', state, { replies: [{ id: 'row1', personId: owner.userId, conversationId: web, messageId: 'r1', threadId: 'root1',
-      actorKind: 'person', actorId: peer.userId, why: 'starter', createdAt: AT }], tags: [] }, [reply])
+      actorKind: 'person', actorId: peer.userId, rings: true }], tags: [] }, [reply])
     expect(notices).toEqual([{ personId: owner.userId, key: 'reply:tab:row1', title: `${shownNameOf(state, peer.userId)} replied in a thread`,
       subtitle: 'Web launch', body: 'Open Harness to read it.', link: `swarm:tab/${web}/message/r1/thread/root1`,
-      slot: `thread:tab:${web}:root1`, thread: { tabId: 'tab', conversationId: web, threadId: 'root1', rowId: 'row1', at: AT.getTime() } }])
+      slot: `thread:tab:${web}:root1` }])
   })
 
   it('words a tag as the phone does, and links the message, in its thread only when it is only there', () => {
@@ -37,7 +36,9 @@ describe('phoneNotices: what a write tells phones (task #2905)', () => {
     const tag = (id: string, messageId: string) => ({ id, personId: owner.userId, conversationId: web, messageId })
     const notices = phoneNotices('tab', state, { replies: [], tags: [tag('t1', 'm1'), tag('t2', 'm2'), tag('t3', 'm3')] }, [inChat, inThread, alsoInChat])
     // A tag is a notice of its own: it shows in the slot of its key, as the app's notice for it does.
-    expect(notices.every(n => n.slot === n.key && !n.thread && !n.quiet)).toBe(true)
+    expect(notices.every(n => n.slot === n.key && !n.quiet)).toBe(true)
+    // Its person's setting for the chat, by which a tag in a chat they muted rings no phone (push/muted.ts).
+    expect(notices.map(n => n.setting)).toEqual(Array(3).fill(stableId('tab', web, owner.userId, 'notify')))
     expect(notices.map(n => [n.key, n.title, n.subtitle, n.link])).toEqual([
       ['mention:t1', `${shownNameOf(state, peer.userId)} tagged you`, 'Web launch', `swarm:tab/${web}/message/m1`],
       ['mention:t2', `${shownNameOf(state, peer.userId)} tagged you`, 'Web launch', `swarm:tab/${web}/message/m2/thread/root2`],
@@ -51,7 +52,7 @@ describe('phoneNotices: what a write tells phones (task #2905)', () => {
     const buddy = openSwarmBuddyChat(state, state.people.find(p => p.id === peer.userId)!).id
     const reply = draft({ id: 'r1', conversationId: buddy, author: person(owner), thread: 'root1' })
     const notices = phoneNotices('tab', state, { replies: [{ id: 'row1', personId: peer.userId, conversationId: buddy, messageId: 'r1', threadId: 'root1',
-      actorKind: 'person', actorId: owner.userId, why: 'starter', createdAt: AT }], tags: [] }, [reply])
+      actorKind: 'person', actorId: owner.userId, rings: true }], tags: [] }, [reply])
     expect(notices).toEqual([expect.objectContaining({ personId: peer.userId, subtitle: '', link: `swarm:tab/${buddy}/message/r1/thread/root1` })])
   })
 
@@ -65,7 +66,7 @@ describe('phoneNotices: what a write tells phones (task #2905)', () => {
     const { state, web } = scene()
     const reply = draft({ id: 'r/1', conversationId: web, author: person(peer), thread: 'root 1' })
     const [notice] = phoneNotices('tab:x', state, { replies: [{ id: 'row1', personId: owner.userId, conversationId: web, messageId: 'r/1', threadId: 'root 1',
-      actorKind: 'person', actorId: peer.userId, why: 'starter', createdAt: AT }], tags: [] }, [reply])
+      actorKind: 'person', actorId: peer.userId, rings: true }], tags: [] }, [reply])
     expect(notice!.link).toBe(`swarm:tab%3Ax/${web}/message/r%2F1/thread/root%201`)
   })
 
@@ -73,35 +74,25 @@ describe('phoneNotices: what a write tells phones (task #2905)', () => {
     const { state, web } = scene()
     const reply = draft({ id: 'r1', conversationId: web, author: person(peer), thread: 'root1', mentions: [owner.userId] })
     const notices = phoneNotices('tab', state, { replies: [{ id: 'row1', personId: owner.userId, conversationId: web, messageId: 'r1', threadId: 'root1',
-      actorKind: 'person', actorId: peer.userId, why: 'starter', createdAt: AT }], tags: [{ id: 't1', personId: owner.userId, conversationId: web, messageId: 'r1' }] }, [reply])
+      actorKind: 'person', actorId: peer.userId, rings: true }], tags: [{ id: 't1', personId: owner.userId, conversationId: web, messageId: 'r1' }] }, [reply])
     expect(JSON.stringify(notices)).not.toContain('never in a notice')
   })
 })
 
-describe('phoneNotices: the push rule Tony approved (task #3248)', () => {
-  const row = (id: string, personId: string, why: 'starter' | 'quoted' | 'tagged' | 'replier', messageId = 'r1') =>
-    ({ id, personId, conversationId: '', messageId, threadId: 'root1', actorKind: 'person', actorId: peer.userId, why, createdAt: AT })
+describe('phoneNotices: the push rule Tony approved (tasks #3248, #3607; 2026-11-09)', () => {
+  const row = (id: string, personId: string, rings: boolean) =>
+    ({ id, personId, conversationId: '', messageId: 'r1', threadId: 'root1', actorKind: 'person', actorId: peer.userId, ...rings ? { rings: true as const } : {} })
 
-  it('pushes a reply to the thread\'s starter, the quoted message\'s author and people tagged in the thread, never to one who only replied there', () => {
+  it('pushes the reply rows that ring alone: the first person\'s reply in a thread the person started (writeReplyActivity)', () => {
     const { state, web } = scene()
     const reply = draft({ id: 'r1', conversationId: web, author: person(peer), thread: 'root1' })
     const at = (r: ReturnType<typeof row>) => ({ ...r, conversationId: web })
-    const notices = phoneNotices('tab', state, { replies: [at(row('a', 'starter-id', 'starter')), at(row('b', 'quoted-id', 'quoted')), at(row('c', 'tagged-id', 'tagged')),
-      at(row('d', 'replier-id', 'replier'))], tags: [] }, [reply])
-    expect(notices.map(n => n.personId)).toEqual(['starter-id', 'quoted-id', 'tagged-id'])
-    // One slot per thread: a newer reply there replaces the notice of the one before.
-    expect(new Set(notices.map(n => n.slot))).toEqual(new Set([`thread:tab:${web}:root1`]))
-  })
-
-  it('pushes no Swarm line in a thread (a status, a ship or review notice): it stays in Activity', () => {
-    const { state, web, worker } = scene()
-    const agent = { kind: 'agent' as const, id: worker, name: 'worker-harness', membershipGeneration: 'g' }
-    const line = draft({ id: 'r1', conversationId: web, author: agent, thread: 'root1', source: { kind: 'system' } })
-    expect(phoneNotices('tab', state, { replies: [{ ...row('a', owner.userId, 'starter'), conversationId: web }], tags: [] }, [line])).toEqual([])
-    // A person's own words in the same row are pushed; an agent's are not (task #3607: Activity and the badge only).
-    const words = draft({ id: 'r1', conversationId: web, author: person(peer), thread: 'root1' })
-    expect(phoneNotices('tab', state, { replies: [{ ...row('a', owner.userId, 'starter'), conversationId: web }], tags: [] }, [words]))
-      .toEqual([expect.objectContaining({ personId: owner.userId, title: `${shownNameOf(state, peer.userId)} replied in a thread` })])
+    const notices = phoneNotices('tab', state, { replies: [at(row('a', 'starter-id', true)), at(row('b', 'quoted-id', false)), at(row('c', 'tagged-id', false)),
+      at(row('d', 'replier-id', false))], tags: [] }, [reply])
+    expect(notices.map(n => n.personId)).toEqual(['starter-id'])
+    // The thread's one slot, which the app's own notice for it shares.
+    expect(notices.map(n => n.slot)).toEqual([`thread:tab:${web}:root1`])
+    expect(notices[0]!.quiet).toBeUndefined()
   })
 
   it('pushes a decision asked of a person as the app words it, linking its card, and only the first of one ask\'s questions sounds', () => {
@@ -135,21 +126,14 @@ describe('phoneNotices: the push rule Tony approved (task #3248)', () => {
 
 describe('phoneNotices: who rings (task #3607, Tony 2026-11-06)', () => {
   const asAgent = (id: string) => ({ kind: 'agent' as const, id, name: 'worker-harness', membershipGeneration: 'g' })
-  const row = (web: string, id: string, personId: string, why: 'starter' | 'quoted' | 'tagged' | 'replier', actorKind: 'person' | 'agent', actorId: string) =>
-    ({ id, personId, conversationId: web, messageId: 'r1', threadId: 'root1', actorKind, actorId, why, createdAt: AT })
+  // An agent's reply row never rings (writeReplyActivity): only a person's can.
+  const row = (web: string, id: string, personId: string, actorKind: 'person' | 'agent', actorId: string) =>
+    ({ id, personId, conversationId: web, messageId: 'r1', threadId: 'root1', actorKind, actorId, ...actorKind === 'person' ? { rings: true as const } : {} })
 
-  it('an agent\'s reply rings nobody, for starter, quoted and tagged alike', () => {
+  it('an agent\'s reply rings nobody', () => {
     const { state, web, worker } = scene()
     const reply = draft({ id: 'r1', conversationId: web, author: asAgent(worker), thread: 'root1' })
-    const rows = (['starter', 'quoted', 'tagged'] as const).map((why, i) => row(web, `a${i}`, `p${i}`, why, 'agent', worker))
-    expect(phoneNotices('tab', state, { replies: rows, tags: [] }, [reply])).toEqual([])
-  })
-
-  it('a person\'s reply rings for starter, quoted and tagged, never for one who only replied', () => {
-    const { state, web } = scene()
-    const reply = draft({ id: 'r1', conversationId: web, author: person(peer), thread: 'root1' })
-    const rows = (['starter', 'quoted', 'tagged', 'replier'] as const).map((why, i) => row(web, `a${i}`, `p${i}`, why, 'person', peer.userId))
-    expect(phoneNotices('tab', state, { replies: rows, tags: [] }, [reply]).map(n => n.personId)).toEqual(['p0', 'p1', 'p2'])
+    expect(phoneNotices('tab', state, { replies: [row(web, 'a', owner.userId, 'agent', worker)], tags: [] }, [reply])).toEqual([])
   })
 
   it('an agent\'s tag rings nobody, a person\'s tag rings', () => {
@@ -166,7 +150,7 @@ describe('phoneNotices: who rings (task #3607, Tony 2026-11-06)', () => {
     const text = 'Please approve this and decide now: waiting on you'
     const reply = draft({ id: 'r1', conversationId: web, author: asAgent(worker), thread: 'root1', text })
     const tagging = draft({ id: 'm1', conversationId: web, author: asAgent(worker), mentions: [owner.userId], text })
-    expect(phoneNotices('tab', state, { replies: [row(web, 'a', owner.userId, 'starter', 'agent', worker)],
+    expect(phoneNotices('tab', state, { replies: [row(web, 'a', owner.userId, 'agent', worker)],
       tags: [{ id: 't1', personId: owner.userId, conversationId: web, messageId: 'm1' }] }, [reply, tagging])).toEqual([])
   })
 
