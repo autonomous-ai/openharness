@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
+import '../shared/widgets/app_menu.dart';
 import '../shared/theme/appearance_prefs_store.dart';
 import '../state/app_state.dart';
 import '../state/harness_activity.dart';
@@ -25,7 +26,9 @@ import 'leaderboard/reader.dart';
 import 'section_heading.dart';
 import 'swarm_switcher.dart';
 import 'private_project_lock.dart';
+import '../widgets/delete_harness_dialog.dart';
 import '../widgets/laid_out_list.dart';
+import '../widgets/pane_menu.dart' show showContextMenuAt;
 import 'swarm_type.dart';
 
 /// The reader's one Buddy for the whole Swarm, listed first among the projects
@@ -799,7 +802,7 @@ class ProjectSidebar extends StatelessWidget {
   ) {
     final name = snapshot.agentName(agent.id, fallback: agent.name);
     final pm = superTabAgentIsPm(snapshot, agent);
-    return SuperTabQuietRow(
+    final row = SuperTabQuietRow(
       key: ValueKey('super-agent-${agent.id}'),
       leading: _face(agent, name, lead: pm),
       name: name,
@@ -814,6 +817,36 @@ class ProjectSidebar extends StatelessWidget {
         (null, final terminal?) => () => terminal(agent),
         _ => null,
       },
+    );
+    final app = this.app;
+    // Delete is one right-click away, for its person alone (Swarm v4: only its person stops an agent).
+    if (app == null || agent.contributorId != controller.accountId) return row;
+    return Builder(
+      builder: (context) => GestureDetector(
+        onSecondaryTapUp: (event) async {
+          final choice = await showContextMenuAt<String>(
+            context: context,
+            at: event.globalPosition,
+            children: (close) => [
+              AppMenuItem(
+                label: 'Delete',
+                leadingSlot: false,
+                onPressed: () => close('delete'),
+              ),
+            ],
+          );
+          if (choice == 'delete' && context.mounted) {
+            await confirmDeleteHarness(
+              context,
+              app,
+              agent.machineId,
+              agent.harnessId,
+              name,
+            );
+          }
+        },
+        child: row,
+      ),
     );
   }
 

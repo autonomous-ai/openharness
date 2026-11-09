@@ -4,7 +4,9 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
 
+import 'package:flutter/gestures.dart';
 import 'support/swarm_v4_data.dart';
+import 'swarm_state_test.dart' show createApp;
 
 /// Swarm v4 (anh Dee 2026-11-08), clicked through as a person does: a project's channel that only agents post in,
 /// its tasks as cards that open their threads, and an agent's own chat with its instructions and terminal beside it.
@@ -14,6 +16,7 @@ void main() {
   Future<SuperTabController> show(
     WidgetTester tester, {
     List<String>? terminals,
+    bool withApp = false,
   }) async {
     late SuperTabController c;
     await tester.binding.setSurfaceSize(const Size(1440, 900));
@@ -30,6 +33,7 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
+            app: withApp ? createApp() : null,
             onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
@@ -96,6 +100,18 @@ void main() {
     await tester.tap(key('super-thread-close'));
     await tester.pumpAndSettle();
     expect(key('super-thread-panel'), findsNothing);
+  });
+
+  testWidgets('its person deletes an agent with a right-click on its row', (
+    tester,
+  ) async {
+    await show(tester, withApp: true);
+    await tester.tap(
+      key('super-agent-second'),
+      buttons: kSecondaryButton,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Delete'), findsOneWidget);
   });
 
   testWidgets('an agent opens its own chat, where its person writes to it', (
