@@ -6,6 +6,7 @@ import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
+import 'my_agents.dart';
 
 /// Delete an agent from the sidebar (Swarm v4, anh Dee 2026-11-09): the Swarm lets go of it, its chat leaves Your Team,
 /// and its computer stops its session. The same `agent.remove` Remove from Swarm sends, in the words a person uses.
@@ -76,6 +77,7 @@ Future<void> deleteSwarmAgent(
                             if (!context.mounted) return;
                             if (result != null) {
                               Navigator.pop(context);
+                              await _leaveChatOf(c, agent);
                             } else {
                               update(() => busy = false);
                             }
@@ -89,5 +91,18 @@ Future<void> deleteSwarmAgent(
         ),
       ),
     ),
+  );
+}
+
+/// The view moves off the chat of the agent just deleted, to the next agent's chat or, with none, the first project's channel.
+Future<void> _leaveChatOf(SuperTabController c, SuperTabAgent agent) async {
+  final snapshot = c.snapshot;
+  if (snapshot == null || agent.chatId != c.selectedId) return;
+  final next = [
+    for (final other in superTabMyAgents(snapshot, c.accountId))
+      if (other.id != agent.id) ?superTabAgentChat(snapshot, other)?.id,
+  ].firstOrNull;
+  await c.select(
+    next ?? snapshot.projects.firstOrNull?.leadConversationId ?? 'lead',
   );
 }
