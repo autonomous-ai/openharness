@@ -1,0 +1,343 @@
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/super_tabs/channel_talk.dart';
+import 'package:harness/super_tabs/message_row.dart';
+import 'package:harness/super_tabs/model.dart';
+
+import 'support/capture.dart';
+import 'support/super_tab_fixture.dart';
+import 'support/swarm_v4_channel.dart';
+
+/// Set to a folder to write this file's screenshots there, with the system's real fonts.
+final shots = Platform.environment['SWARM_V4_SHOTS'];
+
+/// The channel as the team talking (anh Dee 2026-11-09: "i dont see any agent to agent chat"), as a person reads it: a channel
+/// nobody has posted in says why, a post to a teammate reads "Pip to Juno", and an ask to an agent whose computer is off says
+/// so under it.
+void main() {
+  setUpAll(() => loadCaptureFonts(shots));
+
+  Finder key(String k) => find.byKey(ValueKey(k));
+
+  Future<void> look(WidgetTester tester, String name) =>
+      captureWindow(tester, shots, 'talk-$name');
+
+  /// The row of the message whose text holds [text].
+  Finder rowOf(String text) => find.ancestor(
+    of: find.textContaining(text),
+    matching: find.byType(SuperTabMessageRow),
+  );
+
+  /// A post by [who] in the channel at [at], to the agents [to] by id, as the backend stores it (`recipientIds`). Returns its id.
+  String say(
+    ConversationServer server,
+    String who,
+    String text, {
+    List<String> to = const [],
+    String at = '2026-11-09T02:00:00Z',
+  }) {
+    final id = swarmV4Post(server, who, text);
+    server.messages.last
+      ..['createdAt'] = at
+      ..['recipientIds'] = to;
+    return id;
+  }
+
+  const emptyLine =
+      'No posts yet. Agents post here when free or asking a teammate. Task talk is on Tasks.';
+
+  testWidgets(
+    'a channel nobody has posted in says why, and its bar still says who may post',
+    (tester) async {
+      final server = swarmV4Channel();
+      await openSwarmV4(tester, server);
+      expect(find.text(emptyLine), findsOneWidget);
+      expect(find.byType(SuperTabMessageRow), findsNothing);
+      expect(
+        find.text(
+          'Only agents post here. To change what happens, talk to your agents.',
+        ),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+      await look(tester, 'empty');
+    },
+  );
+
+  testWidgets('a channel with a post in it says nothing of being empty', (
+    tester,
+  ) async {
+    final server = swarmV4Channel();
+    say(server, 'Pip', 'free: Pip');
+    await openSwarmV4(tester, server);
+    expect(find.text(emptyLine), findsNothing);
+    expect(rowOf('free: Pip'), findsOneWidget);
+  });
+
+  testWidgets(
+    'an agent\'s chat with its person never says the channel is empty',
+    (tester) async {
+      final server = swarmV4Channel();
+      await openSwarmV4(tester, server, saved: 'agent-chat-pip');
+      expect(find.text(emptyLine), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'a post that names a teammate reads "Pip to Juno"; one that names nobody does not',
+    (tester) async {
+      final server = swarmV4Channel();
+      final free = say(server, 'Pip', 'free: Pip');
+      final ask = say(server, 'Pip', '@Juno can you read #12?', to: ['juno']);
+      final plan = say(
+        server,
+        'Faye',
+        'Plan: @Pip takes #12, @Juno #14.',
+        to: ['pip', 'juno'],
+      );
+      // An older backend sends no recipients at all: the post reads as it always did.
+      swarmV4Post(server, 'Juno', 'Reading #12 now.');
+      server.messages.last['createdAt'] = '2026-11-09T02:10:00Z';
+      await openSwarmV4(tester, server);
+      expect(key('super-message-to-$free'), findsNothing);
+      expect(tester.widget<Text>(key('super-message-to-$ask')).data, 'to Juno');
+      expect(
+        tester.widget<Text>(key('super-message-to-$plan')).data,
+        'to Pip, Juno',
+      );
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is Text && (w.data?.startsWith('to ') ?? false),
+        ),
+        findsNWidgets(2),
+      );
+      // Pip's two posts are minutes apart, yet the second stands on its own, with its name, where the phrase shows.
+      expect(
+        find.descendant(of: rowOf('free: Pip'), matching: find.text('Pip')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: rowOf('@Juno can you read #12?'),
+          matching: find.text('Pip'),
+        ),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+      await look(tester, 'to');
+    },
+  );
+
+  testWidgets(
+    'a post to a deleted agent, or to its own author, reads as no one\'s',
+    (tester) async {
+      final server = swarmV4Channel();
+      final gone = say(server, 'Pip', 'Is @Ghost still here?', to: ['ghost']);
+      final itself = say(server, 'Pip', 'Note to self.', to: ['pip']);
+      await openSwarmV4(tester, server);
+      expect(key('super-message-to-$gone'), findsNothing);
+      expect(key('super-message-to-$itself'), findsNothing);
+    },
+  );
+
+  testWidgets('a task\'s chat reads its posts the same way', (tester) async {
+    final server = swarmV4Channel();
+    final task = say(
+      server,
+      'Faye',
+      '#12 The voice declines in a busy room. @Pip yours.',
+      to: ['pip'],
+    );
+    final ask = swarmV4Post(
+      server,
+      'Pip',
+      '@Juno can you read #12?',
+      thread: task,
+    );
+    server.messages.last
+      ..['createdAt'] = '2026-11-09T02:05:00Z'
+      ..['recipientIds'] = ['juno'];
+    final c = await openSwarmV4(tester, server);
+    await tester.tap(key('super-thread-bar-$task'));
+    await tester.pumpAndSettle();
+    expect(c.openedThread?.root, task);
+    expect(key('super-thread-panel'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: key('super-thread-panel'),
+        matching: key('super-message-to-$ask'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: key('super-thread-panel'),
+        matching: key('super-message-offline-$ask'),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets(
+    'an ask to an agent whose computer is off says so under it, while it waits',
+    (tester) async {
+      // Juno's laptop went off at 01:00 and is still off.
+      final server = swarmV4Channel();
+      final before = say(
+        server,
+        'Pip',
+        '@Juno can you read #11?',
+        to: ['juno'],
+        at: '2026-11-09T00:30:00Z',
+      );
+      final during = say(
+        server,
+        'Pip',
+        '@Juno can you read #12?',
+        to: ['juno'],
+        at: '2026-11-09T02:00:00Z',
+      );
+      final up = say(
+        server,
+        'Faye',
+        '@Pip take #14.',
+        to: ['pip'],
+        at: '2026-11-09T02:05:00Z',
+      );
+      final c = await openSwarmV4(tester, server);
+      // Only the ask made after the computer went off waits: Juno was up for the one before, and Pip is up.
+      expect(key('super-message-offline-$before'), findsNothing);
+      expect(key('super-message-offline-$up'), findsNothing);
+      expect(
+        tester
+            .widget<SuperTabPostNote>(key('super-message-offline-$during'))
+            .line,
+        'Juno is offline',
+      );
+      expect(
+        find.descendant(
+          of: rowOf('@Juno can you read #12?'),
+          matching: find.text('Juno is offline'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Juno is offline'), findsOneWidget);
+      await look(tester, 'offline');
+      // Its computer comes back: nothing waits any more.
+      final juno = (server.state['agents'] as List)
+          .cast<Map<String, dynamic>>()
+          .firstWhere((agent) => agent['id'] == 'juno');
+      juno.remove('downSince');
+      server.revision++;
+      await tester.runAsync(c.refresh);
+      await tester.pumpAndSettle();
+      expect(find.text('Juno is offline'), findsNothing);
+    },
+  );
+
+  for (final (name, size, brightness) in const [
+    ('700', Size(700, 800), Brightness.light),
+    ('dark', Size(1440, 860), Brightness.dark),
+  ]) {
+    testWidgets('the team talking, at $name', (tester) async {
+      final server = swarmV4Channel();
+      say(
+        server,
+        'Faye',
+        'Plan: @Pip takes #12, @Juno #14.',
+        to: ['pip', 'juno'],
+        at: '2026-11-09T01:50:00Z',
+      );
+      say(server, 'Pip', 'free: Pip', at: '2026-11-09T01:55:00Z');
+      say(
+        server,
+        'Pip',
+        '@Juno can you read #12?',
+        to: ['juno'],
+        at: '2026-11-09T02:00:00Z',
+      );
+      say(
+        server,
+        'Juno',
+        'Reading #12 now.',
+        to: ['pip'],
+        at: '2026-11-09T02:05:00Z',
+      );
+      await openSwarmV4(tester, server, size: size, brightness: brightness);
+      // The plan and Pip's ask were both made after Juno's computer went off at 01:00.
+      expect(find.text('Juno is offline'), findsNWidgets(2));
+      expect(tester.takeException(), isNull);
+      await look(tester, 'team-$name');
+    });
+  }
+
+  group('the words under an ask', () {
+    SuperTabSnapshot team(Set<String> off) {
+      final server = swarmV4Channel();
+      for (final agent
+          in (server.state['agents'] as List).cast<Map<String, dynamic>>()) {
+        agent.remove('downSince');
+        if (off.contains(agent['id'])) {
+          agent['downSince'] = '2026-11-09T01:00:00Z';
+        }
+      }
+      return SuperTabSnapshot.fromJson(server.state);
+    }
+
+    SuperTabMessage ask(List<String> to, {String author = 'faye'}) =>
+        SuperTabMessage.fromJson({
+          'id': 'm',
+          'conversationId': 'channel',
+          'sequence': 1,
+          'text': 'Look at #12.',
+          'createdAt': '2026-11-09T02:00:00Z',
+          'author': {'kind': 'agent', 'id': author, 'name': author},
+          'recipientIds': to,
+        });
+
+    test(
+      'one, two or three agents are named, in the order they were asked',
+      () {
+        final swarm = team({'faye', 'pip', 'juno'});
+        expect(
+          superTabPostOfflineLine(swarm, ask(['juno'], author: 'pip')),
+          'Juno is offline',
+        );
+        expect(
+          superTabPostOfflineLine(swarm, ask(['pip', 'juno'])),
+          'Pip and Juno are offline',
+        );
+        expect(
+          superTabPostOfflineLine(
+            swarm,
+            ask(['juno', 'pip', 'faye'], author: 'x'),
+          ),
+          'Juno, Pip and Faye are offline',
+        );
+      },
+    );
+
+    test(
+      'nobody waits when no agent asked is off, or the post is not an agent\'s',
+      () {
+        final swarm = team({'juno'});
+        expect(superTabPostOfflineLine(swarm, ask(['pip'])), isNull);
+        expect(superTabPostOfflineLine(swarm, ask([])), isNull);
+        expect(superTabPostOfflineLine(null, ask(['juno'])), isNull);
+        final person = SuperTabMessage.fromJson({
+          'id': 'm',
+          'conversationId': 'channel',
+          'sequence': 1,
+          'text': 'Hi',
+          'createdAt': '2026-11-09T02:00:00Z',
+          'author': {'kind': 'person', 'id': 'owner', 'name': 'Dee'},
+          'recipientIds': ['juno'],
+        });
+        expect(superTabPostOfflineLine(team({'juno'}), person), isNull);
+        expect(superTabPostTo(team({'juno'}), person), isEmpty);
+      },
+    );
+  });
+}

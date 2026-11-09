@@ -75,6 +75,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.grouped = false,
     this.joinsBelow = false,
     this.oneOnOne = false,
+    this.to = const [],
     this.onReply,
     this.onOpenAgent,
     this.onOpenReply,
@@ -182,6 +183,9 @@ class SuperTabMessageRow extends StatefulWidget {
   /// The chat has one other party (a Buddy chat, an agent chat): no names and
   /// no faces, as a one-on-one iMessage draws it.
   final bool oneOnOne;
+
+  /// The teammates a post is to ([superTabPostTo]): its name reads "Pip to Juno", so the channel reads as the team talking.
+  final List<String> to;
   final VoidCallback? onReply, onOpenAgent;
 
   /// Follows the quote to the original, given this row so that the way back
@@ -652,6 +656,11 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     // would push it down.
     final phone = workspaceIsCompact(context);
     final finger = phone && named;
+    final nameStyle = DesktopChrome.text(
+      size: SwarmType.nameSize,
+      height: SwarmType.bodyLine / SwarmType.nameSize,
+      color: DesktopChrome.muted,
+    );
     final slack = finger ? 12.0 : 0.0;
     // One sender's bubbles sit close; a new sender starts a group gap down.
     final above = widget.grouped
@@ -801,20 +810,22 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                                 .AppDesktop
                                                 .bubbleNamePadding,
                                             child: Wrap(
-                                              spacing: 8,
+                                              // "Pip to Juno" reads as one phrase.
+                                              spacing: widget.to.isEmpty
+                                                  ? 8
+                                                  : 4,
                                               crossAxisAlignment:
                                                   WrapCrossAlignment.center,
                                               children: [
-                                                _name(
-                                                  DesktopChrome.text(
-                                                    size: SwarmType.nameSize,
-                                                    height:
-                                                        SwarmType.bodyLine /
-                                                        SwarmType.nameSize,
-                                                    color: DesktopChrome.muted,
+                                                _name(nameStyle, finger),
+                                                if (widget.to.isNotEmpty)
+                                                  Text(
+                                                    'to ${widget.to.join(', ')}',
+                                                    key: ValueKey(
+                                                      'super-message-to-${message.id}',
+                                                    ),
+                                                    style: nameStyle,
                                                   ),
-                                                  finger,
-                                                ),
                                                 if (widget.thread?.askTag
                                                     case final tag?)
                                                   Text(

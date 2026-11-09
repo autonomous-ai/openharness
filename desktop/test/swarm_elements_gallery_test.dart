@@ -18,6 +18,7 @@ import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
+import 'package:harness/super_tabs/channel_talk.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/task_board.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
@@ -497,6 +498,15 @@ class _Gallery extends StatelessWidget {
                         ),
                         SwarmChatTime(DateTime.utc(2026, 11, 7, 9, 12)),
                         _message('dee', 'Found it, thanks!', person: _person),
+                        // A post to a teammate reads "Quinn to Kai", and says when the one asked is off.
+                        _message(
+                          'Quinn',
+                          '@Kai can you read #12?',
+                          agent: _agent('Quinn'),
+                          id: 'm-Quinn-to',
+                          to: ['Kai'],
+                          note: 'Kai is offline',
+                        ),
                       ],
                     ),
                   ),
@@ -577,6 +587,13 @@ class _Gallery extends StatelessWidget {
                   ),
                 ],
               ),
+              // The one empty pane that says why (anh Dee 2026-11-09): a blank channel read as broken.
+              title('Empty: a project\'s channel'),
+              const SizedBox(
+                width: 400,
+                height: 60,
+                child: SuperTabEmptyWords(superTabEmptyChannel),
+              ),
             ],
           ),
         ),
@@ -595,9 +612,12 @@ Widget _message(
   String? id,
   bool grouped = false,
   bool joinsBelow = false,
+  List<String> to = const [],
+  String? note,
 }) => SuperTabMessageRow(
   grouped: grouped,
   joinsBelow: joinsBelow,
+  to: to,
   message: SuperTabMessage.fromJson({
     'id': id ?? 'm-$author',
     'conversationId': 'lead',
@@ -611,7 +631,7 @@ Widget _message(
   author: author,
   agent: agent,
   person: person,
-  receipts: const [],
+  receipts: [if (note != null) SuperTabPostNote(note)],
   onReturnToComposer: () {},
   readerId: 'p1',
 );

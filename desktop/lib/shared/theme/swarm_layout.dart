@@ -44,6 +44,9 @@ abstract final class SwarmLayout {
   static const double chatCardTop = 12;
   static const double chatCardLineGap = 6;
 
+  /// The gap above the quiet line under a post's bubble that says its answer waits (super_tabs/channel_talk.dart).
+  static const double postNoteTop = 6;
+
   /// The agents-only line under a project's channel, where a composer would be.
   static const EdgeInsets agentsOnlyMargin = EdgeInsets.fromLTRB(28, 6, 28, 18);
 

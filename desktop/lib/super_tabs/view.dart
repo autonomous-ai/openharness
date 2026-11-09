@@ -52,6 +52,7 @@ import 'composer_toggle.dart';
 import 'activity.dart';
 import 'attachment_chips.dart' show superTabShowsInPlace;
 import 'attachment_image.dart';
+import 'channel_talk.dart';
 import 'reminders.dart';
 import 'places.dart';
 import 'attention.dart';
@@ -3835,6 +3836,16 @@ class _SuperTabViewState extends State<SuperTabView>
     null => false,
   };
 
+  /// Whether [id] is where Swarm v4's agents talk to each other: a project's channel or one of its tasks' chats, drawn as the
+  /// board draws them.
+  bool _agentTalk(String id) => widget.board && _agentsOnlyId(id);
+
+  /// The teammates [message] is to, by name, as its name line says ("Pip to Juno").
+  List<String> _postTo(SuperTabMessage message) =>
+      _agentTalk(message.conversationId)
+      ? superTabPostTo(c.snapshot, message)
+      : const [];
+
   /// An agent chat's header (Swarm v4): the agent, where it runs, then its instructions and its terminal, each opening
   /// beside the chat.
   Widget _agentHeader(SuperTabConversation group, SuperTabAgent agent) {
@@ -4690,6 +4701,7 @@ class _SuperTabViewState extends State<SuperTabView>
       message: message,
       joinsBelow: joinsBelow,
       oneOnOne: _oneOnOne(message),
+      to: _postTo(message),
       brief: card?.task == true
           ? _briefCard(group!, message)
           : _decisionCard(message),
@@ -4835,6 +4847,12 @@ class _SuperTabViewState extends State<SuperTabView>
               style: DesktopChrome.metadata(),
             ),
           ),
+        if (_agentTalk(message.conversationId))
+          if (superTabPostOfflineLine(c.snapshot, message) case final line?)
+            SuperTabPostNote(
+              line,
+              key: ValueKey('super-message-offline-${message.id}'),
+            ),
         if (showReceipt)
           SuperTabMessageReceipt(
             key: ValueKey('super-message-receipt-${message.id}'),
@@ -5025,8 +5043,10 @@ class _SuperTabViewState extends State<SuperTabView>
   /// list's dividing row both ways, so a page read in above regroups none of
   /// the rows already shown.
   Set<String> _joined(List<SuperTabMessage> messages, SuperTabMessage? split) {
-    // A task (a message with a thread, Swarm v4) stands on its own row, with its name and face, as a tagged one does.
+    // A task (a message with a thread, Swarm v4) stands on its own row, with its name and face, as a tagged one does; so
+    // does a post to a teammate, where "Pip to Juno" shows.
     bool tagged(SuperTabMessage m) =>
+        _postTo(m).isNotEmpty ||
         switch (c.thread(m.conversationId, m.id)) {
           final thread? => thread.askTag != null || thread.replies > 0,
           null => false,
@@ -5408,22 +5428,14 @@ class _SuperTabViewState extends State<SuperTabView>
                     : _buddyName(group) != null
                     // One short line that helps the reader act (anh Dee's copy rules, task #4465).
                     ? "Say what to build, then 'send to the ${c.snapshot!.coordinatorNameOf(group.projectId)}'."
+                    // A project's channel nobody has posted in says why: an empty page under the project's name read as broken
+                    // (anh Dee, 2026-11-09), and the agents' real talk is on GitHub.
+                    : widget.board &&
+                          c.snapshot?.isProjectLead(group.id) == true
+                    ? superTabEmptyChannel
                     // Empty means empty (anh Dee's rule 7, task #4465): no words for a chat with nothing in it.
                     : null) {
-                  final words? => Padding(
-                    // The pane's side padding, as the composer has: a long line
-                    // wraps inside it, centered.
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: grid.AppDesktop.panelPadding,
-                    ),
-                    child: Center(
-                      child: Text(
-                        words,
-                        textAlign: TextAlign.center,
-                        style: DesktopChrome.text(color: DesktopChrome.muted),
-                      ),
-                    ),
-                  ),
+                  final words? => SuperTabEmptyWords(words),
                   null => const SizedBox.expand(),
                 }
               : Column(
