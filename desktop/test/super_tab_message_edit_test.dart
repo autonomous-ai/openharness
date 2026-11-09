@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -10,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/reading.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -417,7 +419,7 @@ void main() {
     expect(
       find.descendant(
         of: row('message-1'),
-        matching: find.byTooltip('Add reaction'),
+        matching: find.byTooltip('Copy message'),
       ),
       findsNothing,
     );
@@ -473,6 +475,79 @@ void main() {
     expect(root.deletedAt, isNotNull);
     expect(root.deleted, isTrue);
     expect(root.text, 'This message was deleted.');
+  });
+
+  // What the web build reads with: full reads only now and then once quiet.
+  const web = SuperTabReading(quietPoll: Duration(seconds: 15));
+
+  test('an edit made elsewhere shows within one quiet poll', () {
+    fakeAsync((async) {
+      final server = ConversationServer()..append('Shipped');
+      final paths = <String>[];
+      final c = SuperTabController(
+        tabId: 'tab',
+        accountId: 'owner',
+        request: (method, path, {body}) {
+          if (method == 'GET') paths.add(path);
+          return server.request(method, path, body: body);
+        },
+        save: server.save,
+        reading: web,
+      )..start();
+      // Quiet: the polls between full reads ask only for new messages.
+      async.elapse(const Duration(seconds: 61));
+      expect(c.messages('lead').single.editedAt, isNull);
+      server.editMessage('message-1', 'Shipped, and merged');
+      paths.clear();
+      async.elapse(const Duration(seconds: 3));
+      expect(paths.where((p) => p.contains('/changes')), isEmpty);
+      expect(c.messages('lead').single.text, 'Shipped, and merged');
+      // Nothing moved since: the next poll reads only what is new.
+      paths.clear();
+      async.elapse(const Duration(seconds: 3));
+      expect(paths.where((p) => p.contains('messages?before=')), isEmpty);
+      c.dispose();
+    });
+  });
+
+  test('an edit and a new message in the same quiet poll both show', () {
+    fakeAsync((async) {
+      final server = ConversationServer()..append('Shipped');
+      var failPage = false;
+      final c = SuperTabController(
+        tabId: 'tab',
+        accountId: 'owner',
+        request: (method, path, {body}) {
+          final page =
+              path.endsWith('/messages') || path.contains('messages?before=');
+          if (failPage && method == 'GET' && page) {
+            failPage = false;
+            return Future.error(
+              const SuperTabFailure('UNAVAILABLE', 'Try again.'),
+            );
+          }
+          return server.request(method, path, body: body);
+        },
+        save: server.save,
+        reading: web,
+      )..start();
+      async.elapse(const Duration(seconds: 61));
+      server.editMessage('message-1', 'Shipped, and merged');
+      server.append('And the docs');
+      async.elapse(const Duration(seconds: 3));
+      expect(c.messages('lead').map((m) => m.text), [
+        'Shipped, and merged',
+        'And the docs',
+      ]);
+      // A refresh that fails leaves the change to the next poll.
+      server.editMessage('message-1', 'Shipped, merged and released');
+      failPage = true;
+      async.elapse(const Duration(seconds: 3));
+      expect(c.messages('lead').first.text, 'Shipped, and merged');
+      async.elapse(const Duration(seconds: 3));
+      expect(c.messages('lead').first.text, 'Shipped, merged and released');
+      c.dispose();
+    });
   });
 
   // A voice message plays only, and its words are never handed over (anh

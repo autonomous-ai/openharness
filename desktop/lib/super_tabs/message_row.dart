@@ -21,7 +21,6 @@ import 'message_more_menu.dart';
 import 'message_text.dart';
 import 'model.dart';
 import 'pull_requests.dart';
-import 'reactions.dart';
 import 'reminders.dart';
 import 'swarm_type.dart';
 import 'voice_length.dart';
@@ -84,9 +83,6 @@ class SuperTabMessageRow extends StatefulWidget {
     this.mentionAddresses = const {},
     this.mentionLabels = const {},
     this.readerId = '',
-    this.reactorName,
-    this.onReact,
-    this.reactions = true,
     this.headerStatus,
     this.dimmed = false,
     this.thread,
@@ -194,15 +190,9 @@ class SuperTabMessageRow extends StatefulWidget {
   /// Its text and files are faint while it sends; its status line is not.
   final bool dimmed;
 
-  /// The reader, whose own reactions are marked; [reactorName] names the
-  /// others. Without [onReact] the counts only show.
+  /// The reader: their own messages sit on their side, and a message that
+  /// tags them is marked.
   final String readerId;
-  final SuperTabReactorName? reactorName;
-  final ValueChanged<SuperTabReactionEmoji>? onReact;
-
-  /// Whether the reactions under a message, and the button that gives one, are drawn. Swarm v4 draws none: the host's 👀
-  /// receipt sat under every message of a person's agent chat (anh Dee, 2026-11-09), and people do not react to agents.
-  final bool reactions;
 
   /// This message's link, for the More menu's Copy link to message. Without
   /// it the menu is not offered.
@@ -945,8 +935,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                                       child: SuperTabMessageText(
                                                         message.text,
                                                         ink: own
-                                                            ? SwarmBubble
-                                                                  .ownInk
+                                                            ? SwarmBubble.ownInk
                                                             : null,
                                                         references:
                                                             widget.references,
@@ -958,8 +947,8 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                                             widget.agentNames,
                                                         addresses: widget
                                                             .mentionAddresses,
-                                                        labels:
-                                                            widget.mentionLabels,
+                                                        labels: widget
+                                                            .mentionLabels,
                                                         taggedYou: taggedYou,
                                                       ),
                                                     ),
@@ -1016,15 +1005,6 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                                 resolve: resolve,
                                                 onOpen: open,
                                               ),
-                                          if (widget.reactions)
-                                            SuperTabReactionBar(
-                                              message: message,
-                                              readerId: widget.readerId,
-                                              nameOf:
-                                                  widget.reactorName ??
-                                                  (_, id) => id,
-                                              onReact: widget.onReact,
-                                            ),
                                         ],
                                         ...widget.receipts,
                                       ],
@@ -1087,9 +1067,6 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              if (widget.reactions)
-                                if (widget.onReact case final react?)
-                                  SuperTabReactionPicker(onReact: react),
                               if (widget.onReply != null)
                                 fingerTarget(
                                   enabled: phone,

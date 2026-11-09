@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/theme/swarm_layout.dart';
 import 'package:harness/super_tabs/agent_instructions.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -9,6 +10,7 @@ import 'package:harness/super_tabs/view.dart';
 
 import 'package:flutter/gestures.dart';
 
+import 'support/super_tab_fixture.dart';
 import 'support/swarm_v4_data.dart';
 
 /// Swarm v4 (anh Dee 2026-11-08), clicked through as a person does: a project's channel that only agents post in,
@@ -22,11 +24,14 @@ void main() {
     List<List<String>>? ghCalls,
     SwarmV4Computer? computer,
     Size size = const Size(1440, 900),
+    void Function(ConversationServer server)? prepare,
   }) async {
     late SuperTabController c;
     await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    c = swarmV4Server().controller(
+    final server = swarmV4Server();
+    prepare?.call(server);
+    c = server.controller(
       account: 'owner',
       initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
     );
@@ -58,12 +63,13 @@ void main() {
   double width(WidgetTester tester, String k) => tester.getSize(key(k)).width;
 
   testWidgets(
-    'A project\'s menu holds only what v4 has: its notifications and its settings (rename, details, delete)',
+    'A project\'s menu holds only what v4 has: its settings (rename, details, delete), and no Notifications: it is agent to agent only',
     (tester) async {
       await show(tester);
       await tester.tap(key('super-project-menu'));
       await tester.pumpAndSettle();
-      expect(key('super-notify-menu'), findsOneWidget);
+      expect(key('super-notify-menu'), findsNothing);
+      expect(find.text('Notifications'), findsNothing);
       expect(find.text('Project settings…'), findsOneWidget);
       // The v3 items are gone from v4's menu: status, the pull-request page, the instructions document, the crew, GitHub sharing.
       for (final gone in [
@@ -92,6 +98,71 @@ void main() {
       ]) {
         expect(find.text(gone), findsNothing, reason: gone);
       }
+    },
+  );
+
+  testWidgets('a long message in an agent\'s chat shows whole, with no More', (
+    tester,
+  ) async {
+    final long = [for (var i = 1; i <= 14; i++) 'Line $i of the plan.']
+        .join('\n\n');
+    await show(
+      tester,
+      prepare: (server) {
+        server.append(long, conversationId: 'agent-chat-second', agent: true);
+        server.messages.last['author'] = {
+          'kind': 'agent',
+          'id': 'second',
+          'name': 'second',
+        };
+      },
+    );
+    await tester.tap(key('super-agent-second'));
+    await tester.pumpAndSettle();
+    expect(find.text('More'), findsNothing);
+    expect(find.text('Line 1 of the plan.').hitTestable(), findsOneWidget);
+    expect(find.text('Line 14 of the plan.').hitTestable(), findsOneWidget);
+  });
+
+  testWidgets(
+    'a 👀 the host left on a message draws no chip, and nothing offers a reaction',
+    (tester) async {
+      late String id;
+      await show(
+        tester,
+        prepare: (server) {
+          final message = server.messages.firstWhere(
+            (m) => m['conversationId'] == 'agent-chat-second',
+          );
+          id = message['id'] as String;
+          // The receipt the host's agent writes under a person's message, as the backend still sends it.
+          message['reactions'] = [
+            {
+              'emoji': 'eyes',
+              'count': 1,
+              'by': [
+                {'kind': 'agent', 'id': 'second'},
+              ],
+            },
+          ];
+        },
+      );
+      await tester.tap(key('super-agent-second'));
+      await tester.pumpAndSettle();
+      final row = key('super-message-$id');
+      expect(row, findsOneWidget);
+      // A person's mouse over the message shows the actions it offers.
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: Offset.zero);
+      addTearDown(mouse.removePointer);
+      await mouse.moveTo(tester.getCenter(row));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(of: row, matching: find.byTooltip('Copy message')),
+        findsOneWidget,
+      );
+      expect(find.text('👀'), findsNothing);
+      expect(find.byTooltip('Add reaction'), findsNothing);
     },
   );
 
@@ -282,6 +353,14 @@ void main() {
       width(tester, 'super-right-pane'),
       moreOrLessEquals(width(tester, 'super-center-pane'), epsilon: 2),
     );
+    expect(
+      tester.getRect(key('swarm-instructions-close')).right,
+      moreOrLessEquals(
+        tester.getRect(find.byType(SwarmAgentInstructions)).right -
+            SwarmLayout.barSide,
+        epsilon: 1,
+      ),
+    );
     await tester.tap(key('swarm-instructions-close'));
     await tester.pumpAndSettle();
     expect(find.text('agents/second.md'), findsNothing);
@@ -327,6 +406,51 @@ void main() {
   }
 
   const fileKey = 'session-first builder/first builder';
+
+  testWidgets(
+    'Instructions\' Edit and × end the header at the pane\'s right edge, and so do Cancel and Save',
+    (tester) async {
+      final computer = SwarmV4Computer(
+        files: {fileKey: 'Answer in Vietnamese.\n'},
+      );
+      await show(tester, computer: computer);
+      await openInstructions(tester);
+      final edge =
+          tester.getRect(find.byType(SwarmAgentInstructions)).right -
+          SwarmLayout.barSide;
+      Rect at(String k) => tester.getRect(key(k));
+      // The title takes what the buttons leave: they end at the header's own padding, not short of it.
+      expect(
+        at('swarm-instructions-close').right,
+        moreOrLessEquals(edge, epsilon: 1),
+      );
+      expect(
+        at('swarm-instructions-close').left -
+            at('swarm-instructions-edit').right,
+        lessThan(8),
+      );
+      expect(
+        tester.getRect(find.text('agents/first builder.md')).left,
+        lessThan(at('swarm-instructions-edit').left),
+      );
+      await tester.tap(key('swarm-instructions-edit'));
+      await tester.pumpAndSettle();
+      expect(
+        at('swarm-instructions-close').right,
+        moreOrLessEquals(edge, epsilon: 1),
+      );
+      expect(
+        at('swarm-instructions-close').left -
+            at('swarm-instructions-save').right,
+        lessThan(8),
+      );
+      expect(
+        at('swarm-instructions-save').left -
+            at('swarm-instructions-cancel').right,
+        lessThan(8),
+      );
+    },
+  );
 
   testWidgets(
     'Instructions are read from the agent\'s own computer, and its person edits and saves them there',
