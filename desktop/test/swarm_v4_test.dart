@@ -128,7 +128,11 @@ void main() {
   testWidgets('its person deletes an agent: right-click, Delete, confirm, gone', (
     tester,
   ) async {
-    await show(tester);
+    final c = await show(tester);
+    // Its chat is the one open, as it is when a person deletes the agent they are talking to.
+    await tester.tap(key('super-agent-second'));
+    await tester.pumpAndSettle();
+    expect(c.selectedId, 'agent-chat-second');
     await tester.tap(key('super-agent-second'), buttons: kSecondaryButton);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Delete'));
@@ -138,6 +142,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(key('super-agent-second'), findsNothing);
     expect(key('super-agent-third'), findsOneWidget);
+    // The view leaves the deleted agent's chat for another agent's.
+    expect(c.selectedId, isNot('agent-chat-second'));
+    expect(c.selectedId, startsWith('agent-chat-'));
+    expect(find.text('Mac Studio · Claude Code'), findsOneWidget);
+    // The read mark saves 200 ms after a chat is read.
+    await tester.pump(const Duration(milliseconds: 300));
   });
 
   testWidgets('Cancel keeps the agent, and a project\'s PM stays until its project goes', (
