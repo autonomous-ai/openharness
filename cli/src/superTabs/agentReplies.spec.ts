@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { adoptReplies, AgentReplies, NAME_MAX, OWED_GIVE_UP_MS, OWED_PER_AGENT, READ_WAIT_MS, REPLY_RETRY_MS, REPLY_TEXT_MAX, REPLY_WAIT_MS, type Owed } from './agentReplies.js'
+import { adoptReplies, AgentReplies, NAME_MAX, OWED_GIVE_UP_MS, OWED_MAX, OWED_PER_AGENT, READ_WAIT_MS, REPLY_RETRY_MS, REPLY_TEXT_MAX, REPLY_WAIT_MS, type Owed } from './agentReplies.js'
 import { SuperTabHostError } from './wire.js'
 
 const ok = { status: 200, body: { success: true, data: { result: {} } } }
@@ -441,6 +441,18 @@ describe('what is owed, kept small', () => {
       'Dropped the reply owed for delivery d0 of agent agent: more than 16 are owed it.',
       'Dropped the reply owed for delivery d1 of agent agent: more than 16 are owed it.',
     ])
+  })
+
+  it('keeps at most a few hundred replies owed in all, as a journal read back does, the oldest going first, saying so', () => {
+    const t = setup()
+    // Seventeen agents with the most each may be owed: 272, which is more than all together are kept.
+    for (let i = 0; i < 17 * OWED_PER_AGENT; i++) { t.owe(`d${i}`, 'Ship it.', {}, `agent-${i % 17}`); t.wait(1) }
+    const kept = Object.keys(t.journal.replies!)
+    expect(kept).toHaveLength(OWED_MAX)
+    expect(kept).not.toContain('d0')
+    expect(kept).toContain(`d${17 * OWED_PER_AGENT - 1}`)
+    expect(t.lines()).toHaveLength(17 * OWED_PER_AGENT - OWED_MAX)
+    expect(t.lines()[0]).toBe(`Dropped the reply owed for delivery d0 of agent agent-0: more than ${OWED_MAX} are owed in all.`)
   })
 
   it('owes one reply per delivery: a delivery typed again after the pane held it is the same one, owed from the terminal it is typed in now', async () => {

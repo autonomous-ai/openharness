@@ -5836,14 +5836,14 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
   const reads = (t: ReturnType<typeof setup>) => vi.mocked(t.call).mock.calls.filter(([method, path]) => method === 'GET' && path.includes('asAgentId=')).map(([, path]) => path)
   const typed = (t: ReturnType<typeof setup>) => vi.mocked(t.core.turns.deliver).mock.calls.map(([, text]) => text)
   /** The posts the host makes, answered as the backend answers one, or with a refusal for those [refuse] names. */
-  function posting(t: ReturnType<typeof setup>, refuse: (post: Record<string, any>) => boolean = () => false) {
+  function posting(t: ReturnType<typeof setup>, refuse: (post: Record<string, any>) => boolean = () => false, code = 'FORBIDDEN') {
     const original = vi.mocked(t.call).getMockImplementation()!
     const posts: Array<Record<string, any>> = []
     vi.mocked(t.call).mockImplementation(async (method, path, body) => {
       if (method === 'POST' && path.endsWith('/commands')) {
         const post = { path, ...(body as Record<string, unknown>) }
         posts.push(post)
-        return refuse(post) ? { status: 403, body: { success: false, error: { code: 'FORBIDDEN', message: 'Not yours.' } } } : { status: 200, body: { success: true, data: { result: {} } } }
+        return refuse(post) ? { status: 403, body: { success: false, error: { code, message: 'Not yours.' } } } : { status: 200, body: { success: true, data: { result: {} } } }
       }
       return original(method, path, body)
     })
@@ -6056,6 +6056,19 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
       await flush()
       expect(posts).toHaveLength(2)
       expect(t.saved().replies).toBeUndefined()
+    })
+    // A host whose billing lapsed is refused as HOST_UNAVAILABLE (403) until it returns: not final, as its receipts are not.
+    it('is tried again, not dropped as refused for good, when the server says its host is unavailable', async () => {
+      const t = inChat(), posts = posting(t, post => post.operationId === 'reply-delivery', 'HOST_UNAVAILABLE')
+      answered(t)
+      const host = t.open()
+      await host.tick()
+      t.end()
+      await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith(expect.stringContaining('Could not post the reply to delivery delivery of agent agent: HOST_UNAVAILABLE (try 1 of 5)')))
+      // Nothing is told to its person yet: the reply is not dropped, it waits for its next try.
+      expect(posts.map(post => post.operationId)).toEqual(['reply-delivery'])
+      host.stop()
+      expect(t.log).toHaveBeenCalledWith('Dropped the reply to delivery delivery of agent agent: the host stopped.')
     })
     it('is told by the agent\'s place-holder name when its roster row gives none', async () => {
       const t = inChat(), posts = posting(t, post => post.operationId === 'reply-delivery')
