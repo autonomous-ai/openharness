@@ -294,7 +294,8 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     await f.assigner.tick()
     f.clock.now += 5 * HOUR
     await f.assigner.tick()
-    expect(f.said().filter(([, body]) => String(body).includes('Are you still on it?'))).toHaveLength(1)
+    expect(f.said().filter(([, body]) => String(body).includes('Are you still on it?')).map(([, body]) => body))
+      .toEqual([expect.stringMatching(/Say where it stands, or what you need\.$/)])
     expect(f.github.sent.some(s => s.method === 'DELETE')).toBe(false)
     // Out of quota for 3 hours, with a task waiting for it: with nobody else, it waits.
     const resetsAt = new Date(Date.parse('2026-11-09T07:31:00Z') + 3 * HOUR).toISOString()
