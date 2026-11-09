@@ -33,8 +33,6 @@ import { profileNames, readableWeek, recentDormantGroups, weeklyBoard } from '..
 import { LEDGER_WEEKS } from '../leaderboard/record.js'
 import type { PeriodName } from '../leaderboard/rolling.js'
 import { leaderboard } from '../leaderboard/stats.js'
-import { readScorecards, type ScorecardDay } from '../scorecard/rows.js'
-import { scorecardThrough } from '../scorecard/job.js'
 import { WEEK_MS } from '../leaderboard/week.js'
 import { derivedEtag, marksOf } from './derivedEtag.js'
 import { READ_FORMAT, SWARM_MIGRATING, type Changes, type Derived, type ReaderMarks, type MachineReadings, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
@@ -559,20 +557,6 @@ export class SwarmReads {
     const elapsedMs = performance.now() - began
     if (allProjects && !period && elapsedMs > 100) logger.warn('[weekly-leaderboard] slow read', { elapsedMs: Math.round(elapsedMs) })
     return result
-  }
-
-  /** The stored scorecard days (scorecard/rows.ts) of one project, or of every project the reader reads (`allProjects`),
-   *  newest first. Only projects the reader may read; a Team session reads none, as for the leaderboard. */
-  async scorecard(user: AuthUser, tabId: string, projectId: string, allProjects = false): Promise<{ days: ScorecardDay[]; through: string }> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
-    return this.read(user, tabId, async (tx, cached) => {
-      const state = parts.reassemble(await readParts(tx, cached, tabId), { share: true })
-      const actor = await this.store.actor(tx, user, state)
-      readProject(state, actor, projectId)
-      const projects = allProjects ? projectsOf(state).filter(p => canReadProject(state, actor, p)).map(p => p.id) : [projectId]
-      // The asked project's last day, so a day missing at the end shows as missing, not as a shorter table.
-      return { days: await readScorecards(tx, tabId, projects), through: scorecardThrough(this.now()) }
-    })
   }
 
   /** The waiting tags of each listed Swarm, as `/:tabId/mentions` and a Swarm's own state count them (readable conversations

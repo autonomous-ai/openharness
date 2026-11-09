@@ -40,18 +40,11 @@ function openSteps(state: SuperTabState, task: Conversation): string[] {
   })
 }
 
-/** Whether a release still has to carry [task]'s merge: its entry on the project's list with a component not shipped. */
-function awaitingRelease(project: SwarmProject, task: Conversation): boolean {
-  return !!project.releases?.pending.some(e => e.groupId === task.id
-    && (e.components ? e.components.some(c => !e.shippedIn?.[c]) : !Object.keys(e.shippedIn ?? {}).length))
-}
-
-/** [task]'s line (no time), or none when its work ended and nothing of it waits. */
-function lineOf(state: SuperTabState, project: SwarmProject, task: Conversation, today: string): string | null {
+/** [task]'s line (no time), or none when its work ended. */
+function lineOf(state: SuperTabState, task: Conversation, today: string): string | null {
   const assignment = task.assignment
   const merged = task.ledger?.mergedAt != null
-  const waiting = merged && awaitingRelease(project, task)
-  if (assignment && ENDED.has(assignment.status) && !waiting) return null
+  if (assignment && ENDED.has(assignment.status)) return null
   // A task its requester rejected never runs (taskApproval.ts, Swarm v3): it is no longer active work.
   if (!assignment && task.taskApproval?.state === 'rejected') return null
   const name = task.number !== undefined ? `#${task.number} ${JSON.stringify(task.title)}` : JSON.stringify(task.title)
@@ -65,9 +58,9 @@ function lineOf(state: SuperTabState, project: SwarmProject, task: Conversation,
     ...pullRequestLinks(assignment?.result ?? '', groupRepositoryUrl(state, task)).filter(url => !unlinked.has(url))])]
   const prText = prs.length ? ` (${prs.slice(-2).map(pullRequest).join(', ')})` : ''
   let status: string, waits: string
-  if (merged && (waiting || !assignment || assignment.status !== 'done')) {
+  if (merged && (!assignment || assignment.status !== 'done')) {
     status = `merged${prText}`
-    waits = waiting ? 'the next release' : 'its builder to close it'
+    waits = 'its builder to close it'
   } else if (task.paused) {
     // Paused by someone who steers the project (boardRights.ts): its worker stops at a safe point, whatever its status says.
     status = 'paused'; waits = `a person to resume it${task.paused.reason ? ` (${task.paused.reason})` : ''}`
@@ -94,8 +87,8 @@ function lineOf(state: SuperTabState, project: SwarmProject, task: Conversation,
   return `${name}: ${status}. Waits on: ${waits}. Owner: ${owner}.`
 }
 
-const lineNow = (state: SuperTabState, project: SwarmProject, task: Conversation, today: string): string | null =>
-  task.dormant || task.archived ? null : lineOf(state, project, task, today)
+const lineNow = (state: SuperTabState, task: Conversation, today: string): string | null =>
+  task.dormant || task.archived ? null : lineOf(state, task, today)
 /** Each open task's line (null: none, its work ended) before a pass changes anything, by task: what noteTaskLines compares with. */
 export type LinesBefore = ReadonlyMap<string, string | null>
 
@@ -104,7 +97,7 @@ export type LinesBefore = ReadonlyMap<string, string | null>
 export function linesOf(state: SuperTabState, now: number, only?: string): LinesBefore {
   const index = pulseIndex(state, undefined, only), today = new Date(now).toISOString().slice(0, 10), lines = new Map<string, string | null>()
   for (const project of state.projects ?? []) for (const task of index.work.get(project.id) ?? []) {
-    if (!task.reviewOf) lines.set(task.id, lineNow(state, project, task, today))
+    if (!task.reviewOf) lines.set(task.id, lineNow(state, task, today))
   }
   return lines
 }
@@ -120,7 +113,7 @@ export function linesOf(state: SuperTabState, now: number, only?: string): Lines
 export function noteTaskLines(state: SuperTabState, project: SwarmProject, index: PulseIndex, now: number, today: string, before: LinesBefore): void {
   for (const task of index.work.get(project.id) ?? []) {
     if (task.reviewOf) continue
-    const text = lineNow(state, project, task, today)
+    const text = lineNow(state, task, today)
     const old = before.has(task.id) ? before.get(task.id)! : undefined
     if (old === text || (old === undefined && text === null)) continue
     task.statusLine = { text: text ?? '', since: now }
@@ -138,7 +131,7 @@ export function projectCard(state: SuperTabState, project: SwarmProject, now: nu
       && !task.reviewOf && !task.kind && !task.audience && !isBuddyChat(task) && !task.archived && !task.dormant)
     .sort((a, b) => (a.number ?? Infinity) - (b.number ?? Infinity))
     .flatMap(task => {
-      const text = lineOf(state, project, task, today)
+      const text = lineOf(state, task, today)
       if (text === null) return []
       return [{ id: task.id, text, ...task.statusLine?.text === text ? { since: task.statusLine.since } : {} }]
     })

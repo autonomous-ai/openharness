@@ -145,6 +145,29 @@ describe('a command Swarm v4 no longer has, over HTTP', () => {
   })
 })
 
+// The scorecard is gone with Swarm v4, and an older Desktop's Scorecard tab still reads it: it gets no days, whoever asks and
+// whichever Swarm it names, and nothing is read. integration/superTabNotAvailable.test.ts tries it against the real store.
+describe('the retired scorecard read', () => {
+  let app: FastifyInstance
+  beforeEach(async () => {
+    app = Fastify()
+    app.setErrorHandler(errorHandler)
+    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
+    // A store, reads and host reads that fail on any call: the answer must not touch them.
+    await app.register(superTabRoutes, { store: {} as never, github: null, reads: {} as never, hosts: {} as never })
+    await app.ready()
+  })
+  afterEach(async () => { await app.close() })
+
+  it('answers no days, with the query an older Desktop sends or none, and reads nothing', async () => {
+    for (const url of ['/api/super-tabs/tab-1/scorecard?projectId=lead', '/api/super-tabs/tab-1/scorecard?projectId=lead&scope=all', '/api/super-tabs/tab-2/scorecard']) {
+      const res = await app.inject({ method: 'GET', url })
+      expect(res.statusCode, url).toBe(200)
+      expect(res.json(), url).toEqual({ success: true, data: { days: [] } })
+    }
+  })
+})
+
 // One answer for anything the caller cannot reach, on the routes a person's app calls (Huy, 10-30): the route only maps the
 // store's refusal, so a fake store throws each kind. integration/superTabNotAvailable.test.ts runs the real store.
 describe('the person routes\' one not-available answer', () => {
