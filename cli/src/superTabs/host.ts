@@ -56,7 +56,7 @@ const readCommand = (entry: Entry, prefix: string, group: string, id: string, bu
 export { backend, SuperTabHostError } from './wire.js'
 import { leadSwitchOf, leadSwitchRecovered, SWITCH_ADOPT_MS, SWITCH_RECOVERY_MS, switchWithin, type LeadSwitch } from './leadSwitch.js'
 import { backend, ENDED_WORK, identifier, object, SuperTabHostError, within } from './wire.js'
-import { parseSwarmSkill, PM_BASICS, recordBuddySkillNotice, refreshBuddySkill, SWARM_BASICS, wireRole, type SkillRefresh, type SwarmSkill,
+import { parseSwarmSkill, recordBuddySkillNotice, refreshBuddySkill, swarmBasics, swarmBasicsSince, wireRole, type SkillRefresh, type SwarmSkill,
   type SwarmSkillGrant, type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { artifactLinks, buddyLaunchOf, buddyReadsOf, forgetBuddyReads, grantBuddyWide, heldByOldGuard, listSentToOldGuard, SentListsError,
   writeBuddyAccount } from '../lib/buddyGuard.js'
@@ -467,6 +467,8 @@ export class SuperTabHost {
   private readonly file: string
   private readonly journal: Journal
   private readonly now: () => number
+  /** When this host started: the measure of an agent's basics before any launch noted them (lib/swarmSkills.ts noteSwarmBasics). */
+  private readonly started: number
   private readonly write: (file: string, journal: Journal) => void
   private readonly log: (message: string) => void
   private retentionError: string | null = null
@@ -626,6 +628,7 @@ export class SuperTabHost {
     this.claudeHome = options.claudeHome ?? homedir()
     this.worktrees = options.worktrees ?? join(projectsRoot(), 'worktrees')
     this.now = options.now ?? Date.now
+    this.started = this.now()
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
     // Its pickups follow this host's delivery push lease: the server that pushes deliveries also says when a request waits.
@@ -1740,16 +1743,23 @@ export class SuperTabHost {
     const current = () => this.rosterSkills.has(target.agent.harnessId)
     // A checked session waits for the next host (Infinity).
     const due = this.skillChecks.get(target.agent.harnessId) ?? 0
-    // An agent its person attached (Desktop's Attach, Swarm v4) was started outside the Swarm, so without the team's basics
-    // that every agent the Swarm starts gets at launch (lib/swarmSkills.ts SWARM_BASICS): it is told them once, as only it
-    // reads, in its own chat. The operation id names the text, so a restart or a second daemon never tells it twice. A
-    // plain shell is no agent, and a Buddy keeps its own skill.
-    if (session && !skill && (session.engine === 'claude' || session.engine === 'codex') && !isBuddy(object(target.agent)) && this.now() >= due) {
+    // Every Swarm agent follows the team's basics of this release (lib/swarmSkills.ts SWARM_BASICS, PM_BASICS), which its
+    // launch carries. One its person attached (Desktop's Attach) was started outside the Swarm, without them; one the Swarm
+    // started before they last changed has the old ones, and keeps them as long as it runs (anh Dee's team moved to Swarm
+    // v4 on 2026-11-10 with agents started days before). Either is told the current basics once, as only it reads, in its own
+    // chat. The operation id names the text, so a restart or a second daemon never tells it twice. A plain shell is no
+    // agent, and a Buddy keeps its own skill.
+    const agent = session && (session.engine === 'claude' || session.engine === 'codex') && !isBuddy(object(target.agent)) && skill?.role !== 'buddy'
+    if (session && agent && this.now() >= due) {
       this.skillChecks.set(target.agent.harnessId, Infinity)
-      const notice = target.lead === true ? `${SWARM_BASICS}\n${PM_BASICS}` : SWARM_BASICS
+      const { text: basics, version } = swarmBasics(target.lead === true)
+      // Launched by the Swarm since this computer first launched one with these basics (lib/swarmSkills.ts noteSwarmBasics;
+      // with no launch yet, since this host started): its launch carried them. A session not bound yet is starting now.
+      if (skill && (typeof session.boundAt !== 'number' || session.boundAt >= (swarmBasicsSince(this.core.dataDir, version) ?? this.started))) return
+      const notice = skill ? `The team's ways have changed since you started. From now on:\n${basics}` : basics
       try {
         // Named by its text alone: its own hash, so no Buddy notice shares its id.
-        const told = await this.tellSkill(target, { version: createHash('sha256').update(notice).digest('hex'), change: 0, notice }, current,
+        const told = await this.tellSkill(target, { version, change: 0, notice }, current,
           identifier(target.agent.chatId) ? target.agent.chatId : undefined)
         if (!told && current()) this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
         else if (!told) this.skillChecks.delete(target.agent.harnessId)
@@ -1759,7 +1769,7 @@ export class SuperTabHost {
       }
       return
     }
-    // Every other agent the Swarm started has the basics from its launch; only a Buddy has Harness text to keep fresh.
+    // Only a Buddy has Harness text of its own to keep fresh.
     if (!session || !skill || !session.cwd || this.now() < due || skill.role !== 'buddy') return
     this.skillChecks.set(target.agent.harnessId, Infinity)
     try {
