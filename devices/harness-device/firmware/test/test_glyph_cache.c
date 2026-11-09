@@ -19,13 +19,8 @@ static void compare(const ht_scene_t *scene, ht_rect_t clip)
 }
 int main(void)
 {
-    // The Pro's two atlases are in this list too: they are the ones the cache was widened for, and
-    // the ones whose extra columns the unrolled copy in terminal.c used to drop.
     const ht_font_t *fonts[] = {&ht_octopus_font_2, &ht_octopus_font_4,
         &ht_octopus_font_6, &ht_octopus_font_8, &ht_octopus_font_10,
-#if HT_FACE_PX >= 720
-        &ht_octopus_font_14, &ht_octopus_font_16,
-#endif
         &ht_mono_20};
     const unsigned nfonts = sizeof fonts / sizeof *fonts;
     char alphabet[128];
@@ -63,10 +58,6 @@ int main(void)
         }
     }
     // 24 slots of the widest atlas this face has: 5x10 on the dial, 8x16 on the Pro.
-#if HT_FACE_PX >= 720
-    assert(ht_glyph_cache_bytes() <= 6400);
-#else
     assert(ht_glyph_cache_bytes() <= 2600);
-#endif
     puts("glyph cache: 6000 clipped mixed scenes + 252 complete poses match the original renderer; guards and warm reuse pass");
 }

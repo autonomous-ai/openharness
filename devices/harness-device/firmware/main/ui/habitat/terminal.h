@@ -51,7 +51,7 @@ static inline const ht_pfont_t *ht_pfont(const ht_font_t *f)
 {
     return f && f->first > f->last ? (const ht_pfont_t *)f : NULL;
 }
-extern const ht_font_t ht_mono_16, ht_mono_20, ht_mono_24, ht_mono_28, ht_pixel_40;
+extern const ht_font_t ht_mono_16, ht_mono_20, ht_mono_24, ht_mono_28;
 // The Focus skin's icon faces (lvgl_fonts.c; see assets/lvgl/SPEC.md): Montserrat cut down to a space and one
 // FontAwesome symbol each. Every word and number on Focus is Inter (focus_faces.h).
 extern const ht_pfont_t ht_lv_montserrat_22, ht_lv_montserrat_14;
@@ -72,9 +72,8 @@ typedef struct { uint16_t cols; uint8_t rows, cell; const uint16_t *palette; con
     ht_cell_frame_t;
 // One cell of a frame, plain or packed (0 transparent).
 uint8_t ht_cell_at(const ht_cell_frame_t *frame, int col, int row);
-// The engines' marks in focus.c's ENGINES order: 20 px as the inbox drew them, and 27 px — LVGL's
-// own 28/20 scaling of the same 20 px art, as the header drew it. And the microphone.
-extern const ht_icon_t ht_icon_engine20[14], ht_icon_engine28[14], ht_icon_mic;
+// The engines' marks in focus.c's ENGINES order, 20 px as the inbox drew them.
+extern const ht_icon_t ht_icon_engine20[14];
 // The Focus face's 56 px marks (focus_marks.c, scripts/gen_focus_marks.py), in the same order.
 extern const ht_icon_t ht_icon_engine56[14];
 // Precomputed curved-label and larger inbox navigation glyphs.
@@ -103,9 +102,6 @@ extern const ht_font_t ht_engine;
 #define HT_DONE "\xe2\x9c\x93"
 #define HT_FAILED "\xe2\x9c\x97"
 extern const uint8_t ht_bell_20_ink[1][4];
-// The lock's dot is the only 40 px glyph used by the daily UI. Keep its exact
-// pixels without retaining the other 94 glyphs of the gallery font in flash.
-extern const ht_font_t ht_lock_dot;
 // Vietnamese, one atlas per mono size. ht_font_t carries a single contiguous range and a dense
 // 32..0x1EF9 would be 7,898 cells, so these cover 0x1EA0..0x1EF9 plus an eight-cell tail holding
 // the letters that live outside it (A-breve, D-stroke, O-horn, U-horn and their lowercase).
