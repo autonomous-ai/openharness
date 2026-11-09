@@ -536,7 +536,17 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // --machine to the owner's other Mac, which knew no pane there and served the agent it named. Delivered instructions
         // always name this computer.
         if (!asker.local) return payload.action === 'help' ? { ok: true, help: HELP } : { error: 'AGENT_LOCAL_ONLY', detail: LOCAL_ONLY }
-        if (!identifier(payload.tabId) || !(named ?? hashed)) return { error: 'INVALID_REQUEST' }
+        // An agent in its own pane may leave its Swarm out: the one Swarm its harness is in on this machine is meant. Swarm v4
+        // (2026-11-09): an agent its person only talks to in their 1:1 chat is typed their words alone (#3627) and never told
+        // its Swarm's id, and the basics tell it to post in its project's channel (lib/swarmSkills.ts). In two, it names one.
+        if (!identifier(payload.tabId) && identifier(payload.harnessId) && !named) {
+          const tabs = [...new Set((await sources().feed.refresh()).roster.filter(row => object(row.agent).harnessId === payload.harnessId
+            && object(row.agent).machineId === core.daemon.machineId() && row.closeSession !== true).map(row => row.tabId).filter(identifier))]
+          if (tabs.length > 1) return { error: 'SWARM_AMBIGUOUS', detail: `This agent is in ${tabs.length} Swarms: name one with --tab (${tabs.join(', ')}).` }
+          if (tabs.length === 1) payload.tabId = tabs[0]
+        }
+        if (!identifier(payload.tabId)) return { error: 'INVALID_REQUEST', detail: 'Name the Swarm with --tab ID.' }
+        if (!(named ?? hashed)) return { error: 'INVALID_REQUEST' }
         // The caller is one of this machine's running agents, as the host roster lists it now: no Swarm is read to know that
         // (design 2026-10-26 5.3), and the roster is read again for every call, as the whole Swarm once was, by its changes
         // since the host's last read. A replacement terminal is still its original member, found by its harness.
