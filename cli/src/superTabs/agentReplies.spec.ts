@@ -447,7 +447,7 @@ describe('a reply the backend does not take at once', () => {
 })
 
 describe('an answer that cannot be read', () => {
-  it('names the failure of a read that throws, takes too long or is refused by the core, and takes the reply off what is owed: its turn is over', async () => {
+  it('names the failure of a read that throws, takes too long or is refused by the core, tells its person, and takes the reply off what is owed: its turn is over', async () => {
     const refusedByCore = Object.assign(new Error('The core could not give the answer of the turn.'), { name: 'UNKNOWN_QUERY' })
     for (const [read, name] of [[() => Promise.reject(new Error('Core disconnected')), 'Error'], [() => new Promise<string>(() => {}), 'TIMEOUT'],
       [() => Promise.reject(refusedByCore), 'UNKNOWN_QUERY'], [() => Promise.reject('not an error'), 'ERROR']] as const) {
@@ -459,7 +459,9 @@ describe('an answer that cannot be read', () => {
       await done
       expect(t.lines()).toEqual([`Could not read the answer of the turn that ended for agent agent: ${name}.`])
       expect(t.journal.replies).toBeUndefined()
-      expect(t.posts()).toHaveLength(0)
+      // The answer is lost for good, so its person is told as for a post that failed: nothing but that line is posted.
+      expect(t.operations()).toEqual(['dropped-reply-d1'])
+      expect(t.posts()[0]![2]).toMatchObject({ command: { text: NOTE, answers: 'm-d1', recipientIds: [] } })
     }
   })
 })

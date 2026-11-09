@@ -318,6 +318,24 @@ it('asks the core about the agents it is given, keeping only the first 64 ids th
 
 // The Swarm host posts the answer of the turn that ended into its agent's person's chat (superTabs/agentReplies.ts); in its own
 // process it asks the core for the answer of the turn whose prompt its end carried.
+// A Swarm process of the release before (0.5.82) asks the last turn of a session of a core of this one: kept until 2026-12-10.
+it('still gives the Swarm service of the release before the last turn of a session, as the core reads it, and no other service', async () => {
+  const turn = { userMessage: 'Ship it.', assistantText: 'Shipped.' }
+  const lastTurn = vi.fn(async (sessionId: string) => sessionId === 'session-1' ? turn : null)
+  const core = fakeCore({ transcripts: { lastTurn } })
+  const allowed = new Set(['superTabs', 'orchestrator'])
+  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'last_turn', { sessionId: 'session-1' })).toEqual({ turn })
+  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'last_turn', { sessionId: 'no-such-session' })).toEqual({ turn: null })
+  for (const sessionId of ['', 4, null, undefined, 'x'.repeat(257)]) {
+    expect(await answerExperimentQuery(core, allowed, 'superTabs', 'last_turn', { sessionId })).toEqual({ error: 'INVALID_REQUEST' })
+  }
+  expect(lastTurn).toHaveBeenCalledTimes(2)
+  lastTurn.mockClear()
+  expect(await answerExperimentQuery(core, allowed, 'orchestrator', 'last_turn', { sessionId: 'session-1' })).toEqual({ error: 'NOT_SUPER_TABS' })
+  expect(await answerExperimentQuery(core, allowed, 'gateway', 'last_turn', { sessionId: 'session-1' })).toEqual({ error: 'NOT_AN_EXPERIMENT' })
+  expect(lastTurn).not.toHaveBeenCalled()
+})
+
 it('gives the Swarm service the answer of the turn an end names, as the core has it, and no other service', async () => {
   const PROMPT = 'a'.repeat(32)
   const ask = { sessionId: 'session-1', prompt: PROMPT, turnId: 7 }

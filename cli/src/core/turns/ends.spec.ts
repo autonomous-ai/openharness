@@ -94,6 +94,37 @@ describe('live turn ends', () => {
   })
 })
 
+describe('what it keeps, and for whom', () => {
+  it('keeps nothing of a turn, and tells none, until someone can hear it: a listener here, or a service that asked and has connected', async () => {
+    const tell = vi.fn(), lastTurn = vi.fn(async () => null)
+    const ends = createTurnEnds({ hearers: new Set(['superTabs']), tell, lastTurn })
+    const run = () => { ends.started('session', 'Ship it.', false); ends.said('session', 'Shipped.'); ends.worked('session'); ends.ended(told) }
+    run()
+    // A service that is not one that hears turn ends is nobody.
+    ends.connected('another-service')
+    run()
+    expect(tell).not.toHaveBeenCalled()
+    ends.connected('superTabs')
+    run()
+    expect(tell).toHaveBeenCalledOnce()
+    expect(await ends.answerOf(tell.mock.calls[0]![1])).toBe('Shipped.')
+    // Kept for good: a service that went and came back still has the turns that began while it was away.
+    const quiet = createTurnEnds({ hearers: new Set(['superTabs']), tell, lastTurn })
+    quiet.connected('superTabs')
+    quiet.started('session', 'Ship it.', false)
+    quiet.said('session', 'Shipped.')
+    tell.mockClear()
+    quiet.ended(told)
+    expect(tell).toHaveBeenCalledOnce()
+    const listened = createTurnEnds({ hearers: new Set(), tell: vi.fn(), lastTurn })
+    const heard = vi.fn()
+    listened.onEnd(heard)
+    listened.started('session', 'Ship it.', false)
+    listened.ended(told)
+    expect(heard).toHaveBeenCalledOnce()
+  })
+})
+
 describe('the answer of a turn that ended, kept as it was said', () => {
   it('is what was said after its last tool call, joined, each text trimmed, without the empty ones', async () => {
     const { turn, lastTurn, answer } = setup()
@@ -156,6 +187,20 @@ describe('the answer of a turn that ended, kept as it was said', () => {
     expect(one.prompt).toBe(two.prompt)
     expect(await answer(two)).toBe('The second answer.')
     expect(await answer(one)).toBe('The first answer.')
+  })
+
+  it('does not give a turn that said nothing the transcript\'s answer when a later turn was asked the same words: it could be that one\'s', async () => {
+    const { ends, turn, answer } = setup({ userMessage: 'Same words.', assistantText: 'The second answer.' })
+    const one = turn('Same words.', [null])
+    expect(await answer(one)).toBe('The second answer.')
+    const two = turn('Same words.', ['The second answer.'])
+    expect(await answer(one)).toBeNull()
+    expect(await answer(two)).toBe('The second answer.')
+    // Nor while the later one is still at work.
+    const three = turn('Same words.', [null])
+    expect(await answer(three)).toBe('The second answer.')
+    ends.started('session', 'Same words.', false)
+    expect(await answer(three)).toBeNull()
   })
 
   it('keeps the answers of the last few turns of a session, and asks the transcript for an older one', async () => {

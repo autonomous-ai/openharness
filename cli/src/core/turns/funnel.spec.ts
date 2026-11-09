@@ -167,6 +167,17 @@ describe('the event funnel', () => {
     expect(ends.ended).toHaveBeenCalledTimes(1)
   })
 
+  // What an engine says is kept as the funnel hears it only where its texts are whole messages (Claude Code, Codex): another's may be
+  // chunks, which would be joined with paragraphs between, so its answer is read from its transcript when its turn ends.
+  it('tells a turn of an engine whose texts are not whole messages as one whose first part was not seen', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    for (const [engine, partial] of [['claude', false], ['codex', false], ['opencode', true], ['cursor', true]] as const) {
+      const ends = fakeEnds()
+      setup(engine, { ends }).funnel('s1', [started('Ship it.')])
+      expect(ends.started.mock.calls, engine).toEqual([['s1', 'Ship it.', partial]])
+    }
+  })
+
   it('tells them after the input has settled the turn, and carries on past one that throws', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})

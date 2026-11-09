@@ -156,6 +156,20 @@ describe('delivered turns from a service in its own process', () => {
     await expect(turnsLink(async () => { throw new Error('not connected to the core') }).turns.answerOf(END)).rejects.toThrow('not connected to the core')
   })
 
+  it('says once that a turn end names no turn, which a core older than this process tells, and waits for the core to be restarted', () => {
+    const log = vi.fn()
+    const link = turnsLink(async () => ({}), log)
+    const old = { agentId: 'agent-1', sessionId: 's1', aborted: false }
+    expect(link.heard({ kind: 'turn_end', event: old })).toBe(false)
+    expect(link.heard({ kind: 'turn_end', event: old })).toBe(false)
+    expect(link.heard({ kind: 'turn_end', event: 'end' })).toBe(false)
+    expect(log.mock.calls).toEqual([['[turns] a turn end named no turn: the core is older than this process, so no reply is posted for a turn until it is restarted']])
+    // What is no turn end at all is not said.
+    const quiet = vi.fn()
+    expect(turnsLink(async () => ({}), quiet).heard({ kind: 'event', event: {} })).toBe(false)
+    expect(quiet).not.toHaveBeenCalled()
+  })
+
   it('takes nothing else for a delivery\'s progress', () => {
     expect(turnsLink(async () => ({})).heard({ kind: 'event', event: {} })).toBe(false)
     expect(deliveryIn({ kind: 'delivery' })).toBeNull()
