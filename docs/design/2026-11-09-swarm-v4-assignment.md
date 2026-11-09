@@ -132,6 +132,8 @@ one holding the fewest tasks (`assign/crew.ts readerFor`); when no other builder
 before (the swarm-sandbox's Juno for Pip). The comment names the reader, so GitHub news brings it the
 ask. A verdict on an older head no longer counts, and a HOLD on one still blocks the merge, so when its author pushes, its
 reader is asked to read the new head, once ("the head is now abcdef1, after your HOLD on f6edb44: please read it again").
+Each pass reads every open pull request, a hundred a page, the most recently updated first, up to three hundred: a busy
+shared repository has over a hundred open (lampOS and openharness about 110 each), and the team's own can be any of them.
 Harness asks readers for, and merges, only the team's own pull requests: a builder's (away ones too) or its PM's
 (`assign/crew.ts teamOf`). A person's, or anyone's in a shared repository, is theirs to have read and merged
 (openharness has dozens open at a time, by people and their own agents). A reader asked 2 hours ago with no verdict since

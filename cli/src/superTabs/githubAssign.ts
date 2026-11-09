@@ -13,7 +13,7 @@ import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
-import { authorOf, sameKey, verdicts, type LedProject } from './githubMerge.js'
+import { authorOf, openPullsPath, PULL_PAGES, sameKey, verdicts, type LedProject } from './githubMerge.js'
 
 type Json = Record<string, unknown>
 
@@ -38,8 +38,6 @@ const FLOW_LABELS: ReadonlyArray<{ name: string; color: string; description: str
   { name: 'p1', color: 'd93f0b', description: 'Next' },
   { name: 'p2', color: 'fbca04', description: 'Later' },
 ]
-/** How many open pull requests are read for readers each pass, as the merger reads them. */
-const MAX_PULLS = 30
 /** Pages of a hundred open issues and pull requests read each pass: a list that fills them is said (TOO_MANY_OPEN). */
 const ISSUE_PAGES = 10
 /** How long a reader asked for a head has to read it before another reader is asked too, or, with no other, it again; and
@@ -153,7 +151,7 @@ export class GitHubAssign {
     const minutes = learnedMinutes([...this.took].filter(([key, took]) => key.startsWith(`${repo}#`) && took).map(([, took]) => took!))
     const read = readProblem({ now: this.now(), issues, closed, crew, minutes })
     // Open pull requests, drafts included: a draft is where a task's work shows before it is read.
-    const pulls = await this.reads.current(repo, `/repos/${repo}/pulls?state=open&per_page=${MAX_PULLS}`, 1)
+    const pulls = await this.reads.current(repo, openPullsPath(repo), PULL_PAGES)
     // The tasks whose pull request waits for its readers or its merge, readers asked as needed (with no builder here, its
     // PM): their builders have done their part, so none is called quiet, and one whose builder went away is kept, as its
     // pull request merges without it. Another builder would do it again.
