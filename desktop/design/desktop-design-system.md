@@ -446,7 +446,12 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   request for another computer) report `agentInstructions` among their
   features: an older one would send a save in the clear. A save whose answer
   was lost and is made again is read back, and counts as saved when the file is
-  what was typed.
+  what was typed. When the file changed meanwhile, the new version is taken, the
+  typed text stays and a second Save replaces it on purpose (`It changed on Mac
+  3. Save again to replace it.`). A text over 64 KB (bytes, not characters) is
+  refused as it is saved, with nothing sent and nothing cut. A computer another
+  account shares is never asked, and a daemon not heard from yet is waited for
+  (`This computer isn't ready. Try again.`), not taken for an old one.
 - **Agent face.** An agent with no chosen picture wears a face
   (`SuperTabAvatarFace`, `avatar_art.dart`) in rows, cards, chat and profile:
   a round disc with a soft top-to-bottom fill, two eyes and a small smile.

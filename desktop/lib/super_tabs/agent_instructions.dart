@@ -1,5 +1,6 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -49,13 +50,25 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
   bool _editing = false;
   bool _saving = false;
 
+  /// Whether the draft differs from the file: Save waits for a change. Kept apart so a keystroke rebuilds only when it flips.
+  bool _dirty = false;
+
+  /// Which read is the latest: an older answer that comes after it is dropped.
+  int _reading = 0;
+
   /// Why the last save was refused, in words.
   String? _saveError;
+
+  /// The most the computer takes: 64 KiB of UTF-8, as its answer `TOO_LARGE` says. Counted in bytes, not characters.
+  static const _maxBytes = 65536;
 
   @override
   void initState() {
     super.initState();
-    _draft.addListener(() => setState(() {}));
+    _draft.addListener(() {
+      final dirty = _draft.text != (_file?.text ?? '');
+      if (dirty != _dirty) setState(() => _dirty = dirty);
+    });
     _read();
   }
 
@@ -66,7 +79,10 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
       _file = null;
       _readError = null;
       _editing = false;
+      _saving = false;
       _saveError = null;
+      _dirty = false;
+      _draft.clear();
       _read();
     }
   }
@@ -80,14 +96,14 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
   Future<void> _read() async {
     final link = widget.link;
     if (link == null) return;
-    final agent = widget.agent;
+    final agent = widget.agent, turn = ++_reading;
     setState(() => _readError = null);
     try {
       final file = await link.read(agent);
-      if (!mounted || agent.id != widget.agent.id) return;
+      if (!mounted || agent.id != widget.agent.id || turn != _reading) return;
       setState(() => _file = file);
     } on SwarmInstructionsError catch (error) {
-      if (!mounted || agent.id != widget.agent.id) return;
+      if (!mounted || agent.id != widget.agent.id || turn != _reading) return;
       setState(() => _readError = _words(error.code, saving: false));
     }
   }
@@ -96,6 +112,11 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
     final link = widget.link, file = _file;
     if (link == null || file == null || _saving) return;
     final agent = widget.agent, text = _draft.text;
+    // Counted here, not by the field: a field that stops typing at a limit drops a paste without a word.
+    if (utf8.encode(text).length > _maxBytes) {
+      setState(() => _saveError = _words('TOO_LARGE', saving: true));
+      return;
+    }
     setState(() {
       _saving = true;
       _saveError = null;
@@ -106,36 +127,45 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
       setState(() {
         _file = saved;
         _editing = false;
+        _dirty = false;
       });
     } on SwarmInstructionsError catch (error) {
       if (!mounted || agent.id != widget.agent.id) return;
-      // A save whose answer was lost, made again, is refused as changed: it changed to what was typed.
-      if (error.code == 'CHANGED' && await _isSaved(link, agent, text)) return;
-      if (!mounted) return;
-      setState(() => _saveError = _words(error.code, saving: true));
+      if (error.code == 'CHANGED') {
+        await _changed(link, agent, text);
+      } else {
+        setState(() => _saveError = _words(error.code, saving: true));
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
   }
 
-  /// Whether the computer now holds [text] as the file: the save went through though its answer was lost.
-  Future<bool> _isSaved(
+  /// The computer says the file is not the version this save read. It is read again: it may have changed to what was typed (a
+  /// save whose answer was lost, made again), which is saved; else the new version is taken, and a second Save replaces it on
+  /// purpose, the typed text kept.
+  Future<void> _changed(
     SwarmInstructionsLink link,
     SuperTabAgent agent,
     String text,
   ) async {
     try {
       final now = await link.read(agent);
-      if (!mounted || agent.id != widget.agent.id || now.text != text) {
-        return false;
-      }
+      if (!mounted || agent.id != widget.agent.id) return;
       setState(() {
         _file = now;
-        _editing = false;
+        if (now.text == text) {
+          _editing = false;
+          _dirty = false;
+          _saveError = null;
+        } else {
+          _dirty = true;
+          _saveError = _words('CHANGED', saving: true);
+        }
       });
-      return true;
-    } on SwarmInstructionsError {
-      return false;
+    } on SwarmInstructionsError catch (error) {
+      if (!mounted) return;
+      setState(() => _saveError = _words(error.code, saving: true));
     }
   }
 
@@ -143,6 +173,7 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
     _draft.text = _file?.text ?? '';
     setState(() {
       _editing = true;
+      _dirty = false;
       _saveError = null;
     });
   }
@@ -152,13 +183,16 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
     final machine = widget.machineName, name = widget.name;
     return switch (code) {
       'UNSUPPORTED' => 'Update Harness on $machine.',
-      'UPDATE_HERE' => 'Update Harness on this computer.',
+      'UPDATE_HERE' || 'E2EE_REQUIRED' => 'Update Harness on this computer.',
+      'NOT_READY' => 'This computer isn\'t ready. Try again.',
+      'OWNER_REQUIRED' => 'Only $name\'s person can open this.',
+      'SERVICE_UNAVAILABLE' => '$machine isn\'t ready. Try again.',
       'UNSAFE_PATH' => 'agents/$name.md on $machine isn\'t a plain file.',
       'NOT_UTF8' => 'agents/$name.md on $machine isn\'t text.',
       'AGENT_NOT_FOUND' => '$name isn\'t running on $machine.',
       'OFFLINE' => '$machine is offline.',
       'TIMEOUT' => '$machine didn\'t answer. Try again.',
-      'CHANGED' => 'It changed on $machine. Close it and open it again.',
+      'CHANGED' => 'It changed on $machine. Save again to replace it.',
       'TOO_LARGE' =>
         saving
             ? 'Too long to save. Keep it under 64 KB.'
@@ -215,9 +249,7 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
                     key: const ValueKey('swarm-instructions-save'),
                     label: 'Save',
                     compact: true,
-                    onPressed: _saving || _draft.text == (file?.text ?? '')
-                        ? null
-                        : _save,
+                    onPressed: _saving || !_dirty ? null : _save,
                   ),
                 ] else if (file != null)
                   DesktopPill(
@@ -231,7 +263,8 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
                   key: const ValueKey('swarm-instructions-close'),
                   icon: AppIcons.close,
                   tooltip: 'Close',
-                  onPressed: widget.onClose,
+                  // Closing while a save is out would drop its answer: nobody would be told whether the file changed.
+                  onPressed: _saving ? null : widget.onClose,
                 ),
               ],
             ),
@@ -291,7 +324,6 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
             expands: true,
             textAlignVertical: TextAlignVertical.top,
             keyboardType: TextInputType.multiline,
-            inputFormatters: [LengthLimitingTextInputFormatter(65536)],
             style: grid.AppType.mono(color: DesktopChrome.foreground),
             decoration: const InputDecoration.collapsed(hintText: ''),
           ),

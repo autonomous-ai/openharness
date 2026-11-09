@@ -15569,12 +15569,16 @@ class AppNotifier extends ChangeNotifier {
   /// one that does not would send a save in the clear, its text visible to the relay (`UPDATE_HERE`).
   String? instructionsGate(String machineId) {
     final target = machineStates[machineId];
-    if (target == null || !target.terminalCapabilityLoaded) return 'TIMEOUT';
+    if (target == null) return 'NOT_READY';
+    // A computer another account shares answers as its owner: it is never asked from here.
+    if (target.belongsToOtherAccount) return 'OWNER_REQUIRED';
+    if (!target.terminalCapabilityLoaded) return 'NOT_READY';
     if (!target.agentInstructionsAvailable) return 'UNSUPPORTED';
     for (final local in machineStates.values) {
-      if (local.isLocalMachine && !local.agentInstructionsAvailable) {
-        return 'UPDATE_HERE';
-      }
+      if (!local.isLocalMachine) continue;
+      // Not heard from yet is not "too old": wait, and send nothing meanwhile.
+      if (!local.terminalCapabilityLoaded) return 'NOT_READY';
+      if (!local.agentInstructionsAvailable) return 'UPDATE_HERE';
     }
     return null;
   }

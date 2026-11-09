@@ -399,7 +399,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         tester.widget<Text>(key('swarm-instructions-save-error')).data,
-        'It changed on Mac Studio. Close it and open it again.',
+        'It changed on Mac Studio. Save again to replace it.',
       );
       expect(computer.files[fileKey], 'Be brief. Cite sources.');
       expect(
@@ -408,6 +408,41 @@ void main() {
             .controller!
             .text,
         'Be brief. Be kind.',
+      );
+      // The new version was read: a second Save replaces it on purpose, from that version.
+      await tester.tap(key('swarm-instructions-save'));
+      await tester.pumpAndSettle();
+      expect(computer.files[fileKey], 'Be brief. Be kind.');
+      expect(key('swarm-instructions-field'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'A text over 64 KB is refused as it is saved, counted in bytes, with nothing sent and nothing cut',
+    (tester) async {
+      final computer = SwarmV4Computer(files: {fileKey: 'Be brief.'});
+      await show(tester, computer: computer);
+      await openInstructions(tester);
+      await tester.tap(key('swarm-instructions-edit'));
+      await tester.pumpAndSettle();
+      // 40,000 characters of two bytes each: under 65,536 characters, over 65,536 bytes.
+      final big = 'é' * 40000;
+      await tester.enterText(key('swarm-instructions-field'), big);
+      await tester.pump();
+      await tester.tap(key('swarm-instructions-save'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<Text>(key('swarm-instructions-save-error')).data,
+        'Too long to save. Keep it under 64 KB.',
+      );
+      expect(computer.requests.map((r) => r.$2), ['agent_instructions_read']);
+      // The field kept every character the person typed.
+      expect(
+        tester
+            .widget<TextField>(key('swarm-instructions-field'))
+            .controller!
+            .text,
+        big,
       );
     },
   );
