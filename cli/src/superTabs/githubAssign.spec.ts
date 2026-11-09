@@ -219,6 +219,16 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       machines: crew().machines }
     const asks = (f: ReturnType<typeof setup>) => f.said().filter(([n]) => n === 30).map(([, body]) => String(body))
 
+    it('counts no READ-OK its author signed, however its two-word name is written, and asks a reader', async () => {
+      const two: Crew = { builders: [...crew().builders, { id: 'pip-two', name: 'Pip Two', label: 'builder:pip-two', machineId: 'mac', engine: 'claude' }],
+        machines: crew().machines }
+      const f = setup([], { crew: two })
+      f.github.state.pulls = [pull({ labels: [{ name: 'builder:pip-two' }], head: { sha: HEAD, ref: 'pip-two/14' } })]
+      f.github.state.comments.set(30, [comment('Pip Two, 07:10, to **Juno**: READ-OK f6edb44')])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*(Pip|Juno)\*\*: please read this pull request/)])
+    })
+
     it('asks nobody for a pull request that is not the team\'s: a person\'s, or a branch no builder of the team made', async () => {
       const f = setup([], { crew: team })
       f.github.state.pulls = [pull({ number: 31, head: { sha: HEAD, ref: 'ken/fix-login' }, labels: [], body: '' }),
