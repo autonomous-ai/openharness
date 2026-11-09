@@ -1,6 +1,6 @@
 //! Windows: a host started inside a Job Object serves from a copy of itself started outside it,
-//! or, when the job refuses the breakaway (a Harness pane's job does), from a detached copy that
-//! stays in the job.
+//! or, when the job refuses the breakaway (an SSH session's or a task's job does), from a detached
+//! copy that stays in the job.
 #![cfg(windows)]
 mod common;
 use common::{WAIT, call, connect, kill_pid, wait_discovery};
@@ -147,7 +147,7 @@ fn answers(disc: &serde_json::Value) {
 
 #[test]
 fn a_host_in_a_job_that_refuses_breakaway_serves_from_a_detached_copy_in_it() {
-    // A Harness pane's job: no BREAKAWAY_OK.
+    // An SSH session's or a task's job: no BREAKAWAY_OK.
     let job = job(false);
     let home = tempfile::tempdir().unwrap();
     let (mut child, disc) = serve_in(&job, home.path());
