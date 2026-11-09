@@ -1,3 +1,8 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:harness/super_tabs/github_issues.dart';
+
 import '../super_tab_activity_lists_test.dart' show swarm;
 import 'super_tab_fixture.dart';
 
@@ -41,6 +46,10 @@ ConversationServer swarmV4Server() {
   lead['leadId'] = 'first builder';
   lead['title'] = 'lampos';
   (server.state['projects'] as List).first['name'] = 'lampos';
+  // Its tasks are this repository's GitHub issues (Swarm v4, 2026-11-09), read with gh: swarmV4GitHub below.
+  (server.state['projects'] as List).first['repository'] = {
+    'repositoryUrl': 'https://github.com/autonomous-ai/lampOS',
+  };
   (server.state['projects'] as List).add(
     projectFixture('harness', 'openharness', 'harness-lead'),
   );
@@ -162,3 +171,82 @@ ConversationServer swarmV4Server() {
   );
   return server;
 }
+
+/// What `gh` answers for lampOS's issues in these tests: two open tasks, and #5759's text with two comments signed by
+/// their agents, as lampOS's builders sign them. Every other call fails as an unknown issue does.
+SwarmGitHub swarmV4GitHub({List<List<String>>? calls}) => SwarmGitHub(
+  run: (arguments) async {
+    calls?.add(arguments);
+    if (arguments.take(2).join(' ') == 'issue list') {
+      return ProcessResult(
+        1,
+        0,
+        jsonEncode([
+          {
+            'number': 5754,
+            'title': 'No bathroom-break reminder skill ships',
+            'labels': [
+              {'name': 'builder:seventh'},
+            ],
+            'author': {'login': 'deehw'},
+            'updatedAt': '2026-11-09T06:05:08Z',
+            'url': 'https://github.com/autonomous-ai/lampOS/issues/5754',
+          },
+          {
+            'number': 5759,
+            'title': 'The two update rows were scored down for #5539 and #5476',
+            'labels': [
+              {'name': 'status:taken'},
+              {'name': 'builder:first builder'},
+            ],
+            'author': {'login': '69tc'},
+            'updatedAt': '2026-11-09T07:20:06Z',
+            'url': 'https://github.com/autonomous-ai/lampOS/issues/5759',
+          },
+        ]),
+        '',
+      );
+    }
+    if (arguments.take(3).join(' ') == 'issue view 5759') {
+      return ProcessResult(
+        2,
+        0,
+        jsonEncode({
+          'number': 5759,
+          'title': 'The two update rows were scored down for #5539 and #5476',
+          'body': 'Score both rows again once a lamp shows the fix.',
+          'labels': [
+            {'name': 'status:taken'},
+            {'name': 'builder:first builder'},
+          ],
+          'author': {'login': '69tc'},
+          'state': 'OPEN',
+          'createdAt': '2026-11-09T01:00:00Z',
+          'updatedAt': '2026-11-09T07:20:06Z',
+          'url': 'https://github.com/autonomous-ai/lampOS/issues/5759',
+          'comments': [
+            {
+              'author': {'login': '69tc'},
+              'body': 'Migrate, 09:3x GMT+7, taken by Migrate. The first step: what each row still lacks.',
+              'createdAt': '2026-11-09T02:11:20Z',
+              'url': 'https://github.com/autonomous-ai/lampOS/issues/5759#issuecomment-1',
+            },
+            {
+              'author': {'login': 'deehw'},
+              'body': 'First builder, 09:4x: I\'m taking this one.',
+              'createdAt': '2026-11-09T02:27:00Z',
+              'url': 'https://github.com/autonomous-ai/lampOS/issues/5759#issuecomment-2',
+            },
+          ],
+        }),
+        '',
+      );
+    }
+    return ProcessResult(
+      3,
+      1,
+      '',
+      'GraphQL: Could not resolve to an issue or pull request with the number of 0.',
+    );
+  },
+);

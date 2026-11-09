@@ -90,6 +90,9 @@ import 'decisions_view.dart';
 import 'route_row.dart';
 import 'terminal_row.dart';
 import 'agent_instructions.dart';
+import '../core/test_run.dart';
+import 'github_issues.dart';
+import 'issue_panel.dart';
 import 'task_list.dart';
 import 'thread_panel.dart';
 import 'work_details.dart';
@@ -148,6 +151,7 @@ class SuperTabView extends StatefulWidget {
     this.linkSwarms,
     this.voiceRecorder,
     this.paneStore,
+    this.github,
     this.board = false,
   });
   final SuperTabController controller;
@@ -194,6 +198,9 @@ class SuperTabView extends StatefulWidget {
   /// Makes the microphone the composers' mic records with
   /// ([superTabVoiceRecorder]: macOS, Windows and the web); without it, no mic shows.
   final SuperTabVoiceRecorder Function()? voiceRecorder;
+
+  /// Reads a project's tasks, its GitHub issues, with `gh` on this computer; tests give their own.
+  final SwarmGitHub? github;
 
   @override
   State<SuperTabView> createState() => _SuperTabViewState();
@@ -3801,6 +3808,11 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The project's task list, open beside its channel (Swarm v4).
   bool _taskListOpen = false;
 
+  /// The task open beside its channel, in place of the list: its project's channel, repository and issue number.
+  ({String channel, String repository, int number})? _issue;
+
+  late final SwarmGitHub _github = widget.github ?? SwarmGitHub();
+
   /// An agent's instructions file, open beside its chat (Swarm v4).
   bool _instructionsOpen = false;
 
@@ -6143,6 +6155,25 @@ class _SuperTabViewState extends State<SuperTabView>
       grid.AppTheme.watch(context);
       final terminal = widget.terminal;
       final thread = _threadPanel();
+      // Swarm v4: a project's tasks beside its channel, and a task opened from them in their place.
+      final taskList =
+          widget.board &&
+          _taskListOpen &&
+          c.snapshot?.isProjectLead(c.selectedId) == true;
+      final opened = _issue;
+      final issue = taskList && opened != null && opened.channel == c.selectedId
+          ? SwarmIssuePanel(
+              key: ValueKey(
+                'swarm-issue-${opened.repository}-${opened.number}',
+              ),
+              controller: c,
+              github: _github,
+              repository: opened.repository,
+              number: opened.number,
+              refreshEvery: kUnderTest ? null : const Duration(seconds: 30),
+              onClose: () => setState(() => _issue = null),
+            )
+          : null;
       final viewer = _imageViewer();
       // A thread opened since Members takes its side and closes it.
       if (thread != null) _rosterOpen = false;
@@ -6245,15 +6276,24 @@ class _SuperTabViewState extends State<SuperTabView>
                 // An open thread takes the roster's side, as in Slack.
                 right: !wide
                     ? null
-                    : thread ??
-                          (widget.board &&
-                                  _taskListOpen &&
-                                  c.snapshot?.isProjectLead(c.selectedId) ==
-                                      true
+                    : issue ??
+                          thread ??
+                          (taskList
                               ? SwarmTaskList(
                                   controller: c,
                                   conversationId: c.selectedId,
-                                  onOpen: c.openThread,
+                                  github: _github,
+                                  openNumber: _issue?.number,
+                                  refreshEvery: kUnderTest
+                                      ? null
+                                      : const Duration(minutes: 1),
+                                  onOpen: (repository, opened) => setState(
+                                    () => _issue = (
+                                      channel: c.selectedId,
+                                      repository: repository,
+                                      number: opened.number,
+                                    ),
+                                  ),
                                   onClose: () =>
                                       setState(() => _taskListOpen = false),
                                 )

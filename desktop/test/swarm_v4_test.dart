@@ -15,6 +15,7 @@ void main() {
   Future<SuperTabController> show(
     WidgetTester tester, {
     List<String>? terminals,
+    List<List<String>>? ghCalls,
   }) async {
     late SuperTabController c;
     await tester.binding.setSurfaceSize(const Size(1440, 900));
@@ -37,6 +38,7 @@ void main() {
             // The workspace shows the selected chat's terminals beside it.
             onOpenGroupTerminals: () => terminals?.add(c.selectedId),
             machineName: (_) => 'Mac Studio',
+            github: swarmV4GitHub(calls: ghCalls),
             board: true,
           ),
         ),
@@ -65,38 +67,62 @@ void main() {
     expect(find.byType(EditableText), findsNothing);
   });
 
-  testWidgets('Tasks lists the channel\'s threads; a card opens its thread '
-      'beside the channel, at equal width, read-only', (tester) async {
-    await show(tester);
+  testWidgets('Tasks lists the project\'s GitHub issues, read with gh; a card '
+      'opens its issue beside the channel, at equal width, read-only', (
+    tester,
+  ) async {
+    final calls = <List<String>>[];
+    await show(tester, ghCalls: calls);
     await tester.tap(key('swarm-tasks-button'));
     await tester.pumpAndSettle();
     expect(key('swarm-task-list'), findsOneWidget);
-    expect(find.text('#2191'), findsOneWidget);
-    expect(find.text('#3923'), findsOneWidget);
-    expect(find.text('5 replies'), findsWidgets);
+    expect(calls.first.take(4), [
+      'issue',
+      'list',
+      '--repo',
+      'autonomous-ai/lampOS',
+    ]);
+    // Newest activity first: #5759 moved last.
+    expect(
+      tester.getTopLeft(find.text('#5759')).dy,
+      lessThan(tester.getTopLeft(find.text('#5754')).dy),
+    );
+    expect(find.text('No bathroom-break reminder skill ships'), findsOneWidget);
+    Finder inList(Finder f) =>
+        find.descendant(of: key('swarm-task-list'), matching: f);
+    expect(inList(find.textContaining('On it')), findsOneWidget);
+    // Each card names the agent its builder:<name> label gives it.
+    expect(inList(find.text('seventh')), findsOneWidget);
     expect(
       width(tester, 'super-right-pane'),
       moreOrLessEquals(width(tester, 'super-center-pane'), epsilon: 2),
     );
-    await tester.tap(find.text('#2191'));
+    await tester.tap(find.text('#5759'));
     await tester.pumpAndSettle();
-    expect(key('super-thread-panel'), findsOneWidget);
+    expect(key('swarm-issue-panel'), findsOneWidget);
+    expect(calls.last.take(3), ['issue', 'view', '5759']);
     expect(
       find.descendant(
-        of: key('super-thread-panel'),
-        matching: find.text('#2191'),
+        of: key('swarm-issue-panel'),
+        matching: find.text('#5759'),
       ),
       findsOneWidget,
     );
-    expect(find.text('Merged #4905 in train 549.'), findsOneWidget);
-    expect(key('super-thread-agents-only'), findsOneWidget);
+    expect(find.textContaining('Score both rows again'), findsOneWidget);
+    // Each comment is named by the agent that signed it, its GitHub account beside it.
+    expect(find.textContaining('Migrate'), findsWidgets);
+    expect(find.textContaining('First builder'), findsWidgets);
+    expect(key('swarm-issue-agents-only'), findsOneWidget);
+    expect(key('swarm-issue-github'), findsOneWidget);
+    expect(find.byType(EditableText), findsNothing);
     expect(
       width(tester, 'super-right-pane'),
       moreOrLessEquals(width(tester, 'super-center-pane'), epsilon: 2),
     );
-    await tester.tap(key('super-thread-close'));
+    await tester.tap(key('swarm-issue-close'));
     await tester.pumpAndSettle();
-    expect(key('super-thread-panel'), findsNothing);
+    expect(key('swarm-issue-panel'), findsNothing);
+    expect(key('swarm-task-list'), findsOneWidget);
   });
 
   testWidgets('its person deletes an agent: right-click, Delete, confirm, gone', (
