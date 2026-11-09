@@ -287,11 +287,13 @@ export function canReadProject(state: SuperTabState, actor: Actor, project: Swar
     if (isSwarmBuddy(target)) return !!buddyPerson(state, target, project)
     const home = agentProjectId(state, target)
     // Swarm v4 (anh Dee, 2026-11-08): an agent acts for its person. In no project and holding no task (tasks are GitHub
-    // issues), it reads every project its person reads, at the membership it was added in, so it talks in their channels; a
-    // task, while it holds one, keeps it to that task's project. Before, every new agent was out of every channel.
+    // issues), it reads the public projects its person reads, at the membership it was added in, so it talks in their
+    // channels; a task, while it holds one, keeps it to that task's project. Never a private project it was given no task
+    // in: its one terminal would carry that project into every other channel (security review 2 of #4116), and once given
+    // one, that project alone (regularMayWorkIn). Before, every new agent was out of every channel.
     if (target.regular && home === NO_PROJECT) {
       const person = state.people.find(p => p.id === target.contributorId && p.generation === target.membershipGeneration)
-      return !!person && canReadProject(state, { kind: 'person', userId: person.id, email: person.email }, project)
+      return !!person && regularMayWorkIn(state, target, project) && (project.visibility === 'public' || target.privateProjectId === project.id)
     }
     return home === project.id
   }

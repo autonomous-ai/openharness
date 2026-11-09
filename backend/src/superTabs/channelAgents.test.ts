@@ -25,7 +25,7 @@ function swarm() {
       configuration: config } as Command, person, own(person.userId)).result.agentId as string
     return { kind: 'agent', agentId, machineOwnerId: person.userId } as Extract<Actor, { kind: 'agent' }>
   }
-  return { run, newAgent, get state() { return state } }
+  return { run, newAgent, edit: (change: (state: SuperTabState) => void) => change(state), get state() { return state } }
 }
 const post = (conversationId: string, text: string, recipientIds: string[] = []) =>
   ({ type: 'message.send', conversationId, text, replyTo: null, recipientIds }) as Command
@@ -48,5 +48,16 @@ describe('a v4 agent in a project\'s channel', () => {
     const secret = f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).result as { conversationId: string }
     const pip = f.newAgent(mate, 'Pip')
     expect(() => f.run(post(secret.conversationId, 'hello'), pip)).toThrow(SuperTabError)
+  })
+
+  // Its one terminal would carry a private project's channel into every other channel (security review 2 of #4116).
+  it('stays out of a private project its person reads, and once given work in one, out of every other channel', () => {
+    const f = swarm()
+    const secret = f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).result as { projectId: string, conversationId: string }
+    const pip = f.newAgent(owner, 'Pip')
+    expect(() => f.run(post(secret.conversationId, 'hello'), pip)).toThrow(SuperTabError)
+    f.edit(state => { state.agents.find(a => a.id === pip.agentId)!.privateProjectId = secret.projectId })
+    expect(f.run(post(secret.conversationId, 'free: pip'), pip).messages.map(m => m.text)).toContain('free: pip')
+    expect(() => f.run(post('lead', 'hello'), pip)).toThrow(SuperTabError)
   })
 })
