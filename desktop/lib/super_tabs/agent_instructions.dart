@@ -29,7 +29,7 @@ class SwarmAgentInstructions extends StatelessWidget {
   final String machineName;
   final VoidCallback onClose;
 
-  /// What its person calls it: the name its file is written under, as it is told "You are <name>.".
+  /// What its person calls it: the name its file is written under, as it is told "You are `name`.".
   String get name => agent.displayName ?? agent.name;
 
   /// Reads a file's text, or null when it is not there; tests pass their own.
@@ -40,6 +40,10 @@ class SwarmAgentInstructions extends StatelessWidget {
     return await file.exists() ? file.readAsString() : null;
   }
 
+  /// Where [name]'s file is in the project folder [cwd]: null for a name that is a path (`../x`), which names no file there.
+  static String? fileIn(String cwd, String name) =>
+      RegExp(r'[/\\\x00]').hasMatch(name) ? null : '$cwd/agents/$name.md';
+
   /// The file's path, when the agent runs on this computer and its folder is known.
   String? get path {
     final machine = app?.stateOf(agent.machineId);
@@ -49,7 +53,7 @@ class SwarmAgentInstructions extends StatelessWidget {
         .firstOrNull
         ?.project
         ?.cwd;
-    return cwd == null ? null : '$cwd/agents/$name.md';
+    return cwd == null ? null : fileIn(cwd, name);
   }
 
   @override

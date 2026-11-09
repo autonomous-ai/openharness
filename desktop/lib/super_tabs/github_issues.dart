@@ -392,7 +392,7 @@ class SwarmGitHub {
 
   static const _issueFields =
       'number title url createdAt updatedAt author{login} '
-      'labels(first:20){nodes{name color}}';
+      'labels(first:100){nodes{name color}}';
 
   static const _issuesQuery =
       r'query($owner:String!,$name:String!,$first:Int!,$after:String){'

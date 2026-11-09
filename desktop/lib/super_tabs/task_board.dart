@@ -98,6 +98,9 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
   String? _repository;
   Timer? _refresh;
 
+  /// The repository being read now: a refresh that comes while its read is still going waits for the next.
+  String? _reading;
+
   @override
   void initState() {
     super.initState();
@@ -129,16 +132,19 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
       widget.conversationId,
     );
     if (repository != _repository) setState(() => _repository = repository);
-    if (repository == null) return;
+    if (repository == null || _reading == repository) return;
+    _reading = repository;
     // What was read last shows at once; the read below only brings what changed.
     final kept = _issues == null ? widget.github.kept(repository) : null;
     if (kept != null) setState(() => _issues = kept);
+    // The first hundred show while the rest are read, only where nothing shows yet: a list already shown is whole, and
+    // its first hundred would drop the rest from the board until the last page lands.
+    final partial = _issues == null;
     try {
       final issues = await widget.github.issues(
         repository,
-        // The first hundred, the newest, show while the rest are read.
         onPage: (sofar) {
-          if (!mounted || repository != _repository) return;
+          if (!partial || !mounted || repository != _repository) return;
           setState(() {
             _issues = sofar;
             _error = null;
@@ -155,12 +161,16 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
     } on SwarmGitHubError catch (error) {
       if (!mounted || repository != _repository) return;
       setState(() => _error = error.message);
+    } finally {
+      if (_reading == repository) _reading = null;
     }
   }
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    // A read that failed while the cards from the last one show: said beside them, not left as if they were current.
+    final stale = _issues != null ? _error : null;
     return ColoredBox(
       color: DesktopChrome.surface,
       child: Column(
@@ -178,6 +188,23 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
               children: [
                 Text('Tasks', style: DesktopChrome.text(medium: true)),
                 const Spacer(),
+                if (stale != null) ...[
+                  Flexible(
+                    child: Text(
+                      stale,
+                      key: const ValueKey('swarm-tasks-stale'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: DesktopChrome.metadata(),
+                    ),
+                  ),
+                  AppIconButton(
+                    key: const ValueKey('swarm-tasks-retry'),
+                    icon: AppIcons.refreshCw,
+                    tooltip: 'Try again',
+                    onPressed: _read,
+                  ),
+                ],
                 AppIconButton(
                   key: const ValueKey('swarm-tasks-close'),
                   icon: AppIcons.close,
@@ -502,6 +529,12 @@ Widget swarmAgentFace(
     size: size,
     face: true,
   );
+}
+
+/// When an issue was opened, as its header says it: `opened now`, `opened 5m ago`.
+String swarmOpened(DateTime at, DateTime now) {
+  final ago = swarmAgo(at, now);
+  return ago == 'now' ? 'opened now' : 'opened $ago ago';
 }
 
 /// How long ago [at] was, in the fewest characters: now, 5m, 3h, 2d.

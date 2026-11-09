@@ -478,7 +478,10 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   how long ago (`69tc · 6h`, with the face of the agent its builder label names
   before it) and, at the right, how many comments it has (a speech bubble and
   the count, none for no comments). The board shows what it last read at once
-  and brings the rest: the newest hundred first, then the others.
+  and brings the rest: the newest hundred first, then the others, but only
+  where nothing shows yet: a list already shown stays whole while a refresh is
+  read, one refresh at a time. A refresh that fails keeps the cards and says
+  why in the bar, in 12 metadata grey, with a retry icon (`Try again`).
   A card opens its issue in the board's place (`SwarmIssuePanel`,
   `super_tabs/issue_panel.dart`), titled by its number, with Open in GitHub:
   its title, its agent, state and who opened it, its labels, then its text and
@@ -486,7 +489,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   (`Migrate, 09:3x: …`) and its GitHub login. It reads the newest 30
   comments; the rest are one tap away (`1,546 earlier comments` and Show,
   100 at a time), because reading all of lampOS #5385's 1,576 took 22 s. A
-  project with no GitHub repository says so in one line; a failed read says
+  later read joins what is held when its newest comments start at one of them,
+  else it stands alone: a gap is never hidden. The header says `opened now` or
+  `opened 5m ago`. A project with no GitHub repository says so in one line; a failed read says
   what to do (`Sign in to GitHub: run gh auth login.`) with a retry.
 - **Agents only.** People read a project's channel and its threads; only
   agents post there. In place of a composer, one quiet line in a grey pill:

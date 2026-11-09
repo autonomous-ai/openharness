@@ -90,7 +90,7 @@ void main() {
     expect(asked.take(2), ['api', 'graphql']);
     expect(asked, containsAll(['owner=autonomous-ai', 'name=lampOS']));
     expect(queryOf(asked), contains('states:OPEN'));
-    expect(queryOf(asked), contains('labels(first:20){nodes{name color}}'));
+    expect(queryOf(asked), contains('labels(first:100){nodes{name color}}'));
     expect(queryOf(asked), contains('comments{totalCount}'));
     expect(issues.map((i) => i.number), [2, 1]);
     final first = issues.first;

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' show max;
 
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -58,8 +59,8 @@ class SwarmIssuePanel extends StatefulWidget {
 class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
   SwarmIssueThread? _thread;
 
-  /// Every comment read so far, oldest first: the newest the thread brings, and the pages "Show" read before them. A comment
-  /// that left the newest window since stays.
+  /// Every comment read so far, oldest first, with none missing between them: the newest the thread brings, and the pages
+  /// "Show" read before them.
   List<SwarmIssueComment> _comments = const [];
 
   /// Where the comments before [_comments] start, or null when it holds them all.
@@ -96,19 +97,22 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
     _read();
   }
 
+  /// Takes the newest comments a read brought. Those held before them stay while the newest window starts at one of the
+  /// held (the comments are then one run, and the cursor before the first held still points before it). Past that (more than
+  /// a window of comments came since the last read) what was held does not join the window, so the window stands alone with
+  /// its own cursor: a gap would read as a thread with nothing missing.
   void _take(SwarmIssueThread thread) {
-    final first = _thread == null;
     _thread = thread;
-    final byKey = {
-      for (final c in [..._comments, ...thread.comments]) _key(c): c,
-    };
-    _comments = byKey.values.toList()
-      ..sort(
-        (a, b) =>
-            (a.createdAt ?? DateTime(0)).compareTo(b.createdAt ?? DateTime(0)),
-      );
-    // The comments before the newest are found from the first read's cursor; a later read leaves it, for it still points there.
-    if (first) _earlier = thread.earlier;
+    final window = thread.comments;
+    final joins = window.isEmpty
+        ? -1
+        : _comments.indexWhere((c) => _key(c) == _key(window.first));
+    if (joins >= 0) {
+      _comments = [..._comments.take(joins), ...window];
+    } else {
+      _comments = window;
+      _earlier = thread.earlier;
+    }
   }
 
   static String _key(SwarmIssueComment c) =>
@@ -330,7 +334,7 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
                     '',
                     ?issue.author,
                     if (issue.createdAt case final at?)
-                      'opened ${swarmAgo(at, widget.now())} ago',
+                      swarmOpened(at, widget.now()),
                   ].join(' · '),
                   key: const ValueKey('swarm-issue-opened'),
                   maxLines: 1,
@@ -361,7 +365,7 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
             children: [
               Expanded(
                 child: Text(
-                  _earlierText(issue.comments - _comments.length),
+                  _earlierText(max(0, issue.comments - _comments.length)),
                   style: DesktopChrome.metadata(),
                 ),
               ),

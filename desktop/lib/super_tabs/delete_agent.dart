@@ -94,7 +94,8 @@ Future<void> deleteSwarmAgent(
   );
 }
 
-/// The view moves off the chat of the agent just deleted, to the next agent's chat or, with none, the first project's channel.
+/// The view moves off the chat of the agent just deleted, to the next agent's chat or, with none, the first project's channel;
+/// with neither it has nowhere to go, and the deleted chat is gone.
 Future<void> _leaveChatOf(SuperTabController c, SuperTabAgent agent) async {
   final snapshot = c.snapshot;
   if (snapshot == null || agent.chatId != c.selectedId) return;
@@ -102,7 +103,6 @@ Future<void> _leaveChatOf(SuperTabController c, SuperTabAgent agent) async {
     for (final other in superTabMyAgents(snapshot, c.accountId))
       if (other.id != agent.id) ?superTabAgentChat(snapshot, other)?.id,
   ].firstOrNull;
-  await c.select(
-    next ?? snapshot.projects.firstOrNull?.leadConversationId ?? 'lead',
-  );
+  final to = next ?? snapshot.projects.firstOrNull?.leadConversationId;
+  if (to != null) await c.select(to);
 }
