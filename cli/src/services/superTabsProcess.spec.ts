@@ -83,6 +83,36 @@ it('uses the real service wrapper and process runner by default without connecti
   handle.stop()
 })
 
+// The host posts an agent's answer when its turn ends: the core tells this process each live end, and the answer's text is
+// asked of the core, which reads the transcript (core/experimentQueries.ts `last_turn`).
+it('hears each turn end the core tells it, and reads the last turn of a session of the core', async () => {
+  const t = setup()
+  const ends: unknown[] = []
+  t.api().turns.onEnd(end => { ends.push(end) })
+  t.wire().onEvent!({ kind: 'turn_end', event: { agentId: 'one', sessionId: 's1', aborted: false } })
+  expect(ends).toEqual([{ agentId: 'one', sessionId: 's1', aborted: false }])
+  const turn = { userMessage: 'Ship it.', assistantText: 'Shipped.' }
+  const query = vi.fn(async (name: string, payload: Record<string, unknown>) => name === 'last_turn' ? { turn: payload.sessionId === 's1' ? turn : null } : {})
+  t.wire().onConnected!({ query })
+  expect(await t.api().transcripts.lastTurn('s1')).toEqual(turn)
+  expect(query).toHaveBeenCalledWith('last_turn', { sessionId: 's1' })
+  expect(await t.api().transcripts.lastTurn('s2')).toBeNull()
+  t.process.stop()
+})
+
+it('reads no last turn the core did not give whole, and none while the core is away', async () => {
+  const t = setup()
+  await expect(t.api().transcripts.lastTurn('s1')).rejects.toThrow('Core disconnected')
+  for (const turn of [undefined, null, 'turn', {}, { userMessage: 'Ship it.' }, { assistantText: 'Shipped.' }, { userMessage: 4, assistantText: 'Shipped.' },
+    { userMessage: 'Ship it.', assistantText: 4 }]) {
+    t.wire().onConnected!({ query: async (name: string) => name === 'last_turn' ? { turn } : {} })
+    expect(await t.api().transcripts.lastTurn('s1')).toBeNull()
+  }
+  t.wire().onConnected!({ query: async (name: string) => name === 'last_turn' ? { error: 'NOT_SUPER_TABS' } : {} })
+  expect(await t.api().transcripts.lastTurn('s1')).toBeNull()
+  t.process.stop()
+})
+
 // Stability roadmap 2.4: the server's word that work waits reaches the host in this process as the core's notice.
 it('hands the account\'s notices the core tells it to the host, and nothing else', () => {
   const t = setup()

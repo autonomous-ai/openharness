@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps, type SwarmAgentDeps } from './api.js'
+import { CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, TURN_END_HEARERS, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps, type SwarmAgentDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
@@ -70,7 +70,14 @@ describe('the core API services stand on', () => {
     expect(DELIVERIES_OFF.deliver('a', 'hello', 'd1')).toBeUndefined()
     expect(DELIVERIES_OFF.cancelDelivery('d1')).toBe(false)
     expect(DELIVERIES_OFF.onDelivery(() => {})()).toBeUndefined()
+    expect(DELIVERIES_OFF.onEnd(() => {})()).toBeUndefined()
     expect(await DELIVERIES_OFF.leaseDeliveries('test', {})).toBe(false)
+  })
+
+  // The Swarm's host posts its agents' answers into their people's chats as their turns end; no other process hears every end.
+  it('tells the Swarm\'s service alone, among those in their own processes, each live turn end', () => {
+    expect(TURN_END_HEARERS).toEqual(['superTabs'])
+    expect(TURN_END_HEARERS.every(service => TURN_DELIVERERS.includes(service))).toBe(true)
   })
 
   it('resolves an agent in a service\'s own copy as the registry does: by agent id, then session id', () => {
