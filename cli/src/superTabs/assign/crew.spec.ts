@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { contextOf, crewOf, CORES, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, DEEP, dependsOn, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew } from './crew.js'
+import { contextOf, crewOf, CORES, outOfQuota, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, DEEP, dependsOn, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew } from './crew.js'
 import { solve } from './search.js'
 
 type Json = Record<string, unknown>
@@ -208,5 +208,22 @@ describe('taking work back from a builder that cannot work (takeBacks)', () => {
       { pmAgentId: 'pm', projectId: 'app' })
     expect(builders.map(b => b.id)).toEqual(['pip'])
     expect(away).toEqual([{ name: 'Juno', label: 'builder:juno', why: 'stopping' }, { name: 'Atlas', label: 'builder:atlas', why: 'down', since: '2026-11-09T10:00:00Z' }])
+  })
+})
+
+describe('a builder out of quota (outOfQuota)', () => {
+  const withQuota = (usedPercent: number, minutes: number): Crew => ({ builders: crew().builders.slice(0, 1), machines: [machine('mac', {
+    quotas: [{ engine: 'claude', known: true, windows: [{ name: 'five_hour', usedPercent, resetsAt: new Date(NOW + minutes * 60_000).toISOString() }] }] })] })
+  it('is one whose subscription has less room than a small task until a reset more than two hours off', () => {
+    const away = (used: number, minutes: number) => outOfQuota(readProblem({ now: NOW, crew: withQuota(used, minutes), closed: [], issues: [] }))
+    expect(away(85, 180)).toEqual([{ name: 'Pip', label: 'builder:pip', why: 'quota', until: 180 }])
+    expect(away(85, 60)).toEqual([])
+    expect(away(50, 180)).toEqual([])
+  })
+
+  it('gives back only what waits for it, never what it took', () => {
+    const issues = [issue(1, ['builder:pip']), issue(2, ['builder:pip', 'status:taken'])]
+    const back = takeBacks(issues, [{ name: 'Pip', label: 'builder:pip', why: 'quota', until: 180 }], NOW)
+    expect(back).toEqual([{ number: 1, label: 'builder:pip', taken: false, why: 'Pip\'s subscription has no room for 3 h' }])
   })
 })

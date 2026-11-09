@@ -44,13 +44,16 @@ export interface CrewBuilder { id: string; name: string; label: string; machineI
   worksOn?: string[] | null }
 /** A machine a builder runs on, with its last report (backend machines.ts machineObservationSchema). */
 export interface CrewMachine { machineId: string; name?: string; observation?: Json }
-/** A builder of the team that cannot work now: its person is stopping it, or its machine has been down since [since]. */
-export interface AwayBuilder { name: string; label: string; why: 'stopping' | 'down'; since?: string }
+/** A builder of the team that cannot work now: its person is stopping it, its machine has been down since [since], or its
+ *  subscription has no room until [until] (minutes from now). */
+export interface AwayBuilder { name: string; label: string; why: 'stopping' | 'down' | 'quota'; since?: string; until?: number }
 export interface Crew { builders: CrewBuilder[]; machines: CrewMachine[]; away?: AwayBuilder[] }
 
 /** How long a builder's machine is down before its queued tasks go to others, and before the ones it took do too: a sleep
  *  or a restart is back well within the first; a task taken may have work on that machine, so it waits longer. */
 export const QUEUED_AWAY_MS = 30 * 60_000, TAKEN_AWAY_MS = 3 * 60 * 60_000
+/** A subscription with less room than a small task until a reset further off than this keeps no queued tasks. */
+export const QUOTA_WAIT_MINUTES = 120
 
 /** The problem, and what the picks and their reasons need to know of it. */
 export interface Read {
@@ -263,7 +266,10 @@ export function takeBacks(issues: Json[], away: AwayBuilder[], now: number): Tak
       const since = Date.parse(builder.since ?? '')
       if (!Number.isFinite(since) || now - since < (taken ? TAKEN_AWAY_MS : QUEUED_AWAY_MS)) continue
     }
+    // Out of quota: what it took it finishes; what waits for it goes to another.
+    if (builder.why === 'quota' && taken) continue
     const down = builder.why === 'down' ? `${builder.name}'s machine has been down since ${new Date(Date.parse(builder.since!)).toISOString().slice(11, 16)} UTC`
+      : builder.why === 'quota' ? `${builder.name}'s subscription has no room for ${Math.round((builder.until ?? 0) / 60)} h`
       : `${builder.name} is being stopped`
     out.push({ number: Number(issue.number), label: builder.label, taken, why: down })
   }
@@ -283,6 +289,21 @@ export function contextOf(parts: string[], done: Map<string, number> | undefined
     if (factor !== 1) context[part] = Math.round(factor * 1000) / 1000
   }
   return context
+}
+
+/** The builders whose subscription has less room than a small task until a reset more than [QUOTA_WAIT_MINUTES] away, with
+ *  that reset: their queued tasks would wait for it. */
+export function outOfQuota(read: Read): AwayBuilder[] {
+  const out: AwayBuilder[] = []
+  for (const builder of read.problem.builders) {
+    const account = read.problem.accounts.find(a => a.id === builder.modes[0]?.account)
+    const crew = read.builders.get(builder.id)
+    if (!account || !crew) continue
+    // A weekly window is spent a fifth as fast as a 5-hour one (readProblem's spend).
+    const blocked = account.windows.filter(w => w.left - account.reserve < SIZES.s.spend / (w.every === 300 ? 1 : 5) && w.resetsAt > QUOTA_WAIT_MINUTES)
+    if (blocked.length) out.push({ name: crew.name, label: crew.label, why: 'quota', until: Math.max(...blocked.map(w => w.resetsAt)) })
+  }
+  return out
 }
 
 /** One task to give: its builder, and the minute the plan starts it. */
