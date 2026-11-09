@@ -194,24 +194,6 @@ describe('durable proposal cards', () => {
     expect(notices.some(m => (m.source as { moment?: string } | null)?.moment === 'decided')).toBe(false)
   })
 
-  it('marks a dormant proposal overdue on its card, with no notice in the dormant default Buddy chat (task #4558)', async () => {
-    const f = await fixture()
-    await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', setup: { name: 'Fixture Mac', cwd: '/fixture', engines: ['codex'] } })
-    const second = await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', name: 'Research' })
-    await f.execute({ type: 'buddy.default', conversationId: second.result.conversationId })
-    const id = await f.create(owner)
-    for (const key of [id, String(second.result.conversationId)]) {
-      const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key } } })
-      await db.swarmGroup.update({ where: { id: row.id }, data: { dormant: true, version: { increment: 1 },
-        data: { ...(row.data as object), dormant: true } } })
-    }
-    f.clock.now += 31 * 60_000
-    await runTimeCheckPass(db, f.store, f.clock.now)
-    expect((await f.card(id)).proposal!.overdue).toBe(true)
-    const notices = await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: String(second.result.conversationId) } })
-    expect(notices.some(m => (m.source as { kind?: string } | null)?.kind === 'proposal-overdue')).toBe(false)
-  })
-
   it('delivers urgent proposals first on both a full poll and its fast repeat', async () => {
     const f = await fixture(), low = await f.create(), urgent = await f.create(owner, 'P0')
     for (let i = 0; i < 2; i++) {

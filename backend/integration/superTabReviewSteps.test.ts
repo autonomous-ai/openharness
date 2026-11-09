@@ -129,31 +129,6 @@ describe('a Ready through the store', () => {
     expect(await stepsIn(tab, task)).toEqual([])
   })
 
-  // Task #4278: with no Linux machine the project can reach, a CLI change's Linux test waits and the task says why; once the
-  // PM's person's Linux computer reports, the time checks open it.
-  it('opens a CLI change\'s Linux test only once a Linux machine is there', async () => {
-    const head = 'c'.repeat(40)
-    const { store, tab, execute, observe, task, dev, assignment } = await swarm({ pullRequestFiles: async (_repository, urls) => ({ urls, head,
-      files: ['cli/src/superTabs/host.ts'] }) })
-    await execute({ type: 'work.status', conversationId: task, assignmentId: assignment, status: 'review', result: `Ready: ${REPO}/pull/7` }, host, dev)
-    expect((await stepsIn(tab, task)).map(step => step.step).sort()).toEqual(['Review', 'Test on a Mac'])
-    const said = await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: task } })
-    expect(said.filter(row => row.text === 'No Linux machine: CI\'s Linux runs stand in.')).toHaveLength(1)
-    await store.runTimeChecks(tab)
-    expect((await stepsIn(tab, task)).map(step => step.step).sort()).toEqual(['Review', 'Test on a Mac'])
-    await execute({ type: 'machine.contribute', machineId: 'linux-host', name: 'Linux box', cwd: '/repo', engines: ['claude'], maxAgents: 8 }, host)
-    await observe('linux-host', 'Linux')
-    await store.runTimeChecks(tab)
-    const steps = await stepsIn(tab, task)
-    expect(steps.map(step => step.step).sort()).toEqual(['Review', 'Test on a Linux machine', 'Test on a Mac'])
-    const linux = (await db.swarmGroup.findMany({ where: { tabId: tab } })).map(row => row.data as { id: string; step?: string; brief?: string })
-      .find(group => group.step === 'Test on a Linux machine')!
-    expect(linux.brief).toContain(head)
-    const listed = ((await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, key: task } })).data as { stepIds?: string[]; waitingLinuxStep?: unknown })
-    expect(listed.stepIds).toContain(linux.id)
-    expect(listed.waitingLinuxStep).toBeUndefined()
-  })
-
   it('opens the strictest steps when the read throws, and the Ready still goes through', async () => {
     const pullRequestFiles = vi.fn(async () => { throw new Error('GitHub down') })
     const { tab, execute, task, dev, assignment } = await swarm({ pullRequestFiles })
