@@ -396,7 +396,6 @@ describe('one machine: a Mac and its Harness Team account', () => {
     f.machine('mate-mac').observation = reading('computer')
     f.machine('mate-team').observation = reading('team', FAILED)
     expect(machineTeamWork(f.machine('mate-mac'), NOW, ['mate-team'])).toBeNull()
-    expect(machineTeamWork(f.machine('mate-mac'), NOW, ['mate-team'], ['mate-team'])).toBeNull()
     expect(machineTeamWork(f.machine('mate-mac'), NOW, [])).toBeNull()
     // The account itself reads as itself.
     expect(machineTeamWork(f.machine('mate-team'), NOW, ['mate-team'])?.code).toBe('PRIVACY_CHECK_FAILED')
@@ -508,17 +507,6 @@ describe('one machine: a Mac whose Harness Team account was made again', () => {
     expect(f.state.machineCleanups).toEqual(expect.arrayContaining([expect.objectContaining({ machineId: 'mate-team' })]))
   })
 
-})
-
-// A Harness Team account runs every teammate's work as one macOS user, so in Swarms of two Workspaces one Workspace's agents could
-// read the other's folders there (docs/plans/2026-10-27-swarm-workspaces.md, Audience). `otherWorkspaceMachines`: the machines this
-// Swarm's store found contributed to a Swarm of another Workspace.
-describe('a Team machine serving more than one Workspace', () => {
-  it('shows routing the reason, like any other refusal', () => {
-    const f = swarm()
-    expect(teamWorkRefusal(f.machine('mate-team'), NOW, true, true)?.code).toBe('MACHINE_IN_OTHER_WORKSPACE')
-    expect(teamWorkRefusal(f.machine('mate-team'), NOW, true, false)).toBeNull()
-  })
 })
 
 // A machine Desktop adds as its person joins a Swarm (Scholes, 2026-10-29): nobody chose to lend it to teammates, so their

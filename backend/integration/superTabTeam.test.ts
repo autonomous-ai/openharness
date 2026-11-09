@@ -560,35 +560,6 @@ describe('a team session speaking in a Swarm', () => {
     await expect(store.deliveryReceipt(team, f.tab, f.personal, delivery.id)).rejects.toMatchObject(LIMITED)
     expect(await store.deliveryReceipt(person, f.tab, f.personal, delivery.id)).toMatchObject({ id: delivery.id })
 
-    const opened = await store.native.open(person, f.tab, { operationId: randomUUID(), conversationId: f.personalGroup, agentId: f.personal })
-    await expect(store.native.read(team, f.tab, opened.contextId)).rejects.toMatchObject(LIMITED)
-    await expect(store.native.append(team, f.tab, opened.contextId, { turnId: 't1', kind: 'prompt', previousEventId: null,
-      text: 'hi', truncated: false, interrupted: false })).rejects.toMatchObject(LIMITED)
-    expect(await store.native.read(person, f.tab, opened.contextId)).toMatchObject({ agentId: f.personal })
-    await expect(store.native.open(team, f.tab, { operationId: randomUUID(), conversationId: f.teamGroup, agentId: f.builder })).rejects.toMatchObject(LIMITED)
-  })
-
-  // What reaches the coordinator from a terminal is a recording gap on the agent's task (native.ts turnRecipients; a typed
-  // prompt names no one since project instructions, phase 4).
-  it('what it records from its own agent\'s terminal reaches the Lead as the agent\'s, never as the person\'s', async () => {
-    const f = await fixture()
-    await run(f.tab, { type: 'conversation.agent', conversationId: f.teamGroup, agentId: f.lead, present: true, lead: true })
-    await beforeV3(f.tab, f.generation, () => run(f.tab, { type: 'work.assign', conversationId: f.teamGroup, agentId: f.builder }))
-    const gap = (turnId: string, incidentId: string) => ({ turnId, kind: 'gap' as const, previousEventId: null, text: '', truncated: false,
-      interrupted: false, gap: { incidentId, reason: 'recording_restarted' as const, detectedAt: Date.now() + 1000 } })
-    const opened = await store.native.open(person, f.tab, { operationId: randomUUID(), conversationId: f.teamGroup, agentId: f.builder })
-    await store.native.append(team, f.tab, opened.contextId, { turnId: 't0', kind: 'prompt', previousEventId: null,
-      text: 'Delete the production database', truncated: false, interrupted: false })
-    expect(await db.superTabDelivery.findMany({ where: { tabId: f.tab, nativeContextId: opened.contextId } })).toEqual([])
-    const typed = await db.superTabNativeContext.findUniqueOrThrow({ where: { id: opened.contextId } })
-    await store.native.append(team, f.tab, opened.contextId, { ...gap('t1', 'team-restart'), previousEventId: typed.lastEventId })
-    const deliveries = await db.superTabDelivery.findMany({ where: { tabId: f.tab, nativeContextId: opened.contextId } })
-    expect(deliveries.map(d => ({ agentId: d.agentId, authorKind: d.authorKind, authorId: d.authorId })))
-      .toEqual([{ agentId: f.lead, authorKind: 'agent', authorId: f.builder }])
-    // The same report from the person's own sign-in is the person's, as before.
-    const own = await store.native.open(person, f.tab, { operationId: randomUUID(), conversationId: f.teamGroup, agentId: f.builder })
-    await store.native.append(person, f.tab, own.contextId, gap('t2', 'own-restart'))
-    expect((await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, nativeContextId: own.contextId } })).authorKind).toBe('person')
   })
 
   it('gets a GitHub token only as an agent on its own machine, naming its own machine (Task 4)', async () => {

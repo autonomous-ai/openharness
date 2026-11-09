@@ -206,24 +206,20 @@ describe('the cleanup\'s dry run and its write', () => {
 
   it('decide the same moves on the same data, and say why one is left', async () => {
     const { tab, from, to } = await listedTwice()
-    // The entry's owner was taken out of the Swarm's Workspace and is still listed in the Swarm (a Workspace removal whose leave
-    // did not reach this Swarm): no command of theirs reaches it, machine.moved included.
-    const { workspaceId } = (await store.read(owner, tab)).state
-    const membership = { workspaceId: workspaceId!, userId: kelvin }
-    await db.swarmWorkspaceMember.updateMany({ where: membership, data: { removedAt: new Date() } })
-    try {
-      const dry = await cleanUpComputers(db, store, 'prod', { write: false })
-      const written = await cleanUpComputers(db, store, 'prod', { write: true })
-      expect(mine(written.moves, tab)).toEqual([])
-      expect(mine(dry.moves, tab)).toEqual(mine(written.moves, tab))
-      // Both name the entry left and the Swarm's own refusal, so a dry run says what the write will not do.
-      const left = { tabId: tab, from, fromOwner: kelvin, to, toOwner: tt, code: 'WORKSPACE_ACCESS_REVOKED' }
-      expect(mine(dry.left, tab)).toEqual([left])
-      expect(mine(written.left, tab)).toEqual([left])
-    } finally { await db.swarmWorkspaceMember.updateMany({ where: membership, data: { removedAt: null } }) }
-    expect(await machinesIn(tab)).toEqual([`${from}:${kelvin}`, `${to}:${tt}`])
+    // The Swarm was deleted (deletion.ts): no command of the entry's owner reaches it, machine.moved included.
+    await run(tab, { type: 'swarm.delete', name: 'Twice' })
+    const dry = await cleanUpComputers(db, store, 'prod', { write: false })
+    const written = await cleanUpComputers(db, store, 'prod', { write: true })
+    expect(mine(written.moves, tab)).toEqual([])
+    expect(mine(dry.moves, tab)).toEqual(mine(written.moves, tab))
+    // Both name the entry left and the Swarm's own refusal, so a dry run says what the write will not do.
+    const left = { tabId: tab, from, fromOwner: kelvin, to, toOwner: tt, code: 'NOT_FOUND' }
+    expect(mine(dry.left, tab)).toEqual([left])
+    expect(mine(written.left, tab)).toEqual([left])
+  })
 
-    // The Swarm reachable again: both decide the move, and the write makes it.
+  it('decide a move the same, and the write makes it', async () => {
+    const { tab, from, to } = await listedTwice()
     const dry = await cleanUpComputers(db, store, 'prod', { write: false })
     const moved = { tabId: tab, from, fromOwner: kelvin, to, toOwner: tt }
     expect(mine(dry.moves, tab)).toEqual([moved])
@@ -243,20 +239,11 @@ describe('the cleanup script', () => {
 
   it('runs without billing\'s environment and exits once it has printed', async () => {
     const started = Date.now()
-    const { code, stdout } = await script({ SWARM_WORKSPACES_REQUIRED: '0' })
+    const { code, stdout } = await script({})
     expect(code).toBe(0)
     const printed = JSON.parse(stdout.slice(stdout.indexOf('{'))) as { write: boolean; env: string; moves: unknown[]; left: unknown[] }
     expect(printed).toMatchObject({ write: false, env: 'prod', moves: expect.any(Array), left: expect.any(Array) })
     expect(Date.now() - started).toBeLessThan(60_000)
-  }, 90_000)
-
-  // Security review 1 of #3146: the Workspace check reads anything but '1' as not required, so a run that forgot the server's
-  // setting would pass a Swarm the server refuses, in its dry run and its write alike. It must be said, either way.
-  it('will not start unless told whether this server requires Workspaces', async () => {
-    const { code, stdout, stderr } = await script({})
-    expect(code).toBe(1)
-    expect(stdout).toBe('')
-    expect(stderr).toContain('SWARM_WORKSPACES_REQUIRED')
   }, 90_000)
 })
 

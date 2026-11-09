@@ -81,7 +81,6 @@ const conversation: Required<Conversation> = {
   queueRank: 1.5,
   reactionSeq: 0,
   released: { at: 1, tags: [] },
-  releasing: ['cli'],
   reportSeq: 0,
   requesterId: 'p',
   reviewOf: 'r',
