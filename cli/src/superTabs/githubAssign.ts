@@ -26,8 +26,8 @@ const STEPS_PER_TASK = 400, MAX_STEPS = 200_000
 const SELF = 'Harness'
 /** How many open pull requests are read for readers each pass, as the merger reads them. */
 const MAX_PULLS = 30
-/** Harness's ask of a reader, as `ask` writes it: who was asked, so nobody is asked twice. */
-const ASKED = /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: please read/
+/** Harness's ask of a reader, as askReaders writes it: who was asked, and for which head. */
+const ASKED = /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: [^\n]*?please read[^\n]*?READ-OK ([0-9a-f]{7,40})/
 
 export class GitHubAssign {
   private timer: NodeJS.Timeout | null = null
@@ -141,9 +141,10 @@ export class GitHubAssign {
 
   /**
    * Asks a reader for each open pull request into the default branch that needs one (Swarm v4: a builder no longer picks
-   * its own): a READ-OK on its head from someone other than its author, two for TWO READS, counting those asked and not yet
-   * answered. None while a HOLD stands: its author fixes first, and its holder reads again. One comment names the reader,
-   * so GitHub news brings it the ask (githubMentions.ts).
+   * its own): a READ-OK on its head from someone other than its author, two for TWO READS. A reader asked and not yet
+   * answered is still reading. A verdict on an older head no longer counts, and a HOLD on one still blocks the merge
+   * (githubMerge.ts), so its reader is asked to read the new head, once. Nothing while a HOLD stands on the head itself: its
+   * author fixes first. Each ask is one comment naming the reader, which GitHub news brings it (githubMentions.ts).
    */
   private async askReaders(project: LedProject, read: Read): Promise<void> {
     const { repo } = project
@@ -155,26 +156,42 @@ export class GitHubAssign {
       if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head)) continue
       const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 3)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''))
-      if ([...readers.values()].some(r => r.verdict === 'HOLD')) continue
       const author = authorOf(pull)
-      const asked = new Set(comments.map(c => ASKED.exec(String(c.body ?? ''))?.[1]?.toLowerCase()).filter((name): name is string => !!name))
-      const okOnHead = [...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && reader !== author)
-      // Asked and not yet READ-OK on this head: still reading.
-      const reading = [...asked].filter(name => !okOnHead.some(([reader]) => reader === name))
-      let need = (twoReads ? 2 : 1) - okOnHead.length - reading.length
-      const skip = new Set([...asked, ...readers.keys()])
+      const onHead = (sha: string) => head.startsWith(sha)
+      if ([...readers.values()].some(r => r.verdict === 'HOLD' && onHead(r.sha))) continue
+      // Who Harness asked, for which heads.
+      const asked = new Map<string, Set<string>>()
+      for (const c of comments) {
+        const found = ASKED.exec(String(c.body ?? ''))
+        if (found) asked.set(found[1]!.toLowerCase(), new Set([...asked.get(found[1]!.toLowerCase()) ?? [], found[2]!]))
+      }
+      const ok = [...readers].filter(([reader, r]) => reader !== author && r.verdict === 'READ-OK' && onHead(r.sha)).map(([reader]) => reader)
+      const stale = [...readers].filter(([reader, r]) => reader !== author && !onHead(r.sha))
+      const waiting = [...asked.keys()].filter(name => !readers.has(name))
+      for (const [reader, r] of stale) {
+        if ([...asked.get(reader) ?? []].some(onHead)) continue
+        const builder = [...read.builders.values()].find(b => b.name.toLowerCase() === reader)
+        await this.ask(repo, number, head, builder?.name ?? reader, `the head is now ${head.slice(0, 7)}, after your ${r.verdict} on ${r.sha.slice(0, 7)}: please read it again`)
+      }
+      let need = (twoReads ? 2 : 1) - ok.length - stale.length - waiting.length
+      const skip = new Set([...asked.keys(), ...readers.keys()])
       while (need-- > 0) {
         const reader = readerFor(read, author, skip)
         if (!reader) { this.once(`[super-tab] Task assignment: NO_READER ${repo}#${number}: no builder of the team but its author can read it`); break }
         skip.add(reader.id)
-        const key = `${repo}#${number}@${head}:${reader.id}`
-        if (this.said.has(key)) continue
-        this.said.add(key)
-        await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${this.clock()}, to **${reader.name}**: please read `
-          + `this pull request, and start your comment with READ-OK ${head.slice(0, 7)} or HOLD ${head.slice(0, 7)} (with the file, line and fix).` })
-        this.log(`[super-tab] asked ${reader.name} to read ${repo}#${number}`)
+        await this.ask(repo, number, head, reader.name, 'please read this pull request')
       }
     }
+  }
+
+  /** One ask of a reader, once per pull request, head and reader: a comment naming it, with the head it reads. */
+  private async ask(repo: string, number: number, head: string, name: string, what: string): Promise<void> {
+    const key = `${repo}#${number}@${head}:${name.toLowerCase()}`
+    if (this.said.has(key)) return
+    this.said.add(key)
+    await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${this.clock()}, to **${name}**: ${what}, `
+      + `and start your comment with READ-OK ${head.slice(0, 7)} or HOLD ${head.slice(0, 7)} (with the file, line and fix).` })
+    this.log(`[super-tab] asked ${name} to read ${repo}#${number} at ${head.slice(0, 7)}`)
   }
 
   /** Labels the task for its builder and says why on it, as Harness, in its PM's person's name. */
