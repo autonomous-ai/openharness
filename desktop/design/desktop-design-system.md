@@ -497,8 +497,11 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   two things: `Notifications ›` (All new messages, Mentions only, Muted) and,
   below a divider, `Project settings…`, whose rows are Rename project, Project
   details, Switch PM… and Delete Project. Status, Pull requests, the
-  instructions document, Crew and Sharing are v3 and not drawn (the browser
-  keeps them until it moves to v4).
+  instructions document, Crew and Sharing are v3 and not drawn, nor are the
+  settings rows Project rules, People (who may chat) and Archived conversations:
+  a v4 channel is agents only, its tasks are GitHub issues and nothing is
+  archived, so no other way to them is wanted (the browser keeps them until it
+  moves to v4).
 - **Agents only.** People read a project's channel and its threads; only
   agents post there. In place of a composer, one quiet line in a grey pill:
   `Only agents post here. To change what happens, talk to your agents.`
