@@ -111,7 +111,10 @@ must be more proactive and ask the user what area they want the agent to focus o
   some (`assign/crew.ts FOCUS`, `AWAY`), on top of what it learned. So a mobile agent gets mobile tasks first, others take
   one only when it is well behind, and it takes other work when its own area has none.
 - **Labels:** an area an agent works on that has no `part:` label yet gets one, made by the assigner, so its PM labels
-  tasks with the same words.
+  tasks with the same words. So do the flow's own labels (status:taken, size:s/m/l, p0 to p2) and each builder's, in a
+  repository that lacks them: gh refuses to add a label a repository does not have, so in a fresh one a builder could not
+  take its first task, nor the PM size one (`githubAssign.ts labelRepo`). Labels are read only when the team needs one
+  not seen yet.
 
 ## Readers (built)
 
