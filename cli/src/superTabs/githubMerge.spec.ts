@@ -61,6 +61,15 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: merged\. READ-OK on f6edb44 by Juno, checks green\.$/)])
   })
 
+  it('never merges on its author\'s own READ-OK, however its two-word name is written', async () => {
+    const f = setup()
+    f.crew.mockResolvedValue({ builders: [{ id: 'pip-two', name: 'Pip Two', label: 'builder:pip-two', machineId: 'mac', engine: 'claude' }], machines: [] })
+    f.github.repo.pulls = [pull({ labels: [{ name: 'builder:pip-two' }], head: { sha: HEAD, ref: 'pip-two/2' } })]
+    f.github.repo.comments.set(4, [comment('Pip Two, 14:20, to **Juno**: READ-OK f6edb44')])
+    await f.merger.tick()
+    expect(f.merges()).toEqual([])
+  })
+
   it('reads the team only when a pull request is open', async () => {
     const f = setup()
     f.github.repo.pulls = [pull({ draft: true })]

@@ -13,7 +13,7 @@ import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
-import { authorOf, verdicts, type LedProject } from './githubMerge.js'
+import { authorOf, sameKey, verdicts, type LedProject } from './githubMerge.js'
 
 type Json = Record<string, unknown>
 
@@ -277,8 +277,10 @@ export class GitHubAssign {
       // measured from its ask for this head; one that never gave one, from its last ask.
       const lastAsk = (name: string, thisHead: boolean) =>
         Math.max(0, ...[...asked.get(name) ?? []].filter(([sha]) => !thisHead || onHead(sha)).map(([, at]) => at))
-      const ok = [...readers].filter(([reader, r]) => reader !== author && r.verdict === 'READ-OK' && onHead(r.sha)).map(([reader]) => reader)
-      const stale = [...readers].filter(([reader, r]) => reader !== author && !onHead(r.sha))
+      // Its author's own verdicts count for nothing, however its name is written (sameKey).
+      const own = (name: string) => sameKey(name) === sameKey(author)
+      const ok = [...readers].filter(([reader, r]) => !own(reader) && r.verdict === 'READ-OK' && onHead(r.sha)).map(([reader]) => reader)
+      const stale = [...readers].filter(([reader, r]) => !own(reader) && !onHead(r.sha))
       const waiting = [...asked.keys()].filter(name => !readers.has(name) && now - lastAsk(name, false) < READ_WAIT_MS)
       for (const [reader, r] of stale) {
         if (lastAsk(reader, true)) continue
@@ -293,12 +295,12 @@ export class GitHubAssign {
         // Juno, its PM, read every pull request of Pip's).
         const builder = readerFor(read, author, skip)
         const pm = project.pm.toLowerCase()
-        const reader = builder ?? (pm !== author && !skip.has(pm) ? { id: pm, name: project.pm } : null)
+        const reader = builder ?? (!own(pm) && !skip.has(pm) ? { id: pm, name: project.pm } : null)
         if (!reader) {
           // Nobody new can read it: the reader asked longest ago, with no verdict on this head, is asked again, at most twice
           // for a head and two hours apart. One stopped when it was asked never heard it: GitHub news reads what is said from
           // when its agent runs again (the swarm-sandbox, 2026-11-10: Juno, its PM and only reader, was asked while stopped).
-          const again = [...asked.keys()].filter(name => name !== author && (onThisHead.get(name) ?? 0) < READ_ASKS
+          const again = [...asked.keys()].filter(name => !own(name) && (onThisHead.get(name) ?? 0) < READ_ASKS
             && !(readers.has(name) && onHead(readers.get(name)!.sha)) && now - lastAsk(name, false) >= READ_WAIT_MS)
             .sort((a, b) => lastAsk(a, false) - lastAsk(b, false))[0]
           if (again) await this.ask(repo, number, head, written.get(again) ?? again, 'please read this pull request', onThisHead.get(again) ?? 0)

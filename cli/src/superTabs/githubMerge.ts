@@ -78,6 +78,11 @@ export function verdicts(comments: Json[], body: string): { readers: Map<string,
   return { readers: new Map([...readers].map(([k, v]) => [k, { verdict: v.verdict, sha: v.sha, name: v.name }])), twoReads }
 }
 
+/** One name however it is written: as an agent signs it ("Pip Two"), as its builder label has it (`pip-two`), or cased
+ *  otherwise. Without it, "pip two" and "pip-two" were two people, so an agent with a two-word name read its own pull request
+ *  and the merger merged it (found by the other session's Q3 tester, 2026-11-09; #3665 reads names more fully). */
+export const sameKey = (name: string): string => name.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
+
 /** The pull request's author by name: its builder label, else its branch's first part (`pip/12`). */
 export function authorOf(pull: Json): string | null {
   const label = (Array.isArray(pull.labels) ? pull.labels.map(object) : []).map(l => String(l.name ?? '')).find(n => n.startsWith('builder:'))
@@ -177,7 +182,7 @@ export class GitHubMerge {
       const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 3)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''))
       if ([...readers.values()].some(r => r.verdict === 'HOLD')) continue
-      const reads = [...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && reader !== author)
+      const reads = [...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && sameKey(reader) !== sameKey(author))
       if (reads.length < (twoReads ? 2 : 1)) continue
       const runs = object(await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
       const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))
