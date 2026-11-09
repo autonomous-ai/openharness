@@ -4711,8 +4711,9 @@ class SuperTabController extends ChangeNotifier {
 
   /// Whether [answer] says a row changed in [id] since its rows were last
   /// refreshed, by an edit or a delete: a poll then reads the page shown
-  /// again (backend messageEdits.ts). The first answer only records where it
-  /// stands.
+  /// again (backend messageEdits.ts). A reaction another client or the host
+  /// wrote moves it too, until the backend stops writing them: one read that
+  /// shows nothing new. The first answer only records where it stands.
   bool _rowsChanged(String id, Map<String, dynamic> answer) {
     final seq = answer['reactionSeq'];
     final known = _reactionSeq[id];

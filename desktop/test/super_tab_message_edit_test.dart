@@ -501,6 +501,9 @@ void main() {
       paths.clear();
       async.elapse(const Duration(seconds: 3));
       expect(paths.where((p) => p.contains('/changes')), isEmpty);
+      // The counter's move sent the poll to read the page shown again: that
+      // is how the edit arrived.
+      expect(paths.where((p) => p.contains('messages?before=')), hasLength(1));
       expect(c.messages('lead').single.text, 'Shipped, and merged');
       // Nothing moved since: the next poll reads only what is new.
       paths.clear();

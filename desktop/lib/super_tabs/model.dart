@@ -564,9 +564,11 @@ class SuperTabConversation {
   final int lastPersonSequence;
 
   /// Counts changes to rows already sent here (backend messageEdits.ts), as
-  /// its messages pages also say: a move asks for the page shown again. It
-  /// began as the reaction counter and keeps that name on the wire. Absent, it
-  /// is 0, the pages' own value then.
+  /// its messages pages also say: a move asks for the page shown again. An
+  /// edit or a delete moves it; so does a reaction, which it began counting
+  /// and still does until the backend stops writing them, though Desktop draws
+  /// none (that read finds nothing new). Absent, it is 0, the pages' own value
+  /// then.
   final int reactionSeq;
 
   /// The person who asked for this task; null on a conversation that is no
@@ -1228,8 +1230,8 @@ class SuperTabSnapshot {
   /// Empty from a backend before it (task #3029).
   final List<SuperTabPromptWait> promptsWaiting;
 
-  /// Which of the reader's Activity rows are unread (replies to them, reactions to their messages), as a digest
-  /// that moves when one comes or is read; null from a backend before Activity (superTabs/activity.ts).
+  /// Which of the reader's Activity rows are unread (replies to them), as a digest that moves when one comes or is
+  /// read; null from a backend before Activity (superTabs/activity.ts).
   final String? activityDigest;
 
   /// Which reminders the reader has set and when each is due, as a digest that moves when one is set, replaced or
