@@ -208,27 +208,25 @@ export class AgentReplies {
     return [id, owed]
   }
 
-  /** A live turn ended, which the core names by its prompt. Resolves once the reply owed for it, if one is, had its first try (and,
-   *  when the server refused that for good, the line that tells its person so). */
+  /** A live turn ended, which the core names by its prompt and its number. Resolves once the reply owed for it, if one is, had its
+   *  first try (and, when the server refused that for good, the line that tells its person so). */
   async ended(event: TurnEnd): Promise<void> {
     if (this.stopped || !this.journal.replies) return
     if (this.expire()) this.commit()
-    // A turn nobody here asked, which its person typed in the terminal or was automatic, is no reason to read anything.
-    if (this.find(event).at < 0) return
-    if (event.aborted) {
-      const [id, owed] = this.take(event)!
-      return this.log(`No reply posted for delivery ${id} of agent ${owed.agentId}: its turn was interrupted.`)
-    }
-    let answer: string | null = null, failed: string | null = null
-    try { answer = await bounded(this.core.turns.answerOf(event.sessionId, event.prompt), READ_WAIT_MS) } catch (error) { failed = named(error) }
-    if (this.stopped) return
-    // Taken now, not before the read: an earlier hearing of this end may have taken it while this read was out. A turn that is over
-    // has no later end that would try again, so a failed read, or an answer that is none, costs the reply: said, and no more owed.
+    // Taken before its answer is read: a second hearing of this end finds nothing, and the ends of two messages of the same words
+    // each take their own, in the order they were heard, whichever read comes back first. A turn nobody here asked, which its person
+    // typed in the terminal or was automatic, is no reason to read anything. A turn that is over has no later end that would try
+    // again, so an answer that cannot be read, or is none, costs the reply: said, and no more owed.
     const taken = this.take(event)
     if (!taken) return
     const [id, owed] = taken
-    if (failed) return this.log(`Could not read the answer of the turn that ended for agent ${owed.agentId}: ${failed}.`)
+    if (event.aborted) return this.log(`No reply posted for delivery ${id} of agent ${owed.agentId}: its turn was interrupted.`)
+    let answer: string | null
+    try { answer = await bounded(this.core.turns.answerOf(event), READ_WAIT_MS) } catch (error) {
+      return this.log(`Could not read the answer of the turn that ended for agent ${owed.agentId}: ${named(error)}.`)
+    }
     if (!answer) return this.log(`No reply posted for delivery ${id} of agent ${owed.agentId}: its turn ended without an answer.`)
+    if (this.stopped) return this.log(`Dropped the reply to delivery ${id} of agent ${owed.agentId}: the host stopped.`)
     await this.attempt(id, owed, answer.length > REPLY_TEXT_MAX ? cut(answer, REPLY_TEXT_MAX - 1) : answer, 0)
   }
 

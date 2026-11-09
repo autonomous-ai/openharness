@@ -9,8 +9,8 @@
  * - `creation_status`: read the exact native receipt without exposing its launch request;
  * - `keep_lead_alive`, `close_member`: for the Super Tab service alone, reopen a stopped Swarm Lead and close a member
  *   whose session its backend ended, each only as core/api.ts allows;
- * - `turn_answer`: what the turn of a session that was asked a prompt (by its hash) answered, for the Super Tab service alone:
- *   it posts the answer of the turn that ended into its agent's person's chat;
+ * - `turn_answer`: what the turn of a session that ended answered, named as its end named it (its prompt's hash and its number),
+ *   for the Super Tab service alone: it posts the answer of the turn that ended into its agent's person's chat;
  * - `stop_turn`: stop an agent's turn;
  * - `windows`: a change notice for every window on this computer (`orchestrator_changed`);
  * - `daemon`: how an agent's shell reaches this daemon, for the prompts the experiment writes;
@@ -118,12 +118,12 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       return { activity: await core.agents.activity(ids) }
     }
     // The answer of the turn that just ended, which the Swarm host posts into its agent's person's chat (superTabs/agentReplies.ts): the
-    // turn its end named by its prompt's hash, as the core heard it said (core/turns/ends.ts).
+    // turn its end named by its prompt's hash and its number, as the core heard it said (core/turns/ends.ts).
     case 'turn_answer': {
       if (service !== 'superTabs') return { error: 'NOT_SUPER_TABS' }
-      const sessionId = text(payload.sessionId), prompt = text(payload.prompt)
-      if (!sessionId || sessionId.length > 256 || !/^[0-9a-f]{32}$/.test(prompt)) return { error: 'INVALID_REQUEST' }
-      return { answer: await core.turns.answerOf(sessionId, prompt) }
+      const sessionId = text(payload.sessionId), prompt = text(payload.prompt), { turnId } = payload
+      if (!sessionId || sessionId.length > 256 || !/^[0-9a-f]{32}$/.test(prompt) || !Number.isSafeInteger(turnId) || (turnId as number) < 1) return { error: 'INVALID_REQUEST' }
+      return { answer: await core.turns.answerOf({ sessionId, prompt, turnId: turnId as number }) }
     }
     case 'stopped':
       return { stopped: !!text(payload.agentId) && await core.agents.stopped?.(text(payload.agentId)) === true }

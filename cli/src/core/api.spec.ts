@@ -71,7 +71,7 @@ describe('the core API services stand on', () => {
     expect(DELIVERIES_OFF.cancelDelivery('d1')).toBe(false)
     expect(DELIVERIES_OFF.onDelivery(() => {})()).toBeUndefined()
     expect(DELIVERIES_OFF.onEnd(() => {})()).toBeUndefined()
-    expect(await DELIVERIES_OFF.answerOf({ agentId: 'a', sessionId: 'session', aborted: false, prompt: 'a'.repeat(32), turnId: 1 })).toBeNull()
+    expect(await DELIVERIES_OFF.answerOf({ sessionId: 'session', prompt: 'a'.repeat(32), turnId: 1 })).toBeNull()
     expect(await DELIVERIES_OFF.leaseDeliveries('test', {})).toBe(false)
   })
 

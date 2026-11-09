@@ -102,7 +102,7 @@ it('hears each turn end the core tells it, and asks the core for the answer of t
 
 it('has no answer to give while the core is away', async () => {
   const t = setup()
-  await expect(t.api().turns.answerOf({ agentId: 'one', sessionId: 's1', aborted: false, prompt: 'a'.repeat(32), turnId: 3 })).rejects.toThrow('Core disconnected')
+  await expect(t.api().turns.answerOf({ sessionId: 's1', prompt: 'a'.repeat(32), turnId: 3 })).rejects.toThrow('Core disconnected')
   t.process.stop()
 })
 

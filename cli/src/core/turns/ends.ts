@@ -6,7 +6,8 @@
  *
  * Every real end is told, a turn that ends just before a queued follow-up starts included: each message a person sends an agent is
  * its own turn, and the Swarm host answers each in its own order (superTabs/agentReplies.ts). An end names its turn by a hash of its
- * prompt, and what the turn said is kept here as it was said. The transcript cannot be asked for it: a follow-up that began at once
+ * prompt, which says which message it answers, and by a number, which tells it from another turn asked the same words; what the
+ * turn said is kept here as it was said. The transcript cannot be asked for it: a follow-up that began at once
  * has its prompt, and perhaps its first words, in the transcript before the end is heard, and then the last turn there is not the
  * one that ended.
  */
@@ -20,19 +21,24 @@ export const ANSWER_KEEP_MAX = 32_001
 /** How many ended turns of a session keep their answers: a host asks as it hears an end, so a few cover turns that end close
  *  together. And how many sessions are kept in all, ended turns and open ones, the least recent going first. */
 const TURNS_KEPT = 4
-const SESSIONS_KEPT = 64
+const SESSIONS_KEPT = 256
 
-/** Texts, and how long they are together: no more is added once the most kept is reached. */
+/** Texts, and how long they are together: no more is kept than [ANSWER_KEEP_MAX], the last text cut to what is left of it, so
+ *  that a text of megabytes is not held for the turn's length. */
 interface Texts { parts: string[]; size: number }
 const none = (): Texts => ({ parts: [], size: 0 })
 const add = (texts: Texts, text: string): void => {
-  if (texts.size >= ANSWER_KEEP_MAX) return
-  texts.parts.push(text)
-  texts.size += text.length
+  const room = ANSWER_KEEP_MAX - texts.size
+  if (room <= 0) return
+  const part = text.length > room ? text.slice(0, room) : text
+  texts.parts.push(part)
+  texts.size += part.length
 }
 
 interface OpenTurn {
   prompt: string
+  /** The number this turn is told by. */
+  turnId: number
   /** A turn the daemon picked up at attach, whose first part it never saw: what it sees of it is no answer. */
   partial: boolean
   /** What its agent has said since its last tool call, and what it said before them: the answer is the first, and the second
@@ -62,7 +68,8 @@ export function createTurnEnds(deps: TurnEndsDeps) {
   /** The turn running in each session. */
   const open = new Map<string, OpenTurn>()
   /** The answers of the turns that ended last in each session, the latest last. */
-  const done = new Map<string, Array<{ prompt: string; answer: string }>>()
+  const done = new Map<string, Array<{ prompt: string; turnId: number; answer: string }>>()
+  let turns = 0
   return {
     /** `CoreApi.turns.onEnd`. */
     onEnd(listener: (event: TurnEnd) => void): () => void {
@@ -72,12 +79,12 @@ export function createTurnEnds(deps: TurnEndsDeps) {
     /** A turn began in [sessionId]: live, or ([resumed]) one the daemon found open at attach, which a restart interrupted. */
     started(sessionId: string, userMessage: string, resumed: boolean): void {
       open.delete(sessionId)
-      open.set(sessionId, { prompt: promptHash(userMessage), partial: resumed, now: none(), before: none() })
+      open.set(sessionId, { prompt: promptHash(userMessage), turnId: ++turns, partial: resumed, now: none(), before: none() })
       trim(open)
     },
     /** Its agent said [content] in the turn running in [sessionId]. */
     said(sessionId: string, content: string): void {
-      const turn = open.get(sessionId), text = content.trim()
+      const turn = open.get(sessionId), text = content.slice(0, ANSWER_KEEP_MAX).trim()
       if (turn && text) add(turn.now, text)
     },
     /** Its agent called a tool of its own: what it said until now was narration. */
@@ -90,19 +97,19 @@ export function createTurnEnds(deps: TurnEndsDeps) {
     },
     /** A live turn ended. A listener that throws costs that listener this end, never another listener or the funnel. An end whose
      *  start was never seen is told to nobody: nothing can say which turn it was. */
-    ended(event: Omit<TurnEnd, 'prompt'>): void {
+    ended(event: Omit<TurnEnd, 'prompt' | 'turnId'>): void {
       const turn = open.get(event.sessionId)
       if (!turn) return
       open.delete(event.sessionId)
       if (!turn.partial) {
         const kept = done.get(event.sessionId) ?? []
         done.delete(event.sessionId)
-        kept.push({ prompt: turn.prompt, answer: (turn.now.parts.length ? turn.now : turn.before).parts.join('\n\n').slice(0, ANSWER_KEEP_MAX) })
+        kept.push({ prompt: turn.prompt, turnId: turn.turnId, answer: (turn.now.parts.length ? turn.now : turn.before).parts.join('\n\n').slice(0, ANSWER_KEEP_MAX) })
         if (kept.length > TURNS_KEPT) kept.shift()
         done.set(event.sessionId, kept)
         trim(done)
       }
-      const told: TurnEnd = { ...event, prompt: turn.prompt }
+      const told: TurnEnd = { ...event, prompt: turn.prompt, turnId: turn.turnId }
       for (const listener of listeners) {
         try { listener(told) } catch (error) {
           log(`[turns] a turn-end listener failed on ${event.agentId.slice(0, 40)} · ${error instanceof Error ? error.message : String(error)}`)
@@ -110,13 +117,13 @@ export function createTurnEnds(deps: TurnEndsDeps) {
       }
       for (const service of deps.hearers) deps.tell(service, told)
     },
-    /** `CoreApi.turns.answerOf`: what the turn of [sessionId] that was asked [prompt] said last, as the core heard it; else, for
-     *  a turn it did not see from its start or heard no words of, the session's last turn in its transcript if that is the one. */
-    async answerOf(sessionId: string, prompt: string): Promise<string | null> {
-      const kept = done.get(sessionId)?.findLast(turn => turn.prompt === prompt)
+    /** `CoreApi.turns.answerOf`: what the turn that ended [end] said, as the core heard it; else, for a turn it did not see from
+     *  its start or heard no words of, the session's last turn in its transcript if that was asked [end]'s prompt. */
+    async answerOf(end: Pick<TurnEnd, 'sessionId' | 'prompt' | 'turnId'>): Promise<string | null> {
+      const kept = done.get(end.sessionId)?.find(turn => turn.turnId === end.turnId && turn.prompt === end.prompt)
       if (kept?.answer) return kept.answer
-      const last = await deps.lastTurn(sessionId)
-      return (last && promptHash(last.userMessage) === prompt ? last.assistantText.trim().slice(0, ANSWER_KEEP_MAX) : '') || null
+      const last = await deps.lastTurn(end.sessionId)
+      return (last && promptHash(last.userMessage) === end.prompt ? last.assistantText.trim().slice(0, ANSWER_KEEP_MAX) : '') || null
     },
   }
 }

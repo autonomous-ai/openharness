@@ -247,10 +247,10 @@ export interface CoreApi {
      *  transcript at attach. Each says which turn it was, by a hash of its prompt, and the Swarm's host asks for that turn's
      *  answer then and posts it where its person asked (superTabs/agentReplies.ts). Returns how to stop hearing. */
     onEnd(listener: (event: TurnEnd) => void): () => void
-    /** What the turn of [sessionId] that was asked [prompt] (`TurnEnd.prompt`) answered, as it was said, or null when it said
-     *  nothing or is not one the core knows. Its own words as it went, so a follow-up that began at once does not change them,
-     *  and the transcript's last turn only for a turn the core did not see from its start (core/turns/ends.ts). */
-    answerOf(sessionId: string, prompt: string): Promise<string | null>
+    /** What the turn that ended [end] answered, as it was said, or null when it said nothing or is not one the core knows. Its own
+     *  words as it went, so a follow-up that began at once does not change them, and the transcript's last turn only for a turn the
+     *  core did not see from its start (core/turns/ends.ts). */
+    answerOf(end: Pick<TurnEnd, 'sessionId' | 'prompt' | 'turnId'>): Promise<string | null>
     /** Replace a service's short-lived permission to write queued typed deliveries.
      * IDs use `team:service:<service>:`; expired or absent permission means wait.
      * This guards the final terminal write even when its authorizing service stops. */
@@ -586,8 +586,10 @@ export interface DeliveryOptions { answersQuestion?: true; writtenAt?: number }
 export type TurnDelivery = SessionInputDelivery
 
 /** A live turn that ended (`turns.onEnd`): the agent it ran in, its engine session, whether it was cut short (an interrupt), and
- *  its prompt as a hash (lib/promptIdentity.ts): which turn it was, whatever any transcript shows by the time it is asked. */
-export interface TurnEnd { agentId: string; sessionId: string; aborted: boolean; prompt: string }
+ *  which turn it was, whatever any transcript shows by the time it is asked: its prompt as a hash (lib/promptIdentity.ts), which
+ *  says which message it answers, and its number among the turns this core has told, which tells it from another turn asked the same
+ *  words. */
+export interface TurnEnd { agentId: string; sessionId: string; aborted: boolean; prompt: string; turnId: number }
 
 /** The delivery and turn-end members of a core that delivers nothing for this service: nothing is written, nothing is
  *  taken back, and nothing is heard. */

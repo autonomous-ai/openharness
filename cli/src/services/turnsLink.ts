@@ -11,8 +11,8 @@
  *
  * The core also tells a service that asked for them (`TURN_END_HEARERS`) each live turn's end (`service_event` kind
  * `turn_end`), which it hands to whoever listens here (`turns.onEnd`). An end the link misses is gone: it costs that turn
- * what its listener would have done at the end, and the core never waits for it. An end names its turn by a hash of its prompt,
- * and what that turn answered is asked of the core (`turns.answerOf`).
+ * what its listener would have done at the end, and the core never waits for it. An end names its turn by a hash of its prompt and
+ * a number, and what that turn answered is asked of the core (`turns.answerOf`).
  */
 import type { CoreApi, TurnDelivery, TurnEnd } from '../core/api.js'
 
@@ -33,12 +33,12 @@ export function deliveryIn(payload: Payload): TurnDelivery | null {
   }
 }
 
-/** A turn's end as the core sent it, or null when it is not one: it says which turn it was, by a prompt's hash. */
+/** A turn's end as the core sent it, or null when it is not one: it says which turn it was, by a prompt's hash and a number. */
 export function endIn(payload: Payload): TurnEnd | null {
   const event = payload.kind === 'turn_end' ? payload.event as Payload | undefined : undefined
   if (!event || typeof event.agentId !== 'string' || typeof event.sessionId !== 'string' || typeof event.aborted !== 'boolean'
-    || typeof event.prompt !== 'string' || !/^[0-9a-f]{32}$/.test(event.prompt)) return null
-  return { agentId: event.agentId, sessionId: event.sessionId, aborted: event.aborted, prompt: event.prompt }
+    || typeof event.prompt !== 'string' || !/^[0-9a-f]{32}$/.test(event.prompt) || !Number.isSafeInteger(event.turnId) || (event.turnId as number) < 1) return null
+  return { agentId: event.agentId, sessionId: event.sessionId, aborted: event.aborted, prompt: event.prompt, turnId: event.turnId as number }
 }
 
 /** The core could not give the answer of a turn, named by its own code (the error it answered, or INVALID_ANSWER): read as no
@@ -79,8 +79,8 @@ export function turnsLink(query: (query: string, payload: Payload) => Promise<Pa
       endListeners.add(listener)
       return () => { endListeners.delete(listener) }
     },
-    answerOf: async (sessionId, prompt) => {
-      const answer = await query('turn_answer', { sessionId, prompt })
+    answerOf: async ({ sessionId, prompt, turnId }) => {
+      const answer = await query('turn_answer', { sessionId, prompt, turnId })
       if (typeof answer.error === 'string') throw new AnswerFailure(answer.error)
       if (answer.answer === null || typeof answer.answer === 'string') return answer.answer
       throw new AnswerFailure('INVALID_ANSWER')
