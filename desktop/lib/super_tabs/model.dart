@@ -1,9 +1,27 @@
+import 'dart:convert';
+
+import 'package:cryptography/dart.dart' show DartSha256;
+
 import 'identity.dart' show superTabPersonName;
 import 'live_card_model.dart';
 import 'profile_model.dart';
 import 'pulse.dart';
 
 export 'profile_model.dart';
+
+/// The engines a Swarm agent runs: Claude Code and Codex, and no other (backend superTabs/commands.ts `SWARM_ENGINE`).
+const kSwarmEngines = {'claude', 'codex'};
+
+/// The id the backend gives what [parts] name (superTabs/model.ts `stableId`): the first 24 hex digits of the SHA-256 of them
+/// as JSON. An agent is `[machineId, harnessId]`. (A message a person sends is the same over `[tab, 'person:<account>',
+/// receipt]`, which `superTabMessageId` keeps in its own text: the phone carries a copy of it, and its parity test compares
+/// the two.)
+String stableId(List<String> parts) => const DartSha256()
+    .hashSync(utf8.encode(jsonEncode(parts)))
+    .bytes
+    .map((b) => b.toRadixString(16).padLeft(2, '0'))
+    .join()
+    .substring(0, 24);
 
 /// Backend records are independent of the desktop's visible panes and tab layout.
 Map<String, dynamic> superTabMap(Object? value) => value is Map

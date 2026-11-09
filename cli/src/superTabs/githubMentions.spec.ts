@@ -85,6 +85,14 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
       url: 'https://github.com/acme/app/pull/4#issuecomment-2', login: 'deehw', association: 'MEMBER', text: 'Juno, 12:00, to **Pip**: READ-OK f6edb44' })
   })
 
+  it('relays, on its first read, an ask made in the minutes before it, as its agent starts, and nothing older', async () => {
+    const f = setup()
+    f.github.comments.push(comment(1, -20 * 60, 'Harness, 11:40, to **Pip**: please read this pull request, an older ask.'),
+      comment(2, -2 * 60, 'Harness, 11:58, to **Pip**: please read this pull request, and start your comment with READ-OK f6edb44 or HOLD f6edb44.'))
+    await f.mentions.tick()
+    expect(f.relayed().map(command => command.text)).toEqual(['Harness, 11:58, to **Pip**: please read this pull request, and start your comment with READ-OK f6edb44 or HOLD f6edb44.'])
+  })
+
   it('relays nothing a stranger wrote, nor the agent\'s own signed post, nor a word that only looks like its name', async () => {
     const f = setup()
     await f.mentions.tick()
@@ -202,7 +210,8 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
     expect(agent).toMatchObject({ agentId: 'pip', chat: 'chat-pip' })
     expect(operationId).toMatch(/^works-on-[0-9a-f]{40}$/)
     expect(text).toContain('which area of acme/app you should focus on (its areas so far: api, mobile; or anything)')
-    expect(text).toContain('make "Works on: <their answer>" the first line of agents/Pip.md in acme/app')
+    expect(text).toContain('make "Works on: <their answer>" the first line of agents/Pip.md in acme/app, in a pull request of its own on a branch '
+      + 'pip/works-on, labelled builder:pip')
     // A second task asks nothing more, after a restart too.
     f.clock.now += 20_000
     f.github.issues.push(issue(14, 30, ['builder:pip']))
