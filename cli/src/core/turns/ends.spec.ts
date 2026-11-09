@@ -167,6 +167,28 @@ describe('the answer of a turn that ended, kept as it was said', () => {
     expect(await answer(turn('Ship it.', ['Let me look.', null, 'Then this.', null]))).toBe('Let me look.\n\nThen this.')
   })
 
+  // Codex says what it is about to do in messages of their own (its commentary, 306 to 73 final answers on real rollouts) and its engine
+  // reader leaves them out of a turn's text (engines/codex/normalizer.ts lastCodexTurnText): one that follows the last tool call, or
+  // comes with none, is no part of the answer either.
+  it('leaves out what its agent says on the way, its commentary, whether or not a tool call follows it', async () => {
+    const { ends, lastTurn, heard, answer } = setup({ userMessage: 'Ship it.', assistantText: 'From the transcript.' })
+    ends.started('session', 'Ship it.', false)
+    ends.said('session', 'I will look at the build.', true)
+    ends.worked('session')
+    ends.said('session', 'The build is fine; now the summary.', true)
+    ends.said('session', 'Shipped.', false)
+    ends.said('session', 'One more thing on the way.', true)
+    ends.ended(told)
+    expect(await answer(heard.at(-1)!)).toBe('Shipped.')
+    expect(lastTurn).not.toHaveBeenCalled()
+    // A turn that said nothing else has no answer of its own: the transcript's, if that is the turn asked.
+    ends.started('session', 'Ship it.', false)
+    ends.said('session', 'Still on the way.', true)
+    ends.ended(told)
+    expect(await answer(heard.at(-1)!)).toBe('From the transcript.')
+    expect(lastTurn).toHaveBeenCalledOnce()
+  })
+
   it('keeps no more of an answer than one message takes and a character over, so its reader can tell it was cut', async () => {
     const { turn, answer } = setup()
     expect(await answer(turn('Ship it.', ['a'.repeat(ANSWER_KEEP_MAX), 'b'.repeat(500)]))).toBe('a'.repeat(ANSWER_KEEP_MAX))

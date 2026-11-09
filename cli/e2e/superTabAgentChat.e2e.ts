@@ -240,6 +240,17 @@ it.each(['claude', 'codex'] as const)('answers two messages of the same words ea
   expect(posts).toHaveLength(2)
 }, 300_000)
 
+// Codex says what it is about to do in messages of their own, its commentary, ahead of its answer; its transcript reader leaves them out
+// of what a turn said, and so does the reply: the answer alone.
+it('posts the answer of a Codex turn without what it said on the way', async () => {
+  const { posts, ask } = await begin('codex')
+  const said = '!commentary look at the build'
+  ask('one', said)
+  await until('the answer', () => posts.length >= 1 || null, 90_000, 100)
+  expect(posts.map(post => post.command.text)).toEqual([`answer 1: ${said}`])
+  expect(posts).toHaveLength(1)
+}, 300_000)
+
 // The core restarts in the middle of the turn: it picks the turn up at attach and never saw its first part, so what the turn answered is
 // read from the transcript when it ends, and still posted.
 it.each(['claude', 'codex'] as const)('answers the message of a turn the core was restarted in the middle of, %s, when that turn ends', async engine => {

@@ -12,7 +12,8 @@
 //     normalizers, turn lifecycle, chips and attach read are exercised for real.
 //
 // A prompt can carry directives that script the turn: `!slow <ms>` holds the answer back,
-// `!tool <command>` runs a tool call first, `!grow <MiB>` appends that much compaction history
+// `!tool <command>` runs a tool call first, `!commentary <text>` (Codex) says what it is about to do in a message of its own first,
+// `!grow <MiB>` appends that much compaction history
 // before answering (the transcripts that crashed the daemon on 2026-10-03), `!hold` leaves the turn
 // open until the next prompt, `!holdtool <command>` leaves it open with that tool still running (an
 // interrupt then writes the tool's aborted output before the turn's end, as the CLIs do), `!ask` asks the person which drink they would like in the engine's own
@@ -1313,6 +1314,11 @@ export async function run(engine, config = {}, { native = false } = {}) {
         codex('response_item', { type: 'function_call', call_id: id, name: 'exec_command', arguments: JSON.stringify({ cmd: directive[2] }) })
         codex('response_item', { type: 'function_call_output', call_id: id, output: `ran ${directive[2]}` })
       }
+    }
+    // Codex says what it is about to do in a message of its own, its commentary, ahead of the answer, and its transcript reader leaves
+    // such a message out of what the turn said.
+    if (engine === 'codex' && directive?.[1] === 'commentary') {
+      codex('event_msg', { type: 'item_completed', turn_id: open, item: { type: 'AgentMessage', content: [{ type: 'Text', text: `About to answer: ${directive[2]}` }], phase: 'commentary' } })
     }
     if (engine === 'claude' && directive?.[1] === 'bgagent') {
       // A background sub-agent that finishes while its parent still works, as Claude Code 2.1.287 records

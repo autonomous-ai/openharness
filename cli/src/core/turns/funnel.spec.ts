@@ -7,7 +7,7 @@ import { createShortTurnGuard } from './shortTurnGuard.js'
 
 type Event = Parameters<ReturnType<typeof funnelFor>>[1][number]
 const started = (userMessage = 'go'): Event => ({ type: 'turn_started', payload: { userMessage } }) as Event
-const text = (value = 'working on it'): Event => ({ type: 'text_delta', payload: { content: value } })
+const text = (value = 'working on it', commentary = false): Event => ({ type: 'text_delta', payload: { content: value, ...(commentary ? { commentary: true as const } : {}) } })
 const ended = (aborted = false): Event => ({ type: 'turn_ended', payload: { aborted } }) as Event
 const tool = (parentToolUseId?: string): Event => ({ type: 'tool_start', payload: { id: 't1', tool: 'Bash', input: {}, ...(parentToolUseId ? { parentToolUseId } : {}) } })
 /** What the turn-end collaborator is told, in the order it is told it. */
@@ -154,15 +154,16 @@ describe('the event funnel', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const ends = fakeEnds()
     const { funnel } = setup('claude', { ends })
-    funnel('s1', [started('Ship it.'), text('Let me look.'), tool(), tool('sub-agent-call'), text('Shipped.'), ended()])
+    // What Codex says on the way is told as commentary, which is no part of an answer.
+    funnel('s1', [started('Ship it.'), text('Let me look.'), tool(), tool('sub-agent-call'), text('On the way.', true), text('Shipped.'), ended()])
     expect(ends.started.mock.calls).toEqual([['s1', 'Ship it.', false]])
-    expect(ends.said.mock.calls).toEqual([['s1', 'Let me look.'], ['s1', 'Shipped.']])
+    expect(ends.said.mock.calls).toEqual([['s1', 'Let me look.', false], ['s1', 'On the way.', true], ['s1', 'Shipped.', false]])
     expect(ends.worked.mock.calls).toEqual([['s1']])
     // A turn picked up at attach is told as one whose first part was not seen; nothing else of a re-read is told at all.
     funnel('s1', [started('Picked up.'), text('Said before the restart.'), tool(), ended()], { resumed: true })
     funnel('s1', [started('History.'), text('Old.'), tool(), ended()], { replay: true })
     expect(ends.started.mock.calls).toEqual([['s1', 'Ship it.', false], ['s1', 'Picked up.', true]])
-    expect(ends.said).toHaveBeenCalledTimes(2)
+    expect(ends.said).toHaveBeenCalledTimes(3)
     expect(ends.worked).toHaveBeenCalledTimes(1)
     expect(ends.ended).toHaveBeenCalledTimes(1)
   })
