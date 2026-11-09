@@ -165,6 +165,18 @@ describe('a reply owed to a person in their agent\'s own chat', () => {
     expect(t.lines()).toEqual(['No reply posted for delivery d1 of agent agent: its turn was interrupted.'])
   })
 
+  it('answers the same words sent again after an interrupted turn under the new message: the stopped one is owed nothing', async () => {
+    const t = setup()
+    t.owe('d1', 'Same words.')
+    await t.endOf('Same words.', { aborted: true, turnId: 1 })
+    t.wait(10)
+    t.owe('d2', 'Same words.')
+    await t.endOf('Same words.', { turnId: 2 })
+    expect(t.posts().map(([, , body]) => { const b = body as { operationId: string; command: { answers: string } }; return [b.operationId, b.command.answers] })).toEqual([['reply-d2', 'm-d2']])
+    expect(t.lines()).toEqual(['No reply posted for delivery d1 of agent agent: its turn was interrupted.'])
+    expect(t.journal.replies).toBeUndefined()
+  })
+
   it('posts nothing when the host stops while the answer is being read, saying the reply is dropped: its turn is over', async () => {
     const t = setup()
     t.owe()
