@@ -1,5 +1,8 @@
 # Releases scheduled by the Swarm, tasks marked Shipped — Implementation Plan
 
+> **Superseded 2026-11-09:** the release window it schedules inside is removed (anh Dee), and the v3 Swarm's server-opened release
+> steps no longer run (#3603). Kept as history; the code goes with the v1-v3 removal.
+
 > **For agentic workers:** Follow the project's Engineer workflow: this plan is the pull request's first commit; implement
 > task by task, each failing test committed before the code that passes it; one review on the pull request. No Execution
 > Handoff.

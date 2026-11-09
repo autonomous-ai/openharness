@@ -56,10 +56,6 @@ on:
         description: 'Manifest to write. Leave as-is for a real release; metadata-test.json for a dry run.'
         required: false
         default: harness/cli/metadata.json
-      urgent_reason:
-        description: 'A P0 only: why this real release runs outside the release window (recorded in the run summary).'
-        required: false
-        default: ''
       promote_pty:
         description: 'Also point the PRODUCTION Windows terminal-host manifest at this version, after the staging read-back verifies it. The staging E2E (docs/testing/windows-cli-e2e.md) is still the gate before using it.'
         type: boolean
@@ -100,28 +96,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 1
-
-      # A tag pushed by hand skips the release scripts, so the window is checked here too
-      # (scripts/release-window.py). An emergency release carries `Emergency: <reason>` (or the scripts' `Release-Urgent: <reason>`) in its annotated tag.
-      - name: Release window
-        # A promotion publishes no new version: it points the Windows terminal-host manifest at bytes a release
-        # already published and verified. The window governs what lands on the fleet as a new build, so it does not
-        # apply here.
-        if: ${{ !inputs.promote_pty && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.metadata_path == '' || inputs.metadata_path == 'harness/cli/metadata.json'))) }}
-        env:
-          REF_NAME: ${{ github.ref_name }}
-          EVENT_NAME: ${{ github.event_name }}
-          URGENT_REASON: ${{ inputs.urgent_reason }}
-        run: |
-          set -euo pipefail
-          if [ "$EVENT_NAME" = push ]; then
-            git fetch --quiet --force --depth=1 origin tag "$REF_NAME"
-            python3 scripts/release-window.py --kind cli --from-tag "$REF_NAME" --exclude-tag "$REF_NAME"
-          elif [ -n "$URGENT_REASON" ]; then
-            python3 scripts/release-window.py --kind cli --urgent "$URGENT_REASON"
-          else
-            python3 scripts/release-window.py --kind cli
-          fi
 
       - id: resolve
         # Through env, never `${{ }}` inline in run:. Git permits quotes, backticks and $() in a ref
@@ -582,7 +556,7 @@ jobs:
           # 2026-09-21). So fall back to the same commit list the script would have generated —
           # everything since the previous _cli tag — and warn, rather than leave the release half done.
           if [ "$(git cat-file -t "$REF_NAME")" = tag ]; then
-            git tag -l --format='%(contents)' "$REF_NAME" | { grep -v '^Release-Urgent: ' || true; } > RELEASE_NOTES.md
+            git tag -l --format='%(contents)' "$REF_NAME" > RELEASE_NOTES.md
           else
             : > RELEASE_NOTES.md
           fi

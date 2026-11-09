@@ -42,7 +42,7 @@ describe('componentsOf', () => {
 
   it('maps tests, docs and other folders to none: they ship at their merge', () => {
     expect(componentsOf(['backend/src/a.test.ts', 'backend/integration/x.test.ts', 'desktop/test/a_test.dart', 'cli/test/a.spec.ts',
-      'backend/README.md', 'docs/plans/x.md', '.github/workflows/ci.yml', 'scripts/release-window.py'])).toEqual([])
+      'backend/README.md', 'docs/plans/x.md', '.github/workflows/ci.yml', 'scripts/ci-plan.py'])).toEqual([])
   })
 
   it('knows each component\'s release tag and workflow', () => {
