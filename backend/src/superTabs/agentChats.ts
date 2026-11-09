@@ -7,12 +7,13 @@ import { isBuddy } from './buddies.js'
 import { stableId, type SuperTabState } from './model.js'
 import { isAgentChat } from './projects.js'
 
-/** Gives each agent that keeps no chat id the 1:1 chat it is already in, else a new one with its person. [state] holds every
- *  conversation these agents are in, dormant ones too. An agent whose person left the Swarm gets none. */
-export function giveAgentsChats(state: SuperTabState, now: number): void {
+/** Gives each agent of [state] that keeps no chat id the 1:1 chat it is already in, else a new one with its person. [all]
+ *  holds every conversation these agents are in, dormant ones too; [state] gets only the new chats, so what else reads it
+ *  this pass sees what it loaded. An agent whose person left the Swarm gets none. */
+export function giveAgentsChats(state: SuperTabState, now: number, all: SuperTabState = state): void {
   for (const target of state.agents) {
     if (target.chatId || isBuddy(target)) continue
-    const own = state.conversations.find(c => isAgentChat(c) && c.agentIds.includes(target.id))
+    const own = all.conversations.find(c => isAgentChat(c) && c.agentIds.includes(target.id))
     if (own) { target.chatId = own.id; continue }
     const owner = state.people.find(p => p.id === target.contributorId)
     if (!owner) continue

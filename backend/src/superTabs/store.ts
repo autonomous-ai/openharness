@@ -5667,11 +5667,12 @@ export class SuperTabStore {
       // A task its sweep may lose says Stuck in its project chat's thread (taskLine.ts endedReply, task #2693).
       const chats = taskLineChats(loaded.state)
       if (chats.length) loaded = await this.ensure(tx, loaded, { groupIds: [...loaded.state.conversations.map(c => c.id), ...chats] })
-      // Every agent's 1:1 chat with its person (agentChats.ts): its conversations, dormant ones too, for an agent that keeps none.
+      // Every agent's 1:1 chat with its person (agentChats.ts), looked for among its conversations, dormant ones too, for an
+      // agent that keeps none; the checks below read only what they loaded.
       const chatless = chatlessAgents(loaded.state)
-      if (chatless.length) loaded = await this.ensure(tx, loaded, { agentIds: chatless })
+      const all = chatless.length ? (await this.ensure(tx, loaded, { agentIds: chatless })).state : loaded.state
       const state = cloneData(loaded.state), now = this.now()
-      giveAgentsChats(state, now)
+      giveAgentsChats(state, now, all)
       const rulesFor = await this.projectDispatch(tx, state)
       // A Linux or Windows test step that waited for a machine of its OS opens once one is there (osSteps.ts, tasks #4278, #4410).
       const written = [...sweepForLead(state, now, rulesFor), ...advanceProposalCards(state, now), ...openWaitingSteps(state, now)]
