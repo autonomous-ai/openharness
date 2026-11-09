@@ -600,7 +600,7 @@ Top to bottom:
  #  lampos                    a project's channel; bold: something new
  Your Machines         ›     quiet heading, folded; each row a computer of this account, `offline` at its right when it is
                               (a click opens Manage's Machines)
- Top Teams             ›     quiet heading, folded, only once someone has points
+ Top Teams             ›     quiet heading, folded, only once someone has points (a board of zeros shows nothing)
  D  dee                 120   the board's top 8 by points; a tap opens it
  ⚙  Manage                    at the foot
 ```
