@@ -1,5 +1,5 @@
-// A contributed Windows machine's swarm checkout on any OS: node:path is win32's, as it is there. The Lead and the
-// backend build the requested folder as `${pool.cwd}/${projectId}` (routeCommand.ts, backend machines.ts), so it
+// A contributed Windows machine's swarm checkout on any OS: node:path is win32's, as it is there. The backend
+// builds the requested folder as `${pool.cwd}/${projectId}` (backend machines.ts), so it
 // reaches this machine as C:\…\swarm-projects\TAB/PROJECT, the same folder as the C:\…\TAB\PROJECT it expects.
 import * as nodePath from 'node:path'
 import { describe, expect, it, vi } from 'vitest'

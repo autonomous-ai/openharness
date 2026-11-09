@@ -7,7 +7,7 @@ import { buddyOwnerFile, buddyOwnerOf } from '../lib/buddyGuard.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { env } from '../config/env.js'
 import { homedir, tmpdir } from 'node:os'
-import { BUDDY_CLAUDE_SIGNED_OUT, BUDDY_NOT_OWN_MACHINE, HEAVY_NOT_RECORDED, HEAVY_REFUSED, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent, TEAM_WRITTEN_CLAUDE_ONLY, TEAM_WRITTEN_WORKTREE_ONLY } from './start.js'
+import { BUDDY_CLAUDE_SIGNED_OUT, BUDDY_NOT_OWN_MACHINE, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent, TEAM_WRITTEN_CLAUDE_ONLY, TEAM_WRITTEN_WORKTREE_ONLY } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 import { readCapacityDisk } from './disk.js'
 import { SuperTabHostError } from './wire.js'
@@ -311,57 +311,15 @@ describe('Swarm permission mode', () => {
     expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
   })
 
-  // Scholes's goals, piece 5: a heavy start says so in its own field, which a server from before it refuses in its body check.
-  describe('a start that declares heavy work', () => {
-    const submitted = (f: ReturnType<typeof fixture>) => f.scoped.mock.calls.map(c => c[0].command as Record<string, any> | undefined)
-      .filter(c => c?.type === 'agent.start').map(c => c!.request as Record<string, unknown>)
-    const heavyStart = (f: ReturnType<typeof fixture>, answer: (request: Record<string, any>) => unknown) => {
-      const scoped = f.scoped.getMockImplementation()!
-      Object.assign(f.start, { poolGeneration: 'pool' })
-      f.scoped.mockImplementation(async payload => {
-        const command = payload.command as Record<string, any> | undefined
-        if (command?.type !== 'agent.start') return scoped(payload)
-        return (answer(command.request) ?? scoped(payload)) as Record<string, unknown>
-      })
-      return startAgent({ action: 'start', tabId: 'tab', operationId: 'op-heavy', request: { ...f.start.request, heavy: ['build'] } }, f.scoped, where, f.open, noPause)
-    }
-    it('sends the field to a server that takes it, once', async () => {
-      const f = fixture()
-      const result = await heavyStart(f, () => undefined)
-      expect(result).toMatchObject({ ok: true, queued: true, startId: 'start' })
-      expect(result).not.toHaveProperty('heavyWarning')
-      expect(submitted(f)).toEqual([expect.objectContaining({ heavy: ['build'] })])
-      expect(submitted(f)[0]).not.toHaveProperty('permissionMode')
-    })
-    it('sends the start once more without it when an older server refuses that field, and says routes will not count it', async () => {
-      const f = fixture()
-      const result = await heavyStart(f, request => request.heavy ? { error: 'VALIDATION_ERROR', detail: HEAVY_REFUSED } : undefined)
-      expect(result).toMatchObject({ ok: true, queued: true, startId: 'start', heavyWarning: HEAVY_NOT_RECORDED })
-      const sent = submitted(f)
-      expect(sent).toHaveLength(2)
-      expect(sent[1]).not.toHaveProperty('heavy')
-      expect(sent[1]).toEqual({ ...sent[0], heavy: undefined } as never)
-      expect(sent[1]).not.toHaveProperty('permissionMode')
-      expect(new Set(f.scoped.mock.calls.filter(c => (c[0].command as { type?: string } | undefined)?.type === 'agent.start').map(c => c[0].operationId))).toEqual(new Set(['op-heavy']))
-    })
-    it('never sends it again on a timeout or any other refusal, which may have started an agent', async () => {
-      for (const answer of [{ error: 'VALIDATION_ERROR', detail: 'command.request.name: Too big' }, { error: 'VALIDATION_ERROR', detail: 'command.request: Unrecognized key: "other"' },
-        { error: 'MACHINE_OFFLINE', detail: 'Wait for a fresh reading from the contributed machine.' }, { error: 'BACKEND_TIMEOUT', detail: 'timeout' }]) {
-        const f = fixture()
-        await expect(heavyStart(f, () => answer)).rejects.toThrow()
-        expect(submitted(f)).toHaveLength(1)
-      }
-      const f = fixture()
-      await expect(heavyStart(f, () => { throw new Error('socket closed') })).rejects.toThrow('socket closed')
-      expect(submitted(f)).toHaveLength(1)
-      // A start that declares no heavy work is never sent again for that refusal either.
-      const plain = fixture(), scoped = plain.scoped.getMockImplementation()!
-      Object.assign(plain.start, { poolGeneration: 'pool' })
-      plain.scoped.mockImplementation(async payload => (payload.command as { type?: string } | undefined)?.type === 'agent.start'
-        ? { error: 'VALIDATION_ERROR', detail: HEAVY_REFUSED } : scoped(payload))
-      await expect(startAgent({ action: 'start', tabId: 'tab', operationId: 'op', request: plain.start.request }, plain.scoped, where, plain.open, noPause)).rejects.toThrow()
-      expect(submitted(plain)).toHaveLength(1)
-    })
+  // The route that counted a start's heavy work is gone, so a server's refusal of that field is a refusal like any other: it may
+  // have started an agent, and the start is sent once.
+  it('sends a start once, whatever field the server refuses', async () => {
+    const f = fixture(), scoped = f.scoped.getMockImplementation()!
+    Object.assign(f.start, { poolGeneration: 'pool' })
+    f.scoped.mockImplementation(async payload => (payload.command as { type?: string } | undefined)?.type === 'agent.start'
+      ? { error: 'VALIDATION_ERROR', detail: 'command.request: Unrecognized key: "heavy"' } : scoped(payload))
+    await expect(startAgent({ action: 'start', tabId: 'tab', operationId: 'op', request: { ...f.start.request, heavy: ['build'] } }, f.scoped, where, f.open, noPause)).rejects.toThrow()
+    expect(f.scoped.mock.calls.filter(c => (c[0].command as { type?: string } | undefined)?.type === 'agent.start')).toHaveLength(1)
   })
 
   it('tells the Lead a contributed start is still being prepared on its machine, so it waits rather than starting another', async () => {
@@ -976,20 +934,6 @@ it.each([true, false])('reconciles a previously created but unavailable harness 
   expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
 })
 
-it('sends the routing decision at the command level, not inside the machine request', async () => {
-  const f = fixture()
-  await startAgent({ action: 'start', tabId: 'tab', operationId: 'op', request: { ...f.start.request, routeDecisionId: 'd1', overrideReason: 'Needs the Mac.' } }, f.scoped, where, f.open)
-  const sent = f.scoped.mock.calls.map(c => c[0].command as Record<string, any>).find(c => c?.type === 'agent.start')!
-  expect(sent).toMatchObject({ routeDecisionId: 'd1', overrideReason: 'Needs the Mac.' })
-  expect(sent.request).not.toHaveProperty('routeDecisionId')
-  expect(sent.request).not.toHaveProperty('overrideReason')
-  const plain = fixture()
-  await startAgent({ action: 'start', tabId: 'tab', operationId: 'op', request: plain.start.request }, plain.scoped, where, plain.open)
-  const bare = plain.scoped.mock.calls.map(c => c[0].command as Record<string, any>).find(c => c?.type === 'agent.start')!
-  expect(bare).not.toHaveProperty('routeDecisionId')
-  expect(bare).not.toHaveProperty('overrideReason')
-})
-
 it('applies a routed model and effort to the created agent through the ordinary runtime switch', async () => {
   const f = fixture(), request = f.request.getMockImplementation()!
   f.request.mockImplementation(async (type, payload) => type === 'agent_update'
@@ -1129,10 +1073,10 @@ it('retries UNSUPPORTED_CLI_VERSION like BUSY: a fresh Claude learns its version
 })
 
 // The routed switch never succeeds; the agent's frame (agents_list) says what it runs instead.
-async function failedSwitch(options: { routeDecisionId?: string; ran?: string | null; send?: 'fails'; listFails?: boolean; error?: string; engine?: string } = {}) {
+async function failedSwitch(options: { routeDecisionId?: string; ran?: string | null; listFails?: boolean; error?: string; engine?: string } = {}) {
   vi.useFakeTimers()
   try {
-    const f = fixture(), request = f.request.getMockImplementation()!, scoped = f.scoped.getMockImplementation()!
+    const f = fixture(), request = f.request.getMockImplementation()!
     f.request.mockImplementation(async (type, payload) => {
       if (type === 'agent_update') return { error: options.error ?? 'INVALID_RUNTIME_PROFILE' }
       if (type === 'agents_list') {
@@ -1141,10 +1085,6 @@ async function failedSwitch(options: { routeDecisionId?: string; ran?: string | 
           { id: 'native', engine: 'claude', selectedModel: options.ran === null ? null : `runtime-v1:native:claude:${options.ran ?? 'sonnet@auto'}` }] }
       }
       return request(type, payload)
-    })
-    f.scoped.mockImplementation(async payload => {
-      if ((payload.command as Record<string, unknown> | undefined)?.type === 'route.modelResult' && options.send === 'fails') throw new Error('backend down')
-      return scoped(payload)
     })
     Object.assign(f.start.request, { model: 'haiku', effort: 'auto' })
     if (options.engine) f.start.request.engine = options.engine
@@ -1156,46 +1096,34 @@ async function failedSwitch(options: { routeDecisionId?: string; ran?: string | 
     return { result: await run, sent, updates }
   } finally { vi.useRealTimers() }
 }
-it('corrects the decision log to the model the agent runs when the routed switch failed', async () => {
+// The routing decision log is gone with the route: a start that names a decision, or one that does not, writes nothing back.
+it('says the agent runs the engine\'s own model when the routed switch failed, and writes no decision log', async () => {
   const { result, sent } = await failedSwitch({ routeDecisionId: 'd1' })
   expect(result).toMatchObject({ ok: true, harnessId: 'native' })
   expect(result.modelWarning).toBe("Started with the engine's own model; switching to haiku auto failed (INVALID_RUNTIME_PROFILE).")
-  expect(sent).toEqual([expect.objectContaining({ action: 'command', operationId: 'model-result-start',
-    command: { type: 'route.modelResult', decisionId: 'd1', startId: 'start', model: 'sonnet', effort: 'auto' } })])
+  expect(sent).toEqual([])
 })
-it('sends no correction when the switch worked, or when the start was not routed', async () => {
-  const worked = fixture(), request = worked.request.getMockImplementation()!
-  worked.request.mockImplementation(async (type, payload) => type === 'agent_update'
-    ? { agent: { id: 'native', engine: 'claude', selectedModel: 'runtime-v1:native:claude:haiku@auto' } } : request(type, payload))
-  Object.assign(worked.start.request, { model: 'haiku', effort: 'auto' })
-  await startAgent({ action: 'start', tabId: 'tab', operationId: 'op', request: { ...worked.start.request, routeDecisionId: 'd1' } }, worked.scoped, where, worked.open)
-  expect(worked.scoped.mock.calls.some(c => (c[0].command as Record<string, unknown> | undefined)?.type === 'route.modelResult')).toBe(false)
-  expect((await failedSwitch()).sent).toEqual([])
-})
-it('keeps the start ok and says so when the log could not be corrected', async () => {
-  for (const options of [{ send: 'fails' as const }, { listFails: true }, { ran: null }]) {
-    const { result, sent } = await failedSwitch({ routeDecisionId: 'd1', ...options })
+it('says so too when the frame could not be read after the failed switch', async () => {
+  for (const options of [{ listFails: true }, { ran: null }]) {
+    const { result } = await failedSwitch(options)
     expect(result).toMatchObject({ ok: true, harnessId: 'native' })
-    expect(result.modelWarning).toBe("Started with the engine's own model; switching to haiku auto failed (INVALID_RUNTIME_PROFILE). The routing decision log could not be corrected to the model that ran.")
-    expect(sent).toHaveLength(options.send ? 1 : 0)
+    expect(result.modelWarning).toBe("Started with the engine's own model; switching to haiku auto failed (INVALID_RUNTIME_PROFILE).")
   }
 })
-it('also corrects the log when the switch ran out of its budget on a version the daemon never learned', async () => {
-  const { result, sent } = await failedSwitch({ routeDecisionId: 'd1', error: 'UNSUPPORTED_CLI_VERSION' })
+it('says so when the switch ran out of its budget on a version the daemon never learned', async () => {
+  const { result } = await failedSwitch({ error: 'UNSUPPORTED_CLI_VERSION' })
   expect(result.modelWarning).toMatch(/failed \(UNSUPPORTED_CLI_VERSION\)\.$/)
-  expect(sent).toHaveLength(1)
 })
 it('stops at the first UNSUPPORTED_CLI_VERSION of an engine other than Claude: waiting does not load its driver', async () => {
   const { result, updates } = await failedSwitch({ error: 'UNSUPPORTED_CLI_VERSION', engine: 'codex' })
   expect(updates).toBe(1)
   expect(result.modelWarning).toMatch(/failed \(UNSUPPORTED_CLI_VERSION\)/)
 })
-it('drops the warning and the correction when the frame shows the routed model after a failed reply', async () => {
-  const { result, sent, updates } = await failedSwitch({ routeDecisionId: 'd1', ran: 'haiku@auto', error: 'MODEL_UNAVAILABLE' })
+it('drops the warning when the frame shows the routed model after a failed reply', async () => {
+  const { result, updates } = await failedSwitch({ ran: 'haiku@auto', error: 'MODEL_UNAVAILABLE' })
   expect(updates).toBe(1)
   expect(result).toMatchObject({ ok: true, harnessId: 'native' })
   expect(result).not.toHaveProperty('modelWarning')
-  expect(sent).toEqual([])
 })
 
 describe('a routed Claude start launches with the model instead of switching it after the start', () => {
@@ -1479,7 +1407,7 @@ describe('a start that fails before its agent exists', () => {
       commands.push({ operationId: payload.operationId, ...cmd })
       if (cmd.type === 'agent.start') {
         starts.set(String(payload.operationId), { id: payload.operationId, creationId: `super-${String(payload.operationId)}`, poolGeneration: 'pool',
-          routeDecisionId: cmd.routeDecisionId, request: cmd.request, harnessId: null, dispatched: false, error: null })
+          request: cmd.request, harnessId: null, dispatched: false, error: null })
         return { ok: true, value: { result: { startId: payload.operationId } } }
       }
       return { ok: true, value: { result: { messageId: payload.operationId } } }
@@ -1489,7 +1417,7 @@ describe('a start that fails before its agent exists', () => {
     const pause = vi.fn(async () => {})
     const lead = (input: Record<string, unknown>) => startAgent(input, scoped, where, open, pause)
     const first = { action: 'start', tabId: 'tab', operationId: 'first-start', request: { conversationId: 'group', machineId: 'mac-one', engine: 'claude',
-      model: 'opus', effort: 'high', name: 'Agent', cwd: '/one/swarm/project', worktree: true, requirements, routeDecisionId: 'decision-1' } }
+      model: 'opus', effort: 'high', name: 'Agent', cwd: '/one/swarm/project', worktree: true, requirements } }
     return { starts, commands, scoped, pause, lead, first, open, of: (type: string) => commands.filter(c => c.type === type) }
   }
 
@@ -1500,7 +1428,6 @@ describe('a start that fails before its agent exists', () => {
     expect(await b.lead(b.first)).toEqual({ error: 'START_FAILED', startId: 'first-start', detail: TOKEN })
     // Resumed later, the same answer, and still nothing else is sent.
     expect(await b.lead({ action: 'resume', tabId: 'tab', startId: 'first-start' })).toMatchObject({ error: 'START_FAILED' })
-    expect(b.of('route.record')).toEqual([])
     expect(b.of('agent.start')).toHaveLength(1)
     expect(b.of('message.send')).toEqual([])
     expect(b.open).not.toHaveBeenCalled()
@@ -1510,18 +1437,13 @@ describe('a start that fails before its agent exists', () => {
     const b = backend({ fails: [] })
     expect(await b.lead(b.first)).toMatchObject({ ok: true, queued: true, startId: 'first-start' })
     expect(b.pause).toHaveBeenCalledTimes(10)
-    expect(b.of('route.record')).toEqual([])
   })
 
-  it('reports the same on the host side, and for a start that was not routed', async () => {
+  it('reports the same on the host side', async () => {
     const b = backend()
     await b.lead(b.first)
     const hosted = await startAgent({ action: 'resume', tabId: 'tab', startId: 'first-start', hostDispatch: true }, b.scoped, where, vi.fn(), b.pause)
     expect(hosted).toMatchObject({ error: 'START_FAILED' })
-    const unrouted = backend()
-    const { routeDecisionId: _id, ...request } = unrouted.first.request
-    expect(await unrouted.lead({ ...unrouted.first, request })).toMatchObject({ error: 'START_FAILED', detail: TOKEN })
-    expect(unrouted.of('route.record')).toEqual([])
   })
 })
 

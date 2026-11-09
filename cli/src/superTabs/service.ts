@@ -1,5 +1,4 @@
 import { readCapabilities } from './capacity.js'
-import { CHEAP_FIRST_HELP, ROUTE_KIND_HELP } from './routeCheapFirst.js'
 import { existsSync } from 'node:fs'
 import { readAuthSession } from '../lib/authSession.js'
 import { createHash } from 'node:crypto'
@@ -11,7 +10,6 @@ import { HostFeed } from './hostFeed.js'
 import { SwarmReads, type SwarmRead } from './swarmReads.js'
 import { within } from './wire.js'
 import { isCoordinator, isStep, mineText, taskText, unknownAgents } from './agentContext.js'
-import { machineChoices } from '../lib/newCommand.js'
 import { wireRole } from '../lib/swarmSkills.js'
 import { START_REQUIREMENTS } from './capacity.js'
 import { CapacityReservations, type ReservationBook } from './reservations.js'
@@ -53,7 +51,7 @@ const MENTION_HELP = ' --mention tags a person, by the username, display name or
 /** What the command entry says after how its JSON is passed, the same for everyone. A task's review plan (#2382) is said in
  *  its brief (backend superTabs/model.ts renderWorkTask), for whoever opens its review (project instructions, phase 4). */
 const COMMAND_ABOUT = 'send one of the commands below.'
-const COMMAND_RULES = 'Reuse exactly the same ID and JSON after an interrupted request. A task is taken as written: conversation.create and work.define send the parts you give (goal, changes, constraints, owns). An agent\'s task (the PM\'s too) needs a goal, at least one check, a priority and requesterId, or the Swarm refuses it with TASK_CONTRACT_MISSING, naming what is missing; work no person asked for gives noRequesterReason (a few words on why) in place of requesterId, and it is shown in the task. A task\'s priority is P0 (hotfix: something shipped is broken, loses data, or stops people\'s or agents\' work), P1 (needed by users soon), P2 (planned goal) or P3 (tools, docs or process): give one on conversation.create (a person\'s without one gets P2); only the PM or a person sets P0, or changes a priority later with work.priority. A task\'s optional review ({"focus": what every review of it checks first, such as the most-likely-wrong list; "reviews": 2 for two independent reviews}) is written into its brief, where whoever opens its review reads it; the Swarm opens no review by itself. When your assignment needs a person to decide, set work.status needs_human; when you cannot go on, blocked. Set working again once it moves. To change how the project works or routes, change its instructions (instructions.save; read them with instructions). tab.tidy turns off, or back on, the Swarm\'s tidying: finished groups archive once their pull requests are merged or closed. The Swarm owner does, or the PM passing on the owner\'s own chat message, with askedIn naming it. Two failed starts in a row suspend an engine on a machine for up to 6 hours (the route says so); machine.engineResume offers it there again: the machine\'s owner does, or the PM passing on the owner\'s chat message, with askedIn naming it. machine.projects keeps a machine for some projects (projectIds null: every project); the route leaves it out for the others: the machine\'s owner sets it, or the PM passing on the owner\'s chat message, with askedIn naming it.'
+const COMMAND_RULES = 'Reuse exactly the same ID and JSON after an interrupted request. A task is taken as written: conversation.create and work.define send the parts you give (goal, changes, constraints, owns). An agent\'s task (the PM\'s too) needs a goal, at least one check, a priority and requesterId, or the Swarm refuses it with TASK_CONTRACT_MISSING, naming what is missing; work no person asked for gives noRequesterReason (a few words on why) in place of requesterId, and it is shown in the task. A task\'s priority is P0 (hotfix: something shipped is broken, loses data, or stops people\'s or agents\' work), P1 (needed by users soon), P2 (planned goal) or P3 (tools, docs or process): give one on conversation.create (a person\'s without one gets P2); only the PM or a person sets P0, or changes a priority later with work.priority. A task\'s optional review ({"focus": what every review of it checks first, such as the most-likely-wrong list; "reviews": 2 for two independent reviews}) is written into its brief, where whoever opens its review reads it; the Swarm opens no review by itself. When your assignment needs a person to decide, set work.status needs_human; when you cannot go on, blocked. Set working again once it moves. To change how the project works or routes, change its instructions (instructions.save; read them with instructions). tab.tidy turns off, or back on, the Swarm\'s tidying: finished groups archive once their pull requests are merged or closed. The Swarm owner does, or the PM passing on the owner\'s own chat message, with askedIn naming it. Two failed starts in a row suspend an engine on a machine for up to 6 hours; machine.engineResume offers it there again: the machine\'s owner does, or the PM passing on the owner\'s chat message, with askedIn naming it. machine.projects keeps a machine for some projects (projectIds null: every project) and leaves it out for the others: the machine\'s owner sets it, or the PM passing on the owner\'s chat message, with askedIn naming it.'
 /** A Buddy's guard refuses `command` itself and every JSON read from stdin, so its help never offers - and stdin there either
  *  (a Buddy that follows a stdin form is refused and tries again, #2360); it quotes the JSON, as its usage hints do. */
 const BUDDY_COMMAND_HELP = `command OPERATION_ID JSON: ${COMMAND_ABOUT} The JSON is one argument, in single quotes: command OPERATION_ID '{...}' (an apostrophe inside it as \\u0027). ${COMMAND_RULES}`
@@ -81,7 +79,7 @@ const HELP = {
   post: `post GROUP TEXT|- OPERATION_ID ${POST_FLAGS}: ${POST_HELP}${MENTION_HELP}`,
   // Reactions as Slack has them; backend reactions.ts holds the emoji. What each one means here is the instructions' to say.
   react: 'react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off]: react to a message you can read in a conversation you take part in, as people do. EMOJI: eyes (👀), check (✅), rocket (🚀), thumbs_up, tada, heart or laugh. --off takes yours back. A reaction wakes nobody.',
-  start: 'start OPERATION_ID JSON: create one agent in a conversation on a machine in this Swarm\'s Machines list; to use another machine, a person adds it to the Swarm first. Repeat exactly after an interruption; it follows the same native creation receipt. It does not assign work. With worktree true, the agent starts from the repository\'s default branch, fetched first, unless you set branchRef (refs/heads/BRANCH, or refs/remotes/origin/BRANCH to fetch it first) to start from another branch, such as the one this work builds on. Set roleName to the role the project\'s instructions give the agent (free text, up to 40 characters); the server checks nothing against it. Pass the route\'s routeDecisionId to start one of its candidates. A start that fails is reported (START_FAILED, with why) and moved nowhere: decide what next, as your project\'s PM is told too.',
+  start: 'start OPERATION_ID JSON: create one agent in a conversation on a machine in this Swarm\'s Machines list; to use another machine, a person adds it to the Swarm first. Repeat exactly after an interruption; it follows the same native creation receipt. It does not assign work. With worktree true, the agent starts from the repository\'s default branch, fetched first, unless you set branchRef (refs/heads/BRANCH, or refs/remotes/origin/BRANCH to fetch it first) to start from another branch, such as the one this work builds on. Set roleName to the role the project\'s instructions give the agent (free text, up to 40 characters); the server checks nothing against it. A start that fails is reported (START_FAILED, with why) and moved nowhere: decide what next, as your project\'s PM is told too.',
   release: 'agent.release records keep, or requests stop, for an agent whose work ended; assigning it new work reuses it. Wait for the execution host to confirm a stop. A person can withdraw a stuck stop; the session cannot receive new work in that Swarm. Its native capacity stays reserved until its host confirms stopping. Other Swarms wait up to two minutes for an in-flight close, then may reuse it.',
   resume: 'resume START_ID: finish a pending start without creating another agent.',
   // Buddies (backend superTabs/buddies.ts): a person adds and removes their own; the Buddy proposes only when they ask.
@@ -89,12 +87,11 @@ const HELP = {
   // A person's own command, for the machines they added; an agent's terminal is refused (command.ts), so no agent raises its
   // own machine's room (Lead, 2026-10-28).
   setAgents: 'set-agents MACHINE_ID COUNT: for a machine\'s owner, from their own terminal, not an agent\'s: how many Swarm agents may run on that machine at once. Each agent still needs free memory when it starts. A machine may offer one agent for every 2 GB of its memory, and at least 4; a larger number is refused.',
-  route: `route GROUP JSON [--full-instructions] [--instructions-read REVISION]: list who could do a group's work, before you start an agent or assign it to another. Work you do yourself is not routed. It answers with the instructions' Routing section and revision (the whole text with --full-instructions; only the revision with --instructions-read REVISION, the one you read, while it is current), candidates keyed by each machine's line (its machineId, agents, and cwd where it differs from the answer's cwd) with one line per candidate under it, and the machines left out, one line per reason. JSON: {"difficulty":"low|medium|high","risk":"low|medium|high","size":"small|medium|large","why":"one sentence","kind":"${ROUTE_KIND_HELP}","local":"optional true, only when a person asked for a local model","model":"optional: the model a person named, in their words; only it is offered","needs":{"tools":[],"devices":[],"cwd":"/absolute/repo"}}. size is how long the work runs: small about 20 minutes, medium about an hour, large about three hours. The route leaves out what cannot run, and says why: a machine offline, paused or full, an engine not installed, signed out or suspended, tools or devices the work needs that a machine lacks, and machines that cannot take a teammate's project (it runs only on Team machines: a Mac's Harness Team account whose privacy check passed, or a machine used only for agents). It ranks nothing and names no pick: the rest come by machine name, then engine, each with its facts (model, effort, the catalog's strength and price, quota fit with weekly % left and reset time, the agents on its machine, idle or new), and it notes what else it knows on each candidate: a used-up quota, a lost task, a machine whose last starts failed, a task requirement naming another machine, a model the catalog does not offer by default or does not rate, a plug-in's finding. ${CHEAP_FIRST_HELP} The first row is first by its machine's name, not by merit: choose by your project's Routing instructions. A named model the catalog does not list is offered unrated. A candidate on a model served on the Swarm's grid starts with gridModel and gridName in place of model and effort. Start or assign the candidate you chose with the routeDecisionId and overrideReason, the Routing rule that chose it, so the decision records what ran and why.`,
   screen: 'screen AGENT [--scrollback N]: read another agent\'s terminal in your project as plain text, with up to 200 lines of scrollback. Use it when an agent seems stuck.',
   type: 'type AGENT [TEXT] [--key K]...: type text, then keys (Enter, Esc, Tab, Up, Down, Left, Right, Ctrl-C, 0-9), into another agent\'s terminal in your project. Answer prompts within its task; ask the owner before approving anything risky.',
   capacity: 'capacity MACHINE_ID JSON: inspect machine, engine and quota headroom. JSON uses the start request fields below. Unknown allowances are not reported as free tokens.',
   startRequest: { conversationId: 'GROUP', machineId: 'MACHINE', engine: 'codex', name: 'AGENT_NAME', roleName: 'ROLE', cwd: '/absolute/repo/on/that/machine', worktree: true, branchRef: 'refs/remotes/origin/BASE_BRANCH', requirements: START_REQUIREMENTS,
-    model: 'opus', effort: 'high', routeDecisionId: 'DECISION' },
+    model: 'opus', effort: 'high' },
   command: `command OPERATION_ID JSON: ${COMMAND_ABOUT} The JSON is one argument: when it holds quotes, put - in its place and send it on stdin (command OPERATION_ID - <<'JSON' … JSON). ${COMMAND_RULES}`,
   commands: [
     { type: 'project.report', projectId: 'PROJECT', through: { GROUP: 214031 }, text: 'The whole status card, one short line per active task; it replaces the last one and posts nothing. Use null when the card is still right.' },
@@ -114,7 +111,7 @@ const HELP = {
     { type: 'instructions.save', projectId: 'PROJECT', baseRevision: 3, text: 'The whole new document', summary: 'One line, up to 200 characters', askedBy: 'PERSON' },
     { type: 'machine.engineResume', machineId: 'MACHINE', engine: 'codex', askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } },
     { type: 'machine.projects', machineId: 'MACHINE', projectIds: ['PROJECT'], askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } },
-    { type: 'work.assign', conversationId: 'GROUP', agentId: 'AGENT', routeDecisionId: 'DECISION' },
+    { type: 'work.assign', conversationId: 'GROUP', agentId: 'AGENT' },
     { type: 'work.status', conversationId: 'GROUP', assignmentId: 'current', status: 'working', result: null },
     // Both reach the PM and alert the Harness Pro on the machine running the agent until the status moves on.
     { type: 'work.status', conversationId: 'GROUP', assignmentId: 'current', status: 'needs_human', result: 'The decision you need from a person, asked as one short question' },
@@ -163,8 +160,7 @@ const OTHER_WORK_FIELDS = ['conversationId', 'projectName', 'title', 'owns', 'st
  *  any other agent reads none of it. Nobody reads the Leads conversation, removed on 10-31, even from an older server
  *  that still sends it. */
 function statusView(answer: Record<string, unknown>, agentId: string): Record<string, unknown> {
-  // The PM accounts are the route's (pmAccounts.ts), not a roster line.
-  const { otherProjectsWork, leadsConversationId, pmAccounts: _pmAccounts, ...state } = object(answer.state)
+  const { otherProjectsWork, leadsConversationId, ...state } = object(answer.state)
   const shown = list(state.conversations).filter(c => c.kind !== 'leads' && (leadsConversationId == null || c.id !== leadsConversationId))
   // A task's steps are printed under it, not as rows of their own (task steps design); one whose task is not here stays a row.
   const ids = new Set(shown.map(c => c.id))
@@ -651,51 +647,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           if (!identifier(payload.terminalRequestId)) return { error: 'INVALID_REQUEST' }
           return { ok: true, value: await backend(core, 'GET', `${path}/terminal/${payload.terminalRequestId}?${identity}`) }
         }
-        if (payload.action === 'routeContext') {
-          const [read, policy, machines] = await Promise.all([
-            swarm(),
-            backend(core, 'GET', `${path}/routing-policy?${identity}`),
-            core.account.machines().catch(() => null),
-          ])
-          // A list that could not be read is not an empty one: the Lead's route says so.
-          const readable = machines?.status === 200
-          // Machines shared with the account but not yet added refuse it, so they are not offered.
-          return { ok: true, value: { tab: answerOf(read), policy, agentId,
-            machines: readable ? machineChoices(object(object(machines.body).data), null).filter(m => !m.toAdd).map(m => ({ machineId: m.machineId, name: m.label, status: m.status })) : [],
-            ...(readable ? {} : { machinesUnreadable: true }) } }
-        }
-        // The route log and the group's attempts, for the quota open picks hold and what members did before. Apart from
-        // `routeContext` so the agent reads it while it probes the machines; any agent that can read the group, like the
-        // route itself (project instructions, phase 4).
-        if (payload.action === 'routeHistory') {
-          // The one group by id, active or dormant (design 4.5): a group that left the active set still has its history, and
-          // a group this agent cannot read answers 403 or 404, before any history is read (review round 1).
-          const group = identifier(payload.conversationId) ? await readGroupAsAgent(core, path, String(payload.conversationId), identity) : null
-          if (!group) return { error: 'NOT_FOUND', detail: 'No such group, or this agent cannot read it.', status: 404 }
-          const [logged, tried] = await Promise.all([
-            within(backend(core, 'GET', `${path}/route-decisions?${identity}`)),
-            // An older backend has no such route: its 404 is unreadable like any other failure.
-            within(backend(core, 'GET', `${path}/conversations/${encodeURIComponent(String(payload.conversationId))}/attempts?${identity}`)),
-          ])
-          // The log's records carry every candidate's line; the route needs only who was chosen and how it went, and the account and expected spend of what actually runs, which an open decision still holds: the
-          // candidate its start or assignment matched (task #2901: a route names no pick, and the backend records that one in the final), else after an override the person's chosen candidate, else an old record's
-          // pick. A Lead's own choice outside the list has no known account.
-          const decisions = Array.isArray(logged) ? logged.slice(0, 50).map(object).map(d => {
-            const record = object(d.record), final = object(d.final), candidates = list(record.candidates), pick = candidates.find(c => c.id === record.pick)
-            const byFinal = candidates.find(c => typeof final.candidateId === 'string' && c.id === final.candidateId)
-            const runs = byFinal ?? (d.override ? candidates.find(c => c.id === object(d.override).candidateId) : pick), fit = object(runs?.fit)
-            const title = pick?.title ?? byFinal?.title ?? (record.pick === undefined && candidates.length ? 'not chosen yet' : 'unknown pick')
-            return { id: d.id, conversationId: d.conversationId, title: String(title),
-              ...(typeof fit.account === 'string' ? { account: fit.account, spend: object(fit.spend), size: object(record.assessment).size ?? 'medium' } : {}),
-              ...(typeof record.via === 'string' ? { via: record.via } : {}), outcome: d.outcome ?? null, assignmentId: d.assignmentId ?? null, createdAt: d.createdAt,
-              final: final.kind === 'member' ? { kind: 'member', agentId: final.agentId } : final.kind === 'new' ? { kind: 'new', engine: final.engine, model: final.model } : null }
-          }) : null
-          // Every attempt the group had, also the ones `work.define` took out of the state; the server already cut the results.
-          const attempts = Array.isArray(tried) ? tried.slice(0, 50).map(object).map(a => ({ id: a.id, agentId: a.agentId, status: a.status, result: typeof a.result === 'string' ? a.result.slice(0, 500) : null, createdAt: a.createdAt ?? null })) : null
-          return { ok: true, value: { ...(decisions ? { decisions } : { decisionsUnreadable: true }), ...(attempts ? { attempts } : { attemptsUnreadable: true }) } }
-        }
         // What this agent works on, and one task (agent context design, section 1). Both read the Swarm read `status` makes;
-        // a task that left the active set (finished and quiet for a day, or archived) is read by id, as routeHistory reads it.
+        // a task that left the active set (finished and quiet for a day, or archived) is read by id.
         if (payload.action === 'mine') {
           const read = await swarm()
           return { ok: true, value: { text: mineText(read.state, read.groupChangedAt, agentId, Date.now()) } }
@@ -718,11 +671,6 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             }
           }
           return { ok: true, value: { text: taskText(group, read.state, attempts, read.groupChangedAt, Date.now(), names) } }
-        }
-        // The jobs running and waiting on a project's GitHub Actions, counts only, for the route's machine-fit plug-in
-        // (machineFit.ts; backend github/ciLoad.ts). The server reads it through its GitHub App, never this machine's login.
-        if (payload.action === 'ciLoad' && identifier(payload.projectId)) {
-          return { ok: true, value: await backend(core, 'GET', `${path}/projects/${encodeURIComponent(String(payload.projectId))}/ci-load?${identity}`) }
         }
         // What routed attempts cost and how they went over a period (backend superTabs/costs/read.ts).
         if (payload.action === 'costs' && Number.isInteger(payload.days) && Number(payload.days) >= 1 && Number(payload.days) <= 90) {
@@ -754,11 +702,6 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             }
             throw error
           }
-        }
-        // The project's machine rules alone, for the route (backend machine-rules read, task #3964).
-        if (payload.action === 'machineRules') {
-          if (!identifier(payload.projectId)) return { error: 'INVALID_REQUEST' }
-          return { ok: true, value: await backend(core, 'GET', `${path}/projects/${encodeURIComponent(String(payload.projectId))}/machine-rules?${identity}`) }
         }
         if (payload.action === 'decisions' && (payload.state === 'open' || payload.state === 'answered')) {
           return { ok: true, value: await backend(core, 'GET', `${path}/decisions?state=${payload.state}&${identity}`) }
