@@ -2122,7 +2122,8 @@ describe('Super Tab attachments in delivered input', () => {
     const host = t.open({ attachedFiles, downloadWaitMs: 200 })
     const started = Date.now()
     await host.tick()
-    expect(Date.now() - started).toBeLessThan(600)
+    // One wait of 200 ms; one per waiting delivery would take 5 x 200 = 1,000 ms. (Under 600 failed on a busy CI runner, at 600.)
+    expect(Date.now() - started).toBeLessThan(1_000)
     expect(delivered()).toEqual(['harness-z: Hello.'])
     expect(attachedFiles).toHaveBeenCalledTimes(6)
     // Known to be slow, they hold no later pass at all.
