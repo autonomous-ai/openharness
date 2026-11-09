@@ -8,7 +8,7 @@
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { DEEP, nextPicks, outOfQuota, readerFor, readProblem, reasonOf, takeBacks, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
+import { DEEP, nextPicks, outOfQuota, QUIET_ASK_MS, QUIET_BACK_MS, readerFor, readProblem, reasonOf, takeBacks, takenTasks, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
@@ -40,6 +40,8 @@ export class GitHubAssign {
   private readonly given = new Map<string, string>()
   /** What was said of one task (a label refused, no builder able to do it), so each is said once, not every pass. */
   private readonly said = new Set<string>()
+  /** Each quiet taken task its builder was asked about: since when it was quiet, and when it was asked. */
+  private readonly quiet = new Map<string, { since: number; askedAt: number }>()
   private projects: { at: number; list: LedProject[] } | null = null
   private offUntil = 0
   private logged = ''
@@ -111,7 +113,10 @@ export class GitHubAssign {
       crew })
     if (!read.problem.builders.length) return
     await this.takeBack(repo, issues, outOfQuota(read))
-    await this.askReaders(project, read)
+    // Open pull requests, drafts included: a draft is where a task's work shows before it is read.
+    const pulls = await this.reads.current(repo, `/repos/${repo}/pulls?state=open&per_page=${MAX_PULLS}`, 1)
+    await this.askReaders(project, read, pulls)
+    await this.askQuiet(repo, issues, pulls, crew)
     if (!read.free.size) return
     // Nobody can take a task while every list is full: no plan, so a backlog costs no CPU each minute (the daemon at rest
     // keeps under 1% of a core).
@@ -130,9 +135,9 @@ export class GitHubAssign {
    * status:taken when it was taken, come off, with one line of why; the next plan gives each to another builder. Once a
    * task, as the label is gone from the next read.
    */
-  private async takeBack(repo: string, issues: Json[], away: AwayBuilder[]): Promise<void> {
+  private async takeBack(repo: string, issues: Json[], away: AwayBuilder[], why?: string): Promise<void> {
     if (!away.length) return
-    for (const back of takeBacks(issues, away, this.now())) {
+    for (const back of takeBacks(issues, away, this.now()).map(b => why ? { ...b, why } : b)) {
       const key = `${repo}#${back.number}:back:${back.label}`
       if (this.said.has(key)) continue
       this.said.add(key)
@@ -169,11 +174,10 @@ export class GitHubAssign {
    * (githubMerge.ts), so its reader is asked to read the new head, once. Nothing while a HOLD stands on the head itself: its
    * author fixes first. Each ask is one comment naming the reader, which GitHub news brings it (githubMentions.ts).
    */
-  private async askReaders(project: LedProject, read: Read): Promise<void> {
+  private async askReaders(project: LedProject, read: Read, open: Json[]): Promise<void> {
     const { repo } = project
     const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
-    const pulls = (await this.reads.current(repo, `/repos/${repo}/pulls?state=open&per_page=${MAX_PULLS}`, 1))
-      .filter(pull => pull.draft !== true && String((pull.base as Json | undefined)?.ref ?? '') === base)
+    const pulls = open.filter(pull => pull.draft !== true && String((pull.base as Json | undefined)?.ref ?? '') === base)
     for (const pull of pulls) {
       const number = Number(pull.number), head = String((pull.head as Json | undefined)?.sha ?? '')
       if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head)) continue
@@ -203,6 +207,38 @@ export class GitHubAssign {
         if (!reader) { this.once(`[super-tab] Task assignment: NO_READER ${repo}#${number}: no builder of the team but its author can read it`); break }
         skip.add(reader.id)
         await this.ask(repo, number, head, reader.name, 'please read this pull request')
+      }
+    }
+  }
+
+  /**
+   * A task its builder took and nothing touched for [QUIET_ASK_MS] gets one ask of its builder by name, which GitHub news
+   * brings it; quiet for [QUIET_BACK_MS] after that, it goes to another builder. Harness's own ask is no activity; an
+   * answer, a push or a label is.
+   */
+  private async askQuiet(repo: string, issues: Json[], pulls: Json[], crew: Crew): Promise<void> {
+    const now = this.now()
+    const taken = takenTasks(issues, pulls, crew.builders)
+    const open = new Set(taken.map(t => `${repo}#${t.number}`))
+    for (const key of [...this.quiet.keys()]) if (key.startsWith(`${repo}#`) && !open.has(key)) this.quiet.delete(key)
+    for (const task of taken) {
+      // A task GitHub gave no time for is never called quiet.
+      if (task.touched <= 0) continue
+      const key = `${repo}#${task.number}`
+      let asked = this.quiet.get(key)
+      // Touched after the ask (allowing the ask itself, written a moment after it was decided): it is moving again.
+      if (asked && task.touched > asked.askedAt + 2 * 60_000) { this.quiet.delete(key); asked = undefined }
+      const since = asked?.since ?? task.touched
+      if (asked && now - asked.askedAt >= QUIET_BACK_MS - QUIET_ASK_MS && now - since >= QUIET_BACK_MS) {
+        this.quiet.delete(key)
+        await this.takeBack(repo, issues.filter(issue => Number(issue.number) === task.number),
+          [{ name: task.name, label: task.label, why: 'stopping' }], `${task.name} has had no activity on it since it was asked`)
+      } else if (!asked && now - since >= QUIET_ASK_MS) {
+        this.quiet.set(key, { since, askedAt: now })
+        await this.deps.send('POST', `/repos/${repo}/issues/${task.number}/comments`, { body: `${SELF}, ${this.clock()}, to **${task.name}**: `
+          + `nothing has moved on this task for ${Math.round((now - since) / 3_600_000)} h. Are you still on it? Say where it stands, or what you need. `
+          + `With no word in ${Math.round((QUIET_BACK_MS - QUIET_ASK_MS) / 3_600_000)} h it goes to another builder.` })
+        this.log(`[super-tab] asked ${task.name} about quiet ${repo}#${task.number}`)
       }
     }
   }

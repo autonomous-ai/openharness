@@ -54,6 +54,10 @@ export interface Crew { builders: CrewBuilder[]; machines: CrewMachine[]; away?:
 export const QUEUED_AWAY_MS = 30 * 60_000, TAKEN_AWAY_MS = 3 * 60 * 60_000
 /** A subscription with less room than a small task until a reset further off than this keeps no queued tasks. */
 export const QUOTA_WAIT_MINUTES = 120
+/** A task taken and quiet this long (no comment, no change to its pull request) gets one ask of its builder; quiet this long
+ *  after the ask, it goes to another. Agents post when they start, open a pull request and answer reviews, so four quiet
+ *  hours is rare for one at work. */
+export const QUIET_ASK_MS = 4 * 60 * 60_000, QUIET_BACK_MS = 8 * 60 * 60_000
 
 /** The problem, and what the picks and their reasons need to know of it. */
 export interface Read {
@@ -302,6 +306,34 @@ export function outOfQuota(read: Read): AwayBuilder[] {
     // A weekly window is spent a fifth as fast as a 5-hour one (readProblem's spend).
     const blocked = account.windows.filter(w => w.left - account.reserve < SIZES.s.spend / (w.every === 300 ? 1 : 5) && w.resetsAt > QUOTA_WAIT_MINUTES)
     if (blocked.length) out.push({ name: crew.name, label: crew.label, why: 'quota', until: Math.max(...blocked.map(w => w.resetsAt)) })
+  }
+  return out
+}
+
+/** A task a builder of the team took, and when it was last touched: its issue, or a pull request for it. */
+export interface Taken { number: number; label: string; name: string; touched: number }
+
+/** The tasks builders of the team took, each with its last touch: a comment or label on the issue, or a change to a pull
+ *  request for it (one that closes it, or on its builder's branch for it, `pip/14`). */
+export function takenTasks(issues: Json[], pulls: Json[], builders: CrewBuilder[]): Taken[] {
+  const byLabel = new Map(builders.map(b => [b.label, b]))
+  const touched = new Map<number, number>()
+  for (const pull of pulls) {
+    const at = Date.parse(String(pull.updated_at ?? ''))
+    if (!Number.isFinite(at)) continue
+    const branch = /^[^/]+\/(\d+)$/.exec(String((pull.head as Json | undefined)?.ref ?? ''))?.[1]
+    const closes = [...String(pull.body ?? '').matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi)].map(m => Number(m[1]))
+    for (const number of [...closes, ...branch ? [Number(branch)] : []]) touched.set(number, Math.max(touched.get(number) ?? 0, at))
+  }
+  const out: Taken[] = []
+  for (const issue of issues) {
+    if (issue.pull_request || !Number.isSafeInteger(issue.number)) continue
+    const labels = labelsOf(issue)
+    const builder = labels.map(label => byLabel.get(label)).find(Boolean)
+    if (!builder || !labels.includes('status:taken')) continue
+    const own = Date.parse(String(issue.updated_at ?? ''))
+    const number = Number(issue.number)
+    out.push({ number, label: builder.label, name: builder.name, touched: Math.max(Number.isFinite(own) ? own : 0, touched.get(number) ?? 0) })
   }
   return out
 }

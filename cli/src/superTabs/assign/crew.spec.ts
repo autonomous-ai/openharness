@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { contextOf, crewOf, CORES, outOfQuota, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, DEEP, dependsOn, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew } from './crew.js'
+import { contextOf, crewOf, CORES, outOfQuota, takenTasks, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, DEEP, dependsOn, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew } from './crew.js'
 import { solve } from './search.js'
 
 type Json = Record<string, unknown>
@@ -225,5 +225,19 @@ describe('a builder out of quota (outOfQuota)', () => {
     const issues = [issue(1, ['builder:pip']), issue(2, ['builder:pip', 'status:taken'])]
     const back = takeBacks(issues, [{ name: 'Pip', label: 'builder:pip', why: 'quota', until: 180 }], NOW)
     expect(back).toEqual([{ number: 1, label: 'builder:pip', taken: false, why: 'Pip\'s subscription has no room for 3 h' }])
+  })
+})
+
+describe('the tasks builders took, and when each was last touched (takenTasks)', () => {
+  it('reads the issue\'s time and its pull requests\', by "Closes #N" or its branch, and only taken tasks of the team', () => {
+    const t = (h: number) => new Date(NOW - h * 3_600_000).toISOString()
+    const issues = [issue(1, ['builder:pip', 'status:taken'], { updated_at: t(9) }), issue(2, ['builder:juno', 'status:taken'], { updated_at: t(8) }),
+      issue(3, ['builder:pip'], { updated_at: t(9) }), issue(4, ['builder:other', 'status:taken'], { updated_at: t(9) })]
+    const pulls = [{ body: 'Fixes #1', updated_at: t(2), head: { ref: 'pip/feature' } }, { body: '', updated_at: t(1), head: { ref: 'juno/2' } },
+      { body: 'Closes #3', updated_at: t(0), head: { ref: 'x' } }]
+    expect(takenTasks(issues, pulls, crew().builders)).toEqual([
+      { number: 1, label: 'builder:pip', name: 'Pip', touched: Date.parse(t(2)) },
+      { number: 2, label: 'builder:juno', name: 'Juno', touched: Date.parse(t(1)) },
+    ])
   })
 })
