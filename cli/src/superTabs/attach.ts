@@ -126,7 +126,7 @@ async function checkedPath(path: string): Promise<{ path: string; size: number }
   return { path, size: info.size }
 }
 
-export interface UploadTarget { tabId: string; conversationId: string; port: number; dataDir: string }
+interface UploadTarget { tabId: string; conversationId: string; port: number; dataDir: string }
 
 /** Uploads each file of `post --attach` and answers the ids `message.send` names. Repeating a post whose message already
  * went out uploads nothing and names that message's files, so the send returns its receipt. */
