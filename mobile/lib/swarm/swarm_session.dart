@@ -10,6 +10,7 @@ import '../settings/experimental_features.dart';
 import 'swarm_activity.dart';
 import 'swarm_activity_feed.dart';
 import 'swarm_chat_peeks.dart';
+import 'swarm_chat_notify.dart';
 import 'swarm_choices.dart';
 import 'swarm_face.dart';
 import 'swarm_home_cache.dart';
@@ -55,6 +56,9 @@ class SwarmSession extends ChangeNotifier {
     _announcer = SwarmAnnouncer(
       notices,
       quiet: (_) => !swarmLocalNotices || _screens > 0,
+      muted: (need) =>
+          inbox.reader(need.swarmId)?.notifyOf(need.conversationId) ==
+          SwarmNotify.muted,
       told: told,
     );
     _chatNotices = SwarmChatNotices(_announcer);
@@ -78,8 +82,8 @@ class SwarmSession extends ChangeNotifier {
 
   /// Activity, in place of Needs you: its filters, counts and handled rows.
   /// Made with the session: its feeds read each Swarm's replies when the
-  /// Activity digest moves, whether a screen shows them or not, so a new
-  /// reply in a thread the person is in is told ([announceReply]).
+  /// Activity digest moves, whether a screen shows them or not, so the reply
+  /// a thread rang the person for is told ([announceReply]).
   late final SwarmActivity activity;
 
   /// Brings the Buddy tab forward, while Swarm's tabs are up ([SwarmTabsPage]);

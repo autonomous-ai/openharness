@@ -22,7 +22,7 @@ import { SESSION_ENDED_KIND } from './buddySessions.js'
 import { canReadGroup, projectOf } from './projects.js'
 import { groupsBy, readBy } from './parts/indexed.js'
 import type { ThreadFacet } from './pageReads.js'
-import type { ReplyReason, ReplyRow } from '../push/notices.js'
+import type { ReplyRow } from '../push/notices.js'
 import { shownNameOf } from './personNames.js'
 import { FIELDS, readable, row as messageRow, type Row } from './read/inbox.js'
 
@@ -81,10 +81,12 @@ export interface ReplyFanout { state: SuperTabState; threads: ReadonlyMap<string
  *  its state does not hold tells only those two. A notice for
  *  agents alone, or a Buddy session's ended line, is nobody's activity. A root or quoted message counts only in the reply's own
  *  chat. Each row keeps its message's `sequence` (from `sequences`) and whether it is also in the chat, so a thread or chat mark
- *  reads it (markActivityThreadRead).
+ *  reads it (markActivityThreadRead). The starter's row of a person's reply `rings` when no reply there rang them before
+ *  (rangThreads): the phone's push and its own notice are for that row alone.
  *
  *  Reads: the roots and quoted messages by id, the people's thread marks by id and their chat settings by id: three reads
- *  whatever the thread's length, the last two only when someone is told. Writes: one row per person told, in one createMany. */
+ *  whatever the thread's length, the last two only when someone is told; and when a person's reply tells its starter, their
+ *  rows of the thread by the thread index. Writes: one row per person told, in one createMany. */
 export async function writeReplyActivity(tx: Tx, tabId: string, messages: MessageDraft[], sequences: ReadonlyMap<string, number>, now: number,
   fanout?: ReplyFanout): Promise<ReplyRow[]> {
   const replies = messages.filter(m => m.thread && m.thread !== m.id && !agentOnly(m.source ?? null, m.recipients) && m.source?.kind !== SESSION_ENDED_KIND)
@@ -104,9 +106,9 @@ export async function writeReplyActivity(tx: Tx, tabId: string, messages: Messag
     const group = fanout?.state.conversations.find(c => c.id === m.conversationId)
     const spread = fanout && group && !m.source ? threadPeople(fanout.threads.get(m.thread!), m.thread!) : { tagged: [], repliers: [] }
     const tagsHere = new Set(m.mentions ?? [])
-    // Why each person is told, for the phone's push (push/notices.ts): the first that holds, in replyAudience's order.
-    const why = (personId: string): ReplyReason => personId === starter ? 'starter' : personId === quoted ? 'quoted'
-      : spread.tagged.includes(personId) ? 'tagged' : 'replier'
+    // Whom this reply may ring (Tony's rule, 2026-11-09): a person's words ring the thread's starter alone; an agent's reply
+    // and a Swarm line ring nobody, whatever they say.
+    const ringing = m.author.kind === 'person' && !m.source ? starter : null
     const told = replyAudience({ starter, quoted, ...spread }).filter(personId => {
       if (own(m.author, personId) || tagsHere.has(personId)) return false
       // A chat the command's state does not hold (a quiet one) tells the starter and the quoted author, as without `fanout`.
@@ -114,7 +116,7 @@ export async function writeReplyActivity(tx: Tx, tabId: string, messages: Messag
       const person = people.get(personId)
       return !!person && canReadGroup(fanout!.state, { kind: 'person', userId: person.id, email: person.email }, group)
     })
-    return { message: m, people: told, why }
+    return { message: m, people: told, ringing }
   })
   const markIds = [...new Set(recipients.flatMap(({ message, people }) => people.map(personId =>
     stableId(tabId, message.conversationId, message.thread!, personId))))]
@@ -129,14 +131,36 @@ export async function writeReplyActivity(tx: Tx, tabId: string, messages: Messag
     { $match: { _id: { $in: settingIds } } }, { $project: { _id: 1, notify: 1 } },
   ] }) as unknown as Array<{ _id: string; notify?: string }>
   const muted = new Set(settings.filter(row => row.notify === 'muted').map(row => row._id))
-  const data = recipients.flatMap(({ message: m, people, why }) => {
+  const data = recipients.flatMap(({ message: m, people, ringing }) => {
     return people.filter(personId => !unfollowed.has(stableId(tabId, m.conversationId, m.thread!, personId))
-      && !muted.has(stableId(tabId, m.conversationId, personId, 'notify'))).map(personId => ({ why: why(personId), row: { id: stableId(tabId, 'reply', m.id, personId), tabId, personId, kind: 'reply', conversationId: m.conversationId,
+      && !muted.has(stableId(tabId, m.conversationId, personId, 'notify'))).map(personId => ({ ringing: personId === ringing, row: { id: stableId(tabId, 'reply', m.id, personId), tabId, personId, kind: 'reply', conversationId: m.conversationId,
       messageId: m.id, threadId: m.thread!, actorKind: m.author.kind, actorId: m.author.id, emoji: null, createdAt: new Date(now), readAt: null,
       ...sequences.has(m.id) ? { sequence: sequences.get(m.id)! } : {}, ...m.alsoInChat ? { alsoInChat: true } : {} } }))
   })
-  if (data.length) await tx.superTabActivity.createMany({ data: data.map(({ row }) => row) })
-  return data.map(({ row, why }) => ({ ...row, why }))
+  // A thread rings its starter's phone once, for the first person's reply they are told of there; never again, read or not
+  // (Tony's rule, 2026-11-09). The command holds its chat's sequence, so two replies at once cannot both be the first.
+  const rang = await rangThreads(tx, tabId, data.filter(d => d.ringing).map(d => d.row))
+  const rows = data.map(({ row, ringing }) => {
+    if (!ringing || rang.has(threadKey(row))) return row
+    rang.add(threadKey(row))
+    return { ...row, rings: true as const }
+  })
+  if (rows.length) await tx.superTabActivity.createMany({ data: rows })
+  return rows
+}
+
+const threadKey = (row: { personId?: unknown; conversationId?: unknown; threadId?: unknown }) => JSON.stringify([row.personId, row.conversationId, row.threadId])
+
+/** Of the people and threads of `rows`, those a reply there rang already (`rings`), by threadKey. One read through the Activity
+ *  thread index, as a plain $match (parts/indexed.ts readBy): it examines those people's rows of those threads, a thread's
+ *  replies of 30 days at most. Nothing is read when no row may ring. */
+async function rangThreads(tx: Tx, tabId: string, rows: Array<{ personId: string; conversationId: string; threadId: string }>): Promise<Set<string>> {
+  if (!rows.length) return new Set()
+  const any = (key: 'personId' | 'conversationId' | 'threadId') => ({ $in: [...new Set(rows.map(r => r[key]))] })
+  const rang = await readBy(tx, 'SuperTabActivity', 'thread', [
+    { $match: { tabId, personId: any('personId'), conversationId: any('conversationId'), threadId: any('threadId'), kind: 'reply', rings: true } },
+    { $project: { _id: 0, personId: 1, conversationId: 1, threadId: 1 } }])
+  return new Set(rang.map(threadKey))
 }
 
 /** The row of the reaction `reactionId`, for the person who wrote the message, unless they reacted themselves: written when the
@@ -182,6 +206,8 @@ export interface ActivityItem {
   text: string
   createdAt: string
   read: boolean
+  /** The reply that rang the person's phone (writeReplyActivity): the phone posts its own notice for this one alone. */
+  rings: boolean
 }
 
 /** The person's own unexpired rows, newest first, those they can read now (see the file's comment). */
@@ -204,7 +230,7 @@ export async function listActivity(db: PrismaClient, tabId: string, state: Super
       projectName: projectOf(state, group.projectId ?? 'lead').name, messageId: r.messageId, messageSequence: message.sequence,
       threadId: threadOf(message), actor: { kind: r.actorKind as 'person' | 'agent', id: r.actorId,
         name: actorName(state, r.actorKind, r.actorId, r.kind === 'reply' ? message.author : undefined) },
-      emoji: r.emoji ?? null, text: message.text, createdAt: r.createdAt.toISOString(), read: !!r.readAt }]
+      emoji: r.emoji ?? null, text: message.text, createdAt: r.createdAt.toISOString(), read: !!r.readAt, rings: !!r.rings }]
   })
   return { items, more }
 }

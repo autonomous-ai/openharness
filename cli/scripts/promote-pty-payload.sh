@@ -14,8 +14,9 @@
 # after the merge to main. Each step reads what the one before it published:
 #   1. the Node runtime: run the "Node runtime for Windows" workflow (release-node-runtime-windows.yml) with
 #      metadata_path harness/runtime/metadata.json;
-#   2. the pty payload: bash cli/scripts/promote-pty-payload.sh [--allow-downgrade] <version>
-#      (DRY_RUN=1 DRY_RUN_OUT=<dir> first: it checks the same things and writes the manifest it would publish into <dir>);
+#   2. the pty payload: run the "Release" workflow (release.yml) for <version> with promote_pty, which runs this
+#      script on CI's federated credential after that run's staging read-back verified the zips;
+#      a maintainer's own gcloud still works too (DRY_RUN=1 DRY_RUN_OUT=<dir> checks and writes nothing);
 #   3. the installer: bash cli/scripts/upload-install-ps1.sh --production
 #
 # Environment: GCS_BUCKET; STAGING_METADATA_PATH (harness/staging/pty/metadata.json); METADATA_PATH, the manifest

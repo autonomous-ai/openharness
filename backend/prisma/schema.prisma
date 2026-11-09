@@ -1213,6 +1213,9 @@ model SuperTabActivity {
   sequence       Int?
   /// A reply also shown in the chat's main stream: the chat mark reads it, as well as its thread's.
   alsoInChat     Boolean?
+  /// The one reply row of a thread that rings its person's phone (activity.ts writeReplyActivity, Tony's rule of 2026-11-09):
+  /// the first person's reply in a thread the person started. Unset on every other row.
+  rings          Boolean?
 
   /// A person's rows, newest first: the list and the digest.
   @@index([tabId, personId, createdAt])
