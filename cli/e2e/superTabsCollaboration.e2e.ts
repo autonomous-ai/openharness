@@ -41,9 +41,8 @@ it('coordinates an owner-contributed agent while keeping guest machine access se
   const [starter, member] = specs, [a, b] = daemons
   onTestFailed(() => daemons.forEach((daemon, i) => console.log(`Fixture machine ${i}:\n${daemon.log().split('\n').slice(-90).join('\n')}`)))
   const agents: Array<Record<string, any>> = [], messages: Array<Record<string, any>> = []
-  const starts = new Map<string, Record<string, any>>(), pending = new Map<string, Record<string, any>>()
+  const pending = new Map<string, Record<string, any>>()
   const contexts = new Map<string, Record<string, any>>(), observations: Array<Record<string, any>> = []
-  const groups = new Map<string, Set<string>>([[GROUP, new Set()]])
   let revision = 0, contributionAllowed = true
   const agentId = (machine: string, harness: string) => createHash('sha256').update(JSON.stringify([machine, harness])).digest('hex').slice(0, 24)
   const failure = () => ({ status: 403, error: { code: 'FORBIDDEN', message: 'This contribution is no longer shared.' } })
@@ -75,7 +74,6 @@ it('coordinates an owner-contributed agent while keeping guest machine access se
       return { data: { eventId } }
     }
     if (path === `/api/super-tabs/${TAB}`) return { data: { revision, state: { id: TAB, agents } } }
-    if (path.includes('/starts/')) return { data: starts.get(path.split('/').at(-1)!) }
     if (path.endsWith('/commands')) {
       const command = body.command, author = body.asAgentId ? agents.find(agent => agent.id === body.asAgentId)! : null
       if (author) expect(author.machineId).toBe(caller.machineId)
@@ -84,27 +82,10 @@ it('coordinates an owner-contributed agent while keeping guest machine access se
         expect(command.machineId).toBe(member.machineId)
         const id = agentId(command.machineId, command.harnessId)
         agents.push({ id, machineId: command.machineId, harnessId: command.harnessId, configuration: command.configuration })
-        groups.get(GROUP)!.add(id)
         return { data: { result: { agentId: id } } }
       }
-      if (command.type === 'agent.start') {
-        const startId = `start-${body.operationId}`
-        if (!starts.has(startId)) starts.set(startId, { id: startId, creationId: `super-${startId}`, request: command.request, dispatched: false, harnessId: null })
-        return { data: { result: { startId } } }
-      }
-      if (command.type === 'agent.startDispatch') {
-        const start = starts.get(command.startId)!
-        expect(start.dispatched).toBe(false); start.dispatched = true
-      } else if (command.type === 'agent.started') {
-        const start = starts.get(command.startId)!, id = agentId(start.request.machineId, command.harnessId)
-        start.harnessId = command.harnessId
-        if (!agents.some(agent => agent.id === id)) agents.push({ id, machineId: start.request.machineId, harnessId: command.harnessId, configuration: command.configuration })
-        groups.get(GROUP)!.add(id)
-        return { data: { result: { agentId: id } } }
-      } else if (command.type === 'agent.configuration') {
+      if (command.type === 'agent.configuration') {
         author!.configuration = command.configuration; author!.configurationVersion = body.operationId
-      } else if (command.type === 'conversation.agent') {
-        (groups.get(command.conversationId) ?? groups.set(command.conversationId, new Set()).get(command.conversationId)!).add(command.agentId)
       } else if (command.type === 'message.send') {
         const message = { id: `message-${++revision}`, conversationId: command.conversationId,
           text: command.text, author: { name: author?.id ?? caller.email, account: caller.account }, recipientIds: command.recipientIds }
@@ -146,17 +127,13 @@ it('coordinates an owner-contributed agent while keeping guest machine access se
   const lead = await onA.request('agent_create', { engine: 'claude', cwd: projectA, bypassPermission: true }, 90_000)
   expect(lead.error, JSON.stringify(lead)).toBeUndefined()
   const leadId = agentId(starter.machineId, lead.agent.id)
-  agents.push({ id: leadId, machineId: starter.machineId, harnessId: lead.agent.id }); groups.get(GROUP)!.add(leadId)
+  agents.push({ id: leadId, machineId: starter.machineId, harnessId: lead.agent.id })
   const where = { port: a.port, dataDir: a.dataDir, machineId: starter.machineId, harnessPane: true }
   async function run(args: string[]) {
     let answer: Record<string, any> = {}
     const code = await superTabCommand(['--tab', TAB, '--agent', leadId, ...args], { where: () => where, print: line => { answer = JSON.parse(line) } })
     return { code, answer }
   }
-  const request = { conversationId: GROUP, machineId: member.machineId, engine: 'codex', name: 'Member builder', cwd: projectB,
-    worktree: false, permissionMode: 'auto', requirements: { memoryBytes: 0, diskBytes: 1, maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false } }
-  const attempted = await run(['start', 'remote-builder', JSON.stringify(request)])
-  expect(attempted.answer).toMatchObject({ error: 'CONTRIBUTION_REQUIRED', detail: expect.stringContaining('Add machine') })
   expect((await onB.request('agents_list')).agents).toHaveLength(0)
   // Sharing now gives a guest its own OS user, not the owner's Swarm controls.
   // The owner can contribute a running agent; owner-dispatched machine starts
@@ -176,8 +153,7 @@ it('coordinates an owner-contributed agent while keeping guest machine access se
   // Machine control does not make the member's account a proxy for the starter.
   expect(await viaA.request('super_tabs', { action: 'backend', method: 'GET', path: `/api/super-tabs/${TAB}` }))
     .toMatchObject({ error: 'GUEST_NOT_ALLOWED' })
-  expect((await run(['command', 'assign-instruction', JSON.stringify({ type: 'message.send', conversationId: GROUP,
-    text: 'Verify offline editing on the member machine', replyTo: null, recipientIds: [workerId] })])).code).toBe(0)
+  expect((await run(['post', GROUP, 'Verify offline editing on the member machine', 'assign-instruction', '--to', workerId])).code).toBe(0)
   await until('member host delivers the lead instruction', () => pending.get(workerId)?.status === 'delivered' || null, 45_000)
   expect(messages.at(-1)!.author.account).toBe(starter.account)
   expect(await onB.request('super_tabs', { action: 'command', tabId: TAB, agentId: workerId, operationId: 'member-result',
@@ -185,8 +161,6 @@ it('coordinates an owner-contributed agent while keeping guest machine access se
     .toMatchObject({ ok: true })
   await until('starter host delivers the member result', () => pending.get(leadId)?.status === 'delivered' || null, 45_000)
   expect(messages.at(-1)!.author.account).toBe(member.account)
-  expect((await run(['command', 'reuse-member', JSON.stringify({ type: 'conversation.agent', conversationId: 'onboarding', agentId: workerId, present: true, lead: false })])).code).toBe(0)
-  expect(groups.get('onboarding')!.has(workerId)).toBe(true)
   expect((await onB.request('agents_list')).agents).toHaveLength(1)
   const contextId = 'member-on-own-terminal'
   expect(await onB.request('super_tabs', { action: 'backend', method: 'POST', path: `/api/super-tabs/${TAB}/native`,

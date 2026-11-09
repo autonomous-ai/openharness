@@ -66,7 +66,7 @@ void main() {
   }
 
   ConversationServer server() {
-    final s = ConversationServer()..threads = true;
+    final s = ConversationServer.chat()..threads = true;
     (s.state['people'] as List).add({
       'id': 'peer',
       'email': 'peer@example.com',

@@ -42,7 +42,7 @@ void main() {
   }
 
   ConversationServer chat(int count) {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     for (var i = 1; i <= count; i++) {
       server.append('Note $i');
     }

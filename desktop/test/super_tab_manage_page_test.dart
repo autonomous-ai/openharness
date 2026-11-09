@@ -201,6 +201,7 @@ void main() {
             body: ValueListenableBuilder(
               valueListenable: terminals,
               builder: (context, shown, _) => SuperTabView(
+                board: false,
                 controller: c,
                 onInvite: () {},
                 onAddAgent: (_) {},

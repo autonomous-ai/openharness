@@ -52,6 +52,7 @@ void main() {
         theme: grid.buildAppTheme(),
         home: Scaffold(
           body: SuperTabView(
+            board: false,
             controller: c,
             app: app,
             onInvite: () {},
@@ -133,6 +134,7 @@ void main() {
         theme: grid.buildAppTheme(),
         home: Scaffold(
           body: SuperTabView(
+            board: false,
             controller: c,
             app: app,
             onInvite: () {},

@@ -29,7 +29,7 @@ void _fromLead(ConversationServer server, String text, String id) {
 /// chats, tags in their tasks and threads, a decision and a task waiting on
 /// the reader. Only `lamp`'s chat holds a tag still unread.
 ConversationServer _swarm() {
-  final server = ConversationServer()..threads = true;
+  final server = ConversationServer.chat()..threads = true;
   server.state['projects'] = [
     projectFixture('gtm', 'harness-gtm', 'gtm-chat'),
     projectFixture('lamp', 'lamp', 'lamp-chat'),
