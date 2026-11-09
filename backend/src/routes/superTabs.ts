@@ -11,6 +11,8 @@ import { validateBody, validateParams, validateQuery } from '../middlewares/vali
 import { sendError, sendSuccess } from '../utils/response.js'
 import { operationSchema } from '../superTabs/commands.js'
 import { PERIODS } from '../superTabs/leaderboard/rolling.js'
+import { boardQuery, reportBody } from '../superTabs/shipping/contract.js'
+import { Shipping } from '../superTabs/shipping/service.js'
 import { fail, SuperTabError } from '../superTabs/model.js'
 import { SuperTabStore } from '../superTabs/store.js'
 import { redisPollMemory } from '../superTabs/pollMemory.js'
@@ -321,7 +323,7 @@ async function productionStore(github: GitHubTokens | null, approvals: Approvals
 }
 
 export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore; github?: GitHubTokens | null; reads?: SwarmReads; hosts?: HostReads;
-  approvals?: Approvals; signIn?: GitHubSignIn | null } = {}) {
+  approvals?: Approvals; signIn?: GitHubSignIn | null; shipping?: Shipping } = {}) {
   const github = options.github !== undefined ? options.github : await githubTokensFromEnv(env)
   // Which repositories each Swarm may use the app on, and the app's sign-in that approves one (github/approvals.ts).
   const approvals = options.approvals ?? new PrismaApprovals(prisma)
@@ -347,6 +349,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   onComputerSignedIn(signIn => store.computerSignedIn(signIn))
   const reads = options.reads ?? new SwarmReads(store, { githubApp: !!github })
   const hosts = options.hosts ?? new HostReads(store, { githubApp: !!github, teamAccountsIdle: !github })
+  const shipping = options.shipping ?? new Shipping(prisma)
   // Members' apps read a project's GitHub access again when its revision moves (projects.ts githubRevision). A move that
   // fails is logged and changes no answer: the apps then read again within 5 minutes, as before.
   /** One organization check against GitHub for [userId], within OWNER_CHECKS_PER_MINUTE (security reviews of #3201). */
@@ -704,6 +707,16 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof leaderboardQuery> }>('/api/super-tabs/:tabId/leaderboard',
     { preHandler: [validateParams(tabParams), validateQuery(leaderboardQuery)] },
     (req, reply) => respond(reply, () => reads.leaderboard(req.user!, req.params.tabId, req.query.projectId, req.query.week, req.query.period, req.query.scope === 'all')))
+  // The v4 leaderboard (docs/plans/2026-11-09-swarm-v4-leaderboard.md): people ranked by how many of their agents ship, from what each
+  // person's daemon reads of GitHub with their own gh. The daemon asks what to read, and reports counts for the agents it runs.
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof boardQuery> }>('/api/super-tabs/:tabId/shipping',
+    { preHandler: [validateParams(tabParams), validateQuery(boardQuery)] },
+    (req, reply) => respond(reply, () => shipping.board(req.user!, req.params.tabId, req.query)))
+  app.get<{ Params: z.infer<typeof hostParams> }>('/api/super-tabs/hosts/:machineId/shipping', { preHandler: validateParams(hostParams) },
+    (req, reply) => respond(reply, () => shipping.targets(req.user!, req.params.machineId)))
+  app.post<{ Params: z.infer<typeof hostParams>; Body: z.infer<typeof reportBody> }>('/api/super-tabs/hosts/:machineId/shipping',
+    { preHandler: [validateParams(hostParams), validateBody(reportBody)] },
+    (req, reply) => respond(reply, () => shipping.report(req.user!, req.params.machineId, req.body)))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof personalTasksQuery> }>('/api/super-tabs/:tabId/personal-tasks',
     { preHandler: [validateParams(tabParams), validateQuery(personalTasksQuery)] },
     (req, reply) => respond(reply, () => reads.personalTasks(req.user!, req.params.tabId, req.query.before)))

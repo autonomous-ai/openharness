@@ -2144,6 +2144,36 @@ model SwarmProgress {
   @@index([purgeAt], map: "part_purge")
 }
 
+/// What each agent shipped, as its person's daemon read it from GitHub with that person's own gh (superTabs/shipping/), for the
+/// Swarm's leaderboard: counts only, never a title, branch, path or repository. One row per agent and week that shipped something
+/// (`week` is the week's Monday 00:00 UTC in epoch ms) and one all-time row per agent (`week` 0), which also holds how far its
+/// reading is settled and why its last one failed. A week's row goes five weeks on, in the next report that comes (delete on
+/// write, shipping/report.ts); the all-time row, about 150 bytes, is kept for the life of the Swarm (every week is in it, and it
+/// is the only place the old ones are) and goes with it (superTabs/purge.ts). At most 6 rows per agent that ever reported.
+model SwarmShipping {
+  /// `${tabId}:${agentId}:${week}`: a report sets a row, so a report sent twice changes nothing.
+  id              String  @id @map("_id")
+  tabId           String
+  agentId         String
+  week            Float
+  /// The agent's person when it was read (a machine that moved to another account keeps its old weeks with their person).
+  personId        String
+  /// Issues shipped, by priority label: P0, P1, P2, P3, none (shipping/score.ts PRIORITIES).
+  shipped         Int[]
+  /// All-time row only: the first week still open to a revert, where the next reading starts (Monday ms).
+  settled         Float?
+  /// All-time row only: the name its last reading found the agent's issues under (`builder:<name>`). A rename settles the weeks
+  /// before the current one, whose issues carry the old name, so they are not read again under the new one.
+  name            String?
+  /// All-time row only: why the last reading failed (shipping/contract.ts READ_FAILURES), and on which machine; cleared by the next one.
+  failed          String?
+  failedMachineId String?
+
+  /// A board is one week's rows, or the all-time rows (week 0), of a Swarm; a person's own all-time rows (their failed readings) are
+  /// the same index with their id; the delete of old weeks is a range on its first two fields.
+  @@index([tabId, week, personId])
+}
+
 model ExperimentalSettings {
   id               String  @id @map("_id") @db.ObjectId
   userId           String
