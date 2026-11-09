@@ -256,6 +256,14 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(asks(f)[0]).not.toContain(name)
     })
 
+    it('asks the login that opened the pull request to read again after its unsigned HOLD on an older head', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull({ user: { login: 'deehw' } })]
+      f.github.state.comments.set(30, [comment('HOLD 1234567: off by one')])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*deehw\*\*: the head is now f6edb44, after your HOLD on 1234567: please read it again/)])
+    })
+
     it('counts no unsigned READ-OK from the login that opened the pull request, and asks a reader who signs', async () => {
       const f = setup([], { crew: team })
       f.github.state.pulls = [pull({ user: { login: 'deehw' } })]

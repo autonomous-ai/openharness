@@ -119,14 +119,35 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
   // it may be the author's own, so it never counts, and a reader on that login signs. Another login's unsigned READ-OK is that
   // person's (the lead's decision, 2026-11-10).
   it('takes no unsigned READ-OK from the login that opened the pull request, a signed one from a teammate on it, and another login\'s', async () => {
+    // Words before the first comma or colon are a signature only when they name one of the team (its builders and PM): a verdict's
+    // own words, or "LGTM", are no one, from the login that opened it.
     for (const [said, merges] of [[comment('READ-OK f6edb44'), 0], [comment('**READ-OK f6edb44**'), 0], [comment('READ-OK f6edb44', { user: { login: 'DeeHW' } }), 0],
-      [comment('Juno, 14:20: READ-OK f6edb44'), 1], [comment('READ-OK f6edb44', { user: { login: 'kenmore' } }), 1]] as const) {
+      [comment('READ-OK f6edb44: looks good'), 0], [comment('READ-OK f6edb44, checks green'), 0], [comment('READ-OK f6edb44 (tests pass)'), 0],
+      [comment('LGTM: READ-OK f6edb44'), 0],
+      [comment('Juno, 14:20: READ-OK f6edb44'), 1], [comment('READ-OK f6edb44', { user: { login: 'kenmore' } }), 1],
+      [comment('READ-OK f6edb44: looks good', { user: { login: 'kenmore' } }), 1]] as const) {
       const f = setup()
       f.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
       f.github.repo.comments.set(4, [said])
       await f.merger.tick()
       expect(f.merges(), String(said.body) + ' by ' + JSON.stringify(said.user)).toHaveLength(merges)
     }
+    // A team agent whose name is its person's login signs as itself, and counts.
+    const named = setup()
+    named.github.repo.pulls = [pull({ user: { login: 'juno' } })]
+    named.github.repo.comments.set(4, [comment('Juno, 14:20: READ-OK f6edb44', { user: { login: 'juno' } })])
+    await named.merger.tick()
+    expect(named.merges()).toHaveLength(1)
+  })
+
+  it('says once on the pull request that an unsigned READ-OK from its own login does not count, so its reader signs it', async () => {
+    const f = setup()
+    f.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
+    f.github.repo.comments.set(4, [comment('READ-OK f6edb44')])
+    await f.merger.tick()
+    f.clock.now += 30_000
+    await f.merger.tick()
+    expect(f.comments()).toEqual([expect.stringMatching(/not merged yet at f6edb44: the READ-OK from deehw is unsigned, and every agent of its person posts as that login: its reader signs it, as in "<name>, \d\d:\d\d: READ-OK f6edb44"\.$/)])
   })
 
   it('counts a reader who signs its name two ways once for TWO READS', async () => {
