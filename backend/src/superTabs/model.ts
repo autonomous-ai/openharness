@@ -845,6 +845,8 @@ export const AGENT_ONLY = { kind: 'agent-only' }
 export const NOTICE_READERS = {
   // Only its agent: a skill update (cli host.ts), a decision answered (decisions.ts).
   'agent-only': 'agent',
+  // What GitHub said to a person's agent, relayed by their own Harness (githubRelay.ts): the person reads it in their chat.
+  github: 'people',
   // The Lead's wakes and requests, and the worker's "moved" line (liveness.ts, tidy.ts, projectUpdates.ts); two
   // projects changing the same code, to both their Leads in the Leads chat (commands.ts).
   'work-stalled': 'recipients', 'work-lost': 'recipients', 'work-resumed': 'recipients', 'idle-stop': 'recipients',

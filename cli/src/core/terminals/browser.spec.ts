@@ -95,6 +95,12 @@ describe('browser_callback', () => {
     failing.browser.open({ pane: '%7', url: CODEX })
     expect(await failing.browser.callback({ url: 'http://127.0.0.1:1455/auth/callback?code=c' }, 'phone-1')).toEqual({ ok: true, status: 302 })
     expect(failing.deps.log).toHaveBeenCalledWith('[browser] the program\'s next page on port 1455 not opened: ECONNRESET')
+    // A rejection that is not an Error is said the same way.
+    const plain = setup({ replay: vi.fn().mockResolvedValueOnce({ status: 302, location: '/success' }).mockRejectedValueOnce('socket closed') })
+    plain.browser.typed('a1', { connId: 'phone-1', kind: 'phone' })
+    plain.browser.open({ pane: '%7', url: CODEX })
+    expect(await plain.browser.callback({ url: 'http://127.0.0.1:1455/auth/callback?code=c' }, 'phone-1')).toEqual({ ok: true, status: 302 })
+    expect(plain.deps.log).toHaveBeenCalledWith('[browser] the program\'s next page on port 1455 not opened: socket closed')
     // A program that keeps sending the browser on is followed a few pages, never for ever.
     const loop = setup({ replay: vi.fn(async () => ({ status: 302, location: '/again' })) })
     loop.browser.typed('a1', { connId: 'phone-1', kind: 'phone' })

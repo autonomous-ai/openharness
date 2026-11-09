@@ -53,6 +53,7 @@ through this daemon's link to it.
 
 What it answers: `agents_list`, `agent_create`, `agent_restart`, `agent_retarget`, `agent_delete`,
 `agent_update`, `agent_recent`, `agent_handoff_prepare`, `agent_read_file` (media previews, in 128 KiB chunks),
+`agent_instructions_read`, `agent_instructions_write`,
 `fs_list_dir`, `engines_probe`, `codex_profiles_list`, `codex_profile_link`, `models_list`,
 `usage_read`, `question_response`, `message`, `cancel`, and `terminal_open` for a
 binary terminal channel with scroll, resync and paste. The same frames travel from the web client
@@ -85,6 +86,27 @@ newest requests and recaps were used instead, or no history was found), `git` (n
 its state was unclear, or the exclude line could not be added), `file` (nothing was written: the
 repository state was unclear, the exclude line or the files could not be written, or `.harness`
 is not a plain folder).
+
+`agent_instructions_read` (`{ agentId, name }`) and `agent_instructions_write` (`{ agentId, name, text, version }`)
+read and save an agent's instructions file, `agents/<name>.md` in the folder the agent works in, on the computer it runs
+on, so the owner can edit it from any of their computers. The file goes through neither GitHub nor our servers: the
+requests are sealed over the relay, never logged, and answered only to a process on this computer or to one of the
+owner's own computers (`OWNER_REQUIRED` for a collaborator, never a guest). `name` is a file name every computer of the
+account can keep: trimmed, 1 to 100 characters and at most 200 bytes with `.md`, no `/`, `\`, `< > : " | ? *` or control
+character, not starting or ending with a dot, and not a Windows device name (`CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`,
+`LPT0`-`LPT9`, in any case, with or without an extension); anything else is `BAD_NAME`. A read answers `{ text, version }`,
+with `text: null` and `version: ''` when there is no file; `version` is the SHA-256 of the file's bytes in lowercase hex. A
+write replaces the file only if `version` is the one the writer read (`''` for no file), and answers `{ version }`. It
+makes `agents/` only once the save goes ahead, and saves of one file take turns in the daemon, so of two that read the same
+version one is saved and the other is `CHANGED`. A file or text over 64 KiB is refused, text with an unpaired surrogate is
+`BAD_TEXT`, a file that is not UTF-8 is `NOT_UTF8` to a read and to a save over it (whatever `version` the save names), and
+nothing is read or written through a link: `agents` or the file being one is `UNSAFE_PATH`. Errors: `MISSING_AGENT_OR_NAME`,
+`BAD_NAME`, `AGENT_NOT_FOUND` (no such agent, or it has no folder), `OWNER_REQUIRED`, `TOO_LARGE`, `UNSAFE_PATH`,
+`NOT_UTF8`, and `READ_FAILED` when the disk fails a read or `WRITE_FAILED` when it fails a save; and for a save `CHANGED` and
+`BAD_TEXT`. An older daemon answers `UNSUPPORTED`. A daemon that knows both says
+so in `terminal_capabilities`, as `features.agentInstructions: true` beside the other features (`mediaPreview`, ...), and an
+app asks before it sends: a daemon does not seal a request type it has never heard of, so the text of a save would cross
+the relay in the clear.
 
 `question_response` carries the `requestId` of the `commander_question` it answers, and its
 `question_response_result` comes back under that same id, to that client alone (sealed, over the relay):

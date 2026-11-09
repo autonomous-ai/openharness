@@ -42,7 +42,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
     },
     turns: {
       send: vi.fn(), stop: vi.fn(), recent: vi.fn(async () => []), asks: vi.fn(async () => []),
-      deliver: vi.fn(), cancelDelivery: vi.fn(() => false), onDelivery: vi.fn(() => () => {}),
+      deliver: vi.fn(), cancelDelivery: vi.fn(() => false), onDelivery: vi.fn(() => () => {}), onEnd: vi.fn(() => () => {}),
       leaseDeliveries: vi.fn(async () => true),
       ...over.turns,
     },
