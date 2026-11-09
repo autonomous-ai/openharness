@@ -7,7 +7,6 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import { listGroupIndexes, NAMED_INDEX, retryStaleIndex } from '../src/superTabs/parts/indexed.js'
 import { logger } from '../src/utils/logger.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
-import { SwarmWorkspaces } from '../src/superTabs/workspaceStore.js'
 import { agentOpenDeliveries, storedMessages } from '../src/superTabs/pageReads.js'
 import { loadChanged } from '../src/superTabs/parts/index.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
@@ -68,13 +67,6 @@ describe('a person with nothing to read', () => {
     const heads = (store as unknown as { heads(rows: unknown[]): Promise<Map<string, unknown>> }).heads.bind(store)
     const entries = await profiled(db, () => heads([{ id: 'old', format: 1 }]))
     expect(on(entries, 'SwarmHead')).toEqual([])
-  })
-
-  it('reads no workspaces for a person with no invitation', async () => {
-    let answer: unknown
-    const entries = await profiled(db, async () => { answer = await store.workspaces.invitationsFor(person('no-invitation')) })
-    expect(answer).toEqual({ invitations: [] })
-    expect(on(entries, 'SwarmWorkspace')).toEqual([])
   })
 })
 
@@ -178,22 +170,6 @@ describe('a person\'s Swarm list', () => {
     bounded(memberReads(after), mine.length - 1)
   })
 
-  it('a Workspace removal finds only the removed person\'s Swarms of that Workspace', async () => {
-    const workspaceId = (await db.superTab.findUniqueOrThrow({ where: { id: mine[0]! } })).workspaceId!
-    const left: string[] = []
-    const workspaces = new SwarmWorkspaces(db, { transaction: body => db.$transaction(body), now: () => NOW,
-      leave: async (_person, tabId) => { left.push(tabId) } })
-    await db.swarmWorkspaceRemoval.create({ data: { id: `${workspaceId}:${me.sub}:g1`, workspaceId, userId: me.sub, email: me.email, generation: 'g1',
-      autonomousEnv: 'prod', removedAt: new Date(NOW), removedBy: owner.sub, finishedAt: null, purgeAt: null } })
-    const entries = await profiled(db, () => workspaces.finishPending(workspaceId, me.sub))
-    const inWorkspace = (await db.superTab.findMany({ where: { workspaceId }, select: { id: true } })).map(r => r.id).filter(id => mine.includes(id))
-    expect(left.sort()).toEqual(inWorkspace.sort())
-    const rows = memberReads(entries)
-    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
-    // Bounded by the person's Swarms, whichever Workspace each is in.
-    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(mine.length)
-    expect(rows[0]!.command?.hint, `the read names its index: ${JSON.stringify(plan(rows))}`).toBeTruthy()
-  })
 })
 
 describe('an agent\'s open deliveries', () => {

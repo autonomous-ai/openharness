@@ -39,8 +39,6 @@ export interface ReaderView {
 export interface ReadExtras {
   /** Machines whose account row is a Harness Team account (store read helper). */
   teamMachines: string[]
-  /** Machines also contributed to a Swarm of another Workspace (store.ts otherWorkspaceMachines). */
-  otherWorkspaceMachines?: string[]
   /** No Harness GitHub App on this server, so Team accounts take no work (store.ts teamAccountsIdle). */
   teamAccountsIdle?: boolean
   /** Each contributed machine's CLI version as its daemon last connected (store.ts machineFacts). */
@@ -60,7 +58,7 @@ export interface ReadExtras {
 }
 
 const HEAD_FIELDS = ['version', 'id', 'name', 'project', 'projects', 'leadsConversationId', 'ownerId', 'environment',
-  'routingPolicy', 'rules', 'paused', 'invitations', 'localModels', 'workspaceId', 'workspaceVisibility', 'buddies', 'removedMachines', 'autoJoin',
+  'routingPolicy', 'rules', 'paused', 'invitations', 'localModels', 'buddies', 'removedMachines', 'autoJoin',
   // How many Buddies each person may have (task #3818): apps offer a new one below it.
   'buddyCap'] as const
 
@@ -182,14 +180,14 @@ const countsOnly = (pulse: Pulse): Pulse => ({ ...pulse, asks: { ...pulse.asks, 
 function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now: number, extras: ReadExtras): Derived {
   // Where New Project's Product Manager would run on each teammate's machine, decided as its start decides (leadStart.ts).
   const leads = actor.kind === 'person' && state.people.find(p => p.id === actor.userId)?.role !== 'viewer'
-    ? leadChoices(state, actor.userId, { now, teamMachines: extras.teamMachines, otherWorkspaceMachines: extras.otherWorkspaceMachines ?? [],
+    ? leadChoices(state, actor.userId, { now, teamMachines: extras.teamMachines,
       ...(extras.teamAccountsIdle ? { teamAccountsIdle: true } : {}) })
     : {}
   // Every listed machine's slots from one pass over the Swarm's lists (machines.ts slotCounter).
   const slots = slotCounter(state)
   const machine = (pool: ContributedMachine) => {
     const stored = state.machines!.find(m => m.machineId === pool.machineId)!
-    const refusal = machineTeamWork(stored, now, extras.teamMachines, extras.otherWorkspaceMachines ?? [])
+    const refusal = machineTeamWork(stored, now, extras.teamMachines)
     const version = extras.machineVersions?.[pool.machineId]
     const suspended = suspendedEngines(stored, now)
     const machineSuspended = machineSuspensionReason(stored, now)
