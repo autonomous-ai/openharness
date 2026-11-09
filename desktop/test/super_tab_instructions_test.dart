@@ -67,6 +67,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: SuperTabView(
+            board: false,
             controller: controller,
             onInvite: () {},
             onAddAgent: (_) {},
