@@ -13,6 +13,7 @@
  */
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { removePath } from '../lib/removePath.js'
 import { join } from 'node:path'
 import { runPowershell } from '../lib/windows/powershell.js'
 import { untarGz } from './tmux.js'
@@ -110,7 +111,7 @@ export async function ensureTeamGh(deps: TeamGhDeps): Promise<TeamGhOutcome> {
       // A link needs a privilege on Windows: a command file in its place, which cmd.exe and PowerShell find as `gh`.
       writeFileSync(join(deps.binDir, 'gh.cmd'), `@"${binary}" %*\r\n`)
     } else {
-      rmSync(join(deps.binDir, 'gh'), { force: true })
+      removePath(join(deps.binDir, 'gh'))
       symlinkSync(binary, join(deps.binDir, 'gh'))
     }
     deps.log(`team: installed gh ${build.version} for the Harness Team account → ${target}`)

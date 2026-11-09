@@ -11,6 +11,7 @@
  */
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { removePath } from '../lib/removePath.js'
 import { join } from 'node:path'
 
 /** The managed tmux's manifest, as `install.sh` reads it (`TMUX_METADATA_URL`). */
@@ -90,7 +91,7 @@ export async function ensureTeamTmux(deps: TeamTmuxDeps): Promise<TeamTmuxOutcom
     // What the daemon's lookup reads, and the link a shell in this account finds first, as install.sh writes them.
     writeFileSync(join(deps.runtimeDir, 'current-tmux'), `${binary}\n`, { mode: 0o600 })
     mkdirSync(deps.binDir, { recursive: true })
-    rmSync(join(deps.binDir, 'tmux'), { force: true })
+    removePath(join(deps.binDir, 'tmux'))
     symlinkSync(binary, join(deps.binDir, 'tmux'))
     deps.log(`team: installed tmux ${build.version} for the Harness Team account → ${target}`)
     return 'installed'
