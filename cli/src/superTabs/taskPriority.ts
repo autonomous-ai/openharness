@@ -25,6 +25,3 @@ export function effectivePriority(group: { priority?: unknown; title?: unknown }
   if (PRIORITIES.includes(group.priority as TaskPriority)) return group.priority as TaskPriority
   return (typeof group.title === 'string' ? titlePriority(group.title) : null) ?? 'P2'
 }
-
-/** Where [priority] sorts: P0 first. */
-export const priorityRank = (priority: TaskPriority): number => PRIORITIES.indexOf(priority)

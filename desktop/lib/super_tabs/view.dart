@@ -24,6 +24,8 @@ import '../widgets/new_harness_paste.dart';
 import '../widgets/terminal_name_prompt.dart';
 import '../widgets/terminal_prompt.dart';
 import '../core/local_key_value_store.dart';
+import '../core/models.dart' show sameMachineId;
+import '../logging/app_log.dart';
 import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
@@ -38,6 +40,7 @@ import 'unread_line.dart';
 import 'roster.dart';
 import 'profile_actions.dart';
 import 'live_card.dart';
+import 'personal_agents.dart';
 import 'personal_lead.dart';
 import 'personal_lead_card.dart';
 import 'personal_projects.dart';
@@ -155,16 +158,16 @@ class SuperTabView extends StatefulWidget {
     this.paneStore,
     this.github,
     this.instructions,
-    this.board = false,
+    this.board = true,
   });
   final SuperTabController controller;
 
   /// Where pane widths are remembered; the app's local store when null.
   final LocalKeyValueStore? paneStore;
 
-  /// Desktop's layout of task #3787 (anh Dee): a project opens its Board with the person's Buddy beside it, the left
-  /// rail has no Buddy entry and no Threads, and a chat is one flat list (old thread replies inline in time order, a
-  /// reply quoting its message). The web keeps today's layout for now.
+  /// Swarm v4's layout (anh Dee, 2026-11-08), the default: a project's channel that only agents post in, the person's
+  /// own agents in the left pane, their chats and a task's thread beside it. Only the browser still passes false, for
+  /// the v3 layout, until the web moves to v4 (anh Dee, 2026-11-09).
   final bool board;
   final VoidCallback onInvite;
   final ValueChanged<SuperTabConversation> onAddAgent;
@@ -277,6 +280,32 @@ class _SuperTabViewState extends State<SuperTabView>
     });
     (widget.onChooseAgentTerminal ?? widget.onOpenTerminal)(agent);
     _closeSidebar();
+  }
+
+  /// Opens a pane of the person's own listed under Your Team in their Personal Swarm: the tab they last had it focused in
+  /// (else the first that holds it) comes forward with the pane focused.
+  void _openPane(PersonalAgent row) {
+    final app = widget.app;
+    if (app == null) return;
+    final holders = [
+      for (final entry in ownPanes(app))
+        if (entry.pane.agentId == row.agent.id &&
+            sameMachineId(entry.pane.machineId, row.machineId))
+          entry,
+    ];
+    final held =
+        holders.where((e) => e.tab.focusedPaneId == e.pane.id).firstOrNull ??
+        holders.firstOrNull;
+    if (held == null) {
+      // Closed since the list was drawn, which the next draw shows.
+      appLog.info(
+        'super-tabs',
+        'A pane in Your Team was opened after it closed',
+      );
+      return;
+    }
+    app.selectSwarm(held.tab.id);
+    app.focusPane(held.pane.id, reveal: true);
   }
 
   /// Keeps the Board of the project [group] belongs to in the middle, for a
@@ -2088,6 +2117,7 @@ class _SuperTabViewState extends State<SuperTabView>
     onAttachAgent: widget.board ? widget.onAttachAgent : null,
     onOpenAgentChat: _openAgentChat,
     onOpenAgentTerminal: _openAgentTerminal,
+    onOpenPane: _openPane,
     onNewSwarm: widget.onNewSwarm,
     page: _pageShown,
     places: SuperTabPlaces.of(c),
