@@ -29,7 +29,6 @@ class DesktopPrepareTests(unittest.TestCase):
         source = self.repo / 'desktop/scripts'
         source.mkdir(parents=True)
         shutil.copyfile(ROOT / 'desktop/scripts/release-desktop.sh', source / 'release-desktop.sh')
-        (self.repo / 'scripts').mkdir()
         self.git('add', '.')
         self.git('commit', '-qm', 'previous version')
         self.git('tag', '-a', 'v1.2.54_desktop', '-m', 'previous release')

@@ -42,7 +42,6 @@ class ReleaseContainsLastTests(unittest.TestCase):
             target = self.repo / script
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / script, target)
-        (self.repo / 'scripts').mkdir()
         self.git('add', '.')
         self.git('commit', '-qm', 'older')
         self.older = self.git('rev-parse', 'HEAD')

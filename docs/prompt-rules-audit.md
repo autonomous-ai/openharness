@@ -72,7 +72,7 @@ stays (#4591, #4598, #4604 among them). The Lead gives each an owner.
 | #4598 Shell guard: own processes, secrets, outside code, every engine | stop only your own processes, never print a secret, never run an outside PR's code, no upload scripts (project, tools, dev skill) | `shellGuard.ts` refusals; the guard for every engine, not only Claude Code and Codex; secret patterns in the Swarm git hooks |
 | #4599 A pull request stays inside its task's owned code | build only what the brief asks; no two tasks own the same code (project, role skills) | changed files against `task.owns`; overlapping owns refused |
 | #4600 Every question to a person has a default and a time | an ask carries a recommendation and a default, applied at its time (project, built-in) | `decision.ask` requires both in every project; a due default wakes the Lead |
-| #4601 Release window override until launch, and urgent releases | anh Dee's lift of the window until 11-10; a hotfix releases at once; his asks reach a Desktop release within 2 h; the hourly release line (project) | no release window (removed 2026-11-09, anh Dee: releases run at any hour); release watch timers |
+| #4601 Release window override until launch, and urgent releases | anh Dee's lift of the window until 11-10; a hotfix releases at once; his asks reach a Desktop release within 2 h; the hourly release line (project) | no release window in the release scripts and workflows (removed 2026-11-09, anh Dee: releases run at any hour); the v3 Swarm's release steps no longer run (#3603), their `releases.ts` window goes with the v3 removal; release watch timers |
 | #4602 The Lead writes no code and sets no timers | the Lead coordinates; no own timers; no hand-opened steps the server plans; no doubled server actions; "idle" is no reason (built-in, role skills) | daemon and backend refusals for a coordinator session |
 | #4603 The server reacts to work, not the agents | 👀 ✅ 🚀 (all four sources) | reactions written with the writes that already happen, no extra requests |
 | #4604 Production writes behind Ken's approval in GitHub | production writes need Ken's go; explain before a production read (project) | a GitHub production environment with Ken as required reviewer; a read helper that refuses a scan |
@@ -105,7 +105,7 @@ Each goes when #4537 task 9 removes old text, or sooner:
 - "The Engineer tags the person" (swarm-dev): `crewNeeds.ts routesToPm` sends those tags to the PM.
 - "Keep instructions under 150 lines" (built-in): the server limits by size (20 KB), not lines.
 - "The merge helper runs from a checkout of main" (project, Scholes): `scripts/merge-validated-pr.py` requires the checkout at the PR's head.
-- The release window (project, Dee 11-07): removed 2026-11-09, anh Dee. Releases run at any hour. #4601.
+- The release window (project, Dee 11-07): removed 2026-11-09, anh Dee, from the release scripts and workflows. Releases run at any hour. The v3 `releases.ts` `inReleaseWindow` is dead code that goes with the v3 removal. #4601.
 - The PM 20% quota rule (built-in, twice): #4537 removes it, but `crewKeep.ts` still moves crew off a PM's account below 20%. #4546 decides whether that stays.
 
 ## Code-able, not yet in a task
@@ -195,6 +195,7 @@ out "Product direction" because it holds facts and targets, not rules.
 | Rank each reported bug by its effect on people first | Roles › PM (Leo, Ken 11-05) | judgment | Judging impact. |
 | A hotfix gets P0 and its reviews in parallel | Roles › PM (Leo, Ken 11-05) | code | `taskPriority.ts` (P0–P3); review steps all open at Ready (`commands.ts` openReviewSteps, `reviewTable.ts`). |
 | A hotfix gets its own release as soon as checks pass | Roles › PM (Leo, Ken 11-05) | new | When a P0 task's PR merges, its component's release starts. |
+| Releases run 09:00-18:00 project time | pmSchedule.ts:33 (deleted, #3596) | removed | The release scripts and workflows no longer enforce it (2026-11-09, anh Dee). `releases.ts` `inReleaseWindow` (server-opened release steps, no longer run since #3603) is v3 code that goes with the v3 removal. |
 | The reporter hears cause, workaround and when the fix lands | Roles › PM (Leo, Ken 11-05) | judgment | What the message says. |
 | Before answering in a task, read its state | Roles › PM (Ken 11-05) | code | `cli/src/superTabs/deliveryContext.ts` puts the assignee, status, steps and PR head in every delivery. Reading the thread is judgment. |
 | Non-PM agents tag only the person they answer | Roles › PM (Leo 11-05) | code | `commands.ts` message.send → `crewNeeds.ts` routesToPm: other tags become crew needs for the PM. |
