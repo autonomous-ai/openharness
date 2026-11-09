@@ -2,7 +2,7 @@ import { AGENT_FOLDER_MARK, agentFolderFor } from './agentFolder.js'
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { homedir, tmpdir } from 'node:os'
+import { availableParallelism, homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
@@ -708,6 +708,40 @@ describe('contributed machine executor', () => {
       expect(readings(f).at(-2)).toHaveProperty('readiness')
       expect(readings(f).at(-1)).not.toHaveProperty('readiness')
     })
+  })
+
+  it('sends the machine\'s cores, and leaves them out for a while for an older backend that refuses them', async () => {
+    const f = fixture()
+    const original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      const resources = (body as { resources?: Record<string, unknown> } | undefined)?.resources
+      if (method === 'POST' && resources && 'cpuCores' in resources) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: cpuCores', 400)
+      return original(core, method, path, body)
+    })
+    await f.machine.tick()
+    const posts = () => f.backend.mock.calls.filter(c => c[1] === 'POST').map(c => (c[3] as { resources: Record<string, unknown> }).resources)
+    expect(posts().map(r => r.cpuCores)).toEqual([availableParallelism(), undefined])
+    // Refused once: the next readings go without them, at once.
+    f.advance(); await f.machine.tick()
+    expect(posts().slice(2).map(r => 'cpuCores' in r)).toEqual([false])
+  })
+
+  it('drops the cores too for a backend from before both them and probe failures, one refusal at a time', async () => {
+    const f = fixture()
+    f.capabilities.mockResolvedValueOnce({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 },
+      tools: { git: true }, toolProbeErrors: { flutter: 'interactive shell timed out' } } as never)
+    const original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      const sent = body as { toolProbeErrors?: unknown; resources?: Record<string, unknown> } | undefined
+      if (method === 'POST' && sent?.toolProbeErrors) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: "toolProbeErrors"', 400)
+      if (method === 'POST' && sent?.resources && 'cpuCores' in sent.resources) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: "cpuCores"', 400)
+      return original(core, method, path, body)
+    })
+    await f.machine.tick()
+    const last = f.backend.mock.calls.filter(c => c[1] === 'POST').at(-1)![3] as { toolProbeErrors?: unknown; resources: Record<string, unknown> }
+    expect(last).not.toHaveProperty('toolProbeErrors')
+    expect(last.resources).not.toHaveProperty('cpuCores')
+    expect(last.resources).toMatchObject({ cpuPercent: 20, memoryTotalBytes: 1000 })
   })
 
   it('retries a probe-failure observation without its new field for an older backend', async () => {
