@@ -32,9 +32,16 @@ export const MEMORY_SHARE = 0.75
 export const DISK_KEPT = 10 * GiB
 /** How deep each builder's list is kept (PM_BASICS: "keep every builder's list two deep"): what it works on and what is next. */
 export const DEEP = 2
+/** A builder's time in an area its person says it works on: half, so it gets those tasks first, and another builder takes
+ *  one only when it is well behind (anh Dee, 2026-11-09: "do you assign agents to their area of expertise?"). */
+export const FOCUS = 0.5
+/** And in an area it does not work on, once its person named some: it takes other work only when its own has none. */
+export const AWAY = 1.5
 
-/** One of the project's agents that builds, as the PM's read of the Swarm names it. */
-export interface CrewBuilder { id: string; name: string; label: string; machineId: string; engine: string; model?: string | null }
+/** One of the project's agents that builds, as the PM's read of the Swarm names it, with the areas its instructions say it
+ *  works on in this project ([worksOnOf]; empty for anything, absent when unread or unsaid). */
+export interface CrewBuilder { id: string; name: string; label: string; machineId: string; engine: string; model?: string | null
+  worksOn?: string[] | null }
 /** A machine a builder runs on, with its last report (backend machines.ts machineObservationSchema). */
 export interface CrewMachine { machineId: string; name?: string; observation?: Json }
 export interface Crew { builders: CrewBuilder[]; machines: CrewMachine[] }
@@ -54,6 +61,24 @@ export interface Read {
 
 /** The label a builder's tasks carry: builder:pip for Pip, as githubMentions.ts builderLabel. */
 export const labelOf = (name: string): string => `builder:${name.trim().toLowerCase().replace(/\s+/g, '-')}`
+
+/** An area as its `part:` label names it: "Mobile app" is mobile-app, "part:API" is api. */
+export const areaOf = (word: string): string =>
+  word.trim().toLowerCase().replace(/^part:/, '').replace(/[`*_"'.]/g, '').trim().replace(/\s+/g, '-')
+
+/**
+ * The areas an agent's instructions file says it works on in its project (agents/<Name>.md, which its person reads and
+ * changes beside its chat): its `Works on:` line, one of the first lines, as areas ("Mobile, backend" is mobile and
+ * backend). Empty for anything; null when the file says nothing, which is when its agent asks its person
+ * (githubMentions.ts).
+ */
+export function worksOnOf(text: string | null | undefined): string[] | null {
+  if (typeof text !== 'string') return null
+  const line = text.split('\n').slice(0, 40).map(l => /^\s*(?:[-*>]\s*)?\**\s*works on\s*\**\s*:\s*\**\s*(.*?)\s*$/i.exec(l)).find(Boolean)
+  if (!line) return null
+  const areas = [...new Set(line[1]!.split(/,|;|\/|\band\b|&/i).map(areaOf).filter(Boolean))]
+  return areas.length === 0 || areas.includes('anything') || areas.includes('everything') ? [] : areas
+}
 
 const labelsOf = (issue: Json): string[] =>
   (Array.isArray(issue.labels) ? issue.labels.map(object) : []).map(label => String(label.name ?? '')).filter(Boolean)
@@ -155,12 +180,12 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
   // A dependency on a task this does not plan (taken, or someone else's) is not waited for here.
   const planned = new Set(tasks.map(task => task.id))
   for (const task of tasks) task.deps = task.deps.filter(dep => planned.has(dep))
+  const parts = new Set([...tasks.map(task => task.part).filter((part): part is string => !!part), ...[...done.values()].flatMap(m => [...m.keys()])])
   const builders: Builder[] = crew.builders.map(b => ({
     id: b.id, machine: b.machineId, busyUntil: busy.get(b.id) ?? 0,
     modes: [{ model: b.model || b.engine, family: b.engine === 'codex' ? 'openai' : 'anthropic', speed: 1, cost: 2,
       quality: { default: 1 }, account: `${b.machineId}:${b.engine}` }],
-    // Each task it finished in a part makes the next there 15% quicker, to 40% at most.
-    context: Object.fromEntries([...done.get(b.id) ?? []].map(([part, count]) => [part, Math.max(0.6, 1 - 0.15 * count)])),
+    context: contextOf([...parts], done.get(b.id), b.worksOn),
   }))
   const problemMachines: Machine[] = [...new Set(crew.builders.map(b => b.machineId))].map(id => {
     const resources = object(machines.get(id)?.observation?.resources)
@@ -206,6 +231,21 @@ export function crewOf(state: Json, project: { pmAgentId: string; projectId: str
   return { builders, machines }
 }
 
+/**
+ * How fast a builder is in each part, as a factor of its time: each task it finished there makes the next 15% quicker,
+ * to 40% at most; an area its person says it works on halves it ([FOCUS]); once its person named some, any other area
+ * takes it half as long again ([AWAY]).
+ */
+export function contextOf(parts: string[], done: Map<string, number> | undefined, worksOn: string[] | null | undefined): Record<string, number> {
+  const context: Record<string, number> = {}
+  for (const part of parts) {
+    const learned = Math.max(0.6, 1 - 0.15 * (done?.get(part) ?? 0))
+    const factor = !worksOn?.length ? learned : worksOn.includes(part) ? Math.min(learned, FOCUS) : learned * AWAY
+    if (factor !== 1) context[part] = Math.round(factor * 1000) / 1000
+  }
+  return context
+}
+
 /** One task to give: its builder, and the minute the plan starts it. */
 export interface Pick { task: string; builder: string; start: number }
 
@@ -230,5 +270,7 @@ export function reasonOf(pick: Pick, read: Read): string {
   const when = pick.start <= 0 ? 'it can start now' : `it can start in ${pick.start < 90 ? `${pick.start} min` : `${Math.round(pick.start / 60)} h`}`
   const part = task?.part
   const count = part ? read.done.get(pick.builder)?.get(part) ?? 0 : 0
-  return count ? `${when}, and it finished ${count} part:${part} ${count === 1 ? 'task' : 'tasks'}` : when
+  const focus = part && read.builders.get(pick.builder)?.worksOn?.includes(part)
+  return [when, focus ? `it works on ${part}` : '', count ? `it finished ${count} part:${part} ${count === 1 ? 'task' : 'tasks'}` : '']
+    .filter(Boolean).join(', ').replace(/, ([^,]*)$/, ', and $1')
 }
