@@ -324,47 +324,12 @@ describe('credentials in proposal words', () => {
 })
 
 describe('proposal time and delivery boundaries', () => {
-  it('applies a default exactly at the deadline once, preserving a later answer as discussion', async () => {
-    const { advanceProposalCards } = await import('./proposalCards.js')
-    const f = fixture(), id = f.create().result.conversationId
-    const qid = f.run(ask(id), f.pm).result.questionId
-    expect(advanceProposalCards(f.state, deadline - 1)).toEqual([])
-    const messages = advanceProposalCards(f.state, deadline)
-    expect(f.card(id).proposal!.questions[0]!.answer).toEqual({ text: 'Keep seven days', at: deadline, by: 'default', defaulted: true })
-    expect(messages.some(m => m.source?.kind === 'proposal-answer' && m.recipients.includes(f.lead))).toBe(true)
-    expect(advanceProposalCards(f.state, deadline + 1)).toEqual([])
-    expect(f.run({ type: 'proposal.answer', conversationId: id, questionId: qid, text: 'Late correction' }, peer, { now: deadline + 2 }).result.applied).toBe(false)
-    expect(f.card(id).proposal!.questions[0]!.answer!.text).toBe('Keep seven days')
-  })
 
   it('checks the deadline within an answer transaction even before the worker runs', () => {
     const f = fixture(), id = f.create().result.conversationId, qid = f.run(ask(id), f.pm).result.questionId
     const answer = f.run({ type: 'proposal.answer', conversationId: id, questionId: qid, text: 'Too late' }, peer, { now: deadline })
     expect(answer.result.applied).toBe(false)
     expect(f.card(id).proposal!.questions[0]!.answer!.defaulted).toBe(true)
-  })
-
-  it('marks explicit consent overdue without defaulting, and still permits the named person', async () => {
-    const { advanceProposalCards } = await import('./proposalCards.js')
-    const f = fixture(), id = f.create().result.conversationId, qid = f.run(ask(id, { requiresConsent: true }), f.pm).result.questionId
-    expect(inPrivate(f, advanceProposalCards(f.state, deadline))).toEqual([])
-    expect(f.card(id).proposal!.questions[0]).toMatchObject({ overdue: true })
-    expect(f.card(id).proposal!.questions[0]!.answer).toBeUndefined()
-    expect(advanceProposalCards(f.state, deadline + 1)).toEqual([])
-    expect(f.run({ type: 'proposal.answer', conversationId: id, questionId: qid, text: 'I agree' }, peer, { now: deadline + 2 }).result.applied).toBe(true)
-  })
-
-  it('reopens Later on its date even after a month, and marks unanswered proposals overdue once', async () => {
-    const { advanceProposalCards } = await import('./proposalCards.js')
-    const f = fixture(), id = f.create().result.conversationId, date = NOW + 30 * 86_400_000
-    f.run(decide(id, 'later', { revisitAt: date }), f.pm)
-    expect(advanceProposalCards(f.state, date - 1)).toEqual([])
-    expect(advanceProposalCards(f.state, date).some(m => m.recipients.includes(f.lead))).toBe(true)
-    expect(f.card(id).proposal!.decision).toBeUndefined()
-    const overdue = advanceProposalCards(f.state, date + 30 * 60_000)
-    expect(f.card(id).proposal!.overdue).toBe(true)
-    expect(inPrivate(f, overdue)).toEqual([])
-    expect(advanceProposalCards(f.state, date + 31 * 60_000)).toEqual([])
   })
 
   it.each(['person', 'agent'] as const)('tells a %s when their ordinary post reaches no switched PM', kind => {

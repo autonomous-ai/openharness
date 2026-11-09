@@ -1,5 +1,3 @@
-import { recordPulse } from './pulse.js'
-import { linesOf } from './statusCard.js'
 import { CREW_REOPEN_GRACE_MS, isCrew } from './crew.js'
 import { activeWork, forRecipients, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState, type TaskLiveness } from './model.js'
@@ -501,17 +499,6 @@ function unpurged(state: SuperTabState, now: number): MessageDraft[] {
   })
 }
 
-/** The Lead's own time checks: those above, then each task's state, waking the Lead for those that just stalled. Only the
- *  Lead's poll runs them, where the whole active Swarm is loaded and the one they wake is listening: a machine's reading
- *  loads only running work and must write no group (read/host.ts). */
-export function sweepForLead(state: SuperTabState, now: number, rulesFor: DispatchLookup = () => DISPATCH_RULES): MessageDraft[] {
-  // Each task's status line before the sweep moves any (statusCard.ts): only the lines it moves are written.
-  const before = linesOf(state, now)
-  const drafts = [...sweepLiveness(state, now, rulesFor), ...recordTaskStates(state, now)]
-  // Where the whole active Swarm is loaded, as for a command: a task lost here may leave Working at 0 (pulse.ts).
-  recordPulse(state, now, undefined, before)
-  return drafts
-}
 
 /** A task whose agent has reported nothing itself (a status, check or post) this long is quiet, and its Lead is woken to act
  *  (Ken, 2026-10-29). Its screen may still be changing: a session whose screen stays still this long loses its task. */
@@ -604,53 +591,7 @@ export function recordTaskState(state: SuperTabState, group: Conversation, now: 
 const sameState = (a: TaskLiveness | undefined, b: TaskLiveness | undefined) => a?.state === b?.state && a?.why === b?.why
   && a?.personId === b?.personId && (a?.state !== 'waiting' || a.why === 'queued' || a.why === 'starting' || a.since === b?.since)
 
-function stalledLine(state: SuperTabState, group: Conversation, liveness: TaskLiveness, now: number): string {
-  const task = `${group.number ? `#${group.number} ` : ''}"${group.title}"`
-  const worker = state.agents.find(a => a.id === group.assignment?.agentId)
-  const minutes = plural(Math.max(0, Math.floor((now - liveness.since) / 60_000)), 'minute')
-  const why = liveness.why === 'silent' ? `quiet, ${worker?.displayName ?? worker?.name ?? 'its agent'} has reported nothing for ${minutes}`
-    : liveness.why === 'review' ? `waited for review for ${minutes}; no review task is open`
-    : liveness.why === 'removed' ? 'orphaned, its agent was removed from the Swarm' : `orphaned, its agent has not started for ${minutes}`
-  return `- ${task}: ${why}.`
-}
 
-/** Records each task's state where it changed, so readers see it, and wakes each project's Lead once, in its chat, for the
- *  tasks that just turned quiet or orphaned. A task lost or whose start failed has had its own notice already. The record
- *  is the deduplication: a sweep on another server writes the same group, so one of the two retries and finds it recorded.
- *  A stall is recorded only with a wake that reaches its Lead: a project with none yet is told once it has one. A working
- *  task has no record, so a steady Swarm's sweeps write nothing. */
-function recordTaskStates(state: SuperTabState, now: number): MessageDraft[] {
-  const stalled = new Map<string, Array<{ group: Conversation; next: TaskLiveness }>>()
-  const steps = stepIndex(state)
-  for (const group of state.conversations) {
-    // A step lost earlier in this pass, after loseTasks passed its task, ends its Engineer's wait before the task is judged,
-    // as a command's write does (recordTaskState): else the Engineer reads as stalled and loses its task the next sweep.
-    stepsEnded(state, group, now, steps)
-    const before = group.liveness
-    const next = nextState(state, group, now, steps)
-    if (sameState(before, next)) continue
-    if (next && (next.state === 'quiet' || next.state === 'orphaned') && before?.state !== next.state && next.why !== 'lost' && next.why !== 'start-failed') {
-      const projectId = group.projectId ?? 'lead'
-      stalled.set(projectId, [...stalled.get(projectId) ?? [], { group, next }])
-      continue
-    }
-    if (next) group.liveness = next
-    else delete group.liveness
-  }
-  return [...stalled].flatMap(([projectId, tasks]) => {
-    const chat = state.conversations.find(c => c.id === projectsOf(state).find(p => p.id === projectId)!.leadConversationId)
-    const lead = chat?.leadId ? state.agents.find(a => a.id === chat.leadId) : undefined
-    if (!chat || !lead) return []
-    const one = tasks.length === 1
-    const text = `${one ? 'A task is' : `${tasks.length} tasks are`} stalled:\n${tasks.map(t => stalledLine(state, t.group, t.next, now)).join('\n')}`
-    const row = reachable(state, { id: stableId('work-stalled', state.id, projectId, String(now)), conversationId: chat.id, author: writtenBy(state, lead), replyTo: null,
-      recipients: chat.agentIds.includes(lead.id) ? [lead.id] : [], text,
-      source: { kind: 'work-stalled', tasks: tasks.map(t => ({ conversationId: t.group.id, state: t.next.state, why: t.next.why })) } })
-    if (!row.recipients.length) return []
-    for (const t of tasks) t.group.liveness = t.next
-    return [row]
-  })
-}
 
 /** A Buddy's start its machine has not taken this long after it was asked for, while that machine reports, has failed: a
  *  host from before Buddies never sees one (read/hostRows.ts). */

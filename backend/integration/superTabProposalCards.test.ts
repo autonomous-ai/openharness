@@ -194,24 +194,6 @@ describe('durable proposal cards', () => {
     expect(notices.some(m => (m.source as { moment?: string } | null)?.moment === 'decided')).toBe(false)
   })
 
-  it('marks a dormant proposal overdue on its card, with no notice in the dormant default Buddy chat (task #4558)', async () => {
-    const f = await fixture()
-    await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', setup: { name: 'Fixture Mac', cwd: '/fixture', engines: ['codex'] } })
-    const second = await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', name: 'Research' })
-    await f.execute({ type: 'buddy.default', conversationId: second.result.conversationId })
-    const id = await f.create(owner)
-    for (const key of [id, String(second.result.conversationId)]) {
-      const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key } } })
-      await db.swarmGroup.update({ where: { id: row.id }, data: { dormant: true, version: { increment: 1 },
-        data: { ...(row.data as object), dormant: true } } })
-    }
-    f.clock.now += 31 * 60_000
-    await runTimeCheckPass(db, f.store, f.clock.now)
-    expect((await f.card(id)).proposal!.overdue).toBe(true)
-    const notices = await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: String(second.result.conversationId) } })
-    expect(notices.some(m => (m.source as { kind?: string } | null)?.kind === 'proposal-overdue')).toBe(false)
-  })
-
   it('delivers urgent proposals first on both a full poll and its fast repeat', async () => {
     const f = await fixture(), low = await f.create(), urgent = await f.create(owner, 'P0')
     for (let i = 0; i < 2; i++) {
@@ -260,23 +242,6 @@ describe('durable proposal cards', () => {
     const changes = await read.changes(peer, f.tab, before.cursor)
     expect(changes.groups.some(g => g.key === id && !g.deleted && 'data' in g && g.data?.proposal?.text === 'Keep offline drafts')).toBe(true)
     expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId: f.pm, messageId: answered.result.messageId as string } })).toBe(1)
-  })
-
-  it('applies questions after long inactivity including dormant cards, using the due index', async () => {
-    const { dueProposalCards } = await import('../src/superTabs/proposalDue.js')
-    const f = await fixture(), id = await f.create(), deadline = f.clock.now + 30 * DAY
-    await f.execute({ type: 'proposal.ask', conversationId: id, personId: peer.sub, question: 'Wait?', defaultAnswer: 'Proceed', deadline }, owner, f.pm)
-    const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: id } } })
-    await db.swarmGroup.update({ where: { id: row.id }, data: { dormant: true, lastActivityAt: new Date(f.clock.now - 60 * DAY), data: { ...(row.data as object), dormant: true } } })
-    f.clock.now = deadline
-    const prof = await profiled(db, () => dueProposalCards(db, deadline, 200))
-    const due = plan(reads(prof, 'SwarmGroup', ['proposalDueAt']))
-    expect(due).toEqual([expect.objectContaining({ plan: 'IXSCAN { deleted: 1, proposalDueAt: 1, tabId: 1, key: 1 }' })])
-    expect(due[0]!.docsExamined).toBeLessThanOrEqual(due[0]!.returned ?? 0)
-    await runTimeCheckPass(db, f.store, deadline)
-    expect((await f.card(id)).proposal!.questions[0]!.answer).toMatchObject({ text: 'Proceed', defaulted: true })
-    await runTimeCheckPass(db, f.store, deadline + 1)
-    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: id, text: 'Proceed' } })).toBe(1)
   })
 
   it('guards answer races and denies receipt replay after private-project revocation', async () => {

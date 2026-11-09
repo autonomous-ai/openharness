@@ -58,9 +58,9 @@ export interface SwarmProject {
   boardMode?: true
   canChat?: string[]
   decider?: string
-  /** The oldest message a person sent its PM in the last day that the PM has not answered, and when it was sent, as the worker's
-   *  time checks last found it (timeChecks.ts owedAsk); absent when it owes none. Its PM's host restarts a PM that hangs while it
-   *  owes one (task #3385). Readers never get it: it may name a message in a person's private chat with the PM. */
+  /** v3's note of the oldest message a person sent its PM that the PM had not answered, which told its host to restart it while
+   *  it hung (task #3385). Swarm v4 writes none and its time checks clear what is left (store.ts runTimeChecks); kept to read and
+   *  clear old Swarms. Readers never get it: it may name a message in a person's private chat with the PM. */
   owed?: { messageId: string; since: number }
   /** Its release list (releases.ts, task #3405): merged tasks waiting for a release, each component's last verified release
    *  and its open release step. Written by the server alone; readers never get it. */
