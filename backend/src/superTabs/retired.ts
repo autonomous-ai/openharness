@@ -11,7 +11,10 @@ import { z } from 'zod'
  * schemas in commands.ts, its answer in store.ts and its counter in lib/metrics.ts 30 days after the backend release that carries
  * it, and not before 2026-12-09: `swarm_retired_commands_total` says whether an older client still sends one.
  */
-export const RETIRED_COMMANDS = ['process.confirm', 'project.digest', 'machine.projects', 'machine.ownAccountWork', 'machine.access', 'member.status', 'member.timeZone', 'member.username', 'member.name'] as const
+export const RETIRED_COMMANDS = [
+  'process.confirm', 'project.digest', 'machine.projects', 'machine.ownAccountWork', 'machine.access',
+  'member.status', 'member.timeZone', 'member.username', 'member.name',
+] as const
 export type RetiredCommand = (typeof RETIRED_COMMANDS)[number]
 
 const retired: ReadonlySet<unknown> = new Set(RETIRED_COMMANDS)

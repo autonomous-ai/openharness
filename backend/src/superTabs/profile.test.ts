@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor } from './model.js'
 import { split } from './parts/shape.js'
-import { setAgentAvatar } from './profile.js'
+import { personView, setAgentAvatar } from './profile.js'
 import { readerView } from './read/views.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -44,6 +44,15 @@ describe('what readers get of a person', () => {
     expect(part.data.avatar).toEqual({ kind: 'preset', key: 'fox' })
     expect(f.member('owner')).toHaveProperty('status')
     expect(() => visibleState(f.state, stranger)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+  })
+
+  it('copies nobody who has neither stored, as a read always gave them', () => {
+    const plain = { id: 'a', email: 'a@example.com', role: 'owner' as const, generation: 'g', avatar: undefined }
+    expect(personView(plain)).toBe(plain)
+    const picture = { ...plain, avatar: { kind: 'preset' as const, key: 'owl' as const } }
+    expect(personView(picture)).toEqual(picture)
+    const stored: typeof plain & { status?: unknown; timeZone?: unknown } = { ...plain, status: { text: 'Out' }, timeZone: 'UTC' }
+    expect(personView(stored)).toEqual(plain)
   })
 })
 

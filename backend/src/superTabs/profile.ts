@@ -20,9 +20,11 @@ export function withAvatarView<T extends { avatar?: Avatar }>(holder: T): Omit<T
 }
 /** A person as readers get them: [withAvatarView], and without the status and time zone that Swarms from before v4 stored for them.
  *  Nothing sets either any more (2026-11-09) and no app draws them, so a status with no end would only haunt an older app for
- *  ever. The stored values can go from 2026-12-09. */
-export function personView<T extends { avatar?: Avatar }>(person: T): Omit<T, 'avatar'> & { avatar?: AvatarView } {
-  const { status: _status, timeZone: _timeZone, ...rest } = person as T & { status?: unknown; timeZone?: unknown }
+ *  ever. A person with neither stored is read as `withAvatarView` always read them, with no copy. The stored values can go from
+ *  2026-12-09. */
+export function personView<T extends { avatar?: Avatar }>(holder: T): Omit<T, 'avatar'> & { avatar?: AvatarView } {
+  if (!('status' in holder) && !('timeZone' in holder)) return withAvatarView(holder)
+  const { status: _status, timeZone: _timeZone, ...rest } = holder as T & { status?: unknown; timeZone?: unknown }
   return withAvatarView(rest as T)
 }
 export const avatarChoice = z.discriminatedUnion('kind', [

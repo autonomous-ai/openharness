@@ -24,9 +24,11 @@ export interface Person {
   generation: string
   /** Their own avatar (profile.ts); only Swarm members read it. */
   avatar?: import('./profile.js').Avatar
-  /** The name they chose (usernames.ts), or one kept for them; absent, readers work out their default. Only members read it. */
+  /** The name they chose (usernames.ts), or one kept for them; absent, readers work out their default. Nothing sets a chosen one any
+   *  more (2026-11-09): those chosen before stay. Only members read it. */
   username?: string
-  /** The name they show (personNames.ts), such as "Minh Nguyen"; absent, the Swarm shows their username. Only members read it. */
+  /** The name they show (personNames.ts), such as "Minh Nguyen"; absent, the Swarm shows their username. Nothing sets one any more
+   *  (2026-11-09): those set before stay. Only members read it. */
   name?: string
   /** `domain`: joined by themselves as someone at the owner's email domain (autoJoin.ts), so the people list says so. */
   joinedVia?: 'domain'

@@ -3,6 +3,7 @@ import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor } from './model.js'
 import { split } from './parts/shape.js'
 import { readerView } from './read/views.js'
+import { actorName } from './activity.js'
 import { authorForAgent, lazyUsernames, namesPerson, nameRefusal, rowForAgent, shownNameOf, writtenNameOf } from './personNames.js'
 import { swarmUsernames, usernameOf } from './usernames.js'
 
@@ -50,6 +51,16 @@ describe('the name a person set', () => {
     f.setName(null)
     expect(f.name('relay')).toBeUndefined()
     expect(f.shown('relay')).toBe('wkpnjjhbnm')
+  })
+
+  // Activity and reminders name a person through actorName: the stored name first, else the username (end to end, an integration
+  // test set the name with the command that is gone).
+  it('is the name Activity and reminders show for a person', () => {
+    const f = fixture()
+    expect(actorName(f.state, 'person', 'relay')).toBe('wkpnjjhbnm')
+    f.setName('Minh Nguyen')
+    expect(actorName(f.state, 'person', 'relay')).toBe('Minh Nguyen')
+    expect(actorName(f.state, 'person', 'gone')).toBe('Someone')
   })
 
   it('reaches members with the rest of the person, and only members', () => {
