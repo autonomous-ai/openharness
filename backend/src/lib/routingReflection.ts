@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client'
 import type { SuperTabState } from '../superTabs/model.js'
+import { localNow } from '../superTabs/localTime.js'
 import { projectsOf } from '../superTabs/projects.js'
 import type { SuperTabStore } from '../superTabs/store.js'
 import { weekStart } from '../superTabs/leaderboard/week.js'
@@ -29,16 +30,10 @@ const WEEK_MS = 7 * 24 * 60 * 60_000
 /** How long a pass reuses the projects and time zones it read. */
 export const PLAN_EVERY_MS = 3 * 60 * 60_000
 
-function localNow(timeZone: string, now: number): { date: string; hour: string } {
-  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit',
-    hourCycle: 'h23' }).formatToParts(now).map(p => [p.type, p.value]))
-  return { date: `${parts.year}-${parts.month}-${parts.day}`, hour: parts.hour! }
-}
-
 /** The local date whose report is due at `now`, or null outside the 23:00 hour in the default zone. */
 export function reflectionDue(now: number): string | null {
   const local = localNow(DEFAULT_TIME_ZONE, now)
-  return local.hour === HOUR ? local.date : null
+  return local.time.startsWith(`${HOUR}:`) ? local.date : null
 }
 
 /** The Swarms and projects with evidence from the week holding 7 days ago on: one $group in Mongo over the week index, never

@@ -110,7 +110,8 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   const head = Object.fromEntries(HEAD_FIELDS.filter(field => visible[field] !== undefined).map(field => [field, visible[field]])) as HeadView
   // Every project names its coordinator; one from before the field reads as the Product Manager (instructions.ts). The progress
   // and the release list (releases.ts) are the server's bookkeeping: no reader shows them. What the PM owes is its host's alone (timeChecks.ts owedAsk): it may name a message in someone's private chat.
-  if (head.projects) head.projects = head.projects.map(({ progress: _progress, releases: _releases, owed: _owed, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
+  // Swarm v3's `schedule` and `processNote` are still stored on old projects: no reader gets them (the stored copies can go from 2026-12-09).
+  if (head.projects) head.projects = head.projects.map(({ progress: _progress, releases: _releases, owed: _owed, schedule: _schedule, processNote: _note, ...project }: NonNullable<typeof head.projects>[number] & { schedule?: unknown; processNote?: unknown }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
   // Always, its default too (task #3818): an app offers several Buddies only where the head says how many, so an older backend,
   // which sends none, is never taken for one that makes them.
