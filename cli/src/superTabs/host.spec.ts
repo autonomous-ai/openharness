@@ -5893,7 +5893,7 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
   })
 
   // Everything but a person's own words in their agent's own chat keeps its wrapper, its lines and its Answer line.
-  describe('is what alone loses the wrapper', () => {
+  describe('a delivery that is not one', () => {
     const wrapped = async (fields: Record<string, unknown>, from = 'chat') => {
       const t = setup({ conversationId: from, text: 'ok, ship it', ...fields })
       t.row.agent.chatId = 'chat'
