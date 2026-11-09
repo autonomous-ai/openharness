@@ -12,18 +12,25 @@ const PROJECT = { repo: 'acme/app', pm: 'Faye', tabId: 'tab', pmAgentId: 'faye',
 /** One repository's issues as GitHub's REST API answers them, with ETags, and what was sent to it. Labels sent are kept
  *  only once [applied] says GitHub's lists show them. */
 function fakeGitHub(open: Json[], closed: Json[] = []) {
-  const state = { open, closed, labelAnswer: 200, signedOut: false, applied: false }
+  const state = { open, closed, labelAnswer: 200, signedOut: false, applied: false, files: new Map<string, string>(), labels: [] as Json[] }
   const sent: Array<{ method: string; path: string; body: Json }> = []
   const get: GitHubGet = async (path, etag) => {
     if (state.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
     const url = new URL(`https://api.github.com${path}`)
-    if (url.pathname !== '/repos/acme/app/issues') return { status: 404, etag: null, body: null, resetAt: null }
-    const body = url.searchParams.get('state') === 'closed' ? state.closed : state.open
+    const file = /^\/repos\/acme\/app\/contents\/(.+)$/.exec(url.pathname)
+    const text = file ? state.files.get(decodeURIComponent(file[1]!)) : undefined
+    if (file && text === undefined) return { status: 404, etag: null, body: null, resetAt: null }
+    const body = file ? { encoding: 'base64', content: Buffer.from(text!).toString('base64') }
+      : url.pathname === '/repos/acme/app/labels' ? state.labels
+      : url.pathname === '/repos/acme/app/issues' ? url.searchParams.get('state') === 'closed' ? state.closed : state.open
+      : null
+    if (body === null) return { status: 404, etag: null, body: null, resetAt: null }
     const tag = `"${createHash('sha1').update(JSON.stringify(body)).digest('hex')}"`
     return etag === tag ? { status: 304, etag: tag, body: null, resetAt: null } : { status: 200, etag: tag, body, resetAt: null }
   }
   const send: GitHubSend = async (method, path, body) => {
     sent.push({ method, path, body: body as Json })
+    if (path === '/repos/acme/app/labels') { state.labels.push({ name: (body as Json).name }); return { status: 201, etag: null, body: {}, resetAt: null } }
     const labels = /\/issues\/(\d+)\/labels$/.exec(path)
     if (labels) {
       if (state.labelAnswer !== 200) return { status: state.labelAnswer, etag: null, body: {}, resetAt: null }
@@ -48,7 +55,7 @@ function setup(open: Json[], options: { closed?: Json[]; crew?: Crew } = {}) {
   const log = vi.fn()
   const assigner = new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send,
     now: () => Date.parse('2026-11-09T07:31:00Z'), log })
-  const labelled = () => github.sent.filter(s => s.path.endsWith('/labels')).map(s => [Number(s.path.split('/').at(-2)), (s.body.labels as string[])[0]])
+  const labelled = () => github.sent.filter(s => /\/issues\/\d+\/labels$/.test(s.path)).map(s => [Number(s.path.split('/').at(-2)), (s.body.labels as string[])[0]])
   const said = () => github.sent.filter(s => s.path.endsWith('/comments')).map(s => [Number(s.path.split('/').at(-2)), String(s.body.body)])
   return { github, assigner, log, labelled, said }
 }
@@ -135,6 +142,19 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     await f.assigner.tick()
     expect(f.labelled()).toEqual([[1, 'builder:pip'], [1, 'builder:pip'], [1, expect.stringMatching(/^builder:(pip|juno)$/)]])
     expect(f.said()).toHaveLength(1)
+  })
+
+  it('gives a builder the tasks of the area its instructions say it works on, and makes that area\'s label', async () => {
+    const f = setup([issue(1, ['size:s', 'part:mobile']), issue(2, ['size:s', 'part:api'])])
+    f.github.state.files.set('agents/Pip.md', '# Pip\nWorks on: Mobile\n\nMy rules.')
+    f.github.state.labels = [{ name: 'part:api' }]
+    await f.assigner.tick()
+    expect(f.labelled().sort()).toEqual([[1, 'builder:pip'], [2, 'builder:juno']])
+    expect(new Map(f.said() as Array<[number, string]>).get(1)).toMatch(/for \*\*Pip\*\*: it can start now, and it works on mobile\.$/)
+    // The area its person named becomes a label the PM labels tasks with, once.
+    expect(f.github.sent.filter(s => s.path === '/repos/acme/app/labels').map(s => s.body)).toEqual([{ name: 'part:mobile', color: 'c5def5', description: 'An area of the project' }])
+    await f.assigner.tick()
+    expect(f.github.sent.filter(s => s.path === '/repos/acme/app/labels')).toHaveLength(1)
   })
 
   it('stops while gh is signed out, says so once, and says when it runs again', async () => {
