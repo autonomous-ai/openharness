@@ -12,7 +12,7 @@
 import { isBuddyChat } from './buddies.js'
 import type { Actor, Conversation, SuperTabState } from './model.js'
 import { agentWrittenNameOf } from './personNames.js'
-import { groupProject } from './projects.js'
+import { groupProject, isAgentChat } from './projects.js'
 
 export const CREW_NEED_KIND = 'crew-need'
 /** How much of the agent's words a crew need's text quotes; the PM reads the rest at its message. */
@@ -48,7 +48,8 @@ export function projectPm(state: SuperTabState, group: Conversation): string | n
 /** The PM [actor]'s words to people in [group] go to instead, or null when they reach people as before: a person, the PM
  *  itself, a Buddy chat, a project with no PM. */
 export function routesToPm(state: SuperTabState, actor: Actor, group: Conversation): string | null {
-  if (actor.kind !== 'agent' || isBuddyChat(group)) return null
+  // An agent talks to its person straight in their 1:1 chat (Swarm v4), which is in no project and so has no PM.
+  if (actor.kind !== 'agent' || isBuddyChat(group) || isAgentChat(group)) return null
   const pm = projectPm(state, group)
   return pm && pm !== actor.agentId ? pm : null
 }

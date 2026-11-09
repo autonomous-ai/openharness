@@ -256,7 +256,7 @@ describe('+ New agent, Member started on its own computer', () => {
     const chat = f.add({ kind: 'regular', name: 'Ada', machineId: 'mate-laptop', local: true }).result.conversationId as string
     const added = f.run(join(chat, { initialMessage: 'Fix the docs' }), mate, own('mate'))
     const agent = f.state.agents.find(a => a.id === added.result.agentId)!
-    expect(agent).toMatchObject({ machineId: 'mate-laptop', harnessId: 'h-ada', regular: true, contributorId: 'mate', machineOwnerId: 'mate' })
+    expect(agent).toMatchObject({ machineId: 'mate-laptop', harnessId: 'h-ada', regular: true, name: 'Ada', contributorId: 'mate', machineOwnerId: 'mate' })
     expect(agent.projectId).toBeUndefined()
     expect(agentKind(f.state, agent)).toBe('regular')
     expect(f.state.conversations.find(c => c.id === chat)!.agentIds).toEqual([agent.id])
@@ -269,6 +269,21 @@ describe('+ New agent, Member started on its own computer', () => {
     const chat = f.add({ kind: 'regular', name: 'Ada', machineId: 'mate-laptop', local: true }).result.conversationId as string
     const added = f.run(join(chat), mate, own('mate'))
     expect(f.state.agents.find(a => a.id === added.result.agentId)!.name).toBe('Ada')
+  })
+
+  // On 2026-11-09 anh Dee's new agent could not answer him: its post looked for its chat's project's PM, and a 1:1 chat has no
+  // project, so it fell back to the project 'lead', which a Swarm whose projects all have their own ids does not have (404).
+  it('answers its person in its chat in a Swarm with no project \'lead\'', () => {
+    const f = swarm()
+    f.run({ type: 'project.create', name: 'Web', visibility: 'public', brief: '' }, owner)
+    f.state.projects = f.state.projects!.filter(p => p.id !== 'lead')
+    const chat = f.add({ kind: 'regular', name: 'Ada', machineId: 'mate-laptop', local: true }).result.conversationId as string
+    const added = f.run(join(chat, { initialMessage: 'hi' }), mate, own('mate'))
+    const hi = added.messages.find(m => m.text === 'hi')!
+    const ada: Actor = { kind: 'agent', agentId: added.result.agentId as string, machineOwnerId: 'mate' }
+    const sent = f.run({ type: 'message.send', conversationId: chat, text: 'Hi, Ada here. What do you need?', replyTo: null, answers: hi.id, recipientIds: [] }, ada,
+      { reply: { id: hi.id, conversationId: chat, author: { kind: 'person', id: 'mate' }, createdAt: NOW, thread: null, threadSource: null } } as Partial<CommandContext>)
+    expect(sent.messages.map(m => m.text)).toContain('Hi, Ada here. What do you need?')
   })
 
   it('leaves an unused chat for its person to archive, as Desktop\'s Discard does', () => {
