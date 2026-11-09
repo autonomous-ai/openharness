@@ -93,8 +93,10 @@ async function scene() {
   await db.swarmGroup.createMany({ data: [...quietLead, ...quietOther, ...open] })
   // Every project's Lead conversation: a host's light load always reads them (parts/light.ts).
   const leadConversations = state.projects!.map(p => p.leadConversationId)
-  const active = [...leadConversations, web, done, ...open.map(r => r.key)]
-  return { tabId, machineId, lead, worker, reviewer, web, done, other, empty, quietLead, quietOther, leadConversations, active }
+  // The PM's own chat with its person (Swarm v4) is open as any chat is.
+  const agentChats = state.conversations.filter(c => c.kind === 'agent-chat').map(c => c.id)
+  const active = [...leadConversations, ...agentChats, web, done, ...open.map(r => r.key)]
+  return { tabId, machineId, lead, worker, reviewer, web, done, other, empty, quietLead, quietOther, leadConversations, agentChats, active }
 }
 
 /** One read as the profiler saw it: its command and every getMore (they share a query hash). */
@@ -169,7 +171,8 @@ describe('hot SwarmGroup reads name their index and read only what they return (
       const loaded = await db.$transaction(tx => parts.loadLight(tx, s.tabId, { groups: 'working', agentIds: [s.worker], groupIds: [s.done], machines: false }))
       groups = loaded.groups.map(g => g.key)
     })
-    expect(groups.sort()).toEqual([...s.leadConversations, s.web, s.done].sort())
+    // And each PM's own chat with its person (Swarm v4), where its derived chatId points.
+    expect(groups.sort()).toEqual([...s.leadConversations, ...s.agentChats, s.web, s.done].sort())
     expect(reads.length).toBeGreaterThan(0)
     expectIndexed(reads)
     const docs = reads.reduce((n, r) => n + r.docsExamined, 0)
@@ -497,7 +500,7 @@ describe('a hot read whose index the database lacks', () => {
 
     it('the read cache\'s own transaction runs again without it and answers', async () => {
       const loaded = await removed(() => readLight(db, DIRECT, s.tabId, { groups: 'working', agentIds: [s.worker] }))
-      expect(loaded.groups.map(g => g.key).sort()).toEqual([...s.leadConversations, s.web].sort())
+      expect(loaded.groups.map(g => g.key).sort()).toEqual([...s.leadConversations, ...s.agentChats, s.web].sort())
     })
   })
 })

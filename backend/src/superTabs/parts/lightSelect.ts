@@ -77,12 +77,16 @@ export function lightSelect(c: LightCandidates, opts: LightOptions): Omit<SwarmP
       ...activeWork(g.data!) ? [g.data!.assignment!.agentId] : []]))
     const undecided = new Set(c.agents.filter(a => !a.data!.workDecision && agentRole(a.data!) !== 'reviewer' && !busy.has(a.key)).map(a => a.key))
     const legacy = new Set(c.agents.filter(a => !a.data!.projectId).map(a => a.key))
+    // As light.ts: each PM's own chat with its person, by the chat id its agent keeps.
+    const chats = new Set(c.head.data!.projects ? c.head.data!.projects.map(p => p.leadConversationId) : ['lead'])
+    const leads = new Set([...selected.values()].flatMap(g => chats.has(g.key) && g.data!.leadId ? [g.data!.leadId] : []))
+    const pmChats = new Set(c.agents.flatMap(a => leads.has(a.key) && a.data!.chatId ? [a.data!.chatId] : []))
     for (const g of c.groups) {
       if (selected.has(g.key) || !awake(g)) continue
       const d = g.data!
       const ofUndecided = (d.assignment?.agentId && undecided.has(d.assignment.agentId)) || (d.leadId && undecided.has(d.leadId))
         || d.agentIds.some(id => undecided.has(id))
-      if (ofUndecided || d.agentIds.some(id => legacy.has(id))) selected.set(g.key, g)
+      if (ofUndecided || d.agentIds.some(id => legacy.has(id)) || pmChats.has(g.key)) selected.set(g.key, g)
     }
   }
   return { tabId: c.tabId, head: c.head, members: c.members, agents: c.agents, groups: [...selected.values()], starts: c.starts, progress: [],

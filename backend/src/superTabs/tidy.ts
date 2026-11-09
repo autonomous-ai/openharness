@@ -6,7 +6,7 @@ import { expiredModelRequests, unservedBuddyModels } from './buddyModel.js'
 import { agentDisplayName } from './agentNames.js'
 import { githubRepository, type GitHubRepository } from '../github/repository.js'
 import { activeWork, appendPullRequestUrls, stableId, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { agentProjectId, canReadGroup, groupProject, ledProject, projectsOf } from './projects.js'
+import { agentProjectId, canReadGroup, groupProject, isAgentChat, ledProject, projectsOf } from './projects.js'
 import { toLead } from './terminal.js'
 import { roleNameOf } from './instructions.js'
 
@@ -69,7 +69,8 @@ export function idleNotices(state: SuperTabState, projectId: string, now: number
   for (const target of state.agents) {
     if (target.id === coordinator.id || isBuddy(target) || isCrew(target) || target.workDecision === 'stop' || target.workDecision === 'keep' || busy.has(target.id)
       || agentProjectId(state, target) !== projectId || waitingToResume(state, target)) continue
-    const groups = groupsOf(state, target)
+    // Its 1:1 chat with its person is no work (agentChats.ts).
+    const groups = groupsOf(state, target).filter(g => !isAgentChat(g))
     // Handed work leaves an Engineer free for dispatch, but review/CI can return work to it. Its host cannot confirm an
     // agent.remove while it owns active work, so it must not receive an idle stop either.
     if (groups.some(activeWork)) continue

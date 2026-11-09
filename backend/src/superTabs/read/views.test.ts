@@ -134,7 +134,9 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
   it('says each agent\'s kind and the chat its person talks to it in', () => {
     const { parts, s } = scene()
     const view = readerView(parts, owner, NOW, { teamMachines: [] })
-    expect(view.derived.agents[s.lead]).toMatchObject({ kind: 'pm', chatId: 'lead' })
+    // Swarm v4: a PM is talked to in a chat of its own, not the project's channel.
+    expect(view.derived.agents[s.lead]).toMatchObject({ kind: 'pm' })
+    expect(view.derived.agents[s.lead]!.chatId).not.toBe('lead')
     expect(view.derived.agents[s.worker]).toMatchObject({ kind: 'regular', chatId: null })
   })
 

@@ -259,10 +259,15 @@ export async function loadLight(tx: Transaction, tabId: string,
   if (opts.groups === 'working') {
     const workers = agents as Part<unknown>[] as Part<Agent>[]
     const legacy = workers.filter(a => !a.data!.projectId).map(a => a.key)
-    const [undecided, ofLegacy] = await Promise.all([undecidedWork(workers, groups as Part<GroupData>[], lightGroups),
-      legacy.length ? lightGroups('agents', { agentIds: { $in: legacy }, dormant: false }) : Promise.resolve([])])
+    // Each PM's own chat with its person (Swarm v4), where the derived chatId points: by key, from the chat its agent keeps.
+    const chats = new Set(projects ? projects.map(p => p.leadConversationId) : ['lead'])
+    const leads = new Set((groups as Part<GroupData>[]).flatMap(g => chats.has(g.key) && g.data?.leadId ? [g.data.leadId] : []))
+    const pmChats = workers.flatMap(a => leads.has(a.key) && a.data!.chatId ? [a.data!.chatId] : [])
+    const [undecided, ofLegacy, ofLeads] = await Promise.all([undecidedWork(workers, groups as Part<GroupData>[], lightGroups),
+      legacy.length ? lightGroups('agents', { agentIds: { $in: legacy }, dormant: false }) : Promise.resolve([]),
+      pmChats.length ? lightGroups('key', { key: { $in: pmChats }, dormant: false }) : Promise.resolve([])])
     const held = new Set(groups.map(g => g.key))
-    groups.push(...unique([undecided, ofLegacy]).filter(g => !held.has(g.key)))
+    groups.push(...unique([undecided, ofLegacy, ofLeads]).filter(g => !held.has(g.key)))
   }
   return { tabId, head: toPart<HeadData>('head', head as unknown as PartRow), members, agents, groups, machines, starts, progress: [],
     sequenceBase: head.sequenceBase, visibilityEpoch: head.visibilityEpoch, groupCounter: head.groupCounter } as SwarmParts

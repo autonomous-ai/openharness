@@ -4,7 +4,7 @@
  * reader's own by this, a crown beside a PM, each bold while its chat has news the reader has not read (their read marks).
  */
 import { isBuddy, isBuddyChat } from './buddies.js'
-import type { Actor, Agent, SuperTabState } from './model.js'
+import type { Actor, Agent, Conversation, SuperTabState } from './model.js'
 import { isAgentChat, ledProject, onTeamAccount, projectsOf } from './projects.js'
 
 export type AgentKind = 'buddy' | 'pm' | 'regular'
@@ -29,13 +29,14 @@ export function agentKind(state: SuperTabState, target: Agent): AgentKind {
   return ledProject(state, target.id) ? 'pm' : 'regular'
 }
 
-/** The chat [target]'s person talks to it in: a Buddy's own chat, a PM's project chat, a Regular agent's own chat (agent.new);
- *  none for an agent started before chats of their own. */
-export function agentChatId(state: SuperTabState, target: Agent): string | null {
+/** The chat [target]'s person talks to it in: a Buddy's own chat, any other agent's own chat (agent.new, and a PM's since
+ *  Swarm v4, whose project chat is the channel only agents post in), else a PM's project chat (a PM from before); none for an
+ *  agent started before chats of their own. */
+export function agentChatId(state: SuperTabState, target: Agent, reads: (chat: Conversation) => boolean = () => true): string | null {
   if (isBuddy(target)) return state.conversations.find(c => isBuddyChat(c) && c.agentIds.includes(target.id))?.id ?? null
-  const led = ledProject(state, target.id)
-  if (led) return led.leadConversationId
-  return state.conversations.find(c => isAgentChat(c) && c.agentIds.includes(target.id))?.id ?? null
+  // Another person's own chat with their agent is theirs alone: its id goes only to who reads it, as a change read sends it.
+  const own = state.conversations.find(c => (c.id === target.chatId || isAgentChat(c) && c.agentIds.includes(target.id)) && reads(c))?.id
+  return own ?? ledProject(state, target.id)?.leadConversationId ?? null
 }
 
 /** Whether [target] is in [actor]'s My agents (task #4192, anh Dee 11-07: his list showed about 30 rows, agents he never

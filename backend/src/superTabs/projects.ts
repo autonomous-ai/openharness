@@ -747,8 +747,9 @@ export function deleteProject(state: SuperTabState, actor: Actor, projectId: str
   // A project nobody owns is deleted by the Swarm's owner, who reads nothing of it: no refusal names what is in it, and its
   // work, which nobody can resolve, goes with it.
   const ownerless = isOwnerless(project)
-  // A person's one Buddy chat belongs to no project and stays; that project's sessions in it go with their agents.
-  const groups = state.conversations.filter(c => !isLeads(c) && !isSwarmBuddyChat(c) && groupProject(state, c).id === project.id)
+  // A person's one Buddy chat belongs to no project and stays; that project's sessions in it go with their agents. An agent's own
+  // chat belongs to no project either (a PM's too since Swarm v4): it stays, and goes with its agent.
+  const groups = state.conversations.filter(c => !isLeads(c) && !isSwarmBuddyChat(c) && !isAgentChat(c) && groupProject(state, c).id === project.id)
   const groupIds = new Set(groups.map(c => c.id))
   // A queued start in an archived conversation can never be dispatched (commands.ts open() refuses it), so it no longer
   // blocks the delete; it goes with the project's other starts below. On 2026-11-03 one queued two days earlier kept an

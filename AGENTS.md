@@ -37,11 +37,14 @@ worse; a wall our own Swarms hit; what the outside company needs; contribution o
 - Copy is short and sharp. An empty list shows nothing. Buttons are 1-2 words.
 - Every UI element follows the [design doc](desktop/design/desktop-design-system.md); the doc and its gallery change in
   the same pull request.
-- Tasks are Accept and Decline.
 - Voice messages play only.
 - Every Desktop feature gets a Flutter test that clicks through it as a person does.
 - Anything that can be code is code (standard 13).
-- Accept all stays off for subscriptions until Anthropic and OpenAI confirm in writing.
+- Agents start as plain Claude Code or Codex with default settings: no Swarm instructions, skills or manual.
+
+# Talking to anh Dee
+
+Concise, plain words. Answer in 1-3 short lines; say more only when anh Dee asks or has to act on it.
 
 # Code standards
 
