@@ -109,9 +109,9 @@ values to creation, search and desktop presenters; it is not a second palette.
 `DesktopPromptSurface` keeps form actions visible beneath scrolling content.
 `DesktopPill` is the selector/scope variant of the same control family.
 `AppMenuItem` is the ordinary context-menu row. `AppDropdown` is every
-dropdown: whether a click or a key opened it, the control that opened it holds
-focus, Escape closes it from there one level at a time (a submenu, then the
-menu) and leaves focus on the control. Controllers, keymaps, pending
+dropdown: however a click or a key opened it, the control that opened it holds
+focus, and Escape closes the menu from there and leaves focus on the control (on
+a submenu's own row it closes the submenu first). Controllers, keymaps, pending
 receipts, transport state and persistence remain independent of presentation.
 
 Do not solve a local styling problem by inventing another button or palette.
