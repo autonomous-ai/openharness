@@ -306,19 +306,6 @@ class SuperTabMentions extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// The reader is finished with [mention]. Any reader of the Swarm may, read
-  /// only included, so this does not wait behind the composer's pending send.
-  Future<bool> done(SuperTabMention mention) async {
-    if (!await _markDone(mention)) {
-      error = 'Could not mark it read. Try again.';
-      notifyListeners();
-      return false;
-    }
-    await load();
-    unawaited(controller.refresh());
-    return true;
-  }
-
   /// Marks every unresolved one of [mentions] read, two at a time and read
   /// back once; how many the backend took. One that failed does not stop the
   /// rest.

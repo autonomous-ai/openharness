@@ -44,16 +44,12 @@ Run from `desktop/`:
 # The whole app, signed in as a fake account; ?scenario= picks the state.
 flutter build web --no-web-resources-cdn --dart-define=HARNESS_TEST=true \
   -t tool/web_ux_fixture.dart -o /tmp/web-ux
-# The Super Tab, from PR #1570's fixture; ?theme=dark is the Graphite theme.
-flutter build web --no-web-resources-cdn --dart-define=HARNESS_TEST=true \
-  -t tool/super_tab_mobile_fixture.dart -o /tmp/web-ux-super-tab
 
 # Playwright is not a dependency of this repository: install it once outside it.
 pnpm --dir ~/.cache/web-ux-playwright add playwright
 export PLAYWRIGHT_DIR=~/.cache/web-ux-playwright      # CHROME_PATH may name an installed Chromium
 
 node tool/web_ux/capture.mjs /tmp/web-ux out                          # out/screens/<flow>/<width>-<theme>.png
-FIXTURE=super-tab node tool/web_ux/capture.mjs /tmp/web-ux-super-tab out   # the super-tab-* flows
 node tool/web_ux/checks.mjs /tmp/web-ux out                           # tap sizes, wheel, swipe, hover, focus
 bash scripts/build-web-release.sh 1.0.0                              # build/web-release, as released
 node tool/web_ux/load-time.mjs build/web-release out                  # cold, second and returning visits, three profiles
@@ -179,6 +175,8 @@ Menu ▸ Settings: a screen with a rail on a computer, a list then a page on a p
 
 From `tool/super_tab_mobile_fixture.dart` (the real `SuperTabView`, `lib/super_tabs/view.dart`,
 on PR #1570's fake backend). On the web it is reached from Recent Swarms or a tab invite.
+The fixture, its `super-tab-*` flows and the `FIXTURE` option of `tool/web_ux` were removed with
+Swarm v1-v3 (#3623): they no longer run, and the captures stay at the audit revision.
 
 | State | Flow |
 | --- | --- |
