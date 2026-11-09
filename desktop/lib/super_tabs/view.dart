@@ -38,6 +38,7 @@ import 'unread_line.dart';
 import 'roster.dart';
 import 'profile_actions.dart';
 import 'live_card.dart';
+import 'personal_agents.dart';
 import 'personal_lead.dart';
 import 'personal_lead_card.dart';
 import 'personal_projects.dart';
@@ -272,6 +273,15 @@ class _SuperTabViewState extends State<SuperTabView>
     });
     (widget.onChooseAgentTerminal ?? widget.onOpenTerminal)(agent);
     _closeSidebar();
+  }
+
+  /// Opens a pane of the person's own listed under Your Team in their Personal Swarm: its tab comes forward with the pane
+  /// focused.
+  void _openPane(PersonalAgent pane) {
+    final app = widget.app;
+    if (app == null) return;
+    app.selectSwarm(pane.tab.id);
+    app.focusPane(pane.pane.id, reveal: true);
   }
 
   /// Keeps the Board of the project [group] belongs to in the middle, for a
@@ -2082,6 +2092,7 @@ class _SuperTabViewState extends State<SuperTabView>
     onNewAgent: widget.onNewAgent,
     onOpenAgentChat: _openAgentChat,
     onOpenAgentTerminal: _openAgentTerminal,
+    onOpenPane: _openPane,
     onNewSwarm: widget.onNewSwarm,
     page: _pageShown,
     places: SuperTabPlaces.of(c),

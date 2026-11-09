@@ -581,6 +581,7 @@ Top to bottom:
  Your Team             ⌄  +  quiet heading; ⌄ folds the list (open); + opens New agent
  ◎  River                     the PM wears the gold ring
  ◉  Kai                       bold: something new from it
+ ◉  Docs bot   Mac Studio     your Personal Swarm only: a pane you run that is not in the Swarm yet, with its computer
  Projects              ⌄  +  quiet heading; ⌄ folds the list (open); + opens New project
  #  lampos                    a project's channel; bold: something new
  Your Machines         ›     quiet heading, folded; each row a computer of this account, `offline` at its right when it is
@@ -596,6 +597,7 @@ Top to bottom:
 | Shared edges | `SuperTabQuietRow`, gallery check "the left pane's details end at one edge" | Every section's rows share the left edge (the faces' and icons' column), the right edge (every detail ends `AppDesktop.controlGap` from the row's right, with no column kept for anything after it) and the baselines (30 high rows). A heading's + ends on that right edge. |
 | No status marks | — | The left pane draws no spinner, check, `?` or failed mark (anh Dee 22:25, task #4645): status lives on the Tasks cards. An agent with something new is its row's semibold primary name, like an unread Slack channel; read rows stay regular, and the open row keeps its fill. |
 | Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) beside its name, always; the org name's chevron shows only while hovered or focused. Your Team and Projects start open, Your Machines and Top Teams folded; the reader's choice is kept. `onAdd` puts the `plus` button at its right, as on every section heading: Your Team's opens New agent, Projects' New project. |
+| Pane row | `SuperTabQuietRow` (`super_tabs/personal_agents.dart`) | In a person's own Personal Swarm, while they are alone in it, every Claude Code or Codex session they run in their tabs that is not in the Swarm yet (a running session on one of their own computers; a plain shell, a stopped session, a shared computer's and a Team account's are no agents of theirs) is a row after their agents, by name, each once. Its face is the one it wears once it joins (`swarmAgentId`, the Swarm's id for it), its name the one its pane shows, its computer the detail. Nothing is sent for it: a click brings its tab forward with the pane focused. |
 | Org name | `SuperTabQuietHeading.org` | Semibold 13 primary, no icon; its chevron only on hover; opens the Swarm menu. |
 | Person | `SuperTabAvatar.person` at 20 | A photo, or an initial on the neutral grey disc. |
 
