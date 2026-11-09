@@ -97,13 +97,15 @@ character, not starting or ending with a dot, and not a Windows device name (`CO
 `LPT0`-`LPT9`, in any case, with or without an extension); anything else is `BAD_NAME`. A read answers `{ text, version }`,
 with `text: null` and `version: ''` when there is no file; `version` is the SHA-256 of the file's bytes in lowercase hex.
 It also answers `shared`, only when there is any: `[{ name, text, truncated }]` for the project's `AGENTS.md` and then
-`CLAUDE.md`, each when it is a plain file directly in the agent's folder (never a parent's or the home's), whether or not the
-agent has a file of its own, so a person sees everything that instructs the agent. They are read only, and a save never
-touches them. Each is at most 64 KiB, with `truncated: true` when it was cut (at a whole character); one that is a link,
-not UTF-8 or unreadable is left out and never fails the read, and a reader that predates the field ignores it. A
-write replaces the file only if `version` is the one the writer read (`''` for no file), and answers `{ version }`. It
-makes `agents/` only once the save goes ahead, and saves of one file take turns in the daemon, so of two that read the same
-version one is saved and the other is `CHANGED`. A file or text over 64 KiB is refused, text with an unpaired surrogate is
+`CLAUDE.md`, each when it is a plain file directly in the agent's folder (never a parent's or the home's), whether or not
+the agent has a file of its own, so a person sees what instructs the agent in its folder. They are read only, and a save
+never touches them. Each is at most 64 KiB, with `truncated: true` when it was cut (at a whole character), so a read
+carries at most three texts of 64 KiB with the agent's own. One that is a link, not UTF-8 or unreadable is left out and
+never fails the read (one that is not UTF-8, or that the disk fails on, is logged by name and code), and a reader that
+predates the field ignores it. A write replaces the file only if `version` is the one the writer read (`''` for no
+file), and answers `{ version }`. It makes `agents/` only once the save goes ahead, and saves of one file take turns in
+the daemon, so of two that read the same version one is saved and the other is `CHANGED`. A file or text over 64 KiB is
+refused, text with an unpaired surrogate is
 `BAD_TEXT`, a file that is not UTF-8 is `NOT_UTF8` to a read and to a save over it (whatever `version` the save names), and
 nothing is read or written through a link: `agents` or the file being one is `UNSAFE_PATH`. Errors: `MISSING_AGENT_OR_NAME`,
 `BAD_NAME`, `AGENT_NOT_FOUND` (no such agent, or it has no folder), `OWNER_REQUIRED`, `TOO_LARGE`, `UNSAFE_PATH`,

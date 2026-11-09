@@ -69,20 +69,28 @@ async function entry(path: string): Promise<Stats | null> {
   }
 }
 
-/** What is at the file, after checking that each of `agents` and the file is a plain folder or file, or is not there. */
-async function locate(dir: string, file: string): Promise<Stats | null> {
-  const folder = await entry(dir)
-  if (folder && !folder.isDirectory()) throw new InstructionsError('UNSAFE_PATH')
-  const info = await entry(file)
-  // From lstat, so a link is not a file here, and nor is a folder or a named pipe, which would hold an open for ever.
+/** What is at [path] when it is a plain file, or null where there is nothing. From lstat, so a link is not a file here, and
+ *  nor is a folder or a named pipe, which would hold an open for ever. */
+async function plainFile(path: string): Promise<Stats | null> {
+  const info = await entry(path)
   if (info && !info.isFile()) throw new InstructionsError('UNSAFE_PATH')
   return info
 }
 
+/** What is at the file, after checking that each of `agents` and the file is a plain folder or file, or is not there. */
+async function locate(dir: string, file: string): Promise<Stats | null> {
+  const folder = await entry(dir)
+  if (folder && !folder.isDirectory()) throw new InstructionsError('UNSAFE_PATH')
+  return plainFile(file)
+}
+
 /** The file's bytes, to one past the limit at most: never the file whole, and the one byte over says there was more. */
 async function readPrefix(file: string): Promise<Buffer> {
-  const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW)
+  // The check of the file and this open are two steps: a file swapped for a named pipe between them would hold the open for
+  // ever. NONBLOCK opens a pipe at once, and the handle is looked at again, as a pipe would otherwise read as an empty file.
+  const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
   try {
+    if (!(await handle.stat()).isFile()) throw new InstructionsError('UNSAFE_PATH')
     const bytes = Buffer.alloc(INSTRUCTIONS_MAX_BYTES + 1)
     let length = 0
     while (length < bytes.length) {
@@ -134,9 +142,7 @@ interface SharedInstructions { name: (typeof SHARED_NAMES)[number]; text: string
 /** One of the shared files as it is shown: its text, to the limit, and whether there was more. Null where there is no such file. */
 async function readShared(cwd: string, name: SharedInstructions['name']): Promise<SharedInstructions | null> {
   const file = join(cwd, name)
-  const info = await entry(file)
-  if (!info) return null
-  if (!info.isFile()) throw new InstructionsError('UNSAFE_PATH')
+  if (!await plainFile(file)) return null
   const bytes = await readPrefix(file)
   const truncated = bytes.length > INSTRUCTIONS_MAX_BYTES
   try {
@@ -151,20 +157,20 @@ async function readShared(cwd: string, name: SharedInstructions['name']): Promis
 /** The files that instruct the agent besides its own, for a person to read beside it and never to change: AGENTS.md and
  *  CLAUDE.md when each is a plain file directly in its folder, never a parent's or the home's. Held to the rules of its own
  *  file: a link is not followed (a project often makes one of them the other, and then it is shown once, by the file itself),
- *  and each is read to the limit, with `truncated` saying it was cut, at a whole character. One that is not text, or not a plain
- *  file, is left out as the person made it, and one the disk fails on is left out and [failed] hears which: no file is an error
- *  of the whole read. */
-export async function readSharedInstructions(cwd: string, failed: (name: string, error: unknown) => void): Promise<SharedInstructions[]> {
-  const found: SharedInstructions[] = []
+ *  and each is read to the limit, with `truncated` saying it was cut, at a whole character. No file is an error of the whole:
+ *  one that cannot be shown is left out. A file that is not a plain file is as the person made it; one that is not text, and
+ *  one the disk fails on, come back in `failed` with the error, for the caller to tell. */
+export async function readSharedInstructions(cwd: string): Promise<{ shared: SharedInstructions[]; failed: Array<{ name: string; error: unknown }> }> {
+  const shared: SharedInstructions[] = [], failed: Array<{ name: string; error: unknown }> = []
   for (const name of SHARED_NAMES) {
     try {
       const one = await readShared(cwd, name)
-      if (one) found.push(one)
+      if (one) shared.push(one)
     } catch (error) {
-      if (!(error instanceof InstructionsError)) failed(name, error)
+      if (!(error instanceof InstructionsError && error.code === 'UNSAFE_PATH')) failed.push({ name, error })
     }
   }
-  return found
+  return { shared, failed }
 }
 
 /** Saves [text] as the file, making `agents/` when it is missing, if the file is as the writer saw it: [seen] is the

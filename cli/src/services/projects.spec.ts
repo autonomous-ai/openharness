@@ -227,9 +227,20 @@ describe('an agent\'s instructions file', () => {
       expect(await readFile(join(cwd, 'agents', 'AGENTS.md'), 'utf8')).toBe('not that file')
     })
 
-    it('never fail the read: one that is not text is left out, with nothing said of it', async () => {
+    it('never fail the read: one that is not text is left out, and logged by that name, never what it held', async () => {
       const { ask, cwd } = await project()
       await writeFile(join(cwd, 'AGENTS.md'), Buffer.from([0x66, 0xff, 0xfe, 0x66]))
+      await writeFile(join(cwd, 'CLAUDE.md'), 'Claude rules\n')
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({ text: null, version: '', shared: [both[1]] })
+        expect(log.mock.calls.map((call) => call.join(' '))).toEqual(['[projects] agent_instructions_read left out AGENTS.md · NOT_UTF8'])
+      } finally { log.mockRestore() }
+    })
+
+    it('say nothing of a file that is not a plain file: a link or a folder is as the person made it', async () => {
+      const { ask, cwd } = await project()
+      await mkdir(join(cwd, 'AGENTS.md'))
       await writeFile(join(cwd, 'CLAUDE.md'), 'Claude rules\n')
       const log = vi.spyOn(console, 'error').mockImplementation(() => {})
       try {
@@ -242,18 +253,34 @@ describe('an agent\'s instructions file', () => {
       const { ask } = await project()
       const log = vi.spyOn(console, 'error').mockImplementation(() => {})
       try {
-        vi.mocked(readSharedInstructions).mockImplementationOnce(async (_cwd, failed) => {
-          failed('AGENTS.md', Object.assign(new Error('/Users/me/secret-project/AGENTS.md: input/output error'), { code: 'EIO' }))
-          failed('CLAUDE.md', new Error('no code on this one'))
-          return []
+        vi.mocked(readSharedInstructions).mockResolvedValueOnce({
+          shared: [],
+          failed: [
+            { name: 'AGENTS.md', error: Object.assign(new Error('/Users/me/secret-project/AGENTS.md: input/output error'), { code: 'EIO' }) },
+            { name: 'CLAUDE.md', error: new Error('no code on this one') },
+            { name: 'AGENTS.md', error: undefined },
+          ],
         })
         const answer = await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })
         expect(answer).toEqual({ text: null, version: '' })
         expect(log.mock.calls.map((call) => call.join(' '))).toEqual([
           '[projects] agent_instructions_read left out AGENTS.md · EIO',
           '[projects] agent_instructions_read left out CLAUDE.md · unknown',
+          '[projects] agent_instructions_read left out AGENTS.md · unknown',
         ])
       } finally { log.mockRestore() }
+    })
+
+    // The caps are per file, so a read carries at most three texts of 64 KiB, however long the files are.
+    it('never make a read carry more than three texts of 64 KiB, the agent\'s own file and these two', async () => {
+      const { ask, cwd, file } = await project()
+      await mkdir(join(cwd, 'agents'))
+      await writeFile(file, 'o'.repeat(65_536))
+      await writeFile(join(cwd, 'AGENTS.md'), 'a'.repeat(100_000))
+      await writeFile(join(cwd, 'CLAUDE.md'), 'c'.repeat(1_000_000))
+      const answer = await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' }) as { text: string; shared: Array<{ text: string; truncated: boolean }> }
+      expect(answer.text).toHaveLength(65_536)
+      expect(answer.shared.map((one) => [one.text.length, one.truncated])).toEqual([[65_536, true], [65_536, true]])
     })
 
     it('are shown to nobody but the account\'s own computers: a collaborator is refused before anything is read', async () => {
@@ -382,7 +409,14 @@ describe('an agent\'s instructions file', () => {
       expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({ error: 'READ_FAILED' })
       vi.mocked(writeInstructions).mockRejectedValueOnce(new Error('disk'))
       expect(await ask('agent_instructions_write', { agentId: 'a1', name: 'Faye', text: 'x', version: '' })).toEqual({ error: 'WRITE_FAILED' })
+      // A rejection with nothing in it is still a failure with a name, not a second failure in the handler that reports it.
+      vi.mocked(readInstructions).mockRejectedValueOnce(undefined)
+      expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({ error: 'READ_FAILED' })
+      vi.mocked(writeInstructions).mockRejectedValueOnce(null)
+      expect(await ask('agent_instructions_write', { agentId: 'a1', name: 'Faye', text: 'x', version: '' })).toEqual({ error: 'WRITE_FAILED' })
       expect(log.mock.calls.map((call) => call.join(' '))).toEqual([
+        '[projects] agent_instructions_read failed · unknown',
+        '[projects] agent_instructions_write failed · unknown',
         '[projects] agent_instructions_read failed · unknown',
         '[projects] agent_instructions_write failed · unknown',
       ])

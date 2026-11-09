@@ -18,6 +18,10 @@ import { internalOnThrow } from './requestErrors.js'
 /** The requests the project readers answer for the apps, declared in core/api.ts for the core to route. */
 export { PROJECTS_REQUESTS } from '../core/api.js'
 
+/** What a failure is called in a log line: its code (the disk's, or an instructions refusal's), or `unknown` for one without,
+ *  which may be a rejection with nothing in it. Never its message, which names the person's folder. */
+const codeOf = (error: unknown): string => (error as NodeJS.ErrnoException | null | undefined)?.code ?? 'unknown'
+
 /** A trusted collaborator may use terminals here, but must not borrow this computer's GitHub account, nor read or save
  *  its agents' files. Only a process on this computer, or one of the owner's own computers, may. */
 const accountOwnerOnly = (asker: Asker): boolean => asker.owner && (asker.local || asker.accountOwner === true)
@@ -42,7 +46,7 @@ export function startProjects(core: CoreApi): ServiceRequests {
       } catch (error) {
         const refusal = error instanceof InstructionsError ? error.code : undefined
         if (refusal && refusal !== 'NOT_UTF8') return { error: refusal }
-        console.error(`[projects] ${type} failed · ${refusal ?? (error as NodeJS.ErrnoException).code ?? 'unknown'}`)
+        console.error(`[projects] ${type} failed · ${refusal ?? codeOf(error)}`)
         return { error: refusal ?? failed }
       }
     })
@@ -120,7 +124,8 @@ export function startProjects(core: CoreApi): ServiceRequests {
     // only, for an agent with no file of its own too, and a reader that predates it never looks at the field.
     agent_instructions_read: instructions('agent_instructions_read', 'READ_FAILED', async (cwd, { name }) => {
       const own = await readInstructions(cwd, name)
-      const shared = await readSharedInstructions(cwd, (file, error) => console.error(`[projects] agent_instructions_read left out ${file} · ${(error as NodeJS.ErrnoException).code ?? 'unknown'}`))
+      const { shared, failed } = await readSharedInstructions(cwd)
+      for (const { name: file, error } of failed) console.error(`[projects] agent_instructions_read left out ${file} · ${codeOf(error)}`)
       return shared.length ? { ...own, shared } : own
     }),
     agent_instructions_write: instructions('agent_instructions_write', 'WRITE_FAILED', (cwd, { name, text, version }) => writeInstructions(cwd, name, text, version)),
