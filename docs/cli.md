@@ -100,9 +100,14 @@ It also answers `shared`, only when there is any: `[{ name, text, truncated }]` 
 `CLAUDE.md`, each when it is a plain file directly in the agent's folder (never a parent's or the home's), whether or not
 the agent has a file of its own, so a person sees what instructs the agent in its folder. They are read only, and a save
 never touches them. Each is at most 64 KiB, with `truncated: true` when it was cut (at a whole character), so a read
-carries at most three texts of 64 KiB with the agent's own. One that is a link, not UTF-8 or unreadable is left out and
-never fails the read (one that is not UTF-8, or that the disk fails on, is logged by name and code), and a reader that
-predates the field ignores it. A write replaces the file only if `version` is the one the writer read (`''` for no
+carries at most three texts of 64 KiB with the agent's own. One that is there and is not shown never fails the read: it
+is in `skipped`, only when there is any, `[{ name, why }]`, with `why` one of `link` (a link is not followed), `not_text`
+(not UTF-8), `unreadable` (this user may not open it, or the disk fails on it) or `not_a_file` (a folder, a named pipe);
+one that is not UTF-8, or that the disk fails on, is also logged by name and code. Both fields also come beside an error
+of the agent's own file (`BAD_NAME`, `TOO_LARGE`, `NOT_UTF8`, `UNSAFE_PATH`, `READ_FAILED`), so that error does not hide
+what instructs the agent in its folder; an error that comes before the folder is known (`OWNER_REQUIRED`,
+`MISSING_AGENT_OR_NAME`, `AGENT_NOT_FOUND`) and a save's never carry them. A reader that predates the fields ignores
+them. A write replaces the file only if `version` is the one the writer read (`''` for no
 file), and answers `{ version }`. It makes `agents/` only once the save goes ahead, and saves of one file take turns in
 the daemon, so of two that read the same version one is saved and the other is `CHANGED`. A file or text over 64 KiB is
 refused, text with an unpaired surrogate is

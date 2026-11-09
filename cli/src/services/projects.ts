@@ -31,23 +31,39 @@ export function startProjects(core: CoreApi): ServiceRequests {
    *  somewhere this daemon runs git. */
   const knownRoots = (): string[] => core.agents.live().flatMap((agent) => agent.cwd ? [agent.cwd] : [])
   const readPullRequests = createPullRequestsStatusReader()
+  /** What else instructs an agent, as it goes with a read of its instructions: the project's own files that are shown, and
+   *  those that are there and are not, with why. What went wrong with one, where it is the file's or the disk's, is logged by
+   *  its name and a code and never where or what: the answer says only why. Each key is there only when it has something. */
+  const projectFiles = async (cwd: string): Promise<Record<string, unknown>> => {
+    const { shared, skipped } = await readSharedInstructions(cwd)
+    for (const one of skipped) if ('error' in one) console.error(`[projects] agent_instructions_read left out ${one.name} · ${codeOf(one.error)}`)
+    return {
+      ...(shared.length ? { shared } : {}),
+      ...(skipped.length ? { skipped: skipped.map(({ name, why }) => ({ name, why })) } : {}),
+    }
+  }
   /** One of the instructions file's two requests, for an agent in a folder here. A refusal that is the person's own
    *  mistake (a stale version, a bad name) is the reply and no more. A file that is not text is logged by that name, and a
-   *  failure of the disk by its code, and answered [failed]: its message names the person's folder. */
-  const instructions = (type: string, failed: string, run: (cwd: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>): ServiceRequest =>
+   *  failure of the disk by its code, and answered [failed]: its message names the person's folder. [beside] is asked first,
+   *  and what it gives comes with the answer, an error included: the agent's own file failing does not hide the rest. */
+  const instructions = (
+    type: string, failed: string, run: (cwd: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>,
+    beside?: (cwd: string) => Promise<Record<string, unknown>>,
+  ): ServiceRequest =>
     internalOnThrow(type, async (payload, asker) => {
       if (!accountOwnerOnly(asker)) return { error: 'OWNER_REQUIRED' }
       const { agentId, name } = payload
       if (typeof agentId !== 'string' || !agentId || typeof name !== 'string' || !name) return { error: 'MISSING_AGENT_OR_NAME' }
       const cwd = core.agents.resolve(agentId)?.cwd
       if (!cwd) return { error: 'AGENT_NOT_FOUND' }
+      const also = await beside?.(cwd)
       try {
-        return await run(cwd, payload)
+        return { ...await run(cwd, payload), ...also }
       } catch (error) {
         const refusal = error instanceof InstructionsError ? error.code : undefined
-        if (refusal && refusal !== 'NOT_UTF8') return { error: refusal }
+        if (refusal && refusal !== 'NOT_UTF8') return { error: refusal, ...also }
         console.error(`[projects] ${type} failed · ${refusal ?? codeOf(error)}`)
-        return { error: refusal ?? failed }
+        return { error: refusal ?? failed, ...also }
       }
     })
   return {
@@ -120,14 +136,10 @@ export function startProjects(core: CoreApi): ServiceRequests {
 
     // An agent's instructions file, in the folder it works in on this computer (lib/agentInstructions.ts). The owner's
     // other computers read and save it here, so it is never in git or on our servers: the one copy is this one. A read also
-    // carries what else instructs the agent, AGENTS.md and CLAUDE.md in that folder, as `shared` and only when there is any: read
-    // only, for an agent with no file of its own too, and a reader that predates it never looks at the field.
-    agent_instructions_read: instructions('agent_instructions_read', 'READ_FAILED', async (cwd, { name }) => {
-      const own = await readInstructions(cwd, name)
-      const { shared, failed } = await readSharedInstructions(cwd)
-      for (const { name: file, error } of failed) console.error(`[projects] agent_instructions_read left out ${file} · ${codeOf(error)}`)
-      return shared.length ? { ...own, shared } : own
-    }),
+    // carries what else instructs the agent, AGENTS.md and CLAUDE.md in that folder, as `shared`, and those that are there and
+    // not shown, with why, as `skipped`: each only when there is any, read only, for an agent with no file of its own too, beside
+    // an error of its own file too, and a reader that predates them never looks at the fields.
+    agent_instructions_read: instructions('agent_instructions_read', 'READ_FAILED', (cwd, { name }) => readInstructions(cwd, name), projectFiles),
     agent_instructions_write: instructions('agent_instructions_write', 'WRITE_FAILED', (cwd, { name, text, version }) => writeInstructions(cwd, name, text, version)),
   }
 }

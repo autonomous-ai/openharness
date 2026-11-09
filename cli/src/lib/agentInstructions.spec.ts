@@ -470,8 +470,7 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
   // it has a file of its own here. They are shown beside it and never written: the person sees what the agent is told there.
   describe('the files that instruct it besides, AGENTS.md and CLAUDE.md in its folder (read only)', () => {
     const project = (name: string, content: string | Buffer) => writeFile(join(cwd, name), content)
-    /** What is shown, and what was left out for a reason that is told: not a file that is not a plain file, which is as the
-     *  person made it. */
+    /** What is shown, and what is there and not shown, with why. */
     const read = (folder = cwd) => readSharedInstructions(folder)
     const shown = async () => (await read()).shared
 
@@ -483,25 +482,25 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
           { name: 'AGENTS.md', text: 'Agent rules\n', truncated: false },
           { name: 'CLAUDE.md', text: 'Claude rules\n', truncated: false },
         ],
-        failed: [],
+        skipped: [],
       })
     })
 
     it('gives only those that are there, and nothing, making nothing, when none is', async () => {
-      expect(await read()).toEqual({ shared: [], failed: [] })
+      expect(await read()).toEqual({ shared: [], skipped: [] })
       await project('CLAUDE.md', 'only this one')
-      expect(await read()).toEqual({ shared: [{ name: 'CLAUDE.md', text: 'only this one', truncated: false }], failed: [] })
+      expect(await read()).toEqual({ shared: [{ name: 'CLAUDE.md', text: 'only this one', truncated: false }], skipped: [] })
       await rm(join(cwd, 'CLAUDE.md'))
       await project('AGENTS.md', 'and now only that')
-      expect(await read()).toEqual({ shared: [{ name: 'AGENTS.md', text: 'and now only that', truncated: false }], failed: [] })
+      expect(await read()).toEqual({ shared: [{ name: 'AGENTS.md', text: 'and now only that', truncated: false }], skipped: [] })
       await rm(join(cwd, 'AGENTS.md'))
-      expect(await read()).toEqual({ shared: [], failed: [] })
+      expect(await read()).toEqual({ shared: [], skipped: [] })
       expect(await readdir(cwd)).toEqual([])
     })
 
     it('says there are none when the project folder is not there, and creates nothing', async () => {
       const gone = join(cwd, 'moved-away')
-      expect(await read(gone)).toEqual({ shared: [], failed: [] })
+      expect(await read(gone)).toEqual({ shared: [], skipped: [] })
       await expect(stat(gone)).rejects.toMatchObject({ code: 'ENOENT' })
     })
 
@@ -519,7 +518,7 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
       await writeFile(join(cwd, 'agents', 'AGENTS.md'), 'SECRET of the agents folder')
       await writeFile(join(cwd, 'docs', 'CLAUDE.md'), 'SECRET of a subfolder')
       for (const other of ['AGENT.md', 'CLAUDE.md.bak', 'GEMINI.md', 'README.md', 'claude.txt']) await project(other, 'SECRET of another file')
-      expect(await read()).toEqual({ shared: [], failed: [] })
+      expect(await read()).toEqual({ shared: [], skipped: [] })
     })
 
     describe('the limit', () => {
@@ -565,7 +564,7 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
 
       it('shows the start of a file that goes bad only after the limit: that part is never looked at', async () => {
         await project('AGENTS.md', Buffer.concat([Buffer.alloc(LIMIT, 97), Buffer.from([0xff, 0xfe, 0xff])]))
-        expect(await read()).toEqual({ shared: [{ name: 'AGENTS.md', text: 'a'.repeat(LIMIT), truncated: true }], failed: [] })
+        expect(await read()).toEqual({ shared: [{ name: 'AGENTS.md', text: 'a'.repeat(LIMIT), truncated: true }], skipped: [] })
       })
     })
 
@@ -577,7 +576,7 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
         await project('AGENTS.md', Buffer.from(bytes))
         expect(await read(), String(bytes)).toEqual({
           shared: [{ name: 'CLAUDE.md', text: 'fine', truncated: false }],
-          failed: [{ name: 'AGENTS.md', error: expect.objectContaining({ code: 'NOT_UTF8' }) }],
+          skipped: [{ name: 'AGENTS.md', why: 'not_text', error: expect.objectContaining({ code: 'NOT_UTF8' }) }],
         })
       }
     })
@@ -588,7 +587,7 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
       disk.failOpenOf = 'AGENTS.md'
       expect(await read()).toEqual({
         shared: [{ name: 'CLAUDE.md', text: 'fine', truncated: false }],
-        failed: [{ name: 'AGENTS.md', error: expect.objectContaining({ code: 'EIO' }) }],
+        skipped: [{ name: 'AGENTS.md', why: 'unreadable', error: expect.objectContaining({ code: 'EIO' }) }],
       })
     })
 
@@ -598,7 +597,7 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
       await chmod(join(cwd, 'AGENTS.md'), 0)
       expect(await read()).toEqual({
         shared: [{ name: 'CLAUDE.md', text: 'fine', truncated: false }],
-        failed: [{ name: 'AGENTS.md', error: expect.objectContaining({ code: 'EACCES' }) }],
+        skipped: [{ name: 'AGENTS.md', why: 'unreadable', error: expect.objectContaining({ code: 'EACCES' }) }],
       })
     })
 
@@ -607,7 +606,7 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
       await symlink('loop', loop)
       const result = await read(loop)
       expect(result.shared).toEqual([])
-      expect(result.failed.map(({ name, error }) => [name, (error as NodeJS.ErrnoException).code])).toEqual([['AGENTS.md', 'ELOOP'], ['CLAUDE.md', 'ELOOP']])
+      expect(result.skipped.map(({ name, why, error }) => [name, why, (error as NodeJS.ErrnoException).code])).toEqual([['AGENTS.md', 'unreadable', 'ELOOP'], ['CLAUDE.md', 'unreadable', 'ELOOP']])
     })
 
     it('never writes them: a save of the agent\'s own file leaves both as they were', async () => {
@@ -643,8 +642,8 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
         })
         try {
           for (let i = 0; i < 30; i++) {
-            const { shared, failed } = await read()
-            expect(failed).toEqual([])
+            const { shared, skipped } = await read()
+            expect(skipped).toEqual([])
             expect([one, two], `read ${i}`).toContain(shared[0].text)
           }
         } finally { await stop() }
@@ -657,40 +656,55 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
         const stop = writing((turn) => project('AGENTS.md', turn % 2 ? text : cjk(10_000)))
         try {
           for (let i = 0; i < 30; i++) {
-            const { shared, failed } = await read()
+            const { shared, skipped } = await read()
             for (const one of shared) expect(one.text.replaceAll(cjk(1), ''), `read ${i}`).toBe('')
-            for (const lost of failed) expect(lost.error, `read ${i}`).toMatchObject({ code: 'NOT_UTF8' })
+            for (const lost of skipped) expect(lost, `read ${i}`).toMatchObject({ why: 'not_text', error: { code: 'NOT_UTF8' } })
           }
         } finally { await stop() }
       }, 30_000)
     })
 
     describe.skipIf(!posix)('never through a link, and only a plain file', () => {
-      it('leaves out a link to a file outside, to one inside, and to nothing, and says nothing of it', async () => {
+      it('leaves out a link to a file outside, to one inside, and to nothing, and says it is a link', async () => {
         await writeFile(join(outside, 'secret.md'), 'SECRET outside the project')
         await project('real.md', 'inside the project')
         for (const target of [join(outside, 'secret.md'), join(cwd, 'real.md'), join(outside, 'not-there.md')]) {
           await rm(join(cwd, 'AGENTS.md'), { force: true })
           await symlink(target, join(cwd, 'AGENTS.md'))
-          expect(await read(), target).toEqual({ shared: [], failed: [] })
+          expect(await read(), target).toEqual({ shared: [], skipped: [{ name: 'AGENTS.md', why: 'link' }] })
         }
       })
 
-      it('shows the file once when one is a link to the other, as projects often make them', async () => {
+      it('shows the file once when one is a link to the other, as projects often make them, and says the other is a link', async () => {
         await project('AGENTS.md', 'the one text')
         await symlink('AGENTS.md', join(cwd, 'CLAUDE.md'))
-        expect(await read()).toEqual({ shared: [{ name: 'AGENTS.md', text: 'the one text', truncated: false }], failed: [] })
+        expect(await read()).toEqual({
+          shared: [{ name: 'AGENTS.md', text: 'the one text', truncated: false }],
+          skipped: [{ name: 'CLAUDE.md', why: 'link' }],
+        })
         await rm(join(cwd, 'AGENTS.md'))
         await rm(join(cwd, 'CLAUDE.md'))
         await project('CLAUDE.md', 'the other text')
         await symlink('CLAUDE.md', join(cwd, 'AGENTS.md'))
-        expect(await read()).toEqual({ shared: [{ name: 'CLAUDE.md', text: 'the other text', truncated: false }], failed: [] })
+        expect(await read()).toEqual({
+          shared: [{ name: 'CLAUDE.md', text: 'the other text', truncated: false }],
+          skipped: [{ name: 'AGENTS.md', why: 'link' }],
+        })
       })
 
-      it('leaves out what is not a plain file: a folder, a named pipe, which is never opened', async () => {
+      it('leaves out what is not a plain file, a folder or a named pipe, which is never opened, and says it is not a file', async () => {
         await mkdir(join(cwd, 'AGENTS.md'))
         execFileSync('mkfifo', [join(cwd, 'CLAUDE.md')])
-        expect(await read()).toEqual({ shared: [], failed: [] })
+        expect(await read()).toEqual({ shared: [], skipped: [{ name: 'AGENTS.md', why: 'not_a_file' }, { name: 'CLAUDE.md', why: 'not_a_file' }] })
+      })
+
+      it('says why of each of the two, in their order, when neither is shown', async () => {
+        await symlink('nowhere', join(cwd, 'AGENTS.md'))
+        await project('CLAUDE.md', Buffer.from([0xff]))
+        expect(await read()).toEqual({
+          shared: [],
+          skipped: [{ name: 'AGENTS.md', why: 'link' }, { name: 'CLAUDE.md', why: 'not_text', error: expect.objectContaining({ code: 'NOT_UTF8' }) }],
+        })
       })
 
       // The check of a file and its opening are two steps. A file swapped for a named pipe between them (a checkout, a program of
@@ -700,7 +714,7 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
         await project('AGENTS.md', 'a plain file when it was checked')
         await project('CLAUDE.md', 'fine')
         disk.swapForPipe = 'AGENTS.md'
-        expect(await read()).toEqual({ shared: [{ name: 'CLAUDE.md', text: 'fine', truncated: false }], failed: [] })
+        expect(await read()).toEqual({ shared: [{ name: 'CLAUDE.md', text: 'fine', truncated: false }], skipped: [{ name: 'AGENTS.md', why: 'not_a_file' }] })
       })
 
       it('holds the agent\'s own file to the same: a swap for a named pipe is refused, to a read and to a save', async () => {
@@ -716,7 +730,7 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
         await project('AGENTS.md', 'through the front door')
         const front = join(cwd, '..', 'front')
         await symlink(cwd, front)
-        expect(await read(front)).toEqual({ shared: [{ name: 'AGENTS.md', text: 'through the front door', truncated: false }], failed: [] })
+        expect(await read(front)).toEqual({ shared: [{ name: 'AGENTS.md', text: 'through the front door', truncated: false }], skipped: [] })
       })
     })
   })

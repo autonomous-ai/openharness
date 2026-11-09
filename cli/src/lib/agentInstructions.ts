@@ -136,41 +136,55 @@ export async function readInstructions(cwd: string, name: unknown): Promise<{ te
 
 /** What else instructs an agent, besides a file of its own: the project's own files, directly in its folder. */
 const SHARED_NAMES = ['AGENTS.md', 'CLAUDE.md'] as const
+type SharedName = (typeof SHARED_NAMES)[number]
 
-interface SharedInstructions { name: (typeof SHARED_NAMES)[number]; text: string; truncated: boolean }
+interface SharedInstructions { name: SharedName; text: string; truncated: boolean }
 
-/** One of the shared files as it is shown: its text, to the limit, and whether there was more. Null where there is no such file. */
-async function readShared(cwd: string, name: SharedInstructions['name']): Promise<SharedInstructions | null> {
+/** One of those files, there and not shown, and why in the words the apps read: a link (never followed), a file that is not
+ *  text, a file this user may not open or the disk fails on, or what is not a plain file (a folder, a named pipe). [error] is
+ *  what went wrong where the caller may log it, for a file that is not text and for the disk's failures, and is not there for
+ *  what is as the person made it. */
+interface SkippedInstructions { name: SharedName; why: 'link' | 'not_text' | 'unreadable' | 'not_a_file'; error?: unknown }
+
+/** One of the shared files as it is shown (its text, to the limit, and whether there was more), or why it is not, or null where
+ *  there is no such file. It does not throw: a file that cannot be shown is a reason, not a failure of the read. */
+async function readShared(cwd: string, name: SharedName): Promise<SharedInstructions | SkippedInstructions | null> {
   const file = join(cwd, name)
-  if (!await plainFile(file)) return null
-  const bytes = await readPrefix(file)
-  const truncated = bytes.length > INSTRUCTIONS_MAX_BYTES
   try {
-    // A file cut at the limit may end inside a character. Decoding as a stream holds an unfinished one back, so the text
-    // stops at the last whole character; a file that is whole and ends inside one is not text.
-    const text = truncated ? new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, INSTRUCTIONS_MAX_BYTES), { stream: true })
-      : utf8.decode(bytes)
-    return { name, text, truncated }
-  } catch { throw new InstructionsError('NOT_UTF8') }
+    const info = await entry(file)
+    if (!info) return null
+    if (!info.isFile()) return { name, why: info.isSymbolicLink() ? 'link' : 'not_a_file' }
+    const bytes = await readPrefix(file)
+    const truncated = bytes.length > INSTRUCTIONS_MAX_BYTES
+    try {
+      // A file cut at the limit may end inside a character. Decoding as a stream holds an unfinished one back, so the text
+      // stops at the last whole character; a file that is whole and ends inside one is not text.
+      const text = truncated ? new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, INSTRUCTIONS_MAX_BYTES), { stream: true })
+        : utf8.decode(bytes)
+      return { name, text, truncated }
+    } catch { throw new InstructionsError('NOT_UTF8') }
+  } catch (error) {
+    const code = error instanceof InstructionsError ? error.code : undefined
+    // Swapped for a named pipe between the check and the open: not a plain file, as it was said above.
+    if (code === 'UNSAFE_PATH') return { name, why: 'not_a_file' }
+    return { name, why: code === 'NOT_UTF8' ? 'not_text' : 'unreadable', error }
+  }
 }
 
 /** The files that instruct the agent besides its own, for a person to read beside it and never to change: AGENTS.md and
  *  CLAUDE.md when each is a plain file directly in its folder, never a parent's or the home's. Held to the rules of its own
  *  file: a link is not followed (a project often makes one of them the other, and then it is shown once, by the file itself),
  *  and each is read to the limit, with `truncated` saying it was cut, at a whole character. No file is an error of the whole:
- *  one that cannot be shown is left out. A file that is not a plain file is as the person made it; one that is not text, and
- *  one the disk fails on, come back in `failed` with the error, for the caller to tell. */
-export async function readSharedInstructions(cwd: string): Promise<{ shared: SharedInstructions[]; failed: Array<{ name: string; error: unknown }> }> {
-  const shared: SharedInstructions[] = [], failed: Array<{ name: string; error: unknown }> = []
+ *  one that is there and cannot be shown comes back in `skipped`, with why, in the order of the names. */
+export async function readSharedInstructions(cwd: string): Promise<{ shared: SharedInstructions[]; skipped: SkippedInstructions[] }> {
+  const shared: SharedInstructions[] = [], skipped: SkippedInstructions[] = []
   for (const name of SHARED_NAMES) {
-    try {
-      const one = await readShared(cwd, name)
-      if (one) shared.push(one)
-    } catch (error) {
-      if (!(error instanceof InstructionsError && error.code === 'UNSAFE_PATH')) failed.push({ name, error })
-    }
+    const one = await readShared(cwd, name)
+    if (!one) continue
+    if ('why' in one) skipped.push(one)
+    else shared.push(one)
   }
-  return { shared, failed }
+  return { shared, skipped }
 }
 
 /** Saves [text] as the file, making `agents/` when it is missing, if the file is as the writer saw it: [seen] is the

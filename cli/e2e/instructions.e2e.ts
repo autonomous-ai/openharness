@@ -8,8 +8,9 @@
  * - A Product Manager in a repository with no `agents` folder reads as the project's two files, sealed: the relay holds not a
  *   word of them, and saving her own file leaves them as they were.
  * - Files made to break it: a file larger than any instructions, links that lead out of the project, bytes that are not text,
- *   a file that cannot be opened, a named pipe, a folder. What can be shown is shown, what cannot is left out, and the read
- *   neither fails nor waits.
+ *   a file that cannot be opened, a named pipe, a folder. What can be shown is shown, what cannot is left out and said to be
+ *   (`skipped`, with why), and the read neither fails nor waits.
+ * - An error of her own file (a name it cannot have, a file over the limit, not text) leaves the project's files beside it.
  * - Writers at the same time, whichever way a file is replaced: every answer is whole.
  * - The machine offline: the read is refused at once, and answered with what its disk holds now when it is back.
  *
@@ -109,37 +110,40 @@ describe('an agent\'s instructions, as the owner reads them from another compute
     writeFileSync(join(outside, 'secret.md'), 'SECRET-OUTSIDE-THE-PROJECT\n')
     const agentsFile = join(folder, 'AGENTS.md'), claudeFile = join(folder, 'CLAUDE.md')
     const fine = (name: string, text: string): Shared[number] => ({ name, text, truncated: false })
-    const cases: Array<[string, () => void, Shared | undefined]> = [
+    const left = (name: string, why: string) => ({ name, why })
+    // What is shown, and what is there and not shown, with why.
+    const cases: Array<[string, () => void, Shared | undefined, Array<{ name: string; why: string }> | undefined]> = [
       // 6 MB: the limit falls inside the character after the 21 845th (three bytes each), so the text ends before it.
-      ['a file far over the limit, cut at a whole character', () => writeFileSync(agentsFile, euro.repeat(2_000_000)), [{ name: 'AGENTS.md', text: euro.repeat(21_845), truncated: true }]],
-      ['an empty file', () => writeFileSync(agentsFile, ''), [fine('AGENTS.md', '')]],
+      ['a file far over the limit, cut at a whole character', () => writeFileSync(agentsFile, euro.repeat(2_000_000)), [{ name: 'AGENTS.md', text: euro.repeat(21_845), truncated: true }], undefined],
+      ['an empty file', () => writeFileSync(agentsFile, ''), [fine('AGENTS.md', '')], undefined],
       ['links that lead out of the project, and a link to such a link', () => {
         symlinkSync(join(outside, 'secret.md'), agentsFile)
         symlinkSync('AGENTS.md', claudeFile)
-      }, undefined],
-      ['a link to nothing', () => symlinkSync(join(outside, 'missing.md'), claudeFile), undefined],
+      }, undefined, [left('AGENTS.md', 'link'), left('CLAUDE.md', 'link')]],
+      ['a link to nothing', () => symlinkSync(join(outside, 'missing.md'), claudeFile), undefined, [left('CLAUDE.md', 'link')]],
       ['one file that is a link to the other: the real one, once', () => {
         writeFileSync(agentsFile, 'Real.\n')
         symlinkSync('AGENTS.md', claudeFile)
-      }, [fine('AGENTS.md', 'Real.\n')]],
+      }, [fine('AGENTS.md', 'Real.\n')], [left('CLAUDE.md', 'link')]],
       ['bytes that are not text beside text', () => {
         writeFileSync(agentsFile, 'Fine.\n')
         writeFileSync(claudeFile, Buffer.from([0x41, 0xe9, 0x42]))
-      }, [fine('AGENTS.md', 'Fine.\n')]],
-      ['text with a byte-order mark and two kinds of line ending, as it is', () => writeFileSync(agentsFile, '\u{feff}one\r\ntwo\n'), [fine('AGENTS.md', '\u{feff}one\r\ntwo\n')]],
-      ['folders by those names', () => { mkdirSync(agentsFile); mkdirSync(claudeFile) }, undefined],
+      }, [fine('AGENTS.md', 'Fine.\n')], [left('CLAUDE.md', 'not_text')]],
+      ['text with a byte-order mark and two kinds of line ending, as it is', () => writeFileSync(agentsFile, '\u{feff}one\r\ntwo\n'), [fine('AGENTS.md', '\u{feff}one\r\ntwo\n')], undefined],
+      ['folders by those names', () => { mkdirSync(agentsFile); mkdirSync(claudeFile) }, undefined, [left('AGENTS.md', 'not_a_file'), left('CLAUDE.md', 'not_a_file')]],
     ]
-    if (canBeRefused) cases.push(['a file this user may not open', () => { writeFileSync(claudeFile, 'Private.\n'); chmodSync(claudeFile, 0) }, undefined])
+    if (canBeRefused) cases.push(['a file this user may not open', () => { writeFileSync(claudeFile, 'Private.\n'); chmodSync(claudeFile, 0) }, undefined, [left('CLAUDE.md', 'unreadable')]])
     if (process.platform !== 'win32') {
-      cases.push(['a named pipe, which an open would wait on for ever', () => { writeFileSync(agentsFile, 'Before the pipe.\n'); execFileSync('mkfifo', [claudeFile]) }, [fine('AGENTS.md', 'Before the pipe.\n')]])
+      cases.push(['a named pipe, which an open would wait on for ever', () => { writeFileSync(agentsFile, 'Before the pipe.\n'); execFileSync('mkfifo', [claudeFile]) }, [fine('AGENTS.md', 'Before the pipe.\n')], [left('CLAUDE.md', 'not_a_file')]])
     }
-    for (const [what, set, expected] of cases) {
+    for (const [what, set, shown, skipped] of cases) {
       for (const file of [agentsFile, claudeFile]) clear(file)
       set()
       const answer = await ask('agent_instructions_read')
       expect(answer, what).not.toHaveProperty('error')
       expect(answer, what).toMatchObject({ text: null, version: '' })
-      expect(answer.shared, what).toEqual(expected)
+      expect(answer.shared, what).toEqual(shown)
+      expect(answer.skipped, what).toEqual(skipped)
       expect(JSON.stringify(answer), what).not.toContain('SECRET-OUTSIDE')
     }
     // What was left out for a reason that is not the person's own doing is said in the log, by name and code and nothing more.
@@ -155,6 +159,33 @@ describe('an agent\'s instructions, as the owner reads them from another compute
     const worst = await ask('agent_instructions_read')
     expect(worst.text).toHaveLength(65_536)
     expect((worst.shared as Shared).map((one) => [one.name, one.text.length, one.truncated])).toEqual([['AGENTS.md', 65_536, false], ['CLAUDE.md', 65_536, false]])
+  })
+
+  // The owner reads her instructions to see what the agent is told: a name the agent's own file cannot have, or that file being
+  // too large or not text, must not hide what its project tells it.
+  it('an error of her own file does not hide the project\'s: a name it cannot have, a file over the limit, a file that is not text', async () => {
+    const { phone, folder, ask } = await fresh()
+    writeFileSync(join(folder, 'AGENTS.md'), 'Ship it.\n')
+    if (process.platform !== 'win32') symlinkSync('AGENTS.md', join(folder, 'CLAUDE.md'))
+    const shared = [{ name: 'AGENTS.md', text: 'Ship it.\n', truncated: false }]
+    const skipped = process.platform === 'win32' ? undefined : [{ name: 'CLAUDE.md', why: 'link' }]
+    const refused = await ask('agent_instructions_read', { name: 'Faye:Ken' })
+    expect(refused.error).toBe('BAD_NAME')
+    expect(refused.shared).toEqual(shared)
+    expect(refused.skipped).toEqual(skipped)
+    mkdirSync(join(folder, 'agents'))
+    for (const [what, bytes, error] of [['over the limit', Buffer.alloc(65_537, 97), 'TOO_LARGE'], ['not text', Buffer.from([0x66, 0xff, 0xfe, 0x66]), 'NOT_UTF8']] as const) {
+      writeFileSync(join(folder, 'agents', 'Faye.md'), bytes)
+      const answer = await ask('agent_instructions_read')
+      expect(answer.error, what).toBe(error)
+      expect(answer.shared, what).toEqual(shared)
+      expect(answer.skipped, what).toEqual(skipped)
+    }
+    // Where the folder is not known there is nothing to read beside it.
+    const nobody = await phone.request('agent_instructions_read', { agentId: 'no-such-agent', name: 'Faye' }, 30_000)
+    expect(nobody.error).toBe('AGENT_NOT_FOUND')
+    expect(nobody).not.toHaveProperty('shared')
+    expect(nobody).not.toHaveProperty('skipped')
   })
 
   it('written while it is read, whichever way a file is replaced: every answer is whole, and the last is what the disk holds', async () => {
