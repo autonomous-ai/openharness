@@ -8,7 +8,7 @@
 import { join } from 'node:path'
 import { homeRoots, launchHomeOf } from '../lib/engineHomes.js'
 import { homeIsNetworkOrDevice } from './kit/homeAdoption.js'
-import { forgetTrustIn, recordTrustIn, trustsIn } from './kit/folderTrust.js'
+import { acceptedIn, forgetTrustIn, recordAcceptanceIn, recordSettingIn, recordTrustIn, trustsIn } from './kit/folderTrust.js'
 import { recordInheritedMcp } from './kit/inheritedMcp.js'
 import { repairHistory } from './kit/resumeRepair.js'
 import { launchContract } from './launches.js'
@@ -56,6 +56,40 @@ export function folderTrust(engine: AgentEngine, profile?: string | null, enviro
     },
     forget: (path) => network() ? 'skipped' : forgetTrustIn(trust, file(), path),
   }
+}
+
+/** Record that `engine`'s first-run screens are done, as finishing them would (`onboarding`); null for an engine with none.
+ *  A network or device home is never opened, as for trust. */
+export function skipOnboarding(engine: AgentEngine, environment?: NodeJS.ProcessEnv): 'accepted' | 'already' | 'skipped' | null {
+  const contract = launchContract(engine)?.onboarding
+  if (!contract) return null
+  const home = launchHomeOf(contract.home, null, environment)
+  return homeIsNetworkOrDevice(home) ? 'skipped' : recordAcceptanceIn(join(home, contract.file), contract.key)
+}
+
+/** Whether `engine`'s questions before a Swarm agent's first turn are answered here: its first-run screens and full mode's
+ *  warning (`onboarding`, `bypassAcceptance`). Null for an engine that asks neither; false in a network or device home. */
+export function firstRunAnswered(engine: AgentEngine, environment?: NodeJS.ProcessEnv): boolean | null {
+  const onboarding = launchContract(engine)?.onboarding
+  if (!onboarding) return null
+  const home = launchHomeOf(onboarding.home, null, environment)
+  return !homeIsNetworkOrDevice(home) && acceptedIn(join(home, onboarding.file), onboarding.key)
+}
+
+/**
+ * The person's answers to `engine`'s first-run screens, given on the phone setting up this computer (owner, 2026-11-06): its
+ * `theme`, one of the contract's, and the screens done. Recorded as the engine records its own; a `false` the person set
+ * before stays. No permission setting: the Buddy runs in its owner's own mode (task #4215). Whether it is answered now
+ * ([firstRunAnswered]).
+ */
+export function answerFirstRun(engine: AgentEngine, answers: { theme: string }, environment?: NodeJS.ProcessEnv): boolean {
+  const onboarding = launchContract(engine)?.onboarding
+  if (!onboarding) return false
+  const home = launchHomeOf(onboarding.home, null, environment)
+  if (homeIsNetworkOrDevice(home)) return false
+  if (onboarding.theme?.values.includes(answers.theme)) recordSettingIn(join(home, onboarding.file), onboarding.theme.key, answers.theme)
+  skipOnboarding(engine, environment)
+  return firstRunAnswered(engine, environment) === true
 }
 
 /** The session a resume relaunches. `codexHome` is the agent's own engine home, the row's profile. */

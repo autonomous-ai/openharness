@@ -218,13 +218,12 @@ void main() {
       await close(tester, app);
     });
 
-    testWidgets('Set up Intern 3 is left to Computers, whose list has it', (
-      tester,
-    ) async {
+    // Owner, 2026-11-05: always here, computers or not, for a second Intern 3 as for the first.
+    testWidgets('Set up Intern 3 stays with computers too', (tester) async {
       final app = await openSettings(tester, swarm: true);
 
-      await reveal(tester, find.text('Phone name'));
-      expect(find.text('Set up Intern 3'), findsNothing);
+      await reveal(tester, find.text('Set up Intern 3'));
+      expect(inCard('Computers', 'Set up Intern 3'), findsOneWidget);
       await close(tester, app);
     });
 

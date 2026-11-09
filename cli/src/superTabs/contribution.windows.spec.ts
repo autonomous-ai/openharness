@@ -21,7 +21,9 @@ function fixture(existing?: string) {
   const close = vi.fn()
   const machines = existing ? [{ machineId: core.daemon.machineId(), cwd: existing }] : []
   const deps = { backend: vi.fn(async (_core: unknown, _method: string, path: string) => swarmReply(path, { machines })), open: vi.fn(async () => ({ request, close })), prepare: vi.fn(),
-    capacity: vi.fn(async () => ({ ok: true, resources: { memoryTotalBytes: 8 * 1024 ** 3, memoryUsedBytes: 0, projectDiskFreeBytes: 1e11 } })) }
+    capacity: vi.fn(async () => ({ ok: true, resources: { memoryTotalBytes: 8 * 1024 ** 3, memoryUsedBytes: 0, projectDiskFreeBytes: 1e11 } })),
+    // Claude Code's first-run questions answered already: never this machine's own ~/.claude.json.
+    firstRun: () => true }
   return { core, deps, close }
 }
 
@@ -35,7 +37,7 @@ describe('contributing a Windows machine to a swarm', () => {
   ])('$name', async ({ existing, cwd }) => {
     const { core, deps, close } = fixture(existing)
     const result = await prepareContribution(core, { tabId: 'tab', scope: 'swarm' }, deps as never)
-    expect(result).toEqual({ ok: true, state: 'ready', scope: 'swarm', cwd, engines: ['claude'], maxAgents: 2, maxAvailableAgents: 4 })
+    expect(result).toEqual({ ok: true, state: 'ready', scope: 'swarm', cwd, engines: ['claude'], signedIn: ['claude'], maxAgents: 2, maxAvailableAgents: 4 })
     expect(mkdir).toHaveBeenCalledExactlyOnceWith(cwd, { recursive: true })
     expect(deps.capacity).toHaveBeenCalledExactlyOnceWith({ cwd, tools: ['git'], devices: [] })
     expect(deps.prepare).not.toHaveBeenCalled()
