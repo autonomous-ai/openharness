@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/super_tabs/code_block.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/attachment_upload.dart';
 import 'package:harness/super_tabs/attachment_viewer.dart';
@@ -682,6 +683,17 @@ void main() {
       expect(copied, ['final x = 1;\nprint(x);']);
       expect(find.text('Code copied'), findsOneWidget);
       await tester.pumpAndSettle(const Duration(seconds: 3));
+      await close(tester, c);
+    });
+
+    testWidgets('an empty block draws nothing: no box, no Copy', (
+      tester,
+    ) async {
+      final c = await show(tester, text: 'Nothing in it:\n\n```\n```');
+      expect(find.text('Nothing in it:'), findsOneWidget);
+      expect(find.byType(SuperTabCodeBlock), findsOneWidget);
+      expect(tester.getSize(find.byType(SuperTabCodeBlock)).height, 0);
+      expect(find.text('Copy'), findsNothing);
       await close(tester, c);
     });
 

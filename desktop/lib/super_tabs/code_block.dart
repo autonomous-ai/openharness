@@ -30,6 +30,8 @@ class SuperTabCodeBlock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    // An empty fence has nothing to read or copy.
+    if (code.trim().isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         grid.AppDesktop.groupGap,
