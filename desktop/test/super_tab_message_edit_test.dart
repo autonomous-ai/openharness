@@ -140,7 +140,7 @@ void main() {
 
   /// The reader's own message, an agent's and another person's.
   ConversationServer three() {
-    final server = ConversationServer()
+    final server = ConversationServer.chat()
       ..append('My own words')
       ..append('An agent update', agent: true)
       ..append('Someone else');
@@ -175,7 +175,7 @@ void main() {
         brightness = appearance;
         grid.AppTheme.brightness.value = appearance;
         addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
-        final server = ConversationServer()..append('Please fix the menu');
+        final server = ConversationServer.chat()..append('Please fix the menu');
         server.messages.single['source'] = {
           'kind': 'buddy-proposal',
           'personId': 'owner',
@@ -196,7 +196,7 @@ void main() {
     testWidgets('${entry.key} cannot delete an owner Buddy proposal', (
       tester,
     ) async {
-      final server = ConversationServer()..append('Please fix the menu');
+      final server = ConversationServer.chat()..append('Please fix the menu');
       server.messages.single
         ..['author'] = entry.value
         ..['source'] = {'kind': 'buddy-proposal', 'personId': 'owner'};
@@ -215,7 +215,7 @@ void main() {
     testWidgets('a source that does not authorize owner deletion: $source', (
       tester,
     ) async {
-      final server = ConversationServer()..append('Please fix the menu');
+      final server = ConversationServer.chat()..append('Please fix the menu');
       server.messages.single['source'] = source;
       await show(tester, server);
       await openMore(tester, 'message-1');
@@ -397,7 +397,7 @@ void main() {
 
   testWidgets('a deleted message with replies shows the deleted line, no '
       'actions, and keeps its thread line', (tester) async {
-    final server = ConversationServer()..threads = true;
+    final server = ConversationServer.chat()..threads = true;
     server.append('Root to delete');
     server.append('A reply');
     server.messages[1]['thread'] = 'message-1';
@@ -431,7 +431,7 @@ void main() {
 
   test('a page read again drops a message deleted elsewhere and takes an '
       'edited text', () async {
-    final server = ConversationServer()
+    final server = ConversationServer.chat()
       ..append('One')
       ..append('Two')
       ..append('Three');
@@ -462,7 +462,7 @@ void main() {
   });
 
   test('a tombstone read again replaces the message it was', () async {
-    final server = ConversationServer()..threads = true;
+    final server = ConversationServer.chat()..threads = true;
     server.append('Root');
     server.append('Reply');
     server.messages[1]['thread'] = 'message-1';
@@ -558,7 +558,7 @@ void main() {
   // Delete stays (#3335 review).
   group('a voice message of your own', () {
     const words = 'Ship the login fix today.';
-    ConversationServer voice() => ConversationServer()
+    ConversationServer voice() => ConversationServer.chat()
       ..append(
         words,
         attachments: [

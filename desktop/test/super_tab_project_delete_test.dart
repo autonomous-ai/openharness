@@ -110,7 +110,9 @@ void main() {
       expect(c.snapshot!.conversations.single.id, 'design-lead');
       expect(c.draft('offline'), isEmpty);
       expect(find.text('Old project conversation.'), findsNothing);
-      expect(composer, findsOneWidget);
+      // Only agents post in a project's channel (Swarm v4): its line stands where the box was.
+      expect(composer, findsNothing);
+      expect(find.byKey(const ValueKey('super-agents-only')), findsOneWidget);
       await finish(tester);
     },
   );

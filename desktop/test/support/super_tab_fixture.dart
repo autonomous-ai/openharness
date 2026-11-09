@@ -493,6 +493,14 @@ String _backendId(List<String> parts) => const DartSha256()
     .substring(0, 24);
 
 class ConversationServer {
+  ConversationServer();
+
+  /// A Swarm with no project, whose first chat is a plain one a person writes in (Swarm v4: a project's channel is for
+  /// agents), as the chat's own tests need.
+  ConversationServer.chat() {
+    state['projects'] = <dynamic>[];
+  }
+
   int revision = 0;
 
   /// The Swarm reads this server answers, worked out from [state].

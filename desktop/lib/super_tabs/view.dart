@@ -155,16 +155,16 @@ class SuperTabView extends StatefulWidget {
     this.paneStore,
     this.github,
     this.instructions,
-    this.board = false,
+    this.board = true,
   });
   final SuperTabController controller;
 
   /// Where pane widths are remembered; the app's local store when null.
   final LocalKeyValueStore? paneStore;
 
-  /// Desktop's layout of task #3787 (anh Dee): a project opens its Board with the person's Buddy beside it, the left
-  /// rail has no Buddy entry and no Threads, and a chat is one flat list (old thread replies inline in time order, a
-  /// reply quoting its message). The web keeps today's layout for now.
+  /// Swarm v4's layout (anh Dee, 2026-11-08), the default: a project's channel that only agents post in, the person's
+  /// own agents in the left pane, their chats and a task's thread beside it. Only the browser still passes false, for
+  /// the v3 layout, until the web moves to v4 (anh Dee, 2026-11-09).
   final bool board;
   final VoidCallback onInvite;
   final ValueChanged<SuperTabConversation> onAddAgent;

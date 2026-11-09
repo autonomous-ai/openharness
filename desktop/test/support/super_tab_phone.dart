@@ -42,6 +42,7 @@ Future<(ConversationServer, SuperTabController)> mountPhoneSuperTab(
   if (initial != null) await controller.select(initial);
   final view = Scaffold(
     body: SuperTabView(
+      board: false,
       controller: controller,
       onInvite: () {},
       onAddAgent: (_) {},

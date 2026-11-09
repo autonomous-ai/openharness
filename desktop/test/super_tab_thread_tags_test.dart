@@ -62,7 +62,7 @@ void main() {
   /// The owner, ken and dee in a Swarm whose chats hold the agent Kestrel;
   /// the lead chat has a thread at message-1, and a second at message-3.
   ConversationServer swarm() {
-    final server = ConversationServer()..threads = true;
+    final server = ConversationServer.chat()..threads = true;
     server.state['people'] = [
       {'id': 'owner', 'email': 'river@autonomous.ai', 'role': 'owner'},
       {'id': 'ken', 'email': 'ken15@autonomous.ai', 'role': 'collaborator'},

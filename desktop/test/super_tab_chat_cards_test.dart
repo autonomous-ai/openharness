@@ -16,7 +16,7 @@ import 'support/super_tab_fixture.dart';
 void main() {
   group('a sent brief', () {
     ConversationServer server() {
-      final server = ConversationServer();
+      final server = ConversationServer.chat();
       (server.state['agents'] as List).add({
         'id': 'kai',
         'name': 'Kai',
@@ -90,6 +90,8 @@ void main() {
         ),
       );
       expect(card.width, lessThan(tester.getSize(ship).width / 2));
+      // The read mark's save is on its way: let it land.
+      await tester.pump(const Duration(milliseconds: 300));
     });
   });
 
@@ -100,14 +102,14 @@ void main() {
     testWidgets('from an agent shows whole, never folded behind More', (
       tester,
     ) async {
-      final server = ConversationServer()..append(long, agent: true);
+      final server = ConversationServer.chat()..append(long, agent: true);
       await showView(tester, server);
       expect(find.text('More'), findsNothing);
       expect(find.text('Line 14 of the plan.').hitTestable(), findsOneWidget);
     });
 
     testWidgets('from a person shows whole too', (tester) async {
-      final server = ConversationServer()..append(long);
+      final server = ConversationServer.chat()..append(long);
       await showView(tester, server);
       expect(find.text('More'), findsNothing);
       expect(find.text('Line 14 of the plan.').hitTestable(), findsOneWidget);
@@ -118,7 +120,7 @@ void main() {
     testWidgets('is a card: Decision, its question, and View for the rest', (
       tester,
     ) async {
-      final server = ConversationServer();
+      final server = ConversationServer.chat();
       server.append(
         'River asks owner (#12): Ship it tonight?\n\nOptions: Yes, No\n',
         agent: true,
