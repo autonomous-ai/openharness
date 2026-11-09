@@ -128,6 +128,35 @@ describe('the event funnel', () => {
     ])
   })
 
+  // The Swarm host posts an agent's answer into its person's 1:1 chat when the turn ends (superTabs/agentReplies.ts): every
+  // real end, a queued follow-up's included, and never one read back from disk.
+  it('tells those that hear turn ends each live end, a boundary before a queued follow-up too, and never a re-read', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const ended_ = vi.fn()
+    const { funnel } = setup('codex', { ends: { ended: ended_ } })
+    funnel('s1', [started(), text(), ended()])
+    funnel('s1', [started(), ended(true)])
+    funnel('s1', [ended(), started()])
+    funnel('s1', [started(), ended()], { replay: true })
+    funnel('s1', [started(), ended()], { resumed: true })
+    expect(ended_.mock.calls).toEqual([
+      [{ agentId: 'a1', sessionId: 's1', aborted: false }],
+      [{ agentId: 'a1', sessionId: 's1', aborted: true }],
+      [{ agentId: 'a1', sessionId: 's1', aborted: false }],
+    ])
+  })
+
+  it('tells them after the input has settled the turn, and carries on past one that throws', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { funnel, calls } = setup('claude', { ends: { ended: vi.fn(() => { calls.push('ends'); throw new Error('listener failed') }) } })
+    funnel('s1', [started(), ended()])
+    expect(calls.slice(calls.indexOf('send turn_ended'))).toEqual([
+      'send turn_ended', 'search', 'device ended', 'deviceInput ended', 'input ended', 'questions stop', 'ends', 'mirror', 'device stream',
+    ])
+    expect(error.mock.calls.map(([line]) => line)).toEqual(['[funnel] turn-ends failed · listener failed'])
+  })
+
   it('marks a turn picked up at attach as such, and still streams it to the device', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const { funnel, calls, deps } = setup()
