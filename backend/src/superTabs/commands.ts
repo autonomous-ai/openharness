@@ -4337,6 +4337,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     case 'agent.release': {
       const target = agent(state, command.agentId)
+      // Swarm v4 (anh Dee 2026-11-09): only its person stops an agent; no agent stops another.
+      if (command.decision === 'stop' && actor.kind === 'agent' && actor.agentId !== target.id) fail('PERSON_STOPS', 'Only its person stops an agent.', 403)
       // A Buddy is its owner's to stop (buddies.ts), and a Swarm-wide one has no project to look up.
       if (isBuddy(target)) fail('BUDDY_NOT_RELEASED', 'A Buddy is stopped by its owner, or by turning Buddies off, never released.')
       // A Regular agent between tasks is in no project: its person, or the Swarm's owner, releases it (task #4116).

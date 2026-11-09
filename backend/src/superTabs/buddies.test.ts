@@ -1070,51 +1070,6 @@ describe('removing a Buddy', () => {
   })
 })
 
-describe('a Buddy is never a worker', () => {
-  it('is never assigned work nor added to a group', () => {
-    const f = setup()
-    expect(() => f.run({ type: 'work.define', conversationId: f.group, brief: 'Do it', checks: [{ description: 'Done', independent: false }] })).not.toThrow()
-    expect(() => f.run({ type: 'work.assign', conversationId: f.group, agentId: 'buddy' })).toThrow('A Buddy is never assigned work')
-    expect(() => f.run({ type: 'conversation.agent', conversationId: f.group, agentId: 'buddy', present: true, lead: false })).toThrow('A Buddy stays in its own chat')
-  })
-
-  // Security review S2: agent.add naming a session already in the Swarm skipped conversation.agent's checks. An agent never
-  // adds one (it starts a new one); a person adding one meets the same checks.
-  it('is never added again elsewhere by agent.add, nor anyone added to its chat, by an agent or a person', () => {
-    const f = setup()
-    const add = (conversationId: string, harnessId: string) =>
-      ({ type: 'agent.add', conversationId, machineId: 'machine', harnessId, name: 'Helper', configuration, lead: false }) as Command
-    // The Buddy keyed as the store keys every session, by its machine and harness.
-    const buddyId = stableId('machine', 'buddy-harness')
-    f.state.agents.find(a => a.id === 'buddy')!.id = buddyId
-    group(f, f.chat).agentIds = [buddyId]
-    const worker = f.run(add(f.group, 'worker-harness'), peer).result.agentId as string
-    const before = structuredClone(f.state)
-    expect(() => f.run(add(f.group, 'buddy-harness'), peer)).toThrow(expect.objectContaining({ code: 'BUDDY_CHAT_ONLY' }))
-    expect(() => f.run(add(f.app.conversationId, 'buddy-harness'), peer)).toThrow(expect.objectContaining({ code: 'BUDDY_CHAT_ONLY' }))
-    expect(() => f.run(add(f.chat, 'worker-harness'), peer)).toThrow(expect.objectContaining({ code: 'BUDDY_CHAT_FIXED' }))
-    // An agent the Buddy's person contributed, with the grant the store reads for it, adds nothing.
-    for (const conversationId of [f.group, f.app.conversationId]) {
-      expect(() => f.run(add(conversationId, 'buddy-harness'), agentActor(worker), { contribution: { machineOwnerId: 'host', contributorId: 'peer' } }))
-        .toThrow(expect.objectContaining({ code: 'HUMAN_REQUIRED' }))
-    }
-    expect(f.state).toEqual(before)
-  })
-
-  it('is never told as idle: it waits for its owner', async () => {
-    const { idleNotices } = await import('./tidy.js')
-    const f = setup(), now = 10 * 3_600_000
-    machine(f, 'machine', 'owner')
-    const buddy = f.state.agents.find(a => a.id === 'buddy')!
-    buddy.startedSession = { creationId: 'c', sessionId: 's', createdAt: new Date(0).toISOString() }
-    // An Engineer just like it, in the same chat, idle as long, is told to the coordinator: the Buddy is not.
-    f.state.agents.push({ ...structuredClone(buddy), id: 'builder', harnessId: 'builder-harness', buddyOf: undefined })
-    group(f, f.chat).agentIds.push('builder')
-    expect([...new Set(idleNotices(f.state, f.app.projectId, now, new Set()).map(row => row.source?.agentId))]).toEqual(['builder'])
-    expect(buddy.idleNoticedAt).toBeUndefined()
-  })
-})
-
 describe('Chat with PM, replaced by Buddies (Ken, 10-29)', () => {
   const say = (conversationId: string) => ({ type: 'message.send' as const, conversationId, text: 'Hi', replyTo: null, recipientIds: [] })
   const open = (personIds: string[]) => ({ type: 'conversation.create' as const, projectId: 'app', title: 'Private', brief: '', checks: [],

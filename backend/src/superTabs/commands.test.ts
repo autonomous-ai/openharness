@@ -1927,7 +1927,7 @@ describe('voice messages', () => {
     f.run({ type: 'work.assign', conversationId: next, agentId: other, ...via }, leadActor, decisionIn(next))
     f.run({ type: 'work.assign', conversationId: group, agentId: worker, ...via }, leadActor, decisionIn(group))
     expect(f.state.agents.find(a => a.id === worker)).not.toHaveProperty('workDecision')
-    expect(() => f.run({ type: 'agent.release', agentId: worker, decision: 'stop' } as Command, leadActor)).toThrow('active work')
+    expect(() => f.run({ type: 'agent.release', agentId: worker, decision: 'stop' } as Command, owner)).toThrow('active work')
   })
   it('permits any agent of the project or the owner to keep or stop, refuses another person, and fences reuse after stop', () => {
     const { f, group, worker, other, leadActor, workerActor } = finished()
@@ -1944,7 +1944,7 @@ describe('voice messages', () => {
   it('allows only the execution host of a requested stop to acknowledge removal', () => {
     const { f, worker, other, leadActor, workerActor } = finished()
     expect(() => f.run({ type: 'agent.remove', agentId: worker }, workerActor)).toThrow()
-    f.run({ type: 'agent.release', agentId: worker, decision: 'stop' } as Command, leadActor)
+    f.run({ type: 'agent.release', agentId: worker, decision: 'stop' } as Command, owner)
     expect(() => f.run({ type: 'agent.remove', agentId: worker }, { ...workerActor, agentId: other })).toThrow()
     const releaseId = f.state.agents.find(a => a.id === worker)!.releaseId!
     const chats = f.state.conversations.filter(c => c.agentIds.includes(worker)).map(c => c.id)
@@ -1970,7 +1970,7 @@ it('requires the exact stop request for host acknowledgement and prevents promot
   const workerActor: Actor = { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }
   const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
   f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'stopped', result: null }, owner, { confirmedStopped: true })
-  f.run({ type: 'agent.release', agentId: worker, decision: 'stop' }, leadActor)
+  f.run({ type: 'agent.release', agentId: worker, decision: 'stop' }, owner)
   expect(() => f.run({ type: 'agent.remove', agentId: worker, releaseId: 'old-release' } as Command, workerActor)).toThrow('stop request')
   expect(() => f.run({ type: 'conversation.agent', conversationId: group, agentId: worker, present: true, lead: true })).toThrow('stopping')
   expect(() => f.add('worker', 'owner', group, true)).toThrow('stopping')
@@ -1982,11 +1982,11 @@ it('requires the exact stop request for host acknowledgement and prevents promot
 it('lets the Lead stop a worker that never had an assignment, and never a Buddy', () => {
   const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group(), worker = f.add('worker', 'owner', group)
   const leadActor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
-  f.run({ type: 'agent.release', agentId: worker, decision: 'stop' }, leadActor)
+  f.run({ type: 'agent.release', agentId: worker, decision: 'stop' }, owner)
   expect(f.state.agents.find(a => a.id === worker)).toMatchObject({ workDecision: 'stop', releaseId: expect.any(String) })
   const buddy = f.add('buddy', 'owner', group)
   f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', projectId: 'lead', generation: 'g' } as never
-  expect(() => f.run({ type: 'agent.release', agentId: buddy, decision: 'stop' }, leadActor)).toThrow('never released')
+  expect(() => f.run({ type: 'agent.release', agentId: buddy, decision: 'stop' }, owner)).toThrow('never released')
 })
 
 it('allows the contributor to keep a completed worker and refuses another project’s Lead', () => {
@@ -2041,8 +2041,8 @@ describe('any agent of the project', () => {
     expect(cancelled.messages[0]!.text.startsWith(`${f.state.agents.find(a => a.id === engineer)!.name} cancelled this task`)).toBe(true)
     // A, as the Swarm started it: any agent of the project releases it.
     f.state.agents.find(a => a.id === A)!.startedSession = { creationId: 'super-start', sessionId: 'session', createdAt: new Date(0).toISOString() }
-    f.run({ type: 'agent.release', agentId: A, decision: 'stop' }, E)
-    expect(f.state.agents.find(a => a.id === A)!.workDecision).toBe('stop')
+    expect(() => f.run({ type: 'agent.release', agentId: A, decision: 'stop' }, E)).toThrow('Only its person stops an agent')
+    expect(f.state.agents.find(a => a.id === A)!.workDecision).not.toBe('stop')
     f.run({ type: 'conversation.archive', conversationId: group, archived: true }, E)
     expect(task().archived).toBe(true)
   })
@@ -2072,7 +2072,7 @@ describe('any agent of the project', () => {
     // No agent adds a session at all (security review S2), so none names a new lead that way.
     expect(() => f.run({ type: 'agent.add', conversationId: group, machineId: 'host', harnessId: 'new-lead', name: 'New lead', configuration: config, lead: true },
       E, { contribution: f.contribution })).toThrow(expect.objectContaining({ code: 'HUMAN_REQUIRED' }))
-    expect(() => f.run({ type: 'agent.release', agentId: f.lead, decision: 'stop' }, E)).toThrow(expect.objectContaining({ code: 'LEAD_PROTECTED' }))
+    expect(() => f.run({ type: 'agent.release', agentId: f.lead, decision: 'stop' }, E)).toThrow(expect.objectContaining({ code: 'PERSON_STOPS' }))
     expect(f.state).toMatchObject({ name: 'Pilot', paused: false })
     f.run({ type: 'tab.rename', name: 'Renamed' }, f.leadActor)
     expect(f.state.name).toBe('Renamed')
@@ -2394,7 +2394,7 @@ describe('any agent of the project', () => {
   it('lets any agent release a session the Swarm started, and only the coordinator and people one a person added', () => {
     const { f, E } = project(), A = f.worker, group = f.group()
     const before = structuredClone(f.state)
-    for (const decision of ['keep', 'stop'] as const) expect(() => f.run({ type: 'agent.release', agentId: A, decision }, E)).toThrow(coordinatorRequired)
+    expect(() => f.run({ type: 'agent.release', agentId: A, decision: 'keep' }, E)).toThrow(coordinatorRequired)
     expect(f.state).toEqual(before)
     f.run({ type: 'agent.release', agentId: A, decision: 'keep' }, f.leadActor, { now: 2000 })
     f.run({ type: 'agent.release', agentId: A, decision: 'keep' }, owner, { now: 3000 })
@@ -2405,7 +2405,7 @@ describe('any agent of the project', () => {
     { contribution: f.contribution }).result.startId as string
     const started = f.run({ type: 'agent.started', startId, harnessId: 'started', configuration: config,
       startedSession: { sessionId: 'session-1', createdAt: new Date(0).toISOString() } }, f.workerActor, { contribution: f.contribution }).result.agentId as string
-    f.run({ type: 'agent.release', agentId: started, decision: 'stop' }, E)
+    f.run({ type: 'agent.release', agentId: started, decision: 'stop' }, owner)
     expect(f.state.agents.find(a => a.id === started)!.workDecision).toBe('stop')
   })
 
@@ -2590,7 +2590,7 @@ describe('role kinds decide nothing', () => {
     const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group(), worker = f.add('worker', 'owner', group)
     f.run({ type: 'agent.release', agentId: worker, decision: 'keep' }, as(lead), { now: 5000 })
     expect(f.state.agents.find(a => a.id === worker)).toMatchObject({ workDecision: 'keep', keptAt: 5000 })
-    f.run({ type: 'agent.release', agentId: worker, decision: 'stop' }, as(lead))
+    f.run({ type: 'agent.release', agentId: worker, decision: 'stop' }, owner)
     expect(f.state.agents.find(a => a.id === worker)).toMatchObject({ workDecision: 'stop', releaseId: expect.any(String) })
   })
 
@@ -3080,11 +3080,11 @@ describe('Reviewer role', () => {
     f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId, passed: true, evidence: 'Ready: yes — revision abc' }, reviewerActor)
     expect(f.state.conversations.find(c => c.id === group)!.checks[0]!.passedBy).toBe(`agent:${reviewer}`)
     // While its own review is active it is busy; when it is done it is marked as any finished worker is, and stopped on request.
-    expect(() => f.run({ type: 'agent.release', agentId: reviewer, decision: 'stop' }, leadActor)).toThrow('active work')
+    expect(() => f.run({ type: 'agent.release', agentId: reviewer, decision: 'stop' }, owner)).toThrow('active work')
     f.run({ type: 'work.status', conversationId: review, assignmentId, status: 'stopped', result: null }, owner, { confirmedStopped: true })
     f.run({ type: 'work.cancel', conversationId: group, assignmentId: built, reason: 'Obsolete' }, leadActor)
     expect(f.state.agents.find(a => a.id === reviewer)).toHaveProperty('workDecision', 'awaiting')
-    f.run({ type: 'agent.release', agentId: reviewer, decision: 'stop' }, leadActor)
+    f.run({ type: 'agent.release', agentId: reviewer, decision: 'stop' }, owner)
   })
 
   describe('work waiting for its review (liveness.ts: its quiet time does not count)', () => {
@@ -3166,9 +3166,9 @@ describe('Reviewer role', () => {
     f.run({ type: 'work.assign', conversationId: group, agentId: builder })
     f.run({ type: 'agent.release', agentId: reviewer, decision: 'keep' }, leadActor)
     expect(f.state.agents.find(a => a.id === reviewer)).toHaveProperty('workDecision', 'keep')
-    f.run({ type: 'agent.release', agentId: reviewer, decision: 'stop' }, leadActor)
+    f.run({ type: 'agent.release', agentId: reviewer, decision: 'stop' }, owner)
     expect(f.state.agents.find(a => a.id === reviewer)).toHaveProperty('workDecision', 'stop')
-    expect(() => f.run({ type: 'agent.release', agentId: builder, decision: 'stop' }, leadActor)).toThrow('active work')
+    expect(() => f.run({ type: 'agent.release', agentId: builder, decision: 'stop' }, owner)).toThrow('active work')
   })
 
   it('loses a Reviewer\'s review when its model keeps failing, and keeps the Reviewer out of the decision queue', () => {
@@ -3186,7 +3186,7 @@ describe('Reviewer role', () => {
     for (const id of [reviewer, builder]) {
       f.run({ type: 'agent.release', agentId: id, decision: 'keep' }, leadActor)
       expect(f.state.agents.find(a => a.id === id)).toHaveProperty('workDecision', 'keep')
-      f.run({ type: 'agent.release', agentId: id, decision: 'stop' }, leadActor)
+      f.run({ type: 'agent.release', agentId: id, decision: 'stop' }, owner)
       expect(f.state.agents.find(a => a.id === id)).toHaveProperty('workDecision', 'stop')
     }
   })
@@ -5001,7 +5001,7 @@ describe('agent.stopRefused', () => {
 
   it('keeps a stop its Lead asked for after the idle check made it', () => {
     const t = idleStopped()
-    t.f.run({ type: 'agent.release', agentId: t.worker, decision: 'stop' }, { kind: 'agent', agentId: t.lead, machineOwnerId: 'host-owner' })
+    t.f.run({ type: 'agent.release', agentId: t.worker, decision: 'stop' }, owner)
     expect(() => t.f.run({ type: 'agent.stopRefused', agentId: t.worker, releaseId: 'idle-release' }, t.asWorker)).toThrow('Only the execution host')
     expect(t.member().workDecision).toBe('stop')
   })

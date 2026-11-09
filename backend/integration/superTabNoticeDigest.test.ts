@@ -186,21 +186,6 @@ describe('which messages to the coordinator are gathered', () => {
     expect((await f.poll()).map(d => d.messageId)).not.toContain(id)
   })
 
-  it('a gathered delivery does not make an agent busy for its idle notice', async () => {
-    const f = await swarm({ fresh: true })
-    // Agent.add stands for a person's own session; the idle check counts a Swarm-started one.
-    const part = await db.swarmAgent.findFirstOrThrow({ where: { tabId: f.tab, key: f.worker } })
-    await db.swarmAgent.update({ where: { id: part.id }, data: { data: { ...part.data as object,
-      startedSession: { creationId: 'c', sessionId: 's', createdAt: new Date(f.clock.now).toISOString() } } } })
-    await f.status('done')
-    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: f.worker }, data: { status: 'delivered' } })
-    const id = await f.write({ kind: 'idle' }, f.worker)
-    await db.superTabDelivery.update({ where: { id: stableId(id, f.worker) }, data: { status: 'gathered' } })
-    f.clock.now += 16 * MINUTE
-    await f.timed.runTimeChecks(f.tab)
-    const told = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => kindOf(m) === 'idle' && m.text.includes('no open task'))
-    expect(told).toHaveLength(1)
-  })
 })
 
 describe('the coordinator\'s poll releases what was gathered', () => {

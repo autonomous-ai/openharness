@@ -1,3 +1,4 @@
+import { v3Stopping, withdrawV3Stops } from './agentStops.js'
 import { chatlessAgents, giveAgentsChats } from './agentChats.js'
 import { memberPlan } from './members.js'
 import { legacyAsks } from './boardRights.js'
@@ -91,7 +92,7 @@ import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, recordTaskSta
 import { endedReply, taskLineChats } from './taskLine.js'
 import { owedAsk } from './timeChecks.js'
 import { ledgerGroupIds, settleReleases, type ReleaseFacts, type ReleaseRules, type SettledReleases } from './releases.js'
-import { groupsOf, archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
+import { groupsOf, archivable, archiveLine, archiveWaitsFor, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadGroupsByKey, loadLightGroups, loadMachineParts, loadNamed, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { autoJoinSwarms, machineSwarms, memberSwarms } from './swarmRows.js'
@@ -5673,18 +5674,24 @@ export class SuperTabStore {
       const all = chatless.length ? (await this.ensure(tx, loaded, { agentIds: chatless })).state : loaded.state
       const state = cloneData(loaded.state), now = this.now()
       giveAgentsChats(state, now, all)
+      // Swarm v4: the stops the v3 rules asked for, withdrawn once, with the run and session records that hold them (agentStops.ts).
+      const stopping = v3Stopping(state)
+      // A host closing one holds its close lease: that stop stands. Once per Swarm, one read by id each.
+      const closing = new Set<string>()
+      for (const a of stopping) {
+        const scope = await tx.superTabSessionScope.findUnique({ where: { id: stableId('swarm-session', state.environment, a.machineOwnerId, a.id) },
+          select: { closeLeaseUntil: true } })
+        if (scope?.closeLeaseUntil && scope.closeLeaseUntil.getTime() > now) closing.add(a.id)
+      }
+      for (const stop of withdrawV3Stops(state, closing)) {
+        await tx.superTabRun.deleteMany({ where: { id: stop.agentId, tabId, assignmentId: `release-${stop.releaseId}` } })
+        await tx.superTabSessionScope.updateMany({ where: { id: stableId('swarm-session', state.environment, stop.machineOwnerId, stop.agentId),
+          stopReleaseId: stop.releaseId }, data: { stopReleaseId: null } })
+      }
       const rulesFor = await this.projectDispatch(tx, state)
       // A Linux or Windows test step that waited for a machine of its OS opens once one is there (osSteps.ts, tasks #4278, #4410).
       const written = [...sweepForLead(state, now, rulesFor), ...advanceProposalCards(state, now), ...openWaitingSteps(state, now)]
       for (const [id, bodies] of migration) written.push(...migrateLegacyProposals(state, projectsOf(state).find(p => p.id === id)!, bodies, now))
-      // What waits for each agent: an agent with a delivery open is not idle. Only loaded groups' active work keeps an agent
-      // from being idle (project instructions, phase 4).
-      const projects = projectsOf(state).filter(p => state.conversations.find(c => c.id === p.leadConversationId)?.leadId)
-      if (projects.length) {
-        const busy = new Set((await tx.superTabDelivery.findMany({ where: { tabId, status: { in: [...OPEN_DELIVERY] } },
-          select: { agentId: true }, distinct: ['agentId'] })).map(d => d.agentId))
-        for (const project of projects) written.push(...idleNotices(state, project.id, now, busy))
-      }
       // Stuck work, told once to its PM and its people in a line that tags them, and cleared when fixed (stuck.ts, task #3915).
       const stuck = stuckAlerts(state, now)
       written.push(...stuck.rows)
