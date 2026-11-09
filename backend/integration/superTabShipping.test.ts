@@ -113,6 +113,22 @@ describe('what a daemon is told to read', () => {
     await db.superTab.update({ where: { id: tab }, data: { machineIds: [MAC.ann, MAC.bob, MAC.cy] } })
   })
 
+  // As the Swarm decides who reads a project (projects.ts canReadProject, ownsProject): a listing or an ownership from an earlier
+  // membership is not this one's. Someone removed and invited back reads none of what they read before, its repository's name too.
+  it('tells a person who came back of no private project they read or owned at an earlier membership', async () => {
+    const t = await scene()
+    const head = await db.swarmHead.findUniqueOrThrow({ where: { id: `${t}:head` } })
+    const data = head.data as { projects: Array<Record<string, unknown>> }
+    const earlier = (id: string, url: string, extra: Record<string, unknown>) => ({ id, name: id, ownerId: owner.sub, visibility: 'private',
+      members: [], repository: { machineId: MAC.ann, cwd: '/x', repositoryUrl: url }, ...extra })
+    data.projects.push(earlier('listed', 'https://github.com/acme/listed', { members: [{ id: ann.sub, generation: 'before' }] }),
+      earlier('owned', 'https://github.com/acme/owned', { ownerId: ann.sub, ownerGeneration: 'before' }),
+      earlier('now', 'https://github.com/acme/now', { members: [{ id: ann.sub, generation: 'g' }] }))
+    await db.swarmHead.update({ where: { id: head.id }, data: { data: data as never } })
+    const { body } = await targets(MAC.ann, ann)
+    expect(body.data.swarms.find((s: { tabId: string }) => s.tabId === t).repositories).toEqual(['acme/api', 'acme/now', 'acme/web'])
+  })
+
   it('tells nothing of another person\'s agents, another machine, a removed agent or a Swarm the person is not in', async () => {
     expect((await targets(MAC.bob, ann)).body.data.swarms).toEqual([])
     expect((await targets(MAC.ann, bob)).body.data.swarms).toEqual([])
