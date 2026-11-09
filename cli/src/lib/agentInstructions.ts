@@ -79,19 +79,26 @@ async function locate(dir: string, file: string): Promise<Stats | null> {
   return info
 }
 
-/** The file's bytes, read to one past the limit at most: a file over it is refused, never read whole. */
-async function readBytes(file: string): Promise<Buffer> {
+/** The file's bytes, to one past the limit at most: never the file whole, and the one byte over says there was more. */
+async function readPrefix(file: string): Promise<Buffer> {
   const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW)
   try {
     const bytes = Buffer.alloc(INSTRUCTIONS_MAX_BYTES + 1)
     let length = 0
-    for (;;) {
+    while (length < bytes.length) {
       const { bytesRead } = await handle.read(bytes, length, bytes.length - length, length)
-      if (!bytesRead) return bytes.subarray(0, length)
+      if (!bytesRead) break
       length += bytesRead
-      if (length > INSTRUCTIONS_MAX_BYTES) throw new InstructionsError('TOO_LARGE')
     }
+    return bytes.subarray(0, length)
   } finally { await handle.close() }
+}
+
+/** The file's bytes: a file over the limit is refused. */
+async function readBytes(file: string): Promise<Buffer> {
+  const bytes = await readPrefix(file)
+  if (bytes.length > INSTRUCTIONS_MAX_BYTES) throw new InstructionsError('TOO_LARGE')
+  return bytes
 }
 
 /** The file's text and version: only of a file that is UTF-8. */
@@ -117,6 +124,47 @@ export async function readInstructions(cwd: string, name: unknown): Promise<{ te
   const dir = join(cwd, 'agents'), file = join(dir, fileNameOf(name))
   if (!await locate(dir, file)) return { text: null, version: '' }
   return readText(file)
+}
+
+/** What else instructs an agent, besides a file of its own: the project's own files, directly in its folder. */
+const SHARED_NAMES = ['AGENTS.md', 'CLAUDE.md'] as const
+
+interface SharedInstructions { name: (typeof SHARED_NAMES)[number]; text: string; truncated: boolean }
+
+/** One of the shared files as it is shown: its text, to the limit, and whether there was more. Null where there is no such file. */
+async function readShared(cwd: string, name: SharedInstructions['name']): Promise<SharedInstructions | null> {
+  const file = join(cwd, name)
+  const info = await entry(file)
+  if (!info) return null
+  if (!info.isFile()) throw new InstructionsError('UNSAFE_PATH')
+  const bytes = await readPrefix(file)
+  const truncated = bytes.length > INSTRUCTIONS_MAX_BYTES
+  try {
+    // A file cut at the limit may end inside a character. Decoding as a stream holds an unfinished one back, so the text
+    // stops at the last whole character; a file that is whole and ends inside one is not text.
+    const text = truncated ? new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, INSTRUCTIONS_MAX_BYTES), { stream: true })
+      : utf8.decode(bytes)
+    return { name, text, truncated }
+  } catch { throw new InstructionsError('NOT_UTF8') }
+}
+
+/** The files that instruct the agent besides its own, for a person to read beside it and never to change: AGENTS.md and
+ *  CLAUDE.md when each is a plain file directly in its folder, never a parent's or the home's. Held to the rules of its own
+ *  file: a link is not followed (a project often makes one of them the other, and then it is shown once, by the file itself),
+ *  and each is read to the limit, with `truncated` saying it was cut, at a whole character. One that is not text, or not a plain
+ *  file, is left out as the person made it, and one the disk fails on is left out and [failed] hears which: no file is an error
+ *  of the whole read. */
+export async function readSharedInstructions(cwd: string, failed: (name: string, error: unknown) => void): Promise<SharedInstructions[]> {
+  const found: SharedInstructions[] = []
+  for (const name of SHARED_NAMES) {
+    try {
+      const one = await readShared(cwd, name)
+      if (one) found.push(one)
+    } catch (error) {
+      if (!(error instanceof InstructionsError)) failed(name, error)
+    }
+  }
+  return found
 }
 
 /** Saves [text] as the file, making `agents/` when it is missing, if the file is as the writer saw it: [seen] is the

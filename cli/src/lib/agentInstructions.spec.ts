@@ -4,15 +4,16 @@ import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, tru
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { InstructionsError, readInstructions, writeInstructions } from './agentInstructions.js'
+import { InstructionsError, readInstructions, readSharedInstructions, writeInstructions } from './agentInstructions.js'
 
 /** The protocol's limit for a file and for a text, written out: the apps are built against this number. */
 const LIMIT = 65_536
 
 // What a real disk will not show on demand: the one rename that can fail after the new bytes are safely on disk, so a spec
-// can watch what is left behind; a rename held at the last step, so a spec can watch what else goes on meanwhile; and how
-// many bytes a read really took from a file, to prove it is bounded.
-const disk = vi.hoisted(() => ({ failRename: null as Error | null, holdRename: null as Promise<void> | null, renameHeld: false, bytesRead: 0 }))
+// can watch what is left behind; a rename held at the last step, so a spec can watch what else goes on meanwhile; a file
+// that cannot be opened, as a failing disk would not open it; and how many bytes a read really took from a file, to prove
+// it is bounded.
+const disk = vi.hoisted(() => ({ failRename: null as Error | null, holdRename: null as Promise<void> | null, renameHeld: false, failOpenOf: null as string | null, bytesRead: 0 }))
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   return {
@@ -23,6 +24,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       return actual.rename(from, to)
     }),
     open: vi.fn(async (...args: Parameters<typeof actual.open>) => {
+      if (disk.failOpenOf && String(args[0]).endsWith(disk.failOpenOf)) throw Object.assign(new Error('input/output error'), { code: 'EIO' })
       const handle = await actual.open(...args)
       const read = handle.read.bind(handle) as (...call: unknown[]) => Promise<{ bytesRead: number }>
       handle.read = (async (...call: unknown[]) => { const result = await read(...call); disk.bytesRead += result.bytesRead; return result }) as typeof handle.read
@@ -32,9 +34,10 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 })
 
 const sha256 = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex')
-/** `n` characters of 3 bytes each in UTF-8, and `n` of 4. */
+/** `n` characters of 3 bytes each in UTF-8, and `n` of 4; and one of 2 bytes. */
 const cjk = (n: number) => String.fromCodePoint(0x4e2d).repeat(n)
 const emoji = (n: number) => String.fromCodePoint(0x1f600).repeat(n)
+const latin = String.fromCodePoint(0xe9)
 const sup = (n: number) => String.fromCodePoint(n)
 /** An unpaired surrogate is no character: written as UTF-8 it becomes U+FFFD. Built by code, never written out in the source. */
 const lone = (unit: number) => String.fromCharCode(unit)
@@ -69,7 +72,7 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
     await mkdir(outside)
   })
   afterEach(async () => {
-    disk.failRename = null; disk.holdRename = null; disk.renameHeld = false
+    disk.failRename = null; disk.holdRename = null; disk.renameHeld = false; disk.failOpenOf = null
     await rm(join(cwd, '..'), { recursive: true, force: true })
   })
 
@@ -438,6 +441,187 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
         execFileSync('mkfifo', [file()])
         expect(await code(writeInstructions(cwd, 'Faye', 'x', ''))).toBe('UNSAFE_PATH')
         expect(await readdir(join(cwd, 'agents'))).toEqual(['Faye.md'])
+      })
+    })
+  })
+
+  // What instructs most agents is the project's own AGENTS.md and CLAUDE.md, in the folder the agent works in, whether or not
+  // it has a file of its own here. They are shown beside it and never written: the person sees what the agent is told.
+  describe('the files that instruct it besides, AGENTS.md and CLAUDE.md in its folder (read only)', () => {
+    const failed = vi.fn()
+    const project = (name: string, content: string | Buffer) => writeFile(join(cwd, name), content)
+    const shared = () => readSharedInstructions(cwd, failed)
+    beforeEach(() => { failed.mockClear() })
+
+    it('gives AGENTS.md and then CLAUDE.md, each whole, however they were made', async () => {
+      await project('CLAUDE.md', 'Claude rules\n')
+      await project('AGENTS.md', 'Agent rules\n')
+      expect(await shared()).toEqual([
+        { name: 'AGENTS.md', text: 'Agent rules\n', truncated: false },
+        { name: 'CLAUDE.md', text: 'Claude rules\n', truncated: false },
+      ])
+      expect(failed).not.toHaveBeenCalled()
+    })
+
+    it('gives only those that are there, and nothing, making nothing, when none is', async () => {
+      expect(await shared()).toEqual([])
+      await project('CLAUDE.md', 'only this one')
+      expect(await shared()).toEqual([{ name: 'CLAUDE.md', text: 'only this one', truncated: false }])
+      await rm(join(cwd, 'CLAUDE.md'))
+      await project('AGENTS.md', 'and now only that')
+      expect(await shared()).toEqual([{ name: 'AGENTS.md', text: 'and now only that', truncated: false }])
+      await rm(join(cwd, 'AGENTS.md'))
+      expect(await shared()).toEqual([])
+      expect(await readdir(cwd)).toEqual([])
+      expect(failed).not.toHaveBeenCalled()
+    })
+
+    it('says there are none when the project folder is not there, and creates nothing', async () => {
+      const gone = join(cwd, 'moved-away')
+      expect(await readSharedInstructions(gone, failed)).toEqual([])
+      await expect(stat(gone)).rejects.toMatchObject({ code: 'ENOENT' })
+      expect(failed).not.toHaveBeenCalled()
+    })
+
+    it('hands back every byte as written: a byte-order mark, Windows line ends, any script', async () => {
+      const text = '\u{FEFF}line one\r\nline two \u{2014} \u{1EA3}nh \u{1F600}\r\n'
+      await project('AGENTS.md', text)
+      expect(await shared()).toEqual([{ name: 'AGENTS.md', text, truncated: false }])
+    })
+
+    it('reads those two names in the folder itself and nothing else: no parent, no subfolder, no other name', async () => {
+      await writeFile(join(cwd, '..', 'AGENTS.md'), 'SECRET of the parent folder')
+      await writeFile(join(cwd, '..', 'CLAUDE.md'), 'SECRET of the parent folder')
+      await mkdir(join(cwd, 'agents'))
+      await mkdir(join(cwd, 'docs'))
+      await writeFile(join(cwd, 'agents', 'AGENTS.md'), 'SECRET of the agents folder')
+      await writeFile(join(cwd, 'docs', 'CLAUDE.md'), 'SECRET of a subfolder')
+      for (const other of ['AGENT.md', 'CLAUDE.md.bak', 'GEMINI.md', 'README.md', 'claude.txt']) await project(other, 'SECRET of another file')
+      expect(await shared()).toEqual([])
+      expect(failed).not.toHaveBeenCalled()
+    })
+
+    describe('the limit', () => {
+      it('is 64 KiB each: a file of exactly that is whole, one byte over is cut there and says so', async () => {
+        await project('AGENTS.md', Buffer.alloc(LIMIT, 97))
+        await project('CLAUDE.md', Buffer.alloc(LIMIT + 1, 98))
+        const [agents, claude] = await shared()
+        expect(agents).toEqual({ name: 'AGENTS.md', text: 'a'.repeat(LIMIT), truncated: false })
+        expect(claude).toEqual({ name: 'CLAUDE.md', text: 'b'.repeat(LIMIT), truncated: true })
+      })
+
+      // The text stops at a whole character: a cut through one drops the part of it that is there, so what is shown is valid
+      // text and not above the limit.
+      it.each([
+        ['a 2-byte character', 1, latin], ['a 3-byte character', 1, cjk(1)], ['a 3-byte character', 2, cjk(1)],
+        ['an emoji', 1, emoji(1)], ['an emoji', 2, emoji(1)], ['an emoji', 3, emoji(1)],
+      ])('is cut at a character: %s with %i byte(s) before the limit', async (_what, inside, character) => {
+        // `inside` bytes of the character are in the first 64 KiB and the rest of it is past the limit.
+        const content = Buffer.from(`${'a'.repeat(LIMIT - inside)}${character}tail`)
+        await project('AGENTS.md', content)
+        const [one] = await shared()
+        expect(one).toEqual({ name: 'AGENTS.md', text: 'a'.repeat(LIMIT - inside), truncated: true })
+        expect(Buffer.byteLength(one.text)).toBeLessThanOrEqual(LIMIT)
+      })
+
+      it.each([['a 2-byte character', latin, 2], ['a 3-byte character', cjk(1), 3], ['an emoji', emoji(1), 4]])(
+        'keeps a character that ends exactly at the limit: %s', async (_what, character, size) => {
+          await project('AGENTS.md', `${'a'.repeat(LIMIT - size)}${character}tail`)
+          const [one] = await shared()
+          expect(one).toEqual({ name: 'AGENTS.md', text: `${'a'.repeat(LIMIT - size)}${character}`, truncated: true })
+          expect(Buffer.byteLength(one.text)).toBe(LIMIT)
+        })
+
+      it('takes one byte past the limit from a huge file, not the file', async () => {
+        await project('AGENTS.md', '')
+        await truncate(join(cwd, 'AGENTS.md'), 200 * 1024 * 1024)
+        disk.bytesRead = 0
+        const [one] = await shared()
+        expect(one).toMatchObject({ name: 'AGENTS.md', truncated: true })
+        expect(one.text).toHaveLength(LIMIT)
+        expect(disk.bytesRead).toBe(LIMIT + 1)
+      })
+
+      it('shows the start of a file that goes bad only after the limit: that part is never looked at', async () => {
+        await project('AGENTS.md', Buffer.concat([Buffer.alloc(LIMIT, 97), Buffer.from([0xff, 0xfe, 0xff])]))
+        expect(await shared()).toEqual([{ name: 'AGENTS.md', text: 'a'.repeat(LIMIT), truncated: true }])
+        expect(failed).not.toHaveBeenCalled()
+      })
+    })
+
+    // Left out, and no more: the person's own file and the other shared one are still shown, and nothing says it failed.
+    it('leaves out a file that is not UTF-8, cut off in the middle of a character or not, and shows the other', async () => {
+      await project('CLAUDE.md', 'fine')
+      for (const bytes of [[0x66, 0xff, 0xfe, 0x66], [0x61, 0xe2, 0x82]]) {
+        await project('AGENTS.md', Buffer.from(bytes))
+        expect(await shared(), String(bytes)).toEqual([{ name: 'CLAUDE.md', text: 'fine', truncated: false }])
+      }
+      expect(failed).not.toHaveBeenCalled()
+    })
+
+    it('leaves out a file the disk fails on, and hears which, so it can be told: never a path, never a word of it', async () => {
+      await project('AGENTS.md', 'SECRET words')
+      await project('CLAUDE.md', 'fine')
+      disk.failOpenOf = 'AGENTS.md'
+      expect(await shared()).toEqual([{ name: 'CLAUDE.md', text: 'fine', truncated: false }])
+      expect(failed).toHaveBeenCalledTimes(1)
+      expect(failed).toHaveBeenCalledWith('AGENTS.md', expect.objectContaining({ code: 'EIO' }))
+    })
+
+    it.skipIf(!posix)('hears of both when the disk cannot look at the folder at all: a project path that loops', async () => {
+      const loop = join(cwd, '..', 'loop')
+      await symlink('loop', loop)
+      expect(await readSharedInstructions(loop, failed)).toEqual([])
+      expect(failed.mock.calls.map(([name, error]) => [name, (error as NodeJS.ErrnoException).code])).toEqual([['AGENTS.md', 'ELOOP'], ['CLAUDE.md', 'ELOOP']])
+      expect(failed.mock.calls.map(([name]) => name)).toEqual(['AGENTS.md', 'CLAUDE.md'])
+    })
+
+    it('never writes them: a save of the agent\'s own file leaves both as they were', async () => {
+      await project('AGENTS.md', 'agents as they were')
+      await project('CLAUDE.md', 'claude as it was')
+      const saved = await writeInstructions(cwd, 'Faye', 'mine', '')
+      await writeInstructions(cwd, 'Faye', 'mine again', saved.version)
+      expect(await readFile(join(cwd, 'AGENTS.md'), 'utf8')).toBe('agents as they were')
+      expect(await readFile(join(cwd, 'CLAUDE.md'), 'utf8')).toBe('claude as it was')
+      expect((await readdir(cwd)).sort()).toEqual(['AGENTS.md', 'CLAUDE.md', 'agents'])
+    })
+
+    describe.skipIf(!posix)('never through a link, and only a plain file', () => {
+      it('leaves out a link to a file outside, to one inside, and to nothing, and says nothing of it', async () => {
+        await writeFile(join(outside, 'secret.md'), 'SECRET outside the project')
+        await project('real.md', 'inside the project')
+        for (const target of [join(outside, 'secret.md'), join(cwd, 'real.md'), join(outside, 'not-there.md')]) {
+          await rm(join(cwd, 'AGENTS.md'), { force: true })
+          await symlink(target, join(cwd, 'AGENTS.md'))
+          expect(await shared(), target).toEqual([])
+        }
+        expect(failed).not.toHaveBeenCalled()
+      })
+
+      it('shows the file once when one is a link to the other, as projects often make them', async () => {
+        await project('AGENTS.md', 'the one text')
+        await symlink('AGENTS.md', join(cwd, 'CLAUDE.md'))
+        expect(await shared()).toEqual([{ name: 'AGENTS.md', text: 'the one text', truncated: false }])
+        await rm(join(cwd, 'AGENTS.md'))
+        await rm(join(cwd, 'CLAUDE.md'))
+        await project('CLAUDE.md', 'the other text')
+        await symlink('CLAUDE.md', join(cwd, 'AGENTS.md'))
+        expect(await shared()).toEqual([{ name: 'CLAUDE.md', text: 'the other text', truncated: false }])
+        expect(failed).not.toHaveBeenCalled()
+      })
+
+      it('leaves out what is not a plain file: a folder, a named pipe, which is never opened', async () => {
+        await mkdir(join(cwd, 'AGENTS.md'))
+        execFileSync('mkfifo', [join(cwd, 'CLAUDE.md')])
+        expect(await shared()).toEqual([])
+        expect(failed).not.toHaveBeenCalled()
+      })
+
+      it('lets the project folder itself sit behind links, as /tmp does on a Mac', async () => {
+        await project('AGENTS.md', 'through the front door')
+        const front = join(cwd, '..', 'front')
+        await symlink(cwd, front)
+        expect(await readSharedInstructions(front, failed)).toEqual([{ name: 'AGENTS.md', text: 'through the front door', truncated: false }])
       })
     })
   })
