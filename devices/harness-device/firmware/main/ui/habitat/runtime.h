@@ -8,7 +8,6 @@ uint32_t habitat_scene_receipt(void);
 void habitat_scene_presented(uint32_t receipt);
 void habitat_tick(void);
 uint32_t habitat_next_wake_ms(void);
-bool habitat_is_voice_view(void);
 void habitat_touch(bool down, int x, int y, uint32_t now_ms);
 // The driver calls this on an untrusted sample, then swallows contact until a real release.
 void habitat_touch_cancel(void);

@@ -9,7 +9,6 @@ import type { Agent, Author, SuperTabState } from './model.js'
 import { digestIsDue, noticeLine } from './noticeDigest.js'
 import { TURN_END_WAIT_MS } from './turnEnd.js'
 import { ledProject, type SwarmProject } from './projects.js'
-import { noteLines } from './processNotes.js'
 import { switched } from './boardRights.js'
 import { swarmUsernames } from './usernames.js'
 
@@ -75,20 +74,18 @@ export function crewNeedLine(state: SuperTabState, delivery: Where, need: CrewNe
 export const OWED_LINES_MAX = 10
 const MINUTE = 60_000
 
-/** [project]'s owed asks as the inbox's first lines: a what-changed note its PM has not confirmed (processNotes.ts, task #3581),
- *  then a header and one line per ask, oldest first. None when nothing is owed. */
+/** [project]'s owed asks as the inbox's lines: a header and one line per ask, oldest first. None when nothing is owed. */
 export function owedLines(state: SuperTabState, project: SwarmProject, now: number): string[] {
-  const process = noteLines(state, project)
   const asks = state.conversations.filter(c => !c.archived && c.owed && (c.projectId ?? 'lead') === project.id)
     .flatMap(c => c.owed!.map(ask => ({ ...ask, conversationId: c.id }))).sort((a, b) => a.at - b.at)
-  if (!asks.length) return process
+  if (!asks.length) return []
   const names = swarmUsernames(state)
   const ago = (at: number) => `${Math.max(0, Math.round((now - at) / MINUTE))}m`
   // A switched project records no new ask (pulse.ts owe, task #3819): what is left came before the switch, and stays until it
   // is answered or its proposal card exists (boardRights.ts legacyAsks), so nothing is dropped (Readycheck's review).
   const header = switched(project) ? `Owed from before this project switched to the Board (${asks.length}, oldest ${ago(asks[0]!.at)}), until each has its proposal card.`
     : `Owed asks (${asks.length}, oldest ${ago(asks[0]!.at)}).`
-  return [...process, `${header} Answer each once, in its place: harness super-tab answer GROUP MESSAGE_ID TEXT OPERATION_ID.`,
+  return [`${header} Answer each once, in its place: harness super-tab answer GROUP MESSAGE_ID TEXT OPERATION_ID.`,
     ...asks.slice(0, OWED_LINES_MAX).map(a => `- from ${names.get(a.personId) ?? 'a person'}, ${ago(a.at)} ago (message ${a.id} in ${a.conversationId})`),
     ...asks.length > OWED_LINES_MAX ? [`And ${asks.length - OWED_LINES_MAX} more owed: the board lists them all.`] : []]
 }

@@ -6,7 +6,7 @@ import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, occupiesAgent, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
 import { startFinished } from './parts/write.js'
-import { agentProjectId, isAgentChat, canReadAgent, canReadProject, groupProject, ledProject, ownsProject, projectOf, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
+import { agentProjectId, isAgentChat, canReadAgent, canReadProject, groupProject, ledProject, ownsProject, projectOf, projectsOf, startProject, teamAccountPool, type SwarmProject } from './projects.js'
 import { isSwarmBuddyChat } from './buddies.js'
 export { teamAccountPool } from './projects.js'
 import { conversation } from './model.js'
@@ -480,8 +480,9 @@ export function machineTeamWork(pool: ContributedMachine, now: number, teamMachi
 
 /** The projects with work on [machineId]: its agents' and its pending starts'. */
 export function projectsOnMachine(state: SuperTabState, machineId: string): Set<string> {
+  // A start in an agent's own chat or a Buddy's belongs to no project.
   const pending = (state.starts ?? []).filter(s => s.request.machineId === machineId && !s.harnessId && !s.error)
-    .map(s => s.request.leadFor?.projectId ?? groupProject(state, conversation(state, s.request.conversationId)).id)
+    .flatMap(s => s.request.leadFor?.projectId ?? startProject(state, s.request)?.id ?? [])
   return new Set([...state.agents.filter(a => a.machineId === machineId).map(a => agentProjectId(state, a)), ...pending])
 }
 

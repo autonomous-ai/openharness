@@ -34,7 +34,7 @@ static void punctuation_checks(void)
 {
     static const char *unicode[]={"‐","‑","‒","–","—","―","−","‘","’","‚","‛","“","”","„","‟"};
     static const char *ascii[]={"-","-","-","-","-","-","-","'","'","'","'","\"","\"","\"","\""};
-    const ht_font_t *fonts[]={&ht_mono_16,&ht_mono_20,&ht_mono_24,&ht_mono_28,&ht_pixel_40};
+    const ht_font_t *fonts[]={&ht_mono_16,&ht_mono_20,&ht_mono_24,&ht_mono_28};
     for (unsigned f=0;f<sizeof fonts/sizeof fonts[0];f++) {
         for (unsigned i=0;i<sizeof unicode/sizeof unicode[0];i++) {
             ht_scene_t a,b; ht_scene_clear(&a,0); ht_scene_clear(&b,0);
@@ -87,8 +87,6 @@ static void vietnamese_checks(void)
     ht_raster(&horn,(ht_rect_t){0,0,HT_WIDTH,HT_HEIGHT},full);
     ht_raster(&plain,(ht_rect_t){0,0,HT_WIDTH,HT_HEIGHT},scratch);
     assert(memcmp(full,scratch,sizeof full));
-    // The pixel face carries no Vietnamese and must say so rather than draw a wrong cell.
-    assert(!ht_can_display("đã",&ht_pixel_40,400,4));
 }
 
 static void inline_arrow_checks(void)
@@ -271,26 +269,6 @@ static void arc_checks(void)
     puts("arc: upper/lower clipped/full comparisons; UTF-8, removal, recoloring and warm-cache reuse passed");
 }
 
-static void lock_dot_checks(void)
-{
-    assert(ht_lock_dot.first=='o'&&ht_lock_dot.last=='o');
-    assert(ht_lock_dot.width==ht_pixel_40.width&&ht_lock_dot.height==ht_pixel_40.height);
-    size_t bytes=((size_t)ht_lock_dot.width*ht_lock_dot.height+3)/4;
-    assert(!memcmp(ht_lock_dot.pixels,ht_pixel_40.pixels+('o'-ht_pixel_40.first)*bytes,bytes));
-    ht_scene_t original,compact;
-    ht_scene_clear(&original,0);ht_scene_clear(&compact,0);
-    for(int i=0;i<9;i++) {
-        int x=137+i%3*80,y=156+i/3*74;
-        uint16_t fg=ht_rgb(i%2?0xb9ed80:0x969f91);
-        ht_text(&original,x,y,40,&ht_pixel_40,fg,0,"o");
-        ht_text(&compact,x,y,40,&ht_lock_dot,fg,0,"o");
-    }
-    ht_raster(&original,(ht_rect_t){0,0,HT_WIDTH,HT_HEIGHT},full);
-    ht_raster(&compact,(ht_rect_t){0,0,HT_WIDTH,HT_HEIGHT},scratch);
-    assert(!memcmp(full,scratch,sizeof full));
-    puts("lock dot: exact old glyph bytes and nine-dot screen; 45120 unused font bytes removed");
-}
-
 static size_t utf8_encode(char *p, unsigned cp)
 {
     if(cp<0x80) { p[0]=(char)cp; return 1; }
@@ -372,7 +350,6 @@ static void display_text_checks(void)
 
 int main(void)
 {
-    lock_dot_checks();
     arc_checks();
     punctuation_checks();
     vietnamese_checks();

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { agent, fail, person, type Actor, type SuperTabState } from './model.js'
-import { knownTimeZone } from './digest.js'
+import { knownTimeZone } from './localTime.js'
 import { agentProjectId, projectAgent } from './projects.js'
 
 /** The emoji a status may wear. Desktop offers each with its words (focus, coffee, lunch, out, away, sick). */

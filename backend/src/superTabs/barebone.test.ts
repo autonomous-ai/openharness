@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest'
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { recordingDb } from '../lib/queryRecorder.test-support.js'
-import { scheduleRequest, SCHEDULE_SLOT_MS } from './pmSchedule.js'
-import { latestProcessNote } from './processNotes.js'
 import { hostTab, type HostLookups } from './read/hostRows.js'
 import { owner, swarm } from './read/fixture.test-support.js'
 import { SuperTabStore } from './store.js'
@@ -44,17 +42,5 @@ describe('a barebone agent\'s reads (task #4673)', () => {
     expect(row(lead).instructions).not.toBeNull()
     expect(row(lead).instructions).not.toHaveProperty('builtInHash')
     expect(row(worker).instructions).not.toHaveProperty('builtInHash')
-  })
-
-  it('says what the open-task sweep is in the wake itself, pointing at no built-in section', () => {
-    const { s, lead } = withLead()
-    s.edit(state => { state.projects![0]!.processNote = { confirmed: latestProcessNote()!.id } })
-    const now = Date.UTC(2026, 10, 4, 3, 0)
-    const wake = scheduleRequest(s.state, s.state.agents.find(a => a.id === lead)!, now)!
-    expect(wake.slot).toBe(now / SCHEDULE_SLOT_MS)
-    const text = wake.draft.text
-    expect(text).not.toMatch(/built-in PM schedule|in your instructions\)/i)
-    expect(text).toContain('Open-task sweep: every open task, unassigned ones included, ends with an owner working on it')
-    expect(text).toContain('archive every finished task the Swarm left open with no pull request')
   })
 })

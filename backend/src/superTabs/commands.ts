@@ -15,7 +15,6 @@ import { acceptedByRequester, ACCEPT_ALL_REFUSAL, askedByAnother, HELPER_REFUSAL
 import { ownedPath, pathsOverlap } from './ownedPaths.js'
 import { addedAgentName, newAgentName, renameAgentTo } from './agentRename.js'
 import { addCrew, CREW_ROLE_MAX, removeCrew } from './crew.js'
-import { noteIndex } from './processNotes.js'
 import { ownsBoard, readsProject, requireCanChat, requirePriorityRight, steers } from './boardRights.js'
 import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
 import { agentWrittenNameOf, setName, shownNameOf } from './personNames.js'
@@ -54,7 +53,6 @@ import { ABANDONED, askedModel, coordinatorCopy, failureNotice, failureRecipient
 import { noteStartFailed, noteStartSucceeded, resumeEngine } from './engineHealth.js'
 import { reviewCapacityNotice } from './reviewCapacity.js'
 import { processOf, taskProcess, type ProjectProcess } from './process.js'
-import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { reportGroups, summarize } from './projectUpdates.js'
 import { cloneData } from './cloneData.js'
@@ -91,7 +89,6 @@ import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, F
 import { repeatedRules } from './instructionsDiff.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { BASE_DOCUMENT, BASE_VERSION } from './instructionsRebase.js'
-import { tidySaved } from './pmSchedule.js'
 import { contractRefusal, missingContract } from './taskContract.js'
 import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, proposalPriority, titlePriority, type TaskPriority } from './taskPriority.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
@@ -269,10 +266,6 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.canChat'), projectId: id, personId: id, granted: z.boolean() }).strict(),
   z.object({ type: z.literal('project.decider'), projectId: id, personId: id.nullable() }).strict(),
   z.object({ type: z.literal('project.cadence'), projectId: id, minutes: z.union([z.literal(1), z.literal(5), z.literal(15), z.literal(30)]) }).strict(),
-  // A project's PM confirms a what-changed note for PMs (processNotes.ts, task #3581).
-  z.object({ type: z.literal('process.confirm'), projectId: id, noteId: z.string().trim().min(1).max(80) }).strict(),
-  // A local time of day ("08:00") in an IANA zone; null turns the digest off.
-  z.object({ type: z.literal('project.digest'), projectId: id, time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).nullable(), timeZone: z.string().min(1).max(64) }).strict(),
   // `through`: each conversation's sequence the Lead read, as its wake-up names them. `throughRevision` is the tab revision a
   // wake-up from before the store by parts named; it is accepted only up to that split (projectUpdates.ts).
   z.object({ type: z.literal('project.report'), projectId: id, through: z.record(id, z.number().int().nonnegative().safe()).optional(),
@@ -291,8 +284,6 @@ export const commandSchema = z.discriminatedUnion('type', [
     // How the writer sorted the lines it dropped, for the History (ruleGuard.ts droppedLines; the daily tidy).
     dropped: z.array(z.object({ text: z.string().trim().min(1).max(2000), kind: z.enum(['merged', 'expired', 'rule']) }).strict())
       .max(MAX_DROPPED_LINES).optional(),
-    // The coordinator's daily tidy, done by this save (pmSchedule.ts tidyRequest).
-    tidy: z.literal(true).optional(),
     // A person keeping a line that repeats one the document has, and why (ruleGuard.ts refuseRepeats; the coordinator's is ignored).
     repeatReason: z.string().trim().min(1).max(100).regex(/^[^\r\n]*$/, 'Give the reason in one line.').optional() }).strict(),
   // The project's rules record, saved on the revision the writer read (policy.ts). A person writes in their own name; the
@@ -2587,9 +2578,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         context.instructions?.at ?? 0, context.pullRequestMerges ?? {}, context.projectRules?.rules.instructionApprovals)
       // Every line it dropped, with its kind and who gave it, kept with the revision for the History (River, 11-05).
       saveInstructions(project, current, command.text, summary, askedBy, droppedLines(before, command.text, command.dropped ?? [], rules))
-      // The coordinator's save that says it is the tidy is that tidy done (pmSchedule.ts tidyRequest); a correction it saves
-      // meanwhile is not (review of #3112).
-      if (actor.kind === 'agent' && command.tidy) tidySaved(projectOf(state, project.id), current + 1)
       // Approvers and authors affected by a decider's override hear privately, in their one Buddy chat and older one here, from
       // their own agent: only they and it post there (task #4558). Without one, the Instructions history records the drop.
       for (const [personId, rules] of told) {
@@ -2705,16 +2693,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       else delete stored.about
       break
     }
-    case 'process.confirm': {
-      const project = readProject(state, actor, command.projectId)
-      if (actor.kind !== 'agent' || ledProject(state, actor.agentId)?.id !== project.id) fail('FORBIDDEN', 'Only the project\'s PM confirms a note for PMs.', 403)
-      if (noteIndex(command.noteId) < 0) fail('INVALID_NOTE', 'Confirm a note the Swarm sent: its id is in your wake or inbox.', 400)
-      mutableProjects(state)
-      const stored = projectOf(state, project.id)
-      // Confirming an older note after a newer one never brings the newer back.
-      if (noteIndex(command.noteId) > noteIndex(stored.processNote?.confirmed)) stored.processNote = { ...stored.processNote, confirmed: command.noteId }
-      break
-    }
     case 'project.answers': {
       // As its coordinator's name: the coordinator sets it, or a person who manages the project.
       const project = readProject(state, actor, command.projectId)
@@ -2724,26 +2702,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const stored = projectOf(state, project.id)
       if (command.inThread) stored.answersInThread = true
       else delete stored.answersInThread
-      break
-    }
-    case 'project.digest': {
-      const project = readProject(state, actor, command.projectId)
-      const lead = conversation(state, project.leadConversationId).leadId
-      if (actor.kind !== 'person' && !(actor.kind === 'agent' && actor.agentId === lead)) fail('FORBIDDEN', 'A person or the project’s Lead sets its morning digest.', 403)
-      if (!knownTimeZone(command.timeZone)) fail('TIME_ZONE', 'Name a time zone such as Asia/Ho_Chi_Minh.', 400)
-      mutableProjects(state)
-      const stored = projectOf(state, project.id)
-      // Off stays off: the default (digest.ts defaultDigest) is not filled in again.
-      if (command.time === null) {
-        delete stored.digest
-        stored.digestOff = true
-      } else {
-        delete stored.digestOff
-        // Set after today's time, the first digest comes tomorrow rather than at once; moved later on a day its digest went
-        // out, it stays sent for today.
-        const lastOn = digestStartsAfter(command.time, command.timeZone, context.now, stored.digest?.lastOn)
-        stored.digest = { time: command.time, timeZone: command.timeZone, ...lastOn ? { lastOn } : {} }
-      }
       break
     }
     case 'tab.project': {

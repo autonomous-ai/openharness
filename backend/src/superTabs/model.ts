@@ -474,10 +474,6 @@ export interface Conversation {
   /** The sequence of its newest main-stream message from a person, not a system row (parts/commit.ts): what makes a task's
    *  sidebar row bold (Huy, 11-03, #2427). Absent until a person's first message after this was added; readers read 0. */
   lastPersonSequence?: number
-  /** When a person last wrote to its project's coordinator here: any message in the project chat (threads included), or one
-   *  reaching the coordinator in another chat of the project (parts/commit.ts). The built-in wake asks the coordinator to save
-   *  what it was taught only after one (pmSchedule.ts; task #3022). Absent until then. */
-  heardAt?: number
   /** When a person last talked with each agent here, by agent id (parts/commit.ts): `person`, their last message that reached
    *  it; `answer`, its own post to people after that one. An agent a person is chatting with is never idle (tidy.ts idleSince,
    *  task #3816). Ids and times only, the last hour; hidden from readers. Absent until a person talks with an agent here. */
@@ -583,7 +579,7 @@ export interface Conversation {
   /** Why its not-before date holds it (heldReason.ts), set with the date by work.queue. Absent on a hold from before reasons. */
   hold?: import('./heldReason.js').HeldReason
   /** A pause by someone who steers its project (boardRights.ts, task #3819): who (actorKey), when and why. While set, the task
-   *  is not handed out (dispatch.ts) or chased by the PM's sweep (pmSchedule.ts), and shows held (pulse.ts). */
+   *  is not handed out (dispatch.ts) and shows held (pulse.ts). */
   paused?: { by: string; at: number; reason?: string }
   /** How urgent its task is (taskPriority.ts), set by conversation.create and work.priority. Absent on a step, a chat and a task
    *  from before priorities, which reads as P2. */
@@ -859,7 +855,7 @@ export const AGENT_ONLY = { kind: 'agent-only' }
 export const NOTICE_READERS = {
   // Only its agent: a skill update (cli host.ts), a decision answered (decisions.ts).
   'agent-only': 'agent',
-  // The Lead's wakes and requests, and the worker's "moved" line (liveness.ts, tidy.ts, projectUpdates.ts, digest.ts); two
+  // The Lead's wakes and requests, and the worker's "moved" line (liveness.ts, tidy.ts, projectUpdates.ts); two
   // projects changing the same code, to both their Leads in the Leads chat (commands.ts).
   'work-stalled': 'recipients', 'work-lost': 'recipients', 'work-resumed': 'recipients', 'idle-stop': 'recipients',
   // A crew member's 2 hours without progress on its task, to that member (dispatch.ts crewClock, liveness.ts).
@@ -867,11 +863,10 @@ export const NOTICE_READERS = {
   // An agent with no open task for 15 minutes, and a grid attempt's failed first review, told to the coordinator (tidy.ts
   // idleNotices, commands.ts work.check; project instructions, phase 4). `idle-stop` rows are from before.
   idle: 'recipients', 'review-failed': 'recipients',
-  'update-request': 'recipients', 'digest-request': 'recipients', overlap: 'recipients',
-  // The coordinator's wake for its built-in schedule (pmSchedule.ts).
-  'schedule-request': 'recipients',
-  // The daily tidy, the coordinator's alone like its wake (pmSchedule.ts tidyRequest).
-  'tidy-request': 'recipients',
+  'update-request': 'recipients', overlap: 'recipients',
+  // The Lead's built-in schedule wake, its daily tidy and its morning digest, gone in Swarm v4 (anh Dee, 11-09): the rows already
+  // stored stay hidden from people.
+  'schedule-request': 'recipients', 'tidy-request': 'recipients', 'digest-request': 'recipients',
   // Two agents that may be talking in a loop, told to the coordinator (commands.ts pairLoop, project instructions phase 1).
   'pair-loop': 'recipients',
   // A crew member's finished wake or move, timed for the daily scorecard (crewTimes.ts, task #3462): read by nobody.

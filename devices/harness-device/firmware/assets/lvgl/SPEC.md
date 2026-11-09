@@ -26,9 +26,8 @@ ARGB8888 (B,G,R,A, straight alpha), blended with `lv_color_24_16_mix`.
 
 | icon | source | drawn |
 |---|---|---|
-| 14 engine marks | `icons_engine.c`, 20×20 | header: scaled 358/256 about (10,10) → 27 px from box offset 0 (LVGL's transform, ported); inbox: 20 native |
+| 14 engine marks | `icons_engine.c`, 20×20 | inbox: 20 native |
 | Claude | white mark, shape in alpha | recoloured `0xcc7c5e`, alpha kept; the others keep their colours |
-| microphone | `icon_act_voice`, 44×44, `#00ff2f` baked | native, centred on (233, 393) |
 | bell, cross | FontAwesome U+F0F3 / U+F00D in Montserrat | text |
 
 ## Layout of the LVGL firmware (COL_FG `0xeaeaf0`, COL_MUTED `0x8a8a99`)
