@@ -1,8 +1,8 @@
 // Task #3462 (docs/plans/2026-11-06-crew-wake-move-times-plan.md): the design promises a crew member "wakes in seconds" and is
 // "moved and running again within 5 minutes". Each wake and each move is recorded when it finishes: its start, the moment the
 // agent runs again, and its reason, as one row in its project's chat that only the server reads (NOTICE_READERS
-// `crew-timing`). The daily scorecard reads the day's rows (scorecard/figures.ts crewTimesOf), so a member removed since, or
-// moved to a new agent, still counts. The crew keeper (crewKeep.ts) calls startWake when new work wakes an asleep member,
+// `crew-timing`). The daily scorecard that read the day's rows is gone with Swarm v4: nothing reads them now. The crew keeper
+// (crewKeep.ts) calls startWake when new work wakes an asleep member,
 // and moveTimingRow when a move's new session takes the member over; the sweep on machine reports calls finishedWakes.
 import { agentDisplayName } from './agentNames.js'
 import { stableId, type Agent, type Author, type MessageDraft, type SuperTabState } from './model.js'
@@ -31,7 +31,7 @@ function placeFor(state: SuperTabState, agentId: string): { conversationId: stri
 
 const seconds = (ms: number) => Math.round(ms / 1000)
 
-/** The row recording one finished wake or move: read by the scorecard, by no person, and waking no one. Named by the member and
+/** The row recording one finished wake or move: read by no person, and waking no one. Named by the member and
  *  the start, so a retried write is the same row. */
 function timingRow(state: SuperTabState, timing: CrewTiming): MessageDraft | null {
   const place = placeFor(state, timing.agentId)

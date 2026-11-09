@@ -43,6 +43,12 @@ const issue = (number: number, seconds: number, labels: string[], extra: Json = 
   updated_at: at(seconds), labels: labels.map(name => ({ name })), user: { login: 'deehw' }, author_association: 'MEMBER',
   html_url: `https://github.com/acme/app/issues/${number}`, ...extra })
 
+const review = (id: number, seconds: number, state: string, body: string, pull = 4) => ({ id, state, body, submitted_at: at(seconds), author_association: 'MEMBER',
+  user: { login: 'deehw' }, html_url: `https://github.com/acme/app/pull/${pull}#pullrequestreview-${id}` })
+const line = (id: number, seconds: number, body: string, at_line: number, extra: Json = {}, pull = 4) => ({ id, body, path: 'sandbox/quotes.py', line: at_line,
+  created_at: at(seconds), updated_at: at(seconds), author_association: 'MEMBER', user: { login: 'deehw' },
+  pull_request_url: `https://api.github.com/repos/acme/app/pulls/${pull}`, html_url: `https://github.com/acme/app/pull/${pull}#discussion_r${id}`, ...extra })
+
 function setup(agents: WatchedAgent[] = [PIP], file = join(root, `memory-${files++}.json`)) {
   const github = fakeGitHub()
   const clock = { now: START }
@@ -110,6 +116,62 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
     expect(f.relay).toHaveBeenCalledTimes(3)
   })
 
+  it('hands a review and its line comments to the agent as one message, so a review of many lines wakes it once', async () => {
+    const f = setup()
+    f.github.issues.push(issue(4, -100, ['builder:pip'], { pull_request: {} }))
+    await f.mentions.tick()
+    f.github.issues[0]!.updated_at = at(12)
+    f.github.reviews.set(4, [review(7, 11, 'CHANGES_REQUESTED', 'Two things.')])
+    f.github.lineComments.push(line(9, 11, 'Off by one here.', 12, { pull_request_review_id: 7 }), line(10, 11, 'And here.', 30, { pull_request_review_id: 7 }))
+    await f.mentions.tick()
+    expect(f.relayed()).toEqual([{ type: 'github.relay', conversationId: 'chat-pip', agentId: 'pip', repository: 'acme/app', event: 'review', on: 'pull', number: 4,
+      url: 'https://github.com/acme/app/pull/4#pullrequestreview-7', login: 'deehw', association: 'MEMBER', verdict: 'CHANGES_REQUESTED',
+      text: 'Two things.\n\nsandbox/quotes.py line 12:\nOff by one here.\n\nsandbox/quotes.py line 30:\nAnd here.' }])
+  })
+
+  it('hands a lone line comment on as itself: GitHub makes it a review of its own, which relayed it twice', async () => {
+    const f = setup()
+    f.github.issues.push(issue(4, -100, ['builder:pip'], { pull_request: {} }))
+    await f.mentions.tick()
+    f.github.issues[0]!.updated_at = at(12)
+    f.github.reviews.set(4, [review(11, 11, 'COMMENTED', '')])
+    f.github.lineComments.push(line(12, 11, 'Off by one here.', 12, { pull_request_review_id: 11 }))
+    await f.mentions.tick()
+    expect(f.relayed()).toEqual([expect.objectContaining({ event: 'review-comment', number: 4, path: 'sandbox/quotes.py', line: 12, text: 'Off by one here.',
+      url: 'https://github.com/acme/app/pull/4#discussion_r12' })])
+  })
+
+  it('hands an agent named in someone else\'s review only what names it, and nothing of a review it signed', async () => {
+    const f = setup()
+    f.github.issues.push(issue(5, -100, ['builder:juno'], { pull_request: {} }), issue(6, -100, ['builder:pip'], { pull_request: {} }))
+    await f.mentions.tick()
+    f.github.issues[0]!.updated_at = at(12)
+    f.github.issues[1]!.updated_at = at(12)
+    f.github.reviews.set(5, [review(20, 11, 'COMMENTED', '', 5)])
+    f.github.reviews.set(6, [review(30, 11, 'APPROVED', 'Pip, 12:00: READ-OK f6edb44', 6)])
+    f.github.lineComments.push(line(21, 11, 'Fine by me.', 3, { pull_request_review_id: 20 }, 5), line(22, 11, '@Pip has the same bug in its parser.', 8, { pull_request_review_id: 20 }, 5),
+      line(31, 11, 'Pip, 12:00: one nit.', 4, { pull_request_review_id: 30 }, 6))
+    await f.mentions.tick()
+    expect(f.relayed()).toEqual([{ type: 'github.relay', conversationId: 'chat-pip', agentId: 'pip', repository: 'acme/app', event: 'review-comment', on: 'pull',
+      number: 5, url: 'https://github.com/acme/app/pull/5#discussion_r22', login: 'deehw', association: 'MEMBER', path: 'sandbox/quotes.py', line: 8,
+      text: '@Pip has the same bug in its parser.' }])
+  })
+
+  it('hands on a line comment alone when its review was handed on before', async () => {
+    const f = setup()
+    f.github.issues.push(issue(4, -100, ['builder:pip'], { pull_request: {} }))
+    await f.mentions.tick()
+    f.github.issues[0]!.updated_at = at(12)
+    f.github.reviews.set(4, [review(7, 11, 'CHANGES_REQUESTED', 'Two things.')])
+    await f.mentions.tick()
+    f.clock.now += 20_000
+    f.github.issues[0]!.updated_at = at(32)
+    f.github.reviews.set(4, [review(7, 11, 'CHANGES_REQUESTED', 'Two things.'), review(8, 31, 'COMMENTED', 'And a third.')])
+    f.github.lineComments.push(line(9, 31, 'Late, but here.', 12, { pull_request_review_id: 7 }))
+    await f.mentions.tick()
+    expect(f.relayed().map(c => [c.event, c.text])).toEqual([['review', 'Two things.'], ['review', 'And a third.'], ['review-comment', 'Late, but here.']])
+  })
+
   it('tells the agent of an issue newly labelled for it, not one it already had, nor its own pull request\'s label', async () => {
     const f = setup()
     f.github.issues.push(issue(2, -100, ['builder:pip']))
@@ -171,6 +233,20 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
     await f.mentions.tick()
     await f.mentions.tick()
     expect(f.relay).toHaveBeenCalledTimes(2)
+    expect(f.relay.mock.calls[1]![1]).toBe(f.relay.mock.calls[0]![1])
+  })
+
+  it('hands a review on again after the backend failed it, though a newer pull request moved the feed past its own', async () => {
+    const f = setup()
+    f.github.issues.push(issue(4, -100, ['builder:pip'], { pull_request: {} }), issue(6, -100, [], { pull_request: {} }))
+    await f.mentions.tick()
+    f.github.issues[0]!.updated_at = at(11)
+    f.github.issues[1]!.updated_at = at(12)
+    f.github.reviews.set(4, [review(7, 11, 'CHANGES_REQUESTED', 'Fix the count.')])
+    f.relay.mockRejectedValueOnce(new Error('Could not reach this Super Tab.'))
+    await f.mentions.tick()
+    await f.mentions.tick()
+    expect(f.relayed().map(c => [c.event, c.text])).toEqual([['review', 'Fix the count.'], ['review', 'Fix the count.']])
     expect(f.relay.mock.calls[1]![1]).toBe(f.relay.mock.calls[0]![1])
   })
 

@@ -77,10 +77,6 @@ export interface ProgressView {
 export interface Derived {
   /** The board's pulse of each project the reader sees (pulse.ts, task #3384), by project id. Absent from an older backend. */
   pulse?: Record<string, import('../pulse.js').Pulse>
-  /** When each component's release may next open, by project id then component (releases.ts nextReleaseAt, task #3827): 0 is now,
-   *  absent one is left to people. Only for the projects the reader sees and that have a release list; the list itself is never
-   *  sent. A time already past is as good as 0: the settle writes a new one each minute it changes. Absent from an older backend. */
-  releaseTimes?: Record<string, import('../releases.js').ReleaseLedger['nextAt'] & object>
   /** Every agent the reader can see. `workDecision` is null when the stored value stands; `roleId` null outside Custom. */
   /** `roleName`: the role it goes by (instructions.ts roleNameOf), its stored one or what it is. */
   /** `kind`: the reader's Buddy, a PM leading a project, or a Regular agent; `chatId`: the chat its person talks to it in, or null

@@ -69,16 +69,6 @@ export function assignedNotice(state: SuperTabState, group: Conversation, author
     text: `News for your owner: #${group.number} "${group.title}", recorded as their request, is assigned and ${group.assignment.status}.` }
 }
 
-/** Work [group]'s requester asked for just shipped: a verified release holds it (releases.ts settleReleases), as one line for
- *  their Buddy alone inside the task, like the assignment's. */
-export function shippedNotice(state: SuperTabState, group: Conversation, author: Author, operationId: string): MessageDraft | null {
-  if (group.proposal) return null
-  const buddy = group.requesterId ? listeningBuddy(state, group.requesterId, group) : undefined
-  if (!buddy) return null
-  return { id: stableId(operationId, 'buddy-news', 'shipped'), conversationId: group.id, author, replyTo: null, recipients: [buddy.id], source: AGENT_ONLY,
-    text: `News for your owner: #${group.number} "${group.title}", recorded as their request, shipped.` }
-}
-
 /** Every Buddy hearing input, in its own chat too: the agent guard meets a concurrent sleep (#3824), and the person's
  *  guard meets loss of the membership that permits the delivery (parts/touches.ts). */
 export function buddiesHearing(state: SuperTabState, messages: readonly MessageDraft[]): Agent[] {
