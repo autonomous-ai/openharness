@@ -476,6 +476,8 @@ export class SuperTabHost {
   private readonly file: string
   private readonly journal: Journal
   private readonly now: () => number
+  /** When this host started (basicsSince). */
+  private readonly started: number
   private readonly write: (file: string, journal: Journal) => void
   private readonly log: (message: string) => void
   private retentionError: string | null = null
@@ -644,6 +646,7 @@ export class SuperTabHost {
     this.claudeHome = options.claudeHome ?? homedir()
     this.worktrees = options.worktrees ?? join(projectsRoot(), 'worktrees')
     this.now = options.now ?? Date.now
+    this.started = this.now()
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
     // Through this machine's own daemon socket, as the apps ask it: `agent_restart`
@@ -1871,18 +1874,18 @@ export class SuperTabHost {
       this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
     }
   }
-  /** When this computer first ran the basics named [version]: kept in its data folder, so a restart keeps the moment. A
-   *  record it cannot read or write counts from now, which tells a running agent once more at worst. */
+  /** When this computer first ran the basics named [version]: kept in its data folder, so a restart keeps the moment. It
+   *  counts from when this host started, not from its first look, which can come after it launched an agent with them. A
+   *  record it cannot read or write counts from this start, which tells a running agent once more at worst. */
   private basicsSince(version: string): number {
     const file = join(this.core.dataDir, 'super-tab-basics.json')
     let seen: Record<string, number> = {}
     try { seen = object(JSON.parse(readFileSync(file, 'utf8'))) as Record<string, number> } catch { /* First run of any. */ }
     if (typeof seen[version] === 'number') return seen[version]
-    const now = this.now()
     // The last few texts are enough: an older one is never asked about again.
-    const kept = Object.fromEntries([...Object.entries(seen).filter(([, at]) => typeof at === 'number'), [version, now] as const].slice(-5))
+    const kept = Object.fromEntries([...Object.entries(seen).filter(([, at]) => typeof at === 'number'), [version, this.started] as const].slice(-5))
     try { writeFileSync(file, JSON.stringify(kept), { mode: 0o600 }) } catch (error) { this.log(`The basics record was not saved: ${error instanceof Error ? error.message : String(error)}`) }
-    return now
+    return this.started
   }
 
   /** Put a Buddy's skill file on this release's text and tell it if owed; when the notice could not be sent it is due again

@@ -3728,6 +3728,16 @@ describe('an agent its person attached', () => {
     expect(fresh.told).toEqual([])
   })
 
+  it('is told nothing when this daemon launched it with the basics, though it looks only later', async () => {
+    // The daemon starts at 1 s, launches the agent at 2 s and first looks at it at 3 s, with no record of these basics yet.
+    const t = attached({ engine: 'claude', swarmSkill: { role: 'agent', key: 'harness' }, boundAt: 2_000 })
+    t.wait(1_000)
+    const host = t.open()
+    t.wait(2_000)
+    await host.tick(); await settle()
+    expect(t.told).toEqual([])
+  })
+
   it('is told again later when the Swarm could not be read, by a backend whose roster row names no chat', async () => {
     const t = attached({ engine: 'claude' })
     delete t.row.agent.chatId
