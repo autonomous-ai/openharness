@@ -4,8 +4,8 @@ import { metrics } from '../lib/metrics.js'
 import { devicesOf, forgetPushDevice, markSandbox, type PushDevice, type PushPlatform } from './devices.js'
 import { apnsSender } from './apns.js'
 import { fcmSender } from './fcm.js'
+import { dropMuted } from './muted.js'
 import { pushKeysFromEnv, type PushEnv } from './keys.js'
-import { quietRepeats } from './repeats.js'
 import type { PhoneNotice, Sender } from './sender.js'
 
 /** A platform's sender, or null when the server has no keys for it. */
@@ -24,8 +24,8 @@ export function phoneSendersFromEnv(env: PushEnv): PhoneSenders {
 }
 
 /**
- * Sends `notices` to the phones of the people they are for (task #2905), after the write that made them committed. One read
- * of those people's phones; each notice to each of its person's phones, AT_ONCE at a time. A dead token is forgotten, a
+ * Sends `notices` to the phones of the people they are for (task #2905), after the write that made them committed, less
+ * the tags in chats their person muted (push/muted.ts). One read of those people's phones; each notice to each of its person's phones, AT_ONCE at a time. A dead token is forgotten, a
  * sandbox one remembered. It never throws: what failed is logged, by platform and Apple's or Google's reason, and counted.
  */
 export async function sendPhoneNotices(db: PrismaClient, senders: PhoneSenders, given: PhoneNotice[]): Promise<void> {
@@ -33,11 +33,7 @@ export async function sendPhoneNotices(db: PrismaClient, senders: PhoneSenders, 
   const started = Date.now()
   let notices = given
   try {
-    // A thread's repeat goes quietly (task #3248). Not read, each goes with its sound: a notice is never lost to it.
-    notices = await quietRepeats(db, given).catch((error: unknown) => {
-      logger.warn('phone push repeats not read', { notices: given.length, error: error instanceof Error ? error.message : String(error) })
-      return given
-    })
+    notices = await dropMuted(db, given)
     const phones = new Map<string, PushDevice[]>()
     for (const device of await devicesOf(db, [...new Set(notices.map(n => n.personId))])) phones.set(device.userId, [...phones.get(device.userId) ?? [], device])
     const sends = notices.flatMap(notice => (phones.get(notice.personId) ?? []).map(device => ({ notice, device })))

@@ -5,14 +5,16 @@ import type { PushDevice } from './devices.js'
  * lib/swarm/swarm_notices.dart): who and where, never what was written. `key` is the phone's key for the same notice, so the
  * app never posts it a second time; `link` is the phone's `swarm:` payload, which opens the thread at the reply.
  *
- * `slot` is the notification it shows in, the one the app's own notice for the same thing uses (task #3248): a tag's or a
- * decision's own key, and one per thread for its replies, so a newer reply replaces the one before and the app's notice
- * replaces the push instead of showing beside it. `quiet` shows it with no sound and no banner: it only replaces what that
- * slot showed. `thread` is a reply's thread and Activity row, by which repeats are found (push/repeats.ts).
+ * `slot` is the notification it shows in, the one the app's own notice for the same thing uses (task #3248): a tag's own
+ * key, one per thread for its reply, one per task for its decisions, so the app's notice replaces the push instead of
+ * showing beside it. `quiet` shows it with no sound and no banner: it only replaces what that slot showed.
+ *
+ * `setting` is a tag's: the id of its person's setting for the chat, which drops it as it is sent when that chat is
+ * muted (push/muted.ts). The senders never send it.
  */
 export interface PhoneNotice {
   personId: string; key: string; title: string; subtitle: string; body: string; link: string; slot: string; quiet?: true
-  thread?: { tabId: string; conversationId: string; threadId: string; rowId: string; at: number }
+  setting?: string
 }
 
 /** The app's id for the notice in `slot` (mobile lib/notify/system_notices.dart swarmNoticeIdFor: FNV-1a over UTF-16 code

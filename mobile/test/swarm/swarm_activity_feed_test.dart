@@ -503,12 +503,14 @@ void main() {
   });
 
   group('reply notices', () {
-    /// A reply by Mia in thread root-1 of the lead chat.
+    /// A reply by Mia in thread root-1 of the lead chat, the one that rang
+    /// the person (backend superTabs/activity.ts writeReplyActivity).
     Map<String, dynamic> mia(
       String id, {
       String kind = 'reply',
       bool read = false,
       int minute = 5,
+      bool rings = true,
     }) => activityRow(
       id,
       kind: kind,
@@ -519,6 +521,7 @@ void main() {
       text: 'sounds good, ship it',
       minute: minute,
       read: read,
+      rings: rings && kind == 'reply',
     );
 
     test('the feed tells of each reply new since its first read and still '
@@ -607,6 +610,20 @@ void main() {
       digest = 'digest-4';
       await swarmMoves(session, fake, () => digest);
       expect(notices.cancelled, [notice.key]);
+    });
+
+    test('a reply the server did not ring for posts nothing: Activity and '
+        'the badge tell of it (Tony\'s rule, 2026-11-09)', () async {
+      var rows = [activityRow('r1', minute: 1)];
+      var digest = 'digest-1';
+      final fake = server(() => rows, digest: () => digest);
+      final (session, notices) = await unopened(fake);
+
+      rows = [mia('r2', minute: 2, rings: false), ...rows];
+      digest = 'digest-2';
+      await swarmMoves(session, fake, () => digest);
+      expect(lists(fake), 2, reason: 'read when its digest moved');
+      expect(notices.replies, isEmpty);
     });
 
     test('nothing is posted while a Swarm screen is up', () async {
