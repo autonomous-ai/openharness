@@ -41,11 +41,10 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
     expect(has(f.run({ type: 'message.send', conversationId: a.id, text: 'Hi', replyTo: null, recipientIds: [] }, f.agentActor(a.worker)).touches, 'agent', a.worker)).toBe(true)
   })
 
-  it('makes a Lead\'s change to an agent\'s avatar meet on the Lead conversation its check reads', () => {
+  it('makes a Lead\'s read of an agent\'s screen meet on the Lead conversation its check reads', () => {
     const f = swarm(), a = f.group('A')
-    const { touches } = f.run({ type: 'agent.avatar', agentId: a.worker, avatar: { kind: 'preset', key: 'owl' } }, f.agentActor(f.lead))
+    const { touches } = f.run({ type: 'agent.screen', agentId: a.worker }, f.agentActor(f.lead))
     expect(has(touches, 'group', 'lead')).toBe(true)
-    expect(has(touches, 'agent', a.worker)).toBe(true)
   })
 
   it('makes the coordinator\'s instructions save, notes and name meet a Lead change on the Lead conversation its check reads (review of phase 2)', () => {

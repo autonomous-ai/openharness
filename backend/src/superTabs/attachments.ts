@@ -42,9 +42,6 @@ export const HOURLY_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024
 export const PENDING_UPLOAD_LIFE_MS = UPLOAD_LINK_MS + 3_600_000
 /** The form route's own refusal, seen only by a client from before upload links. */
 export const FORM_TOO_LARGE_MESSAGE = 'Update Harness to send files over 10 MB. Files can be up to 256 MB.'
-/** An avatar is a small picture: Desktop resizes it before upload, and the backend still holds it to this. */
-export const MAX_AVATAR_BYTES = 1024 * 1024
-export const AVATAR_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/webp'])
 /** The `purpose` of an avatar upload (schema.prisma SuperTabAttachment): never sendable as a chat file. */
 export const AVATAR_PURPOSE = 'avatar'
 /** How long an upload may wait to be sent. */

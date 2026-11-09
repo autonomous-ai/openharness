@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { Readable } from 'node:stream'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
@@ -31,7 +32,7 @@ const read = async (tab: string, user: AuthUser, path = 'parts') => {
   const response = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/${path}`, headers: { authorization: `Bearer ${user.sub}` } })
   return { status: response.statusCode, body: response.json(), text: response.body }
 }
-type Uploaded = { id: string }
+// What an older app sends to set a picture: the form it posts first. The route only refuses it now (routes/superTabs.ts).
 const upload = async (tab: string, bytes: Uint8Array, name = 'me.png', mime = 'image/png', user = owner, asAgentId?: string) => {
   const form = new FormData()
   form.append('file', new Blob([bytes], { type: mime }), name)
@@ -39,11 +40,21 @@ const upload = async (tab: string, bytes: Uint8Array, name = 'me.png', mime = 'i
   const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/avatars${asAgentId ? `?asAgentId=${asAgentId}` : ''}`,
     headers: { authorization: `Bearer ${user.sub}`, 'content-type': encoded.headers.get('content-type')! }, payload: Buffer.from(await encoded.arrayBuffer()) })
   const body = response.json()
-  return { status: response.statusCode, code: body.error?.code ?? body.code, avatar: body.data?.avatar as Uploaded }
+  return { status: response.statusCode, code: body.error?.code ?? body.code, message: body.error?.message as string | undefined }
 }
 const PNG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
 const image = (size: number, head: number[] = PNG) => { const bytes = new Uint8Array(size).map((_, i) => i % 251); bytes.set(head); return bytes }
-const stored = async (id: string) => pictures.objects.get((await db.superTabAttachment.findUniqueOrThrow({ where: { id } })).objectKey)
+// A picture already set, as the avatar commands set them before they were retired (2026-11-09): nothing sets one now, so the
+// object goes in the store and its key on the member's part, which is what a read finds.
+const keepPicture = async (bucket: MemoryAttachmentStore, tab: string, bytes: Uint8Array = image(64)) => {
+  const objectKey = `avatars/${tab}/${randomUUID().replaceAll('-', '')}/avatar`
+  await bucket.put(objectKey, { name: 'avatar', mime: 'image/png' }, Readable.from([Buffer.from(bytes)]), 1024 * 1024)
+  return objectKey
+}
+const setPicture = async (tab: string, userId: string, objectKey: string) => {
+  const row = await db.swarmMember.findUniqueOrThrow({ where: { tabId_key: { tabId: tab, key: userId } } })
+  await db.swarmMember.update({ where: { id: row.id }, data: { version: row.version + 1, changedAt: new Date(), data: { ...row.data as object, avatar: { kind: 'upload', key: objectKey } } } })
+}
 async function swarm() {
   const tab = (await store.create(owner, randomUUID(), 'Office')).id
   const invitation = await run(tab, { type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' })
@@ -81,88 +92,53 @@ afterAll(async () => {
   await replica?.stop()
 })
 
-// Swarm v4 has no status, time zone, name or username to set (2026-11-09), but Desktop and phone from the last 30 days still send them.
+// Swarm v4 has no status, time zone, name, username or picture to set (2026-11-09), but Desktop and phone from the last 30 days still send them.
 describe('the profile commands an older app still sends', () => {
   it('answers each as ignored, and nothing a member reads changes', async () => {
     const tab = await swarm()
     const before = (await read(tab, peer)).body.data.members
     for (const command of [{ type: 'member.status', status: { text: 'Heads down', emoji: '🎯' } }, { type: 'member.timeZone', timeZone: 'Asia/Ho_Chi_Minh' },
-      { type: 'member.username', username: 'pilot' }, { type: 'member.name', name: 'Minh Nguyen' }] as unknown as Command[]) {
+      { type: 'member.username', username: 'pilot' }, { type: 'member.name', name: 'Minh Nguyen' },
+      { type: 'member.avatar', avatar: { kind: 'preset', key: 'fox' } }, { type: 'member.avatar', avatar: { kind: 'upload', id: 'avatar-1' } },
+      { type: 'agent.avatar', agentId: 'lead', avatar: null }] as unknown as Command[]) {
       expect((await run(tab, command)).result, command.type).toEqual({ ignored: true, note: RETIRED_NOTE })
     }
     expect((await read(tab, peer)).body.data.members).toEqual(before)
   })
-})
 
-describe('avatar uploads', () => {
-  it('stores a png, jpg or webp of at most 1 MB as the image its bytes are', async () => {
-    const tab = await swarm()
-    const png = await upload(tab, image(1024 * 1024))
-    expect(png.status).toBe(200)
-    // No link comes back: a picture is only ever reached through a member read's signed link.
-    expect(png.avatar).toEqual({ id: expect.any(String) })
-    expect(await stored(png.avatar.id)).toMatchObject({ contentType: 'image/png' })
-    // A .png that is really a JPEG still shows, as what it is.
-    const jpeg = await upload(tab, image(2048, [0xff, 0xd8, 0xff]), 'me.png', 'image/png', peer)
-    expect(jpeg.status).toBe(200)
-    expect(await stored(jpeg.avatar.id)).toMatchObject({ contentType: 'image/jpeg' })
-    const webp = await upload(tab, image(64, [...Buffer.from('RIFF'), 0, 0, 0, 0, ...Buffer.from('WEBP')]), 'me.webp', 'image/webp')
-    expect(webp.status).toBe(200)
-  })
-
-  it('refuses a file over 1 MB, a gif, and a page or script that says it is an image', async () => {
+  it('refuses the picture it posts first in words, for everyone and for a Swarm that is not there, and keeps nothing', async () => {
     const tab = await swarm()
     const before = pictures.objects.size
-    expect(await upload(tab, image(1024 * 1024 + 1))).toMatchObject({ status: 413, code: 'AVATAR_TOO_LARGE' })
-    expect(await upload(tab, image(64, [...Buffer.from('GIF89a')]), 'me.gif', 'image/gif')).toMatchObject({ status: 415, code: 'AVATAR_TYPE' })
-    expect(await upload(tab, new TextEncoder().encode('<html><script>alert(1)</script></html>'), 'me.png', 'image/png'))
-      .toMatchObject({ status: 415, code: 'AVATAR_TYPE' })
-    expect(await upload(tab, new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"/>'), 'me.svg', 'image/svg+xml'))
-      .toMatchObject({ status: 415, code: 'AVATAR_TYPE' })
+    const refused = { status: 410, code: 'AVATARS_RETIRED', message: 'Pictures can’t be changed any more.' }
+    for (const [where, user] of [[tab, owner], [tab, peer], [tab, outsider], [randomUUID(), owner]] as const) {
+      expect(await upload(where, image(64), 'me.png', 'image/png', user), `${where} ${user.email}`).toEqual(refused)
+    }
+    expect(await upload(tab, image(1024 * 1024 + 1))).toEqual(refused)
     expect(pictures.objects.size).toBe(before)
-  })
-
-  it('is refused outside the Swarm and for a viewer', async () => {
-    const tab = await swarm()
-    // Outside it, refused as a Swarm that does not exist (routes/superTabs.ts NOT_AVAILABLE).
-    expect(await upload(tab, image(64), 'me.png', 'image/png', outsider)).toMatchObject({ status: 404, code: 'NOT_FOUND' })
-    const viewing = (await store.create(owner, randomUUID(), 'Read only')).id
-    const invitation = await run(viewing, { type: 'invite.create', email: peer.email, role: 'viewer', conversationId: 'lead' })
-    await run(viewing, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, peer)
-    expect(await upload(viewing, image(64), 'me.png', 'image/png', peer)).toMatchObject({ status: 403, code: 'READ_ONLY' })
-  })
-
-  it('is never sendable as a chat file', async () => {
-    const tab = await swarm()
-    const { avatar } = await upload(tab, image(64))
-    await expect(run(tab, { type: 'message.send', conversationId: 'lead', text: '', replyTo: null, recipientIds: [], attachmentIds: [avatar.id] }))
-      .rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
   })
 })
 
-describe('setting avatars', () => {
+describe('a picture already set', () => {
   const HOUR = 3_600_000
-  const avatarOf = async (tab: string, key: string) =>
-    ((await read(tab, peer)).body.data.members as Array<{ key: string; data: { avatar?: unknown } }>).find(m => m.key === key)!.data.avatar
   const linkFor = async (tab: string, reader: AuthUser, who: string) =>
     ((await read(tab, reader)).body.data.derived?.avatars ?? {})[who] as string | undefined
 
-  it('puts the person’s own upload on their member record, once', async () => {
+  it('is never sendable as a chat file', async () => {
     const tab = await swarm()
-    const { avatar } = await upload(tab, image(64))
-    await run(tab, { type: 'member.avatar', avatar: { kind: 'upload', id: avatar.id } })
-    expect(await avatarOf(tab, owner.sub)).toEqual({ kind: 'upload' })
-    await expect(run(tab, { type: 'member.avatar', avatar: { kind: 'upload', id: avatar.id } })).rejects.toMatchObject({ code: 'AVATAR_UNAVAILABLE' })
+    const objectKey = await keepPicture(pictures, tab)
+    const row = await db.superTabAttachment.create({ data: { id: randomUUID().replaceAll('-', '').slice(0, 24), tabId: tab, conversationId: '', actorKey: `person:${owner.sub}`,
+      name: 'avatar', mime: 'image/png', size: 64, objectKey, purpose: 'avatar' } })
+    await expect(run(tab, { type: 'message.send', conversationId: 'lead', text: '', replyTo: null, recipientIds: [], attachmentIds: [row.id] }))
+      .rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
   })
 
   it('reaches members only through a signed link that stops opening within an hour', async () => {
     const tab = await swarm()
-    const { avatar } = await upload(tab, image(64))
-    await run(tab, { type: 'member.avatar', avatar: { kind: 'upload', id: avatar.id } })
+    const objectKey = await keepPicture(pictures, tab)
+    await setPicture(tab, owner.sub, objectKey)
     const first = await read(tab, peer)
     // The record says only that there is a picture; the bucket opens nothing without a signature, its path alone included.
     expect(first.body.data.members.find((m: { key: string }) => m.key === owner.sub).data.avatar).toEqual({ kind: 'upload' })
-    const objectKey = (await db.superTabAttachment.findUniqueOrThrow({ where: { id: avatar.id } })).objectKey
     expect(pictures.open(`https://avatars.example.test/${objectKey}`, Date.now())).toBeNull()
     const link = await linkFor(tab, peer, `person:${owner.sub}`)
     expect(link).toMatch(/^https:\/\/avatars\.example\.test\//)
@@ -177,8 +153,7 @@ describe('setting avatars', () => {
 
   it('gives no link to someone outside the Swarm or removed from it', async () => {
     const tab = await swarm()
-    const { avatar } = await upload(tab, image(64))
-    await run(tab, { type: 'member.avatar', avatar: { kind: 'upload', id: avatar.id } })
+    await setPicture(tab, owner.sub, await keepPicture(pictures, tab))
     const kept = await linkFor(tab, peer, `person:${owner.sub}`)
     const stranger = await read(tab, outsider)
     expect(stranger.status).not.toBe(200)
@@ -190,36 +165,11 @@ describe('setting avatars', () => {
     // What they kept stops opening within the hour.
     expect(pictures.open(kept!, Date.now() + HOUR + 1)).toBeNull()
   })
-
-  it('refuses someone else’s upload and a chat file', async () => {
-    const tab = await swarm()
-    const theirs = (await upload(tab, image(64), 'me.png', 'image/png', peer)).avatar
-    await expect(run(tab, { type: 'member.avatar', avatar: { kind: 'upload', id: theirs.id } })).rejects.toMatchObject({ code: 'AVATAR_UNAVAILABLE' })
-    const chat = await store.upload(owner, tab, 'lead', { name: 'shot.png', mime: 'image/png', body: (await import('node:stream')).Readable.from([Buffer.from(image(64))]) })
-    await expect(run(tab, { type: 'member.avatar', avatar: { kind: 'upload', id: chat.attachment.id } })).rejects.toMatchObject({ code: 'AVATAR_UNAVAILABLE' })
-    expect(await avatarOf(tab, owner.sub)).toBeUndefined()
-  })
-
-  it('lets only one of two commands racing for the same upload take it', async () => {
-    const tab = await swarm()
-    const { avatar } = await upload(tab, image(64))
-    const results = await Promise.allSettled([1, 2].map(() => run(tab, { type: 'member.avatar', avatar: { kind: 'upload', id: avatar.id } })))
-    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1)
-    expect(await db.superTabAttachment.findUnique({ where: { id: avatar.id } })).toMatchObject({ usedBy: expect.any(String) })
-  })
-
-  it('without a private avatar bucket, refuses uploads and still takes presets', async () => {
-    const plain = new SuperTabStore(db, Date.now, { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
-    const tab = (await plain.create(owner, randomUUID(), 'No bucket')).id
-    const { Readable } = await import('node:stream')
-    await expect(plain.uploadAvatar(owner, tab, { body: Readable.from([Buffer.from(image(64))]) })).rejects.toMatchObject({ code: 'AVATARS_UNAVAILABLE', status: 503 })
-    await plain.execute(owner, tab, { operationId: randomUUID(), command: { type: 'member.avatar', avatar: { kind: 'preset', key: 'fox' } } })
-  })
 })
 
 // Prod has no avatar bucket (Ken, 2026-10-28): pictures go in the attachments bucket under avatars/ and are linked as chat
 // files are, by signed links that stop opening (fileLinks.ts), so they keep working once the bucket is no longer public.
-describe('avatars in the attachments bucket', () => {
+describe('a picture already set, in the attachments bucket', () => {
   const bucket = new MemoryAttachmentStore()
   let shared: SuperTabStore
   let reads: FastifyInstance
@@ -233,42 +183,25 @@ describe('avatars in the attachments bucket', () => {
     await reads.ready()
   })
   afterAll(async () => { await reads?.close() })
-  const picture = async (tab: string, bytes: Uint8Array) => {
-    const { Readable } = await import('node:stream')
-    const { avatar } = await shared.uploadAvatar(owner, tab, { body: Readable.from([Buffer.from(bytes)]) })
-    await shared.execute(owner, tab, { operationId: randomUUID(), command: { type: 'member.avatar', avatar: { kind: 'upload', id: avatar.id } } })
-    return (await db.superTabAttachment.findUniqueOrThrow({ where: { id: avatar.id } })).objectKey
-  }
   const linkFor = async (tab: string) => {
     const response = await reads.inject({ method: 'GET', url: `/api/super-tabs/${tab}/parts`, headers: { authorization: `Bearer ${peer.sub}` } })
     return response.json().data.derived?.avatars?.[`person:${owner.sub}`] as string | undefined
   }
 
-  it('uploads, reads and replaces a picture, by a signed link that stops opening', async () => {
+  it('is read by a signed link that stops opening, and a replaced one by the new picture\'s', async () => {
     const tab = (await shared.create(owner, randomUUID(), 'Shared bucket')).id
     const invitation = await shared.execute(owner, tab, { operationId: randomUUID(), command: { type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' } })
     await shared.execute(peer, tab, { operationId: randomUUID(), command: { type: 'invite.accept', inviteId: invitation.result.inviteId as string } })
-    const first = await picture(tab, image(64))
+    const first = await keepPicture(bucket, tab, image(64))
+    await setPicture(tab, owner.sub, first)
     expect(first).toMatch(new RegExp(`^avatars/${tab}/[0-9a-f]{32}/avatar$`))
-    expect(bucket.objects.get(first)).toMatchObject({ contentType: 'image/png' })
     const firstLink = (await linkFor(tab))!
     expect(firstLink).toMatch(new RegExp(`^https://storage\\.memory\\.test/${first}\\?expires=\\d+&signature=`))
     expect(bucket.open(firstLink)).toEqual(Buffer.from(image(64)))
     expect(bucket.open(firstLink, Number(new URL(firstLink).searchParams.get('expires')))).toBeNull()
-    const second = await picture(tab, image(96))
-    expect(second).not.toBe(first)
+    const second = await keepPicture(bucket, tab, image(96))
+    await setPicture(tab, owner.sub, second)
     expect(bucket.open((await linkFor(tab))!)).toEqual(Buffer.from(image(96)))
-  })
-
-  it('keeps chat files out of the avatar folder and out of avatar links', async () => {
-    const tab = (await shared.create(owner, randomUUID(), 'Shared bucket')).id
-    const { Readable } = await import('node:stream')
-    const chat = await shared.upload(owner, tab, 'lead', { name: 'contract.pdf', mime: 'application/pdf', body: Readable.from([Buffer.from('private')]) })
-    const chatKey = (await db.superTabAttachment.findUniqueOrThrow({ where: { id: chat.attachment.id } })).objectKey
-    expect(chatKey).toMatch(/^super-tabs\//)
-    await expect(shared.execute(owner, tab, { operationId: randomUUID(), command: { type: 'member.avatar', avatar: { kind: 'upload', id: chat.attachment.id } } }))
-      .rejects.toMatchObject({ code: 'AVATAR_UNAVAILABLE' })
-    expect([...bucket.objects.keys()].filter(objectKey => objectKey.startsWith('avatars/'))).not.toContain(chatKey)
   })
 })
 

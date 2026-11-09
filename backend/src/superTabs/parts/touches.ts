@@ -116,9 +116,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       // Its name is claimed against every other name in the Swarm, as buddy.rename's is (below).
       head()
       break
-    case 'agent.avatar':
-      leadCheck(agentProject(command.agentId))
-      break
     // A Buddy's name is claimed against every other name in the Swarm, some of them in chats a command does not load: the
     // head guards the claim, as agent.start and agent.add touch it, so of two claims at once one retries and is refused
     // (review of #2094).

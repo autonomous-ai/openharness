@@ -13,6 +13,8 @@ export const OLD_PAYLOADS = {
   'member.timeZone': { timeZone: 'Asia/Ho_Chi_Minh' },
   'member.username': { username: 'minh' },
   'member.name': { name: 'Minh Nguyen' },
+  'member.avatar': { avatar: { kind: 'upload', id: 'avatar-1' } },
+  'agent.avatar': { agentId: 'agent-1', avatar: { kind: 'preset', key: 'owl' } },
 } satisfies Record<RetiredCommand, object>
 
 /** How many [type] commands the retired-commands counter holds for [client]. */

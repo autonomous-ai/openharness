@@ -140,7 +140,6 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/machines/:machineId/removal', `${t}/machines/${MISSING}/removal`),
     json('GET', 'GET /api/super-tabs/:tabId/machines/:machineId/removal/v2', `${t}/machines/${MISSING}/removal/v2`),
     multipart('POST /api/super-tabs/:tabId/attachments', `${t}/attachments`, form([field('conversationId', chat), file('notes.txt', 'text/plain', 'hello')])),
-    multipart('POST /api/super-tabs/:tabId/avatars', `${t}/avatars`, form([file('me.png', 'image/png', 'not a png')])),
     json('GET', 'GET /api/super-tabs/:tabId/costs', `${t}/costs`),
     json('GET', 'GET /api/super-tabs/:tabId/route-decisions', `${t}/route-decisions`),
     json('GET', 'GET /api/super-tabs/:tabId/starts/:startId', `${t}/starts/${MISSING}`),
@@ -172,10 +171,11 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
     const f = await swarm()
     const real = calls(f.tab, 'lead', 'lead'), missing = calls(MISSING, 'lead', 'lead')
     // Compare against actual registration, so adding a route requires a real refusal test.
-    // The retired full-state read always asks every client to update, the retired scorecard read answers no days and the retired
-    // terminal recording answers ok and ignored, each without reading a Swarm: they are tried alike for everyone in the tests below.
+    // The retired full-state read always asks every client to update, the retired scorecard read answers no days, the retired
+    // terminal recording answers ok and ignored and the retired picture upload refuses in words, each without reading a Swarm: they are
+    // tried alike for everyone in the tests below (and the upload's in superTabProfile.test.ts).
     expect(new Set([...real.map(c => c.route), 'GET /api/super-tabs/:tabId', 'GET /api/super-tabs/:tabId/scorecard', 'POST /api/super-tabs/:tabId/native',
-      'GET /api/super-tabs/:tabId/native/:contextId', 'POST /api/super-tabs/:tabId/native/:contextId'])).toEqual(registeredPersonRoutes)
+      'GET /api/super-tabs/:tabId/native/:contextId', 'POST /api/super-tabs/:tabId/native/:contextId', 'POST /api/super-tabs/:tabId/avatars'])).toEqual(registeredPersonRoutes)
     for (const [i, call] of real.entries()) {
       const cases = { missing: await answer(missing[i]!, outsider), refused: await answer(call, outsider), revoked: await answer(call, removed) }
       // Approving needs the server's GitHub App, which this server has not: it says so to everyone, before any Swarm is read.

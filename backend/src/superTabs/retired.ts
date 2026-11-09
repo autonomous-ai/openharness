@@ -10,10 +10,12 @@ import { z } from 'zod'
  * A pull request that removes a command's code adds its type here, with an old payload in retired.test.ts. Delete this file, its
  * schemas in commands.ts, its answer in store.ts and its counter in lib/metrics.ts 30 days after the backend release that carries
  * it, and not before 2026-12-09: `swarm_retired_commands_total` says whether an older client still sends one.
+ * The two avatar commands took a picture from `POST /api/super-tabs/:tabId/avatars`, which now answers `AVATARS_RETIRED`
+ * (routes/superTabs.ts) and goes the same day.
  */
 export const RETIRED_COMMANDS = [
   'process.confirm', 'project.digest', 'machine.projects', 'machine.ownAccountWork', 'machine.access',
-  'member.status', 'member.timeZone', 'member.username', 'member.name',
+  'member.status', 'member.timeZone', 'member.username', 'member.name', 'member.avatar', 'agent.avatar',
 ] as const
 export type RetiredCommand = (typeof RETIRED_COMMANDS)[number]
 
