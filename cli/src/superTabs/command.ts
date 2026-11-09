@@ -1,11 +1,9 @@
-import { inspectCapacity, startAgent } from './start.js'
 import { object } from './host.js'
 import { openDaemon, whereFor, type Daemon, type Where } from '../agentClient/daemon.js'
-import { callerOf, outsideCaller, type Frame } from '../agentClient/model.js'
+import { callerOf, type Frame } from '../agentClient/model.js'
 import { identifier } from './host.js'
 import { resolve } from 'node:path'
-import { readInsideFolder, uploadAttachments, type UploadTarget } from './attach.js'
-import { buddyProjectFolder } from './buddyHome.js'
+import { uploadAttachments } from './attach.js'
 import { keyName } from './terminal.js'
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
@@ -27,53 +25,15 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab [--tab ID] [--agent ID] [--port N --machine ID] status [--project NAME] [--archived [PAGE]] | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | mine | task GROUP | decisions [--answered] | costs [--days N] | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off] | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | instructions [PROJECT] | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help [tools]'
-/** A Buddy's guard refuses a post or a proposal read from stdin (#2358): there its words would skip the secret check. A Buddy
- *  that followed the stdin form here was refused and tried again (#2360 took it out of a Buddy's help), so a Buddy's usage
- *  line and JSON hints never offer it. */
+const USAGE = 'harness super-tab [--tab ID] [--agent ID] [--port N --machine ID] status [--project NAME] [--archived [PAGE]] | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]...'
+/** A Buddy's guard refuses a post read from stdin (#2358): there its words would skip the secret check. A Buddy that followed
+ *  the stdin form here was refused and tried again (#2360 took it out of a Buddy's help), so a Buddy's usage line never offers it. */
 const BUDDY_USAGE = USAGE.replaceAll('TEXT|- OPERATION_ID', 'TEXT OPERATION_ID')
-/** The actions that take an id and then one JSON argument, and what that id names. */
-const JSON_ACTIONS: Readonly<Record<string, string>> = { command: 'OPERATION_ID', propose: 'OPERATION_ID', start: 'OPERATION_ID', capacity: 'MACHINE_ID' }
-const JSON_STDIN = (action: string) => `${action} ${JSON_ACTIONS[action]} - <<'JSON' (the JSON on the next lines, then JSON alone on a line)`
-const stdinHint = (action: string, buddy: boolean) => buddy
-  ? `with the JSON in single quotes: ${action} ${JSON_ACTIONS[action]} '{...}' (an apostrophe inside it as \\u0027)`
-  : `or send the JSON on stdin with - in its place: ${JSON_STDIN(action)}`
-
 /** A refusal worded for any caller, and for a Buddy (BUDDY_USAGE): which one it is is asked only once the command is refused. */
 class UsageError extends Error {
   constructor(readonly words: (buddy: boolean) => string) { super(words(false)) }
 }
 const usageError = () => new UsageError(buddy => buddy ? BUDDY_USAGE : USAGE)
-
-/** The JSON argument, or why it is not one.
- *
- *  Codex Builders on Mac Auto (Swarm groups #13 and #16, 2026-10-29/30) got only the usage line back for a work.status
- *  done: one left out the operation id, one quoted its JSON in single quotes around a result that held `'%h %s'`, so
- *  the shell split it into several arguments. Neither could tell what to fix, and the finished task stayed open. */
-function jsonArgument(action: string, text: string): unknown {
-  try { return JSON.parse(text) } catch (error) {
-    throw new UsageError(buddy => `The ${action} JSON is not valid (${(error as Error).message}). Pass it as one argument, ${stdinHint(action, buddy)}.`)
-  }
-}
-/** Why [positional] is not `ACTION ID JSON`, in words an agent can act on; null to leave it to the usage line. */
-function jsonShapeError(positional: readonly string[], buddy: boolean): string | null {
-  const [action, first = ''] = positional
-  const id = JSON_ACTIONS[action]
-  if (!id) return null
-  const hint = stdinHint(action, buddy)
-  // Nothing after the action: the id and JSON went on the next lines, which the shell ran as commands of their own.
-  if (positional.length === 1) return `${action} needs ${id} and the JSON on the same command line: ${action} ${id} JSON. A line break without \\ before it ends the command; ${buddy ? 'send it again ' : ''}${hint}.`
-  if (!identifier(first)) {
-    return (first as string).trim().startsWith('{')
-      ? `${action} needs ${id} before the JSON: ${action} ${id} JSON. ${id === 'OPERATION_ID' ? 'Use a new unique id of letters, digits, - or _ (reuse it only to repeat an interrupted request).' : ''}`.trim()
-      : `${action} needs ${id} first, as letters, digits, - or _ only: ${action} ${id} JSON.`
-  }
-  if (positional.length < 3 || !positional[2]) return `${action} needs its JSON after ${id}: ${action} ${first} JSON, ${hint}.`
-  if (action !== 'propose' && positional.length > 3) {
-    return `${action} takes ${id} and the JSON as one argument, but got ${positional.length - 2} arguments after ${id}: a quote inside the JSON ended the shell's quoting. Quote it so it stays one argument, ${hint}.`
-  }
-  return null
-}
 
 /** A message on stdin, for post's TEXT `-`.
  *
@@ -81,17 +41,12 @@ function jsonShapeError(positional: readonly string[], buddy: boolean): string |
  *  arrived as "-". So `-` reads the message from stdin, once, before anything is sent, and an empty or a terminal stdin is
  *  refused: nothing is posted, and nothing waits on a terminal for input that never comes. */
 const POST_STDIN = "post GROUP - OPERATION_ID <<'MSG' (the message on the next lines, then MSG alone on a line)"
-function postStdin(stdin: (what: string) => string, terminal: () => boolean): string {
+function postStdin(stdin: () => string, terminal: () => boolean): string {
   if (terminal()) throw new Error(`post - reads the message from stdin, but stdin is a terminal, so nothing was posted. Send the message on stdin: ${POST_STDIN}, or pass it as TEXT.`)
   // A heredoc ends the message with one line break, which is not part of it.
-  const text = stdin('post').replace(/\r?\n$/, '')
+  const text = stdin().replace(/\r?\n$/, '')
   if (!text.trim()) throw new Error(`post - read no message from stdin, so nothing was posted. Send the message on stdin: ${POST_STDIN}. A message that is only - goes on stdin too.`)
   return text
-}
-/** A JSON action's JSON on stdin, for its `-`; a terminal is refused as post's is, worded for a Buddy too (stdinHint). */
-function jsonStdin(action: string, stdin: (what: string) => string, terminal: () => boolean): string {
-  if (terminal()) throw new UsageError(buddy => `${action} - reads the JSON from stdin, but stdin is a terminal, so nothing was sent. Pass it as one argument, ${stdinHint(action, buddy)}.`)
-  return stdin(action)
 }
 /** How long `-` waits on stdin while nothing arrives. #2355's review: `post GROUP - OPERATION_ID` from a pipe its writer left
  *  open (a tool that never closes it) read with no limit and waited for good. A heredoc or a pipe closes stdin at its end;
@@ -117,14 +72,10 @@ export function readStdin(stream: NodeJS.ReadableStream & { destroy(): void }, i
   })
 }
 /** Why `-` read nothing usable from a stdin left open, and how to end it. */
-function idleRefusal(what: string): string {
-  const waited = `${what} - read stdin until nothing more came for ${STDIN_IDLE_MS / 1000} s, but stdin was never closed`
-  return what === 'post'
-    ? `${waited}, so nothing was posted. Close stdin after the message, as a heredoc does: ${POST_STDIN}, or pass it as TEXT.`
-    : `${waited}, so nothing was sent. Close stdin after the JSON, as a heredoc does: ${JSON_STDIN(what)}, or pass it as one argument.`
-}
+const idleRefusal = () => `post - read stdin until nothing more came for ${STDIN_IDLE_MS / 1000} s, but stdin was never closed, so nothing was posted. `
+  + `Close stdin after the message, as a heredoc does: ${POST_STDIN}, or pass it as TEXT.`
 /** Stands in for stdin while the arguments are parsed the first time: stdin is read only for a command that wants it. */
-class WantsStdin { constructor(readonly what: string) {} }
+class WantsStdin {}
 
 /** Whether the harness in this pane is a Buddy, by this computer's launch record (service.ts `buddyCheck`, what turns its
  *  guard on), for a refusal's wording alone. Asked of this computer's daemon, never one named with --machine. Anything it
@@ -140,10 +91,8 @@ async function buddyHere(open: typeof openDaemon, local: Where, pane: string | u
   } catch { return false }
 }
 
-/** The files one proposal may carry (backend buddies.ts MAX_PROPOSAL_ATTACHMENTS). */
-const MAX_PROPOSAL_FILES = 5
-/** [stdin] is asked for what `-` stands for: `post`'s message, or the JSON of the action it names. */
-export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: (what: string) => string = () => readFileSync(0, 'utf8'),
+/** [stdin] is asked for what `-` stands for: `post`'s message. */
+export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: () => string = () => readFileSync(0, 'utf8'),
   terminal: () => boolean = () => isatty(0)) {
   const positional: string[] = []
   let tabId = '', agentId = ''
@@ -157,9 +106,6 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     else { positional.push(...argv.slice(i)); break }
   }
   if (!Number.isInteger(target.port) || target.port < 1 || target.port > 65535 || !identifier(target.machineId)) throw usageError()
-  // `-` in the JSON's place reads it from stdin, where no shell quoting can split it. A terminal is refused at once, as post's
-  // is: read, it waited 30 s for input that never comes and then said stdin was never closed (review of #2379).
-  if (JSON_ACTIONS[positional[0]] && positional[2] === '-') positional[2] = jsonStdin(positional[0], stdin, terminal)
   // A person's one Buddy reads one of its projects by its name (status --project NAME, spec 2026-10-31-one-buddy-per-swarm):
   // taken out first, so it goes with status alone or with --archived.
   let statusProject: string | undefined
@@ -171,17 +117,16 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
   }
   const [action, first, second, third] = positional
   // --tab may be left out in an agent's own pane: its daemon takes the one Swarm the agent is in (superTabs/service.ts).
-  if (action !== 'help' && ((tabId && !identifier(tabId)) || (agentId && !identifier(agentId)))) throw usageError()
+  if ((tabId && !identifier(tabId)) || (agentId && !identifier(agentId))) throw usageError()
   const payload: Record<string, unknown> = { action, tabId, agentId, ...(statusProject ? { project: statusProject } : {}) }
   if (action === 'messages' && identifier(first) && positional.length === 2) payload.conversationId = first
   // Older messages, a page before the cursor the last page named: its sequence and message id together, as messages may
-  // share a sequence and a sequence alone skipped them (security review 2 of #2115). A Buddy reads a task's history this way.
+  // share a sequence and a sequence alone skipped them (security review 2 of #2115).
   else if (action === 'messages' && identifier(first) && positional.length === 5 && second === '--before' && /^(0|[1-9][0-9]{0,15})$/.test(third ?? '')
     && Number.isSafeInteger(Number(third)) && identifier(positional[4])) {
     Object.assign(payload, { conversationId: first, before: Number(third), beforeId: positional[4] })
   }
-  // One thread, its root and replies (a Buddy's thread session reads its own this way, with the main-chat messages it started
-  // from), paged as the conversation is.
+  // One thread, its root and replies, paged as the conversation is.
   else if (action === 'messages' && identifier(first) && second === '--thread' && identifier(third) && (positional.length === 4
     || (positional.length === 7 && positional[4] === '--before' && /^(0|[1-9][0-9]{0,15})$/.test(positional[5] ?? '')
       && Number.isSafeInteger(Number(positional[5])) && identifier(positional[6])))) {
@@ -191,15 +136,6 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
   // A Buddy's archived tasks, a page at a time from the page the last one named (cli/src/superTabs/buddyStatus.ts).
   else if (action === 'status' && first === '--archived' && (positional.length === 2 || positional.length === 3 && /^[A-Za-z0-9_-]{1,512}$/.test(second ?? ''))) {
     Object.assign(payload, { archived: true, ...(second ? { before: second } : {}) })
-  }
-  else if (action === 'mine' && positional.length === 1) { /* the agent's own work (agentContext.ts) */ }
-  else if (action === 'task' && identifier(first) && positional.length === 2) payload.conversationId = first
-  else if (action === 'decisions' && (positional.length === 1 || (positional.length === 2 && first === '--answered'))) payload.state = first ? 'answered' : 'open'
-  else if (action === 'instructions' && (positional.length === 1 || positional.length === 2 && identifier(first))) {
-    if (first) payload.projectId = first
-  }
-  else if (action === 'costs' && (positional.length === 1 || (positional.length === 3 && first === '--days' && /^[1-9][0-9]?$/.test(second ?? '') && Number(second) <= 90))) {
-    payload.days = positional.length === 3 ? Number(second) : 7
   }
   else if (action === 'message' && identifier(first) && identifier(second) && positional.length === 3) {
     Object.assign(payload, { conversationId: first, messageId: second })
@@ -238,39 +174,6 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     if (!text.trim()) throw usageError()
     Object.assign(payload, { action: 'command', operationId: positional[4],
       command: { type: 'message.send', conversationId: first, text, replyTo: null, answers: second, answer: true, recipientIds: to } })
-  } else if (action === 'react' && identifier(first) && identifier(second) && identifier(third) && identifier(positional[4])
-    && (positional.length === 5 || positional.length === 6 && positional[5] === '--off')) {
-    // An acknowledgement without a post, as Slack bots do (swarm skills): the backend checks the emoji and who may react.
-    Object.assign(payload, { action: 'command', operationId: positional[4],
-      command: { type: 'message.react', conversationId: first, messageId: second, emoji: third, on: positional.length === 5 } })
-  } else if (action === 'command' && identifier(first) && second && positional.length === 3) {
-    Object.assign(payload, { operationId: first, command: jsonArgument(action, second) })
-  } else if (action === 'propose' && identifier(first) && second) {
-    const attach: string[] = []
-    for (let i = 3; i < positional.length; i += 2) {
-      const [flag, value] = [positional[i], positional[i + 1]]
-      if (flag === '--attach' && value) attach.push(resolve(value))
-      else throw usageError()
-    }
-    if (attach.length > MAX_PROPOSAL_FILES) throw new Error(`Attach at most ${MAX_PROPOSAL_FILES} files to a proposal.`)
-    // A Buddy's proposal for its owner (backend buddies.ts): only ever that command, whatever the JSON says it is.
-    Object.assign(payload, { action: 'command', operationId: first, ...(attach.length ? { attach } : {}),
-      command: { ...object(jsonArgument(action, second)), type: 'buddy.propose' } })
-  } else if (action === 'start' && identifier(first) && second && positional.length === 3) {
-    Object.assign(payload, { operationId: first, request: jsonArgument(action, second) })
-  } else if (action === 'resume' && identifier(first) && positional.length === 2) payload.startId = first
-  else if (action === 'capacity' && identifier(first) && second && positional.length === 3) {
-    Object.assign(payload, { targetMachineId: first, request: jsonArgument(action, second) })
-  } else if (action === 'remove-machine' && identifier(first) && (positional.length === 2 || positional.length === 3 && second === '--yes')) {
-    // The machine's owner, as the person: without --yes, what removal would do (the agents it stops, a refusal); with it,
-    // the removal. The daemon's owner-only backend request carries both.
-    Object.assign(payload, second === '--yes'
-      ? { action: 'backend', method: 'POST', path: `/api/super-tabs/${tabId}/commands`,
-        body: { operationId: `machine-remove-${randomUUID()}`, command: { type: 'machine.remove', machineId: first } } }
-      : { action: 'backend', method: 'GET', path: `/api/super-tabs/${tabId}/machines/${first}/removal/v2` })
-  } else if (action === 'set-agents' && identifier(first) && /^[1-9][0-9]{0,3}$/.test(second ?? '') && positional.length === 3) {
-    // The machine's owner, as the person: how many Swarm agents may run on it at once (contribution.ts setMachineAgents).
-    Object.assign(payload, { action: 'setMachineAgents', machineId: first, maxAgents: Number(second) })
   } else if (action === 'screen' && identifier(first) && (positional.length === 2
     || positional.length === 4 && second === '--scrollback' && /^[1-9]\d*$/.test(third ?? '') && Number(third) <= 200)) {
     // The id names this one read; a read sent twice is only read twice.
@@ -290,11 +193,8 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     if (!text && !keys.length) throw usageError()
     Object.assign(payload, { operationId: `terminal-${randomUUID()}`,
       command: { type: 'agent.input', agentId: first, ...(text ? { text } : {}), ...(keys.length ? { keys } : {}) } })
-  } else if (action === 'help' && first === 'tools' && positional.length === 2) {
-    // The full tools manual, which every agent's launch line has it read (lib/swarmSkills.ts): printed by this CLI, no daemon asked.
-    payload.topic = 'tools'
-  } else if (!['status', 'help'].includes(action) || positional.length !== 1) {
-    throw new UsageError(buddy => jsonShapeError(positional, buddy) ?? (buddy ? BUDDY_USAGE : USAGE))
+  } else if (action !== 'status' || positional.length !== 1) {
+    throw usageError()
   }
   return { where: target, payload }
 }
@@ -302,11 +202,11 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
 /** The arguments, with stdin read for `-` only when they want it, and then at most until it idles (readStdin). */
 async function parse(argv: readonly string[], local: Where, stdin: () => string | Promise<string>, terminal?: () => boolean) {
   try {
-    return parseSuperTabArgs(argv, local, what => { throw new WantsStdin(what) }, terminal)
+    return parseSuperTabArgs(argv, local, () => { throw new WantsStdin() }, terminal)
   } catch (error) {
     if (!(error instanceof WantsStdin)) throw error
     const text = await Promise.resolve().then(stdin).catch(failure => {
-      throw failure instanceof StdinIdle ? new Error(idleRefusal(error.what)) : failure
+      throw failure instanceof StdinIdle ? new Error(idleRefusal()) : failure
     })
     return parseSuperTabArgs(argv, local, () => text, terminal)
   }
@@ -348,78 +248,29 @@ export async function superTabCommand(argv: readonly string[], deps: {
       } finally { home.close() }
     }
     daemon = await open(request.where)
-    const owners = request.payload.action === 'backend' || request.payload.action === 'setMachineAgents'
-    if (owners) {
-      // The owner's own acts: removal deletes this machine's Swarm folders, and no agent raises its own machine's room
-      // (Lead, 2026-10-28). So neither a Swarm agent on it (its pane, or --agent) nor an outside agent's shell may run
-      // them with the owner's authority.
-      const listed = request.payload.agentId || outsideCaller(env, request.where.machineId) ? null : await daemon.request('agents_list')
-      if (!listed || callerOf(Array.isArray(listed.agents) ? listed.agents as Frame[] : [], pane, request.where.machineId)) {
-        throw new Error(request.payload.action === 'backend' ? 'Remove a machine from your own terminal or from Desktop, not from an agent.'
-          : 'Set a machine\'s agents from your own terminal or from Desktop, not from an agent.')
-      }
-    }
-    // Help names the caller when it can, as every request from a harness does; every agent reads the same help (project
-    // instructions, phase 4), and outside a harness it is that help too.
-    const help = request.payload.action === 'help'
     // A harness's pane speaks as its own agent alone: with --agent too, its harness goes with the request, and the daemon
     // refuses an agent that is not that harness's (security review of #2087: a Buddy named its Builder). A person's terminal
     // is no harness, and its --agent is the person's as before.
-    if (!owners && (!request.payload.agentId || pane) && (!help || request.payload.tabId)) {
+    if (!request.payload.agentId || pane) {
       const listed = await daemon.request('agents_list')
       const frames = Array.isArray(listed.agents) ? listed.agents as Frame[] : []
       const caller = callerOf(frames, pane, request.where.machineId)
       if (caller && !await inDaemonPane(daemon, caller.agentId, running.ancestors)) throw new Error(NOT_IN_PANE)
       if (caller) request.payload.harnessId = caller.agentId
-      else if (!help && !request.payload.agentId) throw new Error('Run this command inside the participating harness, or supply its --agent ID.')
+      else if (!request.payload.agentId) throw new Error('Run this command inside the participating harness, or supply its --agent ID.')
     }
     const source = daemon
     const scoped = (payload: Record<string, unknown>) => source.request('super_tabs', {
       tabId: request.payload.tabId, agentId: request.payload.agentId, harnessId: request.payload.harnessId, ...payload,
     }, 30_000)
     let result: Record<string, unknown>
-    if (['start', 'resume'].includes(String(request.payload.action))) {
-      result = await startAgent(request.payload, scoped, request.where, deps.open)
-    } else if (request.payload.action === 'capacity') {
-      // Establish current Super Tab participation before inspecting a machine;
-      // the native relay independently enforces that account's machine access.
-      const known = await scoped({ action: 'status' })
-      if (known.error) result = known
-      else {
-        const target = await open(request.where, String(request.payload.targetMachineId))
-        try { result = { ok: true, ...await inspectCapacity(target, object(request.payload.request)) } }
-        finally { target.close() }
-      }
-    } else if (request.payload.action === 'screen' || request.payload.action === 'type') {
+    if (request.payload.action === 'screen' || request.payload.action === 'type') {
       const answer = await terminalRequest(request.payload, scoped)
       const value = object(answer.value)
       // The screen is printed as it is, for the Lead to read; anything else, and every failure, as JSON.
       if (request.payload.action === 'screen' && value.ok === true && typeof value.text === 'string') print(value.text)
       else print(JSON.stringify(answer.error ? answer : value))
       return value.ok === true ? 0 : 1
-    } else if (request.payload.action === 'mine' || request.payload.action === 'task') {
-      // Printed as text for the agent to read (agent context design); every failure, as JSON.
-      const answer = await scoped({ ...request.payload })
-      const value = object(answer.value)
-      if (answer.ok === true && typeof value.text === 'string') { print(value.text); return 0 }
-      print(JSON.stringify(answer))
-      return 1
-    } else if (request.payload.action === 'instructions') {
-      // Printed as text for the agent to work by; every failure, as JSON.
-      const answer = await scoped({ ...request.payload })
-      const value = object(answer.value)
-      if (answer.ok === true && typeof value.text === 'string') {
-        // Each note with its id, which note.remove takes, and who asked by name where the status read has it (final review).
-        const notes = Array.isArray(value.notes) ? value.notes.map(object) : []
-        const coordinator = typeof value.coordinatorName === 'string' && value.coordinatorName ? value.coordinatorName : 'The coordinator'
-        const when = (at: unknown) => typeof at === 'number' && Number.isFinite(at) ? new Date(at).toISOString() : String(at)
-        print([`Instructions of project ${value.projectId}, revision ${value.revision}${value.template ? ' (the built-in template)' : ''}`, '', value.text,
-          ...(notes.length ? ['', `${coordinator}'s notes:`, ...notes.map(n => `- ${n.text} (note ${n.id}, asked by ${n.askedByName ?? n.askedBy}, ${when(n.at)}`
-            + `${n.expiresAt ? `, until ${when(n.expiresAt)}` : ''})`)] : [])].join('\n'))
-        return 0
-      }
-      print(JSON.stringify(answer))
-      return 1
     } else {
       const { attach, ...payload } = request.payload
       // Each file goes to the daemon's local upload route, which streams it to the backend with the account's token;
@@ -427,10 +278,7 @@ export async function superTabCommand(argv: readonly string[], deps: {
       if (Array.isArray(attach)) {
         const command = object(payload.command)
         const target = { tabId: String(payload.tabId), conversationId: String(command.conversationId), port: request.where.port, dataDir: request.where.dataDir }
-        command.attachmentIds = command.type === 'buddy.propose'
-          ? await proposalFiles(attach as string[], String(payload.operationId), command, target, daemon, scoped, { ...deps, pane,
-            local: request.where.machineId === local.machineId && request.where.port === local.port })
-          : await uploadAttachments(attach as string[], String(payload.operationId), target, scoped, deps.fetch)
+        command.attachmentIds = await uploadAttachments(attach as string[], String(payload.operationId), target, scoped, deps.fetch)
       }
       result = await daemon.request('super_tabs', payload, 30_000)
     }
@@ -440,46 +288,6 @@ export async function superTabCommand(argv: readonly string[], deps: {
     print(JSON.stringify({ error: error instanceof Error ? error.message : String(error), ...(operationId ? { operationId } : {}) }))
     return 1
   } finally { daemon?.close() }
-}
-
-/** A Buddy's proposal files (backend buddies.ts): those in its own folder, as its harness here records it, uploaded to its
- *  chat beside the files its owner sent there, which the proposal names by id. A repeat finds the proposal in the project
- *  chat and names the files it went with. */
-async function proposalFiles(paths: string[], operationId: string, command: Record<string, unknown>, target: UploadTarget, daemon: Daemon,
-  scoped: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>, deps: { pane?: string; fetch?: typeof fetch; local: boolean }): Promise<string[]> {
-  // Its folder is on this machine: through another machine's daemon (--machine, --port) its pane would name someone else's.
-  if (!deps.local) throw new Error('Attach files to a proposal from your Buddy\'s own terminal.')
-  const named = Array.isArray(command.attachmentIds) ? command.attachmentIds.map(String) : []
-  // Counted before any upload, so a refused proposal leaves no file behind.
-  if (new Set(named).size + paths.length > MAX_PROPOSAL_FILES) throw new Error(`Attach at most ${MAX_PROPOSAL_FILES} files to a proposal.`)
-  const listed = await daemon.request('agents_list')
-  const frames = Array.isArray(listed.agents) ? listed.agents as Frame[] : []
-  // The pane its parent processes prove (callerPane.ts), never TMUX_PANE as the command says it.
-  const caller = callerOf(frames, deps.pane, String(daemon.machineId))
-  const folder = frames.find(f => f.id === caller?.agentId)?.project?.cwd
-  if (!folder) throw new Error('Attach files to a proposal from your Buddy\'s own terminal.')
-  // Read for the upload (service.ts proposalTarget): a Buddy's status is a task summary with no chats, so reading it here refused
-  // every Buddy proposal with a file (Huy 11-06, #3872).
-  const read = object((await scoped({ action: 'proposalTarget', conversationId: target.conversationId })).value)
-  const projects = Array.isArray(read.projects) ? read.projects.map(object) : []
-  const chat = read.chat && object(read.chat).id === target.conversationId ? object(read.chat) : undefined
-  // A person's one Buddy chat has no project (Dee, 10-31): a project session proposes into its own project, and the Swarm-wide
-  // Buddy into the one its JSON names (Scholes, 11-02), with only that project's files: its folder holds every project's.
-  // The read answers for the asking agent alone: its record is the caller's, under its Swarm id, not the terminal's id the pane
-  // names (Linuxtest4 on #3402: matched by that id, a session's project was never read, and another project's PM got its file).
-  const self = read.self ? object(read.self) : undefined
-  const session = object(self?.buddySession).projectId
-  const wide = chat?.kind === 'swarm-buddy' && typeof session !== 'string'
-  const projectId = wide ? command.projectId : chat?.kind === 'swarm-buddy' ? session : chat?.projectId
-  const home = projects.find(p => p.id === projectId)?.leadConversationId
-  // Refused here too, before any upload: the backend would refuse it and leave the file behind.
-  if (!wide && command.projectId && command.projectId !== projectId) throw new Error('A session sends only to its own project\'s PM: leave the project out.')
-  if (typeof home !== 'string') throw new Error(wide ? 'Name the project to send this to, from your status.' : 'Name your own chat: a proposal comes from there.')
-  const inside = wide ? buddyProjectFolder(folder, String(projectId)) : folder
-  if (!inside) throw new Error('That project\'s code is not on this machine: name by its id a file your owner sent in your chat, or one you showed them there.')
-  const files = readInsideFolder(paths, inside)
-  const uploaded = await uploadAttachments(files, operationId, { ...target, sentIn: home }, scoped, deps.fetch)
-  return [...new Set([...named, ...uploaded])]
 }
 
 /** How often a terminal result is read: the backend holds each read about 20 s, and the worker's machine has 10 s to pick a

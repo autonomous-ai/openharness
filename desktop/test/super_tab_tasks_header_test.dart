@@ -29,6 +29,7 @@ Future<SuperTabController> _showView(
       ),
       home: Scaffold(
         body: SuperTabView(
+          board: false,
           controller: c,
           onInvite: () {},
           onAddAgent: (_) {},

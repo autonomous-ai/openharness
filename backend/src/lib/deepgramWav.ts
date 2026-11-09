@@ -4,6 +4,7 @@
 // copy of a decision that was MEASURED rather than chosen. The model-per-language map below cost a real
 // afternoon to establish; two copies of it is how one of them silently stops matching.
 import { env } from '../config/env.js'
+import { STT_TIMEOUT_MS } from './sttTimeout.js'
 
 /**
  * A TWIN of VOICE_LANGS in lib/deepgram.ts, copied rather than imported.
@@ -42,6 +43,7 @@ export async function transcribeWavWithDeepgram(audio: Buffer, contentType: stri
     method: 'POST',
     headers: { Authorization: `Token ${env.DEEPGRAM_API_KEY}`, 'Content-Type': contentType },
     body: new Uint8Array(audio),
+    signal: AbortSignal.timeout(STT_TIMEOUT_MS),
   })
   if (!res.ok) {
     const detail = await res.text().catch(() => '')

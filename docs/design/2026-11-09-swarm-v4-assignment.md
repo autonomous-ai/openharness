@@ -95,12 +95,43 @@ Every minute, in the PM's person's Harness, for each project its PM leads from t
 - **Failures** are said once: a label GitHub refused (tried again next pass), a task no builder can do and why, gh signed
   out or rate limited (as the merger: `githubRest.ts`).
 
+## What an agent works on (built)
+
+anh Dee, 2026-11-09: "do you assign agents to their area of expertise? like one that focuses on mobile", then "the agent
+must be more proactive and ask the user what area they want the agent to focus on".
+
+- **Where it is said:** the `Works on:` line at the top of the agent's instructions file in each project's repository,
+  `agents/<Name>.md`, which its person reads and changes beside its chat. Areas are the project's `part:` labels' words
+  ("Works on: Mobile, backend"), or `anything`. One place: no setting, no second list.
+- **Who says it:** with its first task in a repository, if its file has no such line, Harness tells the agent (only it
+  reads it) to ask its person, in their chat, which area to focus on, naming the repository's areas so far. Its person
+  answers in plain words; the agent writes the line in a pull request of its own. Once per agent and repository
+  (`githubMentions.ts askFocus`).
+- **What it does:** in the plan an agent takes half the time in its areas and half as long again in others once it named
+  some (`assign/crew.ts FOCUS`, `AWAY`), on top of what it learned. So a mobile agent gets mobile tasks first, others take
+  one only when it is well behind, and it takes other work when its own area has none.
+- **Labels:** an area an agent works on that has no `part:` label yet gets one, made by the assigner, so its PM labels
+  tasks with the same words.
+
+## Readers (built)
+
+A builder no longer picks its own reader. Each pass, for every open pull request into the default branch that is not a
+draft and has no HOLD standing, the assigner counts what it needs: one READ-OK on its head from someone other than its
+author, two for TWO READS, less those asked and not answered yet (Harness's asks are its own comments: "Harness, 15:40,
+to **Atlas**: please read this pull request, and start your comment with READ-OK f6edb44 or HOLD f6edb44 (with the file,
+line and fix)."). It asks a builder of the team that is not its author and not asked already, of another model family
+than its author's when one can (a review is never read by its build's family, as the solver's `independentOf`), then the
+one holding the fewest tasks (`assign/crew.ts readerFor`); when no other builder can, its PM, who read for a team of one
+before (the swarm-sandbox's Juno for Pip). The comment names the reader, so GitHub news brings it the
+ask. A verdict on an older head no longer counts, and a HOLD on one still blocks the merge, so when its author pushes, its
+reader is asked to read the new head, once ("the head is now abcdef1, after your HOLD on f6edb44: please read it again").
+Nobody able to read it is said once.
+
 ## Next
 
 1. **Estimates.** Each finished task records its real minutes, peak CPU and memory, disk and spend, by part, size and
    model; estimates take the mean for time and the 80th percentile for memory and disk.
 2. **CPU cores** in each machine's report, so CPU is measured, not assumed.
-3. **Works on**: what a person says their agent works on, beside what it learned.
-4. **Moving work** when a builder stops, stalls or runs out of quota, and **reviewers**.
-5. **Measures** in Desktop: time from label to merge, idle builder-minutes, quota left unspent at resets, overload minutes,
+3. **Moving work** when a builder stops, stalls or runs out of quota.
+4. **Measures** in Desktop: time from label to merge, idle builder-minutes, quota left unspent at resets, overload minutes,
    holds and conflicts.
