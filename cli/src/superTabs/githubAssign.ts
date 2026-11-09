@@ -8,7 +8,7 @@
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { DEEP, nextPicks, readProblem, reasonOf, type Crew, type Read } from './assign/crew.js'
+import { DEEP, nextPicks, readProblem, reasonOf, worksOnOf, type Crew, type Read } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
@@ -102,9 +102,13 @@ export class GitHubAssign {
       if (labelNames(issue).some(name => name.startsWith('builder:'))) { this.given.delete(key); return issue }
       return { ...issue, labels: [...(Array.isArray(issue.labels) ? issue.labels : []), { name: label }] }
     })
+    const crew = await this.deps.crew(project)
+    // What each builder works on in this project: the Works on line of its instructions file here (agents/<Name>.md).
+    for (const builder of crew.builders) builder.worksOn = worksOnOf(await this.reads.file(repo, `agents/${builder.name}.md`))
+    await this.labelAreas(repo, crew)
     const read = readProblem({ now: this.now(), issues,
       closed: await this.reads.current(repo, `/repos/${repo}/issues?state=closed&sort=updated&direction=desc&per_page=${PAGE}`, 1),
-      crew: await this.deps.crew(project) })
+      crew })
     if (!read.free.size || !read.problem.builders.length) return
     // Nobody can take a task while every list is full: no plan, so a backlog costs no CPU each minute (the daemon at rest
     // keeps under 1% of a core).
@@ -115,6 +119,23 @@ export class GitHubAssign {
     this.last.set(repo, solved.choice)
     for (const pick of nextPicks(solved.plan, read)) await this.give(project, read, pick)
     for (const { task, why } of solved.plan.unplaced) if (read.free.has(task)) this.once(`[super-tab] Task assignment: UNPLACED ${repo}${task}: ${why}`)
+  }
+
+  /** Makes the `part:` label of each area a builder works on that the repository does not have yet, so its PM labels tasks
+   *  with the same words (anh Dee, 2026-11-09: "how does github label get populated if we enter a new label"). Once each. */
+  private async labelAreas(repo: string, crew: Crew): Promise<void> {
+    const areas = [...new Set(crew.builders.flatMap(b => b.worksOn ?? []))]
+    if (!areas.length) return
+    const have = new Set((await this.reads.current(repo, `/repos/${repo}/labels?per_page=${PAGE}`, 3)).map(label => String(label.name ?? '').toLowerCase()))
+    for (const area of areas) {
+      const name = `part:${area}`, key = `${repo}:${name}`
+      if (have.has(name) || this.said.has(key)) continue
+      this.said.add(key)
+      const made = await this.deps.send('POST', `/repos/${repo}/labels`, { name, color: 'c5def5', description: 'An area of the project' })
+      // 422: someone made it since the list was read.
+      if (made.status === 201 || made.status === 422) this.log(`[super-tab] made the label ${name} in ${repo}`)
+      else this.once(`[super-tab] Task assignment: LABEL_NOT_MADE ${repo} ${name}: GitHub answered ${made.status}`)
+    }
   }
 
   /** Labels the task for its builder and says why on it, as Harness, in its PM's person's name. */
