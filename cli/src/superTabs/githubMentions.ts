@@ -44,9 +44,11 @@ const VERDICTS: ReadonlySet<unknown> = new Set(['APPROVED', 'CHANGES_REQUESTED',
 export interface WatchedAgent { tabId: string; agentId: string; chat: string; names: string[]; label: string; repos: string[] }
 
 
-/** One thing GitHub said, before it is matched to the agents it reaches. */
+/** One thing GitHub said, before it is matched to the agents it reaches. A line comment names the review it is part of. */
 interface Said { key: string; event: 'comment' | 'review' | 'review-comment'; on: 'issue' | 'pull'; number: number; url: string; login: string
-  association: string; text: string; createdAt: string; verdict?: string; path?: string; line?: number }
+  association: string; text: string; createdAt: string; verdict?: string; path?: string; line?: number; review?: number }
+/** A review with the line comments it was submitted with. */
+interface Review extends Said { id: number; lines: Said[] }
 
 /** What is kept of a repository between passes and restarts: where each feed was read to, what was already handed on, each
  *  agent's tasks already known, and which issues and pull requests carry which builder label. */
@@ -209,38 +211,52 @@ export class GitHubMentions {
         url: String(issue.html_url ?? ''), login: String(object(issue.user).login ?? ''), association, text: cut(String(issue.title ?? ''), TITLE_MAX) })
       kept.tasks[agent.agentId]!.push(Number(issue.number))
     }
-    if (changed.length) kept.issues = newest(changed, issuesFrom)
 
     const comments = await this.reads.changed(repo, `/repos/${repo}/issues/comments?sort=updated&direction=asc&per_page=${PAGE}&since=${kept.comments}`)
     const said: Said[] = comments.map(c => ({ key: `c:${c.id}`, event: 'comment' as const, on: String(c.html_url ?? '').includes('/pull/') ? 'pull' as const : 'issue' as const,
       number: Number(String(c.issue_url ?? '').split('/').pop()), url: String(c.html_url ?? ''), login: String(object(c.user).login ?? ''),
       association: String(c.author_association ?? ''), text: String(c.body ?? ''), createdAt: String(c.created_at ?? '') }))
     const lineComments = await this.reads.changed(repo, `/repos/${repo}/pulls/comments?sort=updated&direction=asc&per_page=${PAGE}&since=${kept.reviewComments}`)
-    said.push(...lineComments.map(c => ({ key: `l:${c.id}`, event: 'review-comment' as const, on: 'pull' as const,
+    const lines: Said[] = lineComments.map(c => ({ key: `l:${c.id}`, event: 'review-comment' as const, on: 'pull' as const,
       number: Number(String(c.pull_request_url ?? '').split('/').pop()), url: String(c.html_url ?? ''), login: String(object(c.user).login ?? ''),
       association: String(c.author_association ?? ''), text: String(c.body ?? ''), createdAt: String(c.created_at ?? ''),
-      path: typeof c.path === 'string' ? c.path : undefined, line: Number.isSafeInteger(c.line) ? Number(c.line) : Number.isSafeInteger(c.original_line) ? Number(c.original_line) : undefined })))
+      path: typeof c.path === 'string' ? c.path : undefined, line: Number.isSafeInteger(c.line) ? Number(c.line) : Number.isSafeInteger(c.original_line) ? Number(c.original_line) : undefined,
+      review: Number.isSafeInteger(c.pull_request_review_id) ? Number(c.pull_request_review_id) : undefined }))
     // A pull request's reviews have no feed of their own: read for the pull requests that changed, a few each pass.
+    const reviews: Review[] = []
     for (const pull of changed.filter(issue => issue.pull_request).slice(-MAX_REVIEWED)) {
-      const reviews = await this.reads.changed(repo, `/repos/${repo}/pulls/${pull.number}/reviews?per_page=${PAGE}`)
-      said.push(...reviews.filter(r => VERDICTS.has(r.state) && String(r.submitted_at ?? '') >= issuesFrom).map(r => ({ key: `r:${r.id}`, event: 'review' as const,
+      const read = await this.reads.changed(repo, `/repos/${repo}/pulls/${pull.number}/reviews?per_page=${PAGE}`)
+      reviews.push(...read.filter(r => VERDICTS.has(r.state) && String(r.submitted_at ?? '') >= issuesFrom).map(r => ({ key: `r:${r.id}`, event: 'review' as const,
         on: 'pull' as const, number: Number(pull.number), url: String(r.html_url ?? ''), login: String(object(r.user).login ?? ''),
-        association: String(r.author_association ?? ''), text: String(r.body ?? ''), createdAt: String(r.submitted_at ?? ''), verdict: String(r.state) })))
+        association: String(r.author_association ?? ''), text: String(r.body ?? ''), createdAt: String(r.submitted_at ?? ''), verdict: String(r.state),
+        id: Number(r.id), lines: [] })))
     }
-    for (const item of said) {
+    // A review's line comments are part of it, as GitHub shows them, and go with it in one message: a review of five lines woke
+    // its agent six times, and GitHub makes even a lone line comment a review of its own, which relayed it twice. A line whose
+    // review went before (read in the pass before its lines were) goes alone.
+    const unsent = new Map(reviews.filter(r => !kept.seen.includes(r.key)).map(r => [r.id, r]))
+    const loose: Said[] = []
+    for (const line of lines) {
+      const review = line.review === undefined ? undefined : unsent.get(line.review)
+      if (review?.number === line.number && !kept.seen.includes(line.key)) review.lines.push(line)
+      else loose.push(line)
+    }
+    for (const item of [...said, ...reviews, ...loose]) {
       // Edited, not new: GitHub's since is by update time. Never twice, never a stranger's, never on nothing.
       if (kept.seen.includes(item.key) || !TEAM.has(item.association) || !Number.isSafeInteger(item.number)) continue
       if ((item.event === 'comment' && item.createdAt < kept.comments) || (item.event === 'review-comment' && item.createdAt < kept.reviewComments)) continue
       const owners = kept.owned[String(item.number)] ?? []
       for (const agent of agents) {
-        if (signedBy(item.text, agent.names) || !(namesAgent(item.text, agent.names) || owners.includes(agent.label))) continue
-        await this.hand(repo, agent, item.number, relays, item.key, { event: item.event, on: item.on, number: item.number, url: item.url, login: item.login,
-          association: item.association, text: cut(item.text.trim() || verdictWord(item.verdict), TEXT_MAX),
-          ...(item.verdict ? { verdict: item.verdict } : {}), ...(item.path ? { path: item.path } : {}), ...(item.line ? { line: item.line } : {}) })
+        const relay = 'lines' in item ? reviewFor(item as Review, agent, owners.includes(agent.label)) : sayingFor(item, agent, owners.includes(agent.label))
+        if (relay) await this.hand(repo, agent, item.number, relays, item.key, relay)
       }
-      kept.seen.push(item.key)
+      kept.seen.push(item.key, ...('lines' in item ? (item as Review).lines.map(line => line.key) : []))
     }
     if (kept.seen.length > MAX_SEEN) kept.seen.splice(0, kept.seen.length - MAX_SEEN)
+    // Each feed moves on only once all it brought was handed on: a pass that failed reads the same again (its ETags are
+    // forgotten), and what went is not sent twice (seen, tasks). The issue feed moving on first lost a failed review for good
+    // whenever a newer pull request had moved it past its own.
+    if (changed.length) kept.issues = newest(changed, issuesFrom)
     if (comments.length) kept.comments = newest(comments, kept.comments)
     if (lineComments.length) kept.reviewComments = newest(lineComments, kept.reviewComments)
   }
@@ -283,6 +299,28 @@ export class GitHubMentions {
       renameSync(temporary, this.deps.file)
     } catch (error) { this.tell('SAVE_FAILED', error instanceof Error ? error.message : String(error)) }
   }
+}
+
+/** What [agent] is handed of a comment or line comment: one that names it or is on its own task or pull request, never its own. */
+function sayingFor(item: Said, agent: WatchedAgent, own: boolean): Json | null {
+  if (signedBy(item.text, agent.names) || !(own || namesAgent(item.text, agent.names))) return null
+  return { event: item.event, on: item.on, number: item.number, url: item.url, login: item.login, association: item.association,
+    text: cut(item.text.trim() || verdictWord(undefined), TEXT_MAX), ...(item.path ? { path: item.path } : {}), ...(item.line ? { line: item.line } : {}) }
+}
+
+/** What [agent] is handed of a review: all of it on its own pull request, else only the parts that name it; nothing of a
+ *  review it signed. One line and nothing else is handed on as that line comment, which is how GitHub's Files tab shows it;
+ *  a verdict is kept for the pull request's own agent, whose work it judges. */
+function reviewFor(review: Review, agent: WatchedAgent, own: boolean): Json | null {
+  if ([review, ...review.lines].some(part => signedBy(part.text, agent.names))) return null
+  const body = review.text.trim() && (own || namesAgent(review.text, agent.names)) ? review.text.trim() : ''
+  const lines = review.lines.filter(line => own || namesAgent(line.text, agent.names))
+  if (!own && !body && !lines.length) return null
+  if (!body && lines.length === 1 && (!own || review.verdict === 'COMMENTED')) return sayingFor(lines[0]!, agent, true)
+  const where = (line: Said) => [line.path, line.line ? `line ${line.line}` : ''].filter(Boolean).join(' ')
+  const text = [body, ...lines.map(line => where(line) ? `${where(line)}:\n${line.text.trim()}` : line.text.trim())].filter(Boolean).join('\n\n')
+  return { event: 'review', on: 'pull', number: review.number, url: review.url, login: review.login, association: review.association,
+    verdict: review.verdict, text: cut(text || verdictWord(review.verdict), TEXT_MAX) }
 }
 
 const cut = (text: string, max: number) => text.length > max ? `${text.slice(0, max - 1)}…` : text
