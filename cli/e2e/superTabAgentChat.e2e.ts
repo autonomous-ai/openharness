@@ -74,7 +74,9 @@ it.each(['claude', 'codex'] as const)('types %s what its person typed, and posts
   await d.start()
   const client = await LocalClient.connect(d, { machineId: ME.machineId }); clients.push(client)
   const cwd = join(d.projectsDir, 'project'); mkdirSync(cwd, { recursive: true })
-  const agent = await client.request('agent_create', { engine, cwd, bypassPermission: true }, 90_000)
+  // As Desktop's + New agent starts it: with its Swarm role. An agent with none is one its person attached, which the host
+  // tells the team's basics once, and reads its Swarm to do so (#3642): that is not what this test is about.
+  const agent = await client.request('agent_create', { engine, cwd, bypassPermission: true, swarmRole: 'dev' }, 90_000)
   expect(agent.error, JSON.stringify(agent)).toBeUndefined()
   const memberId = idFor(agent.agent.id)
   agents.push({ id: memberId, machineId: ME.machineId, harnessId: agent.agent.id, chatId: CHAT, displayName: 'Mia' })
