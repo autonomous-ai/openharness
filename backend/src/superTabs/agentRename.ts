@@ -19,7 +19,7 @@ const HIDDEN = /[\p{Default_Ignorable_Code_Point}\u2800]/u
 type Checked = { name: string } | { code: 'INVALID_AGENT_NAME' | 'AGENT_NAME_ROLE' | 'AGENT_NAME_TAKEN'; message: string; status: 400 | 409 }
 
 /** [input] as the name of [exceptId]'s agent (or a new one), for what [actor] reads, or why it is refused. */
-function checkedAgentName(state: SuperTabState, actor: Actor, exceptId: string | null, input: string): Checked {
+function checkedAgentName(state: SuperTabState, actor: Actor, exceptId: string | null, input: string, ownChatId?: string): Checked {
   const name = input.normalize('NFKC').replace(/\s+/g, ' ').trim()
   if (!name || [...name].length > AGENT_NAME_LENGTH || !printable(name) || HIDDEN.test(name)) {
     return { code: 'INVALID_AGENT_NAME', message: `Use 1 to ${AGENT_NAME_LENGTH} characters, with no hidden ones.`, status: 400 }
@@ -34,7 +34,7 @@ function checkedAgentName(state: SuperTabState, actor: Actor, exceptId: string |
   const agents = agentNamesSeenBy({ ...state, agents: state.agents.filter(a => a.id !== exceptId) }, actor)
   // The person's own agents still starting, and their own agent chats, are theirs to read: two quick starts never share a name.
   const own = actor.kind === 'person' ? [...(state.starts ?? []).filter(s => !s.harnessId && !s.error && s.contributorId === actor.userId).map(s => s.request.name),
-    ...state.conversations.filter(c => c.kind === 'agent-chat' && !(exceptId && c.agentIds.includes(exceptId)) && c.audience?.people.some(p => p.id === actor.userId)).map(c => c.title)] : []
+    ...state.conversations.filter(c => c.kind === 'agent-chat' && c.id !== ownChatId && !(exceptId && c.agentIds.includes(exceptId)) && c.audience?.people.some(p => p.id === actor.userId)).map(c => c.title)] : []
   if ([...others, ...agents, ...own].some(other => other && nameKey(other) === key)) {
     return { code: 'AGENT_NAME_TAKEN', message: `${name} is taken in this Swarm. Choose another.`, status: 409 }
   }
@@ -62,8 +62,9 @@ export function renameAgentTo(state: SuperTabState, actor: Actor, target: Agent,
  * a name that fails them never stops the add. It is left for a member name (a role's name already is: agentNames.ts), so a
  * harness called "System" or "Quinn" joins as someone else's name never would.
  */
-export function addedAgentName(state: SuperTabState, actor: Actor, input: string): string {
-  const checked = checkedAgentName(state, actor, null, input)
+export function addedAgentName(state: SuperTabState, actor: Actor, input: string, chatId: string): string {
+  // The chat it joins was opened with this name (agent.new), so that title is its own, not another's.
+  const checked = checkedAgentName(state, actor, null, input, chatId)
   // A role's name stays as it always did: the agent is given a member name for it (agentNames.ts).
   if (isRoleName(input.normalize('NFKC'))) return input
   return 'name' in checked ? checked.name : 'Agent'

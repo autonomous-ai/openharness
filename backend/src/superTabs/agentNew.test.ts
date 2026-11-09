@@ -264,6 +264,13 @@ describe('+ New agent, Member started on its own computer', () => {
     expect(code(() => f.run(join(chat, { harnessId: 'h-other' }), mate, own('mate')))).toBe('AGENT_CHAT_TAKEN')
   })
 
+  it('joins under the name its chat was opened with, which is no other agent\'s', () => {
+    const f = swarm()
+    const chat = f.add({ kind: 'regular', name: 'Ada', machineId: 'mate-laptop', local: true }).result.conversationId as string
+    const added = f.run(join(chat), mate, own('mate'))
+    expect(f.state.agents.find(a => a.id === added.result.agentId)!.name).toBe('Ada')
+  })
+
   // On 2026-11-09 anh Dee's new agent could not answer him: its post looked for its chat's project's PM, and a 1:1 chat has no
   // project, so it fell back to the project 'lead', which a Swarm whose projects all have their own ids does not have (404).
   it('answers its person in its chat in a Swarm with no project \'lead\'', () => {

@@ -3514,7 +3514,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // agent it re-added a person's Buddy to a task, added to the project chat, and registered any session of its
       // contributor's machines, the Swarm's or not, past conversation.agent's checks (security review S2).
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person adds a session already running. Start a new agent instead.', 403)
-      const addedName = addedAgentName(state, actor, command.name)
+      const addedName = addedAgentName(state, actor, command.name, command.conversationId)
       const group = open(state, command.conversationId)
       // A Member's own chat (local agent.new, task #4196) takes the one session its person started for it on their own computer,
       // in their own account, as a Regular agent in no project: as agent.started records a server-started one.
@@ -3532,9 +3532,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (state.agents.some(a => a.id === agentId)) fail('ALREADY_SHARED', 'This native harness is already in the tab.')
         reserveHarnessSlot(state, command.machineId, command.harnessId, operationId)
         state.agents.push({ id: agentId, machineId: command.machineId, harnessId: command.harnessId, regular: true,
-          // The name agent.new checked and gave its chat, which the session was told it is ("You are West."): checked again here,
-          // the chat's own title read as taken, and the agent became "Agent", shown as another name (anh Dee, 2026-11-09).
-          machineOwnerId: me.id, contributorId: me.id, membershipGeneration: me.generation, hostGrant: null, name: group.title || addedName,
+          machineOwnerId: me.id, contributorId: me.id, membershipGeneration: me.generation, hostGrant: null, name: addedName,
           configuration: command.configuration, configurationVersion: operationId })
         group.agentIds.push(agentId)
         result.agentId = agentId
