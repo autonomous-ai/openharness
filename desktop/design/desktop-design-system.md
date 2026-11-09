@@ -536,7 +536,13 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   (`SwarmChatCard`): an icon and a small label (Sent to River, Shipped), one
   title line, and one blue action (View brief, What changed) that shows the
   rest in place. Never the whole brief inline. A task's live card under its
-  brief keeps its status and checks without repeating the title.
+  brief keeps its status and checks without repeating the title. What GitHub
+  said to your agent (a comment, review or line comment that names it or is on
+  its own task or pull request, or a task labelled for it) is a card on the
+  left in your chat with it, never your bubble (`SuperTabGitHubRow`): the pull
+  request or issue mark, where it was and who wrote it (PR #4 · deehw, Review,
+  Line, New task · #13), its first line or a review's verdict, and Read for
+  the rest and Open in GitHub.
 - **Long messages.** An agent's message folds after about six lines, with
   More (`SwarmFold`); a person's never does.
 - **Voice.** A voice message is its own bubble with play, waveform and
