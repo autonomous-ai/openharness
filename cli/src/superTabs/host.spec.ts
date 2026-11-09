@@ -3699,12 +3699,26 @@ describe('an agent its person attached', () => {
     expect(t.told.map(c => c.command.text)).toEqual([`${SWARM_BASICS}\n${PM_BASICS}`])
   })
 
-  it('is told nothing when the Swarm started it with the basics, nor when it is a plain shell', async () => {
-    for (const session of [{ engine: 'claude', swarmSkill: { role: 'agent', key: 'harness' } }, { engine: 'terminal' }]) {
+  it('is told nothing when its launch carried the basics, nor when it is a plain shell or a Buddy', async () => {
+    for (const session of [{ engine: 'claude', swarmSkill: { role: 'agent', key: 'harness', basics: true } }, { engine: 'terminal' },
+      { engine: 'claude', swarmSkill: { role: 'buddy', key: 'harness' } }]) {
       const t = attached(session)
       const host = t.open()
       await host.tick(); await settle()
       expect(t.told).toEqual([])
+    }
+  })
+
+  // A release before 0.5.83 saved the same record without the mark: its agent never read how the team works, and without this
+  // it stays so until it is relaunched, so its person saw no agent talk to another (owner, 2026-11-09: "i dont see any agent to
+  // agent chat").
+  it('is told them too when the Swarm started it before the basics were part of its launch', async () => {
+    for (const [session, row, basics] of [[{ engine: 'claude', swarmSkill: { role: 'agent', key: 'harness' } }, {}, SWARM_BASICS],
+      [{ engine: 'codex', swarmSkill: { role: 'coordinator', key: 'harness' } }, { lead: true }, `${SWARM_BASICS}\n${PM_BASICS}`]] as const) {
+      const t = attached(session, row)
+      const host = t.open()
+      await host.tick(); await settle()
+      expect(t.told.map(c => c.command.text)).toEqual([basics])
     }
   })
 

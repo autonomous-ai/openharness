@@ -20,6 +20,12 @@ describe('Swarm role kinds (project instructions, phase 4)', () => {
     expect(parseSwarmSkill({ role: 'agent', key: '' })).toBeUndefined()
   })
 
+  // A row saved before 0.5.83 has no mark, so the host can tell its agent never read the team's basics (superTabs/host.ts).
+  it('keeps the mark of a launch that carried the team\'s basics, and no other value of it', () => {
+    expect(parseSwarmSkill({ role: 'agent', key: 'k', basics: true })).toEqual({ role: 'agent', key: 'k', basics: true })
+    for (const basics of [false, 'true', 1, null]) expect(parseSwarmSkill({ role: 'agent', key: 'k', basics })).toEqual({ role: 'agent', key: 'k' })
+  })
+
   it('takes both value sets from the wire and gives back the values an older machine knows', () => {
     expect(roleFromWire('lead')).toEqual({ role: 'coordinator' })
     expect(roleFromWire('dev')).toEqual({ role: 'agent' })

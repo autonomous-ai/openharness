@@ -188,7 +188,7 @@ describe('creating an agent', () => {
       const cwd = folder()
       await setup().create(request({ cwd, engine, swarmRole: role }))
       const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
-      expect(pane.swarmSkill).toEqual({ role, key: pane.sessionLabel })
+      expect(pane.swarmSkill).toEqual({ role, key: pane.sessionLabel, basics: true })
       const place = vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2]
       // The team's basics (Swarm v4, 2026-11-09), and the PM's part for the coordinator alone.
       expect(place.swarmInstructions).toContain('Never watch GitHub yourself')
@@ -202,7 +202,7 @@ describe('creating an agent', () => {
     for (const over of [{ swarmRole: 'agent', swarmFallback: 'review' }, { swarmRole: 'review' }]) {
       await setup().create(request({ cwd: folder(), ...over }))
       const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
-      expect(pane.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: pane.sessionLabel })
+      expect(pane.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: pane.sessionLabel, basics: true })
       expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toContain('Never review your own work')
     }
     // A fallback is an agent's alone.
@@ -210,7 +210,7 @@ describe('creating an agent', () => {
       [{ swarmRole: 'dev' }, 'agent']] as const) {
       await setup().create(request({ cwd: folder(), ...over }))
       const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
-      expect(pane.swarmSkill).toEqual({ role, key: pane.sessionLabel })
+      expect(pane.swarmSkill).toEqual({ role, key: pane.sessionLabel, basics: true })
       expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toContain('Never watch GitHub yourself')
     }
     expect(await setup().create(request({ cwd: folder(), swarmRole: 'pm' }))).toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED' })
@@ -231,7 +231,7 @@ describe('creating an agent', () => {
     const cwd = folder()
     await setup().create(request({ cwd, swarmRole: 'agent', swarmSkillMode: mode }))
     const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
-    expect(pane.swarmSkill).toEqual({ role: 'agent', key: pane.sessionLabel, mode })
+    expect(pane.swarmSkill).toEqual({ role: 'agent', key: pane.sessionLabel, mode, basics: true })
     expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toContain('Never watch GitHub yourself')
   })
 
@@ -282,6 +282,8 @@ describe('creating an agent', () => {
     const calls = vi.mocked(agentTmpLaunch).mock.calls.length
     expect(await setup().create(request({ dsh: 'blender', swarmRole: 'buddy' }))).toMatchObject({ ok: true })
     expect(buddyTmpEnv).toHaveBeenLastCalledWith('claude', expect.any(String))
+    // Its launch carries its own skill, not the team's basics, so its row says nothing of them.
+    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].swarmSkill).toEqual({ role: 'buddy', key: expect.any(String) })
     expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ TMPDIR: '/data-buddy-tmp/one', CLAUDE_CODE_TMPDIR: '/data-buddy-tmp/one', HARNESS_DSH: 'blender' })
     expect(vi.mocked(agentTmpLaunch).mock.calls.length).toBe(calls)
   })
@@ -311,7 +313,7 @@ describe('creating an agent', () => {
     expect(await setup().create(request({ cwd: folder(), swarmRole: 'agent', swarmGitHub: true }))).toMatchObject({ ok: true })
     const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
     expect(swarmGitHubLaunch).toHaveBeenCalledWith(pane.sessionLabel)
-    expect(pane.swarmSkill).toEqual({ role: 'agent', key: pane.sessionLabel, github: true })
+    expect(pane.swarmSkill).toEqual({ role: 'agent', key: pane.sessionLabel, github: true, basics: true })
     expect(pane.env).toMatchObject({ GIT_CONFIG_PARAMETERS: 'fixture', GH_CONFIG_DIR: '/fixture/gh' })
     expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.clearEnv).toContain('GH_TOKEN')
   })
@@ -330,7 +332,7 @@ describe('creating an agent', () => {
   it('launches as before where the GitHub App does not apply, and without a role never asks', async () => {
     await setup().create(request({ cwd: folder(), swarmRole: 'agent', swarmGitHub: true }))
     const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
-    expect(pane.swarmSkill).toEqual({ role: 'agent', key: pane.sessionLabel })
+    expect(pane.swarmSkill).toEqual({ role: 'agent', key: pane.sessionLabel, basics: true })
     expect(pane.env).not.toHaveProperty('GIT_CONFIG_PARAMETERS')
     vi.mocked(swarmGitHubLaunch).mockClear()
     await setup().create(request({ cwd: folder(), swarmGitHub: true }))
