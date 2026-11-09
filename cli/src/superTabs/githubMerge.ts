@@ -10,7 +10,7 @@
  * - its head has a READ-OK from someone other than its writers: `READ-OK <sha>` in a comment's first line, the reader the name
  *   the comment is signed with ("Juno, 14:20, to **Pip**: READ-OK f6edb44"), or its GitHub login when unsigned; two from two
  *   readers when its text or a comment's first line says TWO READS. A comment signed by one of its writers (writersOf), in any
- *   spelling, is that writer's;
+ *   spelling, is that writer's, and an unsigned one from the login that opened it counts for nothing (notReaders);
  * - no reader's last word on it is a HOLD: a HOLD stands until that reader's later READ-OK;
  * - every check on its head passed;
  * - and GitHub says it can merge.
