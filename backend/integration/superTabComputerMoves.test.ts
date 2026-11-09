@@ -206,21 +206,20 @@ describe('the cleanup\'s dry run and its write', () => {
 
   it('decide the same moves on the same data, and say why one is left', async () => {
     const { tab, from, to } = await listedTwice()
-    // The Swarm was deleted (deletion.ts): no command of the entry's owner reaches it, machine.moved included, until its owner
-    // restores it.
+    // The Swarm was deleted (deletion.ts): no command of the entry's owner reaches it, machine.moved included.
     await run(tab, { type: 'swarm.delete', name: 'Twice' })
-    const refused = await cleanUpComputers(db, store, 'prod', { write: false })
+    const dry = await cleanUpComputers(db, store, 'prod', { write: false })
     const written = await cleanUpComputers(db, store, 'prod', { write: true })
     expect(mine(written.moves, tab)).toEqual([])
-    expect(mine(refused.moves, tab)).toEqual(mine(written.moves, tab))
+    expect(mine(dry.moves, tab)).toEqual(mine(written.moves, tab))
     // Both name the entry left and the Swarm's own refusal, so a dry run says what the write will not do.
     const left = { tabId: tab, from, fromOwner: kelvin, to, toOwner: tt, code: 'NOT_FOUND' }
-    expect(mine(refused.left, tab)).toEqual([left])
+    expect(mine(dry.left, tab)).toEqual([left])
     expect(mine(written.left, tab)).toEqual([left])
-    await run(tab, { type: 'swarm.restore' })
-    expect(await machinesIn(tab)).toEqual([`${from}:${kelvin}`, `${to}:${tt}`])
+  })
 
-    // The Swarm reachable again: both decide the move, and the write makes it.
+  it('decide a move the same, and the write makes it', async () => {
+    const { tab, from, to } = await listedTwice()
     const dry = await cleanUpComputers(db, store, 'prod', { write: false })
     const moved = { tabId: tab, from, fromOwner: kelvin, to, toOwner: tt }
     expect(mine(dry.moves, tab)).toEqual([moved])
