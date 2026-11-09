@@ -85,7 +85,8 @@ export function createTurnEnds(deps: TurnEndsDeps) {
       const turn = open.get(sessionId)
       if (!turn) return
       for (const part of turn.now.parts) add(turn.before, part)
-      turn.now = none()
+      turn.now.parts.length = 0
+      turn.now.size = 0
     },
     /** A live turn ended. A listener that throws costs that listener this end, never another listener or the funnel. An end whose
      *  start was never seen is told to nobody: nothing can say which turn it was. */
