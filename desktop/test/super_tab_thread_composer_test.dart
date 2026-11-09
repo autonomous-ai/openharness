@@ -126,7 +126,7 @@ void main() {
 
   /// A root and two replies in the lead's thread.
   ConversationServer threaded() {
-    final server = ConversationServer()..threads = true;
+    final server = ConversationServer.chat()..threads = true;
     server.append('Should we do thread replies?');
     server.append('Yes, like Slack.');
     server.messages.last
@@ -1276,7 +1276,7 @@ void main() {
   group('privacy and lifecycle', () {
     test('each conversation\'s thread keeps its own files, even for the same '
         'root id', () {
-      final c = ConversationServer().controller();
+      final c = ConversationServer.chat().controller();
       addTearDown(c.dispose);
       final here = c.threadAttachments('lead', 'message-1');
       final there = c.threadAttachments('offline', 'message-1');
