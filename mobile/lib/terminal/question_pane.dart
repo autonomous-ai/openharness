@@ -150,11 +150,31 @@ final RegExp _typeRow = RegExp(
 /// The bottom of a live dialog. Each CLI words its own.
 ///
 /// `enter to submit answer` is Codex's `request_user_input`; the rest are
-/// Claude's. Missing one means the dialog is never seen at all.
+/// Claude's, and Codex's own pickers: `enter continue · esc skip` under its
+/// update prompt (update_prompt.rs), `enter/esc confirm · ⌃c quit` under its
+/// model migration (model_migration.rs). A digit selects and submits on each of
+/// those. Missing one means the dialog is never seen at all — the update prompt
+/// went unread, and a tap on `1. Update now` pressed nothing (2026-11-09).
 final RegExp _footer = RegExp(
-  r'enter to (select|confirm|submit)|enter\s+(submit|confirm|toggle)',
+  r'enter to (select|confirm|submit)|enter(/esc)?\s+(submit|confirm|toggle|continue)',
   caseSensitive: false,
 );
+
+/// The first row of Codex's folder-trust question (onboarding/trust_directory.rs),
+/// which shares the update prompt's `enter continue` footer but not its keys:
+/// there `1` only moves the highlight — trust "always requires an explicit
+/// Enter" — and `2` quits at once. A tap pressing `1` would change nothing a
+/// person could see, so the question is not read as a dialog at all.
+final RegExp _codexTrustRow = RegExp(
+  r'^(Trust and continue|Yes, continue|Open restricted|Open existing task)$',
+);
+
+/// The header of Codex's update prompt, `Update available · 0.165.0 → 0.167.0`.
+///
+/// ⚠️ **Not the line over the rows.** That is the release-notes link, which a
+/// phone pane wraps mid-word, and its `→` reads as a tab bar to the question
+/// walk — the dialog was titled `Release notes: https://github.com/openai/codex/releas es/latest`.
+final RegExp _codexUpdateHeader = RegExp(r'^Update available\b');
 
 /// Codex's footer, which also says a digit alone does not commit.
 final RegExp _enterSubmitsFooter = RegExp(
@@ -434,6 +454,10 @@ QuestionPaneView? parseQuestionLines(
     );
   }
   if (start < 0 || rows.isEmpty) return null;
+  if (engine == QuestionEngine.codex &&
+      _codexTrustRow.hasMatch(rows.first.label)) {
+    return null;
+  }
 
   // The question is the nearest real text line above the rows.
   //
@@ -463,6 +487,9 @@ QuestionPaneView? parseQuestionLines(
   // prose rather than another row or the frame's top.
   if (question.isNotEmpty) {
     question = _stitchWrapped(lines, questionAt, question);
+  }
+  if (engine == QuestionEngine.codex) {
+    question = _codexUpdateTitle(lines, start) ?? question;
   }
 
   final answerable = rows
@@ -515,6 +542,20 @@ String _stitchWrapped(List<String> lines, int tailAt, String tail) {
     parts.insert(0, line);
   }
   return parts.join(' ');
+}
+
+/// The header of Codex's update prompt over its first row at [start], or null
+/// when the dialog is another one — see [_codexUpdateHeader].
+///
+/// Stops at another dialog's row or at Codex's own chrome: the top of this
+/// frame, above which a header belongs to an earlier prompt in the scrollback.
+String? _codexUpdateTitle(List<String> lines, int start) {
+  for (var i = start - 1; i >= 0 && start - i <= _maxQuestionScan; i--) {
+    final line = lines[i].trim();
+    if (_codexUpdateHeader.hasMatch(line)) return line;
+    if (_row.hasMatch(line) || _codexChrome.hasMatch(line)) return null;
+  }
+  return null;
 }
 
 /// The review step, which closes a multi-question dialog.
