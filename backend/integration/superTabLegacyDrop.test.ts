@@ -166,8 +166,8 @@ describe('the automatic removal after a release', () => {
 
     expect(report).toMatchObject({ removed: 3, batches: 2, done: true })
     expect(await Promise.all(ids.map(kept))).toEqual([null, null, null])
-    // Counts and sizes only: nothing that names a Swarm. No removed collection was there to drop.
-    expect(logs).toEqual([{ removedCollections: [], collectionsFailed: [] }, expect.objectContaining({ removed: 3, kept: 3, done: true })])
+    // Counts and sizes only: nothing that names a Swarm.
+    expect(logs).toEqual([expect.objectContaining({ removed: 3, kept: 3, done: true })])
     expect(JSON.stringify(logs)).not.toContain(ids[0])
   })
 
@@ -210,7 +210,7 @@ describe('the automatic removal after a release', () => {
 
     expect(await dropLegacyUntilDone(flaky, { pause: noWait, wait: noWait, log: line => logs.push(line) })).toMatchObject({ removed: 1, done: true })
     expect(await kept(swarm)).toBeNull()
-    expect(logs[1]).toEqual({ failed: 'connection reset' })
+    expect(logs[0]).toEqual({ failed: 'connection reset' })
   })
 
   it('removes the old states though the removed collections could not be listed, and tries those again', async () => {

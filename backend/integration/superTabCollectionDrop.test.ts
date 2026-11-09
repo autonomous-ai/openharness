@@ -94,8 +94,4 @@ describe('the job that drops the collections Swarm v4 removed', () => {
     expect(await kept()).toEqual(before)
     expect(lines.filter(line => 'failed' in line || (line.collectionsFailed as unknown[] | undefined)?.length)).toEqual([])
   })
-
-  it('does not make a removed collection again: no release step or sweep creates one', async () => {
-    expect((await listed()).filter(name => removed.has(name))).toEqual([])
-  })
 })

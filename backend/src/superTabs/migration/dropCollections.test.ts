@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { CHUNK, dropRemovedCollections, REMOVED_COLLECTIONS } from './dropCollections.js'
+import { dropRemovedCollections, REMOVED_COLLECTIONS } from './dropCollections.js'
 
 /** A database that answers the commands the drop sends, with the errors Mongo gives for a missing collection and a user who may not drop. */
 class Database {
@@ -10,6 +10,10 @@ class Database {
   denyDrop = false
   failFind = new Set<string>()
   failDelete = new Set<string>()
+  /** Deletes that answer ok and remove nothing, as when something writes the rows back. */
+  stuck = new Set<string>()
+  /** Runs before each delete, as another pod's write would. */
+  beforeDelete: (collection: string) => void = () => {}
   /** Each command yields first, so two passes on one database interleave as two pods do. */
   async $runCommandRaw(command: Record<string, unknown>): Promise<unknown> {
     await new Promise(resolve => setImmediate(resolve))
@@ -26,7 +30,9 @@ class Database {
     }
     if ('delete' in command) {
       const name = command.delete as string
+      this.beforeDelete(name)
       if (this.failDelete.has(name)) return { n: 0, writeErrors: [{ index: 0 }] }
+      if (this.stuck.has(name)) return { n: 0, ok: 1 }
       const gone = new Set(((command.deletes as Array<{ q: { _id: { $in: string[] } } }>)[0]!.q._id.$in))
       const rows = this.collections.get(name) ?? []
       const kept = rows.filter(id => !gone.has(id))
@@ -76,17 +82,43 @@ describe('dropping the collections Swarm v4 removed', () => {
     expect(Object.keys(report.collections[0]!).sort()).toEqual(['collection', 'dropped', 'rows'])
   })
 
-  it('removes in chunks of at most the chunk size, with a pause between them', async () => {
+  it('removes in chunks of at most 500, with a pause between them and none after the last', async () => {
     const database = new Database().fill('SwarmWorkspaceMember', 1050)
     let pauses = 0
 
-    const report = await dropRemovedCollections(asDb(database), { chunk: 500, pause: async () => { pauses++ } })
+    const report = await dropRemovedCollections(asDb(database), { pause: async () => { pauses++ } })
 
     expect(report.collections).toEqual([{ collection: 'SwarmWorkspaceMember', rows: 1050, dropped: true }])
     const deletes = database.commands.filter(c => 'delete' in c) as Array<{ deletes: Array<{ q: { _id: { $in: string[] } } }> }>
     expect(deletes.map(d => d.deletes[0]!.q._id.$in.length)).toEqual([500, 500, 50])
     expect(pauses).toBe(2)
-    expect(CHUNK).toBe(500)
+  })
+
+  it('goes on until the collection is empty when another pod removes some of the same rows meanwhile', async () => {
+    // Its first chunk is cut short by the other pod's 200, and the drop is refused: the collection must still end empty.
+    const database = new Database().fill('SwarmWorkspaceMember', 1200)
+    database.denyDrop = true
+    let raced = false
+    database.beforeDelete = name => { if (!raced) { raced = true; database.collections.set(name, database.collections.get(name)!.slice(200)) } }
+
+    const report = await dropRemovedCollections(asDb(database))
+
+    expect(database.collections.get('SwarmWorkspaceMember')).toEqual([])
+    expect(report).toEqual({ collections: [{ collection: 'SwarmWorkspaceMember', rows: 1200, dropped: false }], failed: [], done: true })
+  })
+
+  it('names a collection whose rows stay after every chunk it may take, and is not done', async () => {
+    const database = new Database().fill('SwarmWorkspace', 1200).fill('SuperTabScorecard', 2)
+    database.stuck.add('SwarmWorkspace')
+
+    const report = await dropRemovedCollections(asDb(database))
+
+    expect(report.failed).toEqual(['SwarmWorkspace'])
+    expect(report.done).toBe(false)
+    expect(report.collections.map(c => c.collection)).toEqual(['SuperTabScorecard'])
+    // 1,200 rows are three chunks and five more are allowed, then it gives up: nine tries at most, not for ever.
+    expect(database.commands.filter(c => 'delete' in c && c.delete === 'SwarmWorkspace')).toHaveLength(9)
+    expect(database.collections.get('SwarmWorkspace')).toHaveLength(1200)
   })
 
   it('leaves a collection that is not there alone, and a second pass finds nothing to do', async () => {
@@ -106,7 +138,7 @@ describe('dropping the collections Swarm v4 removed', () => {
     const database = new Database()
     for (const name of REMOVED_COLLECTIONS) database.fill(name, 1200)
 
-    const [a, b] = await Promise.all([dropRemovedCollections(asDb(database), { chunk: 100 }), dropRemovedCollections(asDb(database), { chunk: 100 })])
+    const [a, b] = await Promise.all([dropRemovedCollections(asDb(database)), dropRemovedCollections(asDb(database))])
 
     expect([a.failed, b.failed, a.done, b.done]).toEqual([[], [], true, true])
     expect(database.collections.size).toBe(0)
@@ -142,13 +174,13 @@ describe('dropping the collections Swarm v4 removed', () => {
   })
 
   it('stops at once when aborted, leaving the rest, and is not done', async () => {
-    const database = new Database().fill('SwarmWorkspaceMember', 1000)
+    const database = new Database().fill('SwarmWorkspaceMember', 1200)
     const control = new AbortController()
 
-    const report = await dropRemovedCollections(asDb(database), { chunk: 100, signal: control.signal, pause: async () => { control.abort() } })
+    const report = await dropRemovedCollections(asDb(database), { signal: control.signal, pause: async () => { control.abort() } })
 
     expect(report.done).toBe(false)
-    expect(database.collections.get('SwarmWorkspaceMember')).toHaveLength(900)
+    expect(database.collections.get('SwarmWorkspaceMember')).toHaveLength(700)
   })
 
   it('a collection listed here is no model of the schema: its push would make it again', () => {

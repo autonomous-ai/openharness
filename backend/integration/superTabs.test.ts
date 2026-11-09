@@ -5205,5 +5205,8 @@ describe('a Swarm with no Workspace above it', () => {
     await store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'tab.rename', name: 'Plain again' } })
     await store.list(owner)
     expect((await db.superTab.findUniqueOrThrow({ where: { id: tab } })).workspaceId).toBeNull()
+    // Nothing wrote a Workspace collection meanwhile, by any command: none exists.
+    const collections = ((await db.$runCommandRaw({ listCollections: 1, nameOnly: true })) as { cursor: { firstBatch: Array<{ name: string }> } }).cursor.firstBatch
+    expect(collections.map(c => c.name).filter(name => /Workspace/.test(name))).toEqual([])
   })
 })

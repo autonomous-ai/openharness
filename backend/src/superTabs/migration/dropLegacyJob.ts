@@ -8,7 +8,7 @@
 import type { PrismaClient } from '@prisma/client'
 import { logger } from '../../utils/logger.js'
 import { dropLegacyStates, type DropReport } from './dropLegacy.js'
-import { dropRemovedCollections, type CollectionDropReport } from './dropCollections.js'
+import { dropRemovedCollections } from './dropCollections.js'
 
 /** A busy Swarm's old state is about 1 MB: this bounds a write to a few megabytes. */
 export const JOB_BATCH = 5
@@ -36,21 +36,24 @@ export const sleeper = (signal?: AbortSignal) => (ms: number) => new Promise<voi
 })
 
 /** Tries until no removed collection is left and no Swarm keeps an old state, or `signal` aborts (then it returns the last report,
- *  or an empty one). The collections go first: a Swarm still in one row holds the old states back, and must not hold them. */
+ *  or an empty one). The collections go first: a Swarm still in one row holds the old states back, and must not hold them. A try
+ *  that finds nothing to remove from the collections logs nothing of them, and once they are gone they are not looked for again. */
 export async function dropLegacyUntilDone(db: PrismaClient, { batch = JOB_BATCH, pause, wait = sleeper(), log = () => {}, signal }: JobOptions = {}): Promise<DropReport | null> {
-  let report: DropReport | null = null
+  let report: DropReport | null = null, collectionsDone = false
   while (!signal?.aborted) {
-    let collections: CollectionDropReport | null = null
-    try {
-      collections = await dropRemovedCollections(db, { pause, signal })
-      log({ removedCollections: collections.collections, collectionsFailed: collections.failed })
-    } catch (error) {
-      log({ failed: `collections: ${error instanceof Error ? error.message : String(error)}` })
+    if (!collectionsDone) {
+      try {
+        const collections = await dropRemovedCollections(db, { pause, signal })
+        collectionsDone = collections.done
+        if (collections.collections.length || collections.failed.length) log({ removedCollections: collections.collections, collectionsFailed: collections.failed })
+      } catch (error) {
+        log({ failed: `collections: ${error instanceof Error ? error.message : String(error)}` })
+      }
     }
     try {
       report = await dropLegacyStates(db, { apply: true, batch, pause, signal })
       log({ ...report })
-      if (report.done && collections?.done) return report
+      if (report.done && collectionsDone) return report
     } catch (error) {
       log({ failed: error instanceof Error ? error.message : String(error) })
     }
