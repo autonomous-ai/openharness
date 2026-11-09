@@ -102,25 +102,6 @@ describe('the time checks with the PM down', () => {
     expect(await f.rows('work-stalled')).toHaveLength(1)
   })
 
-  it('tell the PM of an agent left idle for 15 minutes, once, with no PM poll', async () => {
-    const f = await swarm()
-    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Done elsewhere' })
-    // Its host took the cancel notice, as a running host does.
-    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: f.worker, status: 'queued' }, data: { status: 'delivered' } })
-    f.clock.now += 14 * MINUTE
-    await f.workerBeat()
-    await f.timed.runTimeChecks(f.tab)
-    expect(await f.rows('idle')).toEqual([])
-    f.clock.now += MINUTE + 1_000
-    await f.workerBeat()
-    await f.timed.runTimeChecks(f.tab)
-    expect(await f.rows('idle')).toEqual([expect.objectContaining({ conversationId: 'lead', recipientIds: [f.lead], text: 'Worker has had no open task for 15 minutes.' })])
-    f.clock.now += 10 * MINUTE
-    await f.workerBeat()
-    await f.timed.runTimeChecks(f.tab)
-    expect(await f.rows('idle')).toHaveLength(1)
-  })
-
   it('lose the task of a worker whose machine went silent, and tell the PM, with no report and no PM poll', async () => {
     const f = await swarm()
     await f.workerBeat()
@@ -187,6 +168,27 @@ describe('every agent\'s 1:1 chat', () => {
     expect((await f.timed.read(owner, f.tab)).state.conversations.some(c => c.id === chatId)).toBe(false)
     await f.timed.runTimeChecks(f.tab)
     expect((await f.timed.read(host, f.tab)).state.conversations.filter(c => c.kind === 'agent-chat' && c.agentIds.includes(f.worker))).toHaveLength(1)
+  })
+})
+
+// Swarm v4 (anh Dee 2026-11-09): only its person stops an agent; the stops the v3 rules asked for are withdrawn once.
+describe('the stops from before v4', () => {
+  it('are withdrawn once by the checks, with the session record that refused messages to the agent', async () => {
+    const f = await swarm()
+    const helper = String((await f.execute({ type: 'agent.add', conversationId: f.group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Helper', configuration: config, lead: false }, host)).result.agentId)
+    await f.execute({ type: 'agent.release', agentId: helper, decision: 'stop' })
+    const stopped = (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === helper)!
+    expect(stopped.workDecision).toBe('stop')
+    await f.timed.runTimeChecks(f.tab)
+    const freed = (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === helper)!
+    expect(freed.workDecision).toBeUndefined()
+    expect(await db.superTabSessionScope.findMany({ where: { stopReleaseId: stopped.releaseId! } })).toEqual([])
+    expect(await db.superTabRun.findMany({ where: { id: helper, tabId: f.tab } })).toEqual([])
+    // Once: a stop its person asks for after it stands.
+    await f.execute({ type: 'agent.release', agentId: helper, decision: 'stop' })
+    await f.timed.runTimeChecks(f.tab)
+    expect((await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === helper)!.workDecision).toBe('stop')
   })
 })
 

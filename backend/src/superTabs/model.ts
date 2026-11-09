@@ -693,6 +693,8 @@ export interface RemovedSession {
 export interface SuperTabState {
   version: 1
   id: string
+  /** Swarm v4: the stops the v3 rules asked for were withdrawn once (agentStops.ts). */
+  v4StopsWithdrawn?: true
   name: string
   project?: { machineId: string; cwd: string; repositoryUrl: string | null }
   projects?: SwarmProject[]

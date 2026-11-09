@@ -2770,7 +2770,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const { routeDecisionId, startId } = await routedStart(tab, lead, 'reviewer')
     const agentId = String((await run(tab, { type: 'agent.started', startId, harnessId: randomUUID(), configuration: config }, host, lead)).result.agentId)
     expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBeNull()
-    await run(tab, { type: 'agent.release', agentId, decision: 'stop' }, host, lead)
+    await run(tab, { type: 'agent.release', agentId, decision: 'stop' })
     const releaseId = (await store.read(owner, tab)).state.agents.find(agent => agent.id === agentId)!.releaseId!
     // Its execution host is its own person's: the owner's computer it was started on (task #4120).
     await run(tab, { type: 'agent.remove', agentId, releaseId }, owner, agentId)
@@ -3577,13 +3577,13 @@ it('releases a finished worker through its execution host, cancels deliveries an
     quotas: [], tools: {}, runningHarnessIds: [native], stoppedHarnessIds: [] }
   await store.observeMachine(host, tab, 'test-host', oldObservation)
   const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
-  await expect(run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' }, host, lead)).rejects.toMatchObject({ code: 'WORK_ACTIVE' })
+  await expect(run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' })).rejects.toMatchObject({ code: 'WORK_ACTIVE' })
   await store.stopped(host, tab, assignmentId, 'fixture-native-stop')
   const before = (await store.read(owner, tab)).state
   expect(before.agents.find(a => a.id === worker)!.workDecision).toBe('awaiting')
   const { machineSlots } = await import('../src/superTabs/machines.js')
   expect(machineSlots(before, before.machines![0]!)).toBe(2)
-  await run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' }, host, lead)
+  await run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' })
   expect((await rosterRows(store, host, 'test-host')).find(r => r.agent?.id === worker)).toMatchObject({ stopRequested: true })
   await expect(run(tab, { type: 'agent.remove', agentId: worker }, owner, worker)).rejects.toMatchObject({ code: 'FORBIDDEN' })
   const operation = randomUUID()
@@ -3630,10 +3630,10 @@ it('fences a shared native session globally while its release is pending', async
   const first = await add(a.tab)
   await store.stopped(host, a.tab, first.assignmentId, 'first-finished')
   const second = await add(b.tab)
-  await expect(run(a.tab, { type: 'agent.release', agentId: first.worker, decision: 'stop' }, host, a.lead)).rejects.toMatchObject({ code: 'AGENT_BUSY' })
+  await expect(run(a.tab, { type: 'agent.release', agentId: first.worker, decision: 'stop' })).rejects.toMatchObject({ code: 'AGENT_BUSY' })
   await store.stopped(host, b.tab, second.assignmentId, 'second-finished')
   await run(b.tab, { type: 'agent.remove', agentId: second.worker })
-  await run(a.tab, { type: 'agent.release', agentId: first.worker, decision: 'stop' }, host, a.lead)
+  await run(a.tab, { type: 'agent.release', agentId: first.worker, decision: 'stop' })
   await expect(run(b.tab, { type: 'agent.add', conversationId: second.group, machineId: 'test-host', harnessId: native, name: 'Shared worker', configuration: config, lead: false })).rejects.toMatchObject({ code: 'STOP_REQUESTED' })
   await expect(run(a.tab, { type: 'agent.remove', agentId: first.worker }, host, a.lead)).rejects.toMatchObject({ code: 'FORBIDDEN' })
   const state = (await store.read(owner, a.tab)).state
@@ -3648,7 +3648,7 @@ it('lets a person force-withdraw a stuck stop, clears its fence and retires the 
   const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Worker', configuration: config, lead: false })).result.agentId as string
   const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
   await store.stopped(host, tab, assignmentId, 'completed-before-offline')
-  await run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' }, host, lead)
+  await run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' })
   const forced = { type: 'agent.remove', agentId: worker } as Command
   await expect(run(tab, forced, host, lead)).rejects.toMatchObject({ code: 'FORBIDDEN' })
   await run(tab, forced)
@@ -3670,7 +3670,7 @@ it('refuses to stop a finished worker that also works in another Swarm', async (
   const assignmentId = (await run(first.tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
   await store.stopped(host, first.tab, assignmentId, 'completed')
   await run(second.tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: native, name: 'Other Builder', configuration: config, lead: false })
-  await expect(run(first.tab, { type: 'agent.release', agentId: worker, decision: 'stop' }, host, first.lead)).rejects.toMatchObject({ code: 'SESSION_SHARED' })
+  await expect(run(first.tab, { type: 'agent.release', agentId: worker, decision: 'stop' })).rejects.toMatchObject({ code: 'SESSION_SHARED' })
   expect((await store.read(owner, first.tab)).state.agents.find(a => a.id === worker)!.workDecision).toBe('awaiting')
 })
 
@@ -3681,7 +3681,7 @@ it('makes a project private while its worker is stopping', async () => {
   const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Worker', configuration: config, lead: false })).result.agentId as string
   const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
   await store.stopped(host, tab, assignmentId, 'completed')
-  await run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' }, host, lead)
+  await run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' })
   await run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
   const state = (await store.read(owner, tab)).state
   expect(state.projects!.find(p => p.id === 'lead')!.visibility).toBe('private')
@@ -3695,7 +3695,7 @@ it.each(['finished', 'expired'] as const)('lets another Swarm reuse after the na
   const worker = (await run(first.tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Worker', configuration: config, lead: false })).result.agentId as string
   const assignmentId = (await run(first.tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
   await store.stopped(host, first.tab, assignmentId, 'completed')
-  await run(first.tab, { type: 'agent.release', agentId: worker, decision: 'stop' }, host, first.lead)
+  await run(first.tab, { type: 'agent.release', agentId: worker, decision: 'stop' })
   const leased = await run(first.tab, { type: 'agent.stopLease', agentId: worker, releaseId: (await store.read(owner, first.tab)).state.agents.find(a => a.id === worker)!.releaseId! } as Command, host, worker)
   const reuse = { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: native, name: 'Reused', configuration: config, lead: false } as Command
   if (outcome === 'expired') await run(first.tab, { type: 'agent.remove', agentId: worker })
