@@ -625,6 +625,15 @@ class AppTabPill extends StatelessWidget {
 
 class _AppDropdownState extends State<AppDropdown> {
   MenuController? _own;
+
+  /// Holds the place of the control that opens the menu in the focus tree, so
+  /// the menu can take focus there and hear Escape. A click opens a menu without
+  /// moving focus into it, and the menu's own Escape only hears the key from
+  /// inside the menu.
+  final _anchor = FocusNode(
+    debugLabel: 'Dropdown control',
+    skipTraversal: true,
+  );
   final _searchFocus = FocusNode(debugLabel: 'Dropdown search');
   final _searchText = TextEditingController();
   final _pointer = _AppMenuPointer();
@@ -636,6 +645,7 @@ class _AppDropdownState extends State<AppDropdown> {
   @override
   void dispose() {
     _pointer.dispose();
+    _anchor.dispose();
     _searchFocus.dispose();
     _searchText.dispose();
     super.dispose();
@@ -683,6 +693,16 @@ class _AppDropdownState extends State<AppDropdown> {
     final fit = AppMenuItem.fitWidth(context, _rows);
     if (fit == null) return widget.width;
     return math.min(widget.width, math.max(fit, AppDropdown.minFitWidth));
+  }
+
+  KeyEventResult _anchorKeys(FocusNode node, KeyEvent event) {
+    if (event is KeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.escape &&
+        _controller.isOpen) {
+      _controller.close();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
   }
 
   KeyEventResult _searchKeys(FocusNode node, KeyEvent event) {
@@ -741,6 +761,12 @@ class _AppDropdownState extends State<AppDropdown> {
           ? base
           : base.copyWith(alignment: widget.alignment),
       onOpen: () {
+        // The control takes focus first, so Escape closes the menu from there
+        // and leaves focus on it; whatever the menu takes focus for (a search,
+        // a row that asks for it) comes after and wins.
+        if (widget.childFocusNode == null) {
+          (_anchor.traversalDescendants.firstOrNull ?? _anchor).requestFocus();
+        }
         if (_searching) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted && _controller.isOpen) _searchFocus.requestFocus();
@@ -802,7 +828,15 @@ class _AppDropdownState extends State<AppDropdown> {
             ),
           ),
       ],
-      builder: widget.builder,
+      builder: (context, controller, child) => Focus(
+        focusNode: _anchor,
+        includeSemantics: false,
+        onKeyEvent: _anchorKeys,
+        child:
+            widget.builder?.call(context, controller, child) ??
+            child ??
+            const SizedBox.shrink(),
+      ),
       child: widget.child,
     );
   }
