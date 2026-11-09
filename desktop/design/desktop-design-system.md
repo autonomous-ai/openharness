@@ -555,6 +555,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   the rest and Open in GitHub.
 - **Long messages.** Every message shows whole: nothing folds behind More
   (anh Dee, 2026-11-09).
+- **No reactions.** A message has no reaction chips under it and no reaction
+  button in its actions, whatever the server sends with it (anh Dee,
+  2026-11-09).
 - **Voice.** A voice message is its own bubble with play, waveform and
   length, blue on your side; it plays only, with no words under it (anh Dee,
   2026-11-04, again 2026-11-07).

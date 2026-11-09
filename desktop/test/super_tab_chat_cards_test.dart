@@ -11,7 +11,8 @@ import 'support/super_tab_fixture.dart';
 
 /// Task #4529 (anh Dee's mockup, 11-07): no walls of text. A sent brief or a
 /// shipped note is a compact card, a label, one title line and one blue
-/// action; a long agent message folds after about six lines, with More.
+/// action. A long message shows whole, never folded behind More (anh Dee,
+/// 2026-11-09).
 void main() {
   group('a sent brief', () {
     ConversationServer server() {
@@ -169,16 +170,6 @@ void main() {
       );
       await press(tester, 'View brief');
       expect(find.text('Give every agent a face.'), findsOneWidget);
-    });
-
-    testWidgets('More opens with Enter', (tester) async {
-      final long = [for (var i = 1; i <= 14; i++) 'Line $i of the plan.']
-          .join('\n\n');
-      final server = ConversationServer()..append(long, agent: true);
-      await showView(tester, server);
-      await press(tester, 'More');
-      expect(find.text('More'), findsNothing);
-      expect(find.text('Line 14 of the plan.').hitTestable(), findsOneWidget);
     });
   });
 }
