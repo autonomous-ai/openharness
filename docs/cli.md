@@ -98,7 +98,10 @@ write replaces the file only if `version` is the one the writer read (`''` for n
 missing, and answers `{ version }`. A file or text over 64 KiB is refused, and nothing is read or written through a
 link: `agents` or the file being one is `UNSAFE_PATH`. Errors: `MISSING_AGENT_OR_NAME`, `BAD_NAME`,
 `AGENT_NOT_FOUND` (no such agent, or it has no folder), `OWNER_REQUIRED`, `TOO_LARGE`, `UNSAFE_PATH`, `READ_FAILED`; and
-for a write `CHANGED`, `BAD_TEXT` and `WRITE_FAILED`. An older daemon answers `UNSUPPORTED`.
+for a write `CHANGED`, `BAD_TEXT` and `WRITE_FAILED`. An older daemon answers `UNSUPPORTED`. A daemon that knows both says
+so in `terminal_capabilities`, as `features.agentInstructions: true` beside the other features (`mediaPreview`, ...), and an
+app asks before it sends: a daemon does not seal a request type it has never heard of, so the text of a save would cross
+the relay in the clear.
 
 `question_response` carries the `requestId` of the `commander_question` it answers, and its
 `question_response_result` comes back under that same id, to that client alone (sealed, over the relay):
