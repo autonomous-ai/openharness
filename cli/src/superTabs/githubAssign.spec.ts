@@ -28,7 +28,9 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
       : url.pathname === '/repos/acme/app/pulls' ? state.pulls
       : /^\/repos\/acme\/app\/issues\/\d+\/comments$/.test(url.pathname) ? state.comments.get(Number(url.pathname.split('/').at(-2))) ?? []
       : url.pathname === '/repos/acme/app/labels' ? state.labels
-      : url.pathname === '/repos/acme/app/issues' ? url.searchParams.get('state') === 'closed' ? state.closed : state.open
+      // A page of the list, as GitHub pages it.
+      : url.pathname === '/repos/acme/app/issues' ? (url.searchParams.get('state') === 'closed' ? state.closed : state.open)
+        .slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30), Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
       : null
     if (body === null) return { status: 404, etag: null, body: null, resetAt: null }
     const tag = `"${createHash('sha1').update(JSON.stringify(body)).digest('hex')}"`
@@ -118,6 +120,18 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     const f = setup([issue(1, ['size:m', 'builder:juno']), issue(2, ['size:m', 'builder:juno', 'status:taken']), issue(3, ['size:s'])])
     await f.assigner.tick()
     expect(f.labelled()).toEqual([[3, 'builder:pip']])
+  })
+
+  it('plans the oldest of a busy repository\'s open issues too, and says when they fill every page it reads', async () => {
+    const unsized = (n: number) => issue(n, [])
+    const f = setup([...Array.from({ length: 340 }, (_, i) => unsized(1000 + i)), issue(7, ['size:s']), ...Array.from({ length: 9 }, (_, i) => unsized(2000 + i))])
+    await f.assigner.tick()
+    expect(f.labelled().map(([n]) => n)).toEqual([7])
+    expect(f.log.mock.calls.some(([line]) => String(line).includes('TOO_MANY_OPEN'))).toBe(false)
+    const full = setup(Array.from({ length: 1000 }, (_, i) => unsized(1000 + i)))
+    await full.assigner.tick()
+    await full.assigner.tick()
+    expect(full.log.mock.calls.filter(([line]) => String(line).includes('TOO_MANY_OPEN acme/app: the newest 1000 open issues'))).toHaveLength(1)
   })
 
   it('gives nothing the PM has not sized, nothing to a team with no builders, and keeps a full list full', async () => {

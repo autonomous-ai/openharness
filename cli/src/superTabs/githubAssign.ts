@@ -40,6 +40,8 @@ const FLOW_LABELS: ReadonlyArray<{ name: string; color: string; description: str
 ]
 /** How many open pull requests are read for readers each pass, as the merger reads them. */
 const MAX_PULLS = 30
+/** Pages of a hundred open issues and pull requests read each pass: a list that fills them is said (TOO_MANY_OPEN). */
+const ISSUE_PAGES = 10
 /** How long a reader asked for a head has to read it before another reader is asked too, or, with no other, it again; and
  *  how many asks one reader gets for one head. */
 const READ_WAIT_MS = 2 * 60 * 60_000, READ_ASKS = 3
@@ -126,7 +128,10 @@ export class GitHubAssign {
 
   private async assign(project: LedProject): Promise<void> {
     const { repo } = project
-    const listed = await this.reads.current(repo, `/repos/${repo}/issues?state=open&per_page=${PAGE}`, 3)
+    const listed = await this.reads.current(repo, `/repos/${repo}/issues?state=open&per_page=${PAGE}`, ISSUE_PAGES)
+    // GitHub's list of issues counts the pull requests too: lampOS had 155 issues and 104 pull requests open (2026-11-10), 259 of
+    // the 300 three pages held. Past the last page the oldest tasks would drop out of the plan, so a list that fills it is said.
+    if (listed.length >= ISSUE_PAGES * PAGE) this.once(`[super-tab] Task assignment: TOO_MANY_OPEN ${repo}: the newest ${listed.length} open issues and pull requests are planned`)
     // A task given and not yet shown labelled (GitHub's lists can lag) is read with its label, so it counts in its builder's
     // list and is never given twice; once shown, or closed, it is forgotten.
     const open = new Set(listed.map(issue => `${repo}#${issue.number}`))

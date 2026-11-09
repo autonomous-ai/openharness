@@ -171,6 +171,10 @@ rest (`assign/crew.ts startedAt`, `learnedMinutes`; `githubAssign.ts measure`).
 
 ## Next
 
-1. **Estimates of memory, disk and spend** from what finished tasks used, by part, size and model, beside their time.
-2. **Measures** in Desktop: time from label to merge, idle builder-minutes, quota left unspent at resets, overload minutes,
+1. **Read only what changed.** Each pass reads every open issue and pull request (GitHub's list counts both): lampOS had
+   259 open (2026-11-10), against the 1,000 ten pages hold, so a busy repository is far less than 10x from that limit, and
+   each pass costs a page per hundred. Issues updated since the last read (`since=`), kept as a model of the open ones, read
+   only what changed (standard 4). Until then a list that fills the pages is said (`TOO_MANY_OPEN`).
+2. **Estimates of memory, disk and spend** from what finished tasks used, by part, size and model, beside their time.
+3. **Measures** in Desktop: time from label to merge, idle builder-minutes, quota left unspent at resets, overload minutes,
    holds and conflicts.
