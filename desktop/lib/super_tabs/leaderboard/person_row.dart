@@ -7,7 +7,6 @@ import '../../shared/theme/app_theme.dart' as grid;
 import '../../widgets/desktop_chrome.dart';
 import '../identity.dart';
 import '../model.dart';
-import '../until.dart';
 import 'format.dart';
 import 'member_row.dart';
 import 'model.dart';
@@ -148,46 +147,42 @@ class LeaderboardPersonRow extends StatelessWidget {
   }
 
   /// The name and number one's crown; on hover the whole name, which a long
-  /// one cut short needs, the email and their status. The crown is content
+  /// one cut short needs, and the email. The crown is content
   /// artwork beside the name, said in words, at the metadata size so a
   /// crowned row is as tall as any other (Team and celebration, design
   /// system).
-  Widget _name() => SuperTabUntil(
-    until: person.status?.until,
-    builder: (context) => Row(
-      children: [
-        Flexible(
-          child: Tooltip(
-            message: [
-              leaderboardName(person, score),
-              if (person.name != null) '@${person.username}',
-              person.email,
-              ?person.statusAt(clock.now())?.text,
-            ].join('\n'),
-            child: Text.rich(
-              TextSpan(
-                text: leaderboardName(person, score),
-                children: [
-                  if (leaderboardCrowned(score))
-                    WidgetSpan(
-                      alignment: PlaceholderAlignment.middle,
-                      child: LeaderboardCrown(
-                        id: person.id,
-                        weekName: score!.spanName,
-                      ),
+  Widget _name() => Row(
+    children: [
+      Flexible(
+        child: Tooltip(
+          message: [
+            leaderboardName(person, score),
+            if (person.name != null) '@${person.username}',
+            person.email,
+          ].join('\n'),
+          child: Text.rich(
+            TextSpan(
+              text: leaderboardName(person, score),
+              children: [
+                if (leaderboardCrowned(score))
+                  WidgetSpan(
+                    alignment: PlaceholderAlignment.middle,
+                    child: LeaderboardCrown(
+                      id: person.id,
+                      weekName: score!.spanName,
                     ),
-                ],
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: DesktopChrome.control(),
+                  ),
+              ],
             ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: DesktopChrome.control(),
           ),
         ),
-        // After the name, which gives way first (task #2699).
-        if (noMachine) _NoMachineMark(id: person.id),
-      ],
-    ),
+      ),
+      // After the name, which gives way first (task #2699).
+      if (noMachine) _NoMachineMark(id: person.id),
+    ],
   );
 }
 

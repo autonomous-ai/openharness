@@ -37,7 +37,6 @@ import 'leaderboard/model.dart';
 import 'leaderboard/person_row.dart';
 import 'leaderboard/reader.dart';
 import 'model.dart';
-import 'profile_sheet.dart';
 import 'roster_scope.dart';
 import 'section_heading.dart';
 import 'agent_line.dart';
@@ -340,15 +339,6 @@ class _SuperTabRosterState extends State<SuperTabRoster>
             },
             child: const Text('Manage people'),
           ),
-          if (person.id == c.accountId && c.canWrite)
-            TextButton(
-              key: const ValueKey('super-profile-edit'),
-              onPressed: () {
-                Navigator.pop(context);
-                showSuperTabProfile(this.context, c);
-              },
-              child: const Text('Edit profile'),
-            ),
         ],
       ),
     );

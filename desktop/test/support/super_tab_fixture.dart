@@ -1004,63 +1004,6 @@ class ConversationServer {
         },
   ];
 
-  // Avatar pictures uploaded, as the backend's avatar route keeps them.
-  final avatarUploads = <Uint8List>[];
-
-  /// What the backend's avatar route does with a picture.
-  Future<Map<String, dynamic>> uploadAvatar({
-    required String tabId,
-    required Uint8List png,
-  }) async {
-    avatarUploads.add(png);
-    final id = 'avatar-${avatarUploads.length}';
-    return {
-      'avatar': {'id': id},
-    };
-  }
-
-  /// A person's own status, username or avatar, or an agent's avatar, as the
-  /// backend stores it (profile.ts, usernames.ts).
-  void _profile(Map command, String reader) {
-    final (key, id) = command['type'] == 'agent.avatar'
-        ? ('agents', command['agentId'])
-        : ('people', reader);
-    // An upload's record says only that there is one; its link comes signed with each read (backend avatarLinks.ts).
-    Map<String, dynamic> avatar(Map choice) {
-      if (choice['kind'] != 'upload') return Map<String, dynamic>.from(choice);
-      final links = state['avatars'] ??= <String, dynamic>{};
-      (links as Map)['${key == 'agents' ? 'agent' : 'person'}:$id'] =
-          superTabSignedAvatar(choice['id'] as String);
-      return {'kind': 'upload'};
-    }
-
-    state[key] = <dynamic>[
-      for (final row in state[key] as List)
-        if ((row as Map)['id'] != id)
-          row
-        else
-          <String, dynamic>{
-            ...row,
-            if (command['type'] == 'member.status')
-              'status': command['status']
-            else if (command['type'] == 'member.timeZone')
-              'timeZone': command['timeZone']
-            else if (command['type'] == 'member.username')
-              'username': (command['username'] as String?)?.toLowerCase()
-            else if (command['type'] == 'member.name')
-              'name': (command['name'] as String?)?.replaceAll(
-                RegExp(r'\s+'),
-                ' ',
-              )
-            else
-              'avatar': command['avatar'] == null
-                  ? null
-                  : avatar(command['avatar'] as Map),
-          },
-    ];
-    revision++;
-  }
-
   /// A reaction as the backend keeps it (reactions.ts): one per reactor and
   /// emoji, and the group bumped only on a change.
   bool _react(Map command, String reader) {
@@ -1398,13 +1341,6 @@ class ConversationServer {
           ];
           output['startId'] = operationId;
         }
-      } else if (command['type'] == 'member.status' ||
-          command['type'] == 'member.timeZone' ||
-          command['type'] == 'member.username' ||
-          command['type'] == 'member.name' ||
-          command['type'] == 'member.avatar' ||
-          command['type'] == 'agent.avatar') {
-        _profile(command, reader ?? 'owner');
       } else if (command['type'] == 'message.react') {
         output['changed'] = _react(command, reader ?? 'owner');
       } else if (command['type'] == 'message.edit') {
@@ -2584,7 +2520,6 @@ class ConversationServer {
     SuperTabUpload? upload,
     SuperTabReading reading = const SuperTabReading(),
   }) => SuperTabController(
-    avatarUpload: uploadAvatar,
     reading: reading,
     tabId: tabId,
     accountId: account,

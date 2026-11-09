@@ -1,6 +1,6 @@
-/// Avatars, status lines and reactions as the backend sends them
-/// (backend superTabs/profile.ts and reactions.ts). Only Swarm members read
-/// them; a value this build does not know reads as absent.
+/// Avatars and reactions as the backend sends them (backend
+/// superTabs/profile.ts and reactions.ts). Only Swarm members read them; a
+/// value this build does not know reads as absent.
 library;
 
 /// What a member or agent shows instead of the default.
@@ -68,7 +68,8 @@ class SuperTabPresetAvatar extends SuperTabAvatarPicture {
   String get glyph => superTabAvatarPresets[key]!;
 }
 
-/// The pictures a person may pick (backend AVATAR_PRESETS), in offer order.
+/// The preset pictures a person or an agent may wear (backend AVATAR_PRESETS): nothing offers them
+/// any more, but those already chosen are drawn.
 const superTabAvatarPresets = {
   'fox': '🦊',
   'owl': '🦉',
@@ -79,38 +80,6 @@ const superTabAvatarPresets = {
   'rocket': '🚀',
   'sun': '🌞',
 };
-
-/// A person's short status. Shown until [until] passes.
-class SuperTabPersonStatus {
-  const SuperTabPersonStatus({required this.text, this.emoji, this.until});
-  final String text;
-  final String? emoji;
-  final DateTime? until;
-
-  static SuperTabPersonStatus? fromJson(Object? value) => switch (value) {
-    {'text': final String text} when text.trim().isNotEmpty =>
-      SuperTabPersonStatus(
-        text: text,
-        emoji: value['emoji'] is String ? value['emoji'] as String : null,
-        until: DateTime.tryParse(value['until'] as String? ?? ''),
-      ),
-    _ => null,
-  };
-
-  String get label => emoji == null ? text : '$emoji $text';
-  bool shownAt(DateTime now) => until == null || now.isBefore(until!);
-}
-
-/// The status emoji a person may pick, with the words each offers
-/// (backend STATUS_EMOJI).
-const superTabStatusPresets = [
-  ('🎯', 'Focusing'),
-  ('☕', 'Coffee break'),
-  ('🍽️', 'At lunch'),
-  ('🌴', 'Out of office'),
-  ('🚶', 'Away'),
-  ('🤒', 'Out sick'),
-];
 
 /// The reactions a message can carry, in the order counts show (backend
 /// REACTIONS). Agents acknowledge with the last three, as Slack bots do:

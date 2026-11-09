@@ -4,9 +4,8 @@ import 'package:harness/super_tabs/model.dart';
 import 'support/super_tab_fixture.dart';
 
 void main() {
-  final now = DateTime.utc(2026, 10, 27, 9);
-
-  test('a person carries their avatar and a status until it is over', () {
+  test('a person carries their avatar; a status or zone an older server still '
+      'sends is not read', () {
     final person = SuperTabPerson.fromJson({
       'id': 'p1',
       'email': 'dee@example.com',
@@ -20,15 +19,14 @@ void main() {
         'emoji': '🌴',
         'until': '2026-10-27T14:00:00.000Z',
       },
+      'timeZone': 'Asia/Ho_Chi_Minh',
     });
     expect(person.avatar, isA<SuperTabUploadedAvatar>());
     expect(
       (person.avatar! as SuperTabUploadedAvatar).url,
       Uri.parse('https://storage.googleapis.com/avatars/a?X-Goog-Signature=s'),
     );
-    expect(person.status!.label, '🌴 Out until 2pm');
-    expect(person.statusAt(now)?.text, 'Out until 2pm');
-    expect(person.statusAt(DateTime.utc(2026, 10, 27, 14)), isNull);
+    expect(person.shownName, 'dee');
   });
 
   test(

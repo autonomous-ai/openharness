@@ -104,7 +104,6 @@ import '../super_tabs/swarm_accounts.dart';
 import '../super_tabs/attachment_upload.dart';
 import '../super_tabs/attachment_viewer.dart' show superTabForgetPictures;
 import '../super_tabs/image_cache.dart' show superTabImageCache;
-import '../super_tabs/avatar_upload.dart';
 import '../super_tabs/backend_transport.dart';
 import '../super_tabs/client.dart';
 import '../super_tabs/controller.dart';
@@ -1946,14 +1945,6 @@ class AppNotifier extends ChangeNotifier {
             cancel: cancel,
             onProgress: onProgress,
           ),
-    avatarUpload: ({required tabId, required png}) => _teamComputer
-        ? Future.error(
-            const SuperTabFailure(
-              'MACHINE_UNAVAILABLE',
-              teamComputerSwarmMessage,
-            ),
-          )
-        : uploadAvatarWith(() => api)(tabId: tabId, png: png),
     onMention: superTabMentionNotice(systemNotifications),
     onChatMessage: superTabChatNotice(systemNotifications),
     onReply: superTabReplyNotice(systemNotifications),

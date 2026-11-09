@@ -1,70 +1,10 @@
-import 'dart:typed_data';
-
-import 'avatar_upload.dart';
 import 'controller.dart';
 import 'model.dart';
 
-/// Status, avatars and reactions, and edits and deletes of the reader's own
-/// messages. Each goes as its own request rather than waiting behind a
-/// message being sent (the first three are safe to send again); the answer
-/// is null when it went through, or what to tell the person.
+/// Reactions, and edits and deletes of the reader's own messages. Each goes
+/// as its own request rather than waiting behind a message being sent; the
+/// answer is null when it went through, or what to tell the person.
 extension SuperTabProfileActions on SuperTabController {
-  Future<String?> setStatus(SuperTabPersonStatus? status) => _profile({
-    'type': 'member.status',
-    'status': status == null
-        ? null
-        : {
-            'text': status.text,
-            'emoji': ?status.emoji,
-            if (status.until case final until?)
-              'until': until.toUtc().toIso8601String(),
-          },
-  });
-
-  /// The reader's own username, trimmed (the server lowercases it), or back
-  /// to their default when null. A taken name comes back in words. A viewer
-  /// may change theirs too, though nothing else.
-  Future<String?> setUsername(String? username) => _profile({
-    'type': 'member.username',
-    'username': username?.trim(),
-  }, viewer: true);
-
-  /// The name the Swarm shows for the reader, trimmed (the server keeps one
-  /// space between words), or back to their username when null. A taken name
-  /// comes back in words. A viewer may change theirs too.
-  Future<String?> setName(String? name) =>
-      _profile({'type': 'member.name', 'name': name?.trim()}, viewer: true);
-
-  /// [agentId]'s avatar when given (its contributor's or Lead's to change),
-  /// else the reader's own: [preset], or back to the default when null.
-  /// An upload goes through [uploadAvatar].
-  Future<String?> setAvatar(SuperTabPresetAvatar? preset, {String? agentId}) =>
-      _profile({
-        'type': agentId == null ? 'member.avatar' : 'agent.avatar',
-        'agentId': ?agentId,
-        'avatar': preset == null ? null : {'kind': 'preset', 'key': preset.key},
-      });
-
-  /// Resizes [picked] here, uploads it and makes it the avatar.
-  Future<String?> uploadAvatar(Uint8List picked, {String? agentId}) async {
-    if (!canWrite) return _readOnly;
-    try {
-      final png = await superTabAvatarPng(picked);
-      if (png.length > kSuperTabAvatarMaxBytes) {
-        return 'That picture is over 1 MB.';
-      }
-      final answer = await avatarUpload(tabId: tabId, png: png);
-      final id = superTabMap(answer['avatar'])['id'] as String;
-      return await _profile({
-        'type': agentId == null ? 'member.avatar' : 'agent.avatar',
-        'agentId': ?agentId,
-        'avatar': {'kind': 'upload', 'id': id},
-      });
-    } on SuperTabFailure catch (failure) {
-      return failure.message;
-    }
-  }
-
   /// Adds the reader's [emoji] to [message], or takes it back when it is
   /// already theirs.
   Future<String?> react(
@@ -160,23 +100,8 @@ extension SuperTabProfileActions on SuperTabController {
     return null;
   }
 
-  Future<String?> _profile(
-    Map<String, dynamic> command, {
-    bool viewer = false,
-  }) async {
-    final failure = await _send(command, viewer: viewer);
-    if (failure == null) await refresh();
-    return failure;
-  }
-
-  Future<String?> _send(
-    Map<String, dynamic> command, {
-    bool viewer = false,
-  }) async {
-    final member =
-        !accessRevoked &&
-        snapshot?.people.any((p) => p.id == accountId) == true;
-    if (!(viewer ? member : canWrite)) return _readOnly;
+  Future<String?> _send(Map<String, dynamic> command) async {
+    if (!canWrite) return _readOnly;
     try {
       await request(
         'POST',

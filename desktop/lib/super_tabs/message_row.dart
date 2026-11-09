@@ -14,7 +14,6 @@ import 'chat/bubble.dart';
 import 'chat/fold.dart';
 import 'composer_newline.dart';
 import 'identity.dart';
-import 'identity_card.dart';
 import 'machine_status.dart' show superTabAgo;
 import 'message_link.dart';
 import 'message_link_preview.dart';
@@ -100,7 +99,6 @@ class SuperTabMessageRow extends StatefulWidget {
     this.link,
     this.linkTarget,
     this.onOpenLink,
-    this.identity,
     this.onMarkUnread,
     this.onRemind,
     this.onEdit,
@@ -108,10 +106,6 @@ class SuperTabMessageRow extends StatefulWidget {
   });
 
   final SuperTabMessage message;
-
-  /// Who wrote it, for the card hovering or focusing its name or avatar shows
-  /// (Huy, 11-04); without it the avatar keeps its tooltip.
-  final SuperTabIdentityFacts Function()? identity;
 
   /// The live card [message] is (live_card.dart), drawn in place of its pull
   /// request links; null for a plain message.
@@ -551,8 +545,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     person: widget.person,
   );
 
-  /// The sender's name: opens the agent when it is one, and shows the card
-  /// on hover or keyboard focus, so a person's name takes focus too.
+  /// The sender's name: opens the agent when it is one.
   Widget _name(TextStyle style, bool finger) {
     final name = fingerTarget(
       enabled: finger,
@@ -563,31 +556,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
         child: Text(widget.author, style: style),
       ),
     );
-    final identity = widget.identity;
-    if (identity == null) {
-      return InkWell(onTap: widget.onOpenAgent, child: name);
-    }
-    return SuperTabHoverCard(
-      facts: identity,
-      child: widget.onOpenAgent == null
-          ? Focus(
-              child: Builder(
-                builder: (context) => DecoratedBox(
-                  decoration: BoxDecoration(
-                    border: Border(
-                      bottom: BorderSide(
-                        color: Focus.of(context).hasFocus
-                            ? DesktopChrome.focusRing
-                            : Colors.transparent,
-                      ),
-                    ),
-                  ),
-                  child: name,
-                ),
-              ),
-            )
-          : InkWell(onTap: widget.onOpenAgent, child: name),
-    );
+    return InkWell(onTap: widget.onOpenAgent, child: name);
   }
 
   /// The reader's own message, a task line or proposal sent in their name
@@ -740,17 +709,10 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   child: widget.joinsBelow
                                       ? null
                                       : ExcludeSemantics(
-                                          child: switch (widget.identity) {
-                                            final identity? =>
-                                              SuperTabHoverCard(
-                                                facts: identity,
-                                                child: _avatar(message),
-                                              ),
-                                            null => Tooltip(
-                                              message: _identityDetails,
-                                              child: _avatar(message),
-                                            ),
-                                          },
+                                          child: Tooltip(
+                                            message: _identityDetails,
+                                            child: _avatar(message),
+                                          ),
                                         ),
                                 ),
                                 const SizedBox(
