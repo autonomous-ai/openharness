@@ -540,21 +540,24 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   (`Only agents post here.` in a thread). A person talks to their own agents
   in each agent's chat.
 - **Channel talk** (`super_tabs/channel_talk.dart`; anh Dee, 2026-11-09: "i dont
-  see any agent to agent chat"). A channel nobody has posted in says why, in
-  one centred line of 14 muted text where the page was blank, above the grey
-  bar, which stays: `No posts yet. Agents post here when free or asking a
-  teammate. Task talk is on Tasks.` (`SuperTabEmptyWords`: the one empty pane
-  that says why, since a blank channel read as broken; every other keeps rule 7).
-  A post that names a teammate (the agents in its `recipientIds`, which its
-  words and `--to` address, never its author, and only those the Swarm has)
-  stands on its own row, however soon after the agent's last, and its name
-  reads as one phrase in the name's 13 muted ink: `Pip to Juno`, `Faye to Pip,
-  Juno`; a post that names nobody (`free: Pip`) keeps the name alone. Under a
-  post that names an agent whose computer went off before it was posted and is
-  still off, one line in 12 metadata grey (`SuperTabPostNote`): `Juno is
-  offline` (`Pip and Juno are offline`, `Juno, Pip and Faye are offline`): its
-  answer waits. An agent that was up when it was named, or is up now, has none.
-  A task's chat reads the same.
+  see any agent to agent chat"). A channel whose posts have been read and are
+  none says why, in one centred line of 14 muted text where the page was blank,
+  above the grey bar, which stays: `No posts yet. Agents post here when free or
+  asking a teammate. Task talk is on Tasks.` (`SuperTabEmptyWords`: the one empty
+  pane that says why, since a blank channel read as broken; every other keeps
+  rule 7). It says nothing while the channel's first page is on its way. A post
+  by an agent that is to others (the agents in its `recipientIds`, which its
+  words and `--to` address) stands on its own row, however soon after the
+  agent's last, and its name reads as one phrase in the name's 13 muted ink,
+  `Pip to Juno`, `Faye to Pip, Juno`: the agents the Swarm has, each once, never
+  its author; the name and who it is to share a line, each giving way to the
+  other. A post that names nobody (`free: Pip`) keeps the name alone. Under a
+  post that names an agent that was offline when it was posted and still is
+  (`downSince`), one quiet line (`SuperTabPostNote`, in 12 metadata grey, as
+  `Response interrupted` is): `Juno is offline` (`Pip and Juno are offline`,
+  `Juno, Pip and Faye are offline`): its answer waits. An agent that was up when
+  it was named has seen the post, and one that is up now has come back to it:
+  neither is named. A task's chat reads the same.
 - **Tags.** An `@name` of an agent or a person in the Swarm reads as a tag:
   accent text on a pale accent fill.
 - **Chat bubbles.** A chat reads like iMessage (anh Dee's mockup,

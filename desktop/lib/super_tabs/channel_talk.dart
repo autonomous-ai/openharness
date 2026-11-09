@@ -32,7 +32,8 @@ class SuperTabEmptyWords extends StatelessWidget {
   );
 }
 
-/// The quiet line under a post that waits on an agent: "Juno is offline" ([superTabPostOfflineLine]).
+/// The quiet line under a post's bubble, in 12 metadata grey: what its answer waits for ("Juno is offline", [superTabPostOfflineLine]),
+/// or what its text lacks ("Response interrupted").
 class SuperTabPostNote extends StatelessWidget {
   const SuperTabPostNote(this.line, {super.key});
 
@@ -45,32 +46,41 @@ class SuperTabPostNote extends StatelessWidget {
   );
 }
 
-/// The teammates an agent's post is to (Swarm v4, anh Dee 2026-11-09: "i dont see any agent to agent chat"): the agents its
-/// `recipientIds` name that the Swarm has, by the name it shows them, never its author. Nobody for a person's message and
-/// for a post that names nobody ("free: Pip").
-List<String> superTabPostTo(SuperTabSnapshot? swarm, SuperTabMessage message) {
+/// The agents an agent's post is to that the Swarm has (Swarm v4, anh Dee 2026-11-09: "i dont see any agent to agent chat"):
+/// those its `recipientIds` name, each once, never its author. Nobody for a person's message and for a post that names nobody
+/// ("free: Pip").
+List<SuperTabAgent> superTabPostRecipients(
+  SuperTabSnapshot? swarm,
+  SuperTabMessage message,
+) {
   if (swarm == null || !message.fromAgent) return const [];
+  final seen = {message.authorId};
   return [
     for (final id in message.recipientIds)
-      if (id != message.authorId && swarm.agent(id) != null)
-        swarm.agentName(id),
+      if (seen.add(id)) ?swarm.agent(id),
   ];
 }
 
-/// What waits under a post that names an agent whose computer was off when it was posted and still is: "Juno is offline",
-/// "Juno and Kai are offline". An agent that was up when it was named, or is up now, is not in it. Null when nobody is.
+/// The names of [superTabPostRecipients], as the Swarm shows them: what a post's name line says after "to" ("Pip to Juno").
+List<String> superTabPostTo(SuperTabSnapshot? swarm, SuperTabMessage message) =>
+    [
+      for (final agent in superTabPostRecipients(swarm, message))
+        agent.displayName ?? agent.name,
+    ];
+
+/// What waits under a post that names an agent that was offline when it was posted and still is (`downSince`: its machine has
+/// reported its session gone): "Juno is offline", "Juno and Kai are offline". An agent that was up when it was named has
+/// seen the post, and one that is up now has come back to it: neither is in it. Null when nobody is.
 String? superTabPostOfflineLine(
   SuperTabSnapshot? swarm,
   SuperTabMessage message,
 ) {
   final at = message.createdAt;
-  if (swarm == null || at == null || !message.fromAgent) return null;
+  if (at == null) return null;
   final names = [
-    for (final id in message.recipientIds)
-      if (id != message.authorId)
-        if (swarm.agent(id) case final agent?
-            when agent.downSince != null && !at.isBefore(agent.downSince!))
-          swarm.agentName(id),
+    for (final agent in superTabPostRecipients(swarm, message))
+      if (agent.downSince case final since? when !at.isBefore(since))
+        agent.displayName ?? agent.name,
   ];
   return switch (names) {
     [] => null,

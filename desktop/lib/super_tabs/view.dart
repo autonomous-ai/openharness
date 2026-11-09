@@ -4844,14 +4844,10 @@ class _SuperTabViewState extends State<SuperTabView>
       receipts: [
         if (message.source['truncated'] == true ||
             message.source['interrupted'] == true)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Text(
-              message.source['truncated'] == true
-                  ? 'Excerpt · open the terminal for the full response'
-                  : 'Response interrupted',
-              style: DesktopChrome.metadata(),
-            ),
+          SuperTabPostNote(
+            message.source['truncated'] == true
+                ? 'Excerpt · open the terminal for the full response'
+                : 'Response interrupted',
           ),
         if (_agentTalk(message.conversationId))
           if (superTabPostOfflineLine(c.snapshot, message) case final line?)
@@ -5050,9 +5046,11 @@ class _SuperTabViewState extends State<SuperTabView>
   /// the rows already shown.
   Set<String> _joined(List<SuperTabMessage> messages, SuperTabMessage? split) {
     // A task (a message with a thread, Swarm v4) stands on its own row, with its name and face, as a tagged one does; so
-    // does a post to a teammate, where "Pip to Juno" shows.
+    // does a post to a teammate, where "Pip to Juno" shows. That reads the message alone, so no roster change regroups a row.
+    final talk =
+        messages.isNotEmpty && _agentTalk(messages.first.conversationId);
     bool tagged(SuperTabMessage m) =>
-        _postTo(m).isNotEmpty ||
+        (talk && m.namesAgents) ||
         switch (c.thread(m.conversationId, m.id)) {
           final thread? => thread.askTag != null || thread.replies > 0,
           null => false,
@@ -5437,7 +5435,8 @@ class _SuperTabViewState extends State<SuperTabView>
                     // A project's channel nobody has posted in says why: an empty page under the project's name read as broken
                     // (anh Dee, 2026-11-09), and the agents' real talk is on GitHub.
                     : widget.board &&
-                          c.snapshot?.isProjectLead(group.id) == true
+                          c.snapshot?.isProjectLead(group.id) == true &&
+                          c.messagesRead(group.id)
                     ? superTabEmptyChannel
                     // Empty means empty (anh Dee's rule 7, task #4465): no words for a chat with nothing in it.
                     : null) {
