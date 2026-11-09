@@ -17,7 +17,7 @@
  * each head, so the GitHub news brings it to its author (githubMentions.ts).
  */
 import type { GitHubGet, GitHubSend } from './githubRest.js'
-import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
+import { GitHubReads, GitHubStop, PAGE, retryIn, waitWords } from './githubRest.js'
 import { repositorySlug, TEAM } from './githubMentions.js'
 import { identifier, object } from './wire.js'
 
@@ -103,7 +103,11 @@ export class GitHubMerge {
   private timer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
   private readonly reads: GitHubReads
+  /** Until when each repository is left alone: one this login cannot read, or one whose pass failed. */
   private readonly unreadable = new Map<string, number>()
+  /** How many passes in a row each repository's failed, and how many passes in a row stopped for every repository. */
+  private readonly failing = new Map<string, number>()
+  private stops = 0
   /** What each pull request was last told, by head and reason, so it is told once for each head. */
   private readonly told = new Map<string, string>()
   private projects: { at: number; list: LedProject[] } | null = null
@@ -140,21 +144,34 @@ export class GitHubMerge {
   private async pass(): Promise<void> {
     if (!this.projects || this.now() - this.projects.at >= PROJECTS_FRESH_MS) this.projects = { at: this.now(), list: await this.deps.projects() }
     if (!this.projects.list.length || this.now() < this.offUntil) return
+    // Whether a repository is being left alone: the pass then says nothing of running again.
+    let held = false
     try {
       for (const project of this.projects.list) {
-        if ((this.unreadable.get(project.repo) ?? 0) > this.now()) continue
-        try { await this.mergeReady(project) } catch (error) {
+        if ((this.unreadable.get(project.repo) ?? 0) > this.now()) { held = true; continue }
+        try { await this.mergeReady(project); this.failing.delete(project.repo) } catch (error) {
           this.reads.forget(project.repo)
           if (error instanceof GitHubStop && error.everywhere) throw error
-          if (error instanceof GitHubStop) this.unreadable.set(project.repo, error.until)
-          this.note(error instanceof GitHubStop ? error.code : 'MERGE_FAILED', `${project.repo}: ${error instanceof Error ? error.message : String(error)}`)
+          held = true
+          let wait: number
+          if (error instanceof GitHubStop) wait = error.until - this.now()
+          else {
+            // Its pass failed (a send that threw): this repository waits, 30 seconds and doubling to 15 minutes.
+            const misses = (this.failing.get(project.repo) ?? 0) + 1
+            this.failing.set(project.repo, misses)
+            wait = retryIn(misses)
+          }
+          this.unreadable.set(project.repo, this.now() + wait)
+          this.note(error instanceof GitHubStop ? error.code : 'MERGE_FAILED', `${project.repo}: ${error instanceof Error ? error.message : String(error)} (again in ${waitWords(wait)})`)
         }
       }
-      this.note('', '')
+      this.stops = 0
+      if (!held) this.note('', '')
     } catch (error) {
       if (!(error instanceof GitHubStop)) throw error
-      this.offUntil = error.until
-      this.note(error.code, error.message)
+      const wait = Math.max(error.until - this.now(), retryIn(++this.stops))
+      this.offUntil = this.now() + wait
+      this.note(error.code, `${error.message} (again in ${waitWords(wait)})`)
     }
   }
 

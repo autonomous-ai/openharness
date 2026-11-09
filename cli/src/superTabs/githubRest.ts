@@ -47,6 +47,12 @@ export const PAGE = 100
 const MAX_KEPT = 500
 /** How long to wait before asking again: gh missing or signed out, a repository this login cannot read, a rate limit. */
 const OFF_RETRY_MS = 5 * 60_000, UNREADABLE_RETRY_MS = 10 * 60_000, LIMIT_MAX_MS = 15 * 60_000
+/** How long to wait before asking again after [misses] in a row: 30 seconds, doubling to 15 minutes. A pass every 20 seconds against a
+ *  GitHub or a server that is down is the same failure three times a minute for as long as it lasts (and a revoked login, 180 `gh`
+ *  runs an hour). */
+export const retryIn = (misses: number): number => Math.min(LIMIT_MAX_MS, 30_000 * 2 ** Math.max(0, misses - 1))
+/** [ms] as the log says it: "30 s", "2 min". */
+export const waitWords = (ms: number): string => ms < 60_000 ? `${Math.round(ms / 1000)} s` : `${Math.round(ms / 60_000)} min`
 /** How long a file found missing is not asked for again: an agent's instructions file is written rarely, and a 404 is not
  *  free against GitHub's limit as a 304 is. */
 const MISSING_MS = 5 * 60_000
@@ -123,7 +129,7 @@ export class GitHubReads {
     })
     if (reply.status === 304) return keep ? last?.body ?? null : null
     if (reply.resetAt !== null) throw new GitHubStop('RATE_LIMITED', 'GitHub is limiting this computer\'s requests.', true, Math.min(reply.resetAt, this.now() + LIMIT_MAX_MS))
-    if (reply.status === 401) throw new GitHubStop('GH_SIGNED_OUT', 'GitHub refused this computer\'s gh login: run gh auth login.', true, this.now())
+    if (reply.status === 401) throw new GitHubStop('GH_SIGNED_OUT', 'GitHub refused this computer\'s gh login: run gh auth login.', true, this.now() + OFF_RETRY_MS)
     if (reply.status === 404 && fileMissing) return { missing: true }
     if (reply.status === 404 || reply.status === 403) throw new GitHubStop('UNREADABLE', `this computer's gh login cannot read ${repo}.`, false, this.now() + UNREADABLE_RETRY_MS)
     if (reply.status !== 200) throw new GitHubStop('GH_FAILED', `GitHub answered ${reply.status}.`, true, this.now())
