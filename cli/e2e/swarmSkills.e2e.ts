@@ -31,6 +31,8 @@ it('attaches and restores only the selected Swarm skill for both engines, withou
     expect(row.args).toContain(engine === 'claude' ? '--dangerously-skip-permissions' : '--dangerously-bypass-approvals-and-sandbox')
     expect(args).toContain(`swarm-${role}/SKILL.md`)
     expect(args).not.toContain(`swarm-${role === 'lead' ? 'dev' : 'lead'}/SKILL.md`)
+    // No hook of Harness's runs before its tools: the shell guard is gone (anh Dee, 2026-11-09).
+    expect(args).not.toContain('__swarm-shell-guard')
     const registry = JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')) as Array<Record<string, any>>
     const saved = registry.find(row => row.agentId === created.agent.id)!
     expect(saved.permissionMode).toBe('full')
