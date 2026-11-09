@@ -87,6 +87,7 @@ Future<SuperTabController> showView(
   ConversationServer server, {
   String account = 'owner',
   Brightness brightness = Brightness.dark,
+  bool board = true,
 }) async {
   await tester.binding.setSurfaceSize(const Size(1200, 900));
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -106,6 +107,7 @@ Future<SuperTabController> showView(
           onAddAgent: (_) {},
           onOpenTerminal: (_) {},
           machineName: (_) => 'Team Mac',
+          board: board,
         ),
       ),
     ),
