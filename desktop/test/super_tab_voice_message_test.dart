@@ -291,8 +291,9 @@ void main() {
         ((bar.widget as DecoratedBox).decoration as BoxDecoration).color;
 
     /// Lets the copy be written to disk, which the test's clock does not run.
+    // Up to 5 s for the real file copy: 200 ms was too short on a busy CI runner, which then read no source (#3598's CI).
     Future<void> settleFiles(WidgetTester tester) async {
-      for (var i = 0; i < 20 && sources.isEmpty; i++) {
+      for (var i = 0; i < 500 && sources.isEmpty; i++) {
         await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 10)),
         );

@@ -9,6 +9,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../shared/widgets/skeleton.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/laid_out_list.dart';
 import 'controller.dart';
 import 'github_issues.dart';
 import 'message_row.dart';
@@ -224,7 +225,8 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
           in widget.controller.snapshot?.agents ?? const <SuperTabAgent>[])
         a.displayName ?? a.name,
     ];
-    return ListView(
+    // Kept laid out off screen, as every Swarm list, so a hovered row never breaks hit testing (laid_out_list.dart).
+    return LaidOutListView(
       key: const ValueKey('swarm-issue-thread'),
       padding: const EdgeInsets.fromLTRB(
         SuperTabMessageRow.horizontalInset,
