@@ -697,8 +697,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     { preHandler: [validateParams(tabParams), validateQuery(noQuery), validateBody(activityReadBody)] },
     (req, reply) => respond(reply, () => reads.markActivityRead(req.user!, req.params.tabId, req.body.through)))
   // The scorecard is gone with Swarm v4, but an older Desktop's Scorecard tab still reads it: it answers no days, to everyone, and
-  // names no Swarm, as `updateRequired` does for the retired full-state reads.
-  app.get('/api/super-tabs/:tabId/scorecard', (_req, reply) => sendSuccess(reply, { days: [] }))
+  // names no Swarm, as `updateRequired` does for the retired full-state reads. A Team session never reaches it (lib/teamSession.ts).
+  app.get('/api/super-tabs/:tabId/scorecard', { preHandler: validateParams(tabParams) }, (_req, reply) => sendSuccess(reply, { days: [] }))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof leaderboardQuery> }>('/api/super-tabs/:tabId/leaderboard',
     { preHandler: [validateParams(tabParams), validateQuery(leaderboardQuery)] },
     (req, reply) => respond(reply, () => reads.leaderboard(req.user!, req.params.tabId, req.query.projectId, req.query.week, req.query.period, req.query.scope === 'all')))
