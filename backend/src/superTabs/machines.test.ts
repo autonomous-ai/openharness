@@ -9,6 +9,16 @@ const requirements = { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 50, tools: [
 const observation = { generation: 'o', receivedAt: NOW, resources: { cpuPercent: 1, memoryTotalBytes: 1, memoryUsedBytes: 1, diskFreeBytes: 1, diskTotalBytes: 1,
   projectDiskFreeBytes: 1, deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] }
 
+it('accepts a machine\'s cores, and a report without them from an older daemon', () => {
+  const { receivedAt: _receivedAt, ...sent } = observation
+  expect(machineObservationSchema.safeParse({ ...sent, resources: { ...sent.resources, cpuCores: 10 } }).success).toBe(true)
+  expect(machineObservationSchema.safeParse({ ...sent, resources: { ...sent.resources, cpuCores: null } }).success).toBe(true)
+  expect(machineObservationSchema.safeParse(sent).success).toBe(true)
+  for (const cpuCores of [0, 2.5, -1, 5000, '8']) {
+    expect(machineObservationSchema.safeParse({ ...sent, resources: { ...sent.resources, cpuCores } }).success, String(cpuCores)).toBe(false)
+  }
+})
+
 it('accepts optional tool probe failures while preserving older observations', () => {
   const { receivedAt: _receivedAt, ...sent } = observation
   expect(machineObservationSchema.safeParse(sent).success).toBe(true)

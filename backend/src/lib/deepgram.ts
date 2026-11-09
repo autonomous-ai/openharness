@@ -1,5 +1,6 @@
 import { env } from '../config/env.js'
 import { logger } from '../utils/logger.js'
+import { STT_TIMEOUT_MS } from './sttTimeout.js'
 
 // Deepgram pre-recorded (batch) STT. We buffer the device's streamed PCM and send it as one
 // request here. Audio is raw linear16 (16-bit LE) mono at 16 kHz — declared via query params.
@@ -38,6 +39,7 @@ export async function transcribe(pcm: Buffer, sampleRate = 16000, lang = 'en'): 
       'Content-Type': 'application/octet-stream',
     },
     body: pcm,
+    signal: AbortSignal.timeout(STT_TIMEOUT_MS),
   })
   if (!res.ok) {
     const body = await res.text().catch(() => '')
