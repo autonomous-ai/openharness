@@ -45,6 +45,9 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
   /// What the computer last said the file is; null while it is read, or when it could not be.
   SwarmInstructionsFile? _file;
 
+  /// What else instructs the agent in its folder, as the last read said (a refused read says it too): never from a save.
+  var _shared = SwarmSharedInstructions.none;
+
   /// Why the file could not be read, in words.
   String? _readError;
   bool _editing = false;
@@ -77,6 +80,7 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
     super.didUpdateWidget(old);
     if (old.agent.id != widget.agent.id || old.name != widget.name) {
       _file = null;
+      _shared = SwarmSharedInstructions.none;
       _readError = null;
       _editing = false;
       _saving = false;
@@ -99,12 +103,18 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
     final agent = widget.agent, turn = ++_reading;
     setState(() => _readError = null);
     try {
-      final file = await link.read(agent);
+      final read = await link.read(agent);
       if (!mounted || agent.id != widget.agent.id || turn != _reading) return;
-      setState(() => _file = file);
+      setState(() {
+        _file = read.file;
+        _shared = read.shared;
+      });
     } on SwarmInstructionsError catch (error) {
       if (!mounted || agent.id != widget.agent.id || turn != _reading) return;
-      setState(() => _readError = _words(error.code, saving: false));
+      setState(() {
+        _readError = _words(error.code, saving: false);
+        _shared = error.shared;
+      });
     }
   }
 
@@ -150,10 +160,12 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
     String text,
   ) async {
     try {
-      final now = await link.read(agent);
+      final read = await link.read(agent);
       if (!mounted || agent.id != widget.agent.id) return;
+      final now = read.file;
       setState(() {
         _file = now;
+        _shared = read.shared;
         if (now.text == text) {
           _editing = false;
           _dirty = false;
@@ -209,7 +221,6 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final name = widget.name, file = _file;
-    final empty = file != null && (file.text ?? '').trim().isEmpty;
     return ColoredBox(
       color: DesktopChrome.surface,
       child: Column(
@@ -269,44 +280,129 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
               ],
             ),
           ),
-          Expanded(
-            child: widget.link == null
-                ? _note('Open it on ${widget.machineName}.')
-                : _readError != null
-                ? Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      _note(_readError!, key: 'swarm-instructions-error'),
-                      AppIconButton(
-                        key: const ValueKey('swarm-instructions-retry'),
-                        icon: AppIcons.refreshCw,
-                        tooltip: 'Try again',
-                        onPressed: _read,
-                      ),
-                    ],
-                  )
-                : file == null
-                ? const SizedBox.shrink()
-                : _editing
-                ? _editor()
-                : empty
-                ? _note(
-                    'No instructions yet. Tell $name how you want it to '
-                    'work, and it writes them here.',
-                  )
-                : SingleChildScrollView(
-                    padding: const EdgeInsets.all(grid.AppDesktop.panelPadding),
-                    child: SelectableText(
-                      file.text!,
-                      key: const ValueKey('swarm-instructions-text'),
-                      style: grid.AppType.mono(color: DesktopChrome.foreground),
-                    ),
-                  ),
-          ),
+          Expanded(child: _body()),
         ],
       ),
     );
   }
+
+  /// The agent's own file, then what else instructs it in its folder, one after the other. While the own file is typed, it
+  /// has the pane to itself.
+  Widget _body() {
+    if (widget.link == null) {
+      return _note('Open it on ${widget.machineName}.');
+    }
+    final file = _file, error = _readError, shared = _shared;
+    if (_editing) return _editor();
+    if (file == null && error == null) return const SizedBox.shrink();
+    final own = (file?.text ?? '').trim().isNotEmpty;
+    final blocks = <Widget>[
+      if (error != null)
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _note(error, key: 'swarm-instructions-error'),
+            Padding(
+              // The glyph sits 8 points inside its 32-point target: it starts where the note's words do.
+              padding: const EdgeInsets.symmetric(
+                horizontal: SwarmLayout.barSide - 8,
+              ),
+              child: AppIconButton(
+                key: const ValueKey('swarm-instructions-retry'),
+                icon: AppIcons.refreshCw,
+                tooltip: 'Try again',
+                onPressed: _read,
+              ),
+            ),
+          ],
+        )
+      else if (own)
+        Padding(
+          padding: const EdgeInsets.all(grid.AppDesktop.panelPadding),
+          child: SelectableText(
+            file!.text!,
+            key: const ValueKey('swarm-instructions-text'),
+            style: grid.AppType.mono(color: DesktopChrome.foreground),
+          ),
+        )
+      else if (shared.files.isEmpty)
+        _note(
+          'No instructions yet. Tell ${widget.name} how you want it to work, '
+          'and it writes them here.',
+        ),
+      for (final (i, one) in shared.files.indexed) _sharedFile(i, one),
+    ];
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final (i, block) in blocks.indexed) ...[
+            if (i > 0)
+              ColoredBox(
+                color: DesktopChrome.rim,
+                child: const SizedBox(height: 1),
+              ),
+            block,
+          ],
+          for (final (i, skip) in shared.skipped.indexed)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                grid.AppDesktop.panelPadding,
+                0,
+                grid.AppDesktop.panelPadding,
+                grid.AppDesktop.controlGap,
+              ),
+              child: Text(
+                _skippedWords(skip),
+                key: ValueKey('swarm-skipped-$i'),
+                style: DesktopChrome.metadata(),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// A file of the agent's folder, read only: its name, its text, and a line when the computer cut it.
+  Widget _sharedFile(int index, SwarmSharedFile file) => Padding(
+    padding: const EdgeInsets.all(grid.AppDesktop.panelPadding),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          file.name,
+          key: ValueKey('swarm-shared-name-$index'),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: DesktopChrome.control(medium: true),
+        ),
+        const SizedBox(height: grid.AppDesktop.controlGap),
+        SelectableText(
+          file.text,
+          key: ValueKey('swarm-shared-text-$index'),
+          style: grid.AppType.mono(color: DesktopChrome.foreground),
+        ),
+        if (file.truncated)
+          Padding(
+            padding: const EdgeInsets.only(top: grid.AppDesktop.controlGap),
+            child: Text(
+              'Cut at 64 KB.',
+              key: ValueKey('swarm-shared-cut-$index'),
+              style: DesktopChrome.metadata(),
+            ),
+          ),
+      ],
+    ),
+  );
+
+  /// Why a file in the agent's folder is not shown, by the computer's own word for it.
+  String _skippedWords(SwarmSkippedFile file) => switch (file.why) {
+    'link' => '${file.name} is a link.',
+    'not_text' => '${file.name} isn\'t text.',
+    'unreadable' => '${file.name} can\'t be read.',
+    'not_a_file' => '${file.name} isn\'t a file.',
+    _ => '${file.name} isn\'t shown.',
+  };
 
   Widget _editor() => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
