@@ -16,6 +16,7 @@
  * One that cannot, being behind or in conflict, or whose checks failed, is told so on itself, to its author by name, once for
  * each head, so the GitHub news brings it to its author (githubMentions.ts).
  */
+import { labelOf, teamOf, type Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
 import { repositorySlug, TEAM } from './githubMentions.js'
@@ -113,8 +114,8 @@ export class GitHubMerge {
   private readonly now: () => number
   private readonly log: (line: string) => void
 
-  constructor(private readonly deps: { projects: () => Promise<LedProject[]>; get: GitHubGet; send: GitHubSend; now?: () => number
-    log?: (line: string) => void; intervalMs?: number }) {
+  constructor(private readonly deps: { projects: () => Promise<LedProject[]>; crew: (project: LedProject) => Promise<Crew>; get: GitHubGet
+    send: GitHubSend; now?: () => number; log?: (line: string) => void; intervalMs?: number }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
     this.reads = new GitHubReads(deps.get, this.now)
@@ -164,10 +165,13 @@ export class GitHubMerge {
     const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
     const pulls = (await this.reads.current(repo, `/repos/${repo}/pulls?state=open&per_page=${MAX_PULLS}`, 1))
       .filter(pull => pull.draft !== true && object(pull.base).ref === base)
+    const team = teamOf(await this.deps.crew(project), project.pm)
     for (const pull of pulls) {
       const number = Number(pull.number), head = String(object(pull.head).sha ?? '')
       if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head)) continue
       const author = authorOf(pull)
+      // The team's own pull requests only (assign/crew.ts teamOf): a person's merges as that person's repository does it.
+      if (author === null || !team.has(labelOf(author))) continue
       const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 3)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''))
       if ([...readers.values()].some(r => r.verdict === 'HOLD')) continue
