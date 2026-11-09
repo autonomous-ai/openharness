@@ -61,7 +61,6 @@ import { recordingDb, type Query } from '../lib/queryRecorder.test-support.js'
 import { HOT_BODY_LIMIT, NOT_AVAILABLE, READINGS_MAX, superTabRoutes } from './superTabs.js'
 import { machineObservationSchema } from '../superTabs/machines.js'
 import { logger } from '../utils/logger.js'
-import { WORKSPACE_ACCESS_REVOKED } from '../superTabs/workspaceStore.js'
 
 describe('Super Tab route failures', () => {
   let app: FastifyInstance
@@ -203,63 +202,40 @@ describe('the retired scorecard read', () => {
   })
 })
 
-// An older app, host or agent still sends a command v4 dropped (superTabs/retired.ts): the route accepts it, and the real
-// store answers it as ignored without a read or a write.
-describe('a command Swarm v4 no longer has, over HTTP', () => {
+// Workspaces, the level above Swarms, are gone with Swarm v4: a Swarm is the org already, and no client calls their routes, so none
+// is registered. A new Swarm names no Workspace to be in. integration/superTabNotAvailable.test.ts runs the real store.
+describe('the Workspace routes Swarm v4 removed', () => {
   let app: FastifyInstance
-  const queries: Query[] = []
+  let created: unknown[][]
   beforeEach(async () => {
-    queries.length = 0
+    created = []
     app = Fastify()
     app.setErrorHandler(errorHandler)
     app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
-    await app.register(superTabRoutes, { store: new SuperTabStore(recordingDb(queries) as PrismaClient), github: null, reads: {} as never, hosts: {} as never })
-    await app.ready()
-  })
-  afterEach(async () => { await app.close() })
-  const send = (command: object, asAgentId?: string) => app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/commands', headers: { 'x-harness-client': 'desktop/1.2.3' },
-    payload: { operationId: 'op-1', command, ...asAgentId ? { asAgentId } : {} } })
-
-  it.each(RETIRED_COMMANDS)('answers %s ok and ignored, as an agent too, counts the client it declares and touches no data', async type => {
-    const before = await counted(type, 'desktop')
-    for (const asAgentId of [undefined, 'agent-1']) {
-      const res = await send({ type, ...OLD_PAYLOADS[type] }, asAgentId)
-      expect(res.statusCode).toBe(200)
-      expect(res.json()).toEqual({ success: true, data: { result: { ignored: true, note: RETIRED_NOTE }, parts: [] } })
-    }
-    expect(await counted(type, 'desktop')).toBe(before + 2)
-    expect(queries).toEqual([])
-  })
-
-  it('still refuses a type no version had, and a host\'s start route that names no start', async () => {
-    expect((await send({ type: 'project.nonsense', projectId: 'lead' })).statusCode).toBe(400)
-    const host = await app.inject({ method: 'POST', url: '/api/super-tabs/hosts/m1/starts/tab-1/s1',
-      payload: { operationId: 'op-1', command: { type: 'project.digest', ...OLD_PAYLOADS['project.digest'] } } })
-    expect(host.statusCode).toBe(403)
-    expect(queries).toEqual([])
-  })
-})
-
-// The scorecard is gone with Swarm v4, and an older Desktop's Scorecard tab still reads it: it gets no days, whoever asks and
-// whichever Swarm it names, and nothing is read. integration/superTabNotAvailable.test.ts tries it against the real store.
-describe('the retired scorecard read', () => {
-  let app: FastifyInstance
-  beforeEach(async () => {
-    app = Fastify()
-    app.setErrorHandler(errorHandler)
-    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
-    // A store, reads and host reads that fail on any call: the answer must not touch them.
-    await app.register(superTabRoutes, { store: {} as never, github: null, reads: {} as never, hosts: {} as never })
+    const store = { create: async (...args: unknown[]) => { created.push(args.slice(1)); return { id: 'tab-1', revision: 0 } } }
+    await app.register(superTabRoutes, { store: store as never, github: null, reads: {} as never, hosts: {} as never })
     await app.ready()
   })
   afterEach(async () => { await app.close() })
 
-  it('answers no days, with the query an older Desktop sends or none, and reads nothing', async () => {
-    for (const url of ['/api/super-tabs/tab-1/scorecard?projectId=lead', '/api/super-tabs/tab-1/scorecard?projectId=lead&scope=all', '/api/super-tabs/tab-2/scorecard']) {
-      const res = await app.inject({ method: 'GET', url })
-      expect(res.statusCode, url).toBe(200)
-      expect(res.json(), url).toEqual({ success: true, data: { days: [] } })
-    }
+  it('registers none of the thirteen', () => {
+    const retired: Array<['GET' | 'POST', string]> = [
+      ['GET', '/api/super-tabs/workspaces'], ['POST', '/api/super-tabs/workspaces'], ['GET', '/api/super-tabs/workspace-invitations'],
+      ['POST', '/api/super-tabs/workspaces/:workspaceId'], ['GET', '/api/super-tabs/workspaces/:workspaceId/members'],
+      ['POST', '/api/super-tabs/workspaces/:workspaceId/invitations'], ['POST', '/api/super-tabs/workspaces/:workspaceId/invitations/revoke'],
+      ['POST', '/api/super-tabs/workspaces/:workspaceId/accept'], ['POST', '/api/super-tabs/workspaces/:workspaceId/members/:userId'],
+      ['POST', '/api/super-tabs/workspaces/:workspaceId/members/:userId/remove'], ['POST', '/api/super-tabs/workspaces/:workspaceId/transfer'],
+      ['POST', '/api/super-tabs/:tabId/workspace-visibility'], ['POST', '/api/super-tabs/:tabId/workspace-join']]
+    for (const [method, url] of retired) expect(app.hasRoute({ method, url }), `${method} ${url}`).toBe(false)
+  })
+
+  it('makes a Swarm without naming a Workspace, and refuses a body that still names one', async () => {
+    const made = await app.inject({ method: 'POST', url: '/api/super-tabs', payload: { operationId: 'op-1', name: 'Acme' } })
+    expect(made.statusCode).toBe(200)
+    expect(created).toEqual([['op-1', 'Acme', undefined]])
+    const named = await app.inject({ method: 'POST', url: '/api/super-tabs', payload: { operationId: 'op-2', name: 'Acme', workspaceId: 'w1' } })
+    expect(named.statusCode).toBe(400)
+    expect(created).toHaveLength(1)
   })
 })
 
@@ -282,11 +258,10 @@ describe('the person routes\' one not-available answer', () => {
   const ask = (url: string, method: 'GET' | 'POST' = 'GET') => app.inject({ method, url,
     payload: method === 'POST' ? { operationId: 'op-1', command: { type: 'message.send', conversationId: 'c1', text: 'hi', replyTo: null, recipientIds: [] } } : undefined })
 
-  it('answers missing, not a member, out of the Workspace and a refused link alike, and logs which it was', async () => {
+  it('answers missing, not a member and a refused link alike, and logs which it was', async () => {
     const warn = vi.spyOn(logger, 'warn')
     const refusals = [new SuperTabError('NOT_FOUND', 'This Super Tab is unavailable.', 404),
       new SuperTabError('FORBIDDEN', 'You no longer have access to this Super Tab.', 403, true),
-      new SuperTabError(WORKSPACE_ACCESS_REVOKED, 'You are no longer in this Swarm\'s Workspace.', 403),
       new SuperTabError('JOIN_UNAVAILABLE', 'This Swarm link is unavailable for this account.', 404),
       new SuperTabError('NOT_FOUND', 'This conversation is unavailable.', 404)]
     for (const refusal of refusals) {

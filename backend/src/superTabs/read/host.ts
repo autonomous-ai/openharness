@@ -52,7 +52,7 @@ export class HostReads {
     const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
     await this.store.hostFor(tx, user, machineId, owned)
     if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
-    // Every agent's grant check of this read shares one read of each machine, share, contributor and Workspace membership.
+    // Every agent's grant check of this read shares one read of each machine, share and contributor.
     const grants = new GrantReads(owned)
     // Swarms still in one row are migrated when first opened; the job migrates every one before the new release serves.
     const ids = await machineSwarms(tx, user.autonomousEnv, machineId, FULL_TABS)

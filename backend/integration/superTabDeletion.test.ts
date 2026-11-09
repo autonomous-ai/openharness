@@ -94,13 +94,11 @@ describe('deleting a Swarm', () => {
     const w = world(), f = await swarm(w)
     for (const who of [owner, member, host]) expect(await listed(w, who)).toContain(f.tab)
     expect((await w.store.invitations(invitee)).map(i => i.tabId)).toContain(f.tab)
-    expect((await w.store.workspaceList(owner)).workspaces.flatMap(o => o.swarms.map(s => s.id))).toContain(f.tab)
     w.changed.length = 0
     await f.execute({ type: 'swarm.delete', name: 'Lampos' })
 
     for (const who of [owner, member, host]) expect(await listed(w, who)).not.toContain(f.tab)
     expect((await w.store.invitations(invitee)).map(i => i.tabId)).not.toContain(f.tab)
-    expect((await w.store.workspaceList(owner)).workspaces.flatMap(o => o.swarms.map(s => s.id))).not.toContain(f.tab)
     // Every person's apps are told at once, and its observer sockets check again.
     expect(new Set(w.changed.filter(c => c.tabId === f.tab).flatMap(c => c.userIds))).toEqual(new Set([owner.sub, member.sub, host.sub]))
     expect(w.access).toContain(f.tab)
@@ -121,7 +119,7 @@ describe('deleting a Swarm', () => {
   it('is refused alike to a member, its agents and a made-up agent, and to anyone for the owner\'s Personal Swarm', async () => {
     const w = world(), f = await swarm(w)
     const del = { operationId: randomUUID(), command: { type: 'swarm.delete', name: 'Lampos' } as Command }
-    for (const [who, as] of [[member, undefined], [host, f.lead], [host, f.worker], [host, 'ffffffffffffffffffffffff']] as const) {
+    for (const [who, as] of [[member, undefined], [invitee, undefined], [host, f.lead], [host, f.worker], [host, 'ffffffffffffffffffffffff']] as const) {
       expect(await refusal(() => w.store.execute(who, f.tab, { ...del, operationId: randomUUID() }, as))).toEqual(MISSING)
     }
     expect(await listed(w, member)).toContain(f.tab)
@@ -254,32 +252,6 @@ describe('the purge', () => {
 
 // Security review 2 of #2457: what a deleted Swarm must keep, refuse or skip while it waits for its restore or its purge.
 describe('while a Swarm is deleted', () => {
-  const workspaceOf = async (w: ReturnType<typeof world>, tab: string) => (await w.store.read(owner, tab)).state.workspaceId!
-
-  it('a restore leaves out whoever lost the Workspace meanwhile', async () => {
-    const w = world(), f = await swarm(w)
-    const workspaceId = await workspaceOf(w, f.tab)
-    await f.execute({ type: 'swarm.delete', name: 'Lampos' })
-    // The member loses the Workspace, and no removal has reached this Swarm (a removal still open, say).
-    await db.swarmWorkspaceMember.update({ where: { id: `${workspaceId}:${member.sub}` }, data: { removedAt: new Date(), removedBy: owner.sub } })
-    await f.execute({ type: 'swarm.restore' })
-    expect((await w.store.read(owner, f.tab)).state.people.map(p => p.id)).not.toContain(member.sub)
-    expect(await listed(w, member)).not.toContain(f.tab)
-    expect(await listed(w, host)).toContain(f.tab)
-  })
-
-  it('a Workspace removal takes the person out of a deleted Swarm too, so coming back to the Workspace does not bring them back', async () => {
-    const w = world(), f = await swarm(w)
-    const workspaceId = await workspaceOf(w, f.tab)
-    await f.execute({ type: 'swarm.delete', name: 'Lampos' })
-    expect(await w.store.workspaces.remove(owner, workspaceId, member.sub)).toEqual({ userId: member.sub, pending: 0 })
-    expect(await db.swarmMember.findUnique({ where: { id: `${f.tab}:${member.sub}` }, select: { deleted: true } })).toEqual({ deleted: true })
-    // Back in the Workspace before the restore: still not back in this Swarm.
-    await db.swarmWorkspaceMember.update({ where: { id: `${workspaceId}:${member.sub}` }, data: { removedAt: null, removedBy: null, purgeAt: null } })
-    await f.execute({ type: 'swarm.restore' })
-    expect((await w.store.read(owner, f.tab)).state.people.map(p => p.id)).not.toContain(member.sub)
-    expect(await listed(w, member)).not.toContain(f.tab)
-  })
 
   it('the hourly invitation sweep never writes it back onto an invitee\'s list, and the list never shows it', async () => {
     const w = world(), f = await swarm(w)
@@ -426,13 +398,8 @@ describe('the purge, everywhere', () => {
     expect(keptBefore.length).toBe(targets.length + 1)
   })
 
-  it('reads the due Swarms, an owner\'s deleted list and a Workspace\'s deleted Swarms by their indexes', async () => {
+  it('reads the due Swarms and an owner\'s deleted list by their indexes', async () => {
     const w = world(), f = await swarm(w)
-    // Someone in this Swarm alone, so removing them from the Workspace touches no other test's Swarms.
-    const leaver = user(6, 'leaver')
-    await db.user.upsert({ where: { id: leaver.sub }, create: { id: leaver.sub, externalId: `fixture-${leaver.sub}`, email: leaver.email, autonomousEnv: 'prod' }, update: {} })
-    const invitation = await f.execute({ type: 'invite.create', email: leaver.email, role: 'viewer', conversationId: 'lead' })
-    await f.execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, leaver)
     await f.execute({ type: 'swarm.delete', name: 'Lampos' })
     const plans = async (read: () => Promise<unknown>) => {
       await db.$runCommandRaw({ profile: 2 })
@@ -445,11 +412,6 @@ describe('the purge, everywhere', () => {
     }
     expect(await plans(() => w.store.deletedList(owner))).toEqual(['IXSCAN { autonomousEnv: 1, ownerId: 1, _id: 1 }'])
     expect(await plans(() => purgeDeletedSwarms(db, null, w.clock.now))).toEqual(['IXSCAN { purgeAt: 1 }'])
-    // A Workspace removal reads the person's Swarms by the member index and the Workspace's deleted ones by its own.
-    const workspaceId = (await db.superTab.findUniqueOrThrow({ where: { id: f.tab }, select: { workspaceId: true } })).workspaceId!
-    const removal = await plans(async () => expect(await w.store.workspaces.remove(owner, workspaceId, leaver.sub)).toEqual({ userId: leaver.sub, pending: 0 }))
-    expect(removal).toEqual(expect.arrayContaining(['IXSCAN { autonomousEnv: 1, memberIds: 1, _id: 1 }', 'IXSCAN { autonomousEnv: 1, workspaceId: 1 }']))
-    expect(removal.filter(plan => !plan.startsWith('IXSCAN'))).toEqual([])
   })
 
   it('never lets Swarms it cannot finish hold back one newly due', async () => {

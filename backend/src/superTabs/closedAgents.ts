@@ -121,8 +121,8 @@ export const reopened = (state: SuperTabState, machineId: string, running: reado
   (state.removedSessions ?? []).filter(r => r.machineId === machineId && running.includes(r.harnessId) && now - r.removedAt < REMOVED_KEEP_MS)
 
 /** What a restore's rules read outside the Swarm's state: sessions registered in another Swarm by now, and the machines
- *  commands.ts agent.add's team rules read (store.ts teamMachines, otherWorkspaceMachines). */
-export interface RestoreFacts { elsewhere: ReadonlySet<string>; teamMachines: readonly string[]; otherWorkspaceMachines: readonly string[] }
+ *  commands.ts agent.add's team rules read (store.ts teamMachines). */
+export interface RestoreFacts { elsewhere: ReadonlySet<string>; teamMachines: readonly string[] }
 
 /**
  * Why [record] may not come back as it was, by a fixed word, or null. The rules a person's add takes (commands.ts agent.add, whose
