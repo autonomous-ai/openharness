@@ -671,6 +671,28 @@ describe('a teammate\'s work and the machines that take it', () => {
     await expect(store.observeMachine(person, f.tab, 'team-mac', reading(f.generation))).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY' })
   })
 
+  it('reads a machine an older release stored with its owner\'s choices, notice count and privacy check without them, to everyone, and drops them once its person contributes it again', async () => {
+    const f = await fixture()
+    await personalMac(f)
+    const retired = ['projects', 'ownAccountChoice', 'othersToldWeek', 'access']
+    const state = await storedState(f.tab)
+    const mac = state.machines!.find(m => m.machineId === 'personal-mac')!
+    Object.assign(mac, { projects: ['lead'], ownAccountChoice: { allowed: true, by: person.sub, at: '2026-11-04T00:00:00.000Z' }, othersToldWeek: 1,
+      access: [{ id: '0123456789abcdef', name: 'Lamp', account: 'own', teammates: true, note: 'connection info in ~/.lamp' }] })
+    Object.assign(mac.observation!, { privacy: { mode: 'dedicated' } })
+    await saveState(f.tab, state)
+    for (const reader of [owner, person]) {
+      const read = await pool(f.tab, 'personal-mac', reader)
+      for (const field of retired) expect(read, `${reader.email}: ${field}`).not.toHaveProperty(field)
+      expect(read.observation, reader.email).not.toHaveProperty('privacy')
+    }
+    // Stored still, until its person saves it again.
+    expect((await storedState(f.tab)).machines!.find(m => m.machineId === 'personal-mac')).toMatchObject({ projects: ['lead'], othersToldWeek: 1 })
+    await run(f.tab, { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work', scope: 'swarm', engines: ['codex'], maxAgents: 4 }, person)
+    const saved = (await storedState(f.tab)).machines!.find(m => m.machineId === 'personal-mac')!
+    for (const field of retired) expect(saved, field).not.toHaveProperty(field)
+  })
+
   // Swarm v3 (task #4120, the PM's rulings): no Team account takes work, a new agent starts only on its own person's computer, and a
   // person's own agent works on any task of a project they can read, in their own account.
   it('runs the owner\'s project on the person\'s own Mac when they start it, and on no Team machine; the person\'s own work is unchanged', async () => {
