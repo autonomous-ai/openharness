@@ -400,9 +400,13 @@ describe('an answer that cannot be read', () => {
     const done = t.end()
     await vi.advanceTimersByTimeAsync(READ_WAIT_MS)
     await done
+    // A core that answers with an error, by its code (superTabsProcess.ts).
+    t.lastTurn.mockRejectedValueOnce(new SuperTabHostError('UNKNOWN_QUERY', 'The core could not read the last turn.', 502))
+    await t.end()
     expect(t.lines()).toEqual([
       'Could not read the answer of the turn that ended for agent agent: Error.',
       'Could not read the answer of the turn that ended for agent agent: TIMEOUT.',
+      'Could not read the answer of the turn that ended for agent agent: UNKNOWN_QUERY.',
     ])
     expect(Object.keys(t.journal.replies!)).toEqual(['d1'])
     expect(t.posts()).toHaveLength(0)

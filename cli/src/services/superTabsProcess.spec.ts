@@ -100,16 +100,24 @@ it('hears each turn end the core tells it, and reads the last turn of a session 
   t.process.stop()
 })
 
-it('reads no last turn the core did not give whole, and none while the core is away', async () => {
+it('says what it could not read of a last turn: none while the core is away, an error the core answered, or an answer that is no turn', async () => {
   const t = setup()
   await expect(t.api().transcripts.lastTurn('s1')).rejects.toThrow('Core disconnected')
-  for (const turn of [undefined, null, 'turn', {}, { userMessage: 'Ship it.' }, { assistantText: 'Shipped.' }, { userMessage: 4, assistantText: 'Shipped.' },
-    { userMessage: 'Ship it.', assistantText: 4 }]) {
-    t.wire().onConnected!({ query: async (name: string) => name === 'last_turn' ? { turn } : {} })
-    expect(await t.api().transcripts.lastTurn('s1')).toBeNull()
-  }
-  t.wire().onConnected!({ query: async (name: string) => name === 'last_turn' ? { error: 'NOT_SUPER_TABS' } : {} })
+  // A session the core has no turn of is not a failure.
+  t.wire().onConnected!({ query: async (name: string) => name === 'last_turn' ? { turn: null } : {} })
   expect(await t.api().transcripts.lastTurn('s1')).toBeNull()
+  // Anything else is a failure with a name for the host's log: read as no turn, a core that has no such question (an older one) or
+  // will not answer this process would leave every answer owed and none ever posted, and nothing said.
+  const failures: Array<[Record<string, unknown>, string]> = [
+    [{ error: 'UNKNOWN_QUERY' }, 'UNKNOWN_QUERY'], [{ error: 'NOT_SUPER_TABS' }, 'NOT_SUPER_TABS'], [{ error: 'INVALID_REQUEST' }, 'INVALID_REQUEST'],
+    [{}, 'INVALID_ANSWER'], [{ turn: 'turn' }, 'INVALID_ANSWER'], [{ turn: {} }, 'INVALID_ANSWER'], [{ turn: [] }, 'INVALID_ANSWER'],
+    [{ turn: { userMessage: 'Ship it.' } }, 'INVALID_ANSWER'], [{ turn: { assistantText: 'Shipped.' } }, 'INVALID_ANSWER'],
+    [{ turn: { userMessage: 4, assistantText: 'Shipped.' } }, 'INVALID_ANSWER'], [{ turn: { userMessage: 'Ship it.', assistantText: 4 } }, 'INVALID_ANSWER'],
+  ]
+  for (const [answer, code] of failures) {
+    t.wire().onConnected!({ query: async (name: string) => name === 'last_turn' ? answer : {} })
+    await expect(t.api().transcripts.lastTurn('s1'), JSON.stringify(answer)).rejects.toMatchObject({ code })
+  }
   t.process.stop()
 })
 
