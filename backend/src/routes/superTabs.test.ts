@@ -53,7 +53,8 @@ import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { redeemHandoff, startHandoff } from '../lib/harnessSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { SuperTabError } from '../superTabs/model.js'
-import { RETIRED_NOTE } from '../superTabs/retired.js'
+import { RETIRED_COMMANDS, RETIRED_NOTE } from '../superTabs/retired.js'
+import { counted, OLD_PAYLOADS } from '../superTabs/retired.test-support.js'
 import { SuperTabStore } from '../superTabs/store.js'
 import { recordingDb, type Query } from '../lib/queryRecorder.test-support.js'
 import { HOT_BODY_LIMIT, NOT_AVAILABLE, READINGS_MAX, superTabRoutes } from './superTabs.js'
@@ -121,18 +122,25 @@ describe('a command Swarm v4 no longer has, over HTTP', () => {
     await app.ready()
   })
   afterEach(async () => { await app.close() })
-  const send = (command: object) => app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/commands', payload: { operationId: 'op-1', command } })
+  const send = (command: object, asAgentId?: string) => app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/commands', headers: { 'x-harness-client': 'desktop/1.2.3' },
+    payload: { operationId: 'op-1', command, ...asAgentId ? { asAgentId } : {} } })
 
-  it('answers ok and ignored, and touches no data', async () => {
-    const res = await send({ type: 'project.digest', projectId: 'lead', time: '08:00', timeZone: 'Asia/Ho_Chi_Minh' })
-    expect(res.statusCode).toBe(200)
-    expect(res.json()).toEqual({ success: true, data: { result: { ignored: true, note: RETIRED_NOTE }, parts: [] } })
+  it.each(RETIRED_COMMANDS)('answers %s ok and ignored, as an agent too, counts the client it declares and touches no data', async type => {
+    const before = await counted(type, 'desktop')
+    for (const asAgentId of [undefined, 'agent-1']) {
+      const res = await send({ type, ...OLD_PAYLOADS[type] }, asAgentId)
+      expect(res.statusCode).toBe(200)
+      expect(res.json()).toEqual({ success: true, data: { result: { ignored: true, note: RETIRED_NOTE }, parts: [] } })
+    }
+    expect(await counted(type, 'desktop')).toBe(before + 2)
     expect(queries).toEqual([])
   })
 
-  it('still refuses a type no version had', async () => {
-    const res = await send({ type: 'project.nonsense', projectId: 'lead' })
-    expect(res.statusCode).toBe(400)
+  it('still refuses a type no version had, and a host\'s start route that names no start', async () => {
+    expect((await send({ type: 'project.nonsense', projectId: 'lead' })).statusCode).toBe(400)
+    const host = await app.inject({ method: 'POST', url: '/api/super-tabs/hosts/m1/starts/tab-1/s1',
+      payload: { operationId: 'op-1', command: { type: 'project.digest', ...OLD_PAYLOADS['project.digest'] } } })
+    expect(host.statusCode).toBe(403)
     expect(queries).toEqual([])
   })
 })

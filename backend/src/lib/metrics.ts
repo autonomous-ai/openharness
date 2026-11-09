@@ -39,6 +39,9 @@ export function createMetrics(hour: LastHour = createLastHour()) {
     labelNames: ['work'] as const, registers: [registry] })
   const phonePushes = new Counter({ name: 'phone_pushes_total', help: 'Pushes to phones (push/send.ts), by platform and outcome',
     labelNames: ['platform', 'outcome'] as const, registers: [registry] })
+  const retiredCommands = new Counter({ name: 'swarm_retired_commands_total',
+    help: 'Commands Swarm v4 no longer has that an older client sent and were ignored (superTabs/retired.ts), by type and kind of client',
+    labelNames: ['type', 'client'] as const, registers: [registry] })
   const works = new Set<string>()
   const work = (kind: string) => {
     if (works.has(kind)) return kind
@@ -66,6 +69,9 @@ export function createMetrics(hour: LastHour = createLastHour()) {
     },
     /** One push to one phone: sent, gone (a dead token), sandbox, failed, or unconfigured (no keys for its platform). */
     phonePush(platform: string, outcome: string) { phonePushes.inc({ platform, outcome }) },
+    /** One command an older client sent that Swarm v4 no longer has: `type` is one of superTabs/retired.ts's few, `client` the kind a
+     *  request declares (refusalLog.ts: cli, desktop, phone, web, app, agent or other). Zero once the last older client has updated. */
+    retiredCommand(type: string, client: string) { retiredCommands.inc({ type, client }) },
     /** A minute of `cpu by kind`, every kind of work's busy ms. */
     busyWindow(window: BusyWindow) {
       for (const [kind, ms] of window) workBusy.inc({ work: work(kind) }, ms / 1000)
