@@ -93,14 +93,24 @@ String threadSlot(String swarmId, String conversationId, String threadId) =>
 /// changes, and the first read sets it even at zero, over what an earlier run
 /// left there.
 class SwarmAnnouncer {
-  SwarmAnnouncer(this.notices, {required this.quiet, SwarmTold? told})
-    : told = told ?? SwarmTold();
+  SwarmAnnouncer(
+    this.notices, {
+    required this.quiet,
+    this.muted = _neverMuted,
+    SwarmTold? told,
+  }) : told = told ?? SwarmTold();
 
   final SwarmNotices notices;
 
   /// The person sees [need] where they are: no notice. Null asks for a
   /// chat's new messages ([announceChat]).
   final bool Function(SwarmNeed? need) quiet;
+
+  /// The person muted [need]'s chat: a tag there posts nothing, as its push
+  /// sends nothing (anh Dee, 2026-11-09).
+  final bool Function(SwarmNeed need) muted;
+
+  static bool _neverMuted(SwarmNeed need) => false;
 
   /// What this phone has told the account already: never told again.
   final SwarmTold told;
@@ -124,9 +134,18 @@ class SwarmAnnouncer {
   /// again) is not news (Dee's iPhone, 2026-11-01: one notice every 5
   /// seconds).
   void announce(SwarmNeed need) {
-    // An agent's tag that asks for no decision is badge and Activity only: the
-    // need still counts on the icon ([settle]), but nothing is posted.
-    if (need is SwarmMentionNeed && need.mention.taggedByAgent) return;
+    // An agent's tag that asks for no decision, a tag in a chat the person
+    // muted, and work stuck or needing a person in a task they did not ask
+    // for (anh Dee, 2026-11-09: one person owns many projects) are badge and
+    // Activity only: the need still counts on the icon ([settle]), but
+    // nothing is posted. An agent at a prompt tells whom the server chose.
+    if (need is SwarmMentionNeed &&
+        (need.mention.taggedByAgent || muted(need))) {
+      return;
+    }
+    if (need is SwarmWorkNeed && !need.work.atPrompt && !need.work.requested) {
+      return;
+    }
     if (quiet(need)) return;
     final fresh = told.add(need.key);
     final slot = swarmNotice(need).key;
@@ -257,35 +276,38 @@ class SwarmAnnouncer {
     }
   }
 
-  /// The notifications of threads the person is in, by [threadSlot]: each
+  /// The notifications of threads that rang the person, by [threadSlot]: each
   /// one's Swarm and the unread Activity rows it tells of.
   final _replies = <String, ({String swarmId, Set<String> rows})>{};
 
-  /// Posts [entry]'s notice, once: a reply in a thread of Swarm [swarmId]'s
-  /// project [project] that the person is in ([SwarmActivityFeed.onReply]).
-  /// Names who replied and the project only, as [swarmNotice] does.
+  /// Posts [entry]'s notice, once, when the server rang the person for it
+  /// ([SwarmActivityEntry.rings]): a reply in a thread of Swarm [swarmId]'s
+  /// project [project] ([SwarmActivityFeed.onReply]). Every other reply is
+  /// the badge and Activity only (Tony's rule, 2026-11-09: a thread rings its
+  /// starter once, for the first person's reply). Names who replied and the
+  /// project only, as [swarmNotice] does.
   ///
-  /// One notification per thread, which the server's push for it shares
-  /// (task #3248, the rule Tony approved): it sounds when nothing of that
-  /// thread was unread; a newer reply only replaces it quietly. A thread a
-  /// push still shows gets nothing: that push says so already.
+  /// It shows in the thread's notification, which the server's push for the
+  /// same reply shares (task #3248). A reply a push told already gets nothing
+  /// here, but is followed, so that reading it takes the push down.
   void announceReply({
     required String swarmId,
     required SwarmActivityEntry entry,
     required String project,
   }) {
-    // Only a person's reply rings; an agent's is badge and Activity (task #3607).
-    if (entry.actorKind != 'person') return;
+    if (!entry.rings) return;
     if (quiet(null)) return;
     final key = 'reply:$swarmId:${entry.id}';
-    if (!told.add(key)) return;
+    final fresh = told.add(key);
     final thread = entry.threadId;
     final slot = thread == null
         ? key
         : threadSlot(swarmId, entry.conversationId, thread);
-    final earlier = _replies[slot];
-    _replies[slot] = (swarmId: swarmId, rows: {...?earlier?.rows, entry.id});
-    if (told.pushed(slot)) return;
+    _replies[slot] = (
+      swarmId: swarmId,
+      rows: {...?_replies[slot]?.rows, entry.id},
+    );
+    if (!fresh || told.pushed(slot)) return;
     final who = entry.actorName.isEmpty ? 'Someone' : entry.actorName;
     unawaited(
       notices.showSwarm((
@@ -301,14 +323,14 @@ class SwarmAnnouncer {
           // A reply only in its thread is found there, not in the chat.
           threadId: entry.threadId,
         ),
-        quiet: earlier != null,
+        quiet: false,
       )),
     );
   }
 
   /// Swarm [swarmId]'s Activity was read and lists [rows]: a thread's
   /// notification none of whose rows is unread now, or listed, is taken down,
-  /// with the push it shares, and the thread's next reply sounds again.
+  /// with the push it shares.
   void repliesRead(String swarmId, Iterable<SwarmActivityEntry> rows) {
     final unread = {
       for (final row in rows)

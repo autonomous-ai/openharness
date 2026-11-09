@@ -356,6 +356,60 @@ void main() {
     });
   });
 
+  group('a tag in a chat the person muted (anh Dee, 2026-11-09)', () {
+    /// Swarm `a` with one tag by Ann waiting in its lead chat, which the
+    /// reader set to [notify].
+    Future<(SwarmSession, _Notices)> tagged(String notify) async {
+      final fake = backend();
+      final derived = {
+        'decisionsWaiting': 0,
+        'mentionsWaiting': 1,
+        'chatSettings': {leadChat: notify},
+      };
+      fake.routes['/api/super-tabs/a/parts'] = (_) =>
+          firstLoad(tabId: 'a', derived: derived);
+      fake.routes['/api/super-tabs/a/changes'] = (_) =>
+          changes(cursor: 'c2', derived: derived);
+      fake.routes['/api/super-tabs/a/decisions?state=open'] = (_) => {
+        'decisions': <Object>[],
+      };
+      fake.routes['/api/super-tabs/a/mentions?state=waiting'] = (_) => {
+        'mentions': [
+          {
+            'id': 'm1',
+            'projectName': 'Mobile',
+            'conversationId': leadChat,
+            'conversationTitle': 'Mobile',
+            'messageId': 'msg-1',
+            'leadName': 'Ann',
+            'leadKind': 'person',
+            'text': 'Can you check the copy?',
+          },
+        ],
+      };
+      final notices = _Notices();
+      final s = session(fake, notices: notices)..foreground = false;
+      await s.inbox.refresh();
+      await settle();
+      return (s, notices);
+    }
+
+    test('posts nothing, as its push, yet counts on the badge', () async {
+      final (s, notices) = await tagged('muted');
+      s.announce(s.inbox.needs.single);
+
+      expect(notices.shown, isEmpty);
+      expect(notices.badges.last, 1);
+    });
+
+    test('rings in a chat that is not muted', () async {
+      final (s, notices) = await tagged('mentions');
+      s.announce(s.inbox.needs.single);
+
+      expect(notices.shown.single.title, 'Ann tagged you');
+    });
+  });
+
   test('a computer coming up while Swarm has none reads at once', () {
     fakeAsync((async) {
       final fake = backend();

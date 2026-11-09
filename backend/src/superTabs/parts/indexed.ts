@@ -111,7 +111,9 @@ export const NAMED_INDEX = {
   SuperTabThread: { id: { _id: 1 } },
   /** `age`: Activity rows past their expiry (activity.ts sweepActivity). */
   /** `unread`: a person's unread rows, newest first: the digest each of their reads asks for (activity.ts activityDigest). */
-  SuperTabActivity: { age: { createdAt: 1 }, unread: { tabId: 1, personId: 1, readAt: 1, createdAt: 1 } },
+  /** `thread`: a person's rows of a thread: whether a reply there rang them already (activity.ts writeReplyActivity). */
+  SuperTabActivity: { age: { createdAt: 1 }, unread: { tabId: 1, personId: 1, readAt: 1, createdAt: 1 },
+    thread: { tabId: 1, personId: 1, conversationId: 1, threadId: 1 } },
   /** `age`: chat settings back at the default, untouched for a week (chatSettings.ts sweepChatSettings). */
   SuperTabChatSetting: { age: { updatedAt: 1 } },
   /** A person's reminders (reminders.ts): `person`, the due list, the next one, the digest and the cap's count; `due`, the

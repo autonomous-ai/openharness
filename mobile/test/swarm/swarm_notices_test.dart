@@ -43,13 +43,15 @@ void main() {
     }),
   );
 
-  SwarmWorkNeed work(String status, {String? result}) {
+  /// Work in a project the reader owns; [requester] asked for the task.
+  SwarmWorkNeed work(String status, {String? result, String? requester = me}) {
     final snapshot = SuperTabSnapshot.fromJson(
       SuperTabParts.firstLoad(
         firstLoad(
           groups: [
             {
               ...groupData('g1', title: 'Sync', number: 4, status: status),
+              'requesterId': ?requester,
               'assignment': {
                 'id': 'attempt-g1',
                 'agentId': 'agent-builder',
@@ -272,10 +274,14 @@ void main() {
   });
 
   group('a reply in a thread the person is in', () {
+    // [rings]: the server rang the person for this row (backend
+    // superTabs/activity.ts writeReplyActivity): the first person's reply in
+    // a thread they started.
     SwarmActivityEntry reply(
       String id, {
       bool read = false,
       String threadId = 'root-1',
+      bool rings = true,
     }) => SwarmActivityEntry.fromJson({
       'id': id,
       'kind': 'reply',
@@ -286,6 +292,7 @@ void main() {
       'text': "sounds good, I'll ship the copy today",
       'createdAt': DateTime.utc(2026, 11, 4, 9).toIso8601String(),
       'read': read,
+      'rings': rings,
     });
 
     test('says who replied and in which project, not the reply, and opens '
@@ -338,14 +345,14 @@ void main() {
 
       announcer.announceReply(
         swarmId: 'tab-b',
-        entry: reply('a2'),
+        entry: reply('a2', threadId: 'root-2'),
         project: 'M',
       );
       expect(notices.shown, hasLength(2));
     });
 
-    test('shares one notification per thread, the push\'s too: a newer '
-        'reply replaces it quietly until the thread is read (task #3248)', () {
+    test('rings once per thread, as the server\'s push does: a later reply '
+        'there posts nothing, read or not (Tony\'s rule, 2026-11-09)', () {
       final notices = _Recording();
       final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
       announcer.announceReply(
@@ -355,7 +362,7 @@ void main() {
       );
       announcer.announceReply(
         swarmId: 'tab-b',
-        entry: reply('a2'),
+        entry: reply('a2', rings: false),
         project: 'M',
       );
       final slot = threadSlot('tab-b', 'g9', 'root-1');
@@ -366,28 +373,18 @@ void main() {
             'the server\'s push slot (backend/src/push/notices.ts threadSlot)',
       );
       expect(
-        [for (final n in notices.shown) (n.key, n.quiet)],
-        [(slot, false), (slot, true)],
-      );
-      expect(
-        notices.shown.last.target.messageId,
-        'msg-a2',
-        reason: 'the tap opens the newest',
+        [for (final n in notices.shown) (n.key, n.quiet, n.target.messageId)],
+        [(slot, false, 'msg-a1')],
       );
 
-      // Read up to a1 only: the thread's notification stays for a2.
+      // The notice goes once the reply it told of is read.
       announcer.repliesRead('tab-b', [reply('a1', read: true), reply('a2')]);
-      expect(notices.cancelled, isEmpty);
-      announcer.repliesRead('tab-b', [
-        reply('a1', read: true),
-        reply('a2', read: true),
-      ]);
       expect(notices.cancelled, [slot]);
 
-      // Read, the next reply there sounds again; a reply in another thread is a notification of its own.
+      // Read, a later reply there still posts nothing; a thread of its own rings.
       announcer.announceReply(
         swarmId: 'tab-b',
-        entry: reply('a3'),
+        entry: reply('a3', rings: false),
         project: 'M',
       );
       announcer.announceReply(
@@ -396,8 +393,8 @@ void main() {
         project: 'M',
       );
       expect(
-        [for (final n in notices.shown.skip(2)) (n.key, n.quiet)],
-        [(slot, false), (threadSlot('tab-b', 'g9', 'root-2'), false)],
+        [for (final n in notices.shown.skip(1)) (n.key, n.quiet)],
+        [(threadSlot('tab-b', 'g9', 'root-2'), false)],
       );
     });
 
@@ -420,13 +417,13 @@ void main() {
       );
       announcer.announceReply(
         swarmId: 'tab-b',
-        entry: reply('a2'),
+        entry: reply('a2', rings: false),
         project: 'M',
       );
       announcer.announce(decision());
       expect(notices.shown, isEmpty);
 
-      // Read in the app: the push goes with the thread's notification, and the next reply there sounds.
+      // Read in the app: the push goes with the thread's notification, and a later reply there stays quiet.
       announcer.repliesRead('tab-b', [
         reply('a1', read: true),
         reply('a2', read: true),
@@ -435,17 +432,14 @@ void main() {
       expect(told.pushed(slot), isFalse);
       announcer.announceReply(
         swarmId: 'tab-b',
-        entry: reply('a3'),
+        entry: reply('a3', rings: false),
         project: 'M',
       );
-      expect(
-        [for (final n in notices.shown) (n.key, n.quiet)],
-        [(slot, false)],
-      );
+      expect(notices.shown, isEmpty);
     });
 
-    test('a thread whose push was swiped away unread only replaces quietly, '
-        'as the server does', () {
+    test('a thread whose push was swiped away unread posts nothing more: it '
+        'rang once (Tony\'s rule, 2026-11-09)', () {
       final notices = _Recording();
       final told = SwarmTold();
       final announcer = SwarmAnnouncer(
@@ -454,6 +448,7 @@ void main() {
         told: told,
       );
       final slot = threadSlot('tab-b', 'g9', 'root-1');
+      // Android's FCM push carries the thread's slot alone.
       told.pushesShown([slot]);
       announcer.announceReply(
         swarmId: 'tab-b',
@@ -466,10 +461,10 @@ void main() {
       told.pushesShown(const []);
       announcer.announceReply(
         swarmId: 'tab-b',
-        entry: reply('a2'),
+        entry: reply('a2', rings: false),
         project: 'M',
       );
-      expect([for (final n in notices.shown) (n.key, n.quiet)], [(slot, true)]);
+      expect(notices.shown, isEmpty);
     });
 
     test('is not posted again when its push is already in the notification '
@@ -494,10 +489,54 @@ void main() {
 
       announcer.announceReply(
         swarmId: 'tab-b',
-        entry: reply('a2'),
+        entry: reply('a2', threadId: 'root-2'),
         project: 'M',
       );
-      expect(notices.shown.single.key, threadSlot('tab-b', 'g9', 'root-1'));
+      expect(notices.shown.single.key, threadSlot('tab-b', 'g9', 'root-2'));
+    });
+
+    test('a push in the notification centre comes down once its reply is '
+        'read in the app', () {
+      final notices = _Recording();
+      final told = SwarmTold();
+      final announcer = SwarmAnnouncer(
+        notices,
+        quiet: (_) => false,
+        told: told,
+      );
+      final slot = threadSlot('tab-b', 'g9', 'root-1');
+      // iOS's APNs push: its key and its slot.
+      told.pushesShown(['reply:tab-b:a1', slot]);
+      announcer.announceReply(
+        swarmId: 'tab-b',
+        entry: reply('a1'),
+        project: 'M',
+      );
+      expect(notices.shown, isEmpty);
+
+      announcer.repliesRead('tab-b', [reply('a1', read: true)]);
+      expect(notices.cancelled, [slot]);
+      expect(told.pushed(slot), isFalse);
+    });
+
+    test('an older backend that marks no row posts no reply notice', () {
+      final notices = _Recording();
+      final row = SwarmActivityEntry.fromJson({
+        'id': 'a1',
+        'kind': 'reply',
+        'conversationId': 'g9',
+        'messageId': 'msg-a1',
+        'threadId': 'root-1',
+        'actor': {'kind': 'person', 'id': 'person-mia', 'name': 'Mia'},
+        'text': 'x',
+        'read': false,
+      });
+      SwarmAnnouncer(
+        notices,
+        quiet: (_) => false,
+      ).announceReply(swarmId: 'tab-b', entry: row, project: 'M');
+      expect(row.rings, isFalse);
+      expect(notices.shown, isEmpty);
     });
 
     test('is not posted while the person looks at the Swarm', () {
@@ -727,6 +766,8 @@ void main() {
       }),
     );
 
+    // The server rings for a person's reply only (backend
+    // superTabs/activity.ts writeReplyActivity).
     SwarmActivityEntry replyBy(String id, String kind) =>
         SwarmActivityEntry.fromJson({
           'id': id,
@@ -738,6 +779,7 @@ void main() {
           'text': 'approve this',
           'createdAt': DateTime.utc(2026, 11, 6, 9).toIso8601String(),
           'read': false,
+          'rings': kind == 'person',
         });
 
     test(
@@ -799,6 +841,53 @@ void main() {
         project: 'M',
       );
       expect(notices.shown.single.title, 'River replied in a thread');
+    });
+  });
+
+  group('who is told, so a person in many projects is not spammed (anh Dee, '
+      '2026-11-09)', () {
+    test('a tag in a chat the person muted posts nothing, yet still counts '
+        'on the badge, as its push', () {
+      final notices = _Recording();
+      final asked = <SwarmNeed>[];
+      final announcer = SwarmAnnouncer(
+        notices,
+        quiet: (_) => false,
+        muted: (need) {
+          asked.add(need);
+          return true;
+        },
+      );
+      final need = mention();
+
+      announcer.announce(need);
+      announcer.settle([need]);
+
+      expect(notices.shown, isEmpty);
+      expect(notices.badges, [1]);
+      expect(asked, [need]);
+
+      // Only a tag: a decision in a muted chat still rings.
+      announcer.announce(decision());
+      expect(notices.shown.single.title, 'River asks you');
+    });
+
+    test('a stuck or needs-you task tells only the person who asked for it: '
+        'the project\'s owner has it in the list and on the badge', () {
+      final notices = _Recording();
+      final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
+      final someoneElses = work('blocked', requester: 'person-other');
+      final nobodys = work('needs_human', requester: null);
+
+      announcer.announce(someoneElses);
+      announcer.announce(nobodys);
+      announcer.settle([someoneElses, nobodys]);
+      expect(notices.shown, isEmpty);
+      expect(notices.badges, [2]);
+
+      final mine = work('needs_human');
+      announcer.announce(mine);
+      expect(notices.shown.single.title, endsWith('needs you'));
     });
   });
 
