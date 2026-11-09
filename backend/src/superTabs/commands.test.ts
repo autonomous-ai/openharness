@@ -4637,7 +4637,7 @@ describe('credentials in every command', () => {
       ...['project.role.set role', 'project.roles.create roles[]', 'project.roles.reset roles[]'].flatMap(role =>
         [`${role}.defaults.model`, `${role}.defaults.effort`])]],
     // A repository URL that holds a credential is refused by its schema.
-    ['A folder a host opens, or a URL or ref held to its shape', ['agent.add project.cwd', 'agent.add project.repositoryUrl',
+    ['A folder a host opens, or a URL or ref held to its shape', ['agent.add project.cwd', 'agent.add project.repositoryUrl', 'github.relay repository', 'github.relay login',
       'agent.new repositoryUrl', 'agent.start request.cwd', 'agent.start request.codexHome', 'agent.start request.branchRef',
       'agent.start request.requirements.devices[]', 'buddy.create setup.cwd', 'lead.start branchRef', 'lead.start repositoryUrl',
       'machine.contribute cwd', 'project.repository repositoryUrl', 'tab.project project.cwd', 'tab.project project.repositoryUrl',
