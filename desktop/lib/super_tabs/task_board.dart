@@ -268,12 +268,7 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(
-            4,
-            grid.AppDesktop.groupGap,
-            4,
-            grid.AppDesktop.controlGap,
-          ),
+          padding: SwarmLayout.columnHeadPadding,
           child: Row(
             children: [
               Text(name, style: DesktopChrome.text(medium: true)),
@@ -441,11 +436,11 @@ class SwarmLabelChips extends StatelessWidget {
         .toColor();
     return Container(
       key: ValueKey('swarm-label-$name'),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+      padding: SwarmLayout.chipPadding,
       decoration: BoxDecoration(
         color: base.withValues(alpha: 0.18),
         border: Border.all(color: base.withValues(alpha: 0.45)),
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: BorderRadius.circular(SwarmLayout.chipRadius),
       ),
       child: Text(
         name,
@@ -460,7 +455,8 @@ class SwarmLabelChips extends StatelessWidget {
 /// A label's colour from the six hex digits GitHub gives it, or null when they are not hex.
 Color? _labelColor(String? hex) {
   if (hex == null || !RegExp(r'^[0-9a-fA-F]{6}$').hasMatch(hex)) return null;
-  return Color(0xFF000000 | int.parse(hex, radix: 16));
+  final rgb = int.parse(hex, radix: 16);
+  return Color.fromARGB(255, (rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255);
 }
 
 /// The board while it is first read: its three columns of quiet cards.
@@ -497,8 +493,9 @@ Widget swarmAgentFace(
   final agent = controller.snapshot?.agents
       .where((a) => (a.displayName ?? a.name).toLowerCase() == key)
       .firstOrNull;
-  if (agent != null)
+  if (agent != null) {
     return SuperTabAvatar.agent(agent, size: size, engineBadge: false);
+  }
   return SuperTabAvatar(
     identity: 'agent:$key',
     name: name,
