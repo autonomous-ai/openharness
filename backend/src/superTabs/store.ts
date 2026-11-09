@@ -22,8 +22,9 @@ import { isDeepStrictEqual } from 'node:util'
 import type { Machine, Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { releaseVoice, reserveVoice } from '../lib/voiceBudget.js'
+import { withTimeout } from '../lib/withTimeout.js'
 import { wavDurationMs } from '../lib/wav.js'
-import { agentText, MAX_VOICE_BYTES, MAX_VOICE_MS, VOICE_CLAIM_MS, VOICE_TYPES, voiceFacts, voiceTranscript, voiceWaveform, type StoredVoice, type VoiceFacts } from './voiceMessages.js'
+import { agentText, MAX_VOICE_BYTES, MAX_VOICE_MS, VOICE_CLAIM_MS, VOICE_READ_MS, VOICE_TYPES, voiceFacts, voiceTranscript, voiceWaveform, type StoredVoice, type VoiceFacts } from './voiceMessages.js'
 import { machineAlive } from '../lib/prisma.js'
 import { pullRequestsIn, type PushOrigin } from '../github/pushOrigin.js'
 import type { PullRequestFilesRead } from './pullRequestFiles.js'
@@ -2772,7 +2773,7 @@ export class SuperTabStore {
     let facts: StoredVoice
     try {
       let wav: Buffer
-      try { wav = await direct.head(row.objectKey, row.size) } catch (error) {
+      try { wav = await withTimeout(direct.head(row.objectKey, row.size), VOICE_READ_MS) } catch (error) {
         logger.error('super-tab voice read failed', { tabId, code: errorCode(error) })
         await unclaim()
         fail('ATTACHMENTS_UNAVAILABLE', 'Could not read the voice message just now. Try again.', 503)

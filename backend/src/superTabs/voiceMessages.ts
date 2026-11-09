@@ -46,6 +46,9 @@ export const VOICE_TYPES: ReadonlySet<string> = new Set(['audio/wav', 'audio/x-w
 export const MAX_VOICE_BYTES = 25 * 1024 * 1024
 /** How long a call that claimed a file to transcribe it holds it before another may take over. */
 export const VOICE_CLAIM_MS = 2 * 60_000
+/** The longest the clip's read from the bucket may take. The bucket's own client retries for minutes; meanwhile the call holds the
+ *  file's claim and its share of the voice memory. With the transcription's own limit (lib/sttTimeout.ts) it ends within the claim. */
+export const VOICE_READ_MS = 20_000
 
 /** What a client and a message are told about a voice message's file. Why it has no words, when it has none: the sender's daily
  *  voice limit was used, or the transcription service failed. Either is final for that file. */

@@ -1,6 +1,7 @@
 import { sign } from 'node:crypto'
 import type { FcmAccount } from './keys.js'
-import { SEND_TIMEOUT_MS, SWARM_CHANNEL, SWARM_QUIET_CHANNEL, withTimeout, type Sender } from './sender.js'
+import { SEND_TIMEOUT_MS, SWARM_CHANNEL, SWARM_QUIET_CHANNEL, type Sender } from './sender.js'
+import { withTimeout } from '../lib/withTimeout.js'
 
 const SCOPE = 'https://www.googleapis.com/auth/firebase.messaging'
 /** An access token is used until this long before Google says it runs out. */
