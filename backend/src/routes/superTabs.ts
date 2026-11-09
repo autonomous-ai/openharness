@@ -558,9 +558,11 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     { preHandler: [validateParams(machineParams), validateBody(machineObservationSchema)] },
     (req, reply) => respond(reply, () => store.observeMachine(req.user!, req.params.tabId, req.params.machineId, req.body)))
   // Terminal recording is gone with Swarm v4, but an older Desktop still opens a terminal's context and an older host still reads and
-  // records into it: each is answered ok and ignored, to everyone, naming no Swarm. A host drops an observation once it is
-  // acknowledged by the id it makes of it (cli superTabs/native.ts eventId), so that one is answered with it: without it, a journal
-  // from before would send the same observation again, for ever. A Team session reaches these on its own list (lib/teamSession.ts).
+  // records into it: each is answered ok and ignored, to everyone, naming no Swarm. An older Desktop's open then gets no context (it
+  // says it could not prepare terminal sharing) and an older host's read finds no terminal (its prepare fails), so nothing new is
+  // recorded. A host drops an observation once it is acknowledged by the id it makes of it (cli superTabs/native.ts eventId), so
+  // that one is answered with it: without it, a journal from before would send the same observation again, for ever. A Team session
+  // reaches these on its own list (lib/teamSession.ts).
   const recordingGone = (_req: unknown, reply: FastifyReply) => sendSuccess(reply, { ok: true, ignored: true })
   app.post('/api/super-tabs/:tabId/native', { bodyLimit: HOT_BODY_LIMIT, preHandler: validateParams(tabParams) }, recordingGone)
   app.get('/api/super-tabs/:tabId/native/:contextId', { preHandler: validateParams(nativeParams) }, recordingGone)
