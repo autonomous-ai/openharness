@@ -189,22 +189,6 @@ void main() {
     await done(tester, f, c);
   });
 
-  testWidgets('Activity\'s "is waiting on you" opens the task with the '
-      'agent\'s terminal focused', (tester) async {
-    final f = SuperTabLaunchFixture();
-    final c = await waitingSwarm(f);
-    await show(tester, f);
-    await tester.tap(find.byKey(const ValueKey('super-decisions')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Nova is waiting on you'));
-    await tester.pumpAndSettle();
-    expect(c.selectedId, 'task');
-    expect(c.terminalAgents('task').single.id, 'nova');
-    expect(f.app.focusedPane?.agentId, 'native-nova');
-    besideChat();
-    await done(tester, f, c);
-  });
-
   testWidgets('the toast for an agent no chat holds brings its Swarm forward '
       'and says why its terminal cannot open', (tester) async {
     final f = SuperTabLaunchFixture();

@@ -51,8 +51,9 @@ void main() {
   Finder panel() => find.byKey(const ValueKey('super-thread-panel'));
   Finder inPanel(Finder finder) =>
       find.descendant(of: panel(), matching: finder);
-  ScrollController threadScroll(WidgetTester tester) =>
-      tester.widget<ListView>(inPanel(find.byType(LaidOutListView))).controller!;
+  ScrollController threadScroll(WidgetTester tester) => tester
+      .widget<ListView>(inPanel(find.byType(LaidOutListView)))
+      .controller!;
 
   ConversationServer chat(int count) {
     final server = ConversationServer();

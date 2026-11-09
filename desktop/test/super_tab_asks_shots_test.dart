@@ -55,7 +55,6 @@ void main() {
   final huy = person('huy', 'huy@example.com');
   final darren = person('darren', 'darren@example.com');
   final river = agent('agent-lead', 'River');
-  final gannet = agent('gannet', 'Gannet');
   final egret = agent('egret', 'Egret');
   List<Map<String, Object>> reacted(List<(String, String)> by) => [
     for (final emoji in ['eyes', 'check'])
@@ -141,12 +140,7 @@ void main() {
           thread: 'message-1',
           minutesAgo: 88,
         );
-        say(
-          'ok thanks',
-          huy,
-          thread: 'message-1',
-          minutesAgo: 86,
-        );
+        say('ok thanks', huy, thread: 'message-1', minutesAgo: 86);
         say(
           'I renamed the agents, but the sidebar still shows the old names.',
           darren,

@@ -83,6 +83,7 @@ import '../state/harness_attachments.dart';
 import '../state/harness_placement.dart';
 import '../state/new_harness.dart';
 import '../state/harness_launch_integration.dart';
+import '../super_tabs/new_agent.dart';
 import '../super_tabs/launch.dart';
 import '../super_tabs/message_link.dart' show swarmMessageLinkInbox;
 import '../super_tabs/buddy_chat_shortcut.dart';
@@ -3980,17 +3981,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
         requestedSplit == null &&
         placement != HarnessPlacement.newTab) {
       try {
-        integration = await SuperTabLaunch.open(
-          app,
-          superTab,
-          newSwarmProject
-              ? 'new-project'
-              : newSwarmAgent
-              ? 'new-agent'
-              : conversation,
-          newProject: newSwarmProject,
-          newAgent: newSwarmAgent,
-        );
+        // + New agent in a Swarm has its own small flow (new_agent.dart, Swarm v4).
+        integration = newSwarmAgent && superTab.superTabId != null
+            ? swarmNewAgent(app, superTab)
+            : await SuperTabLaunch.open(
+                app,
+                superTab,
+                newSwarmProject ? 'new-project' : conversation,
+                newProject: newSwarmProject,
+              );
       } catch (failure) {
         _showPaneActionHint(failure.toString());
         return;

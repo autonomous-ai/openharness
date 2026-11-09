@@ -61,7 +61,6 @@ Future<SuperTabController> showLeftPane(
             onNewSwarm: () {},
             onNewProject: () {},
             onPage: (_) {},
-            activity: activity,
             attention: activity.attention,
             onManage: () {},
             board: true,

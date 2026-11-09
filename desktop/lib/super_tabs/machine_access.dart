@@ -440,7 +440,9 @@ class _EntryRow extends StatelessWidget {
                 ),
                 if (entry.note case final note?)
                   Padding(
-                    padding: const EdgeInsets.only(top: grid.AppDesktop.listRowGap),
+                    padding: const EdgeInsets.only(
+                      top: grid.AppDesktop.listRowGap,
+                    ),
                     child: Text('Note: $note', style: quiet),
                   ),
               ],

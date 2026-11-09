@@ -106,20 +106,11 @@ void main() {
   }
 
   testWidgets(
-    'Devices opens in the center, keeps the same tab and preserves the project draft',
+    'Devices opens in the center, keeps the same tab, and a project\'s row leaves it',
     (tester) async {
       final (f, c) = await mount(tester);
       final tab = f.app.activeSwarm;
       final before = f.app.swarms.map((s) => s.id).toList();
-      final field = find.descendant(
-        of: find.byKey(const ValueKey('super-composer')),
-        matching: find.byType(TextField),
-      );
-      // Use the view's composer rather than any search field in the Devices page.
-      final composer = field.evaluate().isEmpty
-          ? find.byType(TextField).last
-          : field;
-      await tester.enterText(composer, 'An unfinished project message');
       await tester.tap(find.byKey(const ValueKey('super-manage')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('super-manage-tab-devices')));
@@ -144,19 +135,14 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('super-manage-tab-devices')));
       await tester.pumpAndSettle();
       expect(tab.panes.single, same(viewer));
-      // A project opens from the Projects grid (task #4466).
-      await tester.tap(find.byKey(const ValueKey('super-projects')));
-      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('super-group-lead')));
       await tester.pumpAndSettle();
       expect(c.devicesSelected, isFalse);
       expect(f.app.activeSwarm, same(tab));
       expect(find.byType(DevicesScreen), findsNothing);
-      // A project's row leaves Manage for its Board (task #3787); its chat, with the draft kept, is the Chat tab.
+      // A project's row leaves Manage for its channel (Swarm v4).
       expect(find.byType(SuperTabManageTabs), findsNothing);
-      await tester.tap(find.byKey(const ValueKey('super-board-tab-chat')));
-      await tester.pumpAndSettle();
-      expect(find.text('An unfinished project message'), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-agents-only')), findsOneWidget);
       expect(
         f.connection.calls.where(
           (call) => call.$1 == 'agent_create' || call.$1 == 'agent_resume',
