@@ -22,12 +22,12 @@ String swarmAgentId(String machineId, String harnessId) => const DartSha256()
 /// is an agent there). It is worked out here, on their Desktop, from the panes their tabs hold: nothing is sent until they open
 /// it, and then it joins the Swarm as an agent.
 class PersonalAgent {
-  const PersonalAgent({
+  PersonalAgent({
     required this.tab,
     required this.pane,
     required this.machine,
     required this.agent,
-  });
+  }) : name = agent.displayName;
 
   /// The tab it is first in.
   final Swarm tab;
@@ -40,12 +40,17 @@ class PersonalAgent {
   String get machineId => machine.machine.machineId;
 
   /// The name where its person already sees it, in the pane's header.
-  String get name => agent.displayName;
+  final String name;
 
   String get computer => machine.machine.displayName;
 
+  /// Where it runs, and that its computer is asleep or off when it is.
+  String get place => machine.isOffline ? '$computer · offline' : computer;
+
   /// What it is once it joins ([swarmAgentId]).
-  String get swarmId => swarmAgentId(machineId, agent.id);
+  late final String swarmId = swarmAgentId(machineId, agent.id);
+
+  late final String _order = name.toLowerCase();
 }
 
 /// The panes of the person's own that are agents of their Swarm [snapshot] but not in it yet, by name: a Claude Code or Codex
@@ -53,9 +58,12 @@ class PersonalAgent {
 /// own views, viewers, a computer shared with them and a Harness Team account's are left out.
 List<PersonalAgent> personalAgents(AppNotifier app, SuperTabSnapshot snapshot) {
   final joined = {
-    for (final agent in snapshot.agents) (agent.machineId, agent.harnessId),
+    for (final agent in snapshot.agents)
+      (machineIdKey(agent.machineId), agent.harnessId),
   };
   final seen = <(String, String)>{};
+  // Each computer's sessions by id, worked out once for the pass: a desk holds hundreds of panes.
+  final sessions = <String, Map<String, Agent>>{};
   final rows = <PersonalAgent>[];
   for (final tab in app.swarms) {
     if (tab.isSuperTab || tab.isUtility) continue;
@@ -68,11 +76,11 @@ List<PersonalAgent> personalAgents(AppNotifier app, SuperTabSnapshot snapshot) {
           machine.machine.isTeamAccount) {
         continue;
       }
-      final key = (pane.machineId, harnessId);
+      final key = (machineIdKey(pane.machineId), harnessId);
       if (joined.contains(key) || !seen.add(key)) continue;
-      final agent = machine.agents
-          .where((agent) => agent.id == harnessId)
-          .firstOrNull;
+      final agent = (sessions[pane.machineId] ??= {
+        for (final agent in machine.agents) agent.id: agent,
+      })[harnessId];
       if (agent == null ||
           (agent.engine != 'claude' && agent.engine != 'codex') ||
           agent.isStopped ||
@@ -85,7 +93,7 @@ List<PersonalAgent> personalAgents(AppNotifier app, SuperTabSnapshot snapshot) {
     }
   }
   return rows..sort((a, b) {
-    final byName = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    final byName = a._order.compareTo(b._order);
     return byName != 0 ? byName : a.swarmId.compareTo(b.swarmId);
   });
 }

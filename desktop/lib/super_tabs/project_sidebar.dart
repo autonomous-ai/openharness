@@ -860,7 +860,7 @@ class ProjectSidebar extends StatelessWidget {
       face: true,
     ),
     name: pane.name,
-    detail: pane.computer,
+    detail: pane.place,
     onTap: onOpenPane == null ? null : () => onOpenPane!(pane),
   );
 
