@@ -20,6 +20,7 @@ export default defineConfig({ test: {
     'integration/superTabMessageEdits.test.ts',
     'integration/superTabReminders.test.ts',
     'integration/superTabLeaderboard.test.ts',
+    'integration/superTabShipping.test.ts',
     'integration/superTabMigration.test.ts',
     'integration/superTabLiveness.test.ts',
     'integration/superTabProfile.test.ts',
