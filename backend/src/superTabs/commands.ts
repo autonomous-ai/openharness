@@ -3532,7 +3532,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (state.agents.some(a => a.id === agentId)) fail('ALREADY_SHARED', 'This native harness is already in the tab.')
         reserveHarnessSlot(state, command.machineId, command.harnessId, operationId)
         state.agents.push({ id: agentId, machineId: command.machineId, harnessId: command.harnessId, regular: true,
-          machineOwnerId: me.id, contributorId: me.id, membershipGeneration: me.generation, hostGrant: null, name: addedName,
+          // The name agent.new checked and gave its chat, which the session was told it is ("You are West."): checked again here,
+          // the chat's own title read as taken, and the agent became "Agent", shown as another name (anh Dee, 2026-11-09).
+          machineOwnerId: me.id, contributorId: me.id, membershipGeneration: me.generation, hostGrant: null, name: group.title || addedName,
           configuration: command.configuration, configurationVersion: operationId })
         group.agentIds.push(agentId)
         result.agentId = agentId

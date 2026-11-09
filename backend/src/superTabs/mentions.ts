@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
 import { activeWork, agentOnly, fail, isLeads, person, stableId, type Actor, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { agentProjectId, canReadGroup, canReadProject, groupProject, projectAgent, projectOf, projectsOf } from './projects.js'
+import { agentProjectId, canReadGroup, canReadProject, groupProject, isAgentChat, projectAgent, projectOf, projectsOf } from './projects.js'
 import { isBuddy, isBuddyChat, isSwarmBuddyChat } from './buddies.js'
 import { groupsBy, readBy } from './parts/indexed.js'
 import { deliveredCopies } from './pageReads.js'
@@ -129,8 +129,9 @@ const OPENS_BLOCK = new RegExp('^(?: {4}|\\t| {0,3}(?:[-*+](?:[ \\t\\n]|$)|#{1,6
 /** Whether [actor] may tag people in [group]: a person who can post there; any agent of the project but a Buddy, in its own
  *  project's conversations (project instructions, phase 4); nobody in the Leads conversation. */
 function mayTag(state: SuperTabState, actor: Actor, group: Conversation): boolean {
-  // Nobody else reads a person's one Buddy chat, so nobody is tagged there (Dee, 10-31).
-  if (isLeads(group) || isSwarmBuddyChat(group)) return false
+  // Nobody else reads a person's one Buddy chat, or their 1:1 chat with an agent of theirs, so nobody is tagged there (Dee,
+  // 10-31; Swarm v4). Such a chat is in no project, so the project check below would refuse the post itself (2026-11-09).
+  if (isLeads(group) || isSwarmBuddyChat(group) || isAgentChat(group)) return false
   return actor.kind !== 'agent' || projectAgent(state, actor, groupProject(state, group).id)
 }
 
