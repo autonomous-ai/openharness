@@ -51,7 +51,7 @@ const unavailable = (detail: string): Json => ({ error: 'CAPACITY_UNAVAILABLE', 
 /** How long a launched agent's reservation still counts. Free memory (vm_stat) already counts what a running agent uses,
  *  so a reservation held past its start counted the agent twice: on Ken's MacBook Pro (2026-10-28) three settled builders
  *  using about 0.4 GiB held 6 GiB, and a start was refused with 7.85 GiB free. The window covers an agent still loading. */
-export const START_WINDOW_MS = 5 * 60_000
+const START_WINDOW_MS = 5 * 60_000
 /** How long a start may hold its reservation while its machine has no creation for it: the backend's own start deadline
  *  (backend liveness.ts START_PREPARE_MS). A run reserves, claims its dispatch and sends agent_create within about two
  *  minutes, and one the backend refused at dispatch never sends it: such rows (2 GiB and 10 GiB each) were held for good on

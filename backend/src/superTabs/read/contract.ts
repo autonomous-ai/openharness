@@ -26,7 +26,7 @@ export type GroupChange = LivePart<GroupView> | Tombstone | DormantStub
  *  invitations filtered (invitations only for the Swarm owner). `autoJoin`: people at the owner's domain join by themselves
  *  (autoJoin.ts), from the sharing the head holds; who declined is never sent. */
 export type HeadView = Pick<SuperTabState, 'version' | 'id' | 'name' | 'project' | 'leadsConversationId' | 'ownerId'
-  | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'workspaceId' | 'workspaceVisibility' | 'buddies' | 'removedMachines'
+  | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'buddies' | 'removedMachines'
   | 'autoJoin'> & {
   /** How many Buddies each person may have (task #3818): always sent, 5 unless the Swarm's owner set another. An older backend
    *  sends none, so an app offers several Buddies only where this is present. */
@@ -77,10 +77,6 @@ export interface ProgressView {
 export interface Derived {
   /** The board's pulse of each project the reader sees (pulse.ts, task #3384), by project id. Absent from an older backend. */
   pulse?: Record<string, import('../pulse.js').Pulse>
-  /** When each component's release may next open, by project id then component (releases.ts nextReleaseAt, task #3827): 0 is now,
-   *  absent one is left to people. Only for the projects the reader sees and that have a release list; the list itself is never
-   *  sent. A time already past is as good as 0: the settle writes a new one each minute it changes. Absent from an older backend. */
-  releaseTimes?: Record<string, import('../releases.js').ReleaseLedger['nextAt'] & object>
   /** Every agent the reader can see. `workDecision` is null when the stored value stands; `roleId` null outside Custom. */
   /** `roleName`: the role it goes by (instructions.ts roleNameOf), its stored one or what it is. */
   /** `kind`: the reader's Buddy, a PM leading a project, or a Regular agent; `chatId`: the chat its person talks to it in, or null
@@ -246,8 +242,7 @@ export interface CommandReply {
 
 /** GET /api/super-tabs/list[?after=][&mentions=1] */
 export interface SwarmList {
-  /** `workspaceId` names its Workspace (null before the migration); a Swarm whose Workspace the person left is not listed. */
-  tabs: Array<{ id: string; name: string; ownerId: string; workspaceId: string | null; paused: boolean; lastChangedAt: number | null
+  tabs: Array<{ id: string; name: string; ownerId: string; paused: boolean; lastChangedAt: number | null
     /** Only on the reader's own Personal Swarm. */
     personal?: true
     /** With `?mentions=1`: the person's waiting tags in the Swarm and their digest, as the Swarm's own state counts them (a

@@ -145,7 +145,6 @@ describe('Simple task lifecycle', () => {
     task.status('done')
     const read = f.view(peer).parts.groups.find(p => p.key === task.id)!.data
     expect(read).toMatchObject({ process: 'simple', assignment: { status: 'done' } })
-    expect(read.releasing).toBeUndefined()
     expect(read.pullRequestUrls ?? []).toEqual([])
     expect(stepsOf(f.state, task.id)).toEqual([])
   })

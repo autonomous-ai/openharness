@@ -96,7 +96,6 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/mentions', `${t}/mentions?state=waiting`),
     json('GET', 'GET /api/super-tabs/:tabId/decisions', `${t}/decisions?state=open`),
     json('GET', 'GET /api/super-tabs/:tabId/leaderboard', `${t}/leaderboard?projectId=${project}`),
-    json('GET', 'GET /api/super-tabs/:tabId/scorecard', `${t}/scorecard?projectId=${project}`),
     json('GET', 'GET /api/super-tabs/:tabId/machine-readings', `${t}/machine-readings`),
     json('GET', 'GET /api/super-tabs/:tabId/proposals', `${t}/proposals?projectId=${project}`),
     json('GET', 'GET /api/super-tabs/:tabId/project-list', `${t}/project-list?invitedTo=${project}`),
@@ -108,7 +107,6 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/groups/:conversationId', `${t}/groups/${chat}`),
     json('POST', 'POST /api/super-tabs/:tabId/join', `${t}/join`, { operationId: op(), token: 'a'.repeat(43) }),
     json('POST', 'POST /api/super-tabs/:tabId/join/preview', `${t}/join/preview`, { token: 'a'.repeat(43) }),
-    json('POST', 'POST /api/super-tabs/:tabId/native', `${t}/native`, { operationId: op(), conversationId: chat, agentId: MISSING }),
     json('GET', 'GET /api/super-tabs/:tabId/conversations/:conversationId/messages', `${t}/conversations/${chat}/messages`),
     json('GET', 'GET /api/super-tabs/:tabId/conversations/:conversationId/catch-up', `${t}/conversations/${chat}/catch-up?after=0`),
     json('GET', 'GET /api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/attachments/:attachmentId',
@@ -143,8 +141,6 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/machines/:machineId/removal/v2', `${t}/machines/${MISSING}/removal/v2`),
     multipart('POST /api/super-tabs/:tabId/attachments', `${t}/attachments`, form([field('conversationId', chat), file('notes.txt', 'text/plain', 'hello')])),
     multipart('POST /api/super-tabs/:tabId/avatars', `${t}/avatars`, form([file('me.png', 'image/png', 'not a png')])),
-    json('POST', 'POST /api/super-tabs/:tabId/workspace-visibility', `${t}/workspace-visibility`, { visibility: 'workspace' }),
-    json('POST', 'POST /api/super-tabs/:tabId/workspace-join', `${t}/workspace-join`, { operationId: op() }),
     json('GET', 'GET /api/super-tabs/:tabId/costs', `${t}/costs`),
     json('GET', 'GET /api/super-tabs/:tabId/route-decisions', `${t}/route-decisions`),
     json('GET', 'GET /api/super-tabs/:tabId/starts/:startId', `${t}/starts/${MISSING}`),
@@ -154,9 +150,6 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/agents/:agentId/deliveries/:deliveryId', `${t}/agents/${MISSING}/deliveries/${MISSING}`),
     json('POST', 'POST /api/super-tabs/:tabId/agents/:agentId/deliveries/:deliveryId', `${t}/agents/${MISSING}/deliveries/${MISSING}`,
       { type: 'claim', claimId: op() }),
-    json('GET', 'GET /api/super-tabs/:tabId/native/:contextId', `${t}/native/${MISSING}`),
-    json('POST', 'POST /api/super-tabs/:tabId/native/:contextId', `${t}/native/${MISSING}`,
-      { turnId: op(), kind: 'prompt', previousEventId: null, text: 'hello', truncated: false, interrupted: false }),
     json('POST', 'POST /api/super-tabs/:tabId/github-token', `${t}/github-token`, { machineId: MISSING }),
     json('POST', 'POST /api/super-tabs/:tabId/machines/:machineId', `${t}/machines/${MISSING}`, { generation: 'g1',
       resources: { cpuPercent: 1, memoryTotalBytes: 1e9, memoryUsedBytes: 1e8, diskFreeBytes: 1e9, diskTotalBytes: 2e9, projectDiskFreeBytes: 1e9,
@@ -179,8 +172,10 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
     const f = await swarm()
     const real = calls(f.tab, 'lead', 'lead'), missing = calls(MISSING, 'lead', 'lead')
     // Compare against actual registration, so adding a route requires a real refusal test.
-    // The retired full-state read always asks every client to update, without reading a Swarm.
-    expect(new Set([...real.map(c => c.route), 'GET /api/super-tabs/:tabId'])).toEqual(registeredPersonRoutes)
+    // The retired full-state read always asks every client to update, the retired scorecard read answers no days and the retired
+    // terminal recording answers ok and ignored, each without reading a Swarm: they are tried alike for everyone in the tests below.
+    expect(new Set([...real.map(c => c.route), 'GET /api/super-tabs/:tabId', 'GET /api/super-tabs/:tabId/scorecard', 'POST /api/super-tabs/:tabId/native',
+      'GET /api/super-tabs/:tabId/native/:contextId', 'POST /api/super-tabs/:tabId/native/:contextId'])).toEqual(registeredPersonRoutes)
     for (const [i, call] of real.entries()) {
       const cases = { missing: await answer(missing[i]!, outsider), refused: await answer(call, outsider), revoked: await answer(call, removed) }
       // Approving needs the server's GitHub App, which this server has not: it says so to everyone, before any Swarm is read.
@@ -214,11 +209,9 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
       || JSON.stringify(c.payload ?? '').includes(f.privateChat) || String(c.payload ?? '').includes(f.privateChat))
     expect(named.map(c => c.route)).toEqual(expect.arrayContaining(['POST /api/super-tabs/:tabId/commands', 'GET /api/super-tabs/:tabId/groups/:conversationId',
       'GET /api/super-tabs/:tabId/conversations/:conversationId/messages', 'POST /api/super-tabs/:tabId/attachments',
-      'GET /api/super-tabs/:tabId/projects/:projectId/github', 'GET /api/super-tabs/:tabId/leaderboard',
-      'GET /api/super-tabs/:tabId/scorecard']))
-    // Checked before the chat: a terminal opens for one agent (made up here), and approving needs the server's GitHub App.
-    const before = ['POST /api/super-tabs/:tabId/native', 'POST /api/super-tabs/:tabId/projects/:projectId/github/approve',
-      'POST /api/super-tabs/:tabId/projects/:projectId/github/repository']
+      'GET /api/super-tabs/:tabId/projects/:projectId/github', 'GET /api/super-tabs/:tabId/leaderboard']))
+    // Checked before the chat: approving needs the server's GitHub App.
+    const before = ['POST /api/super-tabs/:tabId/projects/:projectId/github/approve', 'POST /api/super-tabs/:tabId/projects/:projectId/github/repository']
     for (const call of named) {
       const got = await answer(call, member), absent = await answer(missing[hidden.indexOf(call)]!, member)
       expect(got, call.url).toEqual(absent)
@@ -243,6 +236,40 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
       expect(real.statusCode).toBe(426)
       expect(real.json().error.code).toBe('UPDATE_REQUIRED')
       expect({ status: real.statusCode, body: real.body }).toEqual({ status: missing.statusCode, body: missing.body })
+    }
+  })
+
+  // The scorecard is gone with Swarm v4: an older Desktop's Scorecard tab still reads it, and gets no days, whoever asks and
+  // whatever Swarm or project it names, even one that is missing, so the answer says nothing of any of them.
+  it('answers the retired scorecard read with no days, alike to everyone, naming nothing of the Swarm', async () => {
+    const f = await swarm()
+    const read = (tab: string, project: string, as: AuthUser) => app.inject({ url: `/api/super-tabs/${tab}/scorecard?projectId=${project}&scope=all`, headers: { 'x-user': as.sub } })
+    for (const as of [owner, member, outsider, removed]) {
+      for (const [tab, project] of [[f.tab, 'lead'], [f.tab, f.privateProject], [MISSING, 'lead']] as const) {
+        const res = await read(tab, project, as)
+        expect({ status: res.statusCode, body: res.body }, `${as.email} ${tab} ${project}`).toEqual({ status: 200, body: JSON.stringify({ success: true, data: { days: [] } }) })
+      }
+    }
+  })
+
+  // Terminal recording is gone with Swarm v4: an older Desktop opens a terminal's context, and an older host reads it and records into
+  // it. Each is answered ok and ignored, whoever asks and whatever Swarm it names, even a missing one, so the answer says nothing of any.
+  it('answers the retired terminal recording ok and ignored, alike to everyone, naming nothing of the Swarm', async () => {
+    const f = await swarm()
+    const observation = { turnId: 'turn-1', kind: 'prompt', previousEventId: null, text: 'hello', truncated: false, interrupted: false }
+    const ask = (as: AuthUser, tab: string, method: 'GET' | 'POST', path: string, payload?: object) =>
+      app.inject({ method, url: `/api/super-tabs/${tab}/native${path}`, headers: { 'x-user': as.sub }, payload: payload as never })
+    for (const as of [owner, member, outsider, removed]) {
+      for (const tab of [f.tab, MISSING]) {
+        const label = `${as.email} ${tab}`
+        const opened = await ask(as, tab, 'POST', '', { operationId: randomUUID(), conversationId: 'lead', agentId: MISSING })
+        expect({ status: opened.statusCode, body: opened.body }, label).toEqual({ status: 200, body: JSON.stringify({ success: true, data: { ok: true, ignored: true } }) })
+        const read = await ask(as, tab, 'GET', `/${MISSING}`)
+        expect({ status: read.statusCode, body: read.body }, label).toEqual({ status: 200, body: JSON.stringify({ success: true, data: { ok: true, ignored: true } }) })
+        const recorded = await ask(as, tab, 'POST', `/${MISSING}`, observation)
+        expect(recorded.statusCode, label).toBe(200)
+        expect(recorded.json().data, label).toMatchObject({ ok: true, ignored: true, eventId: expect.stringMatching(/^[0-9a-f]{24}$/) })
+      }
     }
   })
 

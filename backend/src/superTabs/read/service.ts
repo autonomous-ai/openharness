@@ -27,14 +27,11 @@ import * as parts from '../parts/index.js'
 import type { GroupData, Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup, canReadProject, projectsOf, readConversation, readProject } from '../projects.js'
 import { isBuddyReader } from '../buddies.js'
-import { workspacesRequired } from '../workspaceStore.js'
 import type { Leaderboard } from '../leaderboard/contract.js'
 import { profileNames, readableWeek, recentDormantGroups, weeklyBoard } from '../leaderboard/read.js'
 import { LEDGER_WEEKS } from '../leaderboard/record.js'
 import type { PeriodName } from '../leaderboard/rolling.js'
 import { leaderboard } from '../leaderboard/stats.js'
-import { readScorecards, type ScorecardDay } from '../scorecard/rows.js'
-import { scorecardThrough } from '../scorecard/job.js'
 import { WEEK_MS } from '../leaderboard/week.js'
 import { derivedEtag, marksOf } from './derivedEtag.js'
 import { READ_FORMAT, SWARM_MIGRATING, type Changes, type Derived, type ReaderMarks, type MachineReadings, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
@@ -60,7 +57,7 @@ export const SWARM_ROW_READS_MS = 3_000
 const MAX_SWARM_ROW_READS = 2_000
 type SwarmRow = { format: number | null; deletedAt: Date | null }
 type SwarmRowRead = { at: number; read: Promise<SwarmRow | null> }
-type MachineReads = [teamMachines: string[], otherWorkspaceMachines: string[], machineVersions: Record<string, string>]
+type MachineReads = [teamMachines: string[], machineVersions: Record<string, string>]
 
 /** The conversations the reader can read now, a dormant one read by id included. */
 function readableGroups(read: Read): Set<string> {
@@ -241,8 +238,8 @@ export class SwarmReads {
       const state = parts.reassemble(loaded, { share: true })
       const actor = await this.store.actor(tx, user, state)
       author(state, actor)
-      const [teamMachines, otherWorkspaceMachines, machineVersions] = await this.machineLookups(state)
-      const view = readerView(loaded, actor, t0, { teamMachines, otherWorkspaceMachines, machineVersions, teamAccountsIdle: this.store.teamAccountsIdle })
+      const [teamMachines, machineVersions] = await this.machineLookups(state)
+      const view = readerView(loaded, actor, t0, { teamMachines, machineVersions, teamAccountsIdle: this.store.teamAccountsIdle })
       return await personalTasksPage(feedRead(tx, cached, tabId), view, actor, before)
         ?? fail('NOT_FOUND', 'Only a member has a Tasks feed.', 404)
     })
@@ -561,20 +558,6 @@ export class SwarmReads {
     return result
   }
 
-  /** The stored scorecard days (scorecard/rows.ts) of one project, or of every project the reader reads (`allProjects`),
-   *  newest first. Only projects the reader may read; a Team session reads none, as for the leaderboard. */
-  async scorecard(user: AuthUser, tabId: string, projectId: string, allProjects = false): Promise<{ days: ScorecardDay[]; through: string }> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
-    return this.read(user, tabId, async (tx, cached) => {
-      const state = parts.reassemble(await readParts(tx, cached, tabId), { share: true })
-      const actor = await this.store.actor(tx, user, state)
-      readProject(state, actor, projectId)
-      const projects = allProjects ? projectsOf(state).filter(p => canReadProject(state, actor, p)).map(p => p.id) : [projectId]
-      // The asked project's last day, so a day missing at the end shows as missing, not as a shorter table.
-      return { days: await readScorecards(tx, tabId, projects), through: scorecardThrough(this.now()) }
-    })
-  }
-
   /** The waiting tags of each listed Swarm, as `/:tabId/mentions` and a Swarm's own state count them (readable conversations
    *  only), so Desktop reads one list instead of one mentions call per Swarm (roadmap 2.5). One match over the page's
    *  Swarms (swarmsWithTags) finds those with any tag at all; only those load their state to check what the person may still read. A Swarm
@@ -601,11 +584,7 @@ export class SwarmReads {
     // People at the owner's domain join Swarms with auto-join on by themselves, before the first page is read (autoJoin.ts).
     if (!after) await this.store.autoJoin(user)
     const rows = await memberSwarms(this.db, user.autonomousEnv, user.sub, { after, limit: 101 })
-    // A Swarm of a Workspace the person is no longer in is not theirs to list, even before their removal from it has run.
-    const workspaceIds = [...new Set(rows.flatMap(r => r.workspaceId ? [r.workspaceId] : []))]
-    const current = new Set((workspaceIds.length ? await this.db.swarmWorkspaceMember.findMany({ where: { workspaceId: { in: workspaceIds }, userId: user.sub, removedAt: null },
-      select: { workspaceId: true } }) : []).map(m => m.workspaceId))
-    const page = rows.slice(0, 100).filter(r => r.workspaceId ? current.has(r.workspaceId) : !workspacesRequired())
+    const page = rows.slice(0, 100)
     // A Swarm not yet in parts is migrated when it is opened; until then the list names it from its old row.
     const unsplit = page.filter(r => r.format !== 2).map(r => r.id)
     const legacy = unsplit.length ? await this.db.superTab.findMany({ where: { id: { in: unsplit } }, select: { id: true, state: true } }) : []
@@ -621,7 +600,7 @@ export class SwarmReads {
       // Only the reader's own Personal Swarm is marked (a round dial's Personal | Team picker); another person's is not theirs
       // to be told apart. Its id is derived from its owner and environment (deletion.ts), so no read is needed.
       const personal = row.ownerId === user.sub && isPersonalSwarm({ id: row.id, environment: user.autonomousEnv, ownerId: row.ownerId })
-      return { id: row.id, name: head.name, ownerId: row.ownerId, workspaceId: row.workspaceId, paused: head.paused, lastChangedAt: newest.get(row.id) ?? null,
+      return { id: row.id, name: head.name, ownerId: row.ownerId, paused: head.paused, lastChangedAt: newest.get(row.id) ?? null,
         ...personal ? { personal: true as const } : {},
         ...tags ? { mentionsWaiting: tags.count, mentionsDigest: tags.digest } : {} }
     }), next: rows.length > 100 ? rows[99]!.id : null }
@@ -665,13 +644,13 @@ export class SwarmReads {
     const loaded = await loader(cached, tabId, opts)
     const state = parts.reassemble(loaded, { share: true })
     const actor = await this.store.actor(tx, user, state, asAgentId)
-    const [[teamMachines, otherWorkspaceMachines, machineVersions], counts, newest] = await Promise.all([
+    const [[teamMachines, machineVersions], counts, newest] = await Promise.all([
       this.machineLookups(state),
       actor.kind === 'person' ? Promise.all([waitingMentions(tx, tabId, state, actor, t0, waitingRows), decisionsWaiting(tx, tabId, state, actor),
         activityDigest(tx, tabId, actor.userId, t0), remindersDigest(tx, tabId, actor.userId)]) : undefined,
       readLastChangedAt(tx, cached, tabId),
     ])
-    const view = readerView(loaded, actor, t0, { teamMachines, otherWorkspaceMachines, machineVersions, teamAccountsIdle: this.store.teamAccountsIdle,
+    const view = readerView(loaded, actor, t0, { teamMachines, machineVersions, teamAccountsIdle: this.store.teamAccountsIdle,
       ...(counts ? { mentionsWaiting: counts[0].count, mentionsDigest: counts[0].digest, decisionsWaiting: counts[1].count,
         decisionsDigest: counts[1].digest, activityDigest: counts[2], remindersDigest: counts[3] } : {}) }, state)
     // People count a chat unread by its newest main row; agents keep no read marks.
@@ -679,21 +658,20 @@ export class SwarmReads {
     return { parts: loaded, actor, lastChangedAt: newest, view }
   }
 
-  /** Which of the Swarm's machines are signed in as a team account, and which serve another Workspace's Swarm too (store.ts): the
+  /** Which of the Swarm's machines are signed in as a team account (store.ts): the
    *  same answer for every reader, whose view hides what it may not see, so one lookup serves every read of the Swarm for
    *  MACHINE_READS_MS. Commands that admit work still look up afresh (store.ts executeOnce). Outside any transaction, as every read is. */
   private machineLookups(state: SuperTabState): Promise<MachineReads> {
-    if (!state.machines?.length) return Promise.resolve([[], [], {}])
+    if (!state.machines?.length) return Promise.resolve([[], {}])
     const now = this.now()
-    const key = JSON.stringify([state.id, state.environment, state.workspaceId ?? null, state.machines.map(m => m.machineId).sort()])
+    const key = JSON.stringify([state.id, state.environment, state.machines.map(m => m.machineId).sort()])
     const kept = this.machineReads.get(key)
     if (kept && now >= kept.at && now - kept.at < MACHINE_READS_MS) return kept.read
     for (const [old, entry] of this.machineReads) {
       if (now >= entry.at && now - entry.at < MACHINE_READS_MS) break
       this.machineReads.delete(old)
     }
-    const entry = { at: now, read: Promise.all([this.store.machineFacts(this.db, state), this.store.otherWorkspaceMachines(this.db, state)])
-      .then(([facts, other]): MachineReads => [facts.team, other, facts.versions]) }
+    const entry = { at: now, read: this.store.machineFacts(this.db, state).then((facts): MachineReads => [facts.team, facts.versions]) }
     this.machineReads.delete(key)
     this.machineReads.set(key, entry)
     // A failed lookup is never reused.
