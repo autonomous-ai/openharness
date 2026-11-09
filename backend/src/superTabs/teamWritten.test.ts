@@ -28,7 +28,7 @@ function swarm() {
   state.machines = [pool('mac', 'computer'), pool('mac-team', 'team', { hostMachineId: 'mac' }),
     pool('mate-mac', 'computer', { contributorId: 'mate', membershipGeneration: 'm1' })]
   const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
-    const effects = applyCommand(state, actor, command, { now: NOW, operationId: `op-${++sequence}`, teamMachines: ['mac-team'],
+    const effects = applyCommand(state, actor, command, { now: NOW, operationId: `op-${++sequence}`,
       contribution: { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }, ...context })
     state = effects.state
     return effects

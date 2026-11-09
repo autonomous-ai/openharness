@@ -47,10 +47,19 @@ describe('the delivery poll memory every server shares', () => {
   // A held delivery is answered from what the last full poll found open (store.ts deliveries), on whichever server polls next.
   it('gives back the open deliveries a full poll found, the stamp it found them at and the grants it checked', async () => {
     const redis = fakeRedis()
-    const found = { at: 1_234, open: { stamp: 7, seen: ['d1', 'd2'], allowed: ['d2'], swarm: { workspaceId: 'w1', environment: 'prod' },
+    const found = { at: 1_234, open: { stamp: 7, seen: ['d1', 'd2'], allowed: ['d2'], swarm: { environment: 'prod' },
       grants: { a1: { contributorId: 'u1', machineId: 'm1', machineOwnerId: 'u2', hostGrant: 'g1' }, a2: { contributorId: 'u2', machineId: 'm2', machineOwnerId: 'u2', hostGrant: null } } } }
     await redisPollMemory(redis).set('tab:agent:user', found)
     expect(await redisPollMemory(redis).get('tab:agent:user')).toEqual(found)
+  })
+
+  // During a deploy an older server still writes the Swarm's Workspace beside its environment: Workspaces are gone, and it is not kept.
+  it('reads a remembered poll an older server wrote with the Swarm\'s Workspace, without it', async () => {
+    const redis = fakeRedis()
+    const older = { at: 1_234, open: { stamp: 7, seen: ['d1'], allowed: ['d1'], swarm: { workspaceId: 'w1', environment: 'prod' },
+      grants: { a1: { contributorId: 'u1', machineId: 'm1', machineOwnerId: 'u2', hostGrant: null } } } }
+    await redis.set('swarm:polled:tab:agent:user', JSON.stringify(older), 'PX', 30_000)
+    expect(await redisPollMemory(redis).get('tab:agent:user')).toEqual({ ...older, open: { ...older.open, swarm: { environment: 'prod' } } })
   })
 
   // During a deploy an older server still writes the bare time: its full poll counts, with nothing open remembered.

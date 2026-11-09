@@ -500,6 +500,7 @@ void main() {
       WidgetTester tester, {
       required bool withApp,
       VoidCallback? onNewAgent,
+      VoidCallback? onAttachAgent,
     }) async {
       final server = swarm()..state['agents'] = [_agent('kestrel', 'Kestrel')];
       final c = server.controller(
@@ -521,6 +522,7 @@ void main() {
               onInvite: () {},
               onAddAgent: (_) {},
               onNewAgent: onNewAgent,
+              onAttachAgent: onAttachAgent,
               onOpenTerminal: (_) {},
               machineName: (_) => 'Mac Studio',
               board: true,
@@ -548,6 +550,37 @@ void main() {
       final c = await view(tester, withApp: true);
       expect(key('project-sidebar-agents-add'), findsNothing);
       expect(key('super-new-agent-row'), findsNothing);
+      expect(key('project-sidebar-agents-attach'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
+    });
+
+    testWidgets('Attach, before the +, opens the picker of running agents', (
+      tester,
+    ) async {
+      var attached = 0, opened = 0;
+      final c = await view(
+        tester,
+        withApp: true,
+        onNewAgent: () => opened++,
+        onAttachAgent: () => attached++,
+      );
+      final attach = key('project-sidebar-agents-attach');
+      expect(attach, findsOneWidget);
+      // Attach sits just before the +, at the heading's right edge.
+      expect(
+        tester.getTopRight(attach).dx,
+        lessThanOrEqualTo(
+          tester.getTopLeft(key('project-sidebar-agents-add')).dx,
+        ),
+      );
+      expect(
+        find.descendant(of: attach, matching: find.byIcon(AppIcons.link2)),
+        findsOneWidget,
+      );
+      await tester.tap(attach);
+      await tester.pump();
+      expect((attached, opened), (1, 0));
       await tester.pumpWidget(const SizedBox());
       c.dispose();
     });

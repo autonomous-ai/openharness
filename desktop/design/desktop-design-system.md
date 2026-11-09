@@ -495,14 +495,28 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   lighter shade as text in dark, its darker in light), then who opened it and
   how long ago (`69tc · 6h`, with the face of the agent its builder label names
   before it) and, at the right, how many comments it has (a speech bubble and
-  the count, none for no comments). The board shows what it last read at once
+  the count, none for no comments). A task with an open pull request (one
+  that closes it, "Closes #14", else one on its builder's branch for it,
+  `pip/14`) shows it at the card's top right (`SwarmPullChip`,
+  `super_tabs/pull_chip.dart`): the pull request's icon, number and one word in
+  a capsule of its colour at 14%, by the rule Harness merges by
+  (`super_tabs/github_pulls.dart`): Draft and Checks (running) in muted grey,
+  Review (green checks, no READ-OK on its head yet) in the accent, Failing and
+  Conflict in the error red, Held (a reader's last word is a HOLD) in `warn`,
+  and Merging (a READ-OK on its head from someone other than its builder, two
+  for TWO READS, checks green) in `online`; in a narrow column the word
+  shortens, never the task's number. No pull request, no chip. The open pull
+  requests are one GraphQL read after the issues (the newest 50), and a read
+  of them that fails keeps the last chips. The board shows what it last read at once
   and brings the rest: the newest hundred first, then the others, but only
   where nothing shows yet: a list already shown stays whole while a refresh is
   read, one refresh at a time. A refresh that fails keeps the cards and says
   why in the bar, in 12 metadata grey, with a retry icon (`Try again`).
   A card opens its issue in the board's place (`SwarmIssuePanel`,
   `super_tabs/issue_panel.dart`), titled by its number, with Open in GitHub:
-  its title, its agent, state and who opened it, its labels, then its text and
+  its title, its agent, state and who opened it, its labels, its open pull
+  request as a row (the chip, its title and branch, and Open, which goes to it
+  on GitHub), then its text and
   comments as posts, each under the face and name its first words sign it with
   (`Migrate, 09:3x: …`) and its GitHub login. It reads the newest 30
   comments; the rest are one tap away (`1,546 earlier comments` and Show,
@@ -578,7 +592,7 @@ Top to bottom:
 
 ```text
  autonomous.ai ⌄              org name, semibold 13 primary; ⌄ only on hover
- Your Team             ⌄  +  quiet heading; ⌄ folds the list (open); + opens New agent
+ Your Team           ⌄  ∞ +  quiet heading; ⌄ folds the list (open); ∞ (link) Attach agent, + New agent
  ◎  River                     the PM wears the gold ring
  ◉  Kai                       bold: something new from it
  Projects              ⌄  +  quiet heading; ⌄ folds the list (open); + opens New project
@@ -595,7 +609,7 @@ Top to bottom:
 | Quiet row | `SuperTabQuietRow` (`super_tabs/buddy_rows.dart`) | 30 high, 2 under it. A 20 face (`SuperTabQuietRow.faceSize`) or a 16 icon centred in the 32 column, so every name starts on one line. Name 15 (`SwarmType.sidebar`), the size of a project's row: read `textSecondary` regular, unread `textPrimary` semibold, the open row `SidebarInk.selected` with a primary name. One detail, 12 (`DesktopChrome.metadata`) in the tertiary grey (`SidebarInk.faint`, `textFaint`), right-aligned, tabular figures, no brackets; it keeps up to 40% of a row whose name is long, and is cut first. |
 | Shared edges | `SuperTabQuietRow`, gallery check "the left pane's details end at one edge" | Every section's rows share the left edge (the faces' and icons' column), the right edge (every detail ends `AppDesktop.controlGap` from the row's right, with no column kept for anything after it) and the baselines (30 high rows). A heading's + ends on that right edge. |
 | No status marks | — | The left pane draws no spinner, check, `?` or failed mark (anh Dee 22:25, task #4645): status lives on the Tasks cards. An agent with something new is its row's semibold primary name, like an unread Slack channel; read rows stay regular, and the open row keeps its fill. |
-| Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) beside its name, always; the org name's chevron shows only while hovered or focused. Your Team and Projects start open, Your Machines and Top Teams folded; the reader's choice is kept. `onAdd` puts the `plus` button at its right, as on every section heading: Your Team's opens New agent, Projects' New project. |
+| Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) beside its name, always; the org name's chevron shows only while hovered or focused. Your Team and Projects start open, Your Machines and Top Teams folded; the reader's choice is kept. `onAdd` puts the `plus` button at its right, as on every section heading: Your Team's opens New agent, Projects' New project. Your Team also has `onAttach`, the `link` button before the + (tooltip Attach agent; anh Dee 2026-11-09: "like ⌘P, while + is like ⌘N"): ⌘P's picker titled Attach agent, of the Claude Code and Codex sessions running on its person's own computers, those on the team left out and the rest unavailable with why; the one chosen joins with its own chat, which opens. |
 | Org name | `SuperTabQuietHeading.org` | Semibold 13 primary, no icon; its chevron only on hover; opens the Swarm menu. |
 | Person | `SuperTabAvatar.person` at 20 | A photo, or an initial on the neutral grey disc. |
 
