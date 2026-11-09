@@ -45,10 +45,12 @@ describe('closing a tab\'s Personal project', () => {
     const f = setup()
     const tab = f.create('personal-tab-abc')
     const chat = f.chatOf(tab)!.id
-    f.run({ type: 'message.send', conversationId: chat, text: 'A note to keep', replyTo: null, recipientIds: [] })
+    const lead = f.run({ type: 'agent.add', conversationId: chat, machineId: 'owner-mac', harnessId: 'pm', name: 'pm', configuration, lead: true }).result.agentId as string
+    // Its PM writes there: a project's channel is agents only (Swarm v4).
+    f.run({ type: 'message.send', conversationId: chat, text: 'The plan for this project is ready.', replyTo: null, recipientIds: [] },
+      { kind: 'agent', agentId: lead, machineOwnerId: 'owner' })
     // The store numbers the message as it writes it (parts/commit.ts numberMessages): its chat's sequence moves.
     f.chatOf(tab)!.lastMessageSequence = 1
-    const lead = f.run({ type: 'agent.add', conversationId: chat, machineId: 'owner-mac', harnessId: 'pm', name: 'pm', configuration, lead: true }).result.agentId as string
     expect(f.close(tab, 'personal-tab-abc').result).toMatchObject({ outcome: 'archived' })
     expect(f.project(tab)).toMatchObject({ archived: true })
     expect(f.chatOf(tab)).toMatchObject({ archived: true })

@@ -37,20 +37,6 @@ function setup() {
 }
 
 describe('what the PM owes', () => {
-  it('is a person\'s message to the PM, with who asked and when', () => {
-    const { f, post } = setup()
-    const ask = post(null, 'lead', 'Can the board show who is working?')
-    expect(f.group('lead').owed).toEqual([{ id: ask, personId: 'owner', at: f.now, thread: ask }])
-  })
-
-  it('is not an agent\'s message, nor a person\'s to another agent', () => {
-    const { f, post, owed } = setup()
-    post(f.dev, 'lead', 'PR #12 is ready.')
-    const line = post(f.dev, 'lead', 'Engineer here: a question for Ken.')
-    // A person answering the Engineer's line in its thread talks to the Engineer, not the PM.
-    post(null, 'lead', 'Use the second option.', { reply: line, replyAuthor: { kind: 'agent', id: f.dev, name: 'dev' } as Author })
-    expect(owed()).toEqual([])
-  })
 
   it('is not a message in a private chat', () => {
     const { f, post, owed } = setup()
@@ -61,98 +47,6 @@ describe('what the PM owes', () => {
     expect(owed('private')).toEqual([])
   })
 
-  it('is settled by the PM\'s reply in its thread, which settles the whole thread', () => {
-    const { f, post, owed } = setup()
-    const ask = post(null, 'lead', 'Why is Working 0?')
-    const more = post(null, 'lead', 'Still nothing.', { reply: ask })
-    const other = post(null, 'lead', 'And a second topic.')
-    expect(owed()).toEqual([ask, more, other])
-    post(f.lead, 'lead', 'Two agents start now.', { reply: more, thread: ask })
-    expect(owed()).toEqual([other])
-  })
-
-  it('is settled by the PM\'s answer right below it, that message alone', () => {
-    const { f, post, owed } = setup()
-    const first = post(null, 'lead', 'First ask.')
-    const second = post(null, 'lead', 'Second ask.')
-    post(f.lead, 'lead', 'Done.', { answers: second })
-    expect(owed()).toEqual([first])
-  })
-
-  it.each(['thumbs_up', 'tada', 'heart', 'laugh', 'eyes', 'check', 'rocket'])('is settled by the PM’s %s reaction without needing words', emoji => {
-    const { f, post, owed, react } = setup()
-    const ask = post(null, 'lead', 'The PM has more tabs than my browser 😂')
-    react(f.lead, 'lead', ask, emoji)
-    expect(owed()).toEqual([])
-    const project = projectsOf(f.state)[0]!
-    // Main's inbox also lists unread process notes (#3298): only the owed-ask lines matter here.
-    expect(owedLines(f.state, project, f.now).join('\n')).not.toMatch(/Owed asks/)
-    expect(storedPulse(f.state, project)!.asks.count).toBe(0)
-  })
-
-  it('lets the PM decide a question needs only a reaction, without settling its thread siblings', () => {
-    const { f, post, owed, react } = setup()
-    const ask = post(null, 'lead', 'Are we collecting tabs now?')
-    const sibling = post(null, 'lead', 'And a second message.', { reply: ask })
-    react(f.lead, 'lead', ask, 'eyes', false)
-    expect(owed()).toEqual([ask, sibling])
-    react(f.lead, 'lead', ask, 'eyes')
-    expect(owed()).toEqual([sibling])
-  })
-
-  it('is settled by a task the PM opens from it', () => {
-    const { post, owed, taskFrom } = setup()
-    const ask = post(null, 'lead', 'Show unanswered asks on the board.')
-    taskFrom(ask)
-    expect(owed()).toEqual([])
-  })
-
-  // River's ruling on Hugo's review of #3209: only a task the PM opens from the ask settles it; one anyone else opens leaves the
-  // PM's answer owed.
-  it('is not settled by a task someone else opens from it', () => {
-    const { f, post, owed, request } = setup()
-    const ask = post(null, 'lead', 'Can we get dark mode?')
-    f.run({ type: 'conversation.create', title: 'Dark mode', brief: 'Dark mode.', checks: [], requestMessageId: ask } as Command, owner,
-      { request: request(ask) } as Partial<CommandContext>)
-    expect(owed()).toEqual([ask])
-  })
-
-  // ReviewPulse2's review of #3209: a deleted ask has nothing left to answer, and its link would open a message that is gone.
-  it('is settled when its message is deleted, kept as deleted or not', () => {
-    const { f, post, owed } = setup()
-    const [gone, kept] = [post(null, 'lead', 'Never mind.'), post(null, 'lead', 'Drop this too.')]
-    const remove = (messageId: string, hasReplies: boolean) => f.run({ type: 'message.delete', conversationId: 'lead', messageId } as Command, owner,
-      { messageChange: { messageId, author: { kind: 'person', id: 'owner' }, plain: true, deleted: false, hasFiles: false, hasReplies, text: 'x', sequence: 1 } })
-    remove(gone, false)
-    remove(kept, true)
-    expect(owed()).toEqual([])
-  })
-
-  // River, on ReviewPulse2's review of #3209: the asks of a person who left the Swarm are owed to nobody.
-  it('is settled when the person who asked leaves the Swarm', () => {
-    const { f, owed } = setup()
-    const peer = { kind: 'person' as const, userId: 'peer', email: 'peer@example.com' }
-    const invited = f.run({ type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' } as Command)
-    f.run({ type: 'invite.accept', inviteId: invited.result.inviteId as string } as Command, peer)
-    f.run({ type: 'message.send', conversationId: 'lead', text: 'One ask before I go.', replyTo: null, recipientIds: [] } as Command, peer)
-    expect(owed()).toHaveLength(1)
-    f.run({ type: 'member.remove', userId: 'peer' } as Command)
-    expect(owed()).toEqual([])
-  })
-
-  it('is not settled by another agent\'s reply or reaction', () => {
-    const { f, post, owed, react } = setup()
-    const ask = post(null, 'lead', 'Who reviews #12?')
-    post(f.dev, 'lead', 'I can.', { reply: ask })
-    react(f.dev, 'lead', ask, 'check')
-    expect(owed()).toEqual([ask])
-  })
-
-  it('keeps the newest 50 of one chat', () => {
-    const { f, post, owed } = setup()
-    const asks = Array.from({ length: 55 }, (_, i) => { f.tick(MINUTE); return post(null, 'lead', `Ask ${i}.`) })
-    expect(owed()).toEqual(asks.slice(5))
-  })
 })
 
 describe('the pulse', () => {
@@ -168,17 +62,6 @@ describe('the pulse', () => {
   }
   const status = (f: ReturnType<typeof stepsFixture>, task: string, by: string, value: string, result: string | null) =>
     f.run({ type: 'work.status', conversationId: task, assignmentId: f.group(task).assignment!.id, status: value, result } as Command, f.as(by))
-
-  it('counts the asks the PM owes, the oldest one\'s age and who asked', () => {
-    const { f, post } = setup()
-    const first = post(null, 'lead', 'First.')
-    f.tick(4 * MINUTE)
-    post(null, 'lead', 'Second.')
-    const pulse = pulseOf(f)
-    expect(pulse.pmId).toBe(f.lead)
-    expect(pulse.asks).toMatchObject({ count: 2, oldestAt: f.now - 4 * MINUTE, personId: 'owner' })
-    expect(pulse.asks.list[0]).toEqual({ conversationId: 'lead', messageId: first, personId: 'owner', at: f.now - 4 * MINUTE })
-  })
 
   it('counts Working of the crew: agents of the project with a task they work on, never the PM', () => {
     const { f } = setup()
@@ -249,40 +132,11 @@ describe('the pulse', () => {
     expect(pulseOf(f).nextUp.conversationIds).toContain(today)
   })
 
-  it('says when each red rule turns red, by the limits it sends', () => {
-    const { f, post } = setup()
-    expect(pulseOf(f).limits).toEqual({ askMinutes: 5, idleMinutes: 10, lostMinutes: 10 })
-    expect(pulseOf(f).redAt).toEqual({ asks: null, idle: null, lost: null, held: null })
-    post(null, 'lead', 'An ask.')
-    const askedAt = f.now
-    expect(pulseOf(f).redAt.asks).toBe(askedAt + 5 * MINUTE)
-    status(f, f.task, f.dev, 'blocked', null)
-    expect(pulseOf(f).redAt.held).toBe(0)
-  })
-
   it('a lost task turns red 10 minutes after it lost its agent', () => {
     const { f } = setup()
     f.group(f.task).assignment!.status = 'lost'
     f.group(f.task).assignment!.lost = { reason: 'its session stopped', at: f.now }
     expect(pulseOf(f).redAt.lost).toBe(f.now + 10 * MINUTE)
-  })
-
-  it('marks when Working fell to 0 while work waits, and turns red 10 minutes later; work again clears it', () => {
-    const { f } = setup()
-    open(f, 'Waiting task')
-    expect(pulseOf(f).idleSince).toBeNull()
-    f.tick(MINUTE)
-    status(f, f.task, f.dev, 'done', 'Merged.')
-    const idleAt = f.now
-    f.tick(MINUTE)
-    f.run({ type: 'message.send', conversationId: 'lead', text: 'Anyone?', replyTo: null, recipientIds: [] } as Command)
-    expect(stored(f).idleSince).toBe(idleAt)
-    expect(stored(f).asks.count).toBe(1)
-    expect(pulseOf(f).redAt.idle).toBe(idleAt + 10 * MINUTE)
-    const task = pulseOf(f).nextUp.conversationIds[0]!
-    f.run({ type: 'work.assign', conversationId: task, agentId: f.dev }, f.as(f.lead))
-    expect(pulseOf(f).idleSince).toBeNull()
-    expect(pulseOf(f).redAt.idle).toBeNull()
   })
 
 })

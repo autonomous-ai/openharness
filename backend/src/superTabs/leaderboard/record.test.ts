@@ -549,20 +549,9 @@ describe('other ways a person unblocks work: decisions, approvals and tags', () 
   })
 
   for (const word of ['GO', 'go ahead', 'Approve', 'approved, thanks', 'Duyệt', 'duyet nhe', 'DUYỆT nhé', '  Go!']) {
-    it(`counts "${word}" in reply to the Lead's ask as an approval, with how long the ask waited`, () => {
-      const f = fixture(), { reply } = leadAsk(f, HOUR)
-      f.at(4 * HOUR)
-      f.say('lead', owner, word, reply.id, reply)
-      expect(f.group('lead').ledger?.unblocks).toEqual([{ personId: 'owner', at: 4 * HOUR, waitedMs: 3 * HOUR, kind: 'approval', item: reply.id }])
-    })
   }
 
   for (const word of ['ok', 'OK, go', 'goal: ship Friday', 'approves nothing yet', 'no, not GO']) {
-    it(`does not count "${word}" as an approval`, () => {
-      const f = fixture(), { reply } = leadAsk(f)
-      f.say('lead', owner, word, reply.id, reply)
-      expect(f.group('lead').ledger?.unblocks).toBeUndefined()
-    })
   }
 
   it('counts an approval only in reply to the project\'s Lead, never to another agent', () => {
@@ -570,16 +559,6 @@ describe('other ways a person unblocks work: decisions, approvals and tags', () 
     const said = f.say(id, f.asAgent(worker), 'Shall I start?').messages[0]!
     f.say(id, owner, 'GO', said.id, { id: said.id, conversationId: id, author: said.author, createdAt: 1_000 })
     expect(f.group(id).ledger?.unblocks).toBeUndefined()
-  })
-
-  it('counts one approval per ask, however many people or times reply GO', () => {
-    const f = fixture()
-    f.invitePeer()
-    const { reply } = leadAsk(f)
-    f.say('lead', owner, 'GO', reply.id, reply)
-    f.say('lead', owner, 'GO again', reply.id, reply)
-    f.say('lead', peer, 'Approved', reply.id, reply)
-    expect(f.group('lead').ledger?.unblocks).toEqual([expect.objectContaining({ personId: 'owner', kind: 'approval' })])
   })
 
   it('credits a reply to the tags waiting on the person once, timed from the oldest', () => {

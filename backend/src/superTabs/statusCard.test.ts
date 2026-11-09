@@ -20,7 +20,7 @@ function cardFixture() {
   const work = (status: 'working' | 'review' | 'blocked' | 'needs_human' | 'done', result: string | null = null) => {
     const effects = f.run({ type: 'work.status', conversationId: f.task, assignmentId: assignment(), status, result }, f.as(f.dev))
     // As the store does after each command: the Ready line's link is the task's linked pull request.
-    if (result?.includes(PR)) { appendPullRequestUrls(f.group(f.task), [PR]); f.run({ type: 'message.send', conversationId: 'lead', text: 'tick', replyTo: null, recipientIds: [] }) }
+    if (result?.includes(PR)) { appendPullRequestUrls(f.group(f.task), [PR]); f.run({ type: 'message.send', conversationId: f.task, text: 'tick', replyTo: null, recipientIds: [] }) }
     return effects
   }
   return Object.assign(f, { chat, lines, line, text, work, assignment })
@@ -74,7 +74,7 @@ describe('the status card the server writes (#3593)', () => {
     const ledger = projectOf(f.state, 'lead').releases!
     ledger.pending[0]!.components = ['backend']
     ledger.pending[0]!.shippedIn = { backend: 'v1.4.18' }
-    f.run({ type: 'message.send', conversationId: 'lead', text: 'hello', replyTo: null, recipientIds: [] })
+    f.run({ type: 'message.send', conversationId: f.task, text: 'hello', replyTo: null, recipientIds: [] })
     expect(f.line()).toBeUndefined()
   })
 
@@ -108,7 +108,7 @@ describe('the status card the server writes (#3593)', () => {
     const f = cardFixture()
     // The coordinator's whole card of an earlier release: stored with no mark that it is its own lines.
     projectOf(f.state, 'lead').status = { text: 'Old whole card: #1 Fix login working.', at: new Date(0).toISOString(), by: f.lead }
-    f.run({ type: 'message.send', conversationId: 'lead', text: 'tick', replyTo: null, recipientIds: [] })
+    f.run({ type: 'message.send', conversationId: f.task, text: 'tick', replyTo: null, recipientIds: [] })
     expect(f.text()).toBe('#1 "Fix login": working. Waits on: nothing. Owner: Andie. Since 00:00 UTC.')
     // Its next report is its own lines.
     f.run({ type: 'project.report', projectId: 'lead', through: {}, text: 'Freeze starts Friday.' }, f.as(f.lead))
@@ -144,7 +144,7 @@ describe('the status card the server writes (#3593)', () => {
   it('writes no line for a task stored without one that a command does not move, and still shows it on the card', () => {
     const f = cardFixture()
     delete f.group(f.task).statusLine
-    f.run({ type: 'message.send', conversationId: 'lead', text: 'tick', replyTo: null, recipientIds: [] })
+    f.run({ type: 'message.send', conversationId: f.task, text: 'tick', replyTo: null, recipientIds: [] })
     expect(f.group(f.task).statusLine).toBeUndefined()
     expect(f.text()).toBe('#1 "Fix login": working. Waits on: nothing. Owner: Andie.')
     // The command that moves it writes it.

@@ -4665,6 +4665,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'message.send': {
       const joining = actor.kind === 'agent' && !state.conversations.find(c => c.id === command.conversationId)?.agentIds.includes(actor.agentId)
       const group = postable(state, actor, command.conversationId)
+      // Swarm v4 (anh Dee, 2026-11-08): a project's channel and its threads are agents only; people read them and talk to their
+      // own agents. The apps only hid the composer, so an older app or the phone still posted there (2026-11-09).
+      if (actor.kind === 'person' && isProjectChat(state, group)) fail('AGENTS_ONLY', 'Only agents post in a project\'s channel. Talk to your agents.', 403)
       // Posting in its project chat joins it nowhere (postable), so it takes no work there either.
       if (joining && group.agentIds.includes(actor.agentId)) teamJoin(groupProject(state, group), actor.agentId, group)
       const ids = [...new Set(command.attachmentIds ?? [])]

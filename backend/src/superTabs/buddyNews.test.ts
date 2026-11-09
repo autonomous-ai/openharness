@@ -98,11 +98,6 @@ describe('which Buddy a project-chat message reaches (Diego, 10-29)', () => {
     expect(buddiesTold(f.state, notice(forRecipients({ kind: 'work-cancelled' })), null)).toEqual([])
   })
 
-  it('is nobody for the person\'s own words: they know what they wrote', () => {
-    const f = setup(), sent = f.propose()
-    expect(f.pmPost('Thanks, go ahead.', { replyTo: sent }, peer).buddyRecipients).toBeUndefined()
-  })
-
   it('is nobody once its person no longer reads the project, has left, or rejoined at a new membership', () => {
     const lost = setup(), sent = lost.propose()
     lost.state.projects!.find(p => p.id === lost.app.projectId)!.visibility = 'private'

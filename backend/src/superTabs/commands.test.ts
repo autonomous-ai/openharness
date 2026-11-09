@@ -296,39 +296,24 @@ describe('Super Tab collaboration policy', () => {
     expect(f.state.conversations.filter(c => c.kind !== 'agent-chat')).toHaveLength(2) // Lead and the group
   })
 
-  it('routes a human reply to its author, and does not create agent chatter loops', () => {
-    const f = fixture()
-    const lead = f.add('lead', 'owner', 'lead', true)
-    const worker = f.add('worker')
-    const posted = f.run({ type: 'message.send', conversationId: 'lead', text: 'Which behavior?', replyTo: null, recipientIds: [] },
-      { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }).messages[0]!
-    // An agent's post reaches only who it names (#2963).
-    expect(posted.recipients).toEqual([])
-    const reply = f.run({ type: 'message.send', conversationId: 'lead', text: 'Keep the local copy.', replyTo: posted.id, recipientIds: [] }, owner,
-      { reply: { id: posted.id, conversationId: 'lead', author: posted.author, createdAt: 0 } })
-    expect(reply.messages[0]!.recipients).toEqual([worker])
-    const fresh = f.run({ type: 'message.send', conversationId: 'lead', text: 'Continue.', replyTo: null, recipientIds: [] })
-    expect(fresh.messages[0]!.recipients).toEqual([lead])
-    expect(() => f.run({ type: 'message.send', conversationId: 'lead', text: 'Cross-group reply', replyTo: posted.id, recipientIds: [] }, owner,
-      { reply: { id: posted.id, conversationId: 'elsewhere', author: posted.author, createdAt: 0 } })).toThrow('Reply to a message in this conversation')
-  })
-
   it('files a reply under its thread root, never a nested thread, and keeps a reply to a pre-thread message inline', () => {
     const f = fixture()
     const lead = f.add('lead', 'owner', 'lead', true)
-    const root = f.run({ type: 'message.send', conversationId: 'lead', text: 'Should we do threads?', replyTo: null, recipientIds: [] }).messages[0]!
+    // In a task's chat: a project's channel is agents only (Swarm v4).
+    const chat = f.group()
+    const root = f.run({ type: 'message.send', conversationId: chat, text: 'Should we do threads?', replyTo: null, recipientIds: [] }).messages[0]!
     expect(root.thread).toBeUndefined()
-    const first = f.run({ type: 'message.send', conversationId: 'lead', text: 'Yes.', replyTo: root.id, recipientIds: [] },
-      { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }, { reply: { id: root.id, conversationId: 'lead', author: root.author, createdAt: 0, thread: root.id } }).messages[0]!
+    const first = f.run({ type: 'message.send', conversationId: chat, text: 'Yes.', replyTo: root.id, recipientIds: [] },
+      { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }, { reply: { id: root.id, conversationId: chat, author: root.author, createdAt: 0, thread: root.id } }).messages[0]!
     expect(first).toMatchObject({ replyTo: root.id, thread: root.id })
     expect(first.alsoInChat).toBeUndefined()
     // A reply to a reply joins the root's thread.
-    const second = f.run({ type: 'message.send', conversationId: 'lead', text: 'Agreed.', replyTo: first.id, recipientIds: [], alsoSend: true },
-      owner, { reply: { id: first.id, conversationId: 'lead', author: first.author, createdAt: 0, thread: root.id } }).messages[0]!
+    const second = f.run({ type: 'message.send', conversationId: chat, text: 'Agreed.', replyTo: first.id, recipientIds: [], alsoSend: true },
+      owner, { reply: { id: first.id, conversationId: chat, author: first.author, createdAt: 0, thread: root.id } }).messages[0]!
     expect(second).toMatchObject({ replyTo: first.id, thread: root.id, alsoInChat: true })
     // A message written before threads has none: a reply to it stays an inline quote.
-    const inline = f.run({ type: 'message.send', conversationId: 'lead', text: 'Old question answered.', replyTo: 'old-message', recipientIds: [], alsoSend: true },
-      owner, { reply: { id: 'old-message', conversationId: 'lead', author: root.author, createdAt: 0, thread: null } }).messages[0]!
+    const inline = f.run({ type: 'message.send', conversationId: chat, text: 'Old question answered.', replyTo: 'old-message', recipientIds: [], alsoSend: true },
+      owner, { reply: { id: 'old-message', conversationId: chat, author: root.author, createdAt: 0, thread: null } }).messages[0]!
     expect(inline.replyTo).toBe('old-message')
     expect(inline.thread).toBeUndefined()
     expect(inline.alsoInChat).toBeUndefined()
@@ -823,11 +808,12 @@ describe('Super Tab collaboration policy', () => {
 
   it('allows discussion while paused and refuses new work, without mutating rejected state', () => {
     const f = fixture()
+    const chat = f.group()
     f.run({ type: 'tab.pause', paused: true })
     const before = JSON.stringify(f.state)
     expect(() => f.group()).toThrow('paused')
     expect(JSON.stringify(f.state)).toBe(before)
-    expect(f.run({ type: 'message.send', conversationId: 'lead', text: 'Let’s reconsider.', replyTo: null, recipientIds: [] }).messages).toHaveLength(1)
+    expect(f.run({ type: 'message.send', conversationId: chat, text: 'Let’s reconsider.', replyTo: null, recipientIds: [] }).messages).toHaveLength(1)
   })
 
   it('lets a person create an empty group and define its acceptance criteria before delegation', () => {
@@ -1858,15 +1844,19 @@ it('rejects embedded credentials in shared project metadata', () => {
 
 describe('message attachments', () => {
   const file = { id: 'file-1', name: 'screen.png', mime: 'image/png', size: 12, url: 'https://cdn.example.test/super-tabs/tab/abc/screen.png' }
-  const send = (attachmentIds?: string[], text = ''): Command => ({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [], ...(attachmentIds ? { attachmentIds } : {}) })
+  // In a task's chat: a project's channel is agents only (Swarm v4).
+  let chat = ''
+  const send = (attachmentIds?: string[], text = ''): Command => ({ type: 'message.send', conversationId: chat, text, replyTo: null, recipientIds: [], ...(attachmentIds ? { attachmentIds } : {}) })
   it('records verified files on the message and allows empty text with one', () => {
     const f = fixture()
+    chat = f.group()
     const sent = f.run(send(['file-1', 'file-1']), owner, { attachments: [file] })
     expect(sent.messages).toEqual([expect.objectContaining({ text: '', attachments: [file] })])
     expect(f.run(send(undefined, 'Plain text.')).messages[0]).not.toHaveProperty('attachments')
   })
   it('refuses empty text without files and a file the store did not verify', () => {
     const f = fixture()
+    chat = f.group()
     expect(() => f.run(send())).toThrow('Write a message or attach a file.')
     expect(() => f.run(send(['file-1']))).toThrow('Upload this file again')
     expect(() => commandSchema.parse(send(Array.from({ length: 11 }, (_, i) => `file-${i}`)))).toThrow()
@@ -1883,24 +1873,30 @@ describe('voice messages', () => {
   const voice = { durationMs: 81_000, waveform: new Array(48).fill(7), transcribed: true }
   const clip = { id: 'voice-1', name: 'Voice message.wav', mime: 'audio/wav', size: 2_592_044, url: 'https://cdn.example.test/super-tabs/tab/abc/Voice_message.wav', voice }
   const file = { id: 'file-1', name: 'screen.png', mime: 'image/png', size: 12, url: 'https://cdn.example.test/super-tabs/tab/abc/screen.png' }
-  const send = (attachmentIds: string[], text = ''): Command => ({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [], attachmentIds })
+  // In a task's chat: a project's channel is agents only (Swarm v4).
+  let chat = ''
+  const send = (attachmentIds: string[], text = ''): Command => ({ type: 'message.send', conversationId: chat, text, replyTo: null, recipientIds: [], attachmentIds })
   it('makes the clip\'s words the message\'s text, and keeps its facts on the file', () => {
-    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
+    const f = fixture()
+    chat = f.group()
     const sent = f.run(send(['voice-1']), owner, { attachments: [clip], voiceWords: { 'voice-1': 'Ship the parser today.' } })
-    expect(sent.messages).toEqual([expect.objectContaining({ text: 'Ship the parser today.', attachments: [clip], recipients: [lead] })])
+    expect(sent.messages).toEqual([expect.objectContaining({ text: 'Ship the parser today.', attachments: [clip] })])
   })
   it('sends a clip with no words with an empty text', () => {
     const f = fixture()
+    chat = f.group()
     const quiet = { ...clip, voice: { ...voice, transcribed: false, failure: 'limit' as const } }
     expect(f.run(send(['voice-1']), owner, { attachments: [quiet] }).messages[0]).toMatchObject({ text: '', attachments: [quiet] })
   })
   it('sends a voice message alone: no typed text, tags or other files with it', () => {
     const f = fixture()
+    chat = f.group()
     expect(() => f.run(send(['voice-1'], 'and also this'), owner, { attachments: [clip] })).toThrow(expect.objectContaining({ code: 'VOICE_ALONE', status: 400 }))
     expect(() => f.run(send(['voice-1', 'file-1']), owner, { attachments: [clip, file] })).toThrow(expect.objectContaining({ code: 'VOICE_ALONE' }))
   })
   it('removes a credential spoken in it, as from typed text', () => {
     const f = fixture()
+    chat = f.group()
     const token = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_')
     const sent = f.run(send(['voice-1']), owner, { attachments: [clip], voiceWords: { 'voice-1': `the token is ${token}` } })
     expect(sent.messages[0]!.text).toBe(`the token is ${CREDENTIAL_MARKER}`)
@@ -2176,17 +2172,12 @@ describe('any agent of the project', () => {
       return { f, task, step, engineer, reviewer, chat, assigned }
     }
 
-    it('posts a top-level line and a thread reply there, joins nothing, and reaches the coordinator only by name (#2963)', () => {
+    it('posts a top-level line there, joins nothing, and reaches the coordinator only by name (#2963)', () => {
       const { f, engineer, reviewer, chat } = working()
       const members = [...chat().agentIds]
       for (const agentId of [engineer, reviewer]) {
-        // Each routing case has a fresh ask: main chat now permits two posts per ask (#3598).
-        const asked = f.run(post('Can someone check the login bug?')).messages[0]!
         const line = f.run(post('I am on it.'), actorOf(agentId)).messages.at(-1)!
         expect(line).toMatchObject({ conversationId: 'lead', author: { kind: 'agent', id: agentId }, replyTo: null, recipients: [] })
-        const reply = f.run(post('Found it: the token expired.', asked.id), actorOf(agentId),
-          { reply: { id: asked.id, conversationId: 'lead', author: asked.author, createdAt: 0, thread: asked.id } }).messages.at(-1)!
-        expect(reply).toMatchObject({ conversationId: 'lead', replyTo: asked.id, thread: asked.id, recipients: [] })
         expect(f.run(post('Need a ruling.', null, [f.lead]), actorOf(agentId)).messages.at(-1)!.recipients).toEqual([f.lead])
       }
       expect(chat().agentIds).toEqual(members)
@@ -2271,7 +2262,8 @@ describe('any agent of the project', () => {
     // River, 2026-11-04 (#2924): an agent with work in the project reacts there (👀 on an ask it takes), with no other right.
     it('lets it react there without joining', () => {
       const { f, engineer, reviewer, chat } = working()
-      const asked = f.run(post('Can someone check the login bug?')).messages[0]!
+      // A project's channel is agents only (Swarm v4): its coordinator's line is what they react to.
+      const asked = f.run(post('Who can check the login bug?'), actorOf(f.lead)).messages[0]!
       const members = [...chat().agentIds]
       for (const agentId of [engineer, reviewer]) {
         expect(f.run({ type: 'message.react', conversationId: 'lead', messageId: asked.id, emoji: 'eyes', on: true }, actorOf(agentId),
@@ -2280,29 +2272,6 @@ describe('any agent of the project', () => {
       expect(chat().agentIds).toEqual(members)
     })
 
-    // River, 2026-11-04 (#2924): a person answering an agent's line in main, in its thread or right below it, reaches that agent
-    // as a delivery; it joins nothing. Right below, the coordinator is told too, as a new ask there may be its.
-    it('delivers a person\'s reply to the agent whose line it answers, in its thread or right below it', () => {
-      const { f, engineer, chat, assigned } = working()
-      const members = [...chat().agentIds]
-      const line = f.run(post('I am on it.'), actorOf(engineer)).messages.at(-1)!
-      const inThread = f.run(post('Thanks, which build?', line.id), owner,
-        { reply: { id: line.id, conversationId: 'lead', author: line.author, createdAt: 0, thread: line.id } }).messages.at(-1)!
-      expect(inThread).toMatchObject({ replyTo: line.id, thread: line.id, recipients: [engineer] })
-      const below = f.run(post('Also the phone build, please.'), owner, { above: { author: line.author } }).messages.at(-1)!
-      expect(below.recipients).toEqual([engineer, f.lead])
-      // Below a person's or the coordinator's line, or with nothing read above it, the coordinator alone, as before.
-      expect(f.run(post('And the web?'), owner, { above: { author: below.author } }).messages.at(-1)!.recipients).toEqual([f.lead])
-      expect(f.run(post('And the web?'), owner).messages.at(-1)!.recipients).toEqual([f.lead])
-      expect(chat().agentIds).toEqual(members)
-      // An agent whose work there ended is not told: the coordinator hears it, as any post there.
-      const done = assigned('ended')
-      const ended = f.run(post('Done here.'), actorOf(done.agentId)).messages.at(-1)!
-      done.task.assignment!.status = 'cancelled'
-      expect(f.run(post('Wait, one more?', ended.id), owner,
-        { reply: { id: ended.id, conversationId: 'lead', author: ended.author, createdAt: 0, thread: ended.id } }).messages.at(-1)!.recipients).toEqual([f.lead])
-      expect(f.run(post('Hello?'), owner, { above: { author: ended.author } }).messages.at(-1)!.recipients).toEqual([f.lead])
-    })
   })
 
   // Ken, 2026-11-02: nothing recorded who put the Reviewer in the project chat. Each agent added to or removed from a chat
@@ -4204,10 +4173,8 @@ describe('Product Managers chat, removed (Dee, 2026-10-31)', () => {
       .toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
   })
 
-  it('leaves project chats, workgroups and their recipients as before', () => {
-    const { f, lead, worker, docs, docsLead } = swarm()
-    expect(f.run(send('lead', 'Status?')).messages[0]!.recipients).toEqual([lead])
-    expect(f.run(send(docs.conversationId, 'Docs status?')).messages[0]!.recipients).toEqual([docsLead])
+  it('leaves project chats and workgroups as before', () => {
+    const { f, worker } = swarm()
     const group = f.group()
     expect(visibleState(f.state, as(worker)).conversations.map(c => c.id)).toEqual(expect.arrayContaining(['lead', group]))
   })
@@ -4496,16 +4463,17 @@ describe('credentials in Swarm chat', () => {
   const send = (text: string, conversationId = 'lead'): Command => ({ type: 'message.send', conversationId, text, replyTo: null, recipientIds: [] })
 
   it('stores a person\'s message without the credentials, keeps the rest and tells the sender what went', () => {
-    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
-    const input = send(pasted)
+    // In a task's chat: a project's channel is agents only (Swarm v4).
+    const f = fixture(), chat = f.group()
+    const input = send(pasted, chat)
     const sent = f.run(input)
-    expect(sent.messages).toEqual([expect.objectContaining({ text: kept, recipients: [lead] })])
+    expect(sent.messages).toEqual([expect.objectContaining({ text: kept })])
     expect(sent.result).toEqual({ messageId: sent.messages[0]!.id, credentialNotice: notice,
       credentialsRemoved: [{ kind: 'jwt', label: 'JWT', count: 1 }, { kind: 'github', label: 'GitHub token', count: 1 }] })
     expect(JSON.stringify([sent.messages, f.state])).not.toContain(github)
     expect(JSON.stringify([sent.messages, f.state])).not.toContain(jwt)
     // The caller's command is left as it was; only what is stored changes.
-    expect(input).toEqual(send(pasted))
+    expect(input).toEqual(send(pasted, chat))
   })
 
   it('treats an agent\'s post the same: agents echo credentials from their terminals', () => {
@@ -4518,9 +4486,9 @@ describe('credentials in Swarm chat', () => {
   })
 
   it('leaves a message without credentials, and its result, exactly as before', () => {
-    const f = fixture()
+    const f = fixture(), chat = f.group()
     const text = 'Merged a3f1c9e27b5d4f80916e2c3b7a8d9e0f1a2b3c4d; id 123e4567-e89b-12d3-a456-426614174000, see https://github.com/example/project/pull/1680'
-    const sent = f.run(send(text))
+    const sent = f.run(send(text, chat))
     expect(sent.messages[0]!.text).toBe(text)
     expect(sent.result).toEqual({ messageId: sent.messages[0]!.id })
   })

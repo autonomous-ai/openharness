@@ -106,11 +106,6 @@ describe('answeredAgents', () => {
     return answeredAgents(f.state, actor, f.state.conversations.find(c => c.id === conversationId)!, draft.recipients)
   }
 
-  it('a plain post in a project chat answers its coordinator', () => {
-    const f = fixture()
-    expect(post(f, f.app.conversationId, [])).toEqual([f.lead])
-  })
-
   it('a post addressed to another agent leaves the PM\'s tags', () => {
     const f = fixture()
     expect(answeredAgents(f.state, owner, f.state.conversations.find(c => c.id === f.app.conversationId)!, [f.worker])).toEqual([f.worker])

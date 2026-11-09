@@ -357,7 +357,6 @@ describe('ordinary task messages and progress replies', () => {
     const f = fixture(), id = f.group(), builder = f.add('Kai', id)
     f.run({ type: 'work.assign', conversationId: id, agentId: builder })
     delete f.task(id).cards
-    expect(f.lines(f.run({ type: 'message.send', conversationId: 'lead', text: 'Hello.', replyTo: null, recipientIds: [] }))).toEqual([])
     expect(f.status(id, builder, 'review', 'Ready.').messages.filter(m => m.conversationId === 'lead')).toEqual([])
   })
 })

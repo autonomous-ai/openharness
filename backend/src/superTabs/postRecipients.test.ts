@@ -138,14 +138,12 @@ describe('an agent\'s thread reply', () => {
     expect(to(post(f.dev, f.task, 'Yes.', [], { id: ruled.id, author: ruled.author as never }))).toEqual([[f.lead]])
   })
 
-  it('reaches a step agent that answered the Engineer, and nobody for a person\'s message', () => {
+  it('reaches a step agent that answered the Engineer', () => {
     const { f, post, to } = setup()
     const step = f.step('Review'), reviewer = f.add('reviewer', step)
     f.run({ type: 'work.assign', conversationId: step, agentId: reviewer }, f.as(f.dev))
     const verdict = post(reviewer, step, 'Ready to merge: With fixes', [f.dev])[0]!
     expect(to(post(f.dev, step, 'Fixed, please re-check.', [], { id: verdict.id, author: verdict.author as never }))).toEqual([[reviewer]])
-    const asked = f.run({ type: 'message.send', conversationId: 'lead', text: 'Is the fix out?', replyTo: null, recipientIds: [] } as Command, owner).messages[0]!
-    expect(to(post(f.dev, 'lead', 'Yes, since 14:00.', [], { id: asked.id, author: asked.author as never }))).toEqual([[]])
   })
 })
 
