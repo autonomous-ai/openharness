@@ -8,7 +8,7 @@
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { DEEP, labelOf, nextPicks, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
+import { DEEP, labelOf, machineHas, nextPicks, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
@@ -63,6 +63,8 @@ export class GitHubAssign {
    *  the task or pull request is no longer open, so the memory stays as large as the open work. */
   private readonly backs = new Set<string>()
   private readonly asks = new Set<string>()
+  /** The tasks nobody could start whose PM was told why, by task and reason (sayBlocked), forgotten as the others are. */
+  private readonly blocked = new Set<string>()
   /** What was said of one task (a label refused, no builder able to do it), so each is said once, not every pass. */
   private readonly said = new Set<string>()
   /** Each quiet taken task its builder was asked about: since when it was quiet, and when it was asked. */
@@ -130,6 +132,7 @@ export class GitHubAssign {
     const open = new Set(listed.map(issue => `${repo}#${issue.number}`))
     for (const key of [...this.given.keys()]) if (key.startsWith(`${repo}#`) && !open.has(key)) this.given.delete(key)
     for (const key of [...this.backs]) if (key.startsWith(`${repo}#`) && !open.has(key.slice(0, key.indexOf(':back:')))) this.backs.delete(key)
+    for (const key of [...this.blocked]) if (key.startsWith(`${repo}#`) && !open.has(key.slice(0, key.indexOf(':blocked:')))) this.blocked.delete(key)
     const issues = listed.map(issue => {
       const key = `${repo}#${issue.number}`, label = this.given.get(key)
       if (!label) return issue
@@ -167,7 +170,13 @@ export class GitHubAssign {
       ...(this.last.has(repo) ? { start: this.last.get(repo) } : {}) })
     this.last.set(repo, solved.choice)
     for (const pick of nextPicks(solved.plan, read)) await this.give(project, read, pick)
-    for (const { task, why } of solved.plan.unplaced) if (read.free.has(task)) this.once(`[super-tab] Task assignment: UNPLACED ${repo}${task}: ${why}`)
+    let told = 0
+    for (const { task, why } of solved.plan.unplaced) {
+      if (!read.free.has(task)) continue
+      this.once(`[super-tab] Task assignment: UNPLACED ${repo}${task}: ${why}`)
+      const blocked = blockedWhy(issues.find(issue => `#${issue.number}` === task), why, crew, read, task)
+      if (blocked && told < BLOCKED_PER_PASS && await this.sayBlocked(project, Number(task.slice(1)), blocked)) told++
+    }
   }
 
   /**
@@ -376,6 +385,22 @@ export class GitHubAssign {
     return asks.length ? Math.max(...asks) : null
   }
 
+  /** Tells the PM, once on the task, why nobody can start it (a failure is shown to someone who can act on it), counting
+   *  what was said before a restart from the task's comments. Whether it was said now. */
+  private async sayBlocked(project: LedProject, number: number, blocked: string): Promise<boolean> {
+    const { repo } = project
+    const key = `${repo}#${number}:blocked:${blocked}`
+    if (this.blocked.has(key)) return false
+    const line = `nobody can start this yet: ${blocked}`
+    const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 1)
+    if (comments.some(c => String(c.body ?? '').includes(line))) { this.blocked.add(key); return false }
+    const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${this.clock()}, to **${project.pm}**: ${line}.` })
+    if (reply.status >= 300) { this.once(`[super-tab] Task assignment: ASK_REFUSED ${repo}#${number}: GitHub answered ${reply.status}`); return false }
+    this.blocked.add(key)
+    this.log(`[super-tab] told ${project.pm} why nobody can start ${repo}#${number}: ${blocked}`)
+    return true
+  }
+
   /** One ask of a reader, once per pull request, head and reader: a comment naming it, with the head it reads. One GitHub
    *  refuses is said, and asked again next pass. */
   private async ask(repo: string, number: number, head: string, name: string, what: string, nth = 0): Promise<void> {
@@ -425,6 +450,31 @@ export class GitHubAssign {
     this.logged = line
     this.log(code ? `[super-tab] Task assignment stopped · ${line}` : '[super-tab] Task assignment runs again')
   }
+}
+
+/** How many PMs are told per pass why a task cannot start: a backlog of them is said over a few passes. */
+const BLOCKED_PER_PASS = 5
+
+/**
+ * Why nobody can start a sized task, said so its PM can act on it, or null for a wait that passes (a builder busy, quota
+ * spent, a task it waits on): a need no builder's machine meets, a task larger than every machine, or "after #N" lines that
+ * wait on each other. `needs:` labels are what the PM writes (lib/swarmSkills.ts PM_BASICS), and a tool no machine has keeps
+ * its task waiting for ever, which only the PM's person can change.
+ */
+export function blockedWhy(issue: Json | undefined, why: string, crew: Crew, read: Read, task: string): string | null {
+  if (why === 'its dependencies wait on each other') return 'its "after #N" lines wait on each other'
+  const needs = issue ? labelNames(issue).filter(name => name.startsWith('needs:')).map(name => name.slice('needs:'.length)) : []
+  const machines = crew.machines.filter(machine => crew.builders.some(builder => builder.machineId === machine.machineId))
+  if (needs.length && !machines.some(machine => needs.every(need => machineHas(machine.observation, need)))) {
+    const nowhere = needs.filter(need => !machines.some(machine => machineHas(machine.observation, need)))
+    return nowhere.length ? `it needs ${nowhere.join(' and ')}, which no builder's machine has`
+      : `it needs ${needs.join(' and ')} on one machine, and no builder's machine has them all`
+  }
+  const shape = read.problem.tasks.find(t => t.id === task)?.needs
+  if (shape && !read.problem.machines.some(m => shape.cpu <= m.capacity.cpu && shape.ram <= m.capacity.ram && shape.disk <= m.capacity.disk)) {
+    return 'it needs more than any builder\'s machine has'
+  }
+  return null
 }
 
 const labelNames = (issue: Json): string[] =>

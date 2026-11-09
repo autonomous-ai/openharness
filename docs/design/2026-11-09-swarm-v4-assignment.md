@@ -94,7 +94,10 @@ Every minute, in the PM's person's Harness, for each project its PM leads from t
   gets the free tasks it starts next until it holds two: `builder:<name>` on the issue and one comment, "Harness, 15:40: for
   **Pip**: it can start now, and it finished 3 part:api tasks." GitHub news then brings each its task.
 - **Failures** are said once: a label GitHub refused (tried again next pass), a task no builder can do and why, gh signed
-  out or rate limited (as the merger: `githubRest.ts`).
+  out or rate limited (as the merger: `githubRest.ts`). A sized task nobody can start for a reason its PM can act on is
+  said on the task, to the PM by name, once: a need no builder's machine meets ("it needs xcode, which no builder's
+  machine has"), a task larger than every machine, or "after #N" lines that wait on each other (`blockedWhy`). A wait
+  that passes (busy builders, spent quota, a task it waits on) is not.
 
 ## What an agent works on (built)
 

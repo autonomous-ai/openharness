@@ -141,9 +141,25 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(f.labelled().find(([n]) => n === 1)?.[1]).toMatch(/^builder:(pip|juno)$/)
     expect(f.labelled().some(([n]) => n === 2)).toBe(false)
     expect(f.log).toHaveBeenCalledWith(expect.stringContaining('UNPLACED acme/app#2'))
-    // Said once, not every pass.
+    // Its PM is told why, by name, on the task: only its person can add the tool, or the PM change the task.
+    const told = () => f.said().filter(([n]) => n === 2).map(([, body]) => String(body))
+    expect(told()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Faye\*\*: nobody can start this yet: it needs robot-arm, which no builder's machine has\.$/)])
+    // Said once, not every pass, nor again after a restart that finds it on the task.
     await f.assigner.tick()
     expect(f.log.mock.calls.filter(([line]) => String(line).includes('UNPLACED'))).toHaveLength(1)
+    f.github.state.comments.set(2, told().map(body => ({ body, created_at: '2026-11-09T07:31:00Z' })))
+    await f.make().tick()
+    expect(told()).toHaveLength(1)
+  })
+
+  it('tells the PM of "after #N" lines that wait on each other, and of a task larger than every machine', async () => {
+    const f = setup([issue(1, ['size:s'], { body: 'after #2' }), issue(2, ['size:s'], { body: 'after #1' }), issue(3, ['size:l'])],
+      { crew: { builders: crew().builders, machines: [{ machineId: 'mac', observation: { resources: { memoryTotalBytes: 4 * GiB, projectDiskFreeBytes: 500 * GiB } } }] } })
+    await f.assigner.tick()
+    const lines = f.said().map(([n, body]) => [n, String(body).replace(/^Harness, \d\d:\d\d, /, '')]).sort()
+    expect(lines).toEqual([[1, 'to **Faye**: nobody can start this yet: its "after #N" lines wait on each other.'],
+      [2, 'to **Faye**: nobody can start this yet: its "after #N" lines wait on each other.'],
+      [3, 'to **Faye**: nobody can start this yet: it needs more than any builder\'s machine has.']])
   })
 
   it('says a label GitHub refused once, and gives the task again on the next pass', async () => {

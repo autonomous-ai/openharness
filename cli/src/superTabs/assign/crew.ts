@@ -192,7 +192,7 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
       spend: Object.fromEntries([...windowNames].map(name => [name, everyOf(name) === 300 ? shape.spend : shape.spend / 5])),
       floor: 0, kind: 'build', part: valueOf(labels, 'part:'), weight: priority ? WEIGHTS[priority]! : 1, ready: 0,
       deps: dependsOn(issue.body).filter(n => openNumbers.has(n)).map(n => `#${n}`),
-      independentOf: [], notBuilders: unable, files: [],
+      independentOf: [], notBuilders: unable, ...unable.length ? { notWhy: `its builder's machine lacks one of: ${needs.join(', ')}` } : {}, files: [],
       ...(holder ? { pinned: holder.id, queuedOn: holder.id } : {}),
     })
     if (!holder) free.add(id)
