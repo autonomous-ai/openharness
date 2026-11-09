@@ -558,12 +558,9 @@ export interface Conversation {
   requesterId?: string
   /** What the leaderboard counts here (leaderboard/record.ts); bookkeeping readers never get whole. */
   ledger?: import('./leaderboard/record.js').GroupLedger
-  /** When a verified release carried its last recorded merge to people, and the release tags that did (releases.ts, task #3405):
-   *  the board's Shipped. Absent while a release it needs has not gone out, and on work merged before the server recorded it. */
+  /** When a verified release carried its last recorded merge to people, and the release tags that did: the board's Shipped. Only
+   *  on work the release watch settled before Swarm v4 removed it; nothing writes it now. */
   released?: { at: number; tags: string[] }
-  /** While it is on its project's release list (releases.ts): the parts it still waits for, as `desktop` or `cli`; empty until
-   *  its pull request's files are read. Absent otherwise, and cleared once it is released or leaves the list (River, 11-05). */
-  releasing?: import('./releases.js').ReleaseComponentId[]
   /** Whether its task is moving, waiting on purpose or stuck, as the time checks last found it (liveness.ts recordTaskStates). */
   liveness?: TaskLiveness
   /** Its last step up from a cheaper model: written when a grid attempt's first review fails (commands.ts reviewFailed, goals
@@ -672,9 +669,6 @@ export interface Invitation {
   role: 'collaborator' | 'viewer'
   conversationId: string
   expiresAt: number
-  /** Who sent it: the Workspace check at acceptance reads their role then (store.ts invite.accept). Absent on invitations
-   *  from before it was recorded. */
-  invitedBy?: string
 }
 /** An agent a machine's report removed as closed: as it was, and where it was (closedAgents.ts). */
 export interface RemovedSession {
@@ -705,10 +699,6 @@ export interface SuperTabState {
   /** Read-only, for the Swarm owner's reads (visibleState): the projects nobody owns, by name and size (projects.ts). */
   ownerlessProjects?: Array<{ id: string; name: string; conversations: number }>
   ownerId: string
-  /** The Workspace it belongs to (workspaceStore.ts); absent on a Swarm from before Workspaces until the migration gives it one. */
-  workspaceId?: string
-  /** Who in the Workspace may find and join it by themselves: `workspace` lets members and up join; absent reads as invite-only. */
-  workspaceVisibility?: 'invite-only' | 'workspace'
   environment: string
   /** Fields this tab overrides from its owner's account routing policy (routingPolicy.ts). */
   routingPolicy?: import('./routingPolicy.js').RoutingOverride
@@ -822,7 +812,7 @@ export interface MessageDraft {
   recipients: string[]
   /** Buddies this row is news for (buddyNews.ts): a delivery each, never listed among its recipients. */
   buddyRecipients?: string[]
-  /** Structured row kind for clients; `native` is written by native.ts, `route`/`route-override` by commands. */
+  /** Structured row kind for clients; `native` rows were written by the terminal recording Swarm v4 removed, `route`/`route-override` by commands. */
   source?: Record<string, unknown>
   attachments?: import('./attachments.js').Attachment[]
   /** People a Lead tagged (mentions.ts). */
@@ -871,7 +861,7 @@ export const NOTICE_READERS = {
   'schedule-request': 'recipients', 'tidy-request': 'recipients', 'digest-request': 'recipients',
   // Two agents that may be talking in a loop, told to the coordinator (commands.ts pairLoop, project instructions phase 1).
   'pair-loop': 'recipients',
-  // A crew member's finished wake or move, timed for the daily scorecard (crewTimes.ts, task #3462): read by nobody.
+  // A crew member's finished wake or move, timed for the daily scorecard Swarm v4 removed (crewTimes.ts, task #3462): read by nobody.
   'crew-timing': 'agent',
   // The server's routine notices to the coordinator, gathered into one message (noticeDigest.ts).
   'notice-digest': 'recipients',
@@ -912,7 +902,7 @@ export const NOTICE_READERS = {
   // Their one Buddy cannot start in a person's older project chat, told to them there once per outage (commands.ts buddyDownLine).
   'buddy-cannot-start': 'people',
   'auto-archive': 'people', native: 'people',
-  // A release step the Swarm opened for the Integrator, and its verified release's line (releases.ts, task #3405).
+  // A release step the Swarm opened for the Integrator, and its verified release's line (the release watch Swarm v4 removed, task #3405).
   release: 'people',
   // The nightly routing reflection, for the project's people; never a Buddy's (buddies.ts routingRow).
   'routing-reflection': 'people',

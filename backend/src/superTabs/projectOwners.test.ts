@@ -240,8 +240,7 @@ describe('the account of a project\'s owner', () => {
 })
 
 // Security reviews 1 and 2 of #3082: every way into and out of the Swarm settles its projects, not only invite.accept and
-// member.remove. A project from before ownerGeneration whose owner left is never matched to them again by a link, domain or
-// Workspace join, and a person a restore drops passes their projects on.
+// member.remove. A project from before ownerGeneration whose owner left is never matched to them again by a link or domain join.
 describe('every way in and out of the Swarm', () => {
   it('settles a project whose owner left before a person comes back in, by any join', () => {
     const f = setup(), x = f.create(p)
@@ -253,16 +252,6 @@ describe('every way in and out of the Swarm', () => {
     expect(projectOf(f.state, x.projectId)).toMatchObject({ ownerId: 'c', ownerGeneration: 'c-first' })
     expect(f.reads(p, x.projectId)).toBe(false)
     expect(() => f.run({ type: 'project.rename', projectId: x.projectId, name: 'Mine' }, p)).toThrow('unavailable')
-  })
-
-  it('passes on the projects of people a restore leaves out because the Workspace lost them', () => {
-    const f = setup(), x = f.create(p), alone = f.create(p)
-    f.run({ type: 'project.sharing', projectId: x.projectId, visibility: 'private', memberIds: ['c'] }, p)
-    f.state.deletion = { at: new Date(0).toISOString(), by: 'owner', purgeAt: new Date(10_000_000).toISOString() }
-    f.run({ type: 'swarm.restore' }, owner, { workspaceLost: ['p'] })
-    expect(f.state.people.some(person => person.id === 'p')).toBe(false)
-    expect(projectOf(f.state, x.projectId)).toMatchObject({ ownerId: 'c', ownerGeneration: 'c-first' })
-    expect(projectOf(f.state, alone.projectId).ownerId).toBe('')
   })
 
   it('has no other place that adds or drops people without settling', () => {

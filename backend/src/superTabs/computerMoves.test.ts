@@ -154,6 +154,6 @@ describe('a Mac whose own Harness Team account has not joined the Swarm yet', ()
     const pool = f.state.machines[0]!
     pool.observation = reading(NOW - 1000)
     delete pool.ownAccountChoice
-    expect(machineTeamWork(pool, NOW, [], [])).toBeNull()
+    expect(machineTeamWork(pool, NOW, [])).toBeNull()
   })
 })

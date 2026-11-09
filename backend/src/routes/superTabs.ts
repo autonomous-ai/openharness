@@ -11,13 +11,12 @@ import { validateBody, validateParams, validateQuery } from '../middlewares/vali
 import { sendError, sendSuccess } from '../utils/response.js'
 import { operationSchema } from '../superTabs/commands.js'
 import { PERIODS } from '../superTabs/leaderboard/rolling.js'
-import { fail, SuperTabError } from '../superTabs/model.js'
+import { fail, stableId, SuperTabError } from '../superTabs/model.js'
 import { SuperTabStore } from '../superTabs/store.js'
 import { redisPollMemory } from '../superTabs/pollMemory.js'
 import { redisAutoJoinMemory } from '../superTabs/autoJoin.js'
 import { redisReportMemory } from '../superTabs/machineReports.js'
 import { routingPolicySaveSchema } from '../superTabs/routingPolicy.js'
-import { nativeEventSchema, openNativeSchema } from '../superTabs/native.js'
 import { machineObservationSchema, teamAccountRequired } from '../superTabs/machines.js'
 import { repositoryReachOf } from '../superTabs/repositoryReach.js'
 import { joinSwarmSchema, previewJoinSchema, saveSharingSchema } from '../superTabs/sharing.js'
@@ -43,10 +42,9 @@ import { reminderWait } from '../superTabs/reminders.js'
 import { NOTIFY_LEVELS } from '../superTabs/chatSettings.js'
 import { HostReads } from '../superTabs/read/host.js'
 import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
-import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
+import { isTeamSession } from '../lib/teamSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { DEFAULT_DAYS, MAX_DAYS } from '../superTabs/costs/read.js'
-import { WORKSPACE_ACCESS_REVOKED } from '../superTabs/workspaceStore.js'
 import { markNothingNew } from '../lib/routeLatency.js'
 import { onMachineRenamed } from '../superTabs/machineRenames.js'
 import { onComputerSignedIn } from '../superTabs/computerMoves.js'
@@ -71,29 +69,14 @@ const voiceQuery = agentQuery.extend({ lang: z.string().max(16).optional() })
 // The store checks the name, type and size; this only bounds what reaches it.
 const uploadLinkBody = z.object({ conversationId: id, name: z.string().max(1000), mime: z.string().max(1000), size: z.number().int() }).strict()
 const emptyBody = z.object({}).strict().optional()
-const create = z.object({ operationId: id, name: z.string().trim().min(1).max(160), projectVisibility: z.enum(['public', 'private']).optional(),
-  workspaceId: id.optional() }).strict()
+const create = z.object({ operationId: id, name: z.string().trim().min(1).max(160), projectVisibility: z.enum(['public', 'private']).optional() }).strict()
 const operation = operationSchema.extend({ asAgentId: id.optional() })
-// Workspaces (superTabs/workspaceStore.ts). A Team session (lib/teamSession.ts) never acts on a Workspace: only the signed-in person does.
-const workspaceParams = z.object({ workspaceId: id })
-const workspaceMemberParams = z.object({ workspaceId: id, userId: id })
-const workspaceName = z.string().trim().min(1).max(160)
-const workspaceCreate = z.object({ operationId: id, name: workspaceName }).strict()
-const workspaceRename = z.object({ name: workspaceName }).strict()
-const workspaceInvite = z.object({ email: z.email().max(320), role: z.enum(['admin', 'member', 'guest']) }).strict()
-const workspaceRevoke = z.object({ email: z.email().max(320) }).strict()
-const workspaceRole = z.object({ role: z.enum(['admin', 'member', 'guest']) }).strict()
-const workspaceTransfer = z.object({ userId: id }).strict()
-const workspaceVisibility = z.object({ visibility: z.enum(['invite-only', 'workspace']) }).strict()
-const workspaceJoin = z.object({ operationId: id }).strict()
-const personOnly = (user: AuthUser) => { if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403) }
 const listQuery = z.object({ after: id.optional(), mentions: z.literal('1').optional() }).strict()
 const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
 // `derivedEtag`: the summary's etag the client holds (read/derivedEtag.ts, task #2906).
 const changesQuery = agentQuery.extend({ cursor, machines: z.literal('light').optional(),
   derivedEtag: z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/).optional() })
 const costsQuery = z.object({ days: z.coerce.number().int().min(1).max(MAX_DAYS).default(DEFAULT_DAYS), asAgentId: id.optional() }).strict()
-const scorecardQuery = z.object({ projectId: id, scope: z.literal('all').optional() }).strict()
 const leaderboardQuery = z.object({ projectId: id, week: z.coerce.number().int().nonnegative().safe().optional(), period: z.enum(PERIODS).optional(), scope: z.literal('all').optional() }).strict()
   .refine(query => query.week === undefined || query.period === undefined, 'Ask for a week or a period, not both.')
 const dormantQuery = agentQuery.extend({ dormant: z.literal('1'), projectId: id.optional(), before: cursor.optional() })
@@ -106,6 +89,8 @@ const hostChangesBody = z.object({ cursor: cursor.optional(), full: z.boolean().
   held: z.record(id, etag).refine(held => Object.keys(held).length <= 500, 'At most 500 Swarms.').optional() }).strict()
 const startParams = tabParams.extend({ startId: id })
 const nativeParams = tabParams.extend({ contextId: id })
+/** What a retired terminal recording needs of an older host's observation: the two words its id is made of. */
+const nativeObservation = z.object({ turnId: id, kind: z.enum(['prompt', 'answer', 'gap']) })
 const messageParams = tabParams.extend({ conversationId: id })
 // A person's own read mark (superTabs/readMarks.ts): no asAgentId, since agents keep none.
 const readMarkBody = z.object({ sequence: z.number().int().nonnegative().safe() }).strict()
@@ -184,7 +169,7 @@ const githubStartToken = z.object({ always: z.boolean().optional() }).strict()
  * The routes about one Swarm that a sign-in may call: the web with the browser's own sign-in (desktop
  * super_tabs/backend_transport.dart), Desktop and the phone through their machine, and a machine's host and its agents.
  * On these, a Swarm, chat, message, project, decision, start, delivery, file or link the caller cannot reach gets one
- * answer, whether it is missing, refused, revoked, outside its Workspace or in another project, so the answer never says
+ * answer, whether it is missing, refused, revoked or in another project, so the answer never says
  * which. The server log keeps the specific reason. Role refusals inside a Swarm the caller reads (read-only,
  * owner-only) keep their own words: they tell nothing the caller cannot already see. Hosts read 403 and 404 alike as
  * access lost (cli superTabs/machines.ts, swarmReads.ts).
@@ -196,7 +181,7 @@ const NOT_AVAILABLE_EXEMPT_ROUTES: ReadonlyMap<string, string> = new Map([
 /** The one answer on those routes for anything the caller cannot reach. 404 with the code every client already
  *  reads as gone (Desktop and the phone: FORBIDDEN or NOT_FOUND; the CLI: 403 or 404). */
 export const NOT_AVAILABLE = { code: 'NOT_FOUND', message: 'This is not available to you. It may have been removed, or your access changed.', status: 404 } as const
-const UNREACHABLE_CODES: ReadonlySet<string> = new Set(['NOT_FOUND', 'JOIN_UNAVAILABLE', WORKSPACE_ACCESS_REVOKED])
+const UNREACHABLE_CODES: ReadonlySet<string> = new Set(['NOT_FOUND', 'JOIN_UNAVAILABLE'])
 const unreachable = (error: SuperTabError) => error.unreachable || UNREACHABLE_CODES.has(error.code)
 
 /** At most this many Swarms' readings in one call; the most a machine was seen in is 21 (DB roadmap 2.5). */
@@ -238,13 +223,6 @@ async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
   }
 }
 
-/** A terminal recording's host stops recording for good on a 409 (cli superTabs/native.ts). A duplicate key that outlived
- *  every transaction retry is not the recording's fault, so it answers busy, which the host retries. */
-function busyOnDuplicate(error: unknown): never {
-  if ((error as { code?: unknown } | null)?.code === 'P2002') fail('SWARM_BUSY', 'This Swarm is busy. Try again in a moment.', 503)
-  throw error
-}
-
 /** Uses the normal authenticated control API. It never accepts caller-provided host/contributor identities.
  *  `github` is the Harness GitHub App (github/tokens.ts): read from the environment unless given, null when off. */
 /** Full-state reads of clients from before Swarms were stored by parts (design 4.11): every old client reads one of them
@@ -253,7 +231,7 @@ function busyOnDuplicate(error: unknown): never {
  * The body limit of the routes hosts and agents call every second or every turn (roadmap 2.8), in place of Fastify's 1 MiB:
  * a body is parsed whole on the event loop before its schema is checked. Each route's largest valid body, from its schema's
  * limits with free text in three-byte characters (routes/superTabs.test.ts): host changes with 500 held Swarms 116 KB, a
- * recorded turn 48 KB, a delivery ack or stop receipt 6 KB. Commands and machine readings keep the default: a task at its
+ * delivery ack or stop receipt 6 KB. Commands and machine readings keep the default: a task at its
  * schema's limits reaches 700 KB.
  */
 export const HOT_BODY_LIMIT = 128 * 1024
@@ -564,15 +542,18 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof machineParams>; Body: z.infer<typeof machineObservationSchema> }>('/api/super-tabs/:tabId/machines/:machineId',
     { preHandler: [validateParams(machineParams), validateBody(machineObservationSchema)] },
     (req, reply) => respond(reply, () => store.observeMachine(req.user!, req.params.tabId, req.params.machineId, req.body)))
-  app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof openNativeSchema> }>('/api/super-tabs/:tabId/native',
-    { bodyLimit: HOT_BODY_LIMIT, preHandler: [validateParams(tabParams), validateBody(openNativeSchema)] },
-    (req, reply) => respond(reply, () => store.native.open(req.user!, req.params.tabId, req.body)))
-  app.get<{ Params: z.infer<typeof nativeParams> }>('/api/super-tabs/:tabId/native/:contextId',
-    { preHandler: validateParams(nativeParams) },
-    (req, reply) => respond(reply, () => store.native.read(req.user!, req.params.tabId, req.params.contextId)))
-  app.post<{ Params: z.infer<typeof nativeParams>; Body: z.infer<typeof nativeEventSchema> }>('/api/super-tabs/:tabId/native/:contextId',
-    { bodyLimit: HOT_BODY_LIMIT, preHandler: [validateParams(nativeParams), validateBody(nativeEventSchema)] },
-    (req, reply) => respond(reply, () => store.native.append(req.user!, req.params.tabId, req.params.contextId, req.body).catch(busyOnDuplicate)))
+  // Terminal recording is gone with Swarm v4, but an older Desktop still opens a terminal's context and an older host still reads and
+  // records into it: each is answered ok and ignored, to everyone, naming no Swarm. An older Desktop's open then gets no context (it
+  // says it could not prepare terminal sharing) and an older host's read finds no terminal (its prepare fails), so nothing new is
+  // recorded. A host drops an observation once it is acknowledged by the id it makes of it (cli superTabs/native.ts eventId), so
+  // that one is answered with it: without it, a journal from before would send the same observation again, for ever. A Team session
+  // reaches these on its own list (lib/teamSession.ts).
+  const recordingGone = (_req: unknown, reply: FastifyReply) => sendSuccess(reply, { ok: true, ignored: true })
+  app.post('/api/super-tabs/:tabId/native', { bodyLimit: HOT_BODY_LIMIT, preHandler: validateParams(tabParams) }, recordingGone)
+  app.get('/api/super-tabs/:tabId/native/:contextId', { preHandler: validateParams(nativeParams) }, recordingGone)
+  app.post<{ Params: z.infer<typeof nativeParams>; Body: z.infer<typeof nativeObservation> }>('/api/super-tabs/:tabId/native/:contextId',
+    { bodyLimit: HOT_BODY_LIMIT, preHandler: [validateParams(nativeParams), validateBody(nativeObservation)] },
+    (req, reply) => sendSuccess(reply, { ok: true, ignored: true, eventId: stableId('native-event', req.params.contextId, req.body.turnId, req.body.kind) }))
   app.get('/api/super-tabs/routing-policy', (req, reply) => respond(reply, () => store.accountPolicy(req.user!)))
   app.post<{ Body: z.infer<typeof savePolicy> }>('/api/super-tabs/routing-policy', { preHandler: validateBody(savePolicy) },
     (req, reply) => respond(reply, () => store.saveAccountPolicy(req.user!, req.body.revision, req.body.policy)))
@@ -583,43 +564,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Querystring: z.infer<typeof listQuery> }>('/api/super-tabs/list', { preHandler: validateQuery(listQuery) },
     (req, reply) => respond(reply, () => reads.list(req.user!, req.query.after, req.query.mentions === '1')))
   app.post<{ Body: z.infer<typeof create> }>('/api/super-tabs', { preHandler: validateBody(create) },
-    (req, reply) => respond(reply, () => store.create(req.user!, req.body.operationId, req.body.name, req.body.projectVisibility, req.body.workspaceId)))
-  // Workspaces (docs/plans/2026-10-27-swarm-workspaces.md): the person's Workspaces and the Swarms they may see in each.
+    (req, reply) => respond(reply, () => store.create(req.user!, req.body.operationId, req.body.name, req.body.projectVisibility)))
   // The owner's deleted Swarms they can still restore (superTabs/deletion.ts); restoring is the swarm.restore command.
   app.get('/api/super-tabs/deleted', (req, reply) => respond(reply, () => store.deletedList(req.user!)))
-  app.get('/api/super-tabs/workspaces', (req, reply) => respond(reply, () => store.workspaceList(req.user!)))
-  app.post<{ Body: z.infer<typeof workspaceCreate> }>('/api/super-tabs/workspaces', { preHandler: validateBody(workspaceCreate) },
-    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.create(req.user!, req.body.operationId, req.body.name) }))
-  app.get('/api/super-tabs/workspace-invitations', (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.invitationsFor(req.user!) }))
-  app.post<{ Params: z.infer<typeof workspaceParams>; Body: z.infer<typeof workspaceRename> }>('/api/super-tabs/workspaces/:workspaceId',
-    { preHandler: [validateParams(workspaceParams), validateBody(workspaceRename)] },
-    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.rename(req.user!, req.params.workspaceId, req.body.name) }))
-  app.get<{ Params: z.infer<typeof workspaceParams> }>('/api/super-tabs/workspaces/:workspaceId/members', { preHandler: validateParams(workspaceParams) },
-    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.members(req.user!, req.params.workspaceId) }))
-  app.post<{ Params: z.infer<typeof workspaceParams>; Body: z.infer<typeof workspaceInvite> }>('/api/super-tabs/workspaces/:workspaceId/invitations',
-    { preHandler: [validateParams(workspaceParams), validateBody(workspaceInvite)] },
-    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.invite(req.user!, req.params.workspaceId, req.body.email, req.body.role) }))
-  // A POST, not a DELETE, for the daemon (below).
-  app.post<{ Params: z.infer<typeof workspaceParams>; Body: z.infer<typeof workspaceRevoke> }>('/api/super-tabs/workspaces/:workspaceId/invitations/revoke',
-    { preHandler: [validateParams(workspaceParams), validateBody(workspaceRevoke)] },
-    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.revokeInvitation(req.user!, req.params.workspaceId, req.body.email) }))
-  app.post<{ Params: z.infer<typeof workspaceParams> }>('/api/super-tabs/workspaces/:workspaceId/accept', { preHandler: validateParams(workspaceParams) },
-    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.accept(req.user!, req.params.workspaceId) }))
-  app.post<{ Params: z.infer<typeof workspaceMemberParams>; Body: z.infer<typeof workspaceRole> }>('/api/super-tabs/workspaces/:workspaceId/members/:userId',
-    { preHandler: [validateParams(workspaceMemberParams), validateBody(workspaceRole)] },
-    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.setRole(req.user!, req.params.workspaceId, req.params.userId, req.body.role) }))
-  // A POST, not a DELETE: Desktop reaches the backend through the daemon, which forwards only GET and POST (cli superTabs/service.ts).
-  app.post<{ Params: z.infer<typeof workspaceMemberParams> }>('/api/super-tabs/workspaces/:workspaceId/members/:userId/remove', { preHandler: validateParams(workspaceMemberParams) },
-    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.remove(req.user!, req.params.workspaceId, req.params.userId) }))
-  app.post<{ Params: z.infer<typeof workspaceParams>; Body: z.infer<typeof workspaceTransfer> }>('/api/super-tabs/workspaces/:workspaceId/transfer',
-    { preHandler: [validateParams(workspaceParams), validateBody(workspaceTransfer)] },
-    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.transfer(req.user!, req.params.workspaceId, req.body.userId) }))
-  app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof workspaceVisibility> }>('/api/super-tabs/:tabId/workspace-visibility',
-    { preHandler: [validateParams(tabParams), validateBody(workspaceVisibility)] },
-    (req, reply) => respond(reply, () => store.setWorkspaceVisibility(req.user!, req.params.tabId, req.body.visibility)))
-  app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof workspaceJoin> }>('/api/super-tabs/:tabId/workspace-join',
-    { preHandler: [validateParams(tabParams), validateBody(workspaceJoin)] },
-    (req, reply) => respond(reply, () => store.workspaceJoin(req.user!, req.params.tabId, req.body.operationId)))
   app.get('/api/super-tabs/invitations', (req, reply) => respond(reply, () => store.invitations(req.user!)))
   app.get<{ Params: z.infer<typeof tabParams> }>('/api/super-tabs/:tabId/sharing',
     { preHandler: validateParams(tabParams) },
@@ -697,10 +644,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof activityReadBody> }>('/api/super-tabs/:tabId/activity/read',
     { preHandler: [validateParams(tabParams), validateQuery(noQuery), validateBody(activityReadBody)] },
     (req, reply) => respond(reply, () => reads.markActivityRead(req.user!, req.params.tabId, req.body.through)))
-  // A project's daily scorecard (superTabs/scorecard), or every readable project's with scope=all.
-  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof scorecardQuery> }>('/api/super-tabs/:tabId/scorecard',
-    { preHandler: [validateParams(tabParams), validateQuery(scorecardQuery)] },
-    (req, reply) => respond(reply, () => reads.scorecard(req.user!, req.params.tabId, req.query.projectId, req.query.scope === 'all')))
+  // The scorecard is gone with Swarm v4, but an older Desktop's Scorecard tab still reads it: it answers no days, to everyone, and
+  // names no Swarm, as `updateRequired` does for the retired full-state reads. A Team session never reaches it (lib/teamSession.ts).
+  app.get('/api/super-tabs/:tabId/scorecard', { preHandler: validateParams(tabParams) }, (_req, reply) => sendSuccess(reply, { days: [] }))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof leaderboardQuery> }>('/api/super-tabs/:tabId/leaderboard',
     { preHandler: [validateParams(tabParams), validateQuery(leaderboardQuery)] },
     (req, reply) => respond(reply, () => reads.leaderboard(req.user!, req.params.tabId, req.query.projectId, req.query.week, req.query.period, req.query.scope === 'all')))

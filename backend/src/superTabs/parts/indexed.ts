@@ -21,8 +21,6 @@ export const GROUP_INDEX = {
   feed: { tabId: 1, feedIds: 1, lastActivityAt: 1, key: 1 },
   project: { tabId: 1, projectId: 1, dormant: 1, lastActivityAt: 1, key: 1 },
   dormancy: { tabId: 1, dormant: 1, changedAt: 1 },
-  /** Groups active since a time, in every Swarm: the scorecard's projects with a day to count (scorecard/job.ts). */
-  activity: { dormant: 1, lastActivityAt: 1 },
   /** A command's awake conversations by the columns a held part is compared by (parts/held.ts): the listing reads no document. */
   held: { tabId: 1, dormant: 1, deleted: 1, key: 1, version: 1, changedAt: 1 },
   changes: { tabId: 1, changedAt: 1 },
@@ -43,15 +41,13 @@ export const NAMED_INDEX = {
     owner: { autonomousEnv: 1, ownerId: 1, _id: 1 },
     /** The Swarms inviting each address (invitedSwarms.ts), and every Swarm with an invitation (the hourly sweep). */
     invited: { autonomousEnv: 1, invitedEmails: 1, _id: 1 },
-    /** A member's Swarms in id order: Swarm lists and Workspace removals. */
+    /** A member's Swarms in id order: Swarm lists. */
     members: { autonomousEnv: 1, memberIds: 1, _id: 1 },
     /** A machine's Swarms, newest first, and those that still list it for cleanup: the host poll. */
     machines: { autonomousEnv: 1, machineIds: 1, updatedAt: 1 },
     cleanup: { autonomousEnv: 1, cleanupMachineIds: 1, updatedAt: 1 },
     /** Swarms by id. */
     id: { _id: 1 },
-    /** A Workspace's Swarms: a Workspace removal reads its deleted ones (workspaceStore.ts). */
-    workspace: { autonomousEnv: 1, workspaceId: 1 },
     /** Deleted Swarms by purge time (deletion.ts): the purge sweep. */
     purge: { purgeAt: 1 },
     /** The Swarms people at a domain join by themselves (autoJoin.ts): one read per person at most every 2 minutes. */
@@ -82,8 +78,6 @@ export const NAMED_INDEX = {
   SuperTabOpenProposal: { open: { tabId: 1, conversationId: 1, sequence: 1 }, id: { _id: 1 } },
   /** A Swarm's newest route decisions: the route-decision list. */
   SuperTabRouteDecision: { recent: { tabId: 1, createdAt: 1 } },
-  /** A project's scorecard days (scorecard/rows.ts). */
-  SuperTabScorecard: { day: { tabId: 1, projectId: 1, on: 1 } },
   SuperTabDelivery: {
     /** An agent's deliveries by status and age: its open ones, oldest first. */
     agentOpen: { tabId: 1, agentId: 1, status: 1, createdAt: 1 },

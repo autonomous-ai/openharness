@@ -13,7 +13,6 @@ import type { Command } from '../src/superTabs/commands.js'
 import { poolRows } from './hostRows.test-support.js'
 import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
 import { compactDeliveries } from '../src/superTabs/deliveryCompaction.js'
-import { revokeNativeContexts } from '../src/superTabs/native.js'
 import { stableId, type MessageDraft, type SuperTabState } from '../src/superTabs/model.js'
 import { logger } from '../src/utils/logger.js'
 

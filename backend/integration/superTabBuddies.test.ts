@@ -1237,21 +1237,6 @@ describe('a Buddy on its person\'s own machine outside the Swarm, through the st
     expect([read.state.starts ?? [], read.state.agents.filter(a => a.buddyOf)]).toEqual([[], []])
     expect(await poolRows(f.store, owner, 'owner-laptop')).toEqual([])
   })
-
-  // Security review 1 of #2234: a private record in one Swarm made the same Mac read as "contributed in another Workspace" in a
-  // Swarm it truly serves, refusing teammates' work there and naming that association.
-  it('is no contribution another Swarm sees: the Mac it shares elsewhere still takes teammates\' work there', async () => {
-    const a = await swarm()
-    const files = new MemoryAttachmentStore()
-    const store = new SuperTabStore(db, () => Date.now(), { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
-    const b = (await store.create(peer, randomUUID(), 'Peer\'s own', 'public')).id
-    const stateA = (await a.store.read(owner, a.tab)).state, stateB = (await store.read(peer, b)).state
-    expect(stateB.workspaceId).not.toBe(stateA.workspaceId)
-    await store.execute(peer, b, { operationId: randomUUID(), command: { type: 'buddy.create', projectId: 'lead', machineId: 'peer-mac', engine: 'claude',
-      setup: { name: 'Peer Mac', cwd: '/home/peer/b', engines: ['claude'] } } })
-    expect((await poolRows(store, peer, 'peer-mac')).find(p => p.tabId === b)?.machine).toMatchObject({ buddyOnly: true })
-    expect(await a.store.otherWorkspaceMachines(db, stateA)).toEqual([])
-  })
 })
 
 describe('the person\'s own browser, reading and writing the Swarm straight from the web (docs/specs/2026-10-30-web-swarm-direct.md)', () => {
