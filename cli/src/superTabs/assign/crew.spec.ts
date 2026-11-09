@@ -49,6 +49,14 @@ describe('a team\'s tasks as GitHub and the Swarm say them (readProblem)', () =>
     expect([...read.free]).toEqual(['#5'])
   })
 
+  it('plans a machine by the cores it reports, and one from an older daemon as CORES', () => {
+    const team = crew()
+    team.machines = [machine('mac', { resources: { memoryTotalBytes: 32 * GiB, projectDiskFreeBytes: 200 * GiB, cpuCores: 4 } }),
+      machine('box', { resources: { memoryTotalBytes: 16 * GiB, projectDiskFreeBytes: 40 * GiB, cpuCores: 0 } })]
+    const { problem } = readProblem({ now: NOW, crew: team, closed: [], issues: [issue(1, ['size:s'])] })
+    expect(problem.machines.map(m => [m.id, m.capacity.cpu])).toEqual([['mac', 4], ['box', CORES]])
+  })
+
   it('reads each machine\'s room and each subscription\'s windows, its person\'s reserve kept', () => {
     const { problem } = readProblem({ now: NOW, crew: crew(), closed: [], issues: [issue(1, ['size:s'])] })
     expect(problem.machines).toEqual([
