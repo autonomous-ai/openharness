@@ -124,44 +124,6 @@ describe('the project report a Lead is shown how to send', () => {
   })
 })
 
-// Review round 1: a group that left the active set (archived, or finished and idle) is not in the cached parts, yet its own
-// Lead still reads its route history. The group is read by id, as the backend serves an active or a dormant one.
-describe('route history of a group outside the active set', () => {
-  const DORMANT = 'c0000000000000000000000d'
-  const history = (leadId: string | null) => swarm((_method, path) => {
-    if (path.startsWith(`/api/super-tabs/${T}/groups/${DORMANT}?`)) return leadId === null
-      ? { status: 404, body: { success: false, error: { code: 'NOT_FOUND', message: 'No such group.' } } }
-      : ok({ group: { key: DORMANT, version: 214200, changedAt: 1, data: { id: DORMANT, leadId, agentIds: [leadId], archived: true, dormant: true } } })
-    if (path.includes('/route-decisions') || path.includes('/attempts')) return ok([])
-    return undefined
-  })
-  const ask = (s: ReturnType<typeof swarm>, agentId: string) => s.ask({ action: 'routeHistory', tabId: T, agentId, conversationId: DORMANT }, owner)
-  const logReads = (s: ReturnType<typeof swarm>) => s.call.mock.calls.filter(c => c[1].includes('/route-decisions')).length
-
-  it('gives a dormant group\'s own Lead its history', async () => {
-    const s = history(FIXTURE.leadId)
-    expect(await ask(s, FIXTURE.leadId)).toEqual({ ok: true, value: { decisions: [], attempts: [] } })
-    expect(s.call).toHaveBeenCalledWith('GET', `/api/super-tabs/${T}/groups/${DORMANT}?asAgentId=${FIXTURE.leadId}`, undefined)
-  })
-  // Project instructions, phase 4: any agent of the project routes, so any agent that can read the group reads its history.
-  it('gives any agent that can read it its history, and refuses only a group the caller cannot read', async () => {
-    const other = history(FIXTURE.leadId)
-    expect(await ask(other, FIXTURE.builderId)).toEqual({ ok: true, value: { decisions: [], attempts: [] } })
-    expect(logReads(other)).toBe(1)
-    const unreadable = history(null)
-    expect(await ask(unreadable, FIXTURE.leadId)).toMatchObject({ error: 'NOT_FOUND', status: 404 })
-    expect(logReads(unreadable)).toBe(0)
-  })
-})
-
-describe('route history when the group cannot be read for another reason', () => {
-  it('says so, rather than calling the caller no Lead', async () => {
-    const s = swarm((_method, path) => path.includes('/groups/') ? { status: 503, body: { success: false, error: { code: 'SWARM_BUSY', message: 'Busy' } } } : undefined)
-    expect(await s.ask({ action: 'routeHistory', tabId: T, agentId: FIXTURE.leadId, conversationId: FIXTURE.workGroup }, owner))
-      .toEqual({ error: 'SWARM_BUSY', detail: 'Busy', status: 503 })
-  })
-})
-
 describe('decisions', () => {
   it('reads the decisions the caller asked, open or answered, as that agent', async () => {
     const listed = { decisions: [{ id: 'd1', question: 'Ship how?', options: ['Behind a flag', 'To everyone'], recommended: 0, choice: null }] }
@@ -170,17 +132,6 @@ describe('decisions', () => {
       expect(await s.ask({ action: 'decisions', tabId: T, agentId: FIXTURE.leadId, state }, owner)).toEqual({ ok: true, value: listed })
       expect(s.call).toHaveBeenCalledWith('GET', `/api/super-tabs/${T}/decisions?state=${state}&asAgentId=${FIXTURE.leadId}`, undefined)
     }
-  })
-})
-
-describe('machineRules', () => {
-  // Task #3964: the route reads the project's machine rules alone, as that agent.
-  it('reads the project\'s machine rules as the agent, and refuses a project that is not an id', async () => {
-    const read = { projectId: FIXTURE.projectId, revision: 2, machines: [{ machineIds: ['m1'], why: 'No Codex there', noEngines: ['codex'] }] }
-    const s = swarm((method, path) => path.startsWith(`/api/super-tabs/${T}/projects/${FIXTURE.projectId}/machine-rules?`) ? ok(read) : undefined)
-    expect(await s.ask({ action: 'machineRules', tabId: T, agentId: FIXTURE.leadId, projectId: FIXTURE.projectId }, owner)).toEqual({ ok: true, value: read })
-    expect(s.call).toHaveBeenCalledWith('GET', `/api/super-tabs/${T}/projects/${FIXTURE.projectId}/machine-rules?asAgentId=${FIXTURE.leadId}`, undefined)
-    expect(await s.ask({ action: 'machineRules', tabId: T, agentId: FIXTURE.leadId, projectId: '../x' }, owner)).toMatchObject({ error: 'INVALID_REQUEST' })
   })
 })
 
@@ -264,14 +215,6 @@ describe('instructions', () => {
 })
 
 describe('costs', () => {
-  it('reads a project\'s CI load as that agent, and nothing for a malformed project id', async () => {
-    const load = { state: 'read', load: { running: 3, queued: 0, macosRunning: 1, macosQueued: 0 } }
-    const s = swarm((_method, path) => path.startsWith(`/api/super-tabs/${T}/projects/lead/ci-load?`) ? ok(load) : undefined)
-    expect(await s.ask({ action: 'ciLoad', tabId: T, agentId: FIXTURE.leadId, projectId: 'lead' }, owner)).toEqual({ ok: true, value: load })
-    expect(s.call).toHaveBeenCalledWith('GET', `/api/super-tabs/${T}/projects/lead/ci-load?asAgentId=${FIXTURE.leadId}`, undefined)
-    expect(await s.ask({ action: 'ciLoad', tabId: T, agentId: FIXTURE.leadId, projectId: '../x' }, owner)).not.toHaveProperty('ok', true)
-    expect(s.call.mock.calls.filter(c => String(c[1]).includes('ci-load'))).toHaveLength(1)
-  })
   it('reads the cost summary of the period as that agent, and lists it in help', async () => {
     const summary = { days: 30, rows: [], totals: { attempts: 0 }, prices: [] }
     const s = swarm((_method, path) => path.startsWith(`/api/super-tabs/${T}/costs?`) ? ok(summary) : undefined)

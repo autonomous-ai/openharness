@@ -1,6 +1,5 @@
 import { inspectCapacity, startAgent } from './start.js'
 import { object } from './host.js'
-import { routeAnswer, routeTask } from './routeCommand.js'
 import { openDaemon, whereFor, type Daemon, type Where } from '../agentClient/daemon.js'
 import { callerOf, outsideCaller, type Frame } from '../agentClient/model.js'
 import { identifier } from './host.js'
@@ -28,13 +27,13 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--project NAME] [--archived [PAGE]] | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | mine | task GROUP | decisions [--answered] | costs [--days N] | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off] | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON [--full-instructions] [--instructions-read REVISION] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | instructions [PROJECT] | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help [tools]'
+const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--project NAME] [--archived [PAGE]] | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | mine | task GROUP | decisions [--answered] | costs [--days N] | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off] | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | instructions [PROJECT] | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help [tools]'
 /** A Buddy's guard refuses a post or a proposal read from stdin (#2358): there its words would skip the secret check. A Buddy
  *  that followed the stdin form here was refused and tried again (#2360 took it out of a Buddy's help), so a Buddy's usage
  *  line and JSON hints never offer it. */
 const BUDDY_USAGE = USAGE.replaceAll('TEXT|- OPERATION_ID', 'TEXT OPERATION_ID')
 /** The actions that take an id and then one JSON argument, and what that id names. */
-const JSON_ACTIONS: Readonly<Record<string, string>> = { command: 'OPERATION_ID', propose: 'OPERATION_ID', start: 'OPERATION_ID', capacity: 'MACHINE_ID', route: 'GROUP' }
+const JSON_ACTIONS: Readonly<Record<string, string>> = { command: 'OPERATION_ID', propose: 'OPERATION_ID', start: 'OPERATION_ID', capacity: 'MACHINE_ID' }
 const JSON_STDIN = (action: string) => `${action} ${JSON_ACTIONS[action]} - <<'JSON' (the JSON on the next lines, then JSON alone on a line)`
 const stdinHint = (action: string, buddy: boolean) => buddy
   ? `with the JSON in single quotes: ${action} ${JSON_ACTIONS[action]} '{...}' (an apostrophe inside it as \\u0027)`
@@ -143,17 +142,6 @@ async function buddyHere(open: typeof openDaemon, local: Where, pane: string | u
 
 /** The files one proposal may carry (backend buddies.ts MAX_PROPOSAL_ATTACHMENTS). */
 const MAX_PROPOSAL_FILES = 5
-/** route's flags after its JSON: `--full-instructions` and `--instructions-read N`, each at most once; null for anything else. */
-function routeFlags(tail: string[]): { fullInstructions?: true; instructionsRead?: number } | null {
-  const flags: { fullInstructions?: true; instructionsRead?: number } = {}
-  for (let i = 0; i < tail.length; i++) {
-    if (tail[i] === '--full-instructions' && !flags.fullInstructions) flags.fullInstructions = true
-    else if (tail[i] === '--instructions-read' && flags.instructionsRead === undefined && /^\d{1,9}$/.test(tail[i + 1] ?? '')) flags.instructionsRead = Number(tail[++i])
-    else return null
-  }
-  return flags
-}
-
 /** [stdin] is asked for what `-` stands for: `post`'s message, or the JSON of the action it names. */
 export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: (what: string) => string = () => readFileSync(0, 'utf8'),
   terminal: () => boolean = () => isatty(0)) {
@@ -282,11 +270,6 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
   } else if (action === 'set-agents' && identifier(first) && /^[1-9][0-9]{0,3}$/.test(second ?? '') && positional.length === 3) {
     // The machine's owner, as the person: how many Swarm agents may run on it at once (contribution.ts setMachineAgents).
     Object.assign(payload, { action: 'setMachineAgents', machineId: first, maxAgents: Number(second) })
-  } else if (action === 'route' && identifier(first) && second && positional[3]?.startsWith('--') && !routeFlags(positional.slice(3))) {
-    throw usageError()
-  } else if (action === 'route' && identifier(first) && second && routeFlags(positional.slice(3))) {
-    // The whole instructions only on request, and none of them for a revision the caller read (task #3294).
-    Object.assign(payload, { conversationId: first, assessment: jsonArgument(action, second), ...routeFlags(positional.slice(3)) })
   } else if (action === 'screen' && identifier(first) && (positional.length === 2
     || positional.length === 4 && second === '--scrollback' && /^[1-9]\d*$/.test(third ?? '') && Number(third) <= 200)) {
     // The id names this one read; a read sent twice is only read twice.
@@ -436,10 +419,6 @@ export async function superTabCommand(argv: readonly string[], deps: {
       }
       print(JSON.stringify(answer))
       return 1
-    } else if (request.payload.action === 'route') {
-      result = routeAnswer(await routeTask({ tabId: String(request.payload.tabId), conversationId: String(request.payload.conversationId),
-        assessment: request.payload.assessment }, scoped, request.where, deps.open),
-      { fullInstructions: request.payload.fullInstructions === true, ...(typeof request.payload.instructionsRead === 'number' ? { instructionsRead: request.payload.instructionsRead } : {}) })
     } else {
       const { attach, ...payload } = request.payload
       // Each file goes to the daemon's local upload route, which streams it to the backend with the account's token;

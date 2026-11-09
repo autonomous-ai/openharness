@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest'
-import { admission, quotaOf, quotaUnknownReason, readCapabilities, START_REQUIREMENTS, startRequirements, USED_UP_WINDOW } from './capacity.js'
+import { admission, quotaOf, quotaUnknownReason, readCapabilities, START_REQUIREMENTS, USED_UP_WINDOW } from './capacity.js'
 const requirements = { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: ['/dev/test'], quotaRequired: false }
 it('uses the destination filesystem and reports missing tools/devices without executing commands', async () => {
   const deps = { resources: vi.fn(async () => ({ cpuPercent: 25, memoryTotalBytes: 1000, memoryUsedBytes: 300 })),
@@ -94,12 +94,12 @@ it('says why an allowance is unknown, for each way its reading fails', () => {
   // A readable allowance has no reason.
   expect(quotaUnknownReason(reply({ outcome: 'answered', httpStatus: 200, body: { five_hour: { utilization: 5 } } }), 'claude')).toBeNull()
 })
-it('admits a Product Manager, Buddy or template start on a busy CPU, as a routed Builder start, while memory, disk and pressure still refuse (Diego, 10-30)', () => {
+it('admits a Product Manager, Buddy or template start on a busy CPU, while memory, disk and pressure still refuse (Diego, 10-30)', () => {
   const GiB = 1024 ** 3
   // What the backend sends for a PM and a Buddy (leadStart.ts LEAD_REQUIREMENTS, buddies.ts BUDDY_REQUIREMENTS).
   const pmOrBuddy = { memoryBytes: 2 * GiB, diskBytes: GiB, maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false }
   const busy = { resources: { cpuPercent: 91.4, memoryTotalBytes: 32 * GiB, memoryUsedBytes: 16 * GiB, projectDiskFreeBytes: 100 * GiB }, tools: { git: true }, devices: {} }
-  for (const wanted of [pmOrBuddy, START_REQUIREMENTS, startRequirements({ tools: [], devices: [] })]) {
+  for (const wanted of [pmOrBuddy, START_REQUIREMENTS]) {
     expect(admission(busy, { installed: true }, quotaOf({}, 'claude', false), wanted)).toMatchObject({ allowed: true, reasons: [] })
     // An unknown CPU reading does not refuse either; memory, disk and critical pressure still do.
     expect(admission({ ...busy, resources: { ...busy.resources, cpuPercent: null } }, { installed: true }, quotaOf({}, 'claude', false), wanted).allowed).toBe(true)

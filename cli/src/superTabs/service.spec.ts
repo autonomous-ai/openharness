@@ -11,7 +11,6 @@ import { superTabService } from './service.js'
 import { object } from './wire.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { HostFeed } from './hostFeed.js'
-import { CHEAP_FIRST_HELP, GRID_KINDS, MAX_OWNED, ROUTE_KIND_HELP } from './routeCheapFirst.js'
 
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
 import { SuperTabHostError, type SuperTabHost, type SuperTabHostOptions } from './host.js'
@@ -518,8 +517,7 @@ it('refuses every agent request that came over the link from another computer, w
   const t = setup()
   const relayed = { local: false, owner: true, accountOwner: true, machine: { machineId: 'studio', label: 'Studio' } }
   const post = { type: 'message.send', conversationId: 'lead', text: 'Ready', replyTo: null, recipientIds: [] }
-  for (const ask of [{ action: 'status' }, { action: 'command', operationId: 'op', command: post }, { action: 'message', conversationId: 'lead', messageId: 'm' },
-    { action: 'routeContext' }]) {
+  for (const ask of [{ action: 'status' }, { action: 'command', operationId: 'op', command: post }, { action: 'message', conversationId: 'lead', messageId: 'm' }]) {
     t.call.mockClear()
     for (const who of [{ agentId: t.agentId }, { harnessId: 'native' }, {}]) {
       expect(await t.ask({ ...ask, tabId: 'tab', ...who }, relayed)).toEqual({ error: 'AGENT_LOCAL_ONLY',
@@ -656,147 +654,13 @@ it('lets a machine client prepare only a backend-verified terminal context', asy
   expect(core.account.backend).not.toHaveBeenCalled()
 })
 
-it('returns the routing context to a verified contribution', async () => {
+// The route is gone (the plan with it): no action reads its context, history, machine rules or CI load, and Jev is long gone.
+it('has no route actions: each is refused and nothing of the routing is read', async () => {
   const t = setup()
-  vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => path.includes('/routing-policy')
-    ? { status: 200, body: { success: true, data: { policy: { version: 1 }, warnings: [], overridden: [] } } }
-    : { status: 200, body: { success: true, data: swarmData(t.agent, path) } })
-  t.core.account.machines = vi.fn(async () => ({ status: 200, body: { success: true, data: {
-    machines: [{ machineId: 'm1', name: 'remote-1', status: 'online' }],
-    sharedMachines: [{ machineId: 'm2', name: 'shared', status: 'online', share: { added: true } }, { machineId: 'm3', name: 'not added', status: 'online' }] } } }))
-  expect(await t.ask({ action: 'routeContext', tabId: 'tab', harnessId: 'native' }, owner)).toEqual({ ok: true, value: {
-    agentId: t.agentId, tab: { lastChangedAt: expect.any(Number), state: expect.objectContaining({ agents: [t.agent] }) }, policy: { policy: { version: 1 }, warnings: [], overridden: [] },
-    machines: [{ machineId: 'm1', name: 'remote-1', status: 'online' }, { machineId: 'm2', name: 'shared', status: 'online' }] } })
-  expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/routing-policy?asAgentId=${t.agentId}`, undefined)
-})
-describe('routeHistory', () => {
-  const contextOf = (t: ReturnType<typeof setup>, read: (path: string) => Promise<unknown>, lead?: string) => {
-    const state = { agents: [{ ...t.agent, name: 'Boss' }, { id: 'a2', name: 'Multiply' }, { id: 'a3', name: 'Reader' }], conversations: [{ id: 'g1', leadId: lead ?? t.agentId }] }
-    vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => {
-      if (path.includes('/messages') || path.includes('/route-decisions') || path.includes('/attempts')) return await read(path) as never
-      // The one group by id (design 4.5), from the same state.
-      if (path.startsWith('/api/super-tabs/tab/groups/g1?')) return { status: 200, body: { success: true, data: { group: { key: 'g1', version: 1, changedAt: 1, data: state.conversations[0] } } } }
-      return { status: 200, body: { success: true, data: path.includes('/routing-policy') ? { policy: { version: 1 }, warnings: [] } : swarmData(t.agent, path, state) } }
-    })
-    t.core.account.machines = vi.fn(async () => ({ status: 200, body: { data: { machines: [] } } }))
-    return t.ask({ action: 'routeHistory', tabId: 'tab', harnessId: 'native', conversationId: 'g1' }, owner) as Promise<{ value: Record<string, unknown> }>
+  for (const action of ['routeContext', 'routeHistory', 'machineRules', 'ciLoad', 'routeJev']) {
+    expect(await t.ask({ action, tabId: 'tab', harnessId: 'native', conversationId: 'g1', projectId: 'lead' }, owner)).toEqual({ error: 'INVALID_REQUEST' })
   }
-  const ok = (data: unknown) => ({ status: 200, body: { success: true, data } })
-  it('reads only the route log and the attempts, never the group\'s messages, which only Jev read', async () => {
-    const t = setup()
-    const { value } = await contextOf(t, async () => ok([]))
-    expect(value).toEqual({ decisions: [], attempts: [] })
-    expect(vi.mocked(t.core.account.backend)).not.toHaveBeenCalledWith('GET', expect.stringContaining('/messages'), undefined)
-  })
-  // Project instructions, phase 4: any agent of the project routes, so its history is not the group Lead's alone.
-  it('is for any agent that can read the group, like the route', async () => {
-    const t = setup()
-    expect(await contextOf(t, async () => ok([]), 'someone-else')).toEqual({ ok: true, value: { decisions: [], attempts: [] } })
-    expect(vi.mocked(t.core.account.backend)).toHaveBeenCalledWith('GET', expect.stringContaining('/route-decisions'), undefined)
-  })
-  it('gives the latest routing decisions in brief, newest first, without their records', async () => {
-    const t = setup()
-    const decision = (i: number) => ({ id: `d${i}`, conversationId: 'g1', record: { pick: 'c1', via: i === 2 ? undefined : 'jev', candidates: [{ id: 'c0', title: 'Other' }, { id: 'c1', title: `Pick ${i}`, label: 'big'.repeat(100) }] },
-      final: i % 2 ? { kind: 'member', agentId: 'a2', machineId: 'm1' } : { kind: 'new', startId: 's', machineId: 'm1', engine: 'claude', model: 'opus', effort: 'high' },
-      outcome: i % 3 ? 'done' : null, assignmentId: `as${i}`, createdAt: '2026-10-19T10:00:00Z', outcomeAt: null })
-    const unfinished = { id: 'dx', conversationId: 'g1', record: { pick: 'c9', via: 'order', candidates: [] }, final: null, outcome: 'superseded', assignmentId: null, createdAt: '2026-10-19T09:00:00Z' }
-    const { value } = await contextOf(t, async path => path.includes('/messages') ? ok({ messages: [] }) : ok([...Array.from({ length: 60 }, (_, i) => decision(i)), unfinished]))
-    const decisions = value.decisions as Array<Record<string, unknown>>
-    expect(decisions).toHaveLength(50)
-    expect(decisions[0]).toEqual({ id: 'd0', conversationId: 'g1', title: 'Pick 0', via: 'jev', outcome: null, assignmentId: 'as0', createdAt: '2026-10-19T10:00:00Z',
-      final: { kind: 'new', engine: 'claude', model: 'opus' } })
-    expect(decisions[1]).toMatchObject({ final: { kind: 'member', agentId: 'a2' }, outcome: 'done' })
-    expect(decisions[2]).not.toHaveProperty('via')
-    expect(JSON.stringify(decisions)).not.toContain('bigbig')
-    const last = await contextOf(setup(), async path => path.includes('/messages') ? ok({ messages: [] }) : ok([unfinished]))
-    expect(last.value.decisions).toEqual([{ id: 'dx', conversationId: 'g1', title: 'unknown pick', via: 'order', outcome: 'superseded', assignmentId: null, createdAt: '2026-10-19T09:00:00Z', final: null }])
-    // The pick's account, spend and size go with it, so the route can count what an open pick still holds.
-    const fit = { status: 'fits', coverage: 2, effectiveCost: 3, expiring: 0, spend: { '5-hour': 45, weekly: 6 }, account: 'k1' }
-    const sized = (size?: string) => ({ ...decision(0), record: { pick: 'c1', via: 'jev', assessment: size ? { size } : {}, candidates: [{ id: 'c0', title: 'Other' }, { id: 'c1', title: 'Pick', fit }] } })
-    const phase1 = await contextOf(setup(), async path => path.includes('/messages') ? ok({ messages: [] }) : ok([sized('large'), sized()]))
-    expect(phase1.value.decisions).toMatchObject([{ account: 'k1', spend: { '5-hour': 45, weekly: 6 }, size: 'large' }, { size: 'medium' }])
-    // An override runs another candidate: a person's choice holds its own account; a Lead's choice outside the list holds none.
-    const other = { ...fit, account: 'k0', spend: { '5-hour': 30, weekly: 4 } }
-    const overridden = (override: Record<string, unknown>) => ({ ...sized('large'), override,
-      record: { ...sized('large').record, candidates: [{ id: 'c0', title: 'Other', fit: other }, { id: 'c1', title: 'Pick', fit }] } })
-    const moved = await contextOf(setup(), async path => path.includes('/messages') ? ok({ messages: [] })
-      : ok([overridden({ by: 'person', candidateId: 'c0', reason: 'r' }), overridden({ by: 'lead', reason: 'r' })]))
-    const [person, lead] = moved.value.decisions as Array<Record<string, unknown>>
-    expect(person).toMatchObject({ title: 'Pick', account: 'k0', spend: { '5-hour': 30, weekly: 4 } })
-    expect(lead).not.toHaveProperty('account')
-  })
-  // Task #2901: a route names no pick; the start or assignment the coordinator made records the candidate it matched, and that
-  // candidate's account and spend are what the open decision holds (the backend keeps every candidate's slim fit).
-  it('takes the title, account and spend of the candidate a pick-less decision\'s start chose', async () => {
-    const slim = (account: string, weekly: number) => ({ account, spend: { '5-hour': weekly * 7, weekly } })
-    const record = { via: 'instructions', assessment: { size: 'small' }, candidates: [{ id: 'c0', title: 'New agent · Claude opus high · a', fit: slim('ka', 1) },
-      { id: 'c1', title: 'New agent · Codex default default · b', fit: slim('kb', 2) }] }
-    const chosen = { id: 'd1', conversationId: 'g1', record, override: null, outcome: null, assignmentId: 'as1', createdAt: '2026-11-04T10:00:00Z',
-      final: { kind: 'new', startId: 's', machineId: 'b', engine: 'codex', model: 'default', effort: 'default', candidateId: 'c1' } }
-    const waiting = { ...chosen, id: 'd2', final: null, assignmentId: null }
-    const { value } = await contextOf(setup(), async path => path.includes('/messages') ? ok({ messages: [] }) : ok([chosen, waiting]))
-    const [started, unstarted] = value.decisions as Array<Record<string, unknown>>
-    expect(started).toMatchObject({ title: 'New agent · Codex default default · b', account: 'kb', spend: { '5-hour': 14, weekly: 2 }, size: 'small', via: 'instructions' })
-    // Nothing chosen yet holds nothing, and says so.
-    expect(unstarted).toMatchObject({ title: 'not chosen yet' })
-    expect(unstarted).not.toHaveProperty('account')
-  })
-  it('gives every attempt of the group, newest first, with only what the route needs and no more than fifty', async () => {
-    const t = setup()
-    const row = (i: number) => ({ id: `as${i}`, agentId: i % 2 ? 'a2' : 'gone', status: 'stopped', result: i === 0 ? 'Tests failed.' : i === 2 ? 'y'.repeat(900) : null, createdAt: '2026-10-19T10:00:00Z',
-      conversationId: 'g1', execution: { harnessId: 'secret' } })
-    const { value } = await contextOf(t, async path => path.includes('/attempts') ? ok(Array.from({ length: 60 }, (_, i) => row(i))) : ok(path.includes('/messages') ? { messages: [] } : []))
-    const attempts = value.attempts as Array<Record<string, unknown>>
-    expect(attempts).toHaveLength(50)
-    expect(attempts[0]).toEqual({ id: 'as0', agentId: 'gone', status: 'stopped', result: 'Tests failed.', createdAt: '2026-10-19T10:00:00Z' })
-    expect(attempts[1]).toEqual({ id: 'as1', agentId: 'a2', status: 'stopped', result: null, createdAt: '2026-10-19T10:00:00Z' })
-    expect(attempts[2].result).toBe('y'.repeat(500))
-    expect(JSON.stringify(attempts)).not.toContain('secret')
-    expect(value).not.toHaveProperty('attemptsUnreadable')
-    expect(vi.mocked(t.core.account.backend)).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/conversations/g1/attempts?asAgentId=${t.agentId}`, undefined)
-  })
-  it('marks the attempts unreadable when an older backend answers 404 or the read fails or hangs', async () => {
-    const without = (path: string) => path.includes('/messages') ? ok({ messages: [] }) : ok([])
-    const old = await contextOf(setup(), async path => path.includes('/attempts') ? { status: 404, body: { success: false, error: { code: 'NOT_FOUND' } } } : without(path))
-    expect(old.value).toMatchObject({ decisions: [], attemptsUnreadable: true })
-    expect(old.value).not.toHaveProperty('attempts')
-    const failed = await contextOf(setup(), async path => path.includes('/attempts') ? Promise.reject(new Error('down')) : without(path))
-    expect(failed.value).toMatchObject({ attemptsUnreadable: true, decisions: [] })
-    const odd = await contextOf(setup(), async path => path.includes('/attempts') ? ok({ attempts: 'no' }) : without(path))
-    expect(odd.value).toMatchObject({ attemptsUnreadable: true })
-    vi.useFakeTimers()
-    try {
-      const slow = contextOf(setup(), async path => path.includes('/attempts') ? new Promise(() => {}) : without(path))
-      await vi.advanceTimersByTimeAsync(3000)
-      expect((await slow).value).toMatchObject({ decisions: [], attemptsUnreadable: true })
-    } finally { vi.useRealTimers() }
-  })
-  it('marks the route log unreadable on its own, and never waits longer than three seconds for it', async () => {
-    const odd = await contextOf(setup(), async path => path.includes('/attempts') ? ok([]) : { status: 503, body: { error: 'SERVICE_UNAVAILABLE' } })
-    expect(odd.value).toEqual({ decisionsUnreadable: true, attempts: [] })
-    vi.useFakeTimers()
-    try {
-      const slow = contextOf(setup(), async path => path.includes('/attempts') ? ok([]) : new Promise(() => {}))
-      await vi.advanceTimersByTimeAsync(3000)
-      expect((await slow).value).toEqual({ decisionsUnreadable: true, attempts: [] })
-    } finally { vi.useRealTimers() }
-  })
-})
-it('says the machine list could not be read, instead of offering none', async () => {
-  const t = setup()
-  vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => path.includes('/routing-policy')
-    ? { status: 200, body: { success: true, data: { policy: { version: 1 }, warnings: [], overridden: [] } } }
-    : { status: 200, body: { success: true, data: swarmData(t.agent, path) } })
-  for (const answer of [async () => ({ status: 503, body: { error: 'SERVICE_UNAVAILABLE' } }), async () => { throw new Error('link lost') }]) {
-    t.core.account.machines = vi.fn(answer)
-    expect(await t.ask({ action: 'routeContext', tabId: 'tab', harnessId: 'native' }, owner)).toMatchObject({ ok: true, value: { machines: [], machinesUnreadable: true } })
-  }
-  t.core.account.machines = vi.fn(async () => ({ status: 200, body: { data: { machines: [{ machineId: 'm1', name: 'remote-1', status: 'online' }] } } }))
-  expect((await t.ask({ action: 'routeContext', tabId: 'tab', harnessId: 'native' }, owner) as { value: object }).value).not.toHaveProperty('machinesUnreadable')
-})
-it('no longer asks Jev: the daemon has no routeJev action', async () => {
-  const t = setup()
-  expect(await t.ask({ action: 'routeJev', tabId: 'tab', harnessId: 'native', conversationId: 'g1', state: {}, questions: {} }, owner)).not.toMatchObject({ ok: true })
+  expect(t.call).not.toHaveBeenCalledWith('GET', expect.stringMatching(/routing-policy|route-decisions|machine-rules|ci-load/), undefined)
   expect(vi.mocked(t.core.account.backend)).not.toHaveBeenCalledWith('POST', '/api/route/jev', expect.anything())
 })
 
@@ -932,25 +796,10 @@ it('says a server from before rules does not support them, and passes a malforme
   expect(await send({ type: 'rule.set', rule: { kind: 'minEffort', effort: 'huge' }, text: 'x' })).not.toMatchObject({ error: 'RULES_UNSUPPORTED' })
 })
 
-// Project instructions, phase 4: the route shows facts and notes the rest; no build, review or grid rule is the help's. Task #2901:
-// it ranks nothing and names no pick, so the help sends the choice to the Routing instructions and asks for the rule followed.
-it('tells every agent what the route leaves out, that it ranks the rest by nothing, and which kinds of work may go to the grid', async () => {
-  const help = (await setup().ask({ action: 'help' }, owner)).help as { commands: Array<{ type: string }>; command: string; route: string }
-  expect(help.route).toContain('The route leaves out what cannot run, and says why')
-  // Besides what cannot run, the grid rules leave models out (routeCheapFirst.ts), so "only" is no longer said.
-  expect(help.route).not.toContain('leaves out only')
-  // Kind decides whether a grid model is offered (routeCheapFirst.ts): the help names the list from the same constant.
-  expect(help.route).toContain(`"kind":"${ROUTE_KIND_HELP}"`)
-  expect(help.route).toContain(CHEAP_FIRST_HELP)
-  for (const kind of GRID_KINDS) expect(ROUTE_KIND_HELP).toContain(kind)
-  expect(CHEAP_FIRST_HELP).toContain(`1 to ${MAX_OWNED} owned paths`)
-  expect(CHEAP_FIRST_HELP).toMatch(/never offered, even when named, for a review, security work .* or a task's second attempt/)
-  expect(help.route).toContain('It ranks nothing and names no pick: the rest come by machine name, then engine')
-  expect(help.route).toContain('weekly % left and reset time')
-  expect(help.route).toContain('choose by your project\'s Routing instructions')
-  expect(help.route).toContain('routeDecisionId and overrideReason, the Routing rule that chose it')
-  expect(help.route).not.toMatch(/ranks the rest|by strength, then price|choose by strength|A pick on/)
-  expect(`${help.route} ${help.command}`).not.toMatch(/noGridFirst|policy rates 3|low-risk work of kind docs|NO_CANDIDATE/)
+// Project instructions, phase 4: no build, review or grid rule is the help's, and the route is no part of it.
+it('offers every agent no route and no rule command', async () => {
+  const help = (await setup().ask({ action: 'help' }, owner)).help as { commands: Array<{ type: string }> }
+  expect(help).not.toHaveProperty('route')
   expect(help.commands.map(c => c.type)).not.toContain('rule.set')
 })
 

@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { apisOn, ContributedMachines, createQuietGit, liveOn, localModelsStamp, offered, READINGS_RETRY_MS, refusedOn, servedOn, sharedWith, swarmUnconfirmedFile, swarmWorktreesFile } from './machines.js'
+import { apisOn, ContributedMachines, createQuietGit, liveOn, localModelsStamp, offered, READINGS_RETRY_MS, refusedOn, repositoryKey, servedOn, sharedWith, swarmUnconfirmedFile, swarmWorktreesFile } from './machines.js'
 import { SuperTabHostError } from './host.js'
 import { createSwarmAgents } from './inCore/agents.js'
 import { createConfidentialPurge, purgeRecord } from './inCore/teamPurge.js'
@@ -2885,6 +2885,22 @@ describe('removed machine cleanup', () => {
 // The allowance is the CLIs' own report (services/usage.ts): Codex's costs a start of its app-server, so it is read at most
 // once in 3 minutes however often the machine reports, a reading that fails keeps the last good windows a while, and an
 // unknown one says why.
+describe('repositoryKey', () => {
+  it('names a repository the same way over HTTPS and SSH, without credentials or case', () => {
+    for (const url of ['https://github.com/Acme/App.git', 'https://someone:secret@github.com/acme/app/', 'git@github.com:Acme/App.git',
+      'ssh://git@github.com:22/acme/app.git', ' HTTPS://GitHub.com/acme/app ']) expect(repositoryKey(url)).toBe('github.com/acme/app')
+  })
+  it('keeps nothing of a query or fragment, where a credential can be too', () => {
+    for (const url of ['https://example.test/Acme/Repo.git?access_token=SYNTHETIC_SECRET', 'https://example.test/acme/repo#token=SYNTHETIC_SECRET',
+      'git@example.test:acme/repo.git?access_token=SYNTHETIC_SECRET', 'ssh://git@example.test/acme/repo.git#SYNTHETIC_SECRET']) {
+      expect(repositoryKey(url)).toBe('example.test/acme/repo')
+    }
+  })
+  it('names nothing for a folder on disk or an address it cannot read', () => {
+    for (const url of ['/srv/remote.git', 'file:///srv/remote.git', '', 'https://github.com', 'not a url']) expect(repositoryKey(url)).toBeNull()
+  })
+})
+
 describe('the allowance a machine reports', () => {
   const reads = (f: ReturnType<typeof fixture>) => f.request.mock.calls.filter(c => c[0] === 'usage_read').length
   const last = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).at(-1)![3] as Record<string, unknown>
