@@ -12,8 +12,10 @@ const PROJECT = { repo: 'acme/app', pm: 'Faye', tabId: 'tab', pmAgentId: 'faye',
 /** One repository's issues as GitHub's REST API answers them, with ETags, and what was sent to it. Labels sent are kept
  *  only once [applied] says GitHub's lists show them. */
 function fakeGitHub(open: Json[], closed: Json[] = []) {
+  // A repository already set up for the flow: its labels, and its builders' (a fresh one is set apart below).
+  const labels = ['status:taken', 'size:s', 'size:m', 'size:l', 'p0', 'p1', 'p2', 'builder:pip', 'builder:juno', 'builder:atlas'].map(name => ({ name }))
   const state = { open, closed, labelAnswer: 200, deleteAnswer: 200, commentAnswer: 201, signedOut: false, applied: false,
-    files: new Map<string, string>(), labels: [] as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>() }
+    files: new Map<string, string>(), labels: labels as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>() }
   const sent: Array<{ method: string; path: string; body: Json }> = []
   const get: GitHubGet = async (path, etag) => {
     if (state.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
@@ -157,10 +159,30 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(f.said()).toHaveLength(1)
   })
 
+  it('makes the labels a fresh repository lacks, the flow\'s and each builder\'s, once, and says one GitHub refuses', async () => {
+    const f = setup([])
+    f.github.state.labels = [{ name: 'P1' }]
+    await f.assigner.tick()
+    const made = () => f.github.sent.filter(s => s.path === '/repos/acme/app/labels').map(s => s.body.name)
+    expect(made()).toEqual(['status:taken', 'size:s', 'size:m', 'size:l', 'p0', 'p2', 'builder:pip', 'builder:juno'])
+    expect(f.github.sent.find(s => s.body.name === 'size:s')!.body).toEqual({ name: 'size:s', color: 'c2e0c6', description: 'About half an hour of work' })
+    // Read and made once: the next pass asks GitHub for nothing about labels.
+    await f.assigner.tick()
+    expect(made()).toHaveLength(8)
+    const refused = setup([])
+    refused.github.state.labels = []
+    const send = refused.github.send
+    refused.github.send = (async (method, path, body) => path === '/repos/acme/app/labels' ? { status: 403, etag: null, body: {}, resetAt: null }
+      : send(method, path, body)) as typeof send
+    const again = refused.make()
+    await again.tick(); await again.tick()
+    expect(refused.log.mock.calls.filter(([line]) => String(line).includes('LABEL_NOT_MADE acme/app status:taken: GitHub answered 403'))).toHaveLength(1)
+  })
+
   it('gives a builder the tasks of the area its instructions say it works on, and makes that area\'s label', async () => {
     const f = setup([issue(1, ['size:s', 'part:mobile']), issue(2, ['size:s', 'part:api'])])
     f.github.state.files.set('agents/Pip.md', '# Pip\nWorks on: Mobile\n\nMy rules.')
-    f.github.state.labels = [{ name: 'part:api' }]
+    f.github.state.labels.push({ name: 'part:api' })
     await f.assigner.tick()
     expect(f.labelled().sort()).toEqual([[1, 'builder:pip'], [2, 'builder:juno']])
     expect(new Map(f.said() as Array<[number, string]>).get(1)).toMatch(/for \*\*Pip\*\*: it can start now, and it works on mobile\.$/)
