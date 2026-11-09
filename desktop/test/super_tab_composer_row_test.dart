@@ -76,6 +76,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.light),
         home: Scaffold(
           body: SuperTabView(
+            board: false,
             controller: c,
             onInvite: () {},
             onAddAgent: (_) {},

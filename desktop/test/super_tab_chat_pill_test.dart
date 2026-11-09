@@ -18,7 +18,7 @@ void main() {
     WidgetTester tester,
     Brightness brightness,
   ) async {
-    final c = ConversationServer().controller();
+    final c = ConversationServer.chat().controller();
     addTearDown(c.dispose);
     await c.refresh();
     grid.AppTheme.brightness.value = brightness;
