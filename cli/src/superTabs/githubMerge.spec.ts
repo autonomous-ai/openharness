@@ -22,7 +22,9 @@ function fakeGitHub() {
     const url = new URL(`https://api.github.com${path}`)
     const p = url.pathname
     const body = p === '/repos/acme/app' ? { default_branch: 'main' }
-      : p === '/repos/acme/app/pulls' ? repo.pulls
+      // A page of the list, as GitHub pages it.
+      : p === '/repos/acme/app/pulls' ? repo.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
+        Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
       : /\/issues\/\d+\/comments$/.test(p) ? repo.comments.get(Number(p.split('/').at(-2))) ?? []
       : /\/commits\/[0-9a-f]+\/check-runs$/.test(p) ? { check_runs: repo.runs.get(p.split('/').at(-2)!) ?? [] }
       : /\/commits\/[0-9a-f]+\/status$/.test(p) ? { statuses: repo.statuses.get(p.split('/').at(-2)!) ?? [] }
@@ -68,6 +70,14 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     f.github.repo.comments.set(4, [comment('Pip Two, 14:20, to **Juno**: READ-OK f6edb44')])
     await f.merger.tick()
     expect(f.merges()).toEqual([])
+  })
+
+  it('merges the team\'s pull request wherever it is among a busy repository\'s hundred and more', async () => {
+    const f = setup()
+    const people = Array.from({ length: 119 }, (_, i) => pull({ number: 100 + i, labels: [], head: { sha: HEAD, ref: `fix-${i}` } }))
+    f.github.repo.pulls = [...people.slice(0, 110), pull(), ...people.slice(110)]
+    await f.merger.tick()
+    expect(f.merges()).toEqual([{ method: 'PUT', path: '/repos/acme/app/pulls/4/merge', body: { merge_method: 'squash', sha: HEAD } }])
   })
 
   it('reads the team only when a pull request is open', async () => {

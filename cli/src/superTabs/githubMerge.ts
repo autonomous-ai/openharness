@@ -25,7 +25,11 @@ import { identifier, object } from './wire.js'
 type Json = Record<string, unknown>
 
 export const MERGE_INTERVAL_MS = 30_000
-const MAX_PULLS = 30
+/** Open pull requests are read a hundred a page, the most recently updated first, up to this many pages each pass: a busy shared
+ *  repository has over a hundred open (lampOS and openharness about 110 each, 2026-11-10), and the team's own can be any of
+ *  them. The newest thirty alone left an older team pull request unread and unmerged for good. */
+export const PULL_PAGES = 3
+export const openPullsPath = (repo: string): string => `/repos/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=${PAGE}`
 /** How often the projects whose PM runs here are asked again: each ask reads the PM's Swarm. */
 const PROJECTS_FRESH_MS = 60_000
 /** A verdict as lampOS's readers write it: `READ-OK <sha>` or `HOLD <sha>`, the sha at least 7 hex digits. */
@@ -168,7 +172,7 @@ export class GitHubMerge {
   private async mergeReady(project: LedProject): Promise<void> {
     const { repo } = project
     const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
-    const pulls = (await this.reads.current(repo, `/repos/${repo}/pulls?state=open&per_page=${MAX_PULLS}`, 1))
+    const pulls = (await this.reads.current(repo, openPullsPath(repo), PULL_PAGES))
       .filter(pull => pull.draft !== true && object(pull.base).ref === base)
     // The team, read of the PM's Swarm (a changes read on the backend), only when a pull request could merge.
     if (!pulls.length) return
