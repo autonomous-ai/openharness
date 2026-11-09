@@ -17,7 +17,7 @@ import { promptWaits } from '../promptWaits.js'
 import { storedPulse, type Pulse } from '../pulse.js'
 import { coordinatorNameOf, roleNameOf } from '../instructions.js'
 import { agentChatId, agentKind, inMyAgents, ledProjects } from '../agentKind.js'
-import { withAvatarView } from '../profile.js'
+import { personView, withAvatarView } from '../profile.js'
 import { swarmUsernames } from '../usernames.js'
 import type { AgentView, Derived, GroupView, HeadView, LivePart, MachineView, MemberView, ProgressView, StartView } from './contract.js'
 
@@ -125,7 +125,7 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
       head: envelope(parts.head, head),
       // Each person's username as the Swarm shows it, worked out in join order (the reassembled state's), never the order
       // member parts happen to load in.
-      members: parts.members.filter(m => !m.deleted).map(m => envelope(m, { ...withAvatarView(m.data!), username: names.get(m.key) } as MemberView)),
+      members: parts.members.filter(m => !m.deleted).map(m => envelope(m, { ...personView(m.data!), username: names.get(m.key) } as MemberView)),
       agents: visible.agents.map(a => {
         const stored = state.agents.find(s => s.id === a.id)!
         const view = agentView(stored)

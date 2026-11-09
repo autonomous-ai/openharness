@@ -4163,21 +4163,12 @@ describe('Lead mentions', () => {
 
   it('lists a person’s tag of another person under the author’s username, never their email', async () => {
     const { tab, group } = await tagged()
-    await run(tab, { type: 'member.username', username: 'boss' })
     const messageId = (await run(tab, { type: 'message.send', conversationId: group, text: 'Peer, see above.', replyTo: null, recipientIds: [],
       mentions: [peer.sub] })).result.messageId as string
     const mention = (await list(tab, peer, 'waiting')).find(m => m.messageId === messageId)
     // Who tagged, by kind: the phone rings for a person's tag and not for an agent's (task #3607).
-    expect(mention).toEqual(expect.objectContaining({ leadId: owner.sub, leadName: 'boss', leadKind: 'person', text: '@peer Peer, see above.' }))
+    expect(mention).toEqual(expect.objectContaining({ leadId: owner.sub, leadName: 'owner', leadKind: 'person', text: '@peer Peer, see above.' }))
     expect(JSON.stringify(mention)).not.toContain(owner.email)
-  })
-
-  it('lists a person’s tag under the name they set, when they set one', async () => {
-    const { tab, group } = await tagged()
-    await run(tab, { type: 'member.name', name: 'The Boss' })
-    const messageId = (await run(tab, { type: 'message.send', conversationId: group, text: 'Peer, look.', replyTo: null, recipientIds: [],
-      mentions: [peer.sub] })).result.messageId as string
-    expect((await list(tab, peer, 'waiting')).find(m => m.messageId === messageId)).toMatchObject({ leadName: 'The Boss' })
   })
 
   it('resolves on the person’s later post in that conversation, not on anyone else’s', async () => {

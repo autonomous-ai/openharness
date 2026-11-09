@@ -6,6 +6,10 @@ import type { RetiredCommand } from './retired.js'
 export const OLD_PAYLOADS = {
   'process.confirm': { projectId: 'lead', noteId: 'note-3' },
   'project.digest': { projectId: 'lead', time: '08:00', timeZone: 'Asia/Ho_Chi_Minh' },
+  'member.status': { status: { text: 'Heads down', emoji: '🎯', until: '2026-11-10T09:00:00.000Z' } },
+  'member.timeZone': { timeZone: 'Asia/Ho_Chi_Minh' },
+  'member.username': { username: 'minh' },
+  'member.name': { name: 'Minh Nguyen' },
 } satisfies Record<RetiredCommand, object>
 
 /** How many [type] commands the retired-commands counter holds for [client]. */

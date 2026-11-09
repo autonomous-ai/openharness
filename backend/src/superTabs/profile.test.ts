@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor } from './model.js'
+import { split } from './parts/shape.js'
 import { setAgentAvatar } from './profile.js'
+import { readerView } from './read/views.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -24,70 +26,24 @@ function fixture() {
   return { run, invite, member, get state() { return state } }
 }
 
-describe('status line', () => {
-  it('sets and clears the person’s own status', () => {
-    const f = fixture()
-    f.run({ type: 'member.status', status: { text: '  Out until 2pm ', emoji: '🌴', until: '2026-10-27T14:00:00.000Z' } })
-    expect(f.member('owner')!.status).toEqual({ text: 'Out until 2pm', emoji: '🌴', until: '2026-10-27T14:00:00.000Z' })
-    f.run({ type: 'member.status', status: { text: 'Focus' } })
-    expect(f.member('owner')!.status).toEqual({ text: 'Focus', emoji: null, until: null })
-    f.run({ type: 'member.status', status: null })
-    expect(f.member('owner')!.status).toBeUndefined()
-  })
-
-  it('refuses a status that is too long, unprintable, already over or set as an agent', () => {
-    const f = fixture()
-    expect(() => f.run({ type: 'member.status', status: { text: 'x'.repeat(81) } })).toThrow()
-    expect(() => f.run({ type: 'member.status', status: { text: 'Focus‮' } })).toThrow()
-    expect(() => f.run({ type: 'member.status', status: { text: 'Lunch', emoji: '💣' } } as unknown as Command)).toThrow()
-    expect(() => f.run({ type: 'member.status', status: { text: 'Lunch', until: '2026-10-27T08:59:59.000Z' } }))
-      .toThrow(expect.objectContaining({ code: 'STATUS_EXPIRED' }))
-    expect(() => f.run({ type: 'member.status', status: { text: 'Lunch' } }, { kind: 'agent', agentId: 'a1', machineOwnerId: 'owner' })).toThrow()
-    expect(f.member('owner')!.status).toBeUndefined()
-  })
-
-  it('keeps a credential out of the status', () => {
-    const f = fixture()
-    const effects = f.run({ type: 'member.status', status: { text: 'key ghp_R4nd0mT0k3nV4lu3Xq9Lp2Zs8Wd5Yb7Hc1Jk6Mn' } })
-    expect(f.member('owner')!.status!.text).not.toContain('ghp_R4nd0m')
-    expect(effects.result.credentialsRemoved).toBeTruthy()
-  })
-
-  it('is refused for a viewer and read only by members', () => {
-    const f = fixture()
-    f.invite('viewer')
-    expect(() => f.run({ type: 'member.status', status: { text: 'Coffee', emoji: '☕' } }, peer))
-      .toThrow(expect.objectContaining({ code: 'READ_ONLY' }))
-    f.run({ type: 'member.status', status: { text: 'Coffee', emoji: '☕' } })
-    expect(visibleState(f.state, peer).people.find(p => p.id === 'owner')!.status!.text).toBe('Coffee')
-    expect(() => visibleState(f.state, stranger)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
-  })
-})
-
-describe('time zone', () => {
-  it('sets and clears the person’s own zone, read by members', () => {
+describe('what readers get of a person', () => {
+  // Swarms from before v4 hold a status and a time zone that nothing sets any more and no app draws (2026-11-09): a status with
+  // no end would haunt an older app for ever, so readers get neither, though they stay stored.
+  it('leaves out the status and time zone a person stored, keeps their avatar, and reads the same for a member part', () => {
     const f = fixture()
     f.invite()
-    f.run({ type: 'member.timeZone', timeZone: 'Asia/Ho_Chi_Minh' })
-    expect(f.member('owner')!.timeZone).toBe('Asia/Ho_Chi_Minh')
-    expect(visibleState(f.state, peer).people.find(p => p.id === 'owner')!.timeZone).toBe('Asia/Ho_Chi_Minh')
-    f.run({ type: 'member.timeZone', timeZone: null })
-    expect(f.member('owner')!.timeZone).toBeUndefined()
-  })
-
-  it('refuses an unknown zone and an agent', () => {
-    const f = fixture()
-    expect(() => f.run({ type: 'member.timeZone', timeZone: 'Mars/Base' })).toThrow(expect.objectContaining({ code: 'TIME_ZONE' }))
-    expect(() => f.run({ type: 'member.timeZone', timeZone: 'Asia/Ho_Chi_Minh' }, { kind: 'agent', agentId: 'a1', machineOwnerId: 'owner' }))
-      .toThrow()
-    expect(f.member('owner')!.timeZone).toBeUndefined()
-  })
-
-  it('a viewer may set their own', () => {
-    const f = fixture()
-    f.invite('viewer')
-    f.run({ type: 'member.timeZone', timeZone: 'Europe/Berlin' }, peer)
-    expect(f.member('peer')!.timeZone).toBe('Europe/Berlin')
+    Object.assign(f.member('owner')!, { status: { text: 'Out', emoji: '🌴', until: null }, timeZone: 'Asia/Ho_Chi_Minh',
+      avatar: { kind: 'preset', key: 'fox' } })
+    const seen = visibleState(f.state, peer).people.find(p => p.id === 'owner')!
+    expect(seen).not.toHaveProperty('status')
+    expect(seen).not.toHaveProperty('timeZone')
+    expect(seen.avatar).toEqual({ kind: 'preset', key: 'fox' })
+    const part = readerView(split(f.state, { tabId: 'tab', version: 1, now: NOW }), peer, NOW, { teamMachines: [] }).parts.members.find(m => m.key === 'owner')!
+    expect(part.data).not.toHaveProperty('status')
+    expect(part.data).not.toHaveProperty('timeZone')
+    expect(part.data.avatar).toEqual({ kind: 'preset', key: 'fox' })
+    expect(f.member('owner')).toHaveProperty('status')
+    expect(() => visibleState(f.state, stranger)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
   })
 })
 
