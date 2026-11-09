@@ -122,7 +122,9 @@ to **Atlas**: please read this pull request, and start your comment with READ-OK
 line and fix)."). It asks a builder of the team that is not its author and not asked already, of another model family
 than its author's when one can (a review is never read by its build's family, as the solver's `independentOf`), then the
 one holding the fewest tasks (`assign/crew.ts readerFor`). The comment names the reader, so GitHub news brings it the
-ask. Nobody able to read it is said once.
+ask. A verdict on an older head no longer counts, and a HOLD on one still blocks the merge, so when its author pushes, its
+reader is asked to read the new head, once ("the head is now abcdef1, after your HOLD on f6edb44: please read it again").
+Nobody able to read it is said once.
 
 ## Next
 

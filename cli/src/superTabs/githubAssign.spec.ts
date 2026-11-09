@@ -57,11 +57,12 @@ const crew = (): Crew => ({
 function setup(open: Json[], options: { closed?: Json[]; crew?: Crew } = {}) {
   const github = fakeGitHub(open, options.closed)
   const log = vi.fn()
-  const assigner = new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send,
+  const make = () => new GitHubAssign({ projects: async () => [PROJECT], crew: async () => options.crew ?? crew(), get: github.get, send: github.send,
     now: () => Date.parse('2026-11-09T07:31:00Z'), log })
+  const assigner = make()
   const labelled = () => github.sent.filter(s => /\/issues\/\d+\/labels$/.test(s.path)).map(s => [Number(s.path.split('/').at(-2)), (s.body.labels as string[])[0]])
   const said = () => github.sent.filter(s => s.path.endsWith('/comments')).map(s => [Number(s.path.split('/').at(-2)), String(s.body.body)])
-  return { github, assigner, log, labelled, said }
+  return { github, assigner, make, log, labelled, said }
 }
 
 describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () => {
@@ -208,6 +209,22 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.comments.set(30, [comment('Harness, 07:30, to **Atlas**: please read this pull request, and start your comment with READ-OK f6edb44 or HOLD f6edb44 (with the file, line and fix).')])
       await f.assigner.tick()
       expect(asks(f)).toEqual([])
+    })
+
+    it('asks a reader again, once, when the head moves past its HOLD or READ-OK, and nobody else', async () => {
+      const NEW = 'abcdef1c0ffee0000000000000000000000000ab'
+      for (const verdict of ['HOLD', 'READ-OK']) {
+        const f = setup([], { crew: team })
+        f.github.state.pulls = [pull({ head: { sha: NEW, ref: 'pip/14' } })]
+        f.github.state.comments.set(30, [comment(`Juno, 14:00: ${verdict} f6edb44${verdict === 'HOLD' ? ': the day count is off by one.' : ''}`)])
+        await f.assigner.tick()
+        expect(asks(f).map(body => body.replace(/^Harness, \d\d:\d\d,/, 'Harness, HH:MM,'))).toEqual([`Harness, HH:MM, to **Juno**: the head is now abcdef1, `
+          + `after your ${verdict} on f6edb44: please read it again, and start your comment with READ-OK abcdef1 or HOLD abcdef1 (with the file, line and fix).`])
+        // Once: GitHub shows the ask, and Juno is still reading.
+        f.github.state.comments.set(30, [...f.github.state.comments.get(30)!, comment(asks(f)[0]!)])
+        await f.make().tick()
+        expect(asks(f)).toHaveLength(1)
+      }
     })
 
     it('says once when nobody but its author can read it', async () => {
