@@ -648,11 +648,16 @@ void main() {
 
   group('code', () {
     late List<String> copied;
+    var refuse = false;
     setUp(() {
       copied = [];
+      refuse = false;
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(SystemChannels.platform, (call) async {
             if (call.method == 'Clipboard.setData') {
+              if (refuse) {
+                throw PlatformException(code: 'Clipboard unavailable');
+              }
               copied.add((call.arguments as Map)['text'] as String);
             }
             return null;
@@ -686,16 +691,51 @@ void main() {
       await close(tester, c);
     });
 
-    testWidgets('an empty block draws nothing: no box, no Copy', (
+    testWidgets('a clipboard that refuses is said, not taken for a copy', (
       tester,
     ) async {
-      final c = await show(tester, text: 'Nothing in it:\n\n```\n```');
-      expect(find.text('Nothing in it:'), findsOneWidget);
-      expect(find.byType(SuperTabCodeBlock), findsOneWidget);
-      expect(tester.getSize(find.byType(SuperTabCodeBlock)).height, 0);
-      expect(find.text('Copy'), findsNothing);
+      refuse = true;
+      final c = await show(tester, text: '```\nls -la\n```');
+      await tester.tap(find.text('Copy'));
+      await tester.pump();
+      expect(find.text('Code copied'), findsNothing);
+      expect(find.text('Couldn\'t copy it.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpAndSettle(const Duration(seconds: 3));
       await close(tester, c);
     });
+
+    testWidgets(
+      'a line wider than the column wraps inside the block: nothing scrolls sideways',
+      (tester) async {
+        final wide = 'x' * 400;
+        final c = await show(tester, text: '```\n$wide\n```');
+        final code = find.text(wide);
+        expect(code, findsOneWidget);
+        expect(
+          find
+              .ancestor(of: code, matching: find.byType(Scrollable))
+              .evaluate()
+              .where(
+                (e) =>
+                    (e.widget as Scrollable).axisDirection ==
+                    AxisDirection.right,
+              ),
+          isEmpty,
+        );
+        final block = find.ancestor(
+          of: code,
+          matching: find.byType(SuperTabCodeBlock),
+        );
+        expect(
+          tester.getRect(code).right,
+          lessThanOrEqualTo(tester.getRect(block).right),
+        );
+        // Wrapped: more than one line high.
+        expect(tester.getSize(code).height, greaterThan(60));
+        await close(tester, c);
+      },
+    );
 
     testWidgets('a block with no language still has Copy', (tester) async {
       final c = await show(tester, text: '```\nls -la\n```');

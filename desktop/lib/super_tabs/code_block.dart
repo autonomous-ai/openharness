@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../logging/app_log.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
@@ -19,19 +20,28 @@ class SuperTabCodeBlock extends StatelessWidget {
   /// The fence's info string — `dart`, `main.dart` — or null without one.
   final String? language;
 
+  /// Copies the block, and says whether it did: a clipboard that refuses (no helper on Linux, a browser that denies it)
+  /// is said, not taken for a copy.
   Future<void> _copy(BuildContext context) async {
-    await Clipboard.setData(ClipboardData(text: code));
+    var copied = true;
+    try {
+      await Clipboard.setData(ClipboardData(text: code));
+    } on PlatformException catch (error) {
+      copied = false;
+      appLog.warn('super-tabs', 'Code not copied: ${error.code}');
+    }
     if (!context.mounted) return;
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-      const SnackBar(content: Text('Code copied'), duration: Durations.long4),
+      SnackBar(
+        content: Text(copied ? 'Code copied' : 'Couldn\'t copy it.'),
+        duration: Durations.long4,
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    // An empty fence has nothing to read or copy.
-    if (code.trim().isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         grid.AppDesktop.groupGap,

@@ -568,7 +568,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
 - **Long messages.** An agent's message folds after about six lines, with
   More (`SwarmFold`); a person's never does. A code block in a message shows every line
   (no Show more), a line wider than the column wrapped, never a scroll inside
-  the chat, with its language and Copy over it; an empty one draws nothing.
+  the chat, with its language and Copy over it; a clipboard that refuses says `Couldn't copy it.`
 - **Voice.** A voice message is its own bubble with play, waveform and
   length, blue on your side; it plays only, with no words under it (anh Dee,
   2026-11-04, again 2026-11-07).
