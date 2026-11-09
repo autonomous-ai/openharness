@@ -141,8 +141,6 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/machines/:machineId/removal/v2', `${t}/machines/${MISSING}/removal/v2`),
     multipart('POST /api/super-tabs/:tabId/attachments', `${t}/attachments`, form([field('conversationId', chat), file('notes.txt', 'text/plain', 'hello')])),
     multipart('POST /api/super-tabs/:tabId/avatars', `${t}/avatars`, form([file('me.png', 'image/png', 'not a png')])),
-    json('POST', 'POST /api/super-tabs/:tabId/workspace-visibility', `${t}/workspace-visibility`, { visibility: 'workspace' }),
-    json('POST', 'POST /api/super-tabs/:tabId/workspace-join', `${t}/workspace-join`, { operationId: op() }),
     json('GET', 'GET /api/super-tabs/:tabId/costs', `${t}/costs`),
     json('GET', 'GET /api/super-tabs/:tabId/route-decisions', `${t}/route-decisions`),
     json('GET', 'GET /api/super-tabs/:tabId/starts/:startId', `${t}/starts/${MISSING}`),

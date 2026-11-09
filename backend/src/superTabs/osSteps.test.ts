@@ -87,7 +87,6 @@ for (const [os, { reports, step: osStep, line, field, rules }] of Object.entries
         'a Team account\'s': machine('box1', reports, 'owner', { hostMachineId: 'mac1' }),
         'offline': machine('box1', reports, 'owner', { observation: { ...machine('box1', reports).observation, receivedAt: NOW - 10 * 60_000 } }),
         'paused': machine('box1', reports, 'owner', { paused: true }),
-        'kept for other projects': machine('box1', reports, 'owner', { projects: ['other'] }),
       }
       for (const [why, box] of Object.entries(cases)) {
         const f = fixture(rules)

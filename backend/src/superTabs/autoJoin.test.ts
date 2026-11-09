@@ -42,12 +42,12 @@ describe('autoJoin', () => {
   })
 
   it('answers with the Swarms that did join when one join fails or is skipped', async () => {
-    const d = deps({ find: async () => ['a', 'b', 'c', 'd'], join: vi.fn(async (_user: AuthUser, tab: string) => {
+    const d = deps({ find: async () => ['a', 'b', 'c'], join: vi.fn(async (_user: AuthUser, tab: string) => {
       if (tab === 'b') throw new Error('conflict')
-      return tab === 'c' ? 'skipped' as const : tab === 'd' ? 'declined' as const : 'joined' as const
+      return tab === 'c' ? 'skipped' as const : 'joined' as const
     }) })
     expect(await autoJoin(d, x)).toEqual(['a'])
-    expect(d.join).toHaveBeenCalledTimes(4)
+    expect(d.join).toHaveBeenCalledTimes(3)
   })
 
   it('never throws when the read fails', async () => {

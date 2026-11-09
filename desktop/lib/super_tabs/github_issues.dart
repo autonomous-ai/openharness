@@ -7,6 +7,7 @@ import '../core/hidden_process.dart';
 import '../core/home_dir.dart';
 import '../core/test_run.dart';
 import '../logging/app_log.dart';
+import 'github_pulls.dart';
 
 /// A Swarm project's tasks are its repository's GitHub issues (Swarm v4, anh Dee 2026-11-09), read with the GitHub CLI
 /// on this computer, signed in as its person: each person sees exactly what github.com shows them, and nothing goes
@@ -189,12 +190,19 @@ class SwarmGitHub {
     return match == null ? null : '${match.group(1)}/${match.group(2)}';
   }
 
+  /// At most this many open pull requests are read for a board: newest activity first, a team's open ones at once.
+  static const pullsMax = 50;
+
   final _lists = <String, List<SwarmIssue>>{};
+  final _pulls = <String, Map<int, SwarmPull>>{};
   final _threads = <String, SwarmIssueThread>{};
   final _reading = <String>{};
 
   /// [repository]'s issues as they were last read, to show at once while [issues] reads them again. Null before the first.
   List<SwarmIssue>? kept(String repository) => _lists[repository];
+
+  /// [repository]'s open pull requests by the task each is for, as they were last read. Null before the first.
+  Map<int, SwarmPull>? keptPulls(String repository) => _pulls[repository];
 
   /// Issue [number]'s thread as it was last read, to show at once while [thread] reads it again. Null before the first.
   SwarmIssueThread? keptThread(String repository, int number) =>
@@ -243,6 +251,44 @@ class SwarmGitHub {
       _lists.remove(_lists.keys.first);
     }
     return list;
+  }
+
+  /// [repository]'s open pull requests, by the task each is for ([SwarmPull.tasks]); a task with two has the one with the
+  /// newest activity. One GraphQL read of the newest [pullsMax], each with its head's checks, whether it conflicts, and its
+  /// newest comments, where its readers' verdicts are.
+  Future<Map<int, SwarmPull>> pulls(String repository) async {
+    final (owner, name) = _split(repository);
+    final answer = await _call([
+      'api',
+      'graphql',
+      '-f',
+      'query=$_pullsQuery',
+      '-f',
+      'owner=$owner',
+      '-f',
+      'name=$name',
+      '-F',
+      'first=$pullsMax',
+    ], repository);
+    final map = _data(answer, ['repository']);
+    final branch = map['defaultBranchRef'];
+    final defaultBranch = branch is Map && branch['name'] is String
+        ? branch['name'] as String
+        : null;
+    final byTask = <int, SwarmPull>{};
+    for (final row in _nodes(map['pullRequests'])) {
+      final pull = SwarmPull.read(row, defaultBranch: defaultBranch);
+      if (pull == null) continue;
+      for (final task in pull.tasks) {
+        byTask.putIfAbsent(task, () => pull);
+      }
+    }
+    _pulls.remove(repository);
+    _pulls[repository] = byTask;
+    while (_pulls.length > listsKept) {
+      _pulls.remove(_pulls.keys.first);
+    }
+    return byTask;
   }
 
   /// Issue [number] of [repository]: its text, and its newest [lastComments] comments, oldest first.
@@ -414,6 +460,17 @@ class SwarmGitHub {
       r'repository(owner:$owner,name:$name){issues(first:$first,after:$after,'
       r'states:OPEN,orderBy:{field:UPDATED_AT,direction:DESC}){'
       'pageInfo{hasNextPage endCursor} nodes{$_issueFields comments{totalCount}}}}}';
+
+  /// A repository's open pull requests for its board ([pulls]): each one's head, checks, conflict and labels, the issues it
+  /// closes, and its newest comments, where lampOS's readers write `READ-OK <sha>` as a first line.
+  static const _pullsQuery =
+      r'query($owner:String!,$name:String!,$first:Int!){'
+      r'repository(owner:$owner,name:$name){defaultBranchRef{name} '
+      r'pullRequests(states:OPEN,first:$first,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{'
+      'number title url isDraft headRefName headRefOid baseRefName body mergeable '
+      'labels(first:20){nodes{name}} closingIssuesReferences(first:5){nodes{number}} '
+      'commits(last:1){nodes{commit{statusCheckRollup{state}}}} '
+      'comments(last:30){nodes{body createdAt authorAssociation author{login}}}}}}}';
 
   static const _commentFields =
       'pageInfo{hasPreviousPage startCursor} nodes{body createdAt url author{login}}';
