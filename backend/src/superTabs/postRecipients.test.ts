@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import { REACHED_NO_AGENT, type Command } from './commands.js'
 import { agent } from './model.js'
+import { agentDisplayName } from './agentNames.js'
 import { recordAgentPresence } from './machines.js'
 import { agentChatId } from './agentKind.js'
 import { owner, stepsFixture } from './steps.test-support.js'
@@ -231,7 +232,8 @@ describe('a post to an agent whose session is down', () => {
     f.run({ type: 'message.send', conversationId: f.task, text: 'Please rebase on main.', replyTo: null, recipientIds, ...extra } as Command, by ? f.as(by) : owner)
   /** What a machine's report records (machines.ts recordAgentPresence): every session of the machine but those [running] is down now. */
   const down = (f: ReturnType<typeof stepsFixture>, running: string[]) => recordAgentPresence(f.state, 'host', running, f.now)
-  const name = (f: ReturnType<typeof stepsFixture>, id: string) => agent(f.state, id).displayName ?? agent(f.state, id).name
+  /** The name its sender's app shows it by (agentNames.ts). */
+  const name = (f: ReturnType<typeof stepsFixture>, id: string) => agentDisplayName(f.state.agents, id)!
 
   it('tells its sender the recipient is offline and will read it when it is back, and still queues the post for it', () => {
     const f = stepsFixture()
@@ -261,23 +263,18 @@ describe('a post to an agent whose session is down', () => {
     expect(sent(f, f.dev, [f.lead]).result).not.toHaveProperty('offline')
   })
 
-  it('says nothing of an agent asleep, which wakes on the message, of a post that names no agent, or of an agent-only notice', () => {
+  it('says nothing of an agent asleep, which wakes on the message, one told to stop, a post that names no agent, or an agent-only notice', () => {
     const f = stepsFixture()
     const other = f.add('other', f.task)
-    down(f, ['pm', 'dev'])
+    // Everything is down, the Engineer too: an agent-only notice is its own, whatever its record says.
+    down(f, [])
     agent(f.state, other).asleep = { since: f.now }
     expect(sent(f, f.dev, [other]).result).not.toHaveProperty('offline')
     delete agent(f.state, other).asleep
+    agent(f.state, other).workDecision = 'stop'
+    expect(sent(f, f.dev, [other]).result).not.toHaveProperty('offline')
     expect(sent(f, f.dev, []).result).not.toHaveProperty('offline')
     expect(sent(f, f.dev, [f.dev], { agentOnly: true }).result).not.toHaveProperty('offline')
-  })
-
-  it('names no sender among those offline, though its own record says it is down', () => {
-    const f = stepsFixture()
-    const other = f.add('other', f.task)
-    down(f, [])
-    // Everything is down, the Engineer included: it posts, so it is not the one the post waits for.
-    expect(sent(f, f.dev, [f.dev, other]).result.offline).toBe(`${name(f, other)} is offline; it will read this when it is back.`)
   })
 
   it('stops saying it once the session is back', () => {

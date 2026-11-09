@@ -5,7 +5,7 @@ import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
-import type { MachineObservation } from '../src/superTabs/machines.js'
+import { MACHINE_FRESH_MS, type MachineObservation } from '../src/superTabs/machines.js'
 import { localReportMemory, type ReportMemory } from '../src/superTabs/machineReports.js'
 import { clock as stamps } from '../src/superTabs/parts/index.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
@@ -248,7 +248,7 @@ describe('a post to an agent whose session is down', () => {
     expect((await post('While you are up.')).result).not.toHaveProperty('offline')
 
     // Its machine goes silent: a reading that stale reads as down.
-    clock.now += 5 * MINUTE
+    clock.now += MACHINE_FRESH_MS + MINUTE
     const silent = await queued()
     expect((await post('While your machine is silent.')).result.offline).toBe(await told())
     expect(await queued()).toBe(silent + 1)
