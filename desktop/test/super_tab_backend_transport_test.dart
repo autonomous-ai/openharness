@@ -551,9 +551,6 @@ void main() {
           '/api/super-tabs/1/conversations/1/threads/1/follow',
           '/api/super-tabs/1/conversations/1/notifications',
           '/api/super-tabs/deleted',
-          '/api/super-tabs/1/projects/1/instructions/revisions/1',
-          '/api/super-tabs/list?1',
-          '/api/super-tabs/1/projects/1/github?refresh=1',
         ]),
       );
       final refused = <String>[];

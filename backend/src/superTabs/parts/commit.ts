@@ -90,18 +90,6 @@ export function indexesOf(state: SuperTabState) {
   }
 }
 
-/** Whether [message], in [group], is a person's message to its project's coordinator: anywhere in the project chat, any of its
- *  threads, or in another chat of the project where it reaches the coordinator (task #3022, pmSchedule.ts). Who wrote and whom
- *  it reaches, never its words. Marked on [group] itself, which this write already writes (review of #3066, 1). */
-function toCoordinator(state: SuperTabState, group: Conversation, message: MessageDraft): boolean {
-  if (message.author.kind !== 'person' || message.source) return false
-  const projects = state.projects ?? [{ id: 'lead', leadConversationId: 'lead' }]
-  if (projects.some(p => p.leadConversationId === group.id)) return true
-  const project = projects.find(p => p.id === (group.projectId ?? 'lead'))
-  const coordinator = project && state.conversations.find(c => c.id === project.leadConversationId)?.leadId
-  return !!coordinator && message.recipients.includes(coordinator)
-}
-
 /** How long a chat remembers that a person talked with an agent there: well past the 15 minutes an idle agent waits. */
 export const TALKED_KEEP_MS = 60 * 60_000
 
@@ -140,7 +128,6 @@ export function numberMessages(state: SuperTabState, messages: MessageDraft[], n
       group.lastMainSequence = sequence
       if (message.author.kind === 'person' && !message.source) group.lastPersonSequence = sequence
     }
-    if (toCoordinator(state, group, message)) group.heardAt = now
     markTalked(group, message, now)
     group.lastActivityAt = new Date(now).toISOString()
     delete group.dormant

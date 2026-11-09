@@ -122,8 +122,8 @@ pub fn resolve(root: &Path) -> Result<Resolved, String> {
 
 /// Start the CLI. The first attempt is outside the job this launcher runs in: an SSH session's job, or the task's,
 /// ends every process in it when it closes. A job with no `BREAKAWAY_OK` refuses that with `ERROR_ACCESS_DENIED`
-/// (a Harness pane's job is one). Then the CLI is started inside it, with a warning, as the pty host does
-/// (breakaway.rs). Any other failure is the answer.
+/// (an SSH session's and a task's are such jobs; a pane's own allows it). Then the CLI is started inside it, with a
+/// warning, as the pty host does (breakaway.rs). Any other failure is the answer.
 pub fn start(mut spawn: impl FnMut(u32) -> io::Result<u32>, mut warn: impl FnMut(String)) -> io::Result<u32> {
     let base = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
     match spawn(base | CREATE_BREAKAWAY_FROM_JOB) {

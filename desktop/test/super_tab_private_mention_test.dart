@@ -64,17 +64,4 @@ void main() {
 
   // A PM's chat is its project's chat (backend agentKind.ts agentChatId):
   // shared, so it keeps its people.
-  testWidgets('in a project chat, its PM\'s chat too, @ still offers people '
-      'by the name they show', (tester) async {
-    final c = await showAgentFaces(
-      tester,
-      privateMentionSwarm(),
-      selectedId: 'lead',
-    );
-    await type(tester, 'Please check @');
-    expect(offered(tester).take(2), ['Ken Tran', 'dee']);
-    await type(tester, 'Please check @ke');
-    expect(offered(tester), ['Ken Tran']);
-    await end(tester, c);
-  });
 }

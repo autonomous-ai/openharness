@@ -79,7 +79,6 @@ export const GROUP_FIELDS = {
     'codePullRequestUrls',
     'foldedInto',
     'handOutLane',
-    'heardAt',
     'hold',
     'lane',
     'lastActivityAt',

@@ -7,7 +7,7 @@ import { shippedNotice } from './buddyNews.js'
  * right after a visible merge, the backend at most every two hours and never in its morning pause. Everything here is pure.
  */
 import { agentDisplayName } from './agentNames.js'
-import { localNow } from './digest.js'
+import { localNow } from './localTime.js'
 import { activeWork, nextConversationNumber, stableId, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, projectsOf, type SwarmProject } from './projects.js'
 import { SEED_RULES, type ProjectRules } from './policy.js'

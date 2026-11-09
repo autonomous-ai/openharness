@@ -31,11 +31,10 @@ cmake_minimum_required(VERSION 3.16)
 # re-seed it. Day-to-day menuconfig still works; a pull that changes defaults re-applies automatically.
 # A deliberate local tweak belongs in sdkconfig.defaults, where it is reviewable and reaches everyone.
 #
-# TWO BOARDS, TWO SDKCONFIGS. Each build passes its own (`idf.py -D SDKCONFIG=sdkconfig.pro`), so the
-# stamp has to follow that file rather than assume the default name — one shared stamp would have each
-# board's build delete the other board's config, every time, for ever. And the hash covers EVERY defaults
-# file, not just the one this target reads: the alternative is a build that quietly keeps a stale config
-# because the change happened to land in the other target's file.
+# A build may pass its own config (`idf.py -D SDKCONFIG=…`, as the release build does), so the stamp
+# follows that file rather than assume the default name — one shared stamp would have each build delete
+# the other's config, every time, for ever. And the hash covers EVERY defaults file, so a change in any of
+# them re-seeds the config.
 if(DEFINED SDKCONFIG)
     get_filename_component(_sdkcfg "${SDKCONFIG}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_LIST_DIR}")
 else()

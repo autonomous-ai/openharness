@@ -12,7 +12,7 @@ import { sessionClosed } from './closedAgents.js'
 import { activeWork, handed, occupiesAgent, reviewsWanted, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
 import { agentProjectId, NO_PROJECT, onTeamAccount, projectOf, projectsOf, regularMayWorkIn } from './projects.js'
 import { barredFromTeamWritten } from './teamWritten.js'
-import { digestOf, localNow } from './digest.js'
+import { localNow } from './localTime.js'
 import { DEFAULT_TIME_ZONE } from './costs/reflection.js'
 import { queueOrder, queueSiblings } from './taskQueue.js'
 import { unavailableReason } from './liveness.js'
@@ -138,8 +138,8 @@ export function freeCrew(state: SuperTabState, projectId: string, rules: Dispatc
  *  project's Next up. */
 export function openTasks(state: SuperTabState, projectId: string, now: number): Conversation[] {
   const project = projectOf(state, projectId)
-  // The day people meant: the project's own (its digest's time zone), Vietnam's without one, as the PM schedule reads it.
-  const today = localNow(digestOf(project)?.timeZone ?? DEFAULT_TIME_ZONE, now).date
+  // The day people meant: Vietnam's, where the team works.
+  const today = localNow(DEFAULT_TIME_ZONE, now).date
   const lostSteps = state.conversations.filter(group => {
     if (group.archived || group.kind || group.audience || !group.reviewOf || group.assignment?.status !== 'lost' || (group.projectId ?? 'lead') !== projectId) return false
     const task = state.conversations.find(g => g.id === group.reviewOf)

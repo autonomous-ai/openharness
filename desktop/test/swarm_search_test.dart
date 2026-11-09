@@ -243,33 +243,30 @@ void main() {
     },
   );
 
-  test(
-    'opening a group from an occupied tab keeps its work intact',
-    () async {
-      final app = createApp();
-      addTearDown(app.dispose);
-      final machine = app.machineStates['m']!;
-      machine.agents = machine.agents.take(3).toList();
-      await app.addAgentToSwarm('m', 'a2');
-      final original = app.activeSwarm;
-      final retained = app.panes.single;
-      final group = SwarmSearchCatalog()
-          .read(app, [])
-          .singleWhere((e) => e.isMachine);
-      expect(
-        await activateSwarmSearchSelection(
-          app,
-          SwarmSearchSelection(group),
-          destinationSwarmId: original.id,
-        ),
-        isTrue,
-      );
-      expect(app.swarms.length, 2);
-      expect(original.panes, [retained]);
-      expect(app.panes.map((pane) => pane.agentId).toSet(), {'a0', 'a1', 'a2'});
-      expect(app.panes.contains(retained), isTrue);
-    },
-  );
+  test('opening a group from an occupied tab keeps its work intact', () async {
+    final app = createApp();
+    addTearDown(app.dispose);
+    final machine = app.machineStates['m']!;
+    machine.agents = machine.agents.take(3).toList();
+    await app.addAgentToSwarm('m', 'a2');
+    final original = app.activeSwarm;
+    final retained = app.panes.single;
+    final group = SwarmSearchCatalog()
+        .read(app, [])
+        .singleWhere((e) => e.isMachine);
+    expect(
+      await activateSwarmSearchSelection(
+        app,
+        SwarmSearchSelection(group),
+        destinationSwarmId: original.id,
+      ),
+      isTrue,
+    );
+    expect(app.swarms.length, 2);
+    expect(original.panes, [retained]);
+    expect(app.panes.map((pane) => pane.agentId).toSet(), {'a0', 'a1', 'a2'});
+    expect(app.panes.contains(retained), isTrue);
+  });
 
   test(
     'removed group members and oversized groups cannot create a partial tab',

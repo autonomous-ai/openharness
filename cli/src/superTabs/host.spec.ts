@@ -935,9 +935,6 @@ describe('Super Tab native delivery handoff', () => {
     expect(await line({ author: person, text: 'How is it going?', thread: 'message' })).toMatch(/ --answers 'message'$/)
     expect(await line({ author: person, text: 'And the tests?', thread: 'root', replyTo: 'root' })).toMatch(/ --reply-to 'message'$/)
     expect(await line({ author: person, text: 'In my session.', thread: 'message', buddySession: true })).toMatch(/ --reply-to 'message'$/)
-    // A scheduled request is a top-level message to its coordinator alone.
-    expect(await line({ author: { kind: 'agent', id: 'a0000000000000000000000l', name: 'Lead' }, text: 'Built-in schedule.', thread: 'message',
-      source: { kind: 'schedule-request', projectId: 'project', slot: 1 } })).toMatch(/ --answers 'message' --to 'a0000000000000000000000l'$/)
   })
   it('only the machine\'s own person\'s message may close its question', async () => {
     const signedIn = (t: ReturnType<typeof setup>, accountId: string | null) =>
@@ -2125,7 +2122,8 @@ describe('Super Tab attachments in delivered input', () => {
     const host = t.open({ attachedFiles, downloadWaitMs: 200 })
     const started = Date.now()
     await host.tick()
-    expect(Date.now() - started).toBeLessThan(600)
+    // One wait of 200 ms; one per waiting delivery would take 5 x 200 = 1,000 ms. (Under 600 failed on a busy CI runner, at 600.)
+    expect(Date.now() - started).toBeLessThan(1_000)
     expect(delivered()).toEqual(['harness-z: Hello.'])
     expect(attachedFiles).toHaveBeenCalledTimes(6)
     // Known to be slow, they hold no later pass at all.

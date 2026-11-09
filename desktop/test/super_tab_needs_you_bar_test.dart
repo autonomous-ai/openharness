@@ -7,7 +7,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/decisions_page.dart';
 import 'package:harness/super_tabs/message_row.dart'
     show SuperTabMessageHighlight;
 import 'package:harness/super_tabs/model.dart';
@@ -259,18 +258,6 @@ void main() {
         ),
         findsOneWidget,
       );
-    });
-
-    testWidgets('a decision opens where decisions are answered', (
-      tester,
-    ) async {
-      final s = server(status: 'working');
-      s.ask(['Ship how?'], conversationId: 'offline');
-      await show(tester, s);
-      await tester.tap(bar());
-      await tester.pumpAndSettle();
-      expect(find.byType(SuperTabDecisionsPage), findsOneWidget);
-      expect(find.text('Ship how?'), findsWidgets);
     });
 
     testWidgets('with only a terminal to go to, it opens that terminal', (

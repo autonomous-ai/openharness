@@ -247,6 +247,13 @@ describe('instructions in the reader\'s view (project instructions, phase 2)', (
     const head = readerView(store.split(s.state, { tabId: 'tab', version: R, now: NOW }), owner, NOW, { teamMachines: [] }).parts.head
     expect(head.data.projects!.every(p => !('releases' in p))).toBe(true)
   })
+  // Swarm v3's schedule and process note are still stored on old projects: no reader gets them.
+  it('sends projects without the schedule and process note an old project still stores', () => {
+    const { s } = scene()
+    s.edit(state => { Object.assign(state.projects![0]!, { schedule: { lastSlot: 1, wakeId: 'wake' }, processNote: { told: 'note', confirmed: 'note' } }) })
+    const head = readerView(store.split(s.state, { tabId: 'tab', version: R, now: NOW }), owner, NOW, { teamMachines: [] }).parts.head
+    expect(head.data.projects!.every(p => !('schedule' in p) && !('processNote' in p))).toBe(true)
+  })
 })
 
 // Task #3384: the board's pulse is cross-part and timed, so it goes in `derived`, for each project the reader sees; what it is

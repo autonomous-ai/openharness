@@ -1660,6 +1660,31 @@ class ConversationServer {
         }
         revision++;
         agent['displayName'] = (command['name'] as String).trim();
+      } else if (command['type'] == 'agent.remove') {
+        // As the backend's: its contributor or the Swarm's owner withdraws it, and it leaves every chat it was in.
+        final agents = (state['agents'] as List).cast<Map<String, dynamic>>();
+        final agent = agents
+            .where((a) => a['id'] == command['agentId'])
+            .firstOrNull;
+        if (agent == null) {
+          throw const SuperTabFailure(
+            'NOT_FOUND',
+            'This agent is unavailable.',
+            statusCode: 404,
+          );
+        }
+        if (agent['contributorId'] != (reader ?? 'owner')) {
+          throw const SuperTabFailure(
+            'FORBIDDEN',
+            'Only the contributor or tab owner can withdraw this agent.',
+            statusCode: 403,
+          );
+        }
+        revision++;
+        agents.remove(agent);
+        for (final chat in (state['conversations'] as List).cast<Map>()) {
+          (chat['agentIds'] as List).remove(agent['id']);
+        }
       } else if (command['type'] == 'buddy.remove') {
         revision++;
         final person = reader ?? 'owner';

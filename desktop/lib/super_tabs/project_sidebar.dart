@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
+import '../shared/widgets/app_menu.dart';
 import '../shared/theme/appearance_prefs_store.dart';
 import '../state/app_state.dart';
 import '../state/harness_activity.dart';
@@ -12,23 +13,22 @@ import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/harness_activity_mark.dart';
-import 'activity.dart';
 import 'attention.dart';
 import 'controller.dart';
+import 'delete_agent.dart';
 import 'buddies.dart';
 import 'model.dart';
 import 'my_agents.dart';
 import 'personal_projects.dart' show PersonalProjects;
 import 'places.dart';
-import 'buddy_chat.dart' show countText;
 import 'buddy_rows.dart';
 import 'identity.dart';
 import 'leaderboard/reader.dart';
 import 'section_heading.dart';
 import 'swarm_switcher.dart';
-import 'project_github.dart';
 import 'private_project_lock.dart';
 import '../widgets/laid_out_list.dart';
+import '../widgets/pane_menu.dart' show showContextMenuAt;
 import 'swarm_type.dart';
 
 /// The reader's one Buddy for the whole Swarm, listed first among the projects
@@ -61,7 +61,6 @@ class ProjectSidebar extends StatelessWidget {
     this.onPage,
     this.page,
     this.attention,
-    this.activity,
     this.places,
     this.onOpenBuddyChat,
     this.compact = false,
@@ -113,16 +112,11 @@ class ProjectSidebar extends StatelessWidget {
   final bool manageSelected;
   final bool devicesSelected;
 
-  /// Opens one of the Swarm's pages: Decisions, Mentions or Threads (anh
-  /// Dee, 11-05, task #2996). Without it the three rows are not shown.
+  /// Opens one of the Swarm's pages, the Leaderboard or Projects.
   final ValueChanged<SwarmPage>? onPage;
 
   /// The page holding the main pane, if one does.
   final SwarmPage? page;
-
-  /// What the three rows read, to be bold or grey; without it Decisions and
-  /// Mentions read what the server says waits, and Threads nothing.
-  final SuperTabActivity? activity;
 
   /// The reader's places, for the back and forward arrows at the top of a
   /// layout that is not the Desktop's; without it there are none. The
@@ -247,25 +241,6 @@ class ProjectSidebar extends StatelessWidget {
         ),
       ),
     ),
-  );
-
-  /// A page row of Decisions, Mentions or Threads: no number and no red,
-  /// bold at full strength while something waits, grey when nothing does
-  /// (anh Dee, 11-05, task #3128).
-  Widget _pageRow(
-    ValueChanged<SwarmPage> onPage, {
-    required SwarmPage target,
-    required String key,
-    required String label,
-    required IconData icon,
-    required int waiting,
-  }) => _navigationRow(
-    key: key,
-    label: label,
-    icon: icon,
-    onTap: () => onPage(target),
-    selected: page == target,
-    unread: waiting > 0,
   );
 
   /// Back and forward over the reader's places (⌘[ and ⌘]), at the top.
@@ -456,23 +431,11 @@ class ProjectSidebar extends StatelessWidget {
                                             overflow: TextOverflow.ellipsis,
                                             style: style,
                                           )
-                                        : Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Text(
-                                                project!.name,
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: style,
-                                              ),
-                                              // Teammates' agents cannot push to its repository yet (project_github.dart).
-                                              ProjectGitHubLine(
-                                                controller: controller,
-                                                project: project,
-                                              ),
-                                            ],
+                                        : Text(
+                                            project!.name,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: style,
                                           ),
                                   ),
                                   if (badge > 0) ...[
@@ -646,48 +609,31 @@ class ProjectSidebar extends StatelessWidget {
     onTap: onTap,
   );
 
-  /// The Desktop's left pane, top to bottom (task #4466, anh Dee 11-07): the org name, Decisions with its count,
-  /// Projects (one link to the grid in the middle), My agents, then Humans; Manage stays at the foot.
+  /// The Desktop's left pane (Swarm v4, anh Dee 2026-11-08): the org name, Your agents, Projects, then Humans; Manage
+  /// stays at the foot. Nothing else: no Decisions, no Projects grid, no Buddy.
   List<Widget> _desktop(
     SuperTabSnapshot? snapshot,
     _SidebarReading reading, {
     required Widget? switcher,
-    required int decisions,
   }) {
-    // The projects with something new in their chat, a tag of you or a person's new lines: with no project rows and no
-    // Mentions row, they show here (tasks #4220, #4445).
-    final waiting = [
-      for (final read in _listed(snapshot, reading))
-        if ((read.unread.contains(read.lead!.id) &&
-                controller.notifyOf(read.lead!.id) != SuperTabNotify.muted) ||
-            (attention?.chatTagsIn(read.lead!.id) ?? 0) > 0)
-          read,
-    ].length;
+    final projects = snapshot?.projects ?? const <SuperTabProject>[];
     return [
       ?switcher,
-      if (onPage case final onPage?) ...[
-        _iconRow(
-          key: 'super-decisions',
-          icon: AppIcons.inbox,
-          name: 'Decisions',
-          detail: decisions > 0 ? countText(decisions) : null,
-          unread: decisions > 0,
-          selected: page == SwarmPage.decisions,
-          onTap: () => onPage(SwarmPage.decisions),
-        ),
-        _iconRow(
-          key: 'super-projects',
-          icon: AppIcons.layoutGrid,
-          name: 'Projects',
-          detail: waiting > 0 ? countText(waiting) : null,
-          unread: waiting > 0,
-          // A project's Board is one of the grid's: it lights Projects.
-          selected: page == SwarmPage.projects || (!_paneCovered && _boardOpen),
-          onTap: () => onPage(SwarmPage.projects),
-        ),
-      ],
       const SizedBox(height: grid.AppDesktop.groupGap),
       ..._myAgents(snapshot, reading),
+      SuperTabQuietHeading(
+        'Projects',
+        key: const ValueKey('project-sidebar-projects'),
+        onTap: null,
+        onAdd: controller.canWrite ? onNewProject : null,
+        addTooltip: 'New project',
+        addKey: const ValueKey('project-sidebar-projects-add'),
+      ),
+      if (snapshot != null && projects.isEmpty)
+        _noProjects()
+      else
+        for (final (_, channel) in _channels(snapshot, reading)) channel,
+      const SizedBox(height: grid.AppDesktop.groupGap),
       ..._humans(snapshot),
     ];
   }
@@ -697,6 +643,9 @@ class ProjectSidebar extends StatelessWidget {
   List<Widget> _humans(SuperTabSnapshot? snapshot) {
     final onPage = this.onPage;
     if (snapshot == null || onPage == null) return const [];
+    final scores = [...?leaderboard?.board?.people].take(humansShown).toList();
+    // An empty list shows nothing (anh Dee's rule): no heading until someone has points.
+    if (scores.isEmpty) return const [];
     void open() => onPage(SwarmPage.leaderboard);
     final people = {for (final person in snapshot.people) person.id: person};
     return [
@@ -705,7 +654,7 @@ class ProjectSidebar extends StatelessWidget {
         key: const ValueKey('project-sidebar-humans'),
         onTap: open,
       ),
-      for (final score in [...?leaderboard?.board?.people].take(humansShown))
+      for (final score in scores)
         if (people[score.personId] case final person)
           SuperTabQuietRow(
             key: ValueKey('super-human-${score.personId}'),
@@ -833,31 +782,15 @@ class ProjectSidebar extends StatelessWidget {
     final newAgent = controller.canWrite ? onNewAgent : null;
     return [
       SuperTabQuietHeading(
-        'My agents',
+        'Your agents',
         key: const ValueKey('project-sidebar-agents'),
-        // It folds, remembered (task #4192); its chevron shows on hover.
-        collapsed: !controller.agentsGroupOpen,
-        onTap: controller.toggleAgentsGroup,
+        onTap: null,
         onAdd: newAgent,
         addTooltip: 'New agent',
         addKey: const ValueKey('project-sidebar-agents-add'),
       ),
-      if (controller.agentsGroupOpen) ...[
-        if (controller.oneBuddy)
-          ?_swarmBuddyRow()
-        else
-          ..._buddies([...snapshot.projects], reading),
-        for (final (agent, chat) in reading.myAgents)
-          _agentRow(snapshot, agent, chat),
-        // With no agents yet, a row says where to start; the creation dialog chooses Regular or PM.
-        if (newAgent != null && reading.myAgents.isEmpty)
-          _iconRow(
-            key: 'super-new-agent-row',
-            icon: AppIcons.plus,
-            name: 'New agent',
-            onTap: newAgent,
-          ),
-      ],
+      for (final (agent, chat) in reading.myAgents)
+        _agentRow(snapshot, agent, chat),
       const SizedBox(height: grid.AppDesktop.groupGap),
     ];
   }
@@ -869,7 +802,7 @@ class ProjectSidebar extends StatelessWidget {
   ) {
     final name = snapshot.agentName(agent.id, fallback: agent.name);
     final pm = superTabAgentIsPm(snapshot, agent);
-    return SuperTabQuietRow(
+    final row = SuperTabQuietRow(
       key: ValueKey('super-agent-${agent.id}'),
       leading: _face(agent, name, lead: pm),
       name: name,
@@ -877,10 +810,6 @@ class ProjectSidebar extends StatelessWidget {
       tooltip: chat == null && onOpenAgentTerminal != null
           ? 'Opens its terminal'
           : null,
-      detail: _detail(
-        agent,
-        leads: pm ? snapshot.leadProjectForAgent(agent.id)?.name : null,
-      ),
       selected: _chatLit(chat),
       unread: chat != null && controller.unreadShown(chat),
       onTap: switch ((chat, onOpenAgentTerminal)) {
@@ -888,6 +817,34 @@ class ProjectSidebar extends StatelessWidget {
         (null, final terminal?) => () => terminal(agent),
         _ => null,
       },
+    );
+    // Delete is one right-click away, for its person alone (Swarm v4: only its person stops an agent). A project's PM
+    // stays until its project goes.
+    if (agent.contributorId != controller.accountId || !controller.canWrite) {
+      return row;
+    }
+    final kept = snapshot.leadProtectionReason(agent.id);
+    return Builder(
+      builder: (context) => GestureDetector(
+        onSecondaryTapUp: (event) async {
+          final choice = await showContextMenuAt<String>(
+            context: context,
+            at: event.globalPosition,
+            children: (close) => [
+              AppMenuItem(
+                label: 'Delete',
+                detail: kept,
+                leadingSlot: false,
+                onPressed: kept == null ? () => close('delete') : null,
+              ),
+            ],
+          );
+          if (choice == 'delete' && context.mounted) {
+            await deleteSwarmAgent(context, controller, agent, name);
+          }
+        },
+        child: row,
+      ),
     );
   }
 
@@ -1002,7 +959,7 @@ class ProjectSidebar extends StatelessWidget {
   // shared rows drawn in it.
   @override
   Widget build(BuildContext context) => grid.SidebarInk.scope(
-    child: switch ([?attention, ?activity, ?places, ?leaderboard]) {
+    child: switch ([?attention, ?places, ?leaderboard]) {
       final List<Listenable> sources when sources.isNotEmpty =>
         ListenableBuilder(
           listenable: Listenable.merge(sources),
@@ -1016,9 +973,6 @@ class ProjectSidebar extends StatelessWidget {
     final snapshot = controller.snapshot;
     final projects = snapshot?.projects ?? const <SuperTabProject>[];
     final reading = _SidebarReading(controller, attention);
-    final decisions = activity?.needsCount ?? snapshot?.decisionsWaiting ?? 0;
-    final mentions = activity?.mentionsCount ?? snapshot?.mentionsWaiting ?? 0;
-    final threads = activity?.threadsCount ?? 0;
     final switcher = switch ((app, onNewSwarm)) {
       (final app?, final onNewSwarm?) => SwarmSwitcher(
         app: app,
@@ -1066,47 +1020,12 @@ class ProjectSidebar extends StatelessWidget {
             child: LaidOutListView(
               padding: const EdgeInsets.all(8),
               children: board
-                  ? _desktop(
-                      snapshot,
-                      reading,
-                      switcher: switcher,
-                      decisions: decisions,
-                    )
+                  ? _desktop(snapshot, reading, switcher: switcher)
                   : [
                       if (places case final places?) _arrows(places),
                       ?switcher,
-                      // Three rows, each one thing, in anh Dee's order (11-05, task
-                      // #2996): bold when something waits, grey when not, and no
-                      // numbers (task #3128). The Swarm switcher stands apart from
-                      // them by a control gap.
-                      if (onPage case final onPage?) ...[
-                        if (app != null && onNewSwarm != null)
-                          const SizedBox(height: DesktopChrome.controlGap),
-                        _pageRow(
-                          onPage,
-                          target: SwarmPage.decisions,
-                          key: 'super-decisions',
-                          label: 'Decisions',
-                          icon: AppIcons.flag,
-                          waiting: decisions,
-                        ),
-                        _pageRow(
-                          onPage,
-                          target: SwarmPage.mentions,
-                          key: 'super-mentions',
-                          label: 'Mentions',
-                          icon: AppIcons.atSign,
-                          waiting: mentions,
-                        ),
-                        _pageRow(
-                          onPage,
-                          target: SwarmPage.threads,
-                          key: 'super-threads',
-                          label: 'Threads',
-                          icon: AppIcons.messagesSquare,
-                          waiting: threads,
-                        ),
-                      ],
+                      if (app != null && onNewSwarm != null)
+                        const SizedBox(height: DesktopChrome.controlGap),
                       const SizedBox(height: 20),
                       SuperTabSectionHeading(
                         key: const ValueKey('project-sidebar-projects'),

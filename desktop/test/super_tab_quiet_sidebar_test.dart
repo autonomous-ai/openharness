@@ -59,7 +59,6 @@ void main() {
     await show(tester);
     final order = [
       'super-swarm-switcher',
-      'super-decisions',
       'project-sidebar-projects',
       'super-swarm-buddy',
       'super-project-lead',

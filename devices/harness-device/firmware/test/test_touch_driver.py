@@ -16,10 +16,8 @@ code=r'''
 #include <setjmp.h>
 #include <stdio.h>
 #include "creature_gallery.h"
-/* HT_WIDTH / HT_HEIGHT come from terminal.h through the header above. They used to be repeated here
-   as 466, which was a harmless identical redefinition while the header spelled them the same way;
-   the header now derives them from HT_FACE_PX, so repeating them is a -Wmacro-redefined error and,
-   worse, would pin this test to one face. */
+/* HT_WIDTH / HT_HEIGHT come from terminal.h through the header above. Repeating them here would be a
+   -Wmacro-redefined error the day the header spells them differently. */
 #define ESP_OK 0
 #define ESP_ERR_INVALID_RESPONSE 1
 #define ESP_FAIL 2

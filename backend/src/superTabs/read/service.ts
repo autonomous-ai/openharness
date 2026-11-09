@@ -568,10 +568,10 @@ export class SwarmReads {
     return this.read(user, tabId, async (tx, cached) => {
       const state = parts.reassemble(await readParts(tx, cached, tabId), { share: true })
       const actor = await this.store.actor(tx, user, state)
-      const project = readProject(state, actor, projectId)
+      readProject(state, actor, projectId)
       const projects = allProjects ? projectsOf(state).filter(p => canReadProject(state, actor, p)).map(p => p.id) : [projectId]
       // The asked project's last day, so a day missing at the end shows as missing, not as a shorter table.
-      return { days: await readScorecards(tx, tabId, projects), through: scorecardThrough(project, this.now()) }
+      return { days: await readScorecards(tx, tabId, projects), through: scorecardThrough(this.now()) }
     })
   }
 

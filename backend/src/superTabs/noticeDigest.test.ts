@@ -17,7 +17,7 @@ describe('what is gathered', () => {
     expect(gatheredNotice({ kind: 'system', status: 'done' })).toBe(true)
     for (const status of ['needs_human', 'blocked', 'working', 'review', 'stopped']) expect(gatheredNotice({ kind: 'system', status })).toBe(false)
   })
-  it.each(['pair-loop', 'terminal-alert', 'buddy-proposal', 'update-request', 'digest-request', 'agent-only', 'system', 'instructions', 'notice-digest', 'from-a-newer-server'])('not %s', kind => {
+  it.each(['pair-loop', 'terminal-alert', 'buddy-proposal', 'update-request', 'agent-only', 'system', 'instructions', 'notice-digest', 'from-a-newer-server'])('not %s', kind => {
     expect(gatheredNotice({ kind })).toBe(false)
   })
   it('never a Stuck or Needs a human, a step\'s or a task\'s: a person must act on each (review of #2797)', () => {

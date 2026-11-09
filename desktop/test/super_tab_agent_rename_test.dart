@@ -7,7 +7,6 @@ import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/actions.dart';
 import 'package:harness/super_tabs/client.dart';
-import 'package:harness/super_tabs/controller.dart';
 
 import 'super_tab_roster_test.dart' show RosterFixture;
 import 'support/capture.dart';

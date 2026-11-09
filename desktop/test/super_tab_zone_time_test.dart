@@ -8,7 +8,10 @@ import 'package:harness/super_tabs/zone_time.dart';
 void main() {
   test('Asia/Ho_Chi_Minh at 08:42Z is 15:42', () async {
     expect(
-      await superTabTimeIn('Asia/Ho_Chi_Minh', DateTime.utc(2026, 11, 4, 8, 42)),
+      await superTabTimeIn(
+        'Asia/Ho_Chi_Minh',
+        DateTime.utc(2026, 11, 4, 8, 42),
+      ),
       const TimeOfDay(hour: 15, minute: 42),
     );
   });
