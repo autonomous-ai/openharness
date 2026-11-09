@@ -75,10 +75,14 @@ void main() {
     }
   }
 
-  const agentButtons = ['swarm-instructions-button', 'swarm-terminal-button'];
+  const agentButtons = [
+    'swarm-info-button',
+    'swarm-instructions-button',
+    'swarm-terminal-button',
+  ];
 
   testWidgets(
-    'an agent with a very long name, an emoji in it, is cut with an ellipsis, and its bar keeps Instructions and Terminal',
+    'an agent with a very long name, an emoji in it, is cut with an ellipsis, and its bar keeps Info, Instructions and Terminal',
     (tester) async {
       await show(tester, const Size(1080, 700), names: {'second': longName});
       expect(tester.takeException(), isNull);
@@ -87,7 +91,7 @@ void main() {
       expect(name.maxLines, 1);
       expect(name.overflow, TextOverflow.ellipsis);
       // The name ends before the first button, and so does where the agent runs.
-      final first = tester.getRect(key('swarm-instructions-button'));
+      final first = tester.getRect(key('swarm-info-button'));
       expect(
         tester.getRect(key('swarm-agent-name')).right,
         lessThanOrEqualTo(first.left),

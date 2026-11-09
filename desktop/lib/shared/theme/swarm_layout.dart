@@ -63,4 +63,12 @@ abstract final class SwarmLayout {
   /// The most of the room its buttons leave that an agent's name takes: a long name is cut with an ellipsis, and where the agent
   /// runs keeps the rest.
   static const double nameShare = 2 / 3;
+
+  /// An agent's Info: its rows' inset from the pane's edges, the gap around each row, and the width of the labels' column.
+  static const EdgeInsets infoPadding = EdgeInsets.symmetric(
+    horizontal: barSide,
+    vertical: 12,
+  );
+  static const EdgeInsets infoRowPadding = EdgeInsets.symmetric(vertical: 6);
+  static const double infoLabelWidth = 88;
 }

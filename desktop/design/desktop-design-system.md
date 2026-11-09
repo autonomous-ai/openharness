@@ -427,11 +427,12 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   metadata grey. The name takes the room it needs up to two thirds of what the
   icons leave, then is cut with "…"; where it runs takes what is left, cut the
   same way: a long name, even 60 characters, never pushes an icon off the bar.
-  At the right two icons: Instructions (`AppIcons.fileText`) opens
-  `agents/<name>.md`, and Terminal opens its terminal, each with its own
-  header and ×, beside the chat or in its place (Panes beside the chat). In a
-  window under 720 the list of conversations is behind a Conversations button
-  that starts the bar, as a project's bar has it.
+  At the right three icons: Info (`AppIcons.info`) opens what the app knows of
+  it, Instructions (`AppIcons.fileText`) opens `agents/<name>.md`, and
+  Terminal opens its terminal, each with its own header and ×, beside the chat
+  or in its place (Panes beside the chat). In a window under 720 the list of
+  conversations is behind a Conversations button that starts the bar, as a
+  project's bar has it.
 - **Panes beside the chat.** An agent's Instructions, a project's Tasks and
   the task opened from them open beside the chat at equal width, half and
   half, from a window 1080 wide (each half at least 390), and a terminal from
@@ -472,6 +473,20 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   refused as it is saved, with nothing sent and nothing cut. A computer another
   account shares is never asked, and a daemon not heard from yet is waited for
   (`This computer isn't ready. Try again.`), not taken for an old one.
+- **Info** (`SwarmAgentInfo`, `super_tabs/agent_info.dart`). The bar's first
+  icon (`AppIcons.info`, `Info`) opens what the app already knows of the
+  agent, beside the chat or in its place as the other panes: one row each, a
+  12-point grey label in an 88-point column and its value in 13 points:
+  `Owner` (its person), `Project` (`lampos · PM` or `· Builder`, one line per
+  project), `Computer` (`Mac Studio · online`), `Engine` (`Claude Code`),
+  `Model` (`Opus 5.5`), `State` (`Working`, `Idle`, `Waiting`, `Starting`,
+  `Stopped`, `Offline`, `Failed`), `Task` (`#5759` and its title: the issues
+  of its projects' boards that are taken and labelled for it, read with the
+  board's own reader and shown at once from what it read last) and `Folder` in
+  `AppType.mono`. A row the app has no value for is not drawn; a board that
+  cannot be read puts GitHub's reason in the Task row. Its text can be
+  selected. Info, Instructions and Terminal are one at a time: each closes the
+  other two.
 - **Agent face.** An agent with no chosen picture wears a face
   (`SuperTabAvatarFace`, `avatar_art.dart`) in rows, cards, chat and profile:
   a round disc with a soft top-to-bottom fill, two eyes and a small smile.
