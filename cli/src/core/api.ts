@@ -671,7 +671,8 @@ export const SUPER_TAB_REQUESTS = ['super_tabs'] as const
 export interface SuperTabsPort { connected(): void; disconnected(): void; stop(): void; swarmRole(harnessId: string): Promise<import('../lib/swarmSkills.js').SwarmSkillGrant | null | undefined> }
 export const SUPER_TAB_FALLBACKS: PortFallbacks<SuperTabsPort> = { connected: undefined, disconnected: undefined, stop: undefined, swarmRole: later(undefined) }
 /** The project and folder readers (services/projects.ts). */
-export const PROJECTS_REQUESTS = ['git_pull_request', 'git_pull_requests_status', 'git_project_info', 'scm_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file'] as const
+export const PROJECTS_REQUESTS = ['git_pull_request', 'git_pull_requests_status', 'git_project_info', 'scm_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file',
+  'agent_instructions_read', 'agent_instructions_write'] as const
 /** A window's name for its repo and its work, by a small model in the background (services/windowNames.ts). */
 export const WINDOW_NAMES_REQUESTS = ['window_name'] as const
 /** Change agent's handoff file, prepared in the edge host (services/handoff.ts). */
