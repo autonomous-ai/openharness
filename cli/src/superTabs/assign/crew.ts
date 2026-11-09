@@ -134,7 +134,7 @@ function everyOf(name: string): number | null {
  * a builder holds are queued on it (pinned, so the plan sees its list), and the one it has taken keeps it busy for half
  * its size; an issue another label holds is not this team's to plan.
  */
-export function readProblem(input: { now: number; issues: Json[]; closed: Json[]; crew: Crew }): Read {
+export function readProblem(input: { now: number; issues: Json[]; closed: Json[]; crew: Crew; minutes?: Partial<Record<'s' | 'm' | 'l', number>> }): Read {
   const { now, crew } = input
   const byLabel = new Map(crew.builders.map(b => [b.label, b]))
   const machines = new Map(crew.machines.map(m => [m.machineId, m]))
@@ -170,7 +170,8 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
     const size = sized === 's' || sized === 'm' || sized === 'l' ? sized : undefined
     // Not sized: the PM has not made it a task yet. One a builder holds counts as a middle one.
     if (!size && !holder) continue
-    const shape = SIZES[size ?? 'm']
+    // The time this project's finished tasks of the size took, once there are enough of them (learnedMinutes).
+    const shape = { ...SIZES[size ?? 'm'], ...input.minutes?.[size ?? 'm'] ? { minutes: input.minutes[size ?? 'm']! } : {} }
     const id = `#${issue.number}`
     if (holder) open.set(holder.id, (open.get(holder.id) ?? 0) + 1)
     if (holder && labels.includes('status:taken')) {
@@ -334,6 +335,35 @@ export function takenTasks(issues: Json[], pulls: Json[], builders: CrewBuilder[
     const own = Date.parse(String(issue.updated_at ?? ''))
     const number = Number(issue.number)
     out.push({ number, label: builder.label, name: builder.name, touched: Math.max(Number.isFinite(own) ? own : 0, touched.get(number) ?? 0) })
+  }
+  return out
+}
+
+/** Finished tasks of a size needed before their time replaces the size's guess, and the bounds kept on it. */
+export const LEARN_MIN = 3, LEARNED_FLOOR = 10, LEARNED_CEILING = 24 * 60
+
+/** When a closed task's work began: its builder's "taken by" comment (SWARM_BASICS), else Harness's word giving it. */
+export function startedAt(comments: Json[]): number | null {
+  for (const comment of comments) {
+    const first = String(comment.body ?? '').split('\n').find(line => line.trim()) ?? ''
+    if (/\btaken by\b/i.test(first) || /^Harness, \d\d:\d\d: for \*\*/.test(first)) {
+      const at = Date.parse(String(comment.created_at ?? ''))
+      if (Number.isFinite(at)) return at
+    }
+  }
+  return null
+}
+
+/** The minutes each size took in this project, from its finished tasks: the median of [took] by size, once a size has
+ *  [LEARN_MIN] of them, kept between [LEARNED_FLOOR] and [LEARNED_CEILING]. A median, as one task left open over a weekend
+ *  must not move the rest. */
+export function learnedMinutes(took: Array<{ size: string; minutes: number }>): Partial<Record<'s' | 'm' | 'l', number>> {
+  const out: Partial<Record<'s' | 'm' | 'l', number>> = {}
+  for (const size of ['s', 'm', 'l'] as const) {
+    const all = took.filter(t => t.size === size && t.minutes > 0).map(t => t.minutes).sort((a, b) => a - b)
+    if (all.length < LEARN_MIN) continue
+    const middle = all.length % 2 ? all[(all.length - 1) / 2]! : (all[all.length / 2 - 1]! + all[all.length / 2]!) / 2
+    out[size] = Math.round(Math.min(LEARNED_CEILING, Math.max(LEARNED_FLOOR, middle)))
   }
   return out
 }
