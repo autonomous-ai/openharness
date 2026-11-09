@@ -35,7 +35,7 @@ describe('the Mac owner\'s apps on a Team daemon running a Product Manager', () 
   it('reach nothing of the Product Manager, by any field that names it: its agent id or its engine\'s session id', () => {
     const p = running()
     for (const type of ['terminal_open', 'terminal_info', 'message', 'question_response', 'sessions_list', 'agent_recent',
-      'agent_read_file', 'agent_update', 'agent_close', 'agent_fork', 'agent_restart', 'agent_resume']) {
+      'agent_read_file', 'agent_instructions_read', 'agent_instructions_write', 'agent_update', 'agent_close', 'agent_fork', 'agent_restart', 'agent_resume']) {
       expect(p.refuse(type, { agentId: 'pm' }), type).toMatchObject({ error: 'SWARM_CONFIDENTIAL' })
     }
     // `session_get` names it by `sessionId`, which the history reader also matches to an agent's id.
@@ -54,7 +54,8 @@ describe('the Mac owner\'s apps on a Team daemon running a Product Manager', () 
     expect(p.refuse('agents_list', {})).toBeNull()
     for (const [type, payload] of [['terminal_input', { streamId: 's' }], ['terminal_resize', { streamId: 's' }], ['terminal_scroll', { streamId: 's' }],
       ['message', { agentId: 'worker' }], ['agent_create', { engine: 'claude' }], ['agent_fork', { agentId: 'worker' }], ['shell', { op: 'open' }],
-      ['fs_list_dir', { path: '/' }]] as const) {
+      ['fs_list_dir', { path: '/' }], ['agent_instructions_read', { agentId: 'worker', name: 'Faye' }],
+      ['agent_instructions_write', { agentId: 'worker', name: 'Faye', text: 'x', version: '' }]] as const) {
       expect(p.refuse(type, payload), type).toMatchObject({ error: 'TEAM_READ_ONLY' })
     }
     expect(p.watchOnly()).toBe(true)

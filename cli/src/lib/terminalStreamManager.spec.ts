@@ -130,6 +130,18 @@ describe('TerminalStreamManager', () => {
     expect((result.payload.engines as Array<{ id: string }>).map((row) => row.id)).toEqual([...ENGINES])
   })
 
+  // An app seals agent_instructions_read and agent_instructions_write through a daemon of its own that knows them; one that
+  // does not sends a request type it has never heard of in the clear. So the app asks first, and this is the answer.
+  it('says it knows the instructions requests, whether it controls terminals or only watches them', async () => {
+    await manager.handleFrame('web-1', 'terminal_capabilities', { requestId: 'r1' })
+    expect((sent.at(-1)?.payload.features as Record<string, unknown>).agentInstructions).toBe(true)
+    const watching = newManager({ readOnly: true })
+    await watching.handleFrame('web-1', 'terminal_capabilities', { requestId: 'r2' })
+    expect(sent.at(-1)?.payload.requestId).toBe('r2')
+    expect((sent.at(-1)?.payload.features as Record<string, unknown>).agentInstructions).toBe(true)
+    await watching.stop()
+  })
+
   it('asks no window for the tab its input came from, and still writes input from an older one that names it', async () => {
     await manager.handleFrame('web-1', 'terminal_open', {
       requestId: 'scoped', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
