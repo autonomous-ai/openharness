@@ -341,12 +341,6 @@ class SuperTabAttention extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// [markRead] for each of [threads], telling listeners once.
-  void markAllRead(Iterable<SuperTabFollowedThread> threads) {
-    threads.forEach(_markRead);
-    notifyListeners();
-  }
-
   void _markRead(SuperTabFollowedThread thread) {
     controller.markThreadRead(
       thread.conversationId,

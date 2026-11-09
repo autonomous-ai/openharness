@@ -418,6 +418,23 @@ it('explains to the PM other projects\' work, and points nobody at the removed L
   expect(answer.help).not.toHaveProperty('leads')
   expect(JSON.stringify(answer.help)).not.toMatch(/Leads conversation|leadsConversationId/)
 })
+// Swarm v4 (2026-11-09): an agent its person only talks to in their 1:1 chat is never told its Swarm's id, and the basics tell
+// it to post in its project's channel: in its own pane, the one Swarm it is in is meant.
+it('serves an agent in its own pane that leaves its Swarm out, in the one Swarm it is in', async () => {
+  const t = setup()
+  expect(await t.ask({ action: 'status', harnessId: 'native' }, owner)).toMatchObject({ ok: true })
+  expect(t.call).toHaveBeenLastCalledWith('GET', `/api/super-tabs/tab/parts?asAgentId=${t.agentId}`, undefined)
+  expect(await t.ask({ action: 'status', harnessId: 'stranger' }, owner)).toEqual({ error: 'INVALID_REQUEST', detail: 'Name the Swarm with --tab ID.' })
+})
+it('asks an agent in two Swarms to name one', async () => {
+  const agent = { id: 'a', machineId: 'machine-1', harnessId: 'native' }
+  const call = vi.fn<CoreApi['account']['backend']>(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/')
+    ? hostForm([{ tabId: 'tab', agent }, { tabId: 'other', agent }], { tabs: ['tab', 'other'] }) : { state: { agents: [agent] } } } }))
+  const service = superTabService(fakeCore({ account: { backend: call }, agents: { byAgent: vi.fn(() => ({ agentId: 'native' }) as never) } }),
+    { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost })
+  expect(await service.requests.super_tabs({ action: 'status', harnessId: 'native' }, owner))
+    .toEqual({ error: 'SWARM_AMBIGUOUS', detail: 'This agent is in 2 Swarms: name one with --tab (tab, other).' })
+})
 it('resolves a native caller to its exact contribution and rechecks it before every agent command', async () => {
   const t = setup()
   expect(await t.ask({ action: 'status', tabId: 'tab', harnessId: 'native' }, owner)).toMatchObject({ ok: true })
@@ -1050,7 +1067,7 @@ describe('a Harness Team account, which Swarm v3 has none of (#4221)', () => {
       }
     }
     for (const action of ['teamSetupDecline', 'teamSetupStatus']) {
-      expect(await service.requests.super_tabs({ action }, owner)).toEqual({ error: 'INVALID_REQUEST' })
+      expect(await service.requests.super_tabs({ action }, owner)).toEqual({ error: 'INVALID_REQUEST', detail: 'Name the Swarm with --tab ID.' })
     }
     expect(make).not.toHaveBeenCalled()
     expect(backend).not.toHaveBeenCalled()

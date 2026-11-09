@@ -18,7 +18,10 @@ it('keeps an explicit stable receipt for agent messages and arbitrary work comma
     .toMatchObject({ action: 'message', conversationId: 'lead', messageId: 'old-question' })
   expect(parseSuperTabArgs([...prefix, 'post', 'lead', '--tab', 'literal'], where).payload.command).toMatchObject({ text: '--tab' })
   expect(parseSuperTabArgs(['--tab', 'tab', 'status'], where).payload.agentId).toBe('')
-  for (const argv of [[], ['status'], [...prefix, 'post', 'lead', 'Ready'], [...prefix, 'messages', '../other'],
+  // An agent in its own pane may leave its Swarm out: its daemon takes the one it is in (service.ts).
+  expect(parseSuperTabArgs(['status'], where).payload).toMatchObject({ action: 'status', tabId: '' })
+  expect(() => parseSuperTabArgs(['--tab', '../other', 'status'], where)).toThrow('harness super-tab')
+  for (const argv of [[], [...prefix, 'post', 'lead', 'Ready'], [...prefix, 'messages', '../other'],
     [...prefix, 'message', 'lead'], [...prefix, 'message', 'lead', '../other'], [...prefix, 'message', 'lead', 'id', 'extra'],
     ['--port', 'no', 'help'], ['--machine', '', 'help'], [...prefix, 'status', 'extra']]) {
     expect(() => parseSuperTabArgs(argv, where)).toThrow('harness super-tab')
@@ -157,12 +160,12 @@ it('uses the existing daemon transport and retains a receipt in an uncertain ans
 it('has neither a plan nor a route command: both are refused with the usage line, which does not offer them, and nothing is asked of the daemon', async () => {
   const assessment = '{"difficulty":"low","risk":"low","why":"x"}'
   for (const tail of [['plan'], ['plan', '{"groups":{}}'], ['route', 'g1', assessment], ['route', 'g1', assessment, '--full-instructions']]) {
-    expect(() => parseSuperTabArgs([...prefix, ...tail], where)).toThrow(/^harness super-tab --tab ID/)
+    expect(() => parseSuperTabArgs([...prefix, ...tail], where)).toThrow(/^harness super-tab \[--tab ID\]/)
     const print = vi.fn(), open = vi.fn()
     expect(await superTabCommand(['--tab', 'tab', ...tail], { where: () => where, pane: undefined, open: open as never, print })).toBe(1)
     expect(open).not.toHaveBeenCalled()
     const refusal = String(JSON.parse(print.mock.calls.at(-1)![0]).error)
-    expect(refusal).toMatch(/^harness super-tab --tab ID/)
+    expect(refusal).toMatch(/^harness super-tab \[--tab ID\]/)
     expect(refusal).not.toMatch(/plan \[JSON\]|route GROUP JSON/)
   }
 })
