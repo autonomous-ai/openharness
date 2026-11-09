@@ -48,9 +48,6 @@ const HAND_MADE: Array<[string, Record<string, unknown>]> = [
   ['SuperTabTerminalRequest', { key: { createdAt: 1 }, name: 'terminal_request_expiry', expireAfterSeconds: 120 }],
   ['SuperTabMention', { key: { createdAt: 1 }, name: 'mention_expiry', expireAfterSeconds: 30 * DAY }],
   ...['SwarmHead', 'SwarmGroup', 'SwarmStart', 'SwarmProgress'].map(c => [c, { key: { purgeAt: 1 }, name: 'part_purge', expireAfterSeconds: 0 }] as [string, Record<string, unknown>]),
-  ...['SwarmWorkspace', 'SwarmWorkspaceMember', 'SwarmWorkspaceRemoval']
-    .map(c => [c, { key: { purgeAt: 1 }, name: 'workspace_purge', expireAfterSeconds: 0 }] as [string, Record<string, unknown>]),
-  ['SwarmWorkspaceInvitation', { key: { expiresAt: 1 }, name: 'workspace_invitation_expiry', expireAfterSeconds: 0 }],
 ]
 
 async function buildHandMade(db: PrismaClient): Promise<void> {

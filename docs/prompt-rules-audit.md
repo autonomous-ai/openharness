@@ -34,6 +34,11 @@ code. Their safety lines (secrets, temp folders, own processes, other accounts, 
 `instructionsTemplate.ts` are unchanged. The Buddy skill stays: its limits are in no code yet. Appendices B to D keep
 those texts as they were read, marked where removed.
 
+**Since Swarm v4's removal of v1-v3 (anh Dee, 2026-11-09):** much of the code the rows cite is gone: `pmSchedule.ts`,
+`processNotes.ts` and the scheduled wakes (#3596), the merge train (`mergeTrain/`), `releases.ts` and `scorecard/` (S1 of
+the backend removal). A row that names them, and the prompt it describes, is history: a v4 agent starts plain and keeps the
+rules of its project's instructions.
+
 ## Classes
 
 | Class | Means | Rows |
@@ -89,6 +94,12 @@ stays (#4591, #4598, #4604 among them). The Lead gives each an owner.
 | #4533 GitHub issue is the task | issues close on merge |
 | #4537 Four-part instructions | skills and instructions re-sent on a version change or compaction; the Lead's schedule as server messages |
 | #4534 Review independence (PR #3554, ready to merge) | a reviewer of one security review never gets the other; a stuck step moves without a cancel |
+
+**Who builds which task is code (Swarm v4, anh Dee 2026-11-09):** `cli/src/superTabs/githubAssign.ts` reads the PM's
+labels (`part:`, `needs:`, `size:`, `p0`-`p2`, "after #N"), the project's builders and their machines' memory, disk and
+quota, plans with the solver (`cli/src/superTabs/assign/`) and labels `builder:<name>` with why, keeping every list two deep.
+The PM's line "Give a task to the builder who owns its part, is free and has what it needs; keep every builder's list two
+deep" is gone from `PM_BASICS`; the PM still sizes and labels, which is judgment.
 
 **Reassign a task when its claim goes quiet is already code:** `liveness.ts` drops a task whose lease runs out (5
 minutes with no progress report, 30 minutes quiet), `dispatch.ts` `candidatesFor` hands it on, and `stuck.ts` alerts

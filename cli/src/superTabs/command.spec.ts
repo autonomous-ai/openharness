@@ -38,8 +38,6 @@ it('says what is wrong with a command\'s id or JSON instead of the usage line', 
   expect(() => parseSuperTabArgs([...prefix, 'command', 'op-1', '{"result":"git log --format=%h', '%s', 'returned"}'], where))
     .toThrow("got 3 arguments after OPERATION_ID: a quote inside the JSON ended the shell's quoting")
   expect(() => parseSuperTabArgs([...prefix, 'command', 'op-1', '{"type":'], where)).toThrow(/The command JSON is not valid .*send the JSON on stdin with -/)
-  expect(() => parseSuperTabArgs([...prefix, 'route', '../x', '{}'], where)).toThrow('route needs GROUP first')
-  expect(() => parseSuperTabArgs([...prefix, 'route', 'g1'], where)).toThrow("route needs its JSON after GROUP: route g1 JSON, or send the JSON on stdin with - in its place: route GROUP - <<'JSON'")
   expect(() => parseSuperTabArgs([...prefix, 'messages'], where)).toThrow('harness super-tab')
 })
 it('reads a command\'s JSON from stdin for -', () => {
@@ -80,7 +78,7 @@ it('refuses a post\'s - with an empty or a terminal stdin, naming the fix, and p
 // Review of #2379: a JSON action's - with a terminal stdin waited 30 s and then said stdin was never closed; post refused it at once.
 it('refuses a JSON action\'s - with a terminal stdin at once, naming the fix, and sends nothing', async () => {
   const stdin = vi.fn(() => 'never read')
-  for (const [action, id] of [['command', 'op-1'], ['propose', 'op-1'], ['start', 'op-1'], ['capacity', 'machine-2'], ['route', 'lead']]) {
+  for (const [action, id] of [['command', 'op-1'], ['propose', 'op-1'], ['start', 'op-1'], ['capacity', 'machine-2']]) {
     expect(() => parseSuperTabArgs([...prefix, action, id, '-'], where, stdin, () => true))
       .toThrow(`${action} - reads the JSON from stdin, but stdin is a terminal, so nothing was sent. Pass it as one argument, or send the JSON on stdin with - in its place: ${action} `)
   }
@@ -159,71 +157,16 @@ it('uses the existing daemon transport and retains a receipt in an uncertain ans
   expect(JSON.parse(print.mock.calls.at(-1)![0])).toEqual({ error: 'Connection lost', operationId: 'op' })
   expect(close).toHaveBeenCalledTimes(2)
 })
-it('parses route GROUP JSON', () => {
-  expect(parseSuperTabArgs([...prefix, 'route', 'g1', '{"difficulty":"low","risk":"low","why":"x"}'], where).payload)
-    .toMatchObject({ action: 'route', conversationId: 'g1', assessment: { difficulty: 'low' } })
-})
-// Task #3294: the whole instructions only on request, and none of it again for a revision the caller read.
-it('parses route\'s --full-instructions and --instructions-read N, and refuses anything else after the JSON', () => {
-  const json = '{"difficulty":"low","risk":"low","why":"x"}'
-  expect(parseSuperTabArgs([...prefix, 'route', 'g1', json], where).payload).not.toHaveProperty('fullInstructions')
-  expect(parseSuperTabArgs([...prefix, 'route', 'g1', json, '--full-instructions'], where).payload).toMatchObject({ action: 'route', fullInstructions: true })
-  expect(parseSuperTabArgs([...prefix, 'route', 'g1', json, '--instructions-read', '74'], where).payload).toMatchObject({ instructionsRead: 74 })
-  expect(parseSuperTabArgs([...prefix, 'route', 'g1', json, '--instructions-read', '74', '--full-instructions'], where).payload)
-    .toMatchObject({ instructionsRead: 74, fullInstructions: true })
-  for (const tail of [['--instructions-read'], ['--instructions-read', 'x'], ['--instructions-read', '-1'], ['--full'], ['--full-instructions', '--full-instructions']]) {
-    expect(() => parseSuperTabArgs([...prefix, 'route', 'g1', json, ...tail], where)).toThrow('harness super-tab')
-  }
-})
-it('prints the compact route answer: the Routing section, not the whole instructions', async () => {
-  const print = vi.fn(), close = vi.fn()
-  const text = '# P\n\n## Roles\nWHOLE\n\n## Routing\nBy quota.\n'
-  const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}) => {
-    if (type === 'agents_list') return { agents: [{ id: 'native', engine: 'claude', tmuxPane: '%42', status: 'active' }] }
-    if (payload.action === 'routeContext') return { ok: true, value: { agentId: 'lead', tab: { revision: 1, state: {
-      agents: [{ id: 'a1', name: 'Multiply', machineId: 'machine', harnessId: 'native', configuration: { engine: 'claude', model: 'opus', effort: 'high' } }],
-      conversations: [{ id: 'g1', title: 'API', leadId: 'a1', agentIds: ['a1'], archived: false, brief: '', checks: [], assignment: null }] } },
-      policy: { policy: { version: 1, models: [{ engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, enabled: true }] } }, machines: [{ machineId: 'machine', name: 'mac' }] } }
-    if (payload.action === 'command') return { ok: true, value: { result: { routeDecisionId: 'd1' } } }
-    if (payload.action === 'instructions') return { ok: true, value: { revision: 7, text, notes: [] } }
-    if (payload.action === 'routeHistory') return { ok: true, value: { decisions: [], attempts: [] } }
-    if (type === 'engines_probe') return { engines: [{ engine: 'claude', installed: true, signedIn: true }] }
-    if (type === 'usage_read') return { providers: [] }
-    return { resources: { memoryTotalBytes: 8e9, memoryUsedBytes: 1e9, cpuPercent: 10, projectDiskFreeBytes: 1e11 }, tools: { git: true }, devices: {} }
-  })
-  const deps = { where: () => where, pane: '%42', open: async () => ({ request, close, machineId: 'machine' }), print }
-  await superTabCommand(['--tab', 'tab', 'route', 'g1', '{"difficulty":"low","risk":"low","why":"x"}'], deps)
-  const printed = JSON.parse(print.mock.calls.at(-1)![0] as string)
-  expect(printed).toMatchObject({ ok: true, instructions: { revision: 7, routing: '## Routing\nBy quota.' }, candidates: { 'mac · machineId machine · 1 agents': [expect.stringMatching(/^c0 Multiply/), expect.stringMatching(/^c1 new/)] } })
-  expect(JSON.stringify(printed)).not.toContain('WHOLE')
-  await superTabCommand(['--tab', 'tab', 'route', 'g1', '{"difficulty":"low","risk":"low","why":"x"}', '--full-instructions'], deps)
-  expect(JSON.parse(print.mock.calls.at(-1)![0] as string)).toMatchObject({ instructions: { revision: 7, text } })
-  await superTabCommand(['--tab', 'tab', 'route', 'g1', '{"difficulty":"low","risk":"low","why":"x"}', '--instructions-read', '7'], deps)
-  expect(JSON.parse(print.mock.calls.at(-1)![0] as string).instructions).toEqual({ revision: 7, unchanged: expect.any(String), notes: [] })
-})
-it('routes through the caller and prints the decision, or the parse failure as an error', async () => {
-  const print = vi.fn(), close = vi.fn()
-  const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}) => {
-    if (type === 'agents_list') return { agents: [{ id: 'native', engine: 'claude', tmuxPane: '%42', status: 'active' }] }
-    if (payload.action === 'routeContext') return { error: 'AGENT_UNAVAILABLE', detail: 'x' }
-    return { ok: true }
-  })
-  const deps = { where: () => where, pane: '%42', open: async () => ({ request, close, machineId: 'machine' }), print }
-  expect(await superTabCommand(['--tab', 'tab', 'route', 'g1', '{"difficulty":"low","risk":"low","why":"x"}'], deps)).toBe(1)
-  expect(request).toHaveBeenCalledWith('super_tabs', expect.objectContaining({ action: 'routeContext', tabId: 'tab', harnessId: 'native' }), 30_000)
-  expect(JSON.parse(print.mock.calls.at(-1)![0])).toMatchObject({ error: 'AGENT_UNAVAILABLE' })
-  expect(await superTabCommand(['--tab', 'tab', 'route', 'g1', '{nope'], deps)).toBe(1)
-  expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toMatch(/JSON/)
-})
-it('has no plan command: it is refused with the usage line, which does not offer it, and nothing is asked of the daemon', async () => {
-  for (const tail of [['plan'], ['plan', '{"groups":{}}']]) {
+it('has neither a plan nor a route command: both are refused with the usage line, which does not offer them, and nothing is asked of the daemon', async () => {
+  const assessment = '{"difficulty":"low","risk":"low","why":"x"}'
+  for (const tail of [['plan'], ['plan', '{"groups":{}}'], ['route', 'g1', assessment], ['route', 'g1', assessment, '--full-instructions']]) {
     expect(() => parseSuperTabArgs([...prefix, ...tail], where)).toThrow(/^harness super-tab \[--tab ID\]/)
     const print = vi.fn(), open = vi.fn()
     expect(await superTabCommand(['--tab', 'tab', ...tail], { where: () => where, pane: undefined, open: open as never, print })).toBe(1)
     expect(open).not.toHaveBeenCalled()
     const refusal = String(JSON.parse(print.mock.calls.at(-1)![0]).error)
     expect(refusal).toMatch(/^harness super-tab \[--tab ID\]/)
-    expect(refusal).not.toContain('plan [JSON]')
+    expect(refusal).not.toMatch(/plan \[JSON\]|route GROUP JSON/)
   }
 })
 it('posts a reply to one message with --reply-to, and rejects a bad id', () => {

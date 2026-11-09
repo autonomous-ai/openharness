@@ -27,7 +27,7 @@ export async function otherAccountsOnComputer(db: Reader, { computerId, ownerId,
  *  [toOwner]'s [to]. Ids only, so the cleanup's output names what Ken's go covers and what each owner may add back. */
 export interface ComputerMove { tabId: string; from: string; fromOwner: string; to: string; toOwner: string }
 
-/** A move the Swarm refused, dry run and write alike, with the refusal's code (WORKSPACE_ACCESS_REVOKED, NOT_FOUND, ...): what
+/** A move the Swarm refused, dry run and write alike, with the refusal's code (NOT_FOUND, FORBIDDEN, ...): what
  *  the cleanup leaves, and why, so its dry run says what the write will not do (task #3227). Ids and a code only. */
 export interface LeftMove extends ComputerMove { code: string }
 

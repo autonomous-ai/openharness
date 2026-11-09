@@ -33,14 +33,15 @@ const VERDICT = /(?<![\w-])(READ-OK|HOLD)\s+([0-9a-f]{7,40})(?![0-9a-f])/
 const SIGNATURE = /^\W*([A-Za-z][\w-]*(?: [A-Za-z][\w-]*)?)\**\s*[,:(]/
 const SELF = 'Harness'
 
-/** A project whose PM runs on this computer as its person: the merger merges its repository's pull requests. */
-export interface MergingProject { repo: string; pm: string }
+/** A project whose PM runs on this computer as its person: the merger merges its repository's pull requests, and the
+ *  assigner gives its tasks (githubAssign.ts). Its Swarm, its PM and the project, to read its crew as the PM. */
+export interface LedProject { repo: string; pm: string; tabId: string; pmAgentId: string; projectId: string }
 
 /** The projects whose PM is one of this computer's person's agents running here, from the host's roster and the PM's read. */
-export async function mergingProjects(deps: { me: string | null; live: (harnessId: string) => boolean; roster: () => Promise<Json[]>
-  read: (tabId: string, agentId: string) => Promise<Json> }): Promise<MergingProject[]> {
+export async function ledProjects(deps: { me: string | null; live: (harnessId: string) => boolean; roster: () => Promise<Json[]>
+  read: (tabId: string, agentId: string) => Promise<Json> }): Promise<LedProject[]> {
   if (!deps.me) return []
-  const found = new Map<string, MergingProject>()
+  const found = new Map<string, LedProject>()
   for (const row of await deps.roster()) {
     const agent = object(row.agent)
     if (row.lead !== true || !identifier(row.ledConversationId) || !identifier(row.tabId) || !identifier(agent.id) || row.closeSession === true) continue
@@ -48,7 +49,9 @@ export async function mergingProjects(deps: { me: string | null; live: (harnessI
     const state = await deps.read(row.tabId, agent.id).catch(() => null)
     const project = (Array.isArray(state?.projects) ? state.projects.map(object) : []).find(p => p.leadConversationId === row.ledConversationId)
     const repo = repositorySlug(object(project?.repository).repositoryUrl)
-    if (repo && !found.has(repo)) found.set(repo, { repo, pm: String(agent.displayName ?? agent.name ?? 'PM') })
+    if (repo && identifier(project?.id) && !found.has(repo)) {
+      found.set(repo, { repo, pm: String(agent.displayName ?? agent.name ?? 'PM'), tabId: row.tabId, pmAgentId: agent.id, projectId: project.id })
+    }
   }
   return [...found.values()]
 }
@@ -103,13 +106,13 @@ export class GitHubMerge {
   private readonly unreadable = new Map<string, number>()
   /** What each pull request was last told, by head and reason, so it is told once for each head. */
   private readonly told = new Map<string, string>()
-  private projects: { at: number; list: MergingProject[] } | null = null
+  private projects: { at: number; list: LedProject[] } | null = null
   private offUntil = 0
   private logged = ''
   private readonly now: () => number
   private readonly log: (line: string) => void
 
-  constructor(private readonly deps: { projects: () => Promise<MergingProject[]>; get: GitHubGet; send: GitHubSend; now?: () => number
+  constructor(private readonly deps: { projects: () => Promise<LedProject[]>; get: GitHubGet; send: GitHubSend; now?: () => number
     log?: (line: string) => void; intervalMs?: number }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
@@ -155,7 +158,7 @@ export class GitHubMerge {
     }
   }
 
-  private async mergeReady(project: MergingProject): Promise<void> {
+  private async mergeReady(project: LedProject): Promise<void> {
     const { repo } = project
     const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
     const pulls = (await this.reads.current(repo, `/repos/${repo}/pulls?state=open&per_page=${MAX_PULLS}`, 1))

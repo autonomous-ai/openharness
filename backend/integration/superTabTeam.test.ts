@@ -59,7 +59,7 @@ const LIMITED = { code: 'TEAM_SESSION_LIMITED', status: 403 }
 /** What the team account's privacy check reports (cli/src/team/privacy.ts): passed, or the first item that failed. */
 const PASSED = { mode: 'account', passed: true, checkedAt: Date.now() } as const
 const FAILED = { mode: 'account', passed: false, item: 'gitconfig', detail: 'The team account could read ~/.gitconfig.', checkedAt: Date.now() } as const
-/** A machine's reading. It always claims a privacy check; only a team session's claim is kept. */
+/** A machine's reading. It always claims a privacy check, as an older Team daemon does; Swarm v4 keeps none. */
 const reading = (generation: string, privacy: Record<string, unknown> = PASSED) => ({ generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
   diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
   quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [], privacy }) as Parameters<SuperTabStore['observeMachine']>[3]
@@ -560,35 +560,6 @@ describe('a team session speaking in a Swarm', () => {
     await expect(store.deliveryReceipt(team, f.tab, f.personal, delivery.id)).rejects.toMatchObject(LIMITED)
     expect(await store.deliveryReceipt(person, f.tab, f.personal, delivery.id)).toMatchObject({ id: delivery.id })
 
-    const opened = await store.native.open(person, f.tab, { operationId: randomUUID(), conversationId: f.personalGroup, agentId: f.personal })
-    await expect(store.native.read(team, f.tab, opened.contextId)).rejects.toMatchObject(LIMITED)
-    await expect(store.native.append(team, f.tab, opened.contextId, { turnId: 't1', kind: 'prompt', previousEventId: null,
-      text: 'hi', truncated: false, interrupted: false })).rejects.toMatchObject(LIMITED)
-    expect(await store.native.read(person, f.tab, opened.contextId)).toMatchObject({ agentId: f.personal })
-    await expect(store.native.open(team, f.tab, { operationId: randomUUID(), conversationId: f.teamGroup, agentId: f.builder })).rejects.toMatchObject(LIMITED)
-  })
-
-  // What reaches the coordinator from a terminal is a recording gap on the agent's task (native.ts turnRecipients; a typed
-  // prompt names no one since project instructions, phase 4).
-  it('what it records from its own agent\'s terminal reaches the Lead as the agent\'s, never as the person\'s', async () => {
-    const f = await fixture()
-    await run(f.tab, { type: 'conversation.agent', conversationId: f.teamGroup, agentId: f.lead, present: true, lead: true })
-    await beforeV3(f.tab, f.generation, () => run(f.tab, { type: 'work.assign', conversationId: f.teamGroup, agentId: f.builder }))
-    const gap = (turnId: string, incidentId: string) => ({ turnId, kind: 'gap' as const, previousEventId: null, text: '', truncated: false,
-      interrupted: false, gap: { incidentId, reason: 'recording_restarted' as const, detectedAt: Date.now() + 1000 } })
-    const opened = await store.native.open(person, f.tab, { operationId: randomUUID(), conversationId: f.teamGroup, agentId: f.builder })
-    await store.native.append(team, f.tab, opened.contextId, { turnId: 't0', kind: 'prompt', previousEventId: null,
-      text: 'Delete the production database', truncated: false, interrupted: false })
-    expect(await db.superTabDelivery.findMany({ where: { tabId: f.tab, nativeContextId: opened.contextId } })).toEqual([])
-    const typed = await db.superTabNativeContext.findUniqueOrThrow({ where: { id: opened.contextId } })
-    await store.native.append(team, f.tab, opened.contextId, { ...gap('t1', 'team-restart'), previousEventId: typed.lastEventId })
-    const deliveries = await db.superTabDelivery.findMany({ where: { tabId: f.tab, nativeContextId: opened.contextId } })
-    expect(deliveries.map(d => ({ agentId: d.agentId, authorKind: d.authorKind, authorId: d.authorId })))
-      .toEqual([{ agentId: f.lead, authorKind: 'agent', authorId: f.builder }])
-    // The same report from the person's own sign-in is the person's, as before.
-    const own = await store.native.open(person, f.tab, { operationId: randomUUID(), conversationId: f.teamGroup, agentId: f.builder })
-    await store.native.append(person, f.tab, own.contextId, gap('t2', 'own-restart'))
-    expect((await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, nativeContextId: own.contextId } })).authorKind).toBe('person')
   })
 
   it('gets a GitHub token only as an agent on its own machine, naming its own machine (Task 4)', async () => {
@@ -664,7 +635,7 @@ describe('a team session speaking in a Swarm', () => {
 })
 
 // Teammates' work once ran only on Team machines (Task 3). Swarm v3 (task #4120) has none: a person's own agent works on any task of a
-// project they read, in their own account. What reads a Team machine's privacy is unchanged until its entries go.
+// project they read, in their own account. Swarm v4 keeps no privacy check and no machine says whether it takes teammates' work.
 describe('a teammate\'s work and the machines that take it', () => {
   // With the rule required everywhere, as it will be once team accounts can be made (machines.ts teamAccountRequired).
   beforeAll(() => { process.env.SWARM_TEAM_ACCOUNT_REQUIRED = '1' })
@@ -676,35 +647,50 @@ describe('a teammate\'s work and the machines that take it', () => {
     await store.observeMachine(person, f.tab, 'personal-mac', reading(generation))
     return generation
   }
-  /** A machine as a member reads it, with whether it takes teammates' projects now. */
+  /** A machine as a member reads it. */
   const pool = (tab: string, machineId: string, user: AuthUser = owner, at: SuperTabStore = store) => at.read(user, tab)
-    .then(r => r.state.machines!.find(m => m.machineId === machineId)! as unknown as ContributedMachine & { teamWork: { allowed: boolean; code?: string; reason?: string } })
+    .then(r => r.state.machines!.find(m => m.machineId === machineId)! as unknown as ContributedMachine)
   /** A start of the owner's project's Builder, on the team machine (its contribution's folder) or a personal one. */
   const start = (tab: string, conversationId: string, machineId: string, user: AuthUser = owner, cwd = machineId === 'team-mac' ? '/team' : '/work/lead', at: SuperTabStore = store) =>
     at.execute(user, tab, { operationId: randomUUID(), command: { type: 'agent.start', request: { conversationId, machineId, engine: 'codex', name: 'Builder',
       cwd, worktree: false, requirements } } })
 
-  it('keeps privacy only from the team account\'s own reading, and the read says which machines take teammates\' projects', async () => {
+  it('keeps no privacy check, from a team account\'s reading or any other, and the read says nothing of team work', async () => {
     const f = await fixture()
     await personalMac(f)
-    expect((await pool(f.tab, 'team-mac')).observation!.privacy).toEqual({ ...PASSED, seenAt: expect.any(Number) })
-    expect((await pool(f.tab, 'team-mac')).teamWork).toEqual({ allowed: true })
-    // The person's own sign-in claimed the same check for its MacBook: an ordinary computer proves nothing about a team account.
-    // It runs its own person's agents, so it reads no Team-account rule (Swarm v3, task #4218).
-    expect((await pool(f.tab, 'personal-mac')).observation).not.toHaveProperty('privacy')
-    expect((await pool(f.tab, 'personal-mac')).teamWork).toEqual({ allowed: true })
-    // The same check sent again keeps the date it first arrived, so a check that stops running goes stale.
-    const first = (await pool(f.tab, 'team-mac')).observation!.privacy!.seenAt
-    await new Promise(resolve => setTimeout(resolve, 5))
-    await store.observeMachine(team, f.tab, 'team-mac', reading(f.generation))
-    expect((await pool(f.tab, 'team-mac')).observation!.privacy!.seenAt).toBe(first)
-    // A failing check: every member reads the item, only its contributor reads the detail.
+    for (const machineId of ['team-mac', 'personal-mac']) {
+      const read = await pool(f.tab, machineId)
+      expect(read.observation, machineId).not.toHaveProperty('privacy')
+      expect(read, machineId).not.toHaveProperty('teamWork')
+    }
+    // A failing check names no item, to its contributor or anyone.
     await store.observeMachine(team, f.tab, 'team-mac', reading(f.generation, FAILED))
-    expect((await pool(f.tab, 'team-mac', person)).observation!.privacy).toMatchObject({ item: 'gitconfig', detail: FAILED.detail })
-    expect((await pool(f.tab, 'team-mac')).observation!.privacy).toEqual({ mode: 'account', passed: false, item: 'gitconfig', checkedAt: FAILED.checkedAt, seenAt: expect.any(Number) })
-    expect((await pool(f.tab, 'team-mac')).teamWork).toMatchObject({ allowed: false, code: 'PRIVACY_CHECK_FAILED' })
+    expect((await pool(f.tab, 'team-mac', person)).observation).not.toHaveProperty('privacy')
+    expect((await pool(f.tab, 'team-mac')).observation).not.toHaveProperty('privacy')
     // The person's own sign-in may not report for the team machine at all (security review 2 of #2089).
     await expect(store.observeMachine(person, f.tab, 'team-mac', reading(f.generation))).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY' })
+  })
+
+  it('reads a machine an older release stored with its owner\'s choices, notice count and privacy check without them, to everyone, and drops them once its person contributes it again', async () => {
+    const f = await fixture()
+    await personalMac(f)
+    const retired = ['projects', 'ownAccountChoice', 'othersToldWeek', 'access']
+    const state = await storedState(f.tab)
+    const mac = state.machines!.find(m => m.machineId === 'personal-mac')!
+    Object.assign(mac, { projects: ['lead'], ownAccountChoice: { allowed: true, by: person.sub, at: '2026-11-04T00:00:00.000Z' }, othersToldWeek: 1,
+      access: [{ id: '0123456789abcdef', name: 'Lamp', account: 'own', teammates: true, note: 'connection info in ~/.lamp' }] })
+    Object.assign(mac.observation!, { privacy: { mode: 'dedicated' } })
+    await saveState(f.tab, state)
+    for (const reader of [owner, person]) {
+      const read = await pool(f.tab, 'personal-mac', reader)
+      for (const field of retired) expect(read, `${reader.email}: ${field}`).not.toHaveProperty(field)
+      expect(read.observation, reader.email).not.toHaveProperty('privacy')
+    }
+    // Stored still, until its person saves it again.
+    expect((await storedState(f.tab)).machines!.find(m => m.machineId === 'personal-mac')).toMatchObject({ projects: ['lead'], othersToldWeek: 1 })
+    await run(f.tab, { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work', scope: 'swarm', engines: ['codex'], maxAgents: 4 }, person)
+    const saved = (await storedState(f.tab)).machines!.find(m => m.machineId === 'personal-mac')!
+    for (const field of retired) expect(saved, field).not.toHaveProperty(field)
   })
 
   // Swarm v3 (task #4120, the PM's rulings): no Team account takes work, a new agent starts only on its own person's computer, and a
@@ -879,59 +865,22 @@ describe('a project\'s repository, for its GitHub access', () => {
 })
 
 describe('one machine: a Mac and its Harness Team account', () => {
-  it('with no GitHub App on the server, the team account is never asked to join', async () => {
-    await db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: 'personal-mac' } })
-    try {
-      const idle = new SuperTabStore(db, Date.now, null, { teamAccountsIdle: true })
-      const tab = (await idle.create(owner, randomUUID(), 'No app')).id
-      const invitation = await idle.execute(owner, tab, { operationId: randomUUID(), command: { type: 'invite.create', email: person.email, role: 'collaborator', conversationId: 'lead' } })
-      await idle.execute(person, tab, { operationId: randomUUID(), command: { type: 'invite.accept', inviteId: invitation.result.inviteId as string } })
-      await idle.execute(person, tab, { operationId: randomUUID(), command: { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work',
-        scope: 'swarm', engines: ['codex'], maxAgents: 3 } })
-      expect((await rosterRows(idle, person, 'personal-mac', { teamAccountsIdle: true })).some(r => r.tabId === tab && 'joinTeam' in r)).toBe(false)
-      // The same Swarm on a server with the app asks the Mac's host to add it.
-      expect((await rosterRows(store, person, 'personal-mac')).some(r => r.tabId === tab && 'joinTeam' in r)).toBe(true)
-    } finally {
-      await db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: null } })
-    }
-  })
 
-  // Every Swarm alike (2026-11-02): it was tried in listed owners' Swarms only (SWARM_TEAM_ACCOUNT_OWNERS, 10-28 to 11-02),
-  // and a list left in a deployment must neither keep a team account out of a Swarm nor tell a Swarm it uses none.
-  it('joins every Swarm its Mac was added to, whatever SWARM_TEAM_ACCOUNT_OWNERS says, and tells none it uses none', async () => {
-    await db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: 'personal-mac' } })
-    onTestFinished(async () => {
-      vi.unstubAllEnvs()
-      await db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: null } })
-    })
-    const tab = (await store.create(owner, randomUUID(), 'Elsewhere')).id
-    const invitation = await run(tab, { type: 'invite.create', email: person.email, role: 'collaborator', conversationId: 'lead' })
-    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, person)
-    await run(tab, { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work', scope: 'swarm', engines: ['codex'], maxAgents: 3 }, person)
-    const joins = async () => (await rosterRows(store, person, 'personal-mac')).some(r => r.tabId === tab && 'joinTeam' in r)
-    const derived = async () => (await new SwarmReads(store).firstLoad(person, tab)).derived
-    vi.stubEnv('SWARM_TEAM_ACCOUNT_OWNERS', 'someone@example.com')
-    expect(await joins()).toBe(true)
-    expect(await derived()).not.toHaveProperty('teamAccounts')
-  })
-
-  it('the Mac\'s host adds its team account, and the owner\'s project started on the Mac stays on the Mac (task #4120)', async () => {
+  it('the Mac\'s host adds its team account, and the owner\'s project started on the Mac stays on the Mac (task #4120); no host row asks it to', async () => {
     await db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: 'personal-mac' } })
     try {
       const tab = (await store.create(owner, randomUUID(), 'One machine')).id
       const invitation = await run(tab, { type: 'invite.create', email: person.email, role: 'collaborator', conversationId: 'lead' })
       await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, person)
       await run(tab, { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work', scope: 'swarm', engines: ['codex'], maxAgents: 3 }, person)
-      const joins = async () => (await rosterRows(store, person, 'personal-mac')).filter(r => r.tabId === tab && 'joinTeam' in r)
-      expect(await joins()).toEqual([{ tabId: tab, joinTeam: { machineId: 'team-mac', name: 'MacBook Pro', maxAgents: 3 } }])
-      // The team account's own daemon is never asked, and cannot add itself.
+      // No host row asks the Mac's host or the team account to join (Swarm v4); the team account cannot add itself.
+      expect((await rosterRows(store, person, 'personal-mac')).some(r => r.tabId === tab && 'joinTeam' in r)).toBe(false)
       expect((await rosterRows(store, team, 'team-mac')).some(r => 'joinTeam' in r)).toBe(false)
       await expect(store.execute(team, tab, { operationId: randomUUID(), command: { type: 'machine.contribute', machineId: 'team-mac', name: 'x', cwd: '/team',
         scope: 'swarm', engines: ['codex'], maxAgents: 1, ifMissing: true } })).rejects.toMatchObject(LIMITED)
       // The Mac's host adds it, as the person: the backend gives it the Mac's name and slots, and the Mac it lives on.
       await run(tab, { type: 'machine.contribute', machineId: 'team-mac', name: 'MacBook Pro · Team', cwd: '/team', scope: 'swarm', engines: ['codex'],
         maxAgents: 1, ifMissing: true }, person)
-      expect(await joins()).toEqual([])
       const listed = (await store.read(owner, tab)).state.machines!.find(m => m.machineId === 'team-mac')!
       expect(listed).toMatchObject({ hostMachineId: 'personal-mac', name: 'MacBook Pro · Team account', maxAgents: 3, cwd: '/team' })
       const generation = (await poolRows(store, team, 'team-mac')).find(p => p.tabId === tab)!.machine.generation
@@ -1325,45 +1274,6 @@ describe('a message from an agent of another account (audit M3)', () => {
     await db.superTabMessage.update({ where: { id: message.id }, data: { author: { ...(message.author as Record<string, unknown>), membershipGeneration: 'earlier' } } })
     const delivery = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, agentId: f.lead, messageId: message.id } })
     expect(await store.delivery(owner, f.tab, f.lead, delivery.id, { type: 'claim', claimId: randomUUID() })).toMatchObject({ otherAccount: true })
-  })
-})
-
-// Task #2390 (Tony, 11-03): a machine's owner keeps it for some projects; every other project's work is refused there.
-describe('a machine its owner keeps for some projects', () => {
-  it('is kept for them across reads, set by its owner alone, and its Team account takes no start at all (task #4120)', async () => {
-    const f = await fixture()
-    const limit = (projectIds: string[] | null, user: AuthUser) => run(f.tab, { type: 'machine.projects', machineId: 'team-mac', projectIds } as Command, user)
-    await expect(limit([f.own], owner)).rejects.toMatchObject({ code: 'OWNER_REQUIRED' })
-    // Its Harness Team account session cannot change what its owner chose.
-    await expect(limit(['lead'], team)).rejects.toMatchObject({ code: 'TEAM_SESSION_LIMITED' })
-    await limit([f.own], person)
-    expect((await store.read(owner, f.tab)).state.machines!.find(m => m.machineId === 'team-mac')!.projects).toEqual([f.own])
-    await expect(run(f.tab, { type: 'agent.start', request: { conversationId: f.teamGroup, machineId: 'team-mac', engine: 'codex',
-      name: 'Second', cwd: '/team', worktree: false, requirements } }, person)).rejects.toMatchObject({ code: 'TEAM_ACCOUNTS_REMOVED' })
-    await limit(null, person)
-    expect((await store.read(owner, f.tab)).state.machines!.find(m => m.machineId === 'team-mac')!.projects).toBeUndefined()
-  })
-})
-
-// Task #2806 (Scholes, 11-04): a machine's owner lets teammates' work run in their own account there. A guard loosened by the
-// owner alone: never by the Harness Team account that runs on the same Mac as them, nor by anyone else.
-describe('teammates\' work in a machine owner\'s own account', () => {
-  it('is chosen by its owner alone, never by its Team account session, and said only in the route\'s note (#4289)', async () => {
-    const f = await fixture()
-    const choose = (allowed: boolean, user: AuthUser) => run(f.tab, { type: 'machine.ownAccountWork', machineId: 'team-mac', allowed } as Command, user)
-    await expect(choose(true, owner)).rejects.toMatchObject({ code: 'OWNER_REQUIRED' })
-    await expect(choose(true, team)).rejects.toMatchObject({ code: 'TEAM_SESSION_LIMITED' })
-    expect((await store.read(owner, f.tab)).state.machines!.find(m => m.machineId === 'team-mac')!.ownAccountChoice).toBeUndefined()
-    await choose(true, person)
-    const seen = (await store.read(owner, f.tab)).state.machines!.find(m => m.machineId === 'team-mac')!
-    // Swarm v3 has no choice to show: no reader gets the stored field (#4289).
-    expect(seen.ownAccountChoice).toBeUndefined()
-    // Whoever routes a teammate's task there reads it.
-    expect((seen as unknown as { teamWork: { ownAccount?: string } }).teamWork.ownAccount).toMatch(/runs teammates' work in .+'s own account\.$/)
-    await choose(false, person)
-    const off = (await store.read(owner, f.tab)).state.machines!.find(m => m.machineId === 'team-mac')!
-    expect(off.ownAccountChoice).toBeUndefined()
-    expect((off as unknown as { teamWork: { ownAccount?: string } }).teamWork.ownAccount).toBeUndefined()
   })
 })
 

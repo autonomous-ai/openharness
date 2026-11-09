@@ -1058,7 +1058,9 @@ model SuperTab {
   format         Int      @default(1)
   migratedAt     DateTime?
   legacyState    Json?
-  /// The Workspace (SwarmWorkspace) it belongs to, also on its head part. Null only on a Swarm from before Workspaces, until migrated.
+  /// The Workspace an earlier release put it in, also on its head part. Swarm v4 removed Workspaces and their collections: nothing writes
+  /// or reads it, and a new Swarm has none. The column and its index go in the schema step for the shared collections (slice S19),
+  /// not before 2026-12-09.
   workspaceId          String?
   /// When its owner deleted it (superTabs/deletion.ts): from then every read and write answers as for a Swarm that does not
   /// exist, and its owner can restore it until `purgeAt`, when the sweep removes its records and files. Absent on a live Swarm.
@@ -1071,11 +1073,11 @@ model SuperTab {
 
   /// Deleted Swarms whose grace is over, oldest first: the purge sweep's read (superTabs/deletion.ts).
   @@index([purgeAt], map: "swarm_deleted_purge")
+  /// Read by the Workspace removal Swarm v4 removed; nothing reads it now. It goes with the column above.
   @@index([autonomousEnv, workspaceId])
   /// An owner's Swarms in id order: the grid poll names it (superTabs/parts/indexed.ts NAMED_INDEX.SuperTab.owner).
   @@index([autonomousEnv, ownerId, id])
-  /// By id within a member: Swarm lists read 100 at a time in id order, and a Workspace removal finds the person's Swarms
-  /// (superTabs/swarmRows.ts).
+  /// By id within a member: Swarm lists read 100 at a time in id order (superTabs/swarmRows.ts).
   @@index([autonomousEnv, memberIds, id])
   /// By id within an address: the invitation list reads the first 100 in id order (superTabs/invitedSwarms.ts).
   @@index([autonomousEnv, invitedEmails, id])
@@ -1384,7 +1386,7 @@ model SuperTabDecision {
   note           String?
   /// The person asked left it to the PM, who took the recommended option: never shown as their own choice.
   delegated      Boolean?
-  /// With `delegated`: the hourly sweep left it to the PM after 24 hours unanswered, not the person (overdueDecisions.ts).
+  /// With `delegated`: the hourly sweep left it to the PM after 24 hours unanswered, not the person (the sweep Swarm v4 removed).
   overdue        Boolean?
   /// "routing-reflection" for a proposal of the nightly routing reflection (costs/reflection.ts): never a Buddy's to read,
   /// and an approved one is kept past the ledger's weeks. Absent on every other decision.
@@ -1402,7 +1404,7 @@ model SuperTabDecision {
   @@index([tabId, projectId, createdAt])
   /// The decisions waiting in a conversation whose work ended (decisions.ts withdrawIn).
   @@index([tabId, conversationId])
-  /// The hourly overdue sweep reads only the waiting decisions of the last 8 days through it (superTabs/overdueDecisions.ts).
+  /// Read by the hourly overdue sweep Swarm v4 removed (the waiting decisions of the last 8 days); nothing reads it now.
   @@index([answeredAt, createdAt], map: "decision_waiting_created")
   /// Explicit deadlines use their own range so long-lived questions are not missed by the legacy creation window.
   @@index([answeredAt, defaultAt], map: "decision_waiting_default")
@@ -1474,23 +1476,6 @@ model SuperTabOperation {
   /// A receipt goes 30 days after createdAt (superTabs/operations.ts ensureOperationExpiry). Declared so db push keeps the index; the
   /// schema step makes it, with its expiry, before the push.
   @@index([createdAt], map: "operation_expiry")
-}
-
-// A conversation-scoped provenance receipt. It grants no terminal access.
-// Only the recorded execution host can append observations, and every append
-// rechecks the person's membership and both machine grants.
-model SuperTabNativeContext {
-  id              String   @id @map("_id")
-  tabId           String
-  conversationId  String
-  agentId         String
-  userId          String
-  binding         Json
-  lastEventId     String?
-  revoked         Boolean  @default(false)
-  createdAt       DateTime @default(now())
-
-  @@index([tabId, revoked])
 }
 
 model SuperTabDelivery {
@@ -1619,23 +1604,6 @@ model SuperTabRouteDecision {
   @@index([tabId, createdAt])
   @@index([tabId, conversationId, outcome])
   @@index([tabId, assignmentId])
-}
-
-/// One project's scorecard for one local day (superTabs/scorecard): counts and minutes only, never text, names or ids. One row
-/// per project and day, about 1 KB; the nightly job deletes a project's rows older than 120 days when it writes (rows.ts
-/// SCORECARD_DAYS_KEPT), and a Swarm's go with its purge (purge.ts).
-model SuperTabScorecard {
-  id         String   @id @map("_id")
-  tabId      String
-  projectId  String
-  /// The local date, YYYY-MM-DD, in timeZone.
-  on         String
-  timeZone   String
-  figures    Json
-  computedAt DateTime
-
-  /// A project's days, and the prune of its old ones.
-  @@index([tabId, projectId, on])
 }
 
 /// How one model did on one kind of job in one week of one project of a Swarm (superTabs/evidence/store.ts): counts and sums
@@ -1844,84 +1812,6 @@ model SuperTabTerminalRequest {
 // (`deleted`) until `purgeAt`, so readers learn it is gone. `data` keeps the record's shape from `SuperTab.state`.
 
 /// The Swarm's scalars and settings: projects (without progress), rules, invitations, sharing, routing, Local models.
-/// A Workspace: Swarms and the people who may be in them (docs/plans/2026-10-27-swarm-workspaces.md). Not the Harness Team
-/// account. It never grants reading a Swarm: that needs the Swarm's own membership too.
-model SwarmWorkspace {
-  id            String    @id @map("_id")
-  autonomousEnv String
-  name          String
-  ownerId       String
-  revision      Int       @default(0)
-  createdAt     DateTime  @default(now())
-  deletedAt     DateTime?
-  purgeAt       DateTime?
-  /// People this Workspace removed, whom Swarm auto-join never adds again (superTabs/autoJoin.ts). Kept past the purge of their
-  /// member row; cleared when they are added back on purpose (workspaceStore.ts addMember).
-  autoJoinDeclined String[]
-
-  /// Removed rows go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
-  @@index([purgeAt], map: "workspace_purge")
-}
-
-/// One person of a Workspace. A removal keeps the row with `removedAt` until it is purged; a rejoin writes a new generation.
-model SwarmWorkspaceMember {
-  /// `workspaceId:userId`
-  id         String    @id @map("_id")
-  workspaceId      String
-  userId     String
-  email      String
-  role       String
-  generation String
-  version    Int       @default(1)
-  addedBy    String
-  addedAt    DateTime  @default(now())
-  removedAt  DateTime?
-  removedBy  String?
-  purgeAt    DateTime?
-
-  @@index([workspaceId, removedAt])
-  @@index([userId, removedAt])
-  /// Removed rows go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
-  @@index([purgeAt], map: "workspace_purge")
-}
-
-/// One removal of one Workspace membership, open until the person has left every Swarm of the Workspace. While one is open the
-/// person cannot be brought back into the Workspace; the hourly sweep finishes them in order (superTabs/workspaceStore.ts).
-model SwarmWorkspaceRemoval {
-  /// `workspaceId:userId:generation`: the membership generation that was removed.
-  id            String    @id @map("_id")
-  workspaceId         String
-  userId        String
-  email         String
-  generation    String
-  autonomousEnv String
-  removedAt     DateTime
-  removedBy     String
-  finishedAt    DateTime?
-  purgeAt       DateTime?
-
-  @@index([finishedAt, id])
-  @@index([workspaceId, userId, finishedAt])
-  /// Removed rows go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
-  @@index([purgeAt], map: "workspace_purge")
-}
-
-/// An invitation to a Workspace, by email; deleted when accepted or revoked, purged when it expires.
-model SwarmWorkspaceInvitation {
-  /// `workspaceId:email`
-  id        String   @id @map("_id")
-  workspaceId     String
-  email     String
-  role      String
-  invitedBy String
-  expiresAt DateTime
-
-  @@index([email, expiresAt])
-  @@index([workspaceId])
-  /// An invitation goes when it expires (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
-  @@index([expiresAt], map: "workspace_invitation_expiry")
-}
-
 model SwarmHead {
   id              String    @id @map("_id")
   tabId           String
@@ -2073,6 +1963,9 @@ model SwarmMachine {
   ordinal         Float
   data            Json
   machineId       String
+  /// Told whether the machine was contributed, for the check that it served a Swarm of another Workspace (Swarm v4 removed it). Nothing
+  /// writes or reads it now; it goes with the schema step for the shared collections (slice S19), not before 2026-12-09.
+  /// Nothing writes or reads it now.
   contributed     Boolean   @default(false)
   cleanupOwnerIds String[]
   /// The last change to its settings or ledger, never its own reading (host reads wake on this, not on changedAt).

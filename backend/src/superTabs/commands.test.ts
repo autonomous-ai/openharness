@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { groupProject } from './projects.js'
 import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, tasksNamedIn, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, WORDS, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
@@ -2735,7 +2734,7 @@ describe('cancelling work', () => {
     f.run(cancel, workerActor)
     expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('cancelled')
   })
-  it('marks its cancel row with the status, so the scorecard sees the task close (#3386)', () => {
+  it('marks its cancel row with the status, so a task\'s timeline shows it closed (#3386)', () => {
     const { f, group, leadActor, cancel } = active()
     const row = f.run(cancel, leadActor).messages.find(m => m.conversationId === group)!
     expect(row.source).toMatchObject({ kind: 'system', status: 'cancelled' })
@@ -4644,7 +4643,7 @@ describe('credentials in every command', () => {
       'conversation.create task.requires.devices[]', 'work.define task.requires.devices[]', 'proposal.decide task.requires.devices[]',
       'conversation.merged pullRequestUrl', 'conversation.merged fixes', 'conversation.unlink pullRequestUrl', 'work.check head', 'work.check base']],
     ['An id, an account key, a time or a time zone', ['agent.add roleId', 'agent.rebind profileId', 'agent.start request.roleId',
-      'machine.access entryId', 'project.closeTab tabOperation', 'project.role.remove roleId', 'project.role.set role.id',
+      'project.closeTab tabOperation', 'project.role.remove roleId', 'project.role.set role.id',
       'project.roles.create roles[].id', 'project.roles.reset roles[].id', 'proposal.create projectId', 'route.override candidateId',
       'route.record decision.candidates[].id', 'route.record decision.pick', 'route.record decision.candidates[].fit.account', 'work.assign roleId',
       'work.queue hold.personId', 'work.status hold.personId', 'rules.set rules.instructionApprovals.topDeciderId',
@@ -4653,8 +4652,6 @@ describe('credentials in every command', () => {
       'rules.set rules.releasePace.backendPause.start', 'rules.set rules.releasePace.backendPause.end', 'rules.set rules.machines[].away.windows[][]',
       'rules.set rules.machines[].away.timeZone']],
     ['The address an invitation goes to, which its person signs in with', ['invite.create email']],
-    // Redacting first would hide the token from that refusal and store the marker instead.
-    ['Refused outright when it looks like a secret (machineAccess.ts ACCESS_SECRET)', ['machine.access name', 'machine.access note', 'machine.access check']],
     ['Written by the server; the command\'s value is dropped (route.record)', ['route.record decision.stepUp.reason', 'route.record decision.sameEngine']],
   ]
 
@@ -5232,18 +5229,6 @@ describe('linked tasks', () => {
     f.run({ type: 'conversation.merged', conversationId: R, pullRequestUrl: 'https://github.com/example/app/pull/9' }, E)
     expect(task(R).pullRequestUrls).toEqual(['https://github.com/example/app/pull/9'])
     expect(task(R).ledger?.shippedAt).toEqual(expect.any(Number))
-  })
-
-  // Task #3405: the merge record puts the task on its project's release list, once, for the next verified release.
-  it('puts a recorded merge on the project\'s release list once', () => {
-    const { f, T, E, create } = linked()
-    const R = create('Fix the flaky test', T), url = 'https://github.com/example/app/pull/9'
-    const list = () => groupProject(f.state, f.state.conversations.find(c => c.id === R)!).releases?.pending
-    f.run({ type: 'conversation.merged', conversationId: R, pullRequestUrl: url, mergedAt: new Date(900).toISOString() }, E)
-    expect(list()).toEqual([{ groupId: R, url, mergedAt: 900 }])
-    expect(f.state.conversations.find(c => c.id === R)!.releasing).toEqual([])
-    f.run({ type: 'conversation.merged', conversationId: R, pullRequestUrl: url, mergedAt: new Date(900).toISOString() }, E)
-    expect(list()).toHaveLength(1)
   })
 
   it('archives a linked task without a verdict', () => {

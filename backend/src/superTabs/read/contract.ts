@@ -26,7 +26,7 @@ export type GroupChange = LivePart<GroupView> | Tombstone | DormantStub
  *  invitations filtered (invitations only for the Swarm owner). `autoJoin`: people at the owner's domain join by themselves
  *  (autoJoin.ts), from the sharing the head holds; who declined is never sent. */
 export type HeadView = Pick<SuperTabState, 'version' | 'id' | 'name' | 'project' | 'leadsConversationId' | 'ownerId'
-  | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'workspaceId' | 'workspaceVisibility' | 'buddies' | 'removedMachines'
+  | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'buddies' | 'removedMachines'
   | 'autoJoin'> & {
   /** How many Buddies each person may have (task #3818): always sent, 5 unless the Swarm's owner set another. An older backend
    *  sends none, so an app offers several Buddies only where this is present. */
@@ -77,10 +77,6 @@ export interface ProgressView {
 export interface Derived {
   /** The board's pulse of each project the reader sees (pulse.ts, task #3384), by project id. Absent from an older backend. */
   pulse?: Record<string, import('../pulse.js').Pulse>
-  /** When each component's release may next open, by project id then component (releases.ts nextReleaseAt, task #3827): 0 is now,
-   *  absent one is left to people. Only for the projects the reader sees and that have a release list; the list itself is never
-   *  sent. A time already past is as good as 0: the settle writes a new one each minute it changes. Absent from an older backend. */
-  releaseTimes?: Record<string, import('../releases.js').ReleaseLedger['nextAt'] & object>
   /** Every agent the reader can see. `workDecision` is null when the stored value stands; `roleId` null outside Custom. */
   /** `roleName`: the role it goes by (instructions.ts roleNameOf), its stored one or what it is. */
   /** `kind`: the reader's Buddy, a PM leading a project, or a Regular agent; `chatId`: the chat its person talks to it in, or null
@@ -92,14 +88,11 @@ export interface Derived {
     role: import('../agentKind.js').AgentRole; mainProjectId: string | null }>
   /** Every contributed machine the reader can see. */
   /** `clientVersion`: the CLI version its daemon last connected with (routing reads a machine updated since its failed starts). */
-  machines: Record<string, { availableSlots: number; teamWork: { allowed: true } | { allowed: false; reason: string; [key: string]: unknown }; clientVersion?: string
+  machines: Record<string, { availableSlots: number; clientVersion?: string
     /** Engines suspended there now after failed starts, with why (engineHealth.ts); absent when none. */
     suspendedEngines?: Record<string, string>
     /** Pickup timeout cooldown: applies to every new start, including grid models. */
-    machineSuspended?: string
-    /** A person reading a teammate's machine: where New Project's Product Manager would run there by engine, the machine
-     *  (its Team account or itself), or why it cannot now (leadStart.ts leadChoices). Absent for their own machines. */
-    lead?: Record<string, { machineId: string } | { refused: string }> }>
+    machineSuspended?: string }>
   /** A Lead agent only. */
   otherProjectsWork?: OtherProjectWorkView[]
   /** A project agent only: the account each project's PM runs on, a project it may not read named "another project". */
@@ -246,8 +239,7 @@ export interface CommandReply {
 
 /** GET /api/super-tabs/list[?after=][&mentions=1] */
 export interface SwarmList {
-  /** `workspaceId` names its Workspace (null before the migration); a Swarm whose Workspace the person left is not listed. */
-  tabs: Array<{ id: string; name: string; ownerId: string; workspaceId: string | null; paused: boolean; lastChangedAt: number | null
+  tabs: Array<{ id: string; name: string; ownerId: string; paused: boolean; lastChangedAt: number | null
     /** Only on the reader's own Personal Swarm. */
     personal?: true
     /** With `?mentions=1`: the person's waiting tags in the Swarm and their digest, as the Swarm's own state counts them (a
@@ -309,7 +301,6 @@ export type HostRosterRow =
   | HostAgentRow
   | { tabId: string; agent: { id: string; harnessId: string; machineId: string }; closeSession: true; active: false }
   | { tabId: string; cleanup: { machineId: string; removalId: string } }
-  | { tabId: string; joinTeam: { machineId: string; name: string; maxAgents: number } }
 export interface HostAgentRow {
   /** A main Buddy's private chat, used only by its own host to restart it on another engine. */
   buddyConversationId?: string
