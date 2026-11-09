@@ -139,7 +139,14 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     f.github.repo.runs.set(HEAD, [{ name: 'test (ubuntu)', status: 'completed', conclusion: 'failure' }])
     await f.merger.tick()
     await f.merger.tick()
-    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*pip\*\*: not merged yet: checks failed on f6edb44: test \(ubuntu\)\. Fix them and push\.$/)])
+    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*pip\*\*: not merged yet at f6edb44: checks failed: test \(ubuntu\)\. Fix them and push\.$/)])
+    // A restart (each release is one) finds it on the pull request, and says it no more.
+    f.github.repo.comments.set(4, [...f.github.repo.comments.get(4) ?? [], comment(f.comments()[0]!, { author_association: 'OWNER' })])
+    const restarted = setup()
+    restarted.github.repo.runs.set(HEAD, [{ name: 'test (ubuntu)', status: 'completed', conclusion: 'failure' }])
+    restarted.github.repo.comments.set(4, f.github.repo.comments.get(4)!)
+    await restarted.merger.tick()
+    expect(restarted.comments()).toEqual([])
     for (const [state, words] of [['behind', 'it is behind main'], ['dirty', 'it conflicts with main'], ['blocked', 'GitHub\'s rules for main block the merge']]) {
       const g = setup()
       g.github.repo.state = state
