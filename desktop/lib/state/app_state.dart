@@ -584,6 +584,9 @@ class MachineState {
   // Only consulted for a REMOTE pane; a local one pastes its own path directly and never needs this.
   bool terminalPasteFileAvailable = false;
   bool mediaPreviewAvailable = false;
+
+  /// Whether this machine's daemon knows an agent's instructions file requests, and so seals them for another computer.
+  bool agentInstructionsAvailable = false;
   // Which engines this machine actually has, as this machine answered it. Kept
   // on MachineState rather than globally because that is the whole point: two
   // machines on one account hold different engines, and the Docker rig holds
@@ -13563,6 +13566,7 @@ class AppNotifier extends ChangeNotifier {
     machine.terminalImagePasteAvailable = false;
     machine.terminalPasteFileAvailable = false;
     machine.mediaPreviewAvailable = false;
+    machine.agentInstructionsAvailable = false;
   }
 
   /// Whether the app has already opened a terminal on its own.
@@ -13922,6 +13926,8 @@ class AppNotifier extends ChangeNotifier {
           features is Map && features['pasteFile'] == true;
       machine.mediaPreviewAvailable =
           features is Map && features['mediaPreview'] == true;
+      machine.agentInstructionsAvailable =
+          features is Map && features['agentInstructions'] == true;
       machine.terminalNoTakeoverAvailable =
           features is Map && features['noTakeover'] == true;
     } catch (_) {
@@ -13935,6 +13941,7 @@ class AppNotifier extends ChangeNotifier {
       machine.terminalImagePasteAvailable = false;
       machine.terminalPasteFileAvailable = false;
       machine.mediaPreviewAvailable = false;
+      machine.agentInstructionsAvailable = false;
     }
     if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision)) return;
     if (machine.agentLoadStatus != AgentLoadStatus.loading &&
@@ -15555,6 +15562,40 @@ class AppNotifier extends ChangeNotifier {
         'The media download was interrupted. Check the connection and try again.',
       );
     }
+  }
+
+  /// Why an agent's instructions must not be asked of [machineId] from here, or null when they may. That computer's daemon
+  /// must know the two requests (`UNSUPPORTED`), and so must this computer's own, which seals a request for another computer:
+  /// one that does not would send a save in the clear, its text visible to the relay (`UPDATE_HERE`).
+  String? instructionsGate(String machineId) {
+    final target = machineStates[machineId];
+    if (target == null || !target.terminalCapabilityLoaded) return 'TIMEOUT';
+    if (!target.agentInstructionsAvailable) return 'UNSUPPORTED';
+    for (final local in machineStates.values) {
+      if (local.isLocalMachine && !local.agentInstructionsAvailable) {
+        return 'UPDATE_HERE';
+      }
+    }
+    return null;
+  }
+
+  /// Sends [type] with [payload] to the daemon of [machineId] over this app's own link to it (sealed for another computer
+  /// of this account, as terminals are) and returns its answer. A computer that is not connected is refused at once as
+  /// `OFFLINE`, never queued: a person asking now wants an answer now.
+  Future<Map<String, dynamic>> askMachine(
+    String machineId,
+    String type,
+    Map<String, Object?> payload,
+  ) {
+    final machine = machineStates[machineId];
+    if (machine == null ||
+        machine.needsLink ||
+        machine.nodeOnline == false ||
+        machine.connectionStatus != ConnectionStatus.connected) {
+      throw WsRequestFailure(responseType: type, code: 'OFFLINE');
+    }
+    return _conn(machineId)
+        .request(type, payload: payload, timeout: const Duration(seconds: 10));
   }
 
   /// One-level directory listing on the remote machine, for the New Agent folder browser.

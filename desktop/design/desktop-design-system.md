@@ -428,6 +428,25 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   icons: Instructions (`AppIcons.fileText`) opens `agents/<name>.md`, and
   Terminal opens its terminal, each beside the chat at equal width with its
   own header and ×.
+- **Instructions** (`SwarmAgentInstructions`, `super_tabs/agent_instructions.dart`).
+  The agent's file `agents/<name>.md`, titled by it in 13 medium, read from the
+  computer the agent runs on over the encrypted link between this account's
+  computers (`SwarmInstructionsLink`), never through GitHub or the server (anh
+  Dee, 2026-11-09: some people keep it out of git). Its person reads it in
+  `AppType.mono` and changes it here: `Edit` (a compact `DesktopPill`) turns
+  the text into a field, and `Save` and `Cancel` take its place; Save waits for
+  a change. A save names the version it read, so a change the agent made
+  meanwhile is refused (`It changed on Mac 3. Close it and open it again.`)
+  and the typed text stays. No file yet: `No instructions yet. Tell Faye how
+  you want it to work, and it writes them here.` A computer that cannot be
+  asked says what to do in one line, with a retry icon: `Update Harness on
+  Mac 3.`, `Update Harness on this computer.`, `Mac 3 is offline.`, `Faye isn't
+  running on Mac 3.`, `agents/Faye.md on Mac 3 isn't a plain file.` Nothing is
+  sent unless both that computer's daemon and this one's (which seals the
+  request for another computer) report `agentInstructions` among their
+  features: an older one would send a save in the clear. A save whose answer
+  was lost and is made again is read back, and counts as saved when the file is
+  what was typed.
 - **Agent face.** An agent with no chosen picture wears a face
   (`SuperTabAvatarFace`, `avatar_art.dart`) in rows, cards, chat and profile:
   a round disc with a soft top-to-bottom fill, two eyes and a small smile.
