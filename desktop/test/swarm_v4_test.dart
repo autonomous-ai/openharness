@@ -4,6 +4,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
 
+import 'package:flutter/gestures.dart';
 import 'support/swarm_v4_data.dart';
 
 /// Swarm v4 (anh Dee 2026-11-08), clicked through as a person does: a project's channel that only agents post in,
@@ -122,6 +123,40 @@ void main() {
     await tester.pumpAndSettle();
     expect(key('swarm-issue-panel'), findsNothing);
     expect(key('swarm-task-list'), findsOneWidget);
+  });
+
+  testWidgets('its person deletes an agent: right-click, Delete, confirm, gone', (
+    tester,
+  ) async {
+    await show(tester);
+    await tester.tap(key('super-agent-second'), buttons: kSecondaryButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+    expect(find.text('Delete second?'), findsOneWidget);
+    await tester.tap(key('delete-agent-confirm'));
+    await tester.pumpAndSettle();
+    expect(key('super-agent-second'), findsNothing);
+    expect(key('super-agent-third'), findsOneWidget);
+  });
+
+  testWidgets('Cancel keeps the agent, and a project\'s PM stays until its project goes', (
+    tester,
+  ) async {
+    await show(tester);
+    await tester.tap(key('super-agent-second'), buttons: kSecondaryButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(key('super-agent-second'), findsOneWidget);
+    await tester.tap(
+      key('super-agent-first builder'),
+      buttons: kSecondaryButton,
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Delete the project first.'), findsOneWidget);
   });
 
   testWidgets('an agent opens its own chat, where its person writes to it', (

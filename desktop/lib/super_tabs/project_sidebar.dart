@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
+import '../shared/widgets/app_menu.dart';
 import '../shared/theme/appearance_prefs_store.dart';
 import '../state/app_state.dart';
 import '../state/harness_activity.dart';
@@ -14,6 +15,7 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/harness_activity_mark.dart';
 import 'attention.dart';
 import 'controller.dart';
+import 'delete_agent.dart';
 import 'buddies.dart';
 import 'model.dart';
 import 'my_agents.dart';
@@ -26,6 +28,7 @@ import 'section_heading.dart';
 import 'swarm_switcher.dart';
 import 'private_project_lock.dart';
 import '../widgets/laid_out_list.dart';
+import '../widgets/pane_menu.dart' show showContextMenuAt;
 import 'swarm_type.dart';
 
 /// The reader's one Buddy for the whole Swarm, listed first among the projects
@@ -799,7 +802,7 @@ class ProjectSidebar extends StatelessWidget {
   ) {
     final name = snapshot.agentName(agent.id, fallback: agent.name);
     final pm = superTabAgentIsPm(snapshot, agent);
-    return SuperTabQuietRow(
+    final row = SuperTabQuietRow(
       key: ValueKey('super-agent-${agent.id}'),
       leading: _face(agent, name, lead: pm),
       name: name,
@@ -814,6 +817,34 @@ class ProjectSidebar extends StatelessWidget {
         (null, final terminal?) => () => terminal(agent),
         _ => null,
       },
+    );
+    // Delete is one right-click away, for its person alone (Swarm v4: only its person stops an agent). A project's PM
+    // stays until its project goes.
+    if (agent.contributorId != controller.accountId || !controller.canWrite) {
+      return row;
+    }
+    final kept = snapshot.leadProtectionReason(agent.id);
+    return Builder(
+      builder: (context) => GestureDetector(
+        onSecondaryTapUp: (event) async {
+          final choice = await showContextMenuAt<String>(
+            context: context,
+            at: event.globalPosition,
+            children: (close) => [
+              AppMenuItem(
+                label: 'Delete',
+                detail: kept,
+                leadingSlot: false,
+                onPressed: kept == null ? () => close('delete') : null,
+              ),
+            ],
+          );
+          if (choice == 'delete' && context.mounted) {
+            await deleteSwarmAgent(context, controller, agent, name);
+          }
+        },
+        child: row,
+      ),
     );
   }
 
