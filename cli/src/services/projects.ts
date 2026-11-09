@@ -31,15 +31,16 @@ export function startProjects(core: CoreApi): ServiceRequests {
    *  somewhere this daemon runs git. */
   const knownRoots = (): string[] => core.agents.live().flatMap((agent) => agent.cwd ? [agent.cwd] : [])
   const readPullRequests = createPullRequestsStatusReader()
-  /** What else instructs an agent, as it goes with a read of its instructions: the project's own files that are shown, and
-   *  those that are there and are not, with why. What went wrong with one, where it is the file's or the disk's, is logged by
-   *  its name and a code and never where or what: the answer says only why. Each key is there only when it has something. */
+  /** What else instructs an agent, as it goes with a read of its instructions: the files its engines load that are shown, and
+   *  those that are there and are not, with why, each with where it is and which engines load it. What went wrong with one, where
+   *  it is the file's or the disk's, is logged by where it is from the agent's folder and a code and never what: the answer says
+   *  only why. Each key is there only when it has something. */
   const projectFiles = async (cwd: string): Promise<Record<string, unknown>> => {
     const { shared, skipped } = await readSharedInstructions(cwd)
-    for (const one of skipped) if ('error' in one) console.error(`[projects] agent_instructions_read left out ${one.name} · ${codeOf(one.error)}`)
+    for (const one of skipped) if ('error' in one) console.error(`[projects] agent_instructions_read left out ${one.path} · ${codeOf(one.error)}`)
     return {
       ...(shared.length ? { shared } : {}),
-      ...(skipped.length ? { skipped: skipped.map(({ name, why }) => ({ name, why })) } : {}),
+      ...(skipped.length ? { skipped: skipped.map(({ name, path, loadedBy, why }) => ({ name, path, loadedBy, why })) } : {}),
     }
   }
   /** One of the instructions file's two requests, for an agent in a folder here. A refusal that is the person's own
@@ -136,9 +137,10 @@ export function startProjects(core: CoreApi): ServiceRequests {
 
     // An agent's instructions file, in the folder it works in on this computer (lib/agentInstructions.ts). The owner's
     // other computers read and save it here, so it is never in git or on our servers: the one copy is this one. A read also
-    // carries what else instructs the agent, AGENTS.md and CLAUDE.md in that folder, as `shared`, and those that are there and
-    // not shown, with why, as `skipped`: each only when there is any, read only, for an agent with no file of its own too, beside
-    // an error of its own file too, and a reader that predates them never looks at the fields.
+    // carries what else instructs the agent, the files its engines load (AGENTS.md and CLAUDE.md in its folder and what Claude
+    // Code and Codex read besides, above it too), as `shared`, and those that are there and not shown, with why, as `skipped`:
+    // each only when there is any, read only, for an agent with no file of its own too, beside an error of its own file too, and a
+    // reader that predates them never looks at the fields.
     agent_instructions_read: instructions('agent_instructions_read', 'READ_FAILED', (cwd, { name }) => readInstructions(cwd, name), projectFiles),
     agent_instructions_write: instructions('agent_instructions_write', 'WRITE_FAILED', (cwd, { name, text, version }) => writeInstructions(cwd, name, text, version)),
   }

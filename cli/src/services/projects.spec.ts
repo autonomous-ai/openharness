@@ -193,7 +193,12 @@ describe('an agent\'s instructions file', () => {
   // a read-only extra, and says which of them is there and not shown, and why: a reader that predates it never looks at the
   // fields, and a save never touches them.
   describe('the files that instruct it besides, AGENTS.md and CLAUDE.md in its folder', () => {
-    const both = [{ name: 'AGENTS.md', text: 'Agent rules\n', truncated: false }, { name: 'CLAUDE.md', text: 'Claude rules\n', truncated: false }]
+    // Each file comes with where it is, from the agent's folder, and with the engines that load it.
+    const both = [
+      { name: 'AGENTS.md', path: 'AGENTS.md', loadedBy: ['codex'], text: 'Agent rules\n', truncated: false },
+      { name: 'CLAUDE.md', path: 'CLAUDE.md', loadedBy: ['claude'], text: 'Claude rules\n', truncated: false },
+    ]
+    const agentsIs = (why: string) => ({ name: 'AGENTS.md', path: 'AGENTS.md', loadedBy: ['codex'], why })
 
     it('are shown, read only, for an agent with no file of its own, and beside one that has it', async () => {
       const { ask, file, cwd } = await project()
@@ -236,7 +241,7 @@ describe('an agent\'s instructions file', () => {
       const log = vi.spyOn(console, 'error').mockImplementation(() => {})
       try {
         expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({
-          text: null, version: '', shared: [both[1]], skipped: [{ name: 'AGENTS.md', why: 'not_text' }],
+          text: null, version: '', shared: [both[1]], skipped: [agentsIs('not_text')],
         })
         expect(log.mock.calls.map((call) => call.join(' '))).toEqual(['[projects] agent_instructions_read left out AGENTS.md · NOT_UTF8'])
       } finally { log.mockRestore() }
@@ -249,19 +254,19 @@ describe('an agent\'s instructions file', () => {
       const log = vi.spyOn(console, 'error').mockImplementation(() => {})
       try {
         expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({
-          text: null, version: '', shared: [both[1]], skipped: [{ name: 'AGENTS.md', why: 'not_a_file' }],
+          text: null, version: '', shared: [both[1]], skipped: [agentsIs('not_a_file')],
         })
         if (process.platform !== 'win32') {
           await rm(join(cwd, 'AGENTS.md'), { recursive: true })
           await symlink('nowhere.md', join(cwd, 'AGENTS.md'))
           expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({
-            text: null, version: '', shared: [both[1]], skipped: [{ name: 'AGENTS.md', why: 'link' }],
+            text: null, version: '', shared: [both[1]], skipped: [agentsIs('link')],
           })
           // And a link that stays inside the project is followed: both are shown, with the one text.
           await rm(join(cwd, 'AGENTS.md'))
           await symlink('CLAUDE.md', join(cwd, 'AGENTS.md'))
           expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({
-            text: null, version: '', shared: [{ name: 'AGENTS.md', text: 'Claude rules\n', truncated: false }, both[1]],
+            text: null, version: '', shared: [{ ...both[0], text: 'Claude rules\n' }, both[1]],
           })
         }
         expect(log).not.toHaveBeenCalled()
@@ -275,35 +280,42 @@ describe('an agent\'s instructions file', () => {
         vi.mocked(readSharedInstructions).mockResolvedValueOnce({
           shared: [],
           skipped: [
-            { name: 'AGENTS.md', why: 'unreadable', error: Object.assign(new Error('/Users/me/secret-project/AGENTS.md: input/output error'), { code: 'EIO' }) },
-            { name: 'CLAUDE.md', why: 'unreadable', error: new Error('no code on this one') },
-            { name: 'AGENTS.md', why: 'unreadable', error: undefined },
+            { ...agentsIs('unreadable'), error: Object.assign(new Error('/Users/me/secret-project/AGENTS.md: input/output error'), { code: 'EIO' }) },
+            { name: 'CLAUDE.md', path: '../CLAUDE.md', loadedBy: ['claude'], why: 'unreadable', error: new Error('no code on this one') },
+            { ...agentsIs('unreadable'), error: undefined },
           ],
         })
         const answer = await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })
         // The answer says that they are unreadable, and not what went wrong: that is for the log.
         expect(answer).toEqual({
           text: null, version: '',
-          skipped: [{ name: 'AGENTS.md', why: 'unreadable' }, { name: 'CLAUDE.md', why: 'unreadable' }, { name: 'AGENTS.md', why: 'unreadable' }],
+          skipped: [agentsIs('unreadable'), { name: 'CLAUDE.md', path: '../CLAUDE.md', loadedBy: ['claude'], why: 'unreadable' }, agentsIs('unreadable')],
         })
         expect(log.mock.calls.map((call) => call.join(' '))).toEqual([
           '[projects] agent_instructions_read left out AGENTS.md · EIO',
-          '[projects] agent_instructions_read left out CLAUDE.md · unknown',
+          '[projects] agent_instructions_read left out ../CLAUDE.md · unknown',
           '[projects] agent_instructions_read left out AGENTS.md · unknown',
         ])
       } finally { log.mockRestore() }
     })
 
-    // The caps are per file, so a read carries at most three texts of 64 KiB, however long the files are.
-    it('never make a read carry more than three texts of 64 KiB, the agent\'s own file and these two', async () => {
+    // The caps are per file, and one read carries 256 KiB of these files in all, however many there are and however long: and the
+    // agent's own file besides, at most 64 KiB.
+    it('never make a read carry more than 256 KiB of them, and the agent\'s own file besides', async () => {
       const { ask, cwd, file } = await project()
       await mkdir(join(cwd, 'agents'))
+      await mkdir(join(cwd, '.claude'))
       await writeFile(file, 'o'.repeat(65_536))
       await writeFile(join(cwd, 'AGENTS.md'), 'a'.repeat(100_000))
-      await writeFile(join(cwd, 'CLAUDE.md'), 'c'.repeat(1_000_000))
-      const answer = await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' }) as { text: string; shared: Array<{ text: string; truncated: boolean }> }
+      for (const name of ['CLAUDE.md', 'AGENTS.override.md', 'CLAUDE.local.md', '.claude/CLAUDE.md']) await writeFile(join(cwd, name), 'c'.repeat(1_000_000))
+      const answer = await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' }) as {
+        text: string; shared: Array<{ path: string; text: string; truncated: boolean }>; skipped: Array<{ path: string; why: string }>
+      }
       expect(answer.text).toHaveLength(65_536)
-      expect(answer.shared.map((one) => [one.text.length, one.truncated])).toEqual([[65_536, true], [65_536, true]])
+      expect(answer.shared.map((one) => [one.path, one.text.length, one.truncated])).toEqual([
+        ['AGENTS.md', 65_536, true], ['CLAUDE.md', 65_536, true], ['AGENTS.override.md', 65_536, true], ['CLAUDE.local.md', 65_536, true],
+      ])
+      expect(answer.skipped).toEqual([{ name: 'CLAUDE.md', path: '.claude/CLAUDE.md', loadedBy: ['claude'], why: 'too_much' }])
     })
 
     // The agent's own file failing must not hide the project's: a name the file cannot have, a file over the limit, not text, an
@@ -313,7 +325,7 @@ describe('an agent\'s instructions file', () => {
         await mkdir(join(cwd, 'AGENTS.md'))
         await writeFile(join(cwd, 'CLAUDE.md'), 'Claude rules\n')
       }
-      const beside = { shared: [both[1]], skipped: [{ name: 'AGENTS.md', why: 'not_a_file' }] }
+      const beside = { shared: [both[1]], skipped: [agentsIs('not_a_file')] }
 
       it('a name the file cannot have', async () => {
         const { ask, cwd } = await project()
@@ -483,19 +495,21 @@ describe('an agent\'s instructions file', () => {
     } finally { log.mockRestore() }
   })
 
-  // The same folder the disk cannot look at is where the project's two files would be: both are there to be read and neither can
-  // be, which the answer says beside the error, and the log says by file and code.
+  // The same folder the disk cannot look at is where the project's files would be: none can be read, which the answer says beside
+  // the error, and the log says by file and code.
   it.skipIf(process.platform === 'win32')('says READ_FAILED when the disk cannot look, and logs its code, never where', async () => {
     const { ask, cwd } = await project()
     await symlink('loop', join(cwd, 'loop'))
     const log = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       expect(await ask('agent_instructions_read', { agentId: 'loop', name: 'Faye' })).toEqual({
-        error: 'READ_FAILED', skipped: [{ name: 'AGENTS.md', why: 'unreadable' }, { name: 'CLAUDE.md', why: 'unreadable' }],
+        error: 'READ_FAILED',
+        skipped: ['AGENTS.md', 'CLAUDE.md', 'AGENTS.override.md', 'CLAUDE.local.md', '.claude/CLAUDE.md'].map((path) => ({
+          name: path.split('/').pop(), path, loadedBy: path.includes('AGENTS') ? ['codex'] : ['claude'], why: 'unreadable',
+        })),
       })
       expect(log.mock.calls.map((call) => call.join(' '))).toEqual([
-        '[projects] agent_instructions_read left out AGENTS.md · ELOOP',
-        '[projects] agent_instructions_read left out CLAUDE.md · ELOOP',
+        ...['AGENTS.md', 'CLAUDE.md', 'AGENTS.override.md', 'CLAUDE.local.md', '.claude/CLAUDE.md'].map((path) => `[projects] agent_instructions_read left out ${path} · ELOOP`),
         '[projects] agent_instructions_read failed · ELOOP',
       ])
     } finally { log.mockRestore() }

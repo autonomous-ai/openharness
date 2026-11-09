@@ -27,7 +27,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { constants, type Stats } from 'node:fs'
 import { lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
-import { join, sep } from 'node:path'
+import { basename, dirname, join, parse, relative, sep } from 'node:path'
 
 /** The most a file may hold, read or written: far more than instructions need, and the most a request can make the
  *  daemon hold in memory. */
@@ -136,76 +136,137 @@ export async function readInstructions(cwd: string, name: unknown): Promise<{ te
   return readText(file)
 }
 
-/** What else instructs an agent, besides a file of its own: the project's own files, directly in its folder. */
-const SHARED_NAMES = ['AGENTS.md', 'CLAUDE.md'] as const
-type SharedName = (typeof SHARED_NAMES)[number]
+/** What else instructs an agent, besides a file of its own: the files its engines really load. Claude Code reads CLAUDE.md,
+ *  .claude/CLAUDE.md and CLAUDE.local.md in the agent's folder and in every folder above it. Codex reads, in each folder from the
+ *  project's root (the nearest with a `.git`, or the agent's folder where there is none) down to the agent's, AGENTS.override.md or
+ *  else AGENTS.md: one file in each, and not an empty one. What an engine loads is its own to change, so this is the one place
+ *  that says it. */
+const CLAUDE_LOADS = ['CLAUDE.md', 'CLAUDE.local.md', '.claude/CLAUDE.md']
+const CODEX_LOADS = ['AGENTS.override.md', 'AGENTS.md']
+/** What is looked for in each folder, the two files a reader has always had in the agent's folder first. */
+const SHARED_FILES = ['AGENTS.md', 'CLAUDE.md', 'AGENTS.override.md', 'CLAUDE.local.md', '.claude/CLAUDE.md']
+/** How many folders above the agent's are looked in: at most 6 folders and 30 files. */
+const PARENTS = 5
+/** The most text of these files that one read carries, so that the reply stays small whatever the folders hold: once that much is
+ *  read, the files after it are there and not shown. The last one read can go over it by a file's 64 KiB. */
+const SHARED_MAX_BYTES = 256 * 1024
 
-interface SharedInstructions { name: SharedName; text: string; truncated: boolean }
+type Engine = 'claude' | 'codex'
 
-/** One of those files, there and not shown, and why in the words the apps read: a link that leads out of the project or to
+/** A file as the apps are told of it: its name, where it is (from the agent's folder, with `/`), and which engines load it. */
+interface Located { name: string; path: string; loadedBy: Engine[] }
+interface SharedInstructions extends Located { text: string; truncated: boolean }
+
+/** One of those files, there and not shown, and why in the words the apps read: a link that leaves the project or leads to
  *  nothing, a file that is not text, a file this user may not open or the disk fails on, or what is not a plain file (a folder, a
- *  named pipe). [error] is what went wrong where the caller may log it, for a file that is not text and for the disk's failures,
- *  and is not there for what is as the person made it. */
-interface SkippedInstructions { name: SharedName; why: 'link' | 'not_text' | 'unreadable' | 'not_a_file'; error?: unknown }
+ *  named pipe), or because the files before it have used up what one read carries (SHARED_MAX_BYTES). [error] is what went wrong
+ *  where the caller may log it, for a file that is not text and for the disk's failures, and is not there for what is as the
+ *  person made it. */
+interface SkippedInstructions extends Located { why: 'link' | 'not_text' | 'unreadable' | 'not_a_file' | 'too_much'; error?: unknown }
 
-/** Where a link at [link] leads when that is inside [cwd], with every link on the way resolved: the real path, or null when it
- *  leads out of the project or to nothing (a link to nowhere, a loop). The project's own folder may sit behind links itself
- *  (`/tmp` on a Mac), so it is resolved the same way and the two are compared whole: a folder whose name only starts like the
- *  project's is not in it. */
-async function insideProject(cwd: string, link: string): Promise<string | null> {
-  try {
-    const [root, real] = await Promise.all([realpath(cwd), realpath(link)])
-    return real.startsWith(root + sep) ? real : null
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code
-    if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'ELOOP') return null
-    throw error
+/** What reading one file came to: its text, or why it is not shown. */
+type Read = { text: string; truncated: boolean } | { why: SkippedInstructions['why']; error?: unknown }
+
+/** The agent's folder and the [PARENTS] above it, nearest first and never the root of the disk, and the project's root among
+ *  them: the nearest folder with a `.git` (a folder, or the file of a worktree), or null where there is none. */
+async function foldersOf(cwd: string): Promise<{ dirs: string[]; root: string | null }> {
+  const dirs = [cwd]
+  while (dirs.length <= PARENTS) {
+    const up = dirname(dirs[dirs.length - 1])
+    if (up === parse(up).root) break
+    dirs.push(up)
   }
+  for (const dir of dirs) if (await lstat(join(dir, '.git')).then(() => true, () => false)) return { dirs, root: dir }
+  return { dirs, root: null }
 }
 
-/** One of the shared files as it is shown (its text, to the limit, and whether there was more), or why it is not, or null where
- *  there is no such file. It does not throw: a file that cannot be shown is a reason, not a failure of the read. A link is
- *  followed to a plain file inside the project and to no other place, and what it leads to is read where it is, as the file that
- *  was looked at. */
-async function readShared(cwd: string, name: SharedName): Promise<SharedInstructions | SkippedInstructions | null> {
-  const file = join(cwd, name)
+/** The real path of [path] where it leads somewhere, or null where it does not (a link to nowhere, a loop). */
+const realOrNull = (path: string): Promise<string | null> => realpath(path).catch((error: NodeJS.ErrnoException) => {
+  if (error.code === 'ENOENT' || error.code === 'ENOTDIR' || error.code === 'ELOOP') return null
+  throw error
+})
+
+/** One file as it is shown (its text, to the limit, and whether there was more), or why it is not, or null where there is none.
+ *  It does not throw: a file that cannot be shown is a reason, not a failure of the read. [dir] is a real path, so a link on the
+ *  way can only be the file itself or the folder in [rel] (`.claude`), and lstat says which: a path with none is read as it is,
+ *  wherever it is. One through a link is followed only from a folder inside the project ([root], real) to a plain file inside it,
+ *  and what it leads to is read where it is, as the file that was looked at. A file there when [room] is false is not read. */
+async function readFile(root: string, dir: string, rel: string, room: boolean): Promise<Read | null> {
+  const file = join(dir, rel)
   try {
     const info = await entry(file)
     if (!info) return null
-    const real = info.isSymbolicLink() ? await insideProject(cwd, file) : file
-    if (!real) return { name, why: 'link' }
-    const target = real === file ? info : await entry(real)
-    if (!target?.isFile()) return { name, why: 'not_a_file' }
-    const bytes = await readPrefix(real, real === file ? undefined : target)
+    if (!room) return { why: 'too_much' }
+    const folder = rel.includes('/') ? await entry(join(dir, dirname(rel))) : null
+    let path = file
+    if (info.isSymbolicLink() || folder?.isSymbolicLink()) {
+      const real = await realOrNull(file)
+      const inside = (at: string) => at.startsWith(root + sep)
+      if (!real || !(dir === root || inside(dir)) || !inside(real)) return { why: 'link' }
+      path = real
+    }
+    const target = path === file ? info : await entry(path)
+    if (!target?.isFile()) return { why: 'not_a_file' }
+    const bytes = await readPrefix(path, path === file ? undefined : target)
     const truncated = bytes.length > INSTRUCTIONS_MAX_BYTES
     try {
       // A file cut at the limit may end inside a character. Decoding as a stream holds an unfinished one back, so the text
       // stops at the last whole character; a file that is whole and ends inside one is not text.
       const text = truncated ? new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, INSTRUCTIONS_MAX_BYTES), { stream: true })
         : utf8.decode(bytes)
-      return { name, text, truncated }
+      return { text, truncated }
     } catch { throw new InstructionsError('NOT_UTF8') }
   } catch (error) {
     const code = error instanceof InstructionsError ? error.code : undefined
     // Swapped for a named pipe between the check and the open: not a plain file, as it was said above.
-    if (code === 'UNSAFE_PATH') return { name, why: 'not_a_file' }
-    return { name, why: code === 'NOT_UTF8' ? 'not_text' : 'unreadable', error }
+    if (code === 'UNSAFE_PATH') return { why: 'not_a_file' }
+    return { why: code === 'NOT_UTF8' ? 'not_text' : 'unreadable', error }
   }
 }
 
-/** The files that instruct the agent besides its own, for a person to read beside it and never to change: AGENTS.md and
- *  CLAUDE.md when each is a plain file directly in its folder, never a parent's or the home's, or a link in its folder to one
- *  that is inside the project (a project often makes one of them the other: both are shown, with the one text). A link that
- *  leads out of the project is never followed. Each is read to the limit, with `truncated` saying it was cut, at a whole
- *  character. No file is an error of the whole: one that is there and cannot be shown comes back in `skipped`, with why, in the
- *  order of the names. */
+/** The files that instruct the agent besides its own, for a person to read beside it and never to change: what its engines
+ *  really load (see CLAUDE_LOADS), in the agent's folder and in up to [PARENTS] folders above it, never the root of the disk, and
+ *  always the AGENTS.md and CLAUDE.md of its folder. Each comes with where it is and which engines load it; a file no engine loads
+ *  where it is (AGENTS.md above the project's root) is not read. Never through a link that leaves the project, and through none
+ *  above its root. Each is read to the limit, with `truncated` saying it was cut, at a whole character, and no more than
+ *  SHARED_MAX_BYTES of them in all. No file is an error of the whole: one that is there and is not shown comes back in `skipped`,
+ *  with why. */
 export async function readSharedInstructions(cwd: string): Promise<{ shared: SharedInstructions[]; skipped: SkippedInstructions[] }> {
+  // The engines look up from the folder they run in as the system gives it to them, its real path: so this does too. A folder that
+  // is not there has nothing to show; one the disk cannot resolve (a loop) is looked in by its own name only, so that each file it
+  // would hold is told as unreadable.
+  const real = await realpath(cwd).catch((error: NodeJS.ErrnoException) => error.code === 'ENOENT' || error.code === 'ENOTDIR' ? null : undefined)
+  if (real === null) return { shared: [], skipped: [] }
+  const base = real ?? cwd
+  const { dirs, root } = real ? await foldersOf(base) : { dirs: [base], root: null }
+  const codexDirs = root ? dirs.slice(0, dirs.indexOf(root) + 1) : [base]
+  const found: Array<Located & { dir: string; rel: string; read: Read }> = []
+  let spent = 0
+  for (const dir of dirs) {
+    for (const rel of SHARED_FILES) {
+      const loadedBy: Engine[] = [...(CLAUDE_LOADS.includes(rel) ? ['claude' as const] : []), ...(CODEX_LOADS.includes(rel) && codexDirs.includes(dir) ? ['codex' as const] : [])]
+      if (!loadedBy.length) continue
+      const read = await readFile(root ?? base, dir, rel, spent < SHARED_MAX_BYTES)
+      if (read && 'text' in read) spent += Buffer.byteLength(read.text)
+      if (read) found.push({ dir, rel, name: basename(rel), path: relative(base, join(dir, rel)).split(sep).join('/'), loadedBy, read })
+    }
+  }
+  // Codex takes one file of a folder: AGENTS.override.md when there is anything in it, else AGENTS.md; an empty one is not loaded.
+  // An override that is there and not shown for another reason (a link, not text) is still the one it takes; one the disk could
+  // not look at is not known to be there.
+  const blank = (one?: { read: Read }) => !!one && 'text' in one.read && one.read.text.trim() === ''
+  const wins = (one?: { read: Read }) => !!one && ('text' in one.read ? !blank(one) : one.read.why !== 'unreadable')
+  const drop = (one?: { loadedBy: Engine[] }) => { if (one) one.loadedBy = one.loadedBy.filter((engine) => engine !== 'codex') }
+  for (const dir of codexDirs) {
+    const override = found.find((one) => one.dir === dir && one.rel === 'AGENTS.override.md')
+    const plain = found.find((one) => one.dir === dir && one.rel === 'AGENTS.md')
+    if (blank(override)) drop(override)
+    if (blank(plain) || wins(override)) drop(plain)
+  }
   const shared: SharedInstructions[] = [], skipped: SkippedInstructions[] = []
-  for (const name of SHARED_NAMES) {
-    const one = await readShared(cwd, name)
-    if (!one) continue
-    if ('why' in one) skipped.push(one)
-    else shared.push(one)
+  for (const { name, path, loadedBy, read } of found) {
+    if ('text' in read) shared.push({ name, path, loadedBy, ...read })
+    else skipped.push({ name, path, loadedBy, ...read })
   }
   return { shared, skipped }
 }
