@@ -48,10 +48,5 @@ void config_save_voicelang(const char *lang);
 bool config_load_scroll_reversed(void);
 void config_save_scroll_reversed(bool reversed);
 
-// Which way a horizontal swipe walks the carousel. False (the default): a swipe left goes to the NEXT
-// agent in the list. True: it goes to the previous one.
-bool config_load_swipe_reversed(void);
-void config_save_swipe_reversed(bool reversed);
-
 // Factory reset (BOOT held at power-on, or Settings → Reset): forget all of the above.
 bool config_clear_all(void);

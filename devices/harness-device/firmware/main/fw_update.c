@@ -21,7 +21,6 @@ static const char *TAG = "fw";
 // daemon's credit window, and the daemon keeps at most 16 KB unacknowledged against this dial's 32 KB
 // receive ring. Acking less often stalls the transfer; acking on a larger slice overruns the ring, and the
 // peripheral drops the overflow silently. See docs/specs/cable-protocol.md §7.
-#define PROGRESS_EVERY 1
 
 // Read-back buffer for the hash. Small on purpose: this runs on the link's reader task, whose stack also
 // carries esp_ota_write().

@@ -186,7 +186,8 @@ export const groupRepositoryUrl = (state: SuperTabState, group: Conversation): s
 export function startProject(state: SuperTabState, request: Pick<AgentStartRequest, 'conversationId' | 'buddySession'>): SwarmProject | undefined {
   if (request.buddySession?.projectId) return projectOf(state, request.buddySession.projectId)
   const group = conversation(state, request.conversationId)
-  return isSwarmBuddyChat(group) ? undefined : groupProject(state, group)
+  // A person's Buddy chat and an agent's own chat belong to no project (a Regular agent's start waits in the second).
+  return isSwarmBuddyChat(group) || isAgentChat(group) ? undefined : groupProject(state, group)
 }
 
 export function agentProjectId(state: SuperTabState, target: Agent): string {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Full device firmware release: bump version -> build -> upload to a PUBLIC GCS bucket.
-# Devices fetch the manifest + binary straight from GCS (no backend involved — see main/ota.c /
-# DEVICE_OTA_METADATA_URL) and self-update on their next boot / ~6h check. See RELEASE.md.
+# The daemon reads the same manifest and pushes a newer image to a dial over the cable
+# (cli/src/cable/fwPush.ts).
 #
 # Usage:
 #   bash scripts/upload-firmware.sh              # auto-bump (0.1.2 -> 0.1.3; 0.1.99 -> 0.2.1)
@@ -21,9 +21,8 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"    # devices/harness-device/firmware
 VER_FILE="$HERE/version.txt"
-# A DEDICATED prod build dir + DEVICE_FORCE_PROD so a published binary is always production (ignores any
-# local provisioned_config.h) WITHOUT moving the header, and without clobbering the interactive `build/`
-# dir — both stay warm (with ccache, near-instant rebuilds). Override BUILD_DIR via env if needed.
+# A DEDICATED release build dir, so publishing never clobbers the interactive `build/` dir — both stay
+# warm (with ccache, near-instant rebuilds). Override BUILD_DIR via env if needed.
 BUILD_DIR_FROM_ENV="${BUILD_DIR:-}"
 BUILD_DIR="${BUILD_DIR:-$HERE/build-prod}"
 BIN="$BUILD_DIR/interns_commander.bin"
@@ -36,7 +35,7 @@ OTA_KEY="${OTA_KEY:-commander}"   # must match DEVICE_OTA_KEY in main/config_sto
 
 # WHICH SILICON THIS RELEASE IS FOR, NAMED OUT LOUD.
 #
-# One project builds for two boards now, and this script builds into its own fresh directory — so
+# This script builds into its own fresh directory — so
 # nothing in it says which. ESP-IDF then GUESSES, and what it guesses from is a stale `sdkconfig`
 # left in the firmware directory by whoever built last. On this desk that happened to say esp32s3
 # and the release looked fine; on a clean checkout, where no such file exists, IDF falls back to
@@ -182,14 +181,14 @@ if [ "$DO_BUILD" -eq 1 ]; then
   # tracked defaults alone. The developer's interactive devices/harness-device/firmware/sdkconfig is left untouched.
   RELEASE_SDKCONFIG="$BUILD_DIR/sdkconfig.release"
   rm -f "$RELEASE_SDKCONFIG"
-  echo ">> building… (prod: -DDEVICE_FORCE_PROD=1, build dir $BUILD_DIR, fresh config from sdkconfig.defaults)"
+  echo ">> building… (build dir $BUILD_DIR, fresh config from sdkconfig.defaults)"
   BUILD_LOG="$(mktemp)"
-  if ! idf.py -C "$HERE" -B "$BUILD_DIR" -DIDF_TARGET="$IDF_TARGET_BOARD" -DSDKCONFIG="$RELEASE_SDKCONFIG" -DDEVICE_FORCE_PROD=1 build 2>&1 | tee "$BUILD_LOG"; then
+  if ! idf.py -C "$HERE" -B "$BUILD_DIR" -DIDF_TARGET="$IDF_TARGET_BOARD" -DSDKCONFIG="$RELEASE_SDKCONFIG" build 2>&1 | tee "$BUILD_LOG"; then
     if grep -q "idf.py fullclean" "$BUILD_LOG"; then
       echo ">> build env changed; running idf.py fullclean and retrying once"
       idf.py -C "$HERE" -B "$BUILD_DIR" fullclean
       rm -f "$RELEASE_SDKCONFIG"
-      idf.py -C "$HERE" -B "$BUILD_DIR" -DIDF_TARGET="$IDF_TARGET_BOARD" -DSDKCONFIG="$RELEASE_SDKCONFIG" -DDEVICE_FORCE_PROD=1 build
+      idf.py -C "$HERE" -B "$BUILD_DIR" -DIDF_TARGET="$IDF_TARGET_BOARD" -DSDKCONFIG="$RELEASE_SDKCONFIG" build
     else
       exit 1
     fi
