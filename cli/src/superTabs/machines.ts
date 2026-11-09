@@ -26,8 +26,8 @@ import { agentFolderEmpty, removableAgentFolder } from './agentFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { teamPrivacyObserver } from '../team/observer.js'
 import type { PrivacyObservation } from '../team/privacy.js'
-import { repositoryKey } from './route.js'
 import { cleanupClosed } from './cleanupCloses.js'
+import { repositoryKey } from './repositoryKey.js'
 import { listClaudeProfiles, codexReportLabel, profileId } from '../lib/claudeProfiles.js'
 import { defaultCodexHome, listCodexProfiles } from '../lib/codexProfiles.js'
 import { usageTarget, validModelTokens, validUsageTarget, type ModelTokens } from '../lib/agentUsageWire.js'
@@ -35,8 +35,8 @@ import { folderTrust } from '../engines/launchPrep.js'
 
 const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
-// The route's requirements are not known before the Lead routes. Include common tools in each snapshot, then
-// include tools from pending starts. An uncommon tool first named during routing remains unverified and is refused.
+// A start's requirements are not known before it is queued. Include common tools in each snapshot, then
+// include tools from pending starts. An uncommon tool first named by a start remains unverified and is refused.
 const COMMON_TOOLS = ['git', 'node', 'npm', 'flutter', 'gh', 'cargo', 'python3']
 const VERIFIED_TOOL_TTL_MS = 10 * 60_000
 /** After a backend refuses a new field (privacy, from before the Harness Team account; harnessProgress, from before
@@ -57,7 +57,7 @@ const UNCOMMITTED_PARALLEL = 4
  *  machine is left to show as offline rather than kept healthy by a loop that no longer reads anything. */
 const BEAT_LIMIT_MS = 3 * 60_000
 /** How long this machine refuses a start before failing it with its reason, so the Lead starts it elsewhere: a minute of
- *  busy CPU or memory may pass, and routing saw this machine able a moment ago. A refusal no one reported left starts
+ *  busy CPU or memory may pass, and the Swarm saw this machine able a moment ago. A refusal no one reported left starts
  *  "Queued" for hours (DESKTOP-0TFH0OJ, 2026-10-23). */
 const START_REFUSED_MS = 60_000
 /** How long a fault of this machine (its creation folder cannot be used, say) may hold an undispatched start before it fails with the
@@ -383,7 +383,7 @@ export class ContributedMachines {
   private quotaFor(read: { value: Record<string, unknown>; at: number }, engine: string) {
     const q = quotaOf(read.value, engine, false)
     if (q.known) { this.goodQuota.set(engine, { windows: q.windows, at: read.at }); return { engine, known: true, windows: q.windows } }
-    // Windows that could not be read on an API key are metered: known, with none (route.ts quotaOf2).
+    // Windows that could not be read on an API key are metered: known, with none.
     if (meteredEngine(engine, this.deps.env ?? process.env)) return { engine, known: true, windows: [] }
     if (list(read.value.providers).find(p => p.provider === engine)?.outcome === 'signedOut') this.goodQuota.delete(engine)
     const kept = this.goodQuota.get(engine)
@@ -439,7 +439,7 @@ export class ContributedMachines {
     this.waiting.set(startId, reason)
     this.log(`Swarm start ${startId} is waiting: ${reason}`)
   }
-  /** Tells the Swarm why a start waits on this machine, once per reason: the PM sees it on the start and in the route instead of
+  /** Tells the Swarm why a start waits on this machine, once per reason: the PM sees it on the start instead of
    *  only "Queued". A server that does not know the report (an older backend) is not asked again; any other failure is retried. */
   private async tell(scoped: ScopedRequest, startId: string, reason: string) {
     if (this.told.get(startId) === reason) return
@@ -674,8 +674,8 @@ export class ContributedMachines {
         // it again). Unknown — the grid could not be read — keeps the reading as it is.
         const live = typeof row.localGrid === 'string'
           ? liveOn(await local.request('grid_swarm_heal', { grid: row.localGrid }, 30_000).catch(() => ({}))) : null
-        // Not yet listed by the grid (a start or a share still registering): sent as starting, which the panel shows and
-        // the route never offers, rather than left out until the grid lists it.
+        // Not yet listed by the grid (a start or a share still registering): sent as starting, which the panel shows,
+        // rather than left out until the grid lists it.
         const marked = (m: LocalModelReading): LocalModelReading => !live || live.has(m.model) ? m : { ...m, starting: true }
         const fleet = typeof row.localGrid === 'string' ? await local.request('grid_fleet_models_list', {}, 20_000).catch(() => ({})) : null
         const refusedModels = typeof row.localGrid === 'string' ? refusedOn(fleet, row.localGrid) : []
@@ -778,7 +778,7 @@ export class ContributedMachines {
             }
             try {
               // The Harness Team account is not private (its owner's home folder opened again, say): a new start is refused
-              // here as well as by routing, and never moved to the owner's account instead.
+              // here as well as by the server, and never moved to the owner's account instead.
               if (privacy?.mode === 'account' && !privacy.passed && !start.dispatched) {
                 await scoped({ action: 'command', operationId: `privacy-failed-${start.id}`,
                   command: { type: 'agent.startFailed', startId: start.id,
@@ -1423,10 +1423,10 @@ export class ContributedMachines {
   }
 }
 
-// ── Readiness (#229 v1 routing) ─────────────────────────────────────────────────────────────────────────────────────
-// The route picked a Windows machine that never started agents, machines without the project and machines that could not
-// push, because nothing told it so. The reading says what this machine is ready for; the route leaves out only what it
-// says cannot work (routeCommand.ts), and anything unknown stays a candidate.
+// ── Readiness (#229) ─────────────────────────────────────────────────────────────────────────────────────────────────
+// A Windows machine that never started agents, machines without the project and machines that could not push were chosen
+// because nothing told the Swarm so. The reading says what this machine is ready for (Desktop places a PM by it,
+// state/lead_placement.dart), and anything unknown stays unknown.
 
 /** How long an engine's sign-in and a checkout's push access stand before they are read again, and how soon an engine
  *  probe that failed is tried again. */
@@ -1499,8 +1499,8 @@ const NOT_A_REPOSITORY = /not a git repository/i
 /** Each project folder in a Swarm folder: the repository its origin names (without credentials), whether it is a
  *  checkout of its own, and whether this machine's login can push there, by a dry run that runs no hooks. git's own
  *  words never leave the machine. A folder whose probe failed (a timeout, git that would not start, an unreadable
- *  repository) is left out, which the route reads as unknown, and [unsure] says to read it again soon. */
-export async function readCheckouts(root: string, run: GitRun): Promise<{ checkouts: ReadyCheckout[]; unsure: boolean }> {
+ *  repository) is left out, which reads as unknown, and [unsure] says to read it again soon. */
+async function readCheckouts(root: string, run: GitRun): Promise<{ checkouts: ReadyCheckout[]; unsure: boolean }> {
   const folders = (await readdir(root, { withFileTypes: true })).filter(e => e.isDirectory() && !e.name.startsWith('.'))
     .map(e => e.name).sort().slice(0, MAX_CHECKOUTS)
   const out: ReadyCheckout[] = []
@@ -1601,13 +1601,12 @@ function fleetOn(answer: unknown, grid: string): Array<LocalModelReading & { why
 }
 
 /** The models this machine serves on [grid] that can drive a coding agent. One too small or too slow is reported apart
- *  ([refusedOn]), and the route offers it with that note (project instructions, phase 4, decision 19). */
+ *  ([refusedOn]). */
 export function servedOn(answer: unknown, grid: string): LocalModelReading[] {
   return fleetOn(answer, grid).filter(m => m.why === null).map(({ why: _why, ...reading }) => reading)
 }
 
-/** The models this machine serves on [grid] too small or too slow for a coding agent, with why: the route offers them with
- *  that note (routeCommand.ts servedModels), rather than telling the agent to share a model the Swarm already has (2026-10-24). */
+/** The models this machine serves on [grid] too small or too slow for a coding agent, with why. */
 export function refusedOn(answer: unknown, grid: string): Array<{ grid: string; model: string; name?: string; why: string }> {
   return fleetOn(answer, grid).flatMap(({ grid: g, model, name, why }) => why === null ? [] : [{ grid: g, model, ...(name ? { name } : {}), why: why.slice(0, 300) }])
 }
