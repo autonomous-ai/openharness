@@ -29,98 +29,310 @@ void main() {
     expect(SwarmGitHub.repositoryOf(null), isNull);
   });
 
-  test('lists open issues newest activity first, with their agent and whether someone is on it', () async {
+  Map<String, Object?> node(
+    int number,
+    String updated, {
+    List<Map<String, String>> labels = const [],
+    int comments = 0,
+    String? author,
+  }) => {
+    'number': number,
+    'title': 'Issue $number',
+    'url': 'https://github.com/autonomous-ai/lampOS/issues/$number',
+    'createdAt': '2026-11-09T01:00:00Z',
+    'updatedAt': updated,
+    'author': ?(author == null ? null : {'login': author}),
+    'labels': {'nodes': labels},
+    'comments': {'totalCount': comments},
+  };
+
+  ProcessResult page(List<Map<String, Object?>> nodes, {String? next}) =>
+      ProcessResult(
+        1,
+        0,
+        jsonEncode({
+          'data': {
+            'repository': {
+              'issues': {
+                'pageInfo': {'hasNextPage': next != null, 'endCursor': next},
+                'nodes': nodes,
+              },
+            },
+          },
+        }),
+        '',
+      );
+
+  String queryOf(List<String> arguments) =>
+      arguments.firstWhere((a) => a.startsWith('query='));
+
+  test('lists open issues newest activity first, with labels in their colours, who opened it, when, and its comments', () async {
+    late List<String> asked;
+    final github = answering((arguments) {
+      asked = arguments;
+      return page([
+        node(1, '2026-11-01T00:00:00Z'),
+        node(
+          2,
+          '2026-11-09T00:00:00Z',
+          author: '69tc',
+          comments: 4,
+          labels: [
+            {'name': 'status:taken', 'color': 'fbca04'},
+            {'name': 'builder:jarvis', 'color': '0e8a16'},
+          ],
+        ),
+        {'title': 'Not an issue'},
+      ]);
+    });
+    final issues = await github.issues('autonomous-ai/lampOS');
+    // One GraphQL read, which names the repository and asks for what the cards show.
+    expect(asked.take(2), ['api', 'graphql']);
+    expect(asked, containsAll(['owner=autonomous-ai', 'name=lampOS']));
+    expect(queryOf(asked), contains('states:OPEN'));
+    expect(queryOf(asked), contains('labels(first:100){nodes{name color}}'));
+    expect(queryOf(asked), contains('comments{totalCount}'));
+    expect(issues.map((i) => i.number), [2, 1]);
+    final first = issues.first;
+    expect(first.agent, 'jarvis');
+    expect(first.taken, isTrue);
+    expect(first.author, '69tc');
+    expect(first.comments, 4);
+    expect(first.createdAt, DateTime.utc(2026, 11, 9, 1));
+    expect(first.labelColors, {
+      'status:taken': 'fbca04',
+      'builder:jarvis': '0e8a16',
+    });
+    expect(issues.last.agent, isNull);
+    expect(issues.last.taken, isFalse);
+    expect(issues.last.comments, 0);
+  });
+
+  test('reads a long list a page at a time, telling the newest at once, and keeps it to show again', () async {
+    final asked = <List<String>>[];
+    final github = answering((arguments) {
+      asked.add(arguments);
+      return arguments.any((a) => a == 'after=c1')
+          ? page([node(3, '2026-11-02T00:00:00Z')])
+          : page([
+              node(1, '2026-11-09T00:00:00Z'),
+              node(2, '2026-11-08T00:00:00Z'),
+            ], next: 'c1');
+    });
+    expect(github.kept('autonomous-ai/lampOS'), isNull);
+    final told = <List<int>>[];
+    final issues = await github.issues(
+      'autonomous-ai/lampOS',
+      onPage: (sofar) => told.add([for (final i in sofar) i.number]),
+    );
+    expect(asked, hasLength(2));
+    expect(told, [
+      [1, 2],
+    ]);
+    expect(issues.map((i) => i.number), [1, 2, 3]);
+    expect(github.kept('autonomous-ai/lampOS')!.map((i) => i.number), [
+      1,
+      2,
+      3,
+    ]);
+  });
+
+  Map<String, Object?> comment(int n, String who, String body) => {
+    'author': {'login': who},
+    'body': body,
+    'createdAt': '2026-11-09T0$n:00:00Z',
+    'url': 'u#$n',
+  };
+
+  ProcessResult thread(
+    List<Map<String, Object?>> comments, {
+    String state = 'CLOSED',
+    int total = 3,
+    String? earlier,
+  }) => ProcessResult(
+    1,
+    0,
+    jsonEncode({
+      'data': {
+        'repository': {
+          'issue': {
+            ...node(5759, '2026-11-09T05:00:00Z', comments: total),
+            'body': 'Score them again.',
+            'state': state,
+            'comments': {
+              'totalCount': total,
+              'pageInfo': {
+                'hasPreviousPage': earlier != null,
+                'startCursor': earlier,
+              },
+              'nodes': comments,
+            },
+          },
+        },
+      },
+    }),
+    '',
+  );
+
+  test('reads an issue with its newest comments, each signed by its agent, and where the earlier ones start', () async {
+    late List<String> asked;
+    final github = answering((arguments) {
+      asked = arguments;
+      return thread([
+        comment(2, '69tc', 'Migrate, 09:3x GMT+7: done.'),
+        comment(3, 'deehw', '**First builder**, 09:4x: mine.'),
+        {
+          'author': {'login': 'leo'},
+          'body': 'no signature here',
+        },
+      ], earlier: 'cursor-1');
+    });
+    final result = await github.thread('autonomous-ai/lampOS', 5759);
+    // The newest 30 only: a thread of 1,576 comments took 22 s whole and 0.8 s this way.
+    expect(asked, containsAll(['number=5759', 'last=30']));
+    expect(queryOf(asked), contains(r'comments(last:$last)'));
+    expect(result.body, 'Score them again.');
+    expect(result.open, isFalse);
+    expect(result.createdAt, DateTime.utc(2026, 11, 9, 1));
+    expect(result.issue.comments, 3);
+    expect(result.earlier, 'cursor-1');
+    expect(result.comments.map((c) => c.signedBy), [
+      'Migrate',
+      'First builder',
+      null,
+    ]);
+    expect(result.comments.map((c) => c.author), ['69tc', 'deehw', 'leo']);
+  });
+
+  test('reads the page of comments before a cursor, and where the page before that starts', () async {
     late List<String> asked;
     final github = answering((arguments) {
       asked = arguments;
       return ProcessResult(
         1,
         0,
-        jsonEncode([
-          {
-            'number': 1,
-            'title': 'Old',
-            'labels': [],
-            'url': 'u1',
-            'updatedAt': '2026-11-01T00:00:00Z',
+        jsonEncode({
+          'data': {
+            'repository': {
+              'issue': {
+                'comments': {
+                  'pageInfo': {'hasPreviousPage': true, 'startCursor': 'c0'},
+                  'nodes': [comment(1, 'deehw', 'Opened.')],
+                },
+              },
+            },
           },
-          {
-            'number': 2,
-            'title': 'New',
-            'url': 'u2',
-            'updatedAt': '2026-11-09T00:00:00Z',
-            'author': {'login': '69tc'},
-            'labels': [
-              {'name': 'status:taken'},
-              {'name': 'builder:jarvis'},
-            ],
-          },
-          {'title': 'Not an issue'},
-        ]),
+        }),
         '',
       );
     });
-    final issues = await github.issues('autonomous-ai/lampOS');
-    expect(asked.take(6), [
-      'issue',
-      'list',
-      '--repo',
-      'autonomous-ai/lampOS',
-      '--state',
-      'open',
-    ]);
-    expect(issues.map((i) => i.number), [2, 1]);
-    expect(issues.first.agent, 'jarvis');
-    expect(issues.first.taken, isTrue);
-    expect(issues.first.author, '69tc');
-    expect(issues.last.agent, isNull);
-    expect(issues.last.taken, isFalse);
+    final page = await github.earlier('autonomous-ai/lampOS', 5759, 'c1');
+    expect(asked, containsAll(['number=5759', 'last=100', 'before=c1']));
+    expect(page.comments.map((c) => c.body), ['Opened.']);
+    expect(page.earlier, 'c0');
   });
 
-  test('reads an issue with its comments, each signed by its agent', () async {
-    final github = answering(
-      (_) => ProcessResult(
+  test(
+    'keeps the threads it read, and reads ahead only those that changed',
+    () async {
+      final asked = <List<String>>[];
+      final github = answering((arguments) {
+        asked.add(arguments);
+        return thread([comment(1, 'deehw', 'Hi.')]);
+      });
+      final issues = [
+        for (final n in [5759, 5760, 5761])
+          SwarmIssue(
+            number: n,
+            title: 'Issue $n',
+            labels: const [],
+            url: 'u$n',
+            updatedAt: DateTime.utc(2026, 11, 9, 5),
+          ),
+      ];
+      expect(github.keptThread('autonomous-ai/lampOS', 5759), isNull);
+      // The fixture's thread says it was last active at 05:00, as the issues do: 5759 reads, and the others read the same thread.
+      await github.prefetch('autonomous-ai/lampOS', issues, count: 2);
+      expect(asked, hasLength(2));
+      expect(github.keptThread('autonomous-ai/lampOS', 5759), isNotNull);
+      // Nothing changed: nothing is read.
+      await github.prefetch('autonomous-ai/lampOS', issues.take(1).toList());
+      expect(asked, hasLength(2));
+      // 5759 was active again since: it is read again.
+      final newer = SwarmIssue(
+        number: 5759,
+        title: 'Issue 5759',
+        labels: const [],
+        url: 'u',
+        updatedAt: DateTime.utc(2026, 11, 9, 8),
+      );
+      await github.prefetch('autonomous-ai/lampOS', [newer]);
+      expect(asked, hasLength(3));
+    },
+  );
+
+  test(
+    'keeps the lists of the last twenty repositories it read, and no more',
+    () async {
+      final github = answering((_) => page([node(1, '2026-11-01T00:00:00Z')]));
+      for (var i = 0; i <= SwarmGitHub.listsKept; i++) {
+        await github.issues('autonomous-ai/repo$i');
+      }
+      expect(github.kept('autonomous-ai/repo0'), isNull);
+      expect(github.kept('autonomous-ai/repo1'), isNotNull);
+      expect(
+        github.kept('autonomous-ai/repo${SwarmGitHub.listsKept}'),
+        isNotNull,
+      );
+    },
+  );
+
+  test(
+    'a thread it cannot read does not stop the others being read ahead',
+    () async {
+      ProcessResult unreadable() => ProcessResult(
         1,
         0,
         jsonEncode({
-          'number': 5759,
-          'title': 'Rows',
-          'body': 'Score them again.',
-          'url': 'u',
-          'state': 'CLOSED',
-          'labels': [],
-          'createdAt': '2026-11-09T01:00:00Z',
-          'comments': [
-            {
-              'author': {'login': '69tc'},
-              'body': 'Migrate, 09:3x GMT+7: done.',
-              'createdAt': '2026-11-09T02:00:00Z',
+          'data': {
+            'repository': {
+              'issue': {
+                ...node(1, '2026-11-09T05:00:00Z', comments: 1),
+                'body': 'x',
+                'state': 'OPEN',
+                // A cursor that is not text: reading it throws a TypeError, not a GitHub error.
+                'comments': {
+                  'totalCount': 1,
+                  'pageInfo': {'hasPreviousPage': true, 'startCursor': 5},
+                  'nodes': <Object?>[],
+                },
+              },
             },
-            {
-              'author': {'login': 'deehw'},
-              'body': '**First builder**, 09:4x: mine.',
-              'createdAt': '2026-11-09T03:00:00Z',
-            },
-            {
-              'author': {'login': 'leo'},
-              'body': 'no signature here',
-            },
-          ],
+          },
         }),
         '',
-      ),
-    );
-    final thread = await github.thread('autonomous-ai/lampOS', 5759);
-    expect(thread.body, 'Score them again.');
-    expect(thread.open, isFalse);
-    expect(thread.createdAt, DateTime.utc(2026, 11, 9, 1));
-    expect(thread.comments.map((c) => c.signedBy), [
-      'Migrate',
-      'First builder',
-      null,
-    ]);
-    expect(thread.comments.map((c) => c.author), ['69tc', 'deehw', 'leo']);
-  });
+      );
+      final github = answering((arguments) {
+        final number = arguments.firstWhere((a) => a.startsWith('number='));
+        return number == 'number=1'
+            ? unreadable()
+            : thread([comment(1, 'deehw', 'Hi.')]);
+      });
+      final issues = [
+        for (final n in [1, 2])
+          SwarmIssue(
+            number: n,
+            title: 'Issue $n',
+            labels: const [],
+            url: 'u$n',
+            updatedAt: DateTime.utc(2026, 11, 9, 5),
+          ),
+      ];
+      await github.prefetch('autonomous-ai/lampOS', issues);
+      expect(github.keptThread('autonomous-ai/lampOS', 1), isNull);
+      expect(github.keptThread('autonomous-ai/lampOS', 2), isNotNull);
+    },
+  );
 
   test('says how to fix each way gh fails', () async {
     Future<String> failure(SwarmGitHub github) async {
@@ -176,6 +388,19 @@ void main() {
         ),
       ),
       'autonomous-ai/lampOS has issues turned off.',
+    );
+    expect(
+      await failure(
+        answering(
+          (_) => ProcessResult(
+            1,
+            1,
+            '',
+            'gh: Could not resolve to an Issue with the number of 9.',
+          ),
+        ),
+      ),
+      'That issue is gone.',
     );
     expect(
       await failure(
