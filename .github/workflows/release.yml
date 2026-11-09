@@ -104,7 +104,10 @@ jobs:
       # A tag pushed by hand skips the release scripts, so the window is checked here too
       # (scripts/release-window.py). An emergency release carries `Emergency: <reason>` (or the scripts' `Release-Urgent: <reason>`) in its annotated tag.
       - name: Release window
-        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.metadata_path == '' || inputs.metadata_path == 'harness/cli/metadata.json')) }}
+        # A promotion publishes no new version: it points the Windows terminal-host manifest at bytes a release
+        # already published and verified. The window governs what lands on the fleet as a new build, so it does not
+        # apply here.
+        if: ${{ !inputs.promote_pty && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.metadata_path == '' || inputs.metadata_path == 'harness/cli/metadata.json'))) }}
         env:
           REF_NAME: ${{ github.ref_name }}
           EVENT_NAME: ${{ github.event_name }}
@@ -206,6 +209,9 @@ jobs:
   # minute and that cannot be undone.
   publish:
     needs: [version, preflight, process-images]
+    # promote_pty alone re-points the terminal host at bytes a release already published: there is nothing to build,
+    # and the bucket refuses to republish an existing version's files.
+    if: ${{ !inputs.promote_pty }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -349,6 +355,7 @@ jobs:
   # fail loudly, and the next version fixes them.
   pty-build:
     needs: version
+    if: ${{ !inputs.promote_pty }}
     uses: ./.github/workflows/windows.yml
     with:
       version: ${{ needs.version.outputs.version }}
@@ -479,13 +486,16 @@ jobs:
           JS
 
   # The owner's production step for the terminal host, on the repository's own credential instead of a laptop's
-  # gcloud. It runs only when the dispatch asks (promote_pty), on a real (not dry-run) metadata path, and only after
-  # `windows-staging` read this release's zips back from the CDN and matched their sha256 and size — so the payload
-  # promoted is the one that job verified. Promotion names the same immutable staging objects; nothing is uploaded
-  # here. A tag push never does this: the host is a binary in every Windows pane, and the staging E2E
+  # gcloud. It runs only when the dispatch asks (promote_pty) and on a real (not dry-run) metadata path.
+  #
+  # It needs only `version`, not the build jobs: the script checks every zip it promotes — it fetches both from the
+  # CDN and refuses unless their sha256 and size are the ones the staging manifest names — so promoting a version
+  # that was released earlier works without rebuilding it, and without republishing bytes the bucket refuses.
+  #
+  # A tag push never does this: the host is a binary in every Windows pane, and the staging E2E
   # (docs/testing/windows-cli-e2e.md) is the owner's gate before it is worth promoting.
   promote-pty:
-    needs: [version, windows-staging]
+    needs: [version]
     if: >-
       inputs.promote_pty &&
       needs.version.outputs.metadata_path == 'harness/cli/metadata.json'

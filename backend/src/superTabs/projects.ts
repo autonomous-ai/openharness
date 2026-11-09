@@ -285,11 +285,29 @@ export function canReadProject(state: SuperTabState, actor: Actor, project: Swar
     if (!target || target.machineOwnerId !== actor.machineOwnerId) return false
     // A Swarm-wide Buddy reads every project its person reads now, at the membership it was added in (Dee, 10-31).
     if (isSwarmBuddy(target)) return !!buddyPerson(state, target, project)
-    return agentProjectId(state, target) === project.id
+    const home = agentProjectId(state, target)
+    // Swarm v4 (anh Dee, 2026-11-08): an agent acts for its person. In no project and holding no task (tasks are GitHub
+    // issues), it reads the public projects its person reads, at the membership it was added in, so it talks in their
+    // channels; a task, while it holds one, keeps it to that task's project. Never a private project it was given no task
+    // in: its one terminal would carry that project into every other channel (security review 2 of #4116), and once given
+    // one, that project alone (regularMayWorkIn). Before, every new agent was out of every channel.
+    if (target.regular && home === NO_PROJECT) {
+      const person = state.people.find(p => p.id === target.contributorId && p.generation === target.membershipGeneration)
+      return !!person && regularMayWorkIn(state, target, project) && (project.visibility === 'public' || target.privateProjectId === project.id)
+    }
+    return home === project.id
   }
   const member = state.people.find(p => p.id === actor.userId)
   return !!member && (project.visibility === 'public' || ownsProject(state, member.id, project) ||
     project.members.some(p => p.id === member.id && p.generation === member.generation))
+}
+
+/** Whether [target] is an agent of [project]'s channel (Swarm v4, anh Dee 2026-11-08): one that reads the project as an agent
+ *  does (canReadProject), so an agent of the project or a v4 agent in no project, never a Buddy or one stopping. It joins the
+ *  channel by posting there or being named there, by --to or by @Name, and talks there with the others by name. */
+export function inChannelOf(state: SuperTabState, target: Agent, project: SwarmProject): boolean {
+  return !isBuddy(target) && target.workDecision !== 'stop'
+    && canReadProject(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, project)
 }
 
 /** Whether [userId] owns [project] now: its owner, in the Swarm at the membership they owned it in (task #3073). A former
