@@ -55,8 +55,8 @@ const readCommand = (entry: Entry, prefix: string, group: string, id: string, bu
 export { backend, identifier, object, SuperTabHostError } from './wire.js'
 import { leadSwitchOf, leadSwitchRecovered, SWITCH_ADOPT_MS, SWITCH_RECOVERY_MS, switchWithin, type LeadSwitch } from './leadSwitch.js'
 import { backend, ENDED_WORK, identifier, object, SuperTabHostError, within } from './wire.js'
-import { parseSwarmSkill, recordBuddySkillNotice, refreshBuddySkill, wireRole, type SkillRefresh, type SwarmSkill, type SwarmSkillGrant,
-  type SwarmSkillMode } from '../lib/swarmSkills.js'
+import { parseSwarmSkill, PM_BASICS, recordBuddySkillNotice, refreshBuddySkill, SWARM_BASICS, wireRole, type SkillRefresh, type SwarmSkill,
+  type SwarmSkillGrant, type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { artifactLinks, buddyLaunchOf, buddyReadsOf, forgetBuddyReads, grantBuddyWide, heldByOldGuard, listSentToOldGuard, SentListsError,
   writeBuddyAccount } from '../lib/buddyGuard.js'
 import { authorName } from './personName.js'
@@ -1819,11 +1819,9 @@ export class SuperTabHost {
     return target
   }
 
-  /** What a running Swarm session is told (task #4673): a Buddy, when a CLI update ships new text for its skill; any other
-   *  agent, when its project's instructions or its role name change, to read them again with the instructions command, or once,
-   *  if an older release launched it, that its skill files are gone. Told through the Swarm, as any delivery, once it is in an
-   *  open group. The operation id names the agent and what it is told, so a retry, a restart or a second daemon never sends it
-   *  twice. */
+  /** What a running Swarm session is told: an agent its person attached, the team's basics, once (Swarm v4); a Buddy, when a
+   *  CLI update ships new text for its skill (task #4673). Told through the Swarm, as any delivery, once it is in an open group.
+   *  The operation id names the agent and what it is told, so a retry, a restart or a second daemon never sends it twice. */
   private async refreshSkill(target: HostAgent): Promise<void> {
     const session = this.core.agents.byAgent(target.agent.harnessId)
     // Read as every saved row is (project instructions, phase 4): a core from before role kinds answers in the wire's values.
@@ -1836,7 +1834,25 @@ export class SuperTabHost {
       this.skillChecks.delete(target.agent.harnessId)
     }
     const due = this.skillChecks.get(target.agent.harnessId) ?? 0
-    // Plain agents (Swarm v4): only a Buddy has Harness text to keep fresh; every other agent reads only its repo's files.
+    // An agent its person attached (Desktop's Attach, Swarm v4) was started outside the Swarm, so without the team's basics
+    // that every agent the Swarm starts gets at launch (lib/swarmSkills.ts SWARM_BASICS): it is told them once, as only it
+    // reads, in its own chat. The operation id names the text, so a restart or a second daemon never tells it twice. A
+    // plain shell is no agent, and a Buddy keeps its own skill.
+    if (session && !skill && (session.engine === 'claude' || session.engine === 'codex') && !isBuddy(object(target.agent)) && this.now() >= due) {
+      this.skillChecks.set(target.agent.harnessId, Infinity)
+      const notice = target.lead === true ? `${SWARM_BASICS}\n${PM_BASICS}` : SWARM_BASICS
+      try {
+        // Named by its text alone: its own hash, so no Buddy notice shares its id.
+        const told = await this.tellSkill(target, { version: createHash('sha256').update(notice).digest('hex'), change: 0, notice }, current)
+        if (!told && current()) this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
+        else if (!told) this.skillChecks.delete(target.agent.harnessId)
+      } catch (error) {
+        this.log(error instanceof Error ? error.message : String(error))
+        this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
+      }
+      return
+    }
+    // Every other agent the Swarm started has the basics from its launch; only a Buddy has Harness text to keep fresh.
     if (!session || !skill || !session.cwd || this.now() < due || skill.role !== 'buddy') return
     this.skillChecks.set(target.agent.harnessId, Infinity)
     try {
@@ -1861,7 +1877,9 @@ export class SuperTabHost {
     const { state } = await this.sources.reads.read(target.tabId, id)
     const groups = (Array.isArray(state.conversations) ? state.conversations : []).map(object)
       .filter(group => group.archived !== true && identifier(group.id) && Array.isArray(group.agentIds) && group.agentIds.includes(id))
-    const group = groups.find(g => g.leadId === id) ?? groups.find(g => object(g.assignment).agentId === id) ?? groups[0]
+    // A PM's project chat, a crew member's task, else the agent's own chat with its person (Swarm v4).
+    const group = groups.find(g => g.leadId === id) ?? groups.find(g => object(g.assignment).agentId === id)
+      ?? groups.find(g => g.kind === 'agent-chat') ?? groups[0]
     if (!group || !current()) return false
     const send = (agentOnly: boolean, notice: boolean) => backend(this.core, 'POST', `/api/super-tabs/${target.tabId}/commands`, {
       // A switch back to an earlier mode's text is a new rewrite, so its count keeps it from reusing that text's id.
