@@ -101,7 +101,6 @@ import 'thread_panel.dart';
 import 'work_details.dart';
 import 'manage_page.dart';
 import 'project_sidebar.dart';
-import 'projects_page.dart';
 import 'buddy_sessions.dart';
 import 'swarm_switcher.dart' show fallBackToPersonal;
 import 'project_options.dart';
@@ -148,7 +147,6 @@ class SuperTabView extends StatefulWidget {
     this.app,
     this.onNewProject,
     this.onNewAgent,
-    this.rightPane,
     this.onNewSwarm,
     this.onChooseAgentTerminal,
     this.linkSwarms,
@@ -184,11 +182,6 @@ class SuperTabView extends StatefulWidget {
   /// + New agent (task #4196): opens the workspace's Cmd-N form with Member or
   /// Lead. Null shows no + New agent.
   final VoidCallback? onNewAgent;
-
-  /// The Desktop's right pane (Swarm v3's Tasks, task #4119): always shown, never collapsing, in the pane layout's right
-  /// slot. Given, the chat of the selected agent or project is in the middle; without it the right pane keeps the Board's
-  /// chat as before.
-  final Widget Function(BuildContext context)? rightPane;
 
   /// The existing New Swarm, for the Swarm dropdown atop the left bar; none
   /// without it.
@@ -304,8 +297,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// beside that task's title (task #3117).
   ({String taskId, String error})? _priorityRefusal;
 
-  /// The Swarm's page holding the main pane, if one does: the Leaderboard or
-  /// Projects.
+  /// The Swarm's page holding the main pane, if one does: the Leaderboard.
   SwarmPage? _page;
 
   /// Manage holds the main pane; [_manageTab] is which of its pages, but for
@@ -3018,7 +3010,6 @@ class _SuperTabViewState extends State<SuperTabView>
         : _pageShown != null
         ? switch (_pageShown!) {
             SwarmPage.leaderboard => 'Leaderboard',
-            SwarmPage.projects => 'Projects',
           }
         : group == null
         ? c.snapshot?.projects.isEmpty == true
@@ -6395,13 +6386,6 @@ class _SuperTabViewState extends State<SuperTabView>
                           switch (_pageShown) {
                             SwarmPage.leaderboard =>
                               SuperTabWeeklyLeaderboardPage(controller: c),
-                            SwarmPage.projects => SuperTabProjectsPage(
-                              controller: c,
-                              onOpen: _openProject,
-                              onNewProject: c.canWrite
-                                  ? widget.onNewProject
-                                  : null,
-                            ),
                             null => const SizedBox.shrink(),
                           },
                           _manageVisible
