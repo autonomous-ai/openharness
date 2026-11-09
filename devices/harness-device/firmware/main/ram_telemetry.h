@@ -6,11 +6,8 @@
 // Call once at the very start of app_main(), before any cJSON use.
 void ram_telemetry_init(void);
 
-// Mark LVGL ready for safe lv_mem_monitor() snapshots. The display mutex must
-// already exist and lv_init() plus all custom pools must have completed.
-
-// Log internal 8-bit heap, PSRAM, LVGL, cJSON fallback, and current-task stack
-// high-water data. Safe before LVGL is initialized.
+// Log internal 8-bit heap, PSRAM, cJSON fallback, and current-task stack
+// high-water data. Safe at any point of boot.
 void ram_telemetry_checkpoint(const char *tag);
 
 // Periodic checkpoint. Every tenth call also records the known long-lived task

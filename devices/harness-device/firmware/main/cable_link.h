@@ -63,33 +63,8 @@ bool cable_link_send(uint8_t type, const uint8_t *payload, size_t payload_len);
 //
 // Called by the session layer, not by this one: whether a peer is listening is a message-layer fact
 // (a `welcome` arrived), and this layer cannot see it. usb_serial_jtag_is_connected() answers a
-// different question — see cable_link_host_present().
+// different question: it is true whenever the cable is in a running computer, daemon or not.
 void cable_link_set_log_framing(bool on);
 
-// Whether a USB HOST is currently driving this port.
-//
-// NOT the same question as "is the daemon talking to me", and the difference is the whole reason this is
-// documented rather than inlined at the call site. The driver answers from USB frame activity, so it is
-// true whenever the cable is in a running computer — including one with no daemon, which is where this
-// device spends much of its life.
-//
-// It is therefore useful for exactly one thing: noticing that the cable left, or that the machine went
-// to sleep. The layer above uses it as the end of a session. A session that ends because the DAEMON quit
-// with the cable still in is invisible here — see the hello cadence in cable_client.c for what stands in.
-bool cable_link_host_present(void);
-
-// Framing health. The RATE is the diagnosis, not the totals: a handful of discarded bytes right after
-// boot is the bootloader's parting words and is expected, while a steady trickle during a session means
-// the two sides disagree about the format or the cable is bad. Without a count those look identical.
-void cable_link_counters(uint32_t *corrupt_frames, uint32_t *discarded_bytes);
 // Logs skipped because the transport was busy or stalled; diagnostic only.
 uint32_t cable_link_dropped_logs(void);
-
-// Drop any half-received frame. For the layer above to call when it decides a session has ended and a
-// new one begun — leftover bytes belong to the old one, and carrying them across puts a stale half-frame
-// in front of the first real frame of the new session.
-//
-// Call it only from the reader's frame or tick callback. The decoder has one
-// reader and no lock; another task must not reset it during a feed. The reader
-// also expires a partial frame after a 15-second gap in received bytes.
-void cable_link_reset_decoder(void);

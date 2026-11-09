@@ -39,10 +39,6 @@ static void portrait(ht_scene_t *s, int y, ht_tim_mood_t mood, ht_tim_pose_t p, 
         }
     }
 }
-void ht_tim_portrait(ht_scene_t *s, int y, ht_tim_mood_t mood, uint16_t ink)
-{
-    portrait(s, y, mood, (ht_tim_pose_t){0}, ink, false);
-}
 static void lines(ht_scene_t *s, int y, int width, int count, const ht_font_t *font,
                   uint16_t ink, const char *text)
 {

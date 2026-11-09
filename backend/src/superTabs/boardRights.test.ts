@@ -4,7 +4,6 @@ import { createSuperTab, visibleState, type Actor, type SuperTabState } from './
 import { projectOf } from './projects.js'
 import { canChat, legacyAsks, steers, switched } from './boardRights.js'
 import { openTasks } from './dispatch.js'
-import { sweepDue } from './pmSchedule.js'
 import { owedLines } from './inbox.js'
 import { holdOf } from './pulse.js'
 
@@ -279,14 +278,12 @@ describe('pause and resume', () => {
       .toThrow(expect.objectContaining({ code: 'TASK_PAUSED' }))
   })
 
-  it('keeps a paused task from being handed out or chased, until it is resumed', () => {
+  it('keeps a paused task from being handed out, until it is resumed', () => {
     const f = boardFixture()
     const id = task(f)
     expect(openTasks(f.state, f.app.projectId, 1000).map(g => g.id)).toContain(id)
-    expect(sweepDue(f.state, f.app.projectId, 1000)).toBe(true)
     f.run({ type: 'work.pause', conversationId: id, paused: true }, projectOwner)
     expect(openTasks(f.state, f.app.projectId, 1000).map(g => g.id)).not.toContain(id)
-    expect(sweepDue(f.state, f.app.projectId, 1000)).toBe(false)
     f.run({ type: 'work.pause', conversationId: id, paused: false }, projectOwner)
     expect(openTasks(f.state, f.app.projectId, 1000).map(g => g.id)).toContain(id)
   })

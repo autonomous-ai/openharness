@@ -38,13 +38,6 @@ static unsigned clip_frame(const ht_gallery_clip_t *c, uint32_t phase)
     return i;
 }
 
-static const char *const moods[HT_CREATURE_MOODS] = {"calm", "curious", "playful", "sleepy"};
-const char *ht_gallery_name(unsigned creature)
-{
-    creature %= HT_CREATURES;
-    return creature < HT_ORIGINAL_CREATURES ? names[creature] : clips[creature-HT_ORIGINAL_CREATURES].name;
-}
-const char *ht_gallery_mood(unsigned mood) { return moods[mood % HT_CREATURE_MOODS]; }
 
 void ht_gallery_init(ht_gallery_t *g, uint32_t now)
 {

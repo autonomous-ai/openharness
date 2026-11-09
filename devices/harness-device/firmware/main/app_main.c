@@ -49,8 +49,7 @@ static const char *TAG = "app";
 // A button held through power-on = factory reset. All that is left to clear is the screen brightness and
 // the voice language — the credentials this used to wipe do not exist any more.
 //
-// WHICH button, and whether there is one at all, is the board's to answer (board.h): the dial reads BOOT,
-// and the Pro has nothing it could read, because its only switch is the one that just turned it on.
+// WHICH button is the board's to answer (board.h): the dial reads BOOT.
 static bool boot_button_held(void) { return board_factory_reset_requested(); }
 
 // ── the agent list ──────────────────────────────────────────────────────────────────────────────────

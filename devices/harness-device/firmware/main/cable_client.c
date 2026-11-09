@@ -362,11 +362,6 @@ static void send_hello(void)
     send_json(root);
 }
 
-void cable_client_list_machines(void)
-{
-    send_json(msg("machines.list"));
-}
-
 void cable_client_select_machine(const char *machine_id)
 {
     if (!machine_id || !machine_id[0]) return;
@@ -376,8 +371,6 @@ void cable_client_select_machine(const char *machine_id)
     send_json(root);
 }
 
-const char *cable_client_machine_id(void) { return s_machine_id; }
-
 void cable_client_select_swarm(const char *swarm_id)
 {
     if (!swarm_id || !swarm_id[0]) return;
@@ -385,11 +378,6 @@ void cable_client_select_swarm(const char *swarm_id)
     if (!root) return;
     msg_string(&root, "swarmId", swarm_id);
     send_json(root);
-}
-
-void cable_client_list_swarms(void)
-{
-    send_json(msg("swarms.list"));
 }
 
 void cable_client_supertab_send(const char *t, const char *tab, const char *lead)
@@ -831,31 +819,11 @@ void cable_client_fw_error(const char *message)
 
 // ── the agent list ──────────────────────────────────────────────────────────────────────────────────
 
-const char *cable_client_machine_name(void) { return s_machine_name; }
-
 // Set by `agents.end`, read by the refresh that applies the list — see ui_fleet_set.
 static int  s_agents_total;
 static bool s_has_window;
 static char s_agents_tab[ID_MAX];
 static uint32_t s_agents_generation;
-
-int cable_client_agent_total(void)
-{
-    if (!s_agents_lock) return 0;
-    xSemaphoreTake(s_agents_lock, portMAX_DELAY);
-    const int n = s_agents_total;
-    xSemaphoreGive(s_agents_lock);
-    return n;
-}
-
-bool cable_client_has_window(void)
-{
-    if (!s_agents_lock) return false;
-    xSemaphoreTake(s_agents_lock, portMAX_DELAY);
-    const bool w = s_has_window;
-    xSemaphoreGive(s_agents_lock);
-    return w;
-}
 
 bool cable_client_request_agents(void)
 {
@@ -872,10 +840,6 @@ uint32_t cable_client_agent_generation(void)
     uint32_t generation = s_agents_generation;
     xSemaphoreGive(s_agents_lock);
     return generation;
-}
-int cable_client_list_agents(project_t *out, int max)
-{
-    return cable_client_list_agents_snapshot(out,max,NULL);
 }
 int cable_client_list_agents_snapshot(project_t *out, int max, cable_agent_snapshot_t *snapshot)
 {
@@ -949,13 +913,6 @@ static void handle_swarms(const cJSON *p)
     const char *selected = str_of(p, "selected");
     if (selected && strlen(selected) >= ID_MAX) selected = NULL;
     ui_swarms_replace(rows, n, selected);
-
-/* …and the selected tab's shape, which rides the same frame so the two can never be read half
- * updated: a grid drawn against the previous tab's rectangles puts agents where they are not.
- *
- * THE ROUND DIAL IS THE ONLY BUILD THAT SKIPS THIS. A spatial desk needs corners: habitat on the dial
- * shows its panes as a list of rows and has no use for a rectangle, while habitat on the Pro draws the
- * app's own shape and needs every one of them. */
 }
 
 // ── the Swarms ──────────────────────────────────────────────────────────────────────────────────────
@@ -1738,9 +1695,3 @@ failed:
 }
 
 bool cable_client_is_connected(void) { return s_session; }
-
-void cable_client_counters(uint32_t *bad, uint32_t *unknown)
-{
-    if (bad) *bad = s_bad;
-    if (unknown) *unknown = s_unknown;
-}

@@ -11,9 +11,9 @@
  */
 import type { PrismaClient } from '@prisma/client'
 import type { SuperTabState } from '../model.js'
-import { projectsOf, type SwarmProject } from '../projects.js'
+import { projectsOf } from '../projects.js'
 import { groupsBy } from '../parts/indexed.js'
-import { knownTimeZone, localNow } from '../digest.js'
+import { localNow } from '../localTime.js'
 import { DEFAULT_TIME_ZONE } from '../costs/reflection.js'
 import { logger } from '../../utils/logger.js'
 import { dayBounds, scorecardDay } from './figures.js'
@@ -38,15 +38,8 @@ export const scorecardCache = (): ScorecardCache => ({ plan: null, readAt: 0, se
 
 type Log = Pick<typeof logger, 'warn' | 'error' | 'info'>
 
-/** The zone a project's days are counted in: its digest's, else the default (a zone this runtime does not know too). */
-export function scorecardZone(project: Pick<SwarmProject, 'digest'>): string {
-  const zone = project.digest?.timeZone
-  return zone && knownTimeZone(zone) ? zone : DEFAULT_TIME_ZONE
-}
-
 /** The last day a project should have a row for at `now`: yesterday in its zone, stored or not. */
-export const scorecardThrough = (project: Pick<SwarmProject, 'digest'>, now: number): string =>
-  daysBefore(localNow(scorecardZone(project), now).date, 1)
+export const scorecardThrough = (now: number): string => daysBefore(localNow(DEFAULT_TIME_ZONE, now).date, 1)
 
 /** Every project with a group active in the last week, with its chat and time zone. A Swarm whose head fails to read is
  *  logged and counted; the next pass reads the plan again. */
@@ -63,7 +56,7 @@ export async function scorecardPlan(db: PrismaClient, now: number, log: Log = lo
       const head = await db.swarmHead.findUnique({ where: { id: `${tabId}:head` }, select: { deleted: true, data: true } })
       if (!head || head.deleted) continue
       for (const project of projectsOf(head.data as unknown as SuperTabState)) {
-        targets.push({ tabId, projectId: project.id, chatId: project.leadConversationId, timeZone: scorecardZone(project) })
+        targets.push({ tabId, projectId: project.id, chatId: project.leadConversationId, timeZone: DEFAULT_TIME_ZONE })
       }
     } catch (error) {
       failed++
