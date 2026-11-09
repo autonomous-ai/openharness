@@ -25,7 +25,9 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
     if (file && text === undefined) return { status: 404, etag: null, body: null, resetAt: null }
     const body = file ? { encoding: 'base64', content: Buffer.from(text!).toString('base64') }
       : url.pathname === '/repos/acme/app' ? { default_branch: 'main' }
-      : url.pathname === '/repos/acme/app/pulls' ? state.pulls
+      // A page of the list, as GitHub pages it.
+      : url.pathname === '/repos/acme/app/pulls' ? state.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
+        Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
       : /^\/repos\/acme\/app\/issues\/\d+\/comments$/.test(url.pathname) ? state.comments.get(Number(url.pathname.split('/').at(-2))) ?? []
       : url.pathname === '/repos/acme/app/labels' ? state.labels
       : url.pathname === '/repos/acme/app/issues' ? url.searchParams.get('state') === 'closed' ? state.closed : state.open
@@ -227,6 +229,14 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.comments.set(30, [comment('Pip Two, 07:10, to **Juno**: READ-OK f6edb44')])
       await f.assigner.tick()
       expect(asks(f)).toEqual([expect.stringMatching(/to \*\*(Pip|Juno)\*\*: please read this pull request/)])
+    })
+
+    it('asks a reader for the team\'s pull request wherever it is among a busy repository\'s hundred and more', async () => {
+      const f = setup([], { crew: team })
+      const people = Array.from({ length: 119 }, (_, i) => pull({ number: 100 + i, labels: [], head: { sha: HEAD, ref: `fix-${i}` }, body: '' }))
+      f.github.state.pulls = [...people.slice(0, 110), pull(), ...people.slice(110)]
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Atlas\*\*: please read this pull request/)])
     })
 
     it('asks nobody for a pull request that is not the team\'s: a person\'s, or a branch no builder of the team made', async () => {
