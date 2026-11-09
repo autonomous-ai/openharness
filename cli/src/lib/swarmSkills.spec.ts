@@ -9,7 +9,7 @@ vi.mock('../team/config.js', async (original) => ({ ...await original<object>(),
 /** The owner the start recorded for a Buddy's folder (superTabs/start.ts); every Buddy here is started so, unless a test says. */
 const started = vi.hoisted(() => ({ owner: 'peer' as string | null }))
 vi.mock('./buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => started.owner }))
-import { prepareSwarmSkill, parseSwarmSkill, recordBuddySkillNotice, refreshBuddySkill, removeOlderSkills } from './swarmSkills.js'
+import { prepareSwarmSkill, parseSwarmSkill, recordBuddySkillNotice, refreshBuddySkill, removeOlderSkills, PM_BASICS, SWARM_BASICS } from './swarmSkills.js'
 import { buildLaunchOverrides } from './launchOverrides.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 import { buddyAccountFile, buddyLaunchOf, buddyReadsOf, grantBuddyWide, writeBuddyAccount } from './buddyGuard.js'
@@ -28,10 +28,11 @@ const buddyFile = (workspace: string, key: string) => join(realpathSync(workspac
 const prepareBuddy = (workspace: string, saved: Parameters<typeof prepareSwarmSkill>[1]) => ({ ...prepareSwarmSkill(workspace, saved), file: buddyFile(workspace, saved.key) })
 
 describe('Swarm sessions without skill files (task #4673)', () => {
-  it('writes no skill file and tells a Lead, an agent or a Reviewer nothing at launch (Swarm v4)', () => {
+  // Swarm v4 (anh Dee, 2026-11-09): the team's basics are the product's, told at launch, never written into the project.
+  it('writes no skill file and tells an agent or a Reviewer the team\'s basics at launch, and the PM its part too', () => {
     for (const saved of [{ role: 'coordinator', key: 'lead' }, { role: 'agent', key: 'dev' }, { role: 'agent', fallback: 'review', key: 'review' }] as const) {
       const workspace = fixture()
-      expect(prepareSwarmSkill(workspace, saved).instructions).toBe('')
+      expect(prepareSwarmSkill(workspace, saved).instructions).toBe(saved.role === 'coordinator' ? `${SWARM_BASICS}\n${PM_BASICS}` : SWARM_BASICS)
       expect(existsSync(join(realpathSync(workspace), '.harness', 'runtime', sha256(saved.key), 'swarm'))).toBe(false)
     }
   })
@@ -228,8 +229,9 @@ describe('Swarm sessions without skill files (task #4673)', () => {
     const result = await buildLaunchOverrides({ capabilities: async () => ({ sessionEnv: true }), installCodexHooks: () => true, machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(),
       writeGridConfigDir: async () => '/unused', readCodexConfig: () => null, readAttribution: () => null, swarm: SWARM }, engine, { cwd, swarmSkill }, 'new-registry-id')
     expect(result.ok).toBe(true)
-    expect(first.instructions).toBe('')
-    if (result.ok) expect(result.overrides?.extraArgs.join(' ')).not.toContain('harness super-tab')
+    expect(first.instructions).toBe(SWARM_BASICS)
+    // A relaunch is told the same basics again, as the engine starts from nothing.
+    if (result.ok) expect(result.overrides?.extraArgs.join(' ')).toContain('Never watch GitHub yourself')
   })
 
   it('refuses relaunch with a missing workspace', async () => {

@@ -18,7 +18,10 @@ it('keeps an explicit stable receipt for agent messages and arbitrary work comma
     .toMatchObject({ action: 'message', conversationId: 'lead', messageId: 'old-question' })
   expect(parseSuperTabArgs([...prefix, 'post', 'lead', '--tab', 'literal'], where).payload.command).toMatchObject({ text: '--tab' })
   expect(parseSuperTabArgs(['--tab', 'tab', 'status'], where).payload.agentId).toBe('')
-  for (const argv of [[], ['status'], [...prefix, 'post', 'lead', 'Ready'], [...prefix, 'messages', '../other'],
+  // An agent in its own pane may leave its Swarm out: its daemon takes the one it is in (service.ts).
+  expect(parseSuperTabArgs(['status'], where).payload).toMatchObject({ action: 'status', tabId: '' })
+  expect(() => parseSuperTabArgs(['--tab', '../other', 'status'], where)).toThrow('harness super-tab')
+  for (const argv of [[], [...prefix, 'post', 'lead', 'Ready'], [...prefix, 'messages', '../other'],
     [...prefix, 'message', 'lead'], [...prefix, 'message', 'lead', '../other'], [...prefix, 'message', 'lead', 'id', 'extra'],
     ['--port', 'no', 'help'], ['--machine', '', 'help'], [...prefix, 'status', 'extra']]) {
     expect(() => parseSuperTabArgs(argv, where)).toThrow('harness super-tab')
@@ -214,12 +217,12 @@ it('routes through the caller and prints the decision, or the parse failure as a
 })
 it('has no plan command: it is refused with the usage line, which does not offer it, and nothing is asked of the daemon', async () => {
   for (const tail of [['plan'], ['plan', '{"groups":{}}']]) {
-    expect(() => parseSuperTabArgs([...prefix, ...tail], where)).toThrow(/^harness super-tab --tab ID/)
+    expect(() => parseSuperTabArgs([...prefix, ...tail], where)).toThrow(/^harness super-tab \[--tab ID\]/)
     const print = vi.fn(), open = vi.fn()
     expect(await superTabCommand(['--tab', 'tab', ...tail], { where: () => where, pane: undefined, open: open as never, print })).toBe(1)
     expect(open).not.toHaveBeenCalled()
     const refusal = String(JSON.parse(print.mock.calls.at(-1)![0]).error)
-    expect(refusal).toMatch(/^harness super-tab --tab ID/)
+    expect(refusal).toMatch(/^harness super-tab \[--tab ID\]/)
     expect(refusal).not.toContain('plan [JSON]')
   }
 })
