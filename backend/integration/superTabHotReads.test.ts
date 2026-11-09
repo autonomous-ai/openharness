@@ -312,37 +312,36 @@ describe('hot reads read only what they return (roadmap 2.7)', () => {
   })
 })
 
-// Diego's backend review, item 5 (2026-10-28): which machines are signed in as a team account is the same answer for every
-// reader, and machines report every 15 s, so the read API asks for it at most once per 15 s per Swarm and machine list.
-describe('which machines take teammates\' work is read once per 15 s per Swarm', () => {
-  it('two polls within 15 s read the team machines once; a machine turning team shows 15 s after the read', async () => {
+// Diego's backend review, item 5 (2026-10-28): each machine's CLI version is the same answer for every reader, and machines connect
+// rarely, so the read API asks for them at most once per 15 s per Swarm and machine list.
+describe('the machines\' CLI versions are read once per 15 s per Swarm', () => {
+  it('two polls within 15 s read the machine rows once; a version shows 15 s after the read', async () => {
     const s = await scene()
     const swarmReads = new SwarmReads(store, { now: () => clock })
-    // The one machine-row read (store.ts machineFacts): the Swarm's machines by id, alive, in its environment. Since #2196 it
-    // takes the account kind and CLI version from the rows it returns, not from its filter.
-    const teamReads = (entries: ProfileEntry[]) => reads(entries, 'machines', ['machineId', 'autonomousEnv', 'deletedAt'])
-    const teamWork = (read: { derived: { machines: Record<string, { teamWork: unknown }> } }) => read.derived.machines[s.machineId]!.teamWork
+    // The one machine-row read (store.ts machineVersions): the Swarm's machines by id, alive, in its environment.
+    const machineReads = (entries: ProfileEntry[]) => reads(entries, 'machines', ['machineId', 'autonomousEnv', 'deletedAt'])
+    const version = (read: { derived: { machines: Record<string, { clientVersion?: string }> } }) => read.derived.machines[s.machineId]!.clientVersion
     clock = Date.now()
     const readAt = clock
     let cursor = ''
     const within = await profiled(async () => {
       const first = await swarmReads.firstLoad(owner, s.tabId)
-      expect(teamWork(first)).toEqual({ allowed: true })
+      expect(version(first)).toBeUndefined()
       clock += 3_000
       cursor = (await swarmReads.changes(owner, s.tabId, first.cursor)).cursor
-      // The machine's account turns team: a team machine that never reported is offline for teammates' work.
-      await db.machine.update({ where: { machineId: s.machineId }, data: { sessionKind: 'team' } })
+      // The machine's daemon connects with a version: the answer already read is kept for 15 s.
+      await db.machine.update({ where: { machineId: s.machineId }, data: { clientVersion: '0.5.82' } })
       clock += 3_000
       const polled = await swarmReads.changes(owner, s.tabId, cursor)
-      expect(teamWork(polled)).toEqual({ allowed: true })
+      expect(version(polled)).toBeUndefined()
       cursor = polled.cursor
     })
-    expect(teamReads(within)).toHaveLength(1)
+    expect(machineReads(within)).toHaveLength(1)
     clock = readAt + 15_000
     const later = await profiled(async () => {
-      expect(teamWork(await swarmReads.changes(owner, s.tabId, cursor))).toMatchObject({ allowed: false, code: 'MACHINE_OFFLINE' })
+      expect(version(await swarmReads.changes(owner, s.tabId, cursor))).toBe('0.5.82')
     })
-    expect(teamReads(later)).toHaveLength(1)
+    expect(machineReads(later)).toHaveLength(1)
   })
 })
 

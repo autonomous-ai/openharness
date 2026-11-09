@@ -76,7 +76,7 @@ describe('the notices the Swarm writes into a chat', () => {
   const written = writtenKinds()
 
   it('finds the notices it is known to write, so a change in how they are written cannot empty this check', () => {
-    expect([...written.keys()]).toEqual(expect.arrayContaining(['system', 'agent-only', 'review-failed', 'work-lost', 'terminal-alert', 'native']))
+    expect([...written.keys()]).toEqual(expect.arrayContaining(['system', 'agent-only', 'review-failed', 'work-lost', 'terminal-alert']))
   })
 
   it('classifies every kind it writes, and only those', () => {
@@ -92,9 +92,9 @@ describe('the notices the Swarm writes into a chat', () => {
     // An idle agent's notice to its coordinator, gone in Swarm v4 (anh Dee, 11-09: only its person stops an agent), the Lead; the
     // time checks' stalled-work notice, gone with them (anh Dee, 11-09: the server runs no v3 rule on its own), the PM; the
     // Lead's built-in schedule wake, daily tidy and morning digest, gone the same day, the Lead; the release watch's steps and lines,
-    // gone with it, people.
+    // gone with it, people; the recorded terminal turns, gone with the recording, people.
     const retired = ['idle-stop', 'idle', 'project-report', 'ship', 'machine-left', 'task-line', 'routing-reflection', 'instructions', 'update-request',
-      'proposal-notice', 'proposal-overdue', 'pm-line', 'work-stalled', 'schedule-request', 'tidy-request', 'digest-request', 'release']
+      'proposal-notice', 'proposal-overdue', 'pm-line', 'work-stalled', 'schedule-request', 'tidy-request', 'digest-request', 'release', 'native', 'others-work-notice']
     expect(Object.keys(NOTICE_READERS).filter(kind => !written.has(kind) && !retired.includes(kind))).toEqual([])
     expect(retired.filter(kind => written.has(kind))).toEqual([])
   })

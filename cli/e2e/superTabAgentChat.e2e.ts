@@ -87,7 +87,9 @@ async function begin(engine: 'claude' | 'codex') {
   await d.start()
   const client = await LocalClient.connect(d, { machineId: ME.machineId }); clients.push(client)
   const cwd = join(d.projectsDir, 'project'); mkdirSync(cwd, { recursive: true })
-  const agent = await client.request('agent_create', { engine, cwd, bypassPermission: true }, 90_000)
+  // Started as + New agent starts it (desktop/lib/super_tabs/new_agent.dart): with its Swarm role, so its launch carries the
+  // team's basics and the host tells it nothing (host.ts refreshSkill tells a session started outside the Swarm, once).
+  const agent = await client.request('agent_create', { engine, cwd, bypassPermission: true, swarmRole: 'dev' }, 90_000)
   expect(agent.error, JSON.stringify(agent)).toBeUndefined()
   const memberId = idFor(agent.agent.id)
   agents.push({ id: memberId, machineId: ME.machineId, harnessId: agent.agent.id, chatId: CHAT, displayName: 'Mia' })

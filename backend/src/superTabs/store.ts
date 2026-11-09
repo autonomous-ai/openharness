@@ -16,8 +16,7 @@ import { isCrew } from './crew.js'
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
 import { phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
-import { admitMachineStart, accountMachineName, availableSlots, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, ownAccountWork, ownAccountNote, type MachineObservation } from './machines.js'
-import { expireAccess } from './machineAccess.js'
+import { admitMachineStart, accountMachineName, availableSlots, expireRemovals, followAccountName, machineContribution, machineObservationSchema, slotCounter, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, type MachineObservation } from './machines.js'
 import { authorForAgent, lazyUsernames, namesPerson, rowForAgent, shownNameOf } from './personNames.js'
 import { machineSuspensionReason, readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
@@ -38,7 +37,7 @@ import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, isPersonalSwarm, notThere } from './deletion.js'
 import type { ApprovalRow, DroppedLine } from './ruleGuard.js'
-import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, SWARM_INVITATION_MS, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
+import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
@@ -60,7 +59,7 @@ import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
 import { buddyChatId, isSwarmBuddyChat, shownBefore, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
 import { cleanPullRequestLinks } from './cards.js'
-import { accountOf, wordsOf, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, confidentialSets, groupProject, ledProject, onTeamAccount, ownerAccount, ownsProject, admitPerson, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, repositoryCreator, type SwarmProject } from './projects.js'
+import { accountOf, wordsOf, watchersLost, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, confidentialSets, groupProject, ledProject, onTeamAccount, ownerAccount, ownsProject, admitPerson, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, repositoryCreator, type SwarmProject } from './projects.js'
 import { taskProcess } from './process.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
@@ -109,9 +108,6 @@ import { touchesFor } from './parts/touches.js'
 import { freeze, readHostStamp, stampOwed, swarmReadCache, swarmTransaction, type CacheView, type SwarmCache } from './cache.js'
 import { countReport, DEADLINE_CAP_MS, localReportMemory, RECORD_TTL_MS, recordHolds, type ReportMemory, type ReportRecord } from './machineReports.js'
 import { DIRECT, readLastChangedAt, readParts, type ReadNamed } from './cachedReads.js'
-import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
-import { activeMember, addMember, hasWorkspaceAccess, latestRemovalAt, listWorkspaces, memberId, removedFromWorkspace, WORKSPACE_ACCESS_REVOKED, workspaceForNewSwarm, requireWorkspaceAccess, requireWorkspaceRole, SwarmWorkspaces } from './workspaceStore.js'
-import { WORKSPACE_LABEL, workspaceCan, type WorkspaceRole } from './workspaces.js'
 import { STATUS_LABELS, activeWork, handed, occupiesAgent, actorKey, agent, agentOnly, appendCodePullRequestUrls, appendPullRequestUrls, codePullRequests, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker, SuperTabError, isLeads, knownKind, parkLaterConversations, type Actor, type Agent, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type Person, type SuperTabState, projectPullRequestUrl } from './model.js'
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
@@ -133,7 +129,7 @@ import { DEFAULT_ROUTING_POLICY, type RoutingPolicy } from './routingPolicy.js'
 import { catalogRead } from './catalog.js'
 import { invitedSwarms } from './invitedSwarms.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
-  saveSharingSchema, sharingDetails, autoJoinOn, AUTO_JOIN_CAP, declinedWith, declinedWithout, type JoinSwarm, type SaveSharing } from './sharing.js'
+  saveSharingSchema, sharingDetails, autoJoinOn, AUTO_JOIN_CAP, declinedWithout, type JoinSwarm, type SaveSharing } from './sharing.js'
 import { autoJoin, localAutoJoinMemory, type AutoJoinMemory, type AutoJoinOutcome } from './autoJoin.js'
 import { emailDomain } from '../lib/publicEmailDomains.js'
 
@@ -235,8 +231,7 @@ function namedFor(command: Command): Named {
     'askedIn' in command ? command.askedIn?.conversationId : undefined,
     // The code tasks an instructions save's rules moved into, merged ones gone quiet included (ruleGuard.ts; #3392).
     ...command.type === 'instructions.save' ? command.tasks ?? [] : []].filter((id): id is string => !!id)
-  // Deleting a project or changing who reads it reaches every one of its groups, dormant ones too: their terminal
-  // contexts are revoked from the groups the command loaded (native.ts revokeNativeContexts).
+  // Deleting a project or changing who reads it reaches every one of its groups, dormant ones too.
   return { groupIds, startIds: has('startId') ? [field('startId')!] : [],
     projectIds: command.type === 'project.delete' || command.type === 'project.sharing' || command.type === 'project.closeTab' ? [command.projectId] : [] }
 }
@@ -362,7 +357,7 @@ function grantsOf(state: SuperTabState, agentId: string, allowed: SuperTabDelive
     if (found) grants[id] = { contributorId: found.contributorId, machineId: found.machineId, machineOwnerId: found.machineOwnerId, hostGrant: found.hostGrant ?? null,
       ...(onTeamAccount(state, found) ? { team: true as const } : {}) }
   }
-  return { swarm: { workspaceId: state.workspaceId, environment: state.environment }, grants }
+  return { swarm: { environment: state.environment }, grants }
 }
 
 const sameIds = (rows: SuperTabDelivery[], ids: string[]) => rows.length === ids.length && rows.every(r => ids.includes(r.id))
@@ -383,25 +378,6 @@ const WIDE_WINDOW = 5 * LIST_SIZE
 
 /** A Lead's start dispatches within seconds of being recorded; one still undispatched after this long was given up. */
 export const ABANDONED_START_MS = 15 * 60_000
-
-/** The commands that start, assign or route work, which read which of the tab's machines are Team machines. */
-const TEAM_WORK_COMMANDS = new Set<Command['type']>(['agent.start', 'agent.new', 'lead.start', 'agent.startDispatch', 'work.assign', 'conversation.agent', 'route.record', 'route.override'])
-/** Whether an agent's command adds an agent to a task by opening it, by posting into it or by naming one there: those joins
- *  check team access as conversation.agent does (commands.ts teamJoin). An ordinary post reads no machine rows. */
-const addsAgent = (state: SuperTabState, actor: Actor, command: Command): boolean => {
-  // A person's agent.add naming a session already in the Swarm checks it as conversation.agent does (security review S2).
-  if (command.type === 'agent.add') return state.agents.some(a => a.id === stableId(command.machineId, command.harnessId))
-  if (actor.kind !== 'agent') return false
-  if (command.type === 'conversation.create') return true
-  if (command.type !== 'message.send') return false
-  const group = state.conversations.find(c => c.id === command.conversationId)
-  return !group || [actor.agentId, ...command.recipientIds].some(id => !group.agentIds.includes(id))
-}
-
-/** A join by link or its preview, refused to someone the Workspace removed (removedFromWorkspace). */
-function failRemovedFromWorkspace(): never {
-  fail(WORKSPACE_ACCESS_REVOKED, `You were removed from this Swarm's ${WORKSPACE_LABEL}. Ask its owner to invite you.`, 403)
-}
 
 /** Starts on a not-yet-contributed machine that never dispatched, dated by their own operation receipt (starts carry no
  *  time of their own). A dispatched start may have a native session coming, so it is never counted. */
@@ -444,9 +420,6 @@ export interface SuperTabStoreHooks {
   /** Whether the Harness GitHub App reaches a project's GitHub repository for this Swarm (github/projectAccess.ts), read before
    *  an agent.start or work.assign (repositoryReach.ts). Absent with no GitHub App. */
   repositoryReach?: (autonomousEnv: string, tabId: string, projectId: string, repositoryUrl: string) => Promise<RepositoryReach | undefined>
-  /** No Harness GitHub App on this server: a Mac's Harness Team account joins no Swarm and takes no teammates' work, since
-   *  it has no git login to fetch or push with (commands.ts `teamAccountsIdle`). */
-  teamAccountsIdle?: boolean
   /** Hand free crew members their next task after the writes that may free one or open a task, and from the 30-second sweep
    *  (store.ts dispatchCrew, task #3400). Off unless a server turns it on. */
   dispatch?: boolean
@@ -515,7 +488,7 @@ export interface HostsChanged { tabId: string; machineIds: string[]; lastChanged
  *  what the caller's filter says with `in`. */
 export interface DeliveriesEnding {
   where?: { id?: string; agentId?: string; messageId?: string; assignmentId?: string }
-  matches?: (row: { agentId: string; conversationId: string; assignmentId: string | null; nativeContextId: string | null;
+  matches?: (row: { agentId: string; conversationId: string; assignmentId: string | null;
     authorKind: string; authorId: string; authorGeneration: string }) => boolean
 }
 
@@ -523,7 +496,7 @@ export interface DeliveriesEnding {
 export interface DeliveriesWaiting { machineId: string; tabId: string; agentId: string }
 
 /** What of a Swarm an agent's grant is checked against (SuperTabStore.grantHolds). */
-export type SwarmGrant = Pick<SuperTabState, 'workspaceId' | 'environment'>
+export type SwarmGrant = Pick<SuperTabState, 'environment'>
 /** What of an agent its grant is checked against: who lent which machine to whom, under which share grant. */
 /** `team`: the agent runs in a Harness Team account, by the Swarm's own record (projects.ts onTeamAccount). */
 export type AgentGrant = Pick<Agent, 'contributorId' | 'machineId' | 'machineOwnerId' | 'hostGrant'> & { team?: true }
@@ -534,7 +507,7 @@ export interface Polled {
   /** The open deliveries it read, those of them it let reach the agent, and the Swarm's main stamp (cache.ts) read before
    *  it loaded: while all three are unchanged, a held delivery is answered without loading the Swarm (deliveries). The
    *  grants of the agent and of the agents that sent what it allowed, by agent id, are checked again on every such answer:
-   *  they rest on Workspaces, machines and shares, which no Swarm write records. */
+   *  they rest on machines and shares, which no Swarm write records. */
   open?: { prioritized?: boolean; stamp: number; seen: string[]; allowed: string[]; swarm: SwarmGrant; grants: Record<string, AgentGrant> }
 }
 
@@ -581,9 +554,9 @@ export const TEAM_HOST_ONLY_MESSAGE = 'Only this computer\'s Harness Team accoun
 
 /**
  * What agent grant checks read, kept for one request only. A host read checks every agent on its machine, mostly for the
- * same few contributors: without this each agent cost its machine, share, contributor and Workspace membership again
- * (4 point queries per agent on a shared machine, Diego's review 2026-10-28). Never kept past the request, so a revoked
- * share or a Workspace removal drops the rows on the next read, as before.
+ * same few contributors: without this each agent cost its machine, share and contributor again (point queries per agent
+ * on a shared machine, Diego's review 2026-10-28). Never kept past the request, so a revoked share drops the rows on the
+ * next read, as before.
  */
 export class GrantReads {
   private readonly answers = new Map<string, Promise<unknown>>()
@@ -708,15 +681,6 @@ async function strangerRefusal<T>(state: SuperTabState, userId: string, check: (
   }
 }
 
-/** A Workspace refusal to someone not in the Swarm (a Workspace admin need not be): the routes answer it as for a Swarm that
- *  does not exist (routes/superTabs.ts NOT_AVAILABLE), since its words would say the Swarm is there. Its members keep them. */
-async function outsiderRefusal(state: SuperTabState, userId: string, check: () => Promise<void>): Promise<void> {
-  try { await check() } catch (error) {
-    if (error instanceof SuperTabError && !state.people.some(p => p.id === userId)) throw new SuperTabError(error.code, error.message, error.status, true)
-    throw error
-  }
-}
-
 /** [projectId]'s machine rules from its newest revision, one indexed read: those that pass, whether or not the rest of the
  *  record does (policy.ts validMachineRules). A rule dropped for failing its schema is logged. */
 async function machineRulesOf(tx: Transaction, tabId: string, projectId: string): Promise<MachineRule[]> {
@@ -730,15 +694,10 @@ async function machineRulesOf(tx: Transaction, tabId: string, projectId: string)
 export class SuperTabStore {
   /** Where lag-tolerant reads go (SuperTabStoreHooks.replica); the store's own client without one. */
   readonly replica: PrismaClient
-  readonly native: SuperTabNativeStore
-  readonly workspaces: SwarmWorkspaces
   /** Where avatars are kept, whose links member reads carry (read/service.ts); null when avatar uploads are off. */
   get avatars(): AvatarStore | null { return this.attachments?.avatars ?? null }
   /** The folder avatar keys start with (attachments.ts `avatarPrefix`). */
   get avatarPrefix(): string { return trimPrefix(this.attachments?.avatarPrefix ?? this.attachments?.prefix ?? '') }
-  /** No Harness GitHub App on this server: Team accounts take no teammates' work (SuperTabStoreHooks.teamAccountsIdle). Reads
-   *  decide New Project's Product Manager host as its start does (read/views.ts). */
-  get teamAccountsIdle(): boolean { return this.hooks.teamAccountsIdle === true }
   /** Signs the links every read hands out for chat files (fileLinks.ts); null without a bucket. */
   private readonly fileLinks: FileLinks | null
 
@@ -750,23 +709,6 @@ export class SuperTabStore {
     this.autoJoins = hooks.autoJoins ?? localAutoJoinMemory(now)
     this.reports = hooks.reports ?? localReportMemory(now)
     this.machineKeys = hooks.machineKeys ?? activeMachineKeysOf
-    this.native = new SuperTabNativeStore({
-      transaction: body => transaction(db, body),
-      load: (tx, user, tabId, groupIds) => this.load(tx, user, tabId, { groupIds }),
-      save: (tx, loaded, next, stamp, touches) => this.save(tx, loaded as Loaded, next, stamp, touches),
-      stamp: () => clock.next(),
-      agentGrant: (tx, state, target) => this.agentGrant(tx, state, target),
-      contribution: (tx, state, actor, command) => this.contribution(tx, state, actor, command),
-      teamHost: (tx, user) => this.teamHost(tx, user),
-      workspaceAccess: (tx, state, userId) => requireWorkspaceAccess(tx, state, userId),
-      announce: (tx, waiting) => this.announce(tx, waiting),
-    })
-    this.workspaces = new SwarmWorkspaces(db, {
-      transaction: body => transaction(db, body),
-      leave: (person, tabId, operationId) => this.executeOnce(person, tabId, { operationId, command: { type: 'member.remove', userId: person.sub } },
-        undefined, undefined, true),
-      now,
-    })
   }
 
   // ── A Mac's team account (lib/teamSession.ts) ────────────────────────────────────────────────────
@@ -849,8 +791,7 @@ export class SuperTabStore {
       if (target && target.machineId !== team && !onTeamAccount(state, target)) refuse(target)
     }
     switch (command.type) {
-      case 'machine.contribute': case 'machine.pause': case 'machine.remove': case 'machine.moved': case 'machine.engineResume': case 'machine.projects':
-      case 'machine.ownAccountWork': case 'machine.access': return refuse()
+      case 'machine.contribute': case 'machine.pause': case 'machine.remove': case 'machine.moved': case 'machine.engineResume': return refuse()
       case 'machine.cleaned': case 'tab.project': case 'agent.add':
         if (command.machineId !== team) refuse()
         return
@@ -892,37 +833,15 @@ export class SuperTabStore {
     return ids.filter(id => !live.has(id))
   }
 
-  /** The tab's contributed machines whose account row is signed in as a Harness Team account (`Machine.sessionKind`,
-   *  lib/teamSession.ts): one of the two signs routing reads that a machine is a Team machine (machines.ts teamWorkCheck). */
-  /** Shared with the read API (superTabs/read, design section 7.2). */
-  async teamMachines(tx: Transaction, state: SuperTabState): Promise<string[]> {
-    return (await this.machineFacts(tx, state)).team
-  }
-
-  /** The tab's contributed machines' account rows as they are now, in one indexed read: which are signed in as a Harness Team
-   *  account, and the CLI version each one's daemon last connected with (`Machine.clientVersion`). A start records the
-   *  version it was dispatched to, so routing can tell a machine updated since its failed starts (cli routeCommand.ts
-   *  `stalled`): Mac Auto stayed out of every route after Harness bugs later fixed and released (2026-10-29). */
-  async machineFacts(tx: Transaction, state: SuperTabState): Promise<{ team: string[]; versions: Record<string, string> }> {
+  /** The CLI version each of the tab's contributed machines' daemons last connected with (`Machine.clientVersion`), in one indexed
+   *  read of their account rows. A start records the version it was dispatched to, so routing can tell a machine updated since its
+   *  failed starts (cli routeCommand.ts `stalled`): Mac Auto stayed out of every route after Harness bugs later fixed and released
+   *  (2026-10-29). */
+  async machineVersions(tx: Transaction, state: SuperTabState): Promise<Record<string, string>> {
     const ids = (state.machines ?? []).map(m => m.machineId)
-    if (!ids.length) return { team: [], versions: {} }
-    const rows = await tx.machine.findMany({ where: { machineId: { in: ids }, autonomousEnv: state.environment, ...machineAlive },
-      select: { machineId: true, sessionKind: true, clientVersion: true } })
-    return { team: rows.filter(r => r.sessionKind === 'team').map(r => r.machineId),
-      versions: Object.fromEntries(rows.flatMap(r => r.clientVersion ? [[r.machineId, r.clientVersion] as const] : [])) }
-  }
-
-  /** This Swarm's contributed machines that are also contributed to a Swarm of another Workspace: their Harness Team account
-   *  takes no teammate's work here (machines.ts teamWorkRefusal). One indexed read of the machines' parts, one of rows. */
-  async otherWorkspaceMachines(tx: Transaction, state: SuperTabState): Promise<string[]> {
-    const ids = (state.machines ?? []).map(m => m.machineId)
-    if (!state.workspaceId || !ids.length) return []
-    const elsewhere = await tx.swarmMachine.findMany({ where: { machineId: { in: ids }, deleted: false, contributed: true, tabId: { not: state.id } },
-      select: { tabId: true, machineId: true } })
-    if (!elsewhere.length) return []
-    const rows = await tx.superTab.findMany({ where: { id: { in: [...new Set(elsewhere.map(e => e.tabId))] } }, select: { id: true, workspaceId: true, deletedAt: true } })
-    const other = new Set(rows.filter(r => !r.deletedAt && r.workspaceId && r.workspaceId !== state.workspaceId).map(r => r.id))
-    return [...new Set(elsewhere.filter(e => other.has(e.tabId)).map(e => e.machineId))]
+    if (!ids.length) return {}
+    const rows = await tx.machine.findMany({ where: { machineId: { in: ids }, autonomousEnv: state.environment, ...machineAlive }, select: { machineId: true, clientVersion: true } })
+    return Object.fromEntries(rows.flatMap(r => r.clientVersion ? [[r.machineId, r.clientVersion] as const] : []))
   }
 
   /** An older Desktop's account policy read: the built-in policy, whatever the person saved before (project instructions,
@@ -1185,13 +1104,11 @@ export class SuperTabStore {
   }
 
   /** Shared with the read API (superTabs/read, design section 7.2). */
-  /** `workspaceLeave` is a Workspace removal leaving this Swarm for the person (workspaceStore.ts SwarmWorkspaces.remove): past the Workspace check. */
-  async actor(tx: Transaction, user: AuthUser, state: SuperTabState, agentId?: string, workspaceLeave = false): Promise<Actor> {
+  async actor(tx: Transaction, user: AuthUser, state: SuperTabState, agentId?: string): Promise<Actor> {
     const team = await this.teamHost(tx, user)
     if (!agentId) {
       // A team session never speaks or reads as the person.
       if (team !== null) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
-      if (!workspaceLeave) await requireWorkspaceAccess(tx, state, user.sub)
       return { kind: 'person', userId: user.sub, email: user.email }
     }
     // A stranger learns nothing of the Swarm from an agent id, real, made up or another Swarm's.
@@ -1211,18 +1128,17 @@ export class SuperTabStore {
   }
 
   /** Shared with the read API (superTabs/read, design section 7.2). */
-  /** Every path that serves an agent's host checks this, so it also holds the Workspace check: the agent acts for its
-   *  contributor, who must still be in the Swarm's Workspace. Its host need not be, as it need not be in the Swarm. */
+  /** Every path that serves an agent's host checks this: the agent acts for its contributor, whose machine and, lent, share
+   *  must still hold. Its host need not be in the Swarm. */
   /** `reads`: one request's reads, shared by every agent it checks (GrantReads). */
   async agentGrant(tx: Transaction, state: SuperTabState, target: Agent, reads?: GrantReads): Promise<void> {
     await this.grantHolds(tx, state, target, () => person(state, target.contributorId), reads)
   }
 
-  /** What an agent's grant rests on outside the Swarm: its contributor's Workspace membership, its machine and, lent, the
-   *  machine's share. `inSwarm` checks the contributor is still in it, at the point the full check always did. */
+  /** What an agent's grant rests on outside the Swarm: its machine and, lent, the machine's share. `inSwarm` checks the
+   *  contributor is still in it, at the point the full check always did. */
   private async grantHolds(tx: Transaction, state: SwarmGrant, target: AgentGrant, inSwarm: () => void, reads?: GrantReads): Promise<void> {
     const once = <T>(key: string, read: () => Promise<T>) => reads ? reads.once(key, read) : read()
-    await once(`workspace:${state.workspaceId}:${target.contributorId}`, () => requireWorkspaceAccess(tx, state, target.contributorId))
     const machine = await once(machineKey(state.environment, target.machineId, target.machineOwnerId), () => tx.machine.findFirst({
       where: { machineId: target.machineId, userId: target.machineOwnerId, autonomousEnv: state.environment, ...machineAlive } }))
     if (!machine || !machineBillingAllowsDataPlane(machine)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
@@ -1271,10 +1187,10 @@ export class SuperTabStore {
     return { machineOwnerId: machine.userId, contributorId, hostGrant, ...host }
   }
 
-  async create(user: AuthUser, operationId: string, name: string, projectVisibility?: ProjectVisibility, workspaceId?: string) {
+  async create(user: AuthUser, operationId: string, name: string, projectVisibility?: ProjectVisibility) {
     this.personOnly(user)
     const id = stableId('super-tab', user.autonomousEnv, user.sub, operationId)
-    const requestHash = hash({ name, ...(projectVisibility ? { projectVisibility } : {}), ...(workspaceId ? { workspaceId } : {}) })
+    const requestHash = hash({ name, ...(projectVisibility ? { projectVisibility } : {}) })
     return transaction(this.db, async tx => {
       const prior = await tx.superTabOperation.findUnique({ where: { id } })
       if (prior) {
@@ -1282,10 +1198,8 @@ export class SuperTabStore {
         return { id, revision: prior.revision }
       }
       const state = createSuperTab(id, name, { id: user.sub, email: user.email }, user.autonomousEnv, projectVisibility)
-      // Every new Swarm is in a Workspace, invite-only there until its owner or the Workspace's admins open it (workspaceStore.ts).
-      state.workspaceId = await workspaceForNewSwarm(tx, user, name, id, workspaceId)
       // Born in parts: its state lives in the Swarm* parts, and `state` only fences older backends (schema.prisma).
-      await tx.superTab.create({ data: { id, ownerId: user.sub, autonomousEnv: user.autonomousEnv, workspaceId: state.workspaceId, ...indexesOf(state), format: 2, state: { version: 2 } } })
+      await tx.superTab.create({ data: { id, ownerId: user.sub, autonomousEnv: user.autonomousEnv, ...indexesOf(state), format: 2, state: { version: 2 } } })
       await insertParts(tx, split({ ...state, sequenceBase: 0 }, { tabId: id, version: 1, now: clock.next() }))
       // Its first project's copy of the built-in instructions, which its state names as revision 1 (model.ts createSuperTab).
       await writeInstructions(tx, id, { projectId: state.projects![0]!.id, revision: 1, hash: FIRST_INSTRUCTIONS.instructionsHash, text: INSTRUCTIONS_TEMPLATE,
@@ -1329,13 +1243,6 @@ export class SuperTabStore {
     }).sort((a, b) => b.deletedAt - a.deletedAt || (a.id < b.id ? -1 : 1)) }
   }
 
-  async workspaceList(user: AuthUser) {
-    this.personOnly(user)
-    // As the Swarm list does: a Swarm the person joins by domain is in the Workspace they see in this answer.
-    await this.autoJoin(user)
-    return { workspaces: await listWorkspaces(this.db, user) }
-  }
-
   /** Joins the person to the Swarms of their own email domain with auto-join on, at most every 2 minutes (autoJoin.ts). Run at
    *  the start of the list reads apps poll. Never throws. */
   async autoJoin(user: AuthUser): Promise<string[]> {
@@ -1345,22 +1252,15 @@ export class SuperTabStore {
 
   /** Joins `user` to Swarm [tabId] as someone at its owner's domain, by themselves (spec 2026-11-03). Everything the read found
    *  is checked again in this transaction: auto-join still on at the person's domain, not a member, never declined, under 200
-   *  people. The join relies on the sharing the head holds, so turning auto-join off at once conflicts with it. Someone the
-   *  Workspace removed is declined instead, in its own write, so no later read finds this Swarm for them. */
+   *  people. The join relies on the sharing the head holds, so turning auto-join off at once conflicts with it. */
   async autoJoinSwarm(user: AuthUser, tabId: string): Promise<AutoJoinOutcome> {
     this.personOnly(user)
-    const outcome = await transaction(this.db, async tx => {
+    return transaction(this.db, async tx => {
       const loaded = await this.load(tx, user, tabId), state = cloneData(loaded.state)
       const domain = autoJoinOn(state), email = authenticatedEmail(user.email)
       if (!domain || !email || emailDomain(email) !== domain || state.people.some(p => p.id === user.sub) ||
         state.autoJoinDeclined?.includes(user.sub) || state.people.length >= AUTO_JOIN_CAP) return 'skipped' as const
       const stamp = clock.next(), generation = stableId('auto-join', tabId, user.sub, String(stamp))
-      if (state.workspaceId) {
-        // As a link join: a guest of the Workspace, never higher; someone active there keeps their role (addMember). Someone the
-        // Workspace removed is never added back this way (removedFromWorkspace).
-        if (await removedFromWorkspace(tx, state.workspaceId, user.sub)) return 'revoked' as const
-        await addMember(tx, state.workspaceId, { id: user.sub, email }, 'guest', state.ownerId, generation)
-      }
       admitPerson(state, { id: user.sub, email, role: state.sharing!.access.role, generation, joinedVia: 'domain' })
       await this.save(tx, loaded, state, stamp, [{ kind: 'head', key: 'head' }])
       // People per Swarm is what warns first at scale (spec, Design 4).
@@ -1370,50 +1270,6 @@ export class SuperTabStore {
       // A Swarm deleted since the read is found by nobody.
       if (error instanceof SuperTabError && error.code === 'NOT_FOUND') return 'skipped' as const
       throw error
-    })
-    if (outcome !== 'revoked') return outcome
-    await transaction(this.db, async tx => {
-      const loaded = await this.load(tx, user, tabId), state = cloneData(loaded.state)
-      if (state.autoJoinDeclined?.includes(user.sub) || state.people.some(p => p.id === user.sub)) return
-      state.autoJoinDeclined = declinedWith(state, user.sub)
-      await this.save(tx, loaded, state, clock.next())
-    })
-    return 'declined'
-  }
-
-  /** Opens a Swarm to its Workspace's members, or closes it again: its owner (not a guest) or the Workspace's owners and admins,
-   *  who need not be in the Swarm. Closing it leaves everyone who joined. */
-  async setWorkspaceVisibility(user: AuthUser, tabId: string, visibility: 'invite-only' | 'workspace') {
-    this.personOnly(user)
-    return transaction(this.db, async tx => {
-      const loaded = await this.load(tx, user, tabId), state = cloneData(loaded.state)
-      await outsiderRefusal(state, user.sub, async () => {
-        if (!state.workspaceId) fail('WORKSPACE_REQUIRED', `This Swarm has no ${WORKSPACE_LABEL} yet.`, 409)
-        const own = await tx.swarmWorkspaceMember.findUnique({ where: { id: memberId(state.workspaceId, user.sub) } })
-        if (!(state.ownerId === user.sub && own && !own.removedAt && own.role !== 'guest')) await requireWorkspaceRole(tx, state.workspaceId, user.sub, 'swarm.manage')
-      })
-      state.workspaceVisibility = visibility
-      await this.save(tx, loaded, state, clock.next(), [{ kind: 'head', key: 'head' }])
-      return { id: tabId, workspaceVisibility: visibility }
-    })
-  }
-
-  /** A member or above joins a Swarm open to their Workspace, as a collaborator. A guest never does (design, Roles). */
-  async workspaceJoin(user: AuthUser, tabId: string, operationId: string) {
-    this.personOnly(user)
-    return transaction(this.db, async tx => {
-      const loaded = await this.load(tx, user, tabId), state = cloneData(loaded.state)
-      await outsiderRefusal(state, user.sub, async () => {
-        if (!state.workspaceId || state.workspaceVisibility !== 'workspace') fail('FORBIDDEN', 'This Swarm is not open to its Workspace.', 403)
-        await requireWorkspaceRole(tx, state.workspaceId, user.sub, 'swarm.joinOpen')
-      })
-      const existing = state.people.find(p => p.id === user.sub)
-      if (existing) return { id: tabId, role: existing.role, alreadyMember: true }
-      const member = { id: user.sub, email: authenticatedEmail(user.email)!, role: 'collaborator' as const, generation: stableId('workspace-join', tabId, user.sub, operationId) }
-      admitPerson(state, member)
-      // As a link join does: the open visibility it relied on lives on the head, so closing it at once conflicts.
-      await this.save(tx, loaded, state, clock.next(), [{ kind: 'head', key: 'head' }])
-      return { id: tabId, role: member.role, alreadyMember: false }
     })
   }
 
@@ -1478,8 +1334,6 @@ export class SuperTabStore {
       const { state } = await this.load(tx, user, tabId)
       const sharing = authorizeSwarmJoin(state, user.email, token, user.sub)
       const member = state.people.find(p => p.id === user.sub)
-      // What join refuses, its preview refuses alike: it never offers a join that cannot happen.
-      if (!member && state.workspaceId && await removedFromWorkspace(tx, state.workspaceId, user.sub)) failRemovedFromWorkspace()
       return { id: tabId, name: state.name, role: member?.role ?? sharing.access.role, alreadyMember: !!member }
     })
   }
@@ -1504,12 +1358,6 @@ export class SuperTabStore {
         return { id: tabId, role: member.role, alreadyMember: result.alreadyMember === true }
       }
       const alreadyMember = !!member
-      if (!member && state.workspaceId) {
-        // A link or an email domain makes a guest of the Workspace, never higher. Someone the Workspace removed comes back only by
-        // an invitation, never by a general link (design, Roles), also once the purge deleted their member row (task #2510).
-        if (await removedFromWorkspace(tx, state.workspaceId, user.sub)) failRemovedFromWorkspace()
-        await addMember(tx, state.workspaceId, { id: user.sub, email: user.email }, 'guest', state.ownerId, receiptId)
-      }
       if (!member) {
         member = { id: user.sub, email: authenticatedEmail(user.email)!, role: sharing.access.role, generation: receiptId }
         admitPerson(state, member)
@@ -1535,22 +1383,14 @@ export class SuperTabStore {
     const now = this.now()
     const visible = visibleState(state, actor, now)
     const mentions = actor.kind === 'person' ? { mentionsWaiting: await mentionsWaiting(tx, tabId, state, actor, now) } : {}
-    const facts = visible.machines?.length ? await this.machineFacts(tx, state) : { team: [], versions: {} as Record<string, string> }
-    const teamMachines = facts.team
-    const otherWorkspace = visible.machines?.length ? await this.otherWorkspaceMachines(tx, state) : []
+    const versions = visible.machines?.length ? await this.machineVersions(tx, state) : {} as Record<string, string>
     const slots = slotCounter(state)
     return { lastChangedAt: await readLastChangedAt(tx, view, tabId) ?? 0, state: { ...visible, ...mentions, machines: visible.machines?.map(pool => {
       const stored = state.machines!.find(m => m.machineId === pool.machineId)!
-      // Whether it takes teammates' projects now, and if not why (machines.ts teamWorkRefusal): what routing leaves it
-      // out for, and what Desktop can show on the machine.
-      const refusal = machineTeamWork(stored, now, teamMachines, otherWorkspace)
       const suspended = suspendedEngines(stored, now)
       const machineSuspended = machineSuspensionReason(stored, now)
       return { ...pool, availableSlots: availableSlots(state, stored, slots(stored)),
-        teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const,
-          // Its owner lets teammates' work run in their own account (machines.ts ownAccountWork): the route says so.
-          ...(ownAccountWork(stored) ? { ownAccount: ownAccountNote(stored, shownNameOf(state, stored.contributorId)) } : {}) },
-        ...(facts.versions[pool.machineId] ? { clientVersion: facts.versions[pool.machineId] } : {}),
+        ...(versions[pool.machineId] ? { clientVersion: versions[pool.machineId] } : {}),
         // What the route leaves out (cli superTabs/routeCommand.ts unreadyPool).
         ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}), ...(machineSuspended ? { machineSuspended } : {}) }
     }) } }
@@ -1610,22 +1450,6 @@ export class SuperTabStore {
       if (error instanceof SuperTabError && error.details?.pushed === true && typeof pushedOn === 'string') {
         await this.executeOnce(user, tabId, { operationId: `team-written-${stableId(input.operationId, pushedOn)}`, command: { type: 'work.teamWritten', conversationId: pushedOn } }, asAgentId, hostMachineId)
           .catch(failure => logger.warn('Team-written mark failed', { tabId, error: String(failure) }))
-      }
-      // A queued start its machine will not take for good — no Harness Team account, or one that is not private — fails
-      // with that reason instead of waiting there: its host would otherwise try to launch it on every pass, and it would
-      // hold a slot. A stale check or an offline machine may pass again by itself, so that start keeps waiting.
-      const command = input.command
-      if (command?.type === 'agent.startDispatch' && hostMachineId && error instanceof SuperTabError && LASTING_TEAM_REFUSALS.includes(error.code)) {
-        // Only one never launched: a repeated dispatch of a launched start is admitted again too, and its agent may be starting.
-        const start = await transaction(this.db, async tx => {
-          const row = await tx.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv }, select: SWARM_ROW })
-          return row?.format === 2 && !row.deletedAt ? (await loadRow(tx, row, { startIds: [command.startId] })).state.starts?.find(s => s.id === command.startId) : undefined
-        })
-        if (start && !start.dispatched && !start.harnessId && !start.error) {
-          await this.executeOnce(user, tabId, { operationId: `team-refused-${command.startId}`,
-            command: { type: 'agent.startFailed', startId: command.startId, error: error.message } }, asAgentId, hostMachineId)
-            .catch(() => { /* Settled by a concurrent pass: the dispatch is refused either way. */ })
-        }
       }
       throw error
     }
@@ -1783,7 +1607,7 @@ export class SuperTabStore {
 
   /** [only]: what the store alone may give a command: `movedTo` for machine.moved (computerSignedIn). */
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
-    workspaceLeave = false, only: { movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string } = {}) {
+    only: { movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string } = {}) {
     const { operationId, command } = operationSchema.parse(input)
     // Each read before the transaction is its own phase (commandTiming.ts): several call GitHub.
     const [pushOrigin, repositoryReach, pullRequestFiles, pullRequestMerges] = await Promise.all([
@@ -1800,9 +1624,7 @@ export class SuperTabStore {
       ended = []
       started = []
       const stamp = clock.next()
-      // A Workspace removal leaves a deleted Swarm too, so its restore cannot bring the person back (security review 2 of #2457).
-      const leavingDeleted = workspaceLeave && command.type === 'member.remove' && command.userId === user.sub && !asAgentId
-      const first = await this.load(tx, user, tabId, namedFor(command), DELETED_SWARM_COMMANDS.has(command.type) || leavingDeleted)
+      const first = await this.load(tx, user, tabId, namedFor(command), DELETED_SWARM_COMMANDS.has(command.type))
       const named = await this.ensure(tx, first, await this.moreNamed(tx, tabId, first.state, command, asAgentId ? null : user.sub, asAgentId))
       // A person's other Buddies' chats load with their main one, which lists them (task #3818): a command that reads that person's
       // Buddies, their default's chat included, reads all of them. Nothing more is read when none is listed.
@@ -1829,28 +1651,6 @@ export class SuperTabStore {
         if (closing) await this.notTeamMachine(user, () => tx.machine.findFirst({ where: { machineId: closing.machineId, userId: user.sub,
           autonomousEnv: user.autonomousEnv, ...machineAlive } }), !!closing.heldFor || teamByRecord(original, closing.machineId))
       }
-      // Accepting a Swarm's invitation from outside its Workspace makes the person a guest of the Workspace first (design, Roles).
-      if (command.type === 'invite.accept' && !hostMachineId && original.workspaceId) {
-        const email = user.email.trim().toLowerCase()
-        const invite = original.invitations.find(i => i.id === command.inviteId && i.email === email && i.expiresAt > this.now())
-        if (invite) {
-          // Workspace owners, admins and members may invite to a Swarm (invite.create). Someone the Workspace removed comes
-          // back only on the word of an owner or admin, as a Workspace invitation needs, read now rather than when it was
-          // sent: otherwise a member's invitation would undo the removal and its auto-join decline (task #2939).
-          // Nor does any invitation sent before the removal, an admin's included: the removal is final against it (task #3173).
-          if (await removedFromWorkspace(tx, original.workspaceId, user.sub)) {
-            const sender = invite.invitedBy ? await activeMember(tx, original.workspaceId, invite.invitedBy) : null
-            const removedAt = await latestRemovalAt(tx, original.workspaceId, user.sub)
-            if (!sender || !workspaceCan(sender.role as WorkspaceRole, 'workspace.invite')
-              || (removedAt !== null && invite.expiresAt - SWARM_INVITATION_MS < removedAt)) {
-              fail(WORKSPACE_ACCESS_REVOKED, `You were removed from this Swarm's ${WORKSPACE_LABEL}. Ask one of its owners or admins to invite you.`, 403)
-            }
-          }
-          // On the inviter's authority; an invitation from before that was recorded was the Swarm owner's or a member's.
-          await addMember(tx, original.workspaceId, { id: user.sub, email }, 'guest', invite.invitedBy ?? original.ownerId,
-            stableId('workspace-guest', tabId, user.sub, operationId))
-        }
-      }
       // A removed agent's or machine's host confirms its close or cleanup as the machine owner, who may have left the Swarm with it.
       const actor: Actor = command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned' ? { kind: 'person', userId: user.sub, email: user.email }
         // The server's own crew dispatch (dispatchCrew), as the project's PM, with no sign-in of anyone's: only while that
@@ -1858,7 +1658,7 @@ export class SuperTabStore {
         : only.asProjectPm ? await this.projectPmActor(tx, original, only.asProjectPm, command, user)
         : hostMachineId && 'startId' in command
           ? await this.poolHostActor(tx, user, original, hostMachineId, command.startId)
-          : await this.actor(tx, user, original, asAgentId, workspaceLeave && command.type === 'member.remove' && command.userId === user.sub && !asAgentId)
+          : await this.actor(tx, user, original, asAgentId)
             // A made-up or stopped agent, or anyone refused here, is told what a missing Swarm tells (deletion.ts).
             .catch(error => DELETION_COMMANDS.has(command.type) ? notThere() : Promise.reject(error))
       // A Mac and its Harness Team account leave under one removal, and each host confirms its cleanup as the same person
@@ -1898,15 +1698,13 @@ export class SuperTabStore {
         }
         return replyOf(prior)
       }
-      if (command.type !== 'invite.accept' && command.type !== 'agent.sessionClosed' && command.type !== 'machine.cleaned') author(original, actor)
-      const context: CommandContext = { operationId, now: this.now(), ...(leavingDeleted ? { workspaceLeave: true as const } : {}) }
+      if (command.type !== 'invite.accept' && command.type !== 'agent.sessionClosed' && command.type !== 'machine.cleaned') {
+        // Whoever is refused on the way to deleting or restoring the Swarm, a stranger to it included, is told what a missing one tells.
+        try { author(original, actor) } catch (error) { if (DELETION_COMMANDS.has(command.type)) notThere(); throw error }
+      }
+      const context: CommandContext = { operationId, now: this.now() }
       if (command.type === 'machine.moved' && only.movedTo && actor.kind === 'person') {
         context.computerMove = await this.computerMove(tx, original, actor.userId, command.machineId, only.movedTo)
-      }
-      if (command.type === 'swarm.restore' && original.deletion && original.workspaceId) {
-        const lost: string[] = []
-        for (const person of original.people) if (!await hasWorkspaceAccess(tx, original, person.id)) lost.push(person.id)
-        if (lost.length) context.workspaceLost = lost
       }
       if (command.type === 'agent.screen' || command.type === 'agent.input') context.confidentialSession = await this.confidential(tx, command.agentId)
       if (REGISTERS.has(command.type)) context.registrations = await otherRegistrations(tx, original, registeredBy(original, command))
@@ -2026,8 +1824,7 @@ export class SuperTabStore {
         context.projectRules = await currentRules(tx, tabId, projectId)
       }
       if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
-        || command.type === 'machine.engineResume' || command.type === 'machine.projects' || command.type === 'machine.ownAccountWork'
-        || command.type === 'machine.access' || command.type === 'rules.set') && command.askedIn) {
+        || command.type === 'machine.engineResume' || command.type === 'rules.set') && command.askedIn) {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.askedIn.messageId, tabId, conversationId: command.askedIn.conversationId } })
         if (asked) context.askedIn = { author: asked.author as unknown as Author, source: !!asked.source, createdAt: asked.createdAt.getTime() }
       }
@@ -2108,22 +1905,8 @@ export class SuperTabStore {
       if ((command.type === 'member.avatar' || command.type === 'agent.avatar') && command.avatar?.kind === 'upload') {
         context.avatarUpload = await this.avatarUpload(tx, tabId, actor, command.avatar.id)
       }
-      if ((command.type === 'invite.create' || command.type === 'invite.revoke') && actor.kind === 'person' && original.workspaceId) {
-        const member = await activeMember(tx, original.workspaceId, actor.userId)
-        if (member) context.workspaceRole = member.role as WorkspaceRole
-        // Only an owner or admin may bring back someone the Workspace removed; for anyone else, the account the email names.
-        if (command.type === 'invite.create' && !(member && workspaceCan(member.role as WorkspaceRole, 'workspace.invite'))) {
-          const invitee = await tx.user.findUnique({ where: { email: command.email.trim().toLowerCase() }, select: { id: true } })
-          if (invitee && await removedFromWorkspace(tx, original.workspaceId, invitee.id)) context.inviteeRemoved = true
-        }
-      }
-      // A Ready for review counts the machines the project may use (reviewCapacity.ts), by the same team access as work.assign.
-      if (TEAM_WORK_COMMANDS.has(command.type) || (command.type === 'work.status' && command.status === 'review') || addsAgent(original, actor, command)) {
-        const facts = await this.machineFacts(tx, original)
-        context.teamMachines = facts.team
-        context.machineVersions = facts.versions
-        context.otherWorkspaceMachines = await this.otherWorkspaceMachines(tx, original)
-      }
+      // A start records the version of the machine it is dispatched to.
+      if (command.type === 'agent.startDispatch') context.machineVersions = await this.machineVersions(tx, original)
       if (pushOrigin) Object.assign(context, { pushOrigin: pushOrigin.origin, pushOriginPulls: pushOrigin.pulls, ...pushOrigin.task ? { pushOriginTask: pushOrigin.task } : {} })
       if (repositoryReach) context.repositoryReach = repositoryReach
       if (pullRequestFiles && command.type === 'work.status') {
@@ -2215,7 +1998,7 @@ export class SuperTabStore {
       if (command.type === 'project.sharing' && command.visibility === 'private') {
         await makeProjectPrivate(tx, effects.state, command.projectId)
       }
-      const watchersLost = await revokeNativeContexts(tx, original, effects.state, (holds, end) => this.endDeliveries(tx, tabId, holds, end))
+      const lostSight = watchersLost(original, effects.state)
       // Rule (b) for claims (design D10): a change to who a conversation's deliveries may reach writes those delivery rows,
       // so a claim of one conflicts with it. An archived conversation, or one its receiver left, ends them: kept for a
       // reopening, 6 of the 9 deliveries prod watch found stuck for days on 2026-10-28 waited in archived groups, unread.
@@ -2367,7 +2150,7 @@ export class SuperTabStore {
       if (deleted) await deleteRules(tx, tabId, deleted)
       if (effects.terminal) await this.writeTerminal(tx, tabId, effects.terminal, context.now)
       // A deleted Swarm's observer sockets, on any instance, check again and close (deletion.ts).
-      if (this.hooks.accessChanged && (watchersLost.length || command.type === 'swarm.delete')) {
+      if (this.hooks.accessChanged && (lostSight.length || command.type === 'swarm.delete')) {
         const told = this.hooks.accessChanged
         afterCommit(tx, () => told(tabId))
       }
@@ -2556,7 +2339,7 @@ export class SuperTabStore {
 
   /**
    * The project PM the crew dispatch speaks as (dispatchCrew), checked inside the write as the agent path checks an agent:
-   * it still leads the task's own project and is not stopping, its grant holds (Workspace, machine, share: grantHolds), a
+   * it still leads the task's own project and is not stopping, its grant holds (machine, share: grantHolds), a
    * PM in a Team account reaches only what its own session could (teamCommand), and the task is still one the dispatch would
    * hand out now (its state may have moved since the pass read it: postponed, pinned, defined again). It only assigns.
    */
@@ -2705,7 +2488,7 @@ export class SuperTabStore {
             : { type: pick.kind === 'start' ? 'member.start' as const : 'member.helper' as const, conversationId: group.id }
           try {
             await this.executeOnce(memberUser, tabId, { operationId: stableId('member-dispatch', pick.kind, group.id, roundOf(group)), command },
-              undefined, undefined, false, { asProjectPm: lead.id })
+              undefined, undefined, { asProjectPm: lead.id })
             if (pick.kind === 'assign') out.assigned++
           } catch (error) {
             const code = error instanceof SuperTabError ? error.code : 'unknown'
@@ -2732,7 +2515,7 @@ export class SuperTabStore {
           if (++tries > DISPATCH_TRIES) break
           try {
             await this.executeOnce(user, tabId, { operationId: stableId('dispatch', group.id, roundOf(group)),
-              command: { type: 'work.assign', conversationId: group.id, agentId: member.id } }, undefined, undefined, false, { asProjectPm: lead.id })
+              command: { type: 'work.assign', conversationId: group.id, agentId: member.id } }, undefined, undefined, { asProjectPm: lead.id })
             taken.add(group.id)
             out.assigned++
             break
@@ -3352,8 +3135,7 @@ export class SuperTabStore {
       } else if (team !== null) {
         // A team session is never the project's owner: it reads a text only for an agent its own machine hosts.
         if (!await this.hostsProject(tx, state, user, project.id, team)) unavailable()
-      } else if (!(ownsProject(state, user.sub, project) && await hasWorkspaceAccess(tx, state, user.sub))
-        && !await this.hostsProject(tx, state, user, project.id)) {
+      } else if (!ownsProject(state, user.sub, project) && !await this.hostsProject(tx, state, user, project.id)) {
         unavailable()
       }
       const stored = await tx.superTabRoleText.findUnique({ where: { id: stableId(tabId, projectId, roleId) } })
@@ -3734,7 +3516,7 @@ export class SuperTabStore {
    */
   async endDeliveries(tx: Transaction, tabId: string, holds: DeliveriesEnding, end: () => Promise<{ count: number }>): Promise<{ count: number }> {
     const rows = await tx.superTabDelivery.findMany({ where: { tabId, status: 'claimed', ...holds.where },
-      select: { machineId: true, agentId: true, conversationId: true, assignmentId: true, nativeContextId: true, authorKind: true, authorId: true, authorGeneration: true } })
+      select: { machineId: true, agentId: true, conversationId: true, assignmentId: true, authorKind: true, authorId: true, authorGeneration: true } })
     const claimed = holds.matches ? rows.filter(holds.matches) : rows
     const ended = await end()
     if (ended.count) {
@@ -4241,9 +4023,8 @@ export class SuperTabStore {
   }
 
   /** What the crew keeper asks of the store (crewKeep.ts CrewDeps): whether a machine admits a crew member's move start now,
-   *  under the same checks an agent.start meets, Team-account facts read once per sweep. */
+   *  under the same checks an agent.start meets. */
   private async crewDeps(tx: Transaction, state: SuperTabState, now: number): Promise<CrewDeps> {
-    const teamMachines = await this.teamMachines(tx, state), otherWorkspaceMachines = await this.otherWorkspaceMachines(tx, state)
     // Each crew project's machine rules from its record (machineRules.ts): one indexed read per project with crew (at most
     // the Swarm's 100), only in a sweep where a member needs a machine.
     const rules = new Map<string, readonly MachineRule[]>()
@@ -4254,7 +4035,7 @@ export class SuperTabStore {
       const pool = state.machines?.find(m => m.machineId === machineId)
       const request = pool && crewMoveRequest(state, agent, pool)
       if (!request) return false
-      try { return !!admitMachineStart(state, request, now, undefined, teamMachines, otherWorkspaceMachines) } catch { return false }
+      try { return !!admitMachineStart(state, request, now) } catch { return false }
     } }
   }
 
@@ -4462,8 +4243,6 @@ export class SuperTabStore {
       // A machine that went silent while cleaning takes the fallback before this fresh reading can bring it back: its records
       // go, its cleanup waits for this host, as the next sweep would have done (machines.ts expireRemovals).
       expireRemovals(state, now)
-      // So does an unconfirmed access entry nobody confirmed in a week: the reading writes this machine's part anyway.
-      expireAccess(state, now)
       const stamp = clock.next(), removedIds: string[] = []
       // A reading writes only its machine's part, and an agent's part only when its presence changes (spec); a group's only
       // when a task there is lost.
@@ -4483,9 +4262,8 @@ export class SuperTabStore {
           }
         }
         if (removedIds.length) {
-          const watchersLost = await revokeNativeContexts(tx, loaded.state, state)
           const told = this.hooks.accessChanged
-          if (told && watchersLost.length) afterCommit(tx, () => told(tabId))
+          if (told && watchersLost(loaded.state, state).length) afterCommit(tx, () => told(tabId))
         }
         return { version }
       }
@@ -4554,9 +4332,9 @@ export class SuperTabStore {
       if (back.length) {
         const elsewhere = await otherRegistrations(tx, state, back.map(r => ({ machineId, harnessId: r.harnessId })))
         const facts = { elsewhere: new Set(back.flatMap(r => { const key = sessionKey(machineId, r.harnessId); return elsewhere.registered.has(key) || elsewhere.confidential.has(key) ? [r.harnessId] : [] })),
-          teamMachines: await this.teamMachines(tx, state), otherWorkspaceMachines: await this.otherWorkspaceMachines(tx, state) }
+        }
         for (const record of back) {
-          const refused = restoreRefusal(state, record, user.sub, now, facts)
+          const refused = restoreRefusal(state, record, user.sub, facts)
           if (refused) { logger.info('[swarm] a reopened session was not restored', { reason: refused }); continue }
           // Its share, then the record every Swarm registering this session writes: withdrawn, stopping or tied to a private project.
           try {
@@ -4595,7 +4373,6 @@ export class SuperTabStore {
       const tx = this.db
       const { state } = await this.readLoad(user, tabId)
       person(state, user.sub)
-      await requireWorkspaceAccess(tx, state, user.sub)
       const target = state.agents.find(a => a.machineId === machineId && a.harnessId === harnessId && a.machineOwnerId === machineOwnerId)
       if (!target) return false
       agent(state, target.id)
@@ -4646,7 +4423,6 @@ export class SuperTabStore {
     try {
       state = (await this.readLoad(user, tabId)).state
       person(state, user.sub)
-      await requireWorkspaceAccess(this.db, state, user.sub)
     } catch (error) { if (error instanceof SuperTabError) return []; throw error }
     // agentGrant reads only the agent's contributor, machine and grant: agents sharing those share its answer.
     const grants = new Map<string, Promise<boolean>>()
@@ -4715,7 +4491,6 @@ export class SuperTabStore {
         ? (await tx.superTabMessage.findUnique({ where: { id: delivery.messageId }, select: { source: true } }))?.source : knownSource
       if (!pmAcceptsMessage(state, delivery.agentId, source)) return false
     }
-    if (delivery.nativeContextId && !await this.native.allowsDelivery(tx, state, delivery.nativeContextId)) return false
     if (delivery.authorKind !== 'agent') return true
     try { await this.agentGrant(tx, state, agent(state, delivery.authorId)); return true }
     catch (error) { if (error instanceof SuperTabError) return false; throw error }
@@ -4743,10 +4518,9 @@ export class SuperTabStore {
       if (!open.length) return []
       // A held delivery stays open for as long as its host cannot type it, possibly hours, polled each second (Diego, 10-28):
       // the same open deliveries at the same main stamp are allowed as the full poll found them. Anything a Swarm write
-      // revokes moves the stamp; what no Swarm write records (a Workspace, a machine, a share) is checked again each time.
-      // A turn typed into a terminal rests on its typist's access too (native.ts allowsDelivery): it takes the full poll.
+      // revokes moves the stamp; what no Swarm write records (a machine, a share) is checked again each time.
       const seen = last.open, stamp = seen && (await this.view([tabId])).mainStamp(tabId)
-      if (seen?.grants[agentId] && stamp === seen.stamp && sameIds(open, seen.seen) && !open.some(d => d.nativeContextId)) {
+      if (seen?.grants[agentId] && stamp === seen.stamp && sameIds(open, seen.seen)) {
         return (await this.heldDeliveries(user, agentId, open, seen)).map(d => withTurnEnd(d, this.now()))
       }
     }
@@ -4997,11 +4771,8 @@ export class SuperTabStore {
       // A compacted delivery (deliveryCompaction.ts) is checked as its row was: finished, it is refused or resolved as before.
       const delivery = live ?? await compactedDelivery(tx, tabId, agentId, deliveryId)
       await this.row(tx, user, tabId)
-      // A native message may be delivered to its Lead in a different conversation from the terminal it came from.
-      const context = delivery?.nativeContextId ? await tx.superTabNativeContext.findFirst({
-        where: { id: delivery.nativeContextId, tabId }, select: { agentId: true } }) : null
       const parts = await loadDeliveryParts(tx, tabId, delivery ? [delivery.conversationId] : [],
-        [agentId, ...delivery?.authorKind === 'agent' ? [delivery.authorId] : [], ...context ? [context.agentId] : []], context?.agentId, agentId)
+        [agentId, ...delivery?.authorKind === 'agent' ? [delivery.authorId] : []], agentId)
       const state = reassemble(parts, { share: true })
       parkLaterConversations(state)
       author(state, await this.actor(tx, user, state, agentId), true)
@@ -5264,7 +5035,7 @@ export class SuperTabStore {
         try {
           const moved = write
             ? (await this.executeOnce(user, tabId, { operationId: `computer-move-${randomUUID()}`, command: { type: 'machine.moved', machineId: from.machineId } },
-              undefined, undefined, false, { movedTo })).result.moved === true
+              undefined, undefined, { movedTo })).result.moved === true
             : await this.wouldMove(user, tabId, from.machineId, movedTo)
           if (moved) moves.push({ tabId, ...move })
         } catch (error) {

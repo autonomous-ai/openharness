@@ -18,6 +18,7 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { worksOnOf } from './assign/crew.js'
 import { GitHubReads, GitHubStop, PAGE, type GitHubGet } from './githubRest.js'
 import { identifier, object } from './wire.js'
 
@@ -28,7 +29,7 @@ export const MENTIONS_INTERVAL_MS = 20_000
 export const TEAM: ReadonlySet<unknown> = new Set(['OWNER', 'MEMBER', 'COLLABORATOR'])
 /** Bounds on one pass and on what is kept: a Swarm reads at most this many repositories here, and a burst beyond a page
  *  count is read next pass. */
-const MAX_REPOS = 20, MAX_REVIEWED = 10, MAX_RELAYS = 50, MAX_SEEN = 2_000, MAX_OWNED = 1_000
+const MAX_REPOS = 20, MAX_REVIEWED = 10, MAX_RELAYS = 50, MAX_SEEN = 2_000, MAX_OWNED = 1_000, MAX_ASKED = 200
 const TEXT_MAX = 4_000, TITLE_MAX = 300
 /** Who the agents here are and what they read, asked again at most this often: each ask reads every agent's Swarm. */
 const AGENTS_FRESH_MS = 60_000
@@ -53,7 +54,9 @@ interface Review extends Said { id: number; lines: Said[] }
 /** What is kept of a repository between passes and restarts: where each feed was read to, what was already handed on, each
  *  agent's tasks already known, and which issues and pull requests carry which builder label. */
 interface RepoMemory { comments: string; reviewComments: string; issues: string; seen: string[]; tasks: Record<string, number[]>
-  owned: Record<string, string[]>; usedAt: number }
+  owned: Record<string, string[]>; usedAt: number
+  /** The agents already asked what they work on here (askFocus). */
+  asked?: string[] }
 interface Memory { repos: Record<string, RepoMemory> }
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -83,7 +86,9 @@ export async function watchedAgents(deps: { me: string | null; live: (harnessId:
     const agent = object(row.agent)
     if (agent.regular !== true || row.closeSession === true || row.stopRequested === true || !identifier(row.tabId) || !identifier(agent.id)) continue
     if (agent.contributorId !== deps.me || agent.machineOwnerId !== deps.me || typeof agent.harnessId !== 'string' || !deps.live(agent.harnessId)) continue
-    const names = [...new Set([agent.name, agent.displayName].filter((n): n is string => typeof n === 'string' && !!n.trim()).map(n => n.trim()))]
+    // The name people see first (backend agentNames.ts: a chosen name, else a free one): it names the agent's label and its
+    // instructions file as the assigner and Desktop name them. Its stored name can be its engine's ("Claude Code").
+    const names = [...new Set([agent.displayName, agent.name].filter((n): n is string => typeof n === 'string' && !!n.trim()).map(n => n.trim()))]
     if (!names.length) continue
     const state = await deps.read(row.tabId, agent.id).catch(() => null)
     if (!state) continue
@@ -116,6 +121,8 @@ export class GitHubMentions {
     get: GitHubGet
     /** Hands one relay to the backend as this computer's person (github.relay). */
     relay: (tabId: string, operationId: string, command: Json) => Promise<unknown>
+    /** Tells one agent something only it reads, in its chat with its person (an agent-only notice). */
+    tell?: (agent: WatchedAgent, operationId: string, text: string) => Promise<unknown>
     file: string
     now?: () => number
     log?: (line: string) => void
@@ -210,6 +217,7 @@ export class GitHubMentions {
       await this.hand(repo, agent, Number(issue.number), relays, `t:${issue.number}`, { event: 'task', on: 'issue', number: Number(issue.number),
         url: String(issue.html_url ?? ''), login: String(object(issue.user).login ?? ''), association, text: cut(String(issue.title ?? ''), TITLE_MAX) })
       kept.tasks[agent.agentId]!.push(Number(issue.number))
+      await this.askFocus(repo, agent, kept)
     }
 
     const comments = await this.reads.changed(repo, `/repos/${repo}/issues/comments?sort=updated&direction=asc&per_page=${PAGE}&since=${kept.comments}`)
@@ -259,6 +267,29 @@ export class GitHubMentions {
     if (changed.length) kept.issues = newest(changed, issuesFrom)
     if (comments.length) kept.comments = newest(comments, kept.comments)
     if (lineComments.length) kept.reviewComments = newest(lineComments, kept.reviewComments)
+  }
+
+  /**
+   * With its first task in a repository, an agent asks its person what to focus on there, unless its instructions file
+   * says (anh Dee, 2026-11-09: "the agent must be more proactive and ask the user what area they want the agent to focus
+   * on. otherwise the user won't know what to say"). Its answer becomes the `Works on:` line the assigner reads
+   * (assign/crew.ts worksOnOf). Once per agent and repository; the operation id is the same after a restart.
+   */
+  private async askFocus(repo: string, agent: WatchedAgent, kept: RepoMemory): Promise<void> {
+    const tell = this.deps.tell
+    if (!tell || kept.asked?.includes(agent.agentId)) return
+    const name = agent.names[0]!
+    const file = `agents/${name}.md`
+    if (worksOnOf(await this.reads.file(repo, file)) === null) {
+      const areas = (await this.reads.current(repo, `/repos/${repo}/labels?per_page=${PAGE}`, 3)).map(label => String(label.name ?? ''))
+        .filter(label => label.startsWith('part:')).map(label => label.slice('part:'.length)).sort()
+      const choices = areas.length ? `its areas so far: ${areas.join(', ')}; or anything` : 'it has no areas yet, so any word will do; or anything'
+      const operationId = `works-on-${createHash('sha256').update(`${repo}\n${agent.agentId}`).digest('hex').slice(0, 40)}`
+      await tell(agent, operationId, `You have your first task in ${repo}. Ask your person, in your chat with them, which area of ${repo} `
+        + `you should focus on (${choices}). Do not wait for the answer to start your task. When they answer, make "Works on: <their answer>" `
+        + `the first line of ${file} in ${repo}, in a pull request of its own: Harness then gives you those tasks first.`)
+    }
+    kept.asked = [...kept.asked ?? [], agent.agentId].slice(-MAX_ASKED)
   }
 
   /** Hands one relay to the backend, once per agent and item: a retry after a failure sends the same operation id, which the
