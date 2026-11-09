@@ -127,11 +127,33 @@ ask. A verdict on an older head no longer counts, and a HOLD on one still blocks
 reader is asked to read the new head, once ("the head is now abcdef1, after your HOLD on f6edb44: please read it again").
 Nobody able to read it is said once.
 
+## Taking work back (built)
+
+A builder that cannot work keeps nothing: one its person is stopping gives back all its open tasks at once; one whose
+machine is down gives back its queued tasks after 30 minutes (a sleep or a restart is back well within that) and the ones
+it took after 3 hours (work may be on that machine). Its builder label, and status:taken, come off with one comment
+("Harness, 23:10: Atlas's machine has been down since 15:40 UTC, so this task goes to the builder who can start it
+next."), and the next plan gives each to another builder (`assign/crew.ts takeBacks`, `githubAssign.ts takeBack`). A
+builder whose subscription has less room than a small task until a reset more than two hours off gives back what waits
+for it, never what it took (`outOfQuota`): the plan would only hold it until the reset. A task its builder took that
+nothing touched for 4 hours (no comment or label on the issue, no change to a pull request for it, drafts included) gets
+one ask of its builder by name; with no word 4 hours after, it goes to another (`takenTasks`, `githubAssign.ts askQuiet`).
+A task whose pull request waits for its readers or its merge (ready, with no HOLD on its head) is not its builder's to move,
+and is never asked about. A restart (each release restarts every PM's daemon) finds its own ask as the issue's last touch, so it neither asks twice
+nor waits 4 hours more. status:taken comes off before the builder label: a task left taken with no builder is one nobody
+plans, while one left queued for its builder is taken back again next pass. A take back or an ask GitHub refuses is logged
+once (`TAKE_BACK_REFUSED`, `ASK_REFUSED`) and tried again next pass.
+
+## Learned task times (built)
+
+Each pass the assigner reads up to five closed sized issues it has not measured: a task's work runs from its builder's
+"taken by" comment (or Harness's word giving it) to its close. Once a size has three, its median in this project replaces
+the size's guess, kept between 10 minutes and a day; a median, so one task left open over a weekend does not move the
+rest (`assign/crew.ts startedAt`, `learnedMinutes`; `githubAssign.ts measure`).
+
 ## Next
 
-1. **Estimates.** Each finished task records its real minutes, peak CPU and memory, disk and spend, by part, size and
-   model; estimates take the mean for time and the 80th percentile for memory and disk.
+1. **Estimates of memory, disk and spend** from what finished tasks used, by part, size and model, beside their time.
 2. **CPU cores** in each machine's report, so CPU is measured, not assumed.
-3. **Moving work** when a builder stops, stalls or runs out of quota.
-4. **Measures** in Desktop: time from label to merge, idle builder-minutes, quota left unspent at resets, overload minutes,
+3. **Measures** in Desktop: time from label to merge, idle builder-minutes, quota left unspent at resets, overload minutes,
    holds and conflicts.
