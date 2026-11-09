@@ -609,7 +609,7 @@ class ProjectSidebar extends StatelessWidget {
     onTap: onTap,
   );
 
-  /// The Desktop's left pane (Swarm v4, anh Dee 2026-11-08): the org name, Your agents, Projects, then Humans; Manage
+  /// The Desktop's left pane (Swarm v4, anh Dee 2026-11-08): the org name, Your Team, Projects, then Top Teams; Manage
   /// stays at the foot. Nothing else: no Decisions, no Projects grid, no Buddy.
   List<Widget> _desktop(
     SuperTabSnapshot? snapshot,
@@ -650,7 +650,7 @@ class ProjectSidebar extends StatelessWidget {
     final people = {for (final person in snapshot.people) person.id: person};
     return [
       SuperTabQuietHeading(
-        'Humans',
+        'Top Teams',
         key: const ValueKey('project-sidebar-humans'),
         onTap: open,
       ),
@@ -782,7 +782,7 @@ class ProjectSidebar extends StatelessWidget {
     final newAgent = controller.canWrite ? onNewAgent : null;
     return [
       SuperTabQuietHeading(
-        'Your agents',
+        'Your Team',
         key: const ValueKey('project-sidebar-agents'),
         onTap: null,
         onAdd: newAgent,
