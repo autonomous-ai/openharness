@@ -116,8 +116,9 @@ void main() {
       expect(find.text('Manage people'), findsOneWidget);
       expect(find.text('Edit profile'), findsNothing);
       expect(key('super-profile-edit'), findsNothing);
-      await tester.tap(find.text('Close'));
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
+      expect(find.text('Manage people'), findsNothing);
       await f.close(tester);
     });
 
