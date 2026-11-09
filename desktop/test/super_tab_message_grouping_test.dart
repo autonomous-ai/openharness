@@ -629,11 +629,11 @@ void main() {
       return server;
     }
 
-    testWidgets('three Buddy messages in two minutes share one header', (
-      tester,
-    ) async {
+    // Swarm v4: the first has a thread, so it is a task and stands on its own; the next two share one header.
+    testWidgets('a task stands alone; the two messages after it share one '
+        'header', (tester) async {
       await show(tester);
-      expect(find.text('River'), findsOneWidget);
+      expect(find.text('River'), findsNWidgets(2));
       expect(find.text('Shall I merge it?'), findsOneWidget);
     });
 

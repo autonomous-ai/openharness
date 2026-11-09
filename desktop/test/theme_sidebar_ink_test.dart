@@ -275,7 +275,6 @@ void main() {
             onNewSwarm: () {},
             onNewProject: () {},
             onPage: (_) {},
-            activity: activity,
             attention: activity.attention,
             places: SuperTabPlaces.of(c),
             onManage: () {},

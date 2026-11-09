@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../shared/theme/app_icons.dart';
+import '../shared/theme/swarm_layout.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../state/harness_attachments.dart';
@@ -37,6 +38,7 @@ class SuperTabThreadPanel extends StatefulWidget {
     this.machineName,
     this.onScroll,
     this.voice,
+    this.agentsOnly = false,
   });
 
   final SuperTabController controller;
@@ -62,6 +64,9 @@ class SuperTabThreadPanel extends StatefulWidget {
   /// The composers' voice message (the view's one take); without it, no mic
   /// shows. Its row takes the reply box's row while it is this thread's.
   final SuperTabVoiceTake? voice;
+
+  /// A task's thread in a project's channel: agents post, people read (Swarm v4), so it has no composer.
+  final bool agentsOnly;
 
   @override
   State<SuperTabThreadPanel> createState() => SuperTabThreadPanelState();
@@ -505,7 +510,12 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                   Expanded(
                     child: Semantics(
                       header: true,
-                      child: Text('Thread', style: SwarmType.name(context)),
+                      // A task's thread is named by its number, as its card is (Swarm v4).
+                      child: Text(
+                        RegExp(r'^#\d+').stringMatch(root?.text ?? '') ??
+                            'Thread',
+                        style: SwarmType.name(context),
+                      ),
                     ),
                   ),
                   AppIconButton(
@@ -643,54 +653,76 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                 ],
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                grid.AppDesktop.groupGap,
-                0,
-                grid.AppDesktop.groupGap,
-                grid.AppDesktop.groupGap,
-              ),
-              child: // The Tab order holds wherever Also send sits (reply_box.dart
-                  // fieldOrder).
-                  FocusTraversalGroup(
-                    policy: OrderedTraversalPolicy(),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        ListenableBuilder(
-                          listenable: Listenable.merge([
-                            _composer,
-                            _tagIndex,
-                            _tagDismissed,
-                          ]),
-                          builder: (context, _) {
-                            final choices = _tagChoices;
-                            if (choices.isEmpty) return const SizedBox.shrink();
-                            return Padding(
-                              padding: const EdgeInsets.only(
-                                bottom: grid.AppDesktop.controlGap,
-                              ),
-                              child: SuperTabCompletionList(
-                                listKey: const ValueKey(
-                                  'super-thread-completions',
+            if (widget.agentsOnly)
+              Container(
+                key: const ValueKey('super-thread-agents-only'),
+                margin: const EdgeInsets.fromLTRB(
+                  grid.AppDesktop.groupGap,
+                  0,
+                  grid.AppDesktop.groupGap,
+                  grid.AppDesktop.groupGap,
+                ),
+                height: 40,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: grid.AppSurface.recess,
+                  borderRadius: BorderRadius.circular(SwarmLayout.cardRadius),
+                ),
+                child: Text(
+                  'Only agents post here.',
+                  style: DesktopChrome.metadata(),
+                ),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  grid.AppDesktop.groupGap,
+                  0,
+                  grid.AppDesktop.groupGap,
+                  grid.AppDesktop.groupGap,
+                ),
+                child: // The Tab order holds wherever Also send sits (reply_box.dart
+                    // fieldOrder).
+                    FocusTraversalGroup(
+                      policy: OrderedTraversalPolicy(),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          ListenableBuilder(
+                            listenable: Listenable.merge([
+                              _composer,
+                              _tagIndex,
+                              _tagDismissed,
+                            ]),
+                            builder: (context, _) {
+                              final choices = _tagChoices;
+                              if (choices.isEmpty)
+                                return const SizedBox.shrink();
+                              return Padding(
+                                padding: const EdgeInsets.only(
+                                  bottom: grid.AppDesktop.controlGap,
                                 ),
-                                choices: choices,
-                                index: _tagIndex.value,
-                                rowKeys: _tagRows,
-                              ),
-                            );
-                          },
-                        ),
-                        FocusTraversalOrder(
-                          order: SuperTabReplyBox.fieldOrder,
-                          child: _composerBox(),
-                        ),
-                        ?_underBox(),
-                      ],
+                                child: SuperTabCompletionList(
+                                  listKey: const ValueKey(
+                                    'super-thread-completions',
+                                  ),
+                                  choices: choices,
+                                  index: _tagIndex.value,
+                                  rowKeys: _tagRows,
+                                ),
+                              );
+                            },
+                          ),
+                          FocusTraversalOrder(
+                            order: SuperTabReplyBox.fieldOrder,
+                            child: _composerBox(),
+                          ),
+                          ?_underBox(),
+                        ],
+                      ),
                     ),
-                  ),
-            ),
+              ),
           ],
         ),
       ),

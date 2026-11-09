@@ -101,10 +101,7 @@ void main() {
               children: [
                 SizedBox(
                   width: 300,
-                  child: ProjectSidebar(
-                    controller: c,
-                    onSelect: c.select,
-                  ),
+                  child: ProjectSidebar(controller: c, onSelect: c.select),
                 ),
                 const Expanded(child: SizedBox()),
               ],

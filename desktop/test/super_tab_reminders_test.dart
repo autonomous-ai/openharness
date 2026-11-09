@@ -87,14 +87,6 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Future<void> openActivity(WidgetTester tester) async {
-    await tester.tap(find.byKey(const ValueKey('super-decisions')));
-    await tester.pumpAndSettle();
-  }
-
-  Finder reminderRow(String messageId) =>
-      find.byKey(ValueKey('super-activity-row-reminder:reminder-$messageId'));
-
   // One slow answer at startup left "Could not load reminders" on Decisions
   // until the person pressed Retry (DESKTOP-0TFH0OJ, 2026-11-05).
   testWidgets('a read that fails is tried again by itself, and says so only '
@@ -160,16 +152,15 @@ void main() {
     });
   });
 
-  testWidgets("a due reminder shows once in Activity's Needs you, with one "
-      'notice, and opening it clears it', (tester) async {
+  testWidgets('a due reminder raises one notice, and opening it from the '
+      'menu bar opens its message and clears it', (tester) async {
     final server = _chat();
     server.remindElsewhere(
       'message-3',
       clock.now().add(const Duration(minutes: 20)),
     );
     await show(tester, server);
-    await openActivity(tester);
-    expect(reminderRow('message-3'), findsNothing);
+    expect(arrived, isEmpty);
 
     // Nothing polls: the list is read again when the reminder is due.
     final reads = server.reminderReads.length;
@@ -178,32 +169,15 @@ void main() {
     await tester.pump(const Duration(minutes: 1, seconds: 1));
     await tester.pumpAndSettle();
     expect(server.reminderReads, hasLength(reads + 1));
-
-    expect(reminderRow('message-3'), findsOneWidget);
-    expect(
-      find.descendant(
-        of: reminderRow('message-3'),
-        matching: find.text(_question),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: reminderRow('message-3'),
-        matching: find.text('Avocet'),
-      ),
-      findsOneWidget,
-    );
     expect(arrived, ['reminder-message-3']);
 
-    // Read again, it is still one row and no second notice.
+    // Read again, still no second notice.
     await SuperTabReminders.of(c).load();
     await c.refresh();
     await tester.pumpAndSettle();
-    expect(reminderRow('message-3'), findsOneWidget);
     expect(arrived, ['reminder-message-3']);
 
-    await tester.tap(reminderRow('message-3'));
+    c.openNotice('reminder', 'reminder-message-3');
     await tester.pumpAndSettle();
     expect(server.reminderWrites.last, {
       'method': 'clear',
@@ -213,8 +187,6 @@ void main() {
     expect(server.reminders, isEmpty);
     expect(c.selectedId, 'lead');
     expect(find.text(_question), findsOneWidget);
-    await openActivity(tester);
-    expect(reminderRow('message-3'), findsNothing);
   });
 
   testWidgets('a reminder set again on the same message notifies again', (
@@ -308,8 +280,7 @@ void main() {
       await show(tester, server, width: width);
       await tester.pump(const Duration(minutes: 20, seconds: 1));
       await tester.pumpAndSettle();
-      await openActivity(tester);
-      await tester.tap(reminderRow('message-3'));
+      c.openNotice('reminder', 'reminder-message-3');
       await tester.pumpAndSettle();
 
       expect(c.selectedId, 'lead');
@@ -335,8 +306,7 @@ void main() {
       await show(tester, server, width: width);
       await tester.pump(const Duration(minutes: 20, seconds: 1));
       await tester.pumpAndSettle();
-      await openActivity(tester);
-      await tester.tap(reminderRow('message-4'));
+      c.openNotice('reminder', 'reminder-message-4');
       await tester.pumpAndSettle();
 
       expect(c.selectedId, 'lead');

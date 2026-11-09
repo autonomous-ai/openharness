@@ -62,7 +62,6 @@ Future<void> pumpSidebar(
             controller: c,
             onSelect: c.select,
             attention: SuperTabAttention.of(c),
-            activity: SuperTabActivity.of(c),
             onPage: (_) {},
           ),
         ),
@@ -551,10 +550,8 @@ void main() {
 
   group('sidebar', () {
     for (final brightness in Brightness.values) {
-      testWidgets('Mentions is bold with the tag; a '
-          'muted chat is greyed with its mark and no number ($brightness)', (
-        tester,
-      ) async {
+      testWidgets('a muted chat is greyed with its mark and no number '
+          '($brightness)', (tester) async {
         final server = projectServer();
         fromLead(server, 'News');
         server.tag('message-1');
@@ -563,14 +560,6 @@ void main() {
         await c.setNotify('lead', SuperTabNotify.muted);
         await pumpSidebar(tester, c, brightness: brightness);
         expect(find.text('Notifications'), findsNothing);
-        expect(inRow('super-mentions', find.text('Mentions')), findsOneWidget);
-        // Mentions is bold for the unread tag (#2887) and carries no number
-        // (task #3128); the muted chat's own row carries none either.
-        expect(inRow('super-mentions', find.text('1')), findsNothing);
-        expect(
-          rowText(tester, 'super-mentions', 'Mentions').style?.fontWeight,
-          grid.AppFont.semibold,
-        );
         expect(find.byKey(const ValueKey('super-muted-lead')), findsOneWidget);
         expect(
           inRow('super-group-lead', find.byType(SuperTabCountBadge)),
@@ -832,30 +821,6 @@ void main() {
       await settle();
       await activity.decisions.load();
       expect(activity.count, 1);
-    });
-
-    testWidgets('before the tags and decisions are read, the sidebar shows '
-        'the server\'s waiting ones bold', (tester) async {
-      final server = withAgent();
-      server.state['mentionsWaiting'] = 4;
-      server.state['decisionsWaiting'] = 2;
-      server.failDecisions = true;
-      server.failMentions = true;
-      final c = await openHere(server);
-      await pumpSidebar(tester, c);
-      for (final (row, label) in [
-        ('super-decisions', 'Decisions'),
-        ('super-mentions', 'Mentions'),
-      ]) {
-        expect(
-          rowText(tester, row, label).style?.fontWeight,
-          grid.AppFont.semibold,
-          reason: row,
-        );
-      }
-      expect(inRow('super-decisions', find.text('2')), findsNothing);
-      expect(inRow('super-mentions', find.text('4')), findsNothing);
-      await close(tester, c);
     });
 
     test('handled today lists the PM\'s answers of today', () async {
