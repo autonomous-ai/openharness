@@ -202,7 +202,8 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
     expect(agent).toMatchObject({ agentId: 'pip', chat: 'chat-pip' })
     expect(operationId).toMatch(/^works-on-[0-9a-f]{40}$/)
     expect(text).toContain('which area of acme/app you should focus on (its areas so far: api, mobile; or anything)')
-    expect(text).toContain('make "Works on: <their answer>" the first line of agents/Pip.md in acme/app')
+    expect(text).toContain('make "Works on: <their answer>" the first line of agents/Pip.md in acme/app, in a pull request of its own on a branch '
+      + 'pip/works-on, labelled builder:pip')
     // A second task asks nothing more, after a restart too.
     f.clock.now += 20_000
     f.github.issues.push(issue(14, 30, ['builder:pip']))
