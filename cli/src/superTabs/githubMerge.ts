@@ -39,14 +39,14 @@ const SELF = 'Harness'
 export interface LedProject { repo: string; pm: string; tabId: string; pmAgentId: string; projectId: string }
 
 /** The projects whose PM is one of this computer's person's agents running here, from the host's roster and the PM's read. */
-export async function ledProjects(deps: { me: string | null; live: (harnessId: string) => boolean; roster: () => Promise<Json[]>
+export async function ledProjects(deps: { me: string | null; live: (harnessId: string) => boolean | Promise<boolean>; roster: () => Promise<Json[]>
   read: (tabId: string, agentId: string) => Promise<Json> }): Promise<LedProject[]> {
   if (!deps.me) return []
   const found = new Map<string, LedProject>()
   for (const row of await deps.roster()) {
     const agent = object(row.agent)
     if (row.lead !== true || !identifier(row.ledConversationId) || !identifier(row.tabId) || !identifier(agent.id) || row.closeSession === true) continue
-    if (agent.contributorId !== deps.me || agent.machineOwnerId !== deps.me || typeof agent.harnessId !== 'string' || !deps.live(agent.harnessId)) continue
+    if (agent.contributorId !== deps.me || agent.machineOwnerId !== deps.me || typeof agent.harnessId !== 'string' || !await deps.live(agent.harnessId)) continue
     const state = await deps.read(row.tabId, agent.id).catch(() => null)
     const project = (Array.isArray(state?.projects) ? state.projects.map(object) : []).find(p => p.leadConversationId === row.ledConversationId)
     const repo = repositorySlug(object(project?.repository).repositoryUrl)
