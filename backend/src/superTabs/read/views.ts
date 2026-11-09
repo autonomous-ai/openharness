@@ -68,9 +68,10 @@ export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, d
   ({ key: part.key, version: part.version, changedAt: part.changedAt, data })
 
 /** A group as readers get it: its message counter, a dormant flag only when dormant, never the store's bookkeeping or the
- *  leaderboard's (the leaderboard read sums it), except when it shipped. */
+ *  leaderboard's (the leaderboard read sums it), except when it shipped. The `releasing` list of the release watch Swarm v4
+ *  removed is still stored on old tasks and never sent: nothing would ever clear it, so an older app would show them waiting. */
 export function groupView(group: Conversation, seenMachines: ReadonlySet<string>): GroupView {
-  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, proposals: _proposals, owed: _owed, answered: _answered, chatLimits: _chatLimits, talkedAt: _talkedAt, pulse: _pulse, statusLine: _statusLine, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
+  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, proposals: _proposals, owed: _owed, answered: _answered, chatLimits: _chatLimits, talkedAt: _talkedAt, pulse: _pulse, statusLine: _statusLine, releasing: _releasing, dormant, audience, ...rest }: Conversation & { releasing?: unknown } = withSeenRequirement(group, seenMachines)
   // A Buddy chat names its owner instead of an audience: an app from before Buddies takes a private chat of the reader
   // alone for their Chat with PM, and would send what they write for the PM to their Buddy instead (buddies.ts).
   const readers = isBuddyChat(group) ? { buddyOwnerId: audience!.people[0]!.id } : audience ? { audience } : {}
@@ -109,9 +110,9 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   const agentPart = part(parts.agents), groupPart = part(parts.groups), machinePart = part(parts.machines), startPart = part(parts.starts)
   const head = Object.fromEntries(HEAD_FIELDS.filter(field => visible[field] !== undefined).map(field => [field, visible[field]])) as HeadView
   // Every project names its coordinator; one from before the field reads as the Product Manager (instructions.ts). The progress
-  // and the release list (releases.ts) are the server's bookkeeping: no reader shows them. What the PM owes is its host's alone (timeChecks.ts owedAsk): it may name a message in someone's private chat.
-  // Swarm v3's `schedule` and `processNote` are still stored on old projects: no reader gets them (the stored copies can go from 2026-12-09).
-  if (head.projects) head.projects = head.projects.map(({ progress: _progress, releases: _releases, owed: _owed, schedule: _schedule, processNote: _note, ...project }: NonNullable<typeof head.projects>[number] & { schedule?: unknown; processNote?: unknown }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
+  // is the server's bookkeeping: no reader shows it. What the PM owes is its host's alone (timeChecks.ts owedAsk): it may name a message in someone's private chat.
+  // Swarm v3's `schedule`, `processNote` and release list (`releases`) are still stored on old projects: no reader gets them (the stored copies can go from 2026-12-09).
+  if (head.projects) head.projects = head.projects.map(({ progress: _progress, releases: _releases, owed: _owed, schedule: _schedule, processNote: _note, ...project }: NonNullable<typeof head.projects>[number] & { schedule?: unknown; processNote?: unknown; releases?: unknown }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
   // Always, its default too (task #3818): an app offers several Buddies only where the head says how many, so an older backend,
   // which sends none, is never taken for one that makes them.
@@ -212,15 +213,8 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
   // A Lead's main project is the one it leads; a Member's, the one its person picked (task #4540).
   const led = ledProjects(state)
   const shownMain = (agent: Agent) => { const main = led.get(agent.id) ?? agent.mainProjectId; return main && readsProject(main) ? main : null }
-  // The next release times the settle recorded (releases.ts), for the projects this reader sees: the release list itself stays
-  // the server's (task #3827).
-  const releaseTimes = Object.fromEntries(visible.projects?.flatMap(seen => {
-    const nextAt = state.projects?.find(p => p.id === seen.id)?.releases?.nextAt
-    return nextAt ? [[seen.id, nextAt] as const] : []
-  }) ?? [])
   return {
     ...(pulse ? { pulse } : {}),
-    ...(Object.keys(releaseTimes).length ? { releaseTimes } : {}),
     agents: Object.fromEntries(visible.agents.map(seen => {
       const stored = storedAgents.get(seen.id)!
       return [seen.id, { downSince: seen.downSince ?? null, limitedUntil: seen.limitedUntil ?? null,

@@ -33,7 +33,7 @@ export async function readRules(tx: Transaction, tabId: string, projectId: strin
   return { revision: row.revision, rules: seedRules(tabId, projectId, parsed.success ? parsed.data : row.rules as unknown as ProjectRules) }
 }
 
-/** The record a project runs on now, for a server worker (the merge train, the release schedule): its newest revision, or
+/** The record a project runs on now, for the server's own reads (a command's review plan, dispatch): its newest revision, or
  *  the seed at revision 0. Takes the client or a transaction. */
 export async function currentRules(tx: Transaction, tabId: string, projectId: string): Promise<{ revision: number; rules: ProjectRules }> {
   return await readRules(tx, tabId, projectId) ?? { revision: 0, rules: seedRules(tabId, projectId) }

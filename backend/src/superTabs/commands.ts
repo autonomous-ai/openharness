@@ -65,7 +65,6 @@ import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { deleteMessage, editMessage, type MessageChangeTarget } from './messageEdits.js'
 import { githubRepository } from '../github/repository.js'
 import { shippedAt } from './ship.js'
-import { notePendingRelease } from './releases.js'
 import { syncTaskLines } from './taskLine.js'
 import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
@@ -666,10 +665,11 @@ export interface CommandContext {
   /** A Workspace removal taking the person out of this Swarm (workspaceStore.ts): it reaches a deleted Swarm too, so a restore
    *  never brings them back (security review 2 of #2457). Set by the store alone. */
   workspaceLeave?: true
-  /** For `decision.answer`: the hourly sweep leaves a decision unanswered for 24 hours to the PM (overdueDecisions.ts). Set by the
-   *  store alone; a client cannot send it. */
+  /** For `decision.answer`: the decision waited 24 hours and was left to the PM. Only the store could set it, and no sweep does
+   *  since Swarm v4; a client cannot send it. */
   overdue?: boolean
-  /** Server-only timed recommendation application; a client cannot send it. */
+  /** For `decision.answer`: the decision's own default time came and its recommended option applied. Only the store could set it,
+   *  and no sweep does since Swarm v4; a client cannot send it. */
   defaulted?: boolean
   /** For a restore: the people no longer in the Swarm's Workspace, read by the store. They do not come back with it. */
   workspaceLost?: string[]
@@ -1423,7 +1423,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   /** Any other row the system writes in the actor's name. Without a source, a notice written as the owner read as the owner
    * asking, and a Lead could quote it to change rules (review of #1594). Only `message.send` and an initial message stay plain. */
   const SYSTEM_ROW = { kind: 'system' }
-  /** A cancel, with its status as a status row has it: the scorecard's task timelines see the task close (scorecard/figures.ts). */
+  /** A cancel, with its status as a status row has it, so a task's timeline shows it closed. */
   const CANCEL_ROW = { ...SYSTEM_ROW, status: 'cancelled' }
   /** [agentId] as a member of [group] who may be told there: joined when it is not one yet and may join; else null. */
   const reachable = (group: Conversation, agentId: string | null): string | null => {
@@ -3423,9 +3423,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // The pull request that merged is the task's own code.
       appendCodePullRequestUrls(group, [pullRequestUrl], repositoryUrl)
       recordMerged(group, mergedAt)
-      // On its project's release list, for the next verified release to mark it shipped (releases.ts, task #3405). A Swarm from
-      // before projects keeps no list: its one project is not stored.
-      if (state.projects) notePendingRelease(groupProject(state, group), group, pullRequestUrl, mergedAt)
       // Like a Slack app's update: the card shows the merge, and the line goes in the card's thread, once per pull request.
       // Without a card yet, the group's first ship or a new link still says so, and the line becomes the card. A fix of an
       // earlier merge says so once more.

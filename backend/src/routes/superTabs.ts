@@ -93,7 +93,6 @@ const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
 const changesQuery = agentQuery.extend({ cursor, machines: z.literal('light').optional(),
   derivedEtag: z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/).optional() })
 const costsQuery = z.object({ days: z.coerce.number().int().min(1).max(MAX_DAYS).default(DEFAULT_DAYS), asAgentId: id.optional() }).strict()
-const scorecardQuery = z.object({ projectId: id, scope: z.literal('all').optional() }).strict()
 const leaderboardQuery = z.object({ projectId: id, week: z.coerce.number().int().nonnegative().safe().optional(), period: z.enum(PERIODS).optional(), scope: z.literal('all').optional() }).strict()
   .refine(query => query.week === undefined || query.period === undefined, 'Ask for a week or a period, not both.')
 const dormantQuery = agentQuery.extend({ dormant: z.literal('1'), projectId: id.optional(), before: cursor.optional() })
@@ -697,10 +696,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof activityReadBody> }>('/api/super-tabs/:tabId/activity/read',
     { preHandler: [validateParams(tabParams), validateQuery(noQuery), validateBody(activityReadBody)] },
     (req, reply) => respond(reply, () => reads.markActivityRead(req.user!, req.params.tabId, req.body.through)))
-  // A project's daily scorecard (superTabs/scorecard), or every readable project's with scope=all.
-  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof scorecardQuery> }>('/api/super-tabs/:tabId/scorecard',
-    { preHandler: [validateParams(tabParams), validateQuery(scorecardQuery)] },
-    (req, reply) => respond(reply, () => reads.scorecard(req.user!, req.params.tabId, req.query.projectId, req.query.scope === 'all')))
+  // The scorecard is gone with Swarm v4, but an older Desktop's Scorecard tab still reads it: it answers no days, to everyone, and
+  // names no Swarm, as `updateRequired` does for the retired full-state reads.
+  app.get('/api/super-tabs/:tabId/scorecard', (_req, reply) => sendSuccess(reply, { days: [] }))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof leaderboardQuery> }>('/api/super-tabs/:tabId/leaderboard',
     { preHandler: [validateParams(tabParams), validateQuery(leaderboardQuery)] },
     (req, reply) => respond(reply, () => reads.leaderboard(req.user!, req.params.tabId, req.query.projectId, req.query.week, req.query.period, req.query.scope === 'all')))

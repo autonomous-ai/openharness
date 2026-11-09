@@ -92,7 +92,7 @@ describe('ordinary task messages and progress replies', () => {
   })
 
   // Task #4410, River's ruling 11-07: an owed Windows check does not hold the merge, and is never silent. The merge reply says
-  // it, and the task keeps it after the merge, for the release that ships it to list (releases.ts).
+  // it, and the task keeps it after the merge.
   it('says at the merge that a Windows check is owed while its Windows test step waits, and keeps it owed', () => {
     const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
     const builder = f.add('Kai', id)
