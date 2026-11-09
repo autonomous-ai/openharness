@@ -13,7 +13,7 @@ import 'swarm_state_test.dart' show createApp;
 /// Set to a folder to write Swarm v4's screenshots there.
 final shots = Platform.environment['SWARM_V4_SHOTS'];
 
-/// Swarm v4 (anh Dee 2026-11-08), in both appearances: the left pane (Your agents, Projects, Humans, Manage), a project's
+/// Swarm v4 (anh Dee 2026-11-08), in both appearances: the left pane (Your Team, Projects, Top Teams, Manage), a project's
 /// channel in the middle, a task's chat beside it, and an agent's own chat.
 void main() {
   setUpAll(() => loadCaptureFonts(shots));

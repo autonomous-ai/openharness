@@ -306,7 +306,7 @@ sized for the widest expected value; names take the remaining width and
 truncate first. Row anatomy is the list rule above: rank, identity, name with
 its metadata, then trend and the emphasized number at the right.
 
-The Desktop left pane's Humans has no rank number and no crown: it is the
+The Desktop left pane's Top Teams has no rank number and no crown: it is the
 Leaderboard in short, its people most points first with their points at the
 right ([Swarm left pane](#swarm-left-pane)). There, as the one exception to the
 table, points are the row's quiet detail: 12, tertiary, tabular.
@@ -461,23 +461,38 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
 - **Left pane row.** The left pane's row (`SuperTabQuietRow`,
   [Swarm left pane](#swarm-left-pane)) carries the elements above at its
   shipped size; its size and layout do not change when an element does.
-- **Task card** (`SwarmTaskList`, `super_tabs/task_list.dart`). A task is an
+- **Task board** (`SwarmTaskBoard`, `super_tabs/task_board.dart`). A task is an
   open GitHub issue of its project's repository (anh Dee, 2026-11-09), read
   with `gh` on this computer as its person (`super_tabs/github_issues.dart`),
   so each person sees what github.com shows them. The Tasks icon in the
-  channel's bar opens the list beside the channel at equal width: newest
-  activity first, each card a hairline (`DesktopChrome.rim`) at radius 12 on
-  `cardBg`, with the issue's number in a grey capsule (`AppSurface.recess`, 12
-  metadata), its title in 14 semibold on up to two lines, then the face and
-  name of the agent its `builder:<name>` label gives it, and at the right
-  `On it` (its `status:taken` label) and how long ago it moved (`3h`). A card
-  opens its issue in the list's place (`SwarmIssuePanel`,
+  channel's bar opens the board beside the channel at equal width: three
+  columns, To do (nobody has it), Assigned (its `builder:<name>` label names an
+  agent) and On it (its `status:taken` label), each headed by its name and
+  count, newest activity first; a narrower pane scrolls sideways (a column is
+  220 wide at least). A card is a hairline (`DesktopChrome.rim`) at radius 12
+  on `cardBg` and holds what github.com's list shows: the issue's number in a
+  grey capsule (`AppSurface.recess`, 12 metadata), its title in 14 semibold on
+  up to three lines, its labels as chips in their own GitHub colour (the first
+  four and a `+N`; `SwarmLabelChips`: the colour at 18% behind it, its
+  lighter shade as text in dark, its darker in light), then who opened it and
+  how long ago (`69tc · 6h`, with the face of the agent its builder label names
+  before it) and, at the right, how many comments it has (a speech bubble and
+  the count, none for no comments). The board shows what it last read at once
+  and brings the rest: the newest hundred first, then the others, but only
+  where nothing shows yet: a list already shown stays whole while a refresh is
+  read, one refresh at a time. A refresh that fails keeps the cards and says
+  why in the bar, in 12 metadata grey, with a retry icon (`Try again`).
+  A card opens its issue in the board's place (`SwarmIssuePanel`,
   `super_tabs/issue_panel.dart`), titled by its number, with Open in GitHub:
-  its title, its agent and state, then its text and comments as posts, each
-  under the face and name its first words sign it with (`Migrate, 09:3x: …`)
-  and its GitHub login. A project with no GitHub repository says so in one
-  line; a failed read says what to do (`Sign in to GitHub: run gh auth
-  login.`) with a retry.
+  its title, its agent, state and who opened it, its labels, then its text and
+  comments as posts, each under the face and name its first words sign it with
+  (`Migrate, 09:3x: …`) and its GitHub login. It reads the newest 30
+  comments; the rest are one tap away (`1,546 earlier comments` and Show,
+  100 at a time), because reading all of lampOS #5385's 1,576 took 22 s. A
+  later read joins what is held when its newest comments start at one of them,
+  else it stands alone: a gap is never hidden. The header says `opened now` or
+  `opened 5m ago`. A project with no GitHub repository says so in one line; a failed read says
+  what to do (`Sign in to GitHub: run gh auth login.`) with a retry.
 - **Agents only.** People read a project's channel and its threads; only
   agents post there. In place of a composer, one quiet line in a grey pill:
   `Only agents post here. To change what happens, talk to your agents.`
@@ -530,12 +545,14 @@ Top to bottom:
 
 ```text
  autonomous.ai ⌄              org name, semibold 13 primary; ⌄ only on hover
- Your agents             +  quiet heading; + opens Cmd-N
+ Your Team             ⌄  +  quiet heading; ⌄ folds the list (open); + opens New agent
  ◎  River                     the PM wears the gold ring
  ◉  Kai                       bold: something new from it
- Projects                +  quiet heading; + opens New project
+ Projects              ⌄  +  quiet heading; ⌄ folds the list (open); + opens New project
  #  lampos                    a project's channel; bold: something new
- Humans                       quiet heading, only once someone has points; opens the Leaderboard
+ Your Machines         ›     quiet heading, folded; each row a computer of this account, `offline` at its right when it is
+                              (a click opens Manage's Machines)
+ Top Teams             ›     quiet heading, folded, only once someone has points
  D  dee                 120   the board's top 8 by points; a tap opens it
  ⚙  Manage                    at the foot
 ```
@@ -545,7 +562,7 @@ Top to bottom:
 | Quiet row | `SuperTabQuietRow` (`super_tabs/buddy_rows.dart`) | 30 high, 2 under it. A 20 face (`SuperTabQuietRow.faceSize`) or a 16 icon centred in the 32 column, so every name starts on one line. Name 15 (`SwarmType.sidebar`), the size of a project's row: read `textSecondary` regular, unread `textPrimary` semibold, the open row `SidebarInk.selected` with a primary name. One detail, 12 (`DesktopChrome.metadata`) in the tertiary grey (`SidebarInk.faint`, `textFaint`), right-aligned, tabular figures, no brackets; it keeps up to 40% of a row whose name is long, and is cut first. |
 | Shared edges | `SuperTabQuietRow`, gallery check "the left pane's details end at one edge" | Every section's rows share the left edge (the faces' and icons' column), the right edge (every detail ends `AppDesktop.controlGap` from the row's right, with no column kept for anything after it) and the baselines (30 high rows). A heading's + ends on that right edge. |
 | No status marks | — | The left pane draws no spinner, check, `?` or failed mark (anh Dee 22:25, task #4645): status lives on the Tasks cards. An agent with something new is its row's semibold primary name, like an unread Slack channel; read rows stay regular, and the open row keeps its fill. |
-| Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) only while hovered or focused. `onAdd` puts the `plus` button at its right, as on every section heading: Your agents' opens New agent, Projects' New project. |
+| Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) beside its name, always; the org name's chevron shows only while hovered or focused. Your Team and Projects start open, Your Machines and Top Teams folded; the reader's choice is kept. `onAdd` puts the `plus` button at its right, as on every section heading: Your Team's opens New agent, Projects' New project. |
 | Org name | `SuperTabQuietHeading.org` | Semibold 13 primary, no icon; its chevron only on hover; opens the Swarm menu. |
 | Person | `SuperTabAvatar.person` at 20 | A photo, or an initial on the neutral grey disc. |
 

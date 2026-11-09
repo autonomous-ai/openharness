@@ -19,7 +19,7 @@ import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/task_list.dart';
+import 'package:harness/super_tabs/task_board.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
@@ -473,11 +473,12 @@ class _Gallery extends StatelessWidget {
                     width: 280,
                     child: Column(
                       children: [
-                        // The v4 left pane (anh Dee 2026-11-08): your agents by face and name, then projects.
+                        // The v4 left pane (anh Dee 2026-11-08): your team by face and name, then projects.
                         SuperTabQuietHeading.org('autonomous.ai', onTap: () {}),
                         SuperTabQuietHeading(
-                          'Your agents',
-                          onTap: null,
+                          'Your Team',
+                          collapsed: false,
+                          onTap: () {},
                           onAdd: () {},
                           addTooltip: 'New agent',
                         ),
@@ -498,7 +499,16 @@ class _Gallery extends StatelessWidget {
                             unread: unread,
                             onTap: () {},
                           ),
-                        SuperTabQuietHeading('Humans', onTap: () {}),
+                        SuperTabQuietHeading(
+                          'Your Machines',
+                          collapsed: true,
+                          onTap: () {},
+                        ),
+                        SuperTabQuietHeading(
+                          'Top Teams',
+                          collapsed: false,
+                          onTap: () {},
+                        ),
                         SuperTabQuietRow(
                           leading: SuperTabAvatar.person(
                             _person,
@@ -514,12 +524,12 @@ class _Gallery extends StatelessWidget {
                 ],
               ),
               title(
-                'Tasks: the project\'s GitHub issues, read with gh; a card opens one',
+                'Tasks: a board of the project\'s GitHub issues, read with gh; a card opens one',
               ),
               SizedBox(
-                width: 520,
+                width: 760,
                 height: 330,
-                child: SwarmTaskList(
+                child: SwarmTaskBoard(
                   controller: swarm,
                   conversationId: 'lead',
                   github: swarmV4GitHub(),

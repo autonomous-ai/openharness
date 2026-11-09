@@ -249,6 +249,10 @@ class SuperTabController extends ChangeNotifier {
       machinesGroupOpen = initial['machinesGroupOpen'] as bool? ?? true;
       buddiesGroupOpen = initial['buddiesGroupOpen'] as bool? ?? true;
       agentsGroupOpen = initial['agentsGroupOpen'] as bool? ?? true;
+      projectsGroupOpen = initial['projectsGroupOpen'] as bool? ?? true;
+      yourMachinesGroupOpen =
+          initial['yourMachinesGroupOpen'] as bool? ?? false;
+      topTeamsGroupOpen = initial['topTeamsGroupOpen'] as bool? ?? false;
       modelsGroupOpen = initial['modelsGroupOpen'] as bool? ?? true;
       offlineMachinesOpen = initial['offlineMachinesOpen'] as bool? ?? false;
       sessionProjectId = initial['sessionProjectId'] as String? ?? '';
@@ -1133,8 +1137,10 @@ class SuperTabController extends ChangeNotifier {
   /// and Machines (Dee, 2026-10-30: every section the same).
   bool buddiesGroupOpen = true, modelsGroupOpen = true;
 
-  /// Whether the left pane's My agents is open (task #4192): open until the reader closes it.
-  bool agentsGroupOpen = true;
+  /// Whether the left pane's sections are open (Swarm v4, anh Dee 2026-11-09): Your Team and Projects open until the reader
+  /// folds them, Your Machines and Top Teams folded until the reader opens them.
+  bool agentsGroupOpen = true, projectsGroupOpen = true;
+  bool yourMachinesGroupOpen = false, topTeamsGroupOpen = false;
 
   bool isMachineExpanded(String id) => expandedMachines.contains(id);
 
@@ -1208,6 +1214,24 @@ class SuperTabController extends ChangeNotifier {
 
   void toggleAgentsGroup() {
     agentsGroupOpen = !agentsGroupOpen;
+    _saveSoon();
+    _changed();
+  }
+
+  void toggleProjectsGroup() {
+    projectsGroupOpen = !projectsGroupOpen;
+    _saveSoon();
+    _changed();
+  }
+
+  void toggleYourMachinesGroup() {
+    yourMachinesGroupOpen = !yourMachinesGroupOpen;
+    _saveSoon();
+    _changed();
+  }
+
+  void toggleTopTeamsGroup() {
+    topTeamsGroupOpen = !topTeamsGroupOpen;
     _saveSoon();
     _changed();
   }
@@ -2736,6 +2760,10 @@ class SuperTabController extends ChangeNotifier {
     _changed();
   }
 
+  /// What this view keeps for the next start (the left pane's folds among it).
+  @visibleForTesting
+  Map<String, dynamic> get savedForTest => _localState();
+
   Map<String, dynamic> _localState() => {
     'tabId': tabId,
     'accountId': accountId,
@@ -2747,6 +2775,9 @@ class SuperTabController extends ChangeNotifier {
     'machinesGroupOpen': machinesGroupOpen,
     'buddiesGroupOpen': buddiesGroupOpen,
     'agentsGroupOpen': agentsGroupOpen,
+    'projectsGroupOpen': projectsGroupOpen,
+    'yourMachinesGroupOpen': yourMachinesGroupOpen,
+    'topTeamsGroupOpen': topTeamsGroupOpen,
     'modelsGroupOpen': modelsGroupOpen,
     'offlineMachinesOpen': offlineMachinesOpen,
     'sessionProjectId': sessionProjectId,

@@ -172,81 +172,147 @@ ConversationServer swarmV4Server() {
   return server;
 }
 
-/// What `gh` answers for lampOS's issues in these tests: two open tasks, and #5759's text with two comments signed by
-/// their agents, as lampOS's builders sign them. Every other call fails as an unknown issue does.
+/// What `gh` answers for lampOS's issues in these tests, as GitHub's GraphQL does: three open tasks (one nobody has, one for
+/// the seventh builder, one the first builder is on), and #5759's text with its newest two comments, signed by their agents as
+/// lampOS's builders sign them, and one before them. Every other call fails as an unknown issue does.
 SwarmGitHub swarmV4GitHub({List<List<String>>? calls}) => SwarmGitHub(
   run: (arguments) async {
     calls?.add(arguments);
-    if (arguments.take(2).join(' ') == 'issue list') {
-      return ProcessResult(
-        1,
-        0,
-        jsonEncode([
-          {
-            'number': 5754,
-            'title': 'No bathroom-break reminder skill ships',
-            'labels': [
-              {'name': 'builder:seventh'},
+    final query = arguments
+        .firstWhere((a) => a.startsWith('query='), orElse: () => '')
+        .substring(6);
+    const url = 'https://github.com/autonomous-ai/lampOS/issues';
+    Map<String, Object?> issue(int number, String title, String updated) => {
+      'number': number,
+      'title': title,
+      'url': '$url/$number',
+      'createdAt': '2026-11-09T01:00:00Z',
+      'updatedAt': updated,
+    };
+    Map<String, Object?> label(String name, String color) => {
+      'name': name,
+      'color': color,
+    };
+    Map<String, Object?> comment(int n, String who, String body, String at) => {
+      'author': {'login': who},
+      'body': body,
+      'createdAt': at,
+      'url': '$url/5759#issuecomment-$n',
+    };
+    ProcessResult answer(Object? data) =>
+        ProcessResult(1, 0, jsonEncode({'data': data}), '');
+    if (query.contains('issues(first:')) {
+      return answer({
+        'repository': {
+          'issues': {
+            'pageInfo': {'hasNextPage': false, 'endCursor': null},
+            'nodes': [
+              {
+                ...issue(
+                  5754,
+                  'No bathroom-break reminder skill ships',
+                  '2026-11-09T06:05:08Z',
+                ),
+                'labels': {
+                  'nodes': [label('builder:seventh', '0e8a16')],
+                },
+                'author': {'login': 'deehw'},
+                'comments': {'totalCount': 6},
+              },
+              {
+                ...issue(
+                  5759,
+                  'The two update rows were scored down for #5539 and #5476',
+                  '2026-11-09T07:20:06Z',
+                ),
+                'labels': {
+                  'nodes': [
+                    label('status:taken', 'fbca04'),
+                    label('builder:first builder', '1d76db'),
+                  ],
+                },
+                'author': {'login': '69tc'},
+                'comments': {'totalCount': 3},
+              },
+              {
+                ...issue(
+                  5760,
+                  'Play your music through Spotify by voice',
+                  '2026-11-09T05:00:00Z',
+                ),
+                'labels': {'nodes': <Object?>[]},
+                'author': {'login': 'deehw'},
+                'comments': {'totalCount': 0},
+              },
             ],
-            'author': {'login': 'deehw'},
-            'updatedAt': '2026-11-09T06:05:08Z',
-            'url': 'https://github.com/autonomous-ai/lampOS/issues/5754',
           },
-          {
-            'number': 5759,
-            'title': 'The two update rows were scored down for #5539 and #5476',
-            'labels': [
-              {'name': 'status:taken'},
-              {'name': 'builder:first builder'},
-            ],
-            'author': {'login': '69tc'},
-            'updatedAt': '2026-11-09T07:20:06Z',
-            'url': 'https://github.com/autonomous-ai/lampOS/issues/5759',
-          },
-        ]),
-        '',
-      );
+        },
+      });
     }
-    if (arguments.take(3).join(' ') == 'issue view 5759') {
-      return ProcessResult(
-        2,
-        0,
-        jsonEncode({
-          'number': 5759,
-          'title': 'The two update rows were scored down for #5539 and #5476',
-          'body': 'Score both rows again once a lamp shows the fix.',
-          'labels': [
-            {'name': 'status:taken'},
-            {'name': 'builder:first builder'},
-          ],
-          'author': {'login': '69tc'},
-          'state': 'OPEN',
-          'createdAt': '2026-11-09T01:00:00Z',
-          'updatedAt': '2026-11-09T07:20:06Z',
-          'url': 'https://github.com/autonomous-ai/lampOS/issues/5759',
-          'comments': [
-            {
-              'author': {'login': '69tc'},
-              'body': 'Migrate, 09:3x GMT+7, taken by Migrate. The first step: what each row still lacks.',
-              'createdAt': '2026-11-09T02:11:20Z',
-              'url': 'https://github.com/autonomous-ai/lampOS/issues/5759#issuecomment-1',
+    if (query.contains(r'before:$before')) {
+      return answer({
+        'repository': {
+          'issue': {
+            'comments': {
+              'pageInfo': {'hasPreviousPage': false, 'startCursor': 'c0'},
+              'nodes': [
+                comment(
+                  0,
+                  'deehw',
+                  'Opened by deehw, 09:0x GMT+7: the rows need a lamp check.',
+                  '2026-11-09T01:30:00Z',
+                ),
+              ],
             },
-            {
-              'author': {'login': 'deehw'},
-              'body': 'First builder, 09:4x: I\'m taking this one.',
-              'createdAt': '2026-11-09T02:27:00Z',
-              'url': 'https://github.com/autonomous-ai/lampOS/issues/5759#issuecomment-2',
+          },
+        },
+      });
+    }
+    if (query.contains('body state') && arguments.contains('number=5759')) {
+      return answer({
+        'repository': {
+          'issue': {
+            ...issue(
+              5759,
+              'The two update rows were scored down for #5539 and #5476',
+              '2026-11-09T07:20:06Z',
+            ),
+            'body': 'Score both rows again once a lamp shows the fix.',
+            'labels': {
+              'nodes': [
+                label('status:taken', 'fbca04'),
+                label('builder:first builder', '1d76db'),
+              ],
             },
-          ],
-        }),
-        '',
-      );
+            'author': {'login': '69tc'},
+            'state': 'OPEN',
+            'comments': {
+              'totalCount': 3,
+              'pageInfo': {'hasPreviousPage': true, 'startCursor': 'c1'},
+              'nodes': [
+                comment(
+                  1,
+                  '69tc',
+                  'Migrate, 09:3x GMT+7, taken by Migrate. The first step: what each row still lacks.',
+                  '2026-11-09T02:11:20Z',
+                ),
+                comment(
+                  2,
+                  'deehw',
+                  'First builder, 09:4x: I\'m taking this one.',
+                  '2026-11-09T02:27:00Z',
+                ),
+              ],
+            },
+          },
+        },
+      });
     }
     return ProcessResult(
       3,
       1,
       '',
-      'GraphQL: Could not resolve to an issue or pull request with the number of 0.',
+      'GraphQL: Could not resolve to an Issue with the number of 0.',
     );
   },
 );

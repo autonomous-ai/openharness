@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' show max;
 
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -16,7 +17,7 @@ import 'message_row.dart';
 import 'message_text.dart';
 import 'model.dart';
 import 'swarm_type.dart';
-import 'task_list.dart';
+import 'task_board.dart';
 
 /// A task opened beside its project's channel (Swarm v4, anh Dee 2026-11-09): the GitHub issue, read with `gh` on this
 /// computer as its person, its text and its comments as one conversation, each named by the agent that signed it. People
@@ -57,13 +58,21 @@ class SwarmIssuePanel extends StatefulWidget {
 
 class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
   SwarmIssueThread? _thread;
+
+  /// Every comment read so far, oldest first, with none missing between them: the newest the thread brings, and the pages
+  /// "Show" read before them.
+  List<SwarmIssueComment> _comments = const [];
+
+  /// Where the comments before [_comments] start, or null when it holds them all.
+  String? _earlier;
+  bool _showing = false;
   String? _error;
   Timer? _refresh;
 
   @override
   void initState() {
     super.initState();
-    _read();
+    _open();
     if (widget.refreshEvery case final every?) {
       _refresh = Timer.periodic(every, (_) => _read());
     }
@@ -74,10 +83,40 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
     super.didUpdateWidget(old);
     if (old.number != widget.number || old.repository != widget.repository) {
       _thread = null;
+      _comments = const [];
+      _earlier = null;
       _error = null;
-      _read();
+      _open();
     }
   }
+
+  /// What was read last shows at once; the read brings what changed since.
+  void _open() {
+    final kept = widget.github.keptThread(widget.repository, widget.number);
+    if (kept != null) _take(kept);
+    _read();
+  }
+
+  /// Takes the newest comments a read brought. Those held before them stay while the newest window starts at one of the
+  /// held (the comments are then one run, and the cursor before the first held still points before it). Past that (more than
+  /// a window of comments came since the last read) what was held does not join the window, so the window stands alone with
+  /// its own cursor: a gap would read as a thread with nothing missing.
+  void _take(SwarmIssueThread thread) {
+    _thread = thread;
+    final window = thread.comments;
+    final joins = window.isEmpty
+        ? -1
+        : _comments.indexWhere((c) => _key(c) == _key(window.first));
+    if (joins >= 0) {
+      _comments = [..._comments.take(joins), ...window];
+    } else {
+      _comments = window;
+      _earlier = thread.earlier;
+    }
+  }
+
+  static String _key(SwarmIssueComment c) =>
+      c.url ?? '${c.createdAt?.toIso8601String()}${c.author}${c.body.hashCode}';
 
   @override
   void dispose() {
@@ -94,7 +133,7 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
           number != widget.number)
         return;
       setState(() {
-        _thread = thread;
+        _take(thread);
         _error = null;
       });
     } on SwarmGitHubError catch (error) {
@@ -103,6 +142,36 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
           number != widget.number)
         return;
       setState(() => _error = error.message);
+    }
+  }
+
+  /// Reads the page of comments before the ones shown and puts it above them.
+  Future<void> _showEarlier() async {
+    final (repository, number, cursor) = (
+      widget.repository,
+      widget.number,
+      _earlier,
+    );
+    if (cursor == null || _showing) return;
+    setState(() => _showing = true);
+    try {
+      final page = await widget.github.earlier(repository, number, cursor);
+      // A newer read that did not join the held comments moved the cursor: this page is of a range no longer held.
+      if (!mounted ||
+          repository != widget.repository ||
+          number != widget.number ||
+          cursor != _earlier)
+        return;
+      setState(() {
+        _comments = [...page.comments, ..._comments];
+        _earlier = page.earlier;
+        _error = null;
+      });
+    } on SwarmGitHubError catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _showing = false);
     }
   }
 
@@ -260,8 +329,27 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
                   : 'Waiting',
               style: DesktopChrome.metadata(),
             ),
+            if (issue.author != null || issue.createdAt != null)
+              Flexible(
+                child: Text(
+                  [
+                    '',
+                    ?issue.author,
+                    if (issue.createdAt case final at?)
+                      swarmOpened(at, widget.now()),
+                  ].join(' · '),
+                  key: const ValueKey('swarm-issue-opened'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: DesktopChrome.metadata(),
+                ),
+              ),
           ],
         ),
+        if (issue.labels.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          SwarmLabelChips(issue: issue, limit: 12),
+        ],
         const SizedBox(height: 16),
         _post(
           context,
@@ -272,7 +360,26 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
           ),
           agents,
         ),
-        for (final comment in thread.comments) ...[
+        if (_earlier != null) ...[
+          const SizedBox(height: 18),
+          Row(
+            key: const ValueKey('swarm-issue-earlier'),
+            children: [
+              Expanded(
+                child: Text(
+                  _earlierText(max(0, issue.comments - _comments.length)),
+                  style: DesktopChrome.metadata(),
+                ),
+              ),
+              TextButton(
+                key: const ValueKey('swarm-issue-show-earlier'),
+                onPressed: _showing ? null : _showEarlier,
+                child: Text(_showing ? 'Reading' : 'Show'),
+              ),
+            ],
+          ),
+        ],
+        for (final comment in _comments) ...[
           const SizedBox(height: 18),
           _post(context, comment, agents),
         ],
@@ -349,3 +456,13 @@ String _when(DateTime at, DateTime now) {
       local.day == today.day;
   return sameDay ? time : '${_months[local.month - 1]} ${local.day}, $time';
 }
+
+/// 1576 as 1,576.
+String _formatCount(int n) => n.toString().replaceAllMapped(
+  RegExp(r'(\d)(?=(\d{3})+$)'),
+  (m) => '${m[1]},',
+);
+
+/// How many comments are before the ones shown: "1 earlier comment", "1,546 earlier comments".
+String _earlierText(int n) =>
+    '${_formatCount(n)} earlier comment${n == 1 ? '' : 's'}';

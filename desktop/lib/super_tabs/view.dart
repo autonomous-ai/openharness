@@ -94,7 +94,7 @@ import 'agent_instructions.dart';
 import '../core/test_run.dart';
 import 'github_issues.dart';
 import 'issue_panel.dart';
-import 'task_list.dart';
+import 'task_board.dart';
 import 'thread_panel.dart';
 import 'work_details.dart';
 import 'manage_page.dart';
@@ -2089,6 +2089,12 @@ class _SuperTabViewState extends State<SuperTabView>
     places: SuperTabPlaces.of(c),
     attention: SuperTabAttention.of(c),
     onManage: _openManage,
+    onManageMachines: () {
+      // Set before Manage opens, so a last page of Devices is not opened here only to be left at once.
+      _manageTab = SuperTabManageTab.machines;
+      _openManage();
+      c.leaveDevices();
+    },
     manageSelected: _manageOpen,
     // On every platform: the Mac's menu bar and Dock still say what waits,
     // and the sidebar lists it as Slack does (task #2996).
@@ -6274,7 +6280,7 @@ class _SuperTabViewState extends State<SuperTabView>
                     : issue ??
                           thread ??
                           (taskList
-                              ? SwarmTaskList(
+                              ? SwarmTaskBoard(
                                   controller: c,
                                   conversationId: c.selectedId,
                                   github: _github,
@@ -6296,6 +6302,9 @@ class _SuperTabViewState extends State<SuperTabView>
                               ? SwarmAgentInstructions(
                                   agent: instructionsAgent,
                                   app: widget.app,
+                                  machineName: widget.machineName(
+                                    instructionsAgent.machineId,
+                                  ),
                                   onClose: () =>
                                       setState(() => _instructionsOpen = false),
                                 )

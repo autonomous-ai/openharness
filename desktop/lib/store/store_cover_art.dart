@@ -328,6 +328,11 @@ const storeCoverArt = <String, StoreCoverArt>{
     imageSize: Size(1600, 1250),
     viewport: Rect.fromLTWH(104, 44, 1056, 525),
   ),
+  'autonomous/web-studio': StoreCoverArt(
+    asset: 'assets/store/covers/web-studio.jpg',
+    description: 'Field, a live WebGL instrument made with Web Studio',
+    imageSize: Size(1600, 1000),
+  ),
   'autonomous/score': StoreCoverArt(
     asset: 'assets/store/covers/score.jpg',
     description: 'An ensemble score made with Score',

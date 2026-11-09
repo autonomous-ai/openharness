@@ -42,6 +42,9 @@ describe('the Windows release workflows', () => {
     // can be promoted without republishing bytes the bucket holds as immutable.
     expect(release).toMatch(/promote_pty:\n\s+description:[\s\S]*?\n\s+type: boolean\n\s+default: false/)
     expect(release).toMatch(/promote-pty:\n\s+needs: \[version\]\n\s+if: >-\n\s+inputs\.promote_pty &&\n\s+needs\.version\.outputs\.metadata_path == 'harness\/cli\/metadata\.json'/)
+    // A promote-only dispatch builds nothing: the bytes are already published, and the bucket refuses a republish.
+    expect(release).toMatch(/publish:\n\s+needs: \[version, preflight, process-images\]\n(?:\s+#[^\n]*\n)*\s+if: \$\{\{ !inputs\.promote_pty \}\}/)
+    expect(release).toMatch(/pty-build:\n\s+needs: version\n\s+if: \$\{\{ !inputs\.promote_pty \}\}/)
     expect(release).toContain('bash cli/scripts/promote-pty-payload.sh')
     expect(release).toMatch(/windows-staging:\n\s+needs: \[version, preflight, publish, pty-build, pty-sign\]/)
     expect(release).toMatch(/github-release:\n\s+needs: \[version, publish\]/)

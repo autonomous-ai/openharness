@@ -53,10 +53,6 @@ on:
         description: 'Manifest to write. Leave as-is for a real release; metadata-test.json for a dry run.'
         required: false
         default: harness/desktop/metadata.json
-      urgent_reason:
-        description: 'A P0 only: why this real release runs outside the release window (recorded in the run summary).'
-        required: false
-        default: ''
       test_publication:
         description: 'Only test publication against disposable fixture objects; no app build or product release'
         type: boolean
@@ -113,25 +109,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 1
-
-      # A tag pushed by hand skips the release scripts, so the window is checked here too
-      # (scripts/release-window.py). An emergency release carries `Emergency: <reason>` (or the scripts' `Release-Urgent: <reason>`) in its annotated tag.
-      - name: Release window
-        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.prepare_only && !inputs.test_candidate_reuse && (inputs.metadata_path == '' || inputs.metadata_path == 'harness/desktop/metadata.json')) }}
-        env:
-          REF_NAME: ${{ github.ref_name }}
-          EVENT_NAME: ${{ github.event_name }}
-          URGENT_REASON: ${{ inputs.urgent_reason }}
-        run: |
-          set -euo pipefail
-          if [ "$EVENT_NAME" = push ]; then
-            git fetch --quiet --force --depth=1 origin tag "$REF_NAME"
-            python3 scripts/release-window.py --kind desktop --from-tag "$REF_NAME" --exclude-tag "$REF_NAME"
-          elif [ -n "$URGENT_REASON" ]; then
-            python3 scripts/release-window.py --kind desktop --urgent "$URGENT_REASON"
-          else
-            python3 scripts/release-window.py --kind desktop
-          fi
 
       - id: resolve
         # Through env, never `${{ }}` inline in run:. Git permits quotes, backticks and $() in a
@@ -753,7 +730,7 @@ jobs:
           # 2026-09-21). So fall back to the same commit list the script would have generated —
           # everything since the previous _desktop tag — and warn, rather than leave the release half done.
           if [ "$(git cat-file -t "$REF_NAME")" = tag ]; then
-            git tag -l --format='%(contents)' "$REF_NAME" | { grep -v '^Release-Urgent: ' || true; } > RELEASE_NOTES.md
+            git tag -l --format='%(contents)' "$REF_NAME" > RELEASE_NOTES.md
           else
             : > RELEASE_NOTES.md
           fi

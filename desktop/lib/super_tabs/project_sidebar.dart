@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../core/models.dart' show Machine;
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
@@ -56,6 +57,7 @@ class ProjectSidebar extends StatelessWidget {
     this.onNewProject,
     this.onNewSwarm,
     this.onManage,
+    this.onManageMachines,
     this.manageSelected = false,
     this.devicesSelected = false,
     this.onPage,
@@ -109,6 +111,9 @@ class ProjectSidebar extends StatelessWidget {
 
   /// Opens Manage (Machines, Models, Devices, Swarm), the row at the foot.
   final VoidCallback? onManage;
+
+  /// Opens Manage on its Machines, where a computer in Your Machines is managed.
+  final VoidCallback? onManageMachines;
   final bool manageSelected;
   final bool devicesSelected;
 
@@ -609,7 +614,7 @@ class ProjectSidebar extends StatelessWidget {
     onTap: onTap,
   );
 
-  /// The Desktop's left pane (Swarm v4, anh Dee 2026-11-08): the org name, Your agents, Projects, then Humans; Manage
+  /// The Desktop's left pane (Swarm v4, anh Dee 2026-11-08): the org name, Your Team, Projects, then Top Teams; Manage
   /// stays at the foot. Nothing else: no Decisions, no Projects grid, no Buddy.
   List<Widget> _desktop(
     SuperTabSnapshot? snapshot,
@@ -624,17 +629,55 @@ class ProjectSidebar extends StatelessWidget {
       SuperTabQuietHeading(
         'Projects',
         key: const ValueKey('project-sidebar-projects'),
-        onTap: null,
+        collapsed: !controller.projectsGroupOpen,
+        onTap: controller.toggleProjectsGroup,
         onAdd: controller.canWrite ? onNewProject : null,
         addTooltip: 'New project',
         addKey: const ValueKey('project-sidebar-projects-add'),
       ),
-      if (snapshot != null && projects.isEmpty)
-        _noProjects()
-      else
-        for (final (_, channel) in _channels(snapshot, reading)) channel,
+      if (controller.projectsGroupOpen)
+        if (snapshot != null && projects.isEmpty)
+          _noProjects()
+        else
+          for (final (_, channel) in _channels(snapshot, reading)) channel,
       const SizedBox(height: grid.AppDesktop.groupGap),
+      ..._yourMachines(),
       ..._humans(snapshot),
+    ];
+  }
+
+  /// Your Machines (Swarm v4, anh Dee 2026-11-09): the computers of this account, folded until it is opened, each opening
+  /// Manage where it is managed. What the machine list says is up is up. A person with none sees no heading.
+  List<Widget> _yourMachines() {
+    final machines =
+        [
+          for (final m in app?.machines ?? const <Machine>[])
+            if (!m.isShared && !m.isTeamAccount && !m.isSharedMachine) m,
+        ]..sort(
+          (a, b) => a.displayName.toLowerCase().compareTo(
+            b.displayName.toLowerCase(),
+          ),
+        );
+    if (machines.isEmpty) return const [];
+    return [
+      SuperTabQuietHeading(
+        'Your Machines',
+        key: const ValueKey('project-sidebar-machines'),
+        collapsed: !controller.yourMachinesGroupOpen,
+        onTap: controller.toggleYourMachinesGroup,
+      ),
+      if (controller.yourMachinesGroupOpen)
+        for (final machine in machines)
+          _iconRow(
+            key: 'super-machine-${machine.machineId}',
+            icon: machine.reportedOnline == false
+                ? AppIcons.monitorOff
+                : AppIcons.monitor,
+            name: machine.displayName,
+            detail: machine.reportedOnline == false ? 'offline' : null,
+            onTap: onManageMachines ?? onManage,
+          ),
+      const SizedBox(height: grid.AppDesktop.groupGap),
     ];
   }
 
@@ -650,31 +693,33 @@ class ProjectSidebar extends StatelessWidget {
     final people = {for (final person in snapshot.people) person.id: person};
     return [
       SuperTabQuietHeading(
-        'Humans',
+        'Top Teams',
         key: const ValueKey('project-sidebar-humans'),
-        onTap: open,
+        collapsed: !controller.topTeamsGroupOpen,
+        onTap: controller.toggleTopTeamsGroup,
       ),
-      for (final score in scores)
-        if (people[score.personId] case final person)
-          SuperTabQuietRow(
-            key: ValueKey('super-human-${score.personId}'),
-            leading: person == null
-                ? SuperTabAvatar(
-                    identity: 'person:${score.personId}',
-                    name: score.displayName ?? '',
-                    size: SuperTabQuietRow.faceSize,
-                  )
-                : SuperTabAvatar.person(
-                    person,
-                    size: SuperTabQuietRow.faceSize,
-                  ),
-            name: person?.shownName ?? score.displayName ?? 'Someone',
-            detail: '${score.points}',
-            selected:
-                page == SwarmPage.leaderboard &&
-                score.personId == controller.accountId,
-            onTap: open,
-          ),
+      if (controller.topTeamsGroupOpen)
+        for (final score in scores)
+          if (people[score.personId] case final person)
+            SuperTabQuietRow(
+              key: ValueKey('super-human-${score.personId}'),
+              leading: person == null
+                  ? SuperTabAvatar(
+                      identity: 'person:${score.personId}',
+                      name: score.displayName ?? '',
+                      size: SuperTabQuietRow.faceSize,
+                    )
+                  : SuperTabAvatar.person(
+                      person,
+                      size: SuperTabQuietRow.faceSize,
+                    ),
+              name: person?.shownName ?? score.displayName ?? 'Someone',
+              detail: '${score.points}',
+              selected:
+                  page == SwarmPage.leaderboard &&
+                  score.personId == controller.accountId,
+              onTap: open,
+            ),
     ];
   }
 
@@ -782,15 +827,17 @@ class ProjectSidebar extends StatelessWidget {
     final newAgent = controller.canWrite ? onNewAgent : null;
     return [
       SuperTabQuietHeading(
-        'Your agents',
+        'Your Team',
         key: const ValueKey('project-sidebar-agents'),
-        onTap: null,
+        collapsed: !controller.agentsGroupOpen,
+        onTap: controller.toggleAgentsGroup,
         onAdd: newAgent,
         addTooltip: 'New agent',
         addKey: const ValueKey('project-sidebar-agents-add'),
       ),
-      for (final (agent, chat) in reading.myAgents)
-        _agentRow(snapshot, agent, chat),
+      if (controller.agentsGroupOpen)
+        for (final (agent, chat) in reading.myAgents)
+          _agentRow(snapshot, agent, chat),
       const SizedBox(height: grid.AppDesktop.groupGap),
     ];
   }

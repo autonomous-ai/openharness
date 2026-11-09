@@ -8,7 +8,7 @@ import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/swarm_type.dart';
 
 /// The Desktop left pane's one row style and its heading (task #4466, anh Dee 11-07): face, name, one quiet detail on
-/// the right; 30 high; 13 names, 12 details; bold only for unread; chevrons only on hover.
+/// the right; 30 high; 13 names, 12 details; bold only for unread; a section that folds always shows its chevron; the org name only on hover.
 void main() {
   Future<void> pump(WidgetTester tester, List<Widget> children) async {
     await tester.binding.setSurfaceSize(const Size(300, 400));
@@ -213,7 +213,7 @@ void main() {
       return mouse;
     }
 
-    testWidgets('is 12 and secondary, with its chevron only while hovered', (
+    testWidgets('is 12 and secondary, with its chevron always showing', (
       tester,
     ) async {
       var toggled = 0;
@@ -227,18 +227,16 @@ void main() {
       final style = styleOf(tester, 'My agents');
       expect(style.fontSize, 12);
       expect(style.color, grid.AppPalette.textSecondary);
-      expect(find.byIcon(AppIcons.chevronDown), findsNothing);
-      await hover(tester, find.text('My agents'));
+      // The person sees at a glance that it folds, hovered or not (anh Dee, 2026-11-09).
       expect(find.byIcon(AppIcons.chevronDown), findsOneWidget);
       await tester.tap(find.text('My agents'));
       expect(toggled, 1);
     });
 
-    testWidgets('folded, its hover chevron points right', (tester) async {
+    testWidgets('folded, its chevron points right', (tester) async {
       await pump(tester, [
         SuperTabQuietHeading('My agents', collapsed: true, onTap: () {}),
       ]);
-      await hover(tester, find.text('My agents'));
       expect(find.byIcon(AppIcons.chevronRight), findsOneWidget);
     });
 
