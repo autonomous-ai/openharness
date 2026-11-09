@@ -26,6 +26,18 @@ const STEPS_PER_TASK = 400, MAX_STEPS = 200_000
 const SELF = 'Harness'
 /** Closed tasks whose time is read each pass, and how many are remembered: a slow start, never a slow pass. */
 const MEASURES_PER_PASS = 5, MAX_MEASURED = 500
+/** The labels the team's flow uses (lib/swarmSkills.ts SWARM_BASICS, PM_BASICS), made where a repository lacks them: gh
+ *  refuses to add a label the repository does not have, so in a fresh repository a builder could not take its first task,
+ *  nor the PM size one. */
+const FLOW_LABELS: ReadonlyArray<{ name: string; color: string; description: string }> = [
+  { name: 'status:taken', color: '0e8a16', description: 'A builder is on it' },
+  { name: 'size:s', color: 'c2e0c6', description: 'About half an hour of work' },
+  { name: 'size:m', color: 'c2e0c6', description: 'About an hour and a half of work' },
+  { name: 'size:l', color: 'c2e0c6', description: 'About four hours of work' },
+  { name: 'p0', color: 'b60205', description: 'First' },
+  { name: 'p1', color: 'd93f0b', description: 'Next' },
+  { name: 'p2', color: 'fbca04', description: 'Later' },
+]
 /** How many open pull requests are read for readers each pass, as the merger reads them. */
 const MAX_PULLS = 30
 /** How long a reader asked for a head has to read it before another reader is asked too. */
@@ -44,6 +56,8 @@ export class GitHubAssign {
   private readonly last = new Map<string, Choice>()
   /** Tasks given and not yet seen labelled in a read, so a pass before GitHub's lists catch up never gives one twice. */
   private readonly given = new Map<string, string>()
+  /** The labels each repository has, or was asked to make, as `repo:name` (labelRepo). */
+  private readonly labels = new Set<string>()
   /** What was said of one task (a label refused, no builder able to do it), so each is said once, not every pass. */
   private readonly said = new Set<string>()
   /** Each quiet taken task its builder was asked about: since when it was quiet, and when it was asked. */
@@ -120,7 +134,7 @@ export class GitHubAssign {
     await this.takeBack(repo, issues, crew.away ?? [])
     // What each builder works on in this project: the Works on line of its instructions file here (agents/<Name>.md).
     for (const builder of crew.builders) builder.worksOn = worksOnOf(await this.reads.file(repo, `agents/${builder.name}.md`))
-    await this.labelAreas(repo, crew)
+    await this.labelRepo(repo, crew)
     const closed = await this.reads.current(repo, `/repos/${repo}/issues?state=closed&sort=updated&direction=desc&per_page=${PAGE}`, 1)
     await this.measure(repo, closed)
     const minutes = learnedMinutes([...this.took].filter(([key, took]) => key.startsWith(`${repo}#`) && took).map(([, took]) => took!))
@@ -172,20 +186,26 @@ export class GitHubAssign {
     }
   }
 
-  /** Makes the `part:` label of each area a builder works on that the repository does not have yet, so its PM labels tasks
-   *  with the same words (anh Dee, 2026-11-09: "how does github label get populated if we enter a new label"). Once each. */
-  private async labelAreas(repo: string, crew: Crew): Promise<void> {
-    const areas = [...new Set(crew.builders.flatMap(b => b.worksOn ?? []))]
-    if (!areas.length) return
+  /**
+   * Makes the labels the team's flow needs that the repository does not have yet: the flow's own (FLOW_LABELS), each
+   * builder's, and the part: label of each area a builder works on (anh Dee, 2026-11-09: "how does github label get
+   * populated if we enter a new label"). The repository's labels are read only when the team needs one not seen yet, and a
+   * label GitHub refuses is said once and not asked for again.
+   */
+  private async labelRepo(repo: string, crew: Crew): Promise<void> {
+    const wanted = [...FLOW_LABELS,
+      ...crew.builders.map(b => ({ name: b.label, color: '1d76db', description: `${b.name}'s tasks and pull requests` })),
+      ...[...new Set(crew.builders.flatMap(b => b.worksOn ?? []))].map(area => ({ name: `part:${area}`, color: 'c5def5', description: 'An area of the project' }))]
+    const missing = wanted.filter(label => !this.labels.has(`${repo}:${label.name}`))
+    if (!missing.length) return
     const have = new Set((await this.reads.current(repo, `/repos/${repo}/labels?per_page=${PAGE}`, 3)).map(label => String(label.name ?? '').toLowerCase()))
-    for (const area of areas) {
-      const name = `part:${area}`, key = `${repo}:${name}`
-      if (have.has(name) || this.said.has(key)) continue
-      this.said.add(key)
-      const made = await this.deps.send('POST', `/repos/${repo}/labels`, { name, color: 'c5def5', description: 'An area of the project' })
+    for (const label of missing) {
+      this.labels.add(`${repo}:${label.name}`)
+      if (have.has(label.name.toLowerCase())) continue
+      const made = await this.deps.send('POST', `/repos/${repo}/labels`, label)
       // 422: someone made it since the list was read.
-      if (made.status === 201 || made.status === 422) this.log(`[super-tab] made the label ${name} in ${repo}`)
-      else this.once(`[super-tab] Task assignment: LABEL_NOT_MADE ${repo} ${name}: GitHub answered ${made.status}`)
+      if (made.status === 201 || made.status === 422) this.log(`[super-tab] made the label ${label.name} in ${repo}`)
+      else this.once(`[super-tab] Task assignment: LABEL_NOT_MADE ${repo} ${label.name}: GitHub answered ${made.status}`)
     }
   }
 
