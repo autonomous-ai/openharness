@@ -25,12 +25,6 @@ export async function ensurePartExpiry(db: PrismaClient): Promise<void> {
   for (const collection of ['SwarmHead', 'SwarmGroup', 'SwarmStart', 'SwarmProgress']) {
     await ensureIndex(db, collection, { key: { purgeAt: 1 }, name: 'part_purge', expireAfterSeconds: 0 })
   }
-  // The Workspace rows Swarm v4 removed keep expiring until their collections are dropped (a production write, with the owner's go):
-  // a removed person's row, a finished removal and a deleted Workspace 30 days on, an invitation when it expires.
-  for (const collection of ['SwarmWorkspace', 'SwarmWorkspaceMember', 'SwarmWorkspaceRemoval']) {
-    await ensureIndex(db, collection, { key: { purgeAt: 1 }, name: 'workspace_purge', expireAfterSeconds: 0 })
-  }
-  await ensureIndex(db, 'SwarmWorkspaceInvitation', { key: { expiresAt: 1 }, name: 'workspace_invitation_expiry', expireAfterSeconds: 0 })
 }
 
 /** A removed person or machine keeps its tombstone after its 7 days, with its data dropped: the version it holds
