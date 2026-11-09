@@ -35,7 +35,7 @@ export function agentKind(state: SuperTabState, target: Agent): AgentKind {
 export function agentChatId(state: SuperTabState, target: Agent, reads: (chat: Conversation) => boolean = () => true): string | null {
   if (isBuddy(target)) return state.conversations.find(c => isBuddyChat(c) && c.agentIds.includes(target.id))?.id ?? null
   // Another person's own chat with their agent is theirs alone: its id goes only to who reads it, as a change read sends it.
-  const own = state.conversations.find(c => isAgentChat(c) && c.agentIds.includes(target.id) && reads(c))?.id
+  const own = state.conversations.find(c => (c.id === target.chatId || isAgentChat(c) && c.agentIds.includes(target.id)) && reads(c))?.id
   return own ?? ledProject(state, target.id)?.leadConversationId ?? null
 }
 

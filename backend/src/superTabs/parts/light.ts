@@ -265,7 +265,7 @@ export async function loadLight(tx: Transaction, tabId: string,
     const pmChats = workers.flatMap(a => leads.has(a.key) && a.data!.chatId ? [a.data!.chatId] : [])
     const [undecided, ofLegacy, ofLeads] = await Promise.all([undecidedWork(workers, groups as Part<GroupData>[], lightGroups),
       legacy.length ? lightGroups('agents', { agentIds: { $in: legacy }, dormant: false }) : Promise.resolve([]),
-      pmChats.length ? lightGroups('key', { key: { $in: pmChats } }) : Promise.resolve([])])
+      pmChats.length ? lightGroups('key', { key: { $in: pmChats }, dormant: false }) : Promise.resolve([])])
     const held = new Set(groups.map(g => g.key))
     groups.push(...unique([undecided, ofLegacy, ofLeads]).filter(g => !held.has(g.key)))
   }

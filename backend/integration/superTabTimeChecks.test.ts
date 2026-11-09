@@ -173,6 +173,23 @@ describe('the time checks with the PM down', () => {
   })
 })
 
+// Swarm v4 (anh Dee 2026-11-09): every agent has one 1:1 chat with its person, an agent from before v4 too (agentChats.ts).
+describe('every agent\'s 1:1 chat', () => {
+  it('is opened by the checks for an agent that has none, once, for its person alone', async () => {
+    const f = await swarm()
+    const before = (await f.timed.read(owner, f.tab)).state
+    expect(before.agents.find(a => a.id === f.worker)!.chatId).toBeUndefined()
+    await f.timed.runTimeChecks(f.tab)
+    const state = (await f.timed.read(host, f.tab)).state
+    const chatId = state.agents.find(a => a.id === f.worker)!.chatId!
+    expect(state.conversations.find(c => c.id === chatId)).toMatchObject({ kind: 'agent-chat', agentIds: [f.worker] })
+    // Its person's alone: the Swarm's owner does not read it.
+    expect((await f.timed.read(owner, f.tab)).state.conversations.some(c => c.id === chatId)).toBe(false)
+    await f.timed.runTimeChecks(f.tab)
+    expect((await f.timed.read(host, f.tab)).state.conversations.filter(c => c.kind === 'agent-chat' && c.agentIds.includes(f.worker))).toHaveLength(1)
+  })
+})
+
 describe('the worker\'s pass', () => {
   it('runs the checks of each Swarm active in the last week, and leaves a deleted one alone', async () => {
     const f = await swarm(), quiet = await swarm()
