@@ -28,6 +28,7 @@ const ENGINE_LABELS: Record<AgentEngine, string> = {
   grok: 'Grok',
   agy: 'Antigravity',
   copilot: 'Copilot',
+  kimi: 'Kimi Code',
   terminal: 'Terminal',
 }
 

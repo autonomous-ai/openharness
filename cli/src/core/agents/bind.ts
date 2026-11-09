@@ -160,8 +160,12 @@ export function createBinding({
     // `userPromptSubmitted` and `sessionStart` hooks both register (measured 2.5s apart, and in that
     // order — sessionStart fires AFTER the first prompt), so treating the second as a reset re-folded
     // the transcript and emitted a second `turn_started` for one exchange.
+    // kimi joins them for a fourth reason: its SessionStart fires on `resume` as well as `startup`
+    // (measured), so a resumed session re-announces an already-folded conversation, and treating that
+    // as a reset would re-fold and re-emit `turn_started` for the turn in flight. The resume's wire is
+    // appended in place — the fold cursor is already past it.
     const reset = meta.isNew || !!meta.recovered
-      || (entry.engine !== 'cursor' && entry.engine !== 'agy' && entry.engine !== 'copilot'
+      || (entry.engine !== 'cursor' && entry.engine !== 'agy' && entry.engine !== 'copilot' && entry.engine !== 'kimi'
         && meta.hookEvent === 'SessionStart')
     // Deliberately NOT gated on `meta.isNew`. `isNew` is false in exactly the case this is meant to catch:
     // a session announced once BEFORE its transcript exists and registered again when the file appears —

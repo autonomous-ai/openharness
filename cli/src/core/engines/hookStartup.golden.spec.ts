@@ -31,6 +31,7 @@ vi.mock('../../engines/nativeHooks.js', () => ({
   installGrokHooks: (port: number) => world.install('grok', port),
   installAgyHooks: (port: number) => world.install('agy', port),
   installCopilotHooks: (port: number) => world.install('copilot', port),
+  installKimiHooks: (port: number) => world.install('kimi', port),
 }))
 vi.mock('../../lib/engineHomes.js', () => ({
   recoverEngineHomes: () => world.state.homes,

@@ -61,6 +61,7 @@ vi.mock('../../engines/muse/normalizer.js', async (real) => ({ ...await real<obj
 vi.mock('../../engines/amp/normalizer.js', async (real) => ({ ...await real<object>(), ampMessagesToEvents: vi.fn(fake.replay('amp')) }))
 vi.mock('../../engines/amp/threadExport.js', async (real) => ({ ...await real<object>(), readAmpThread: vi.fn(async () => null), ampThreadToEvents: vi.fn(fake.replay('amp export')) }))
 vi.mock('../../engines/grok/normalizer.js', async (real) => ({ ...await real<object>(), grokMessagesToEvents: vi.fn(fake.replay('grok')) }))
+vi.mock('../../engines/kimi/normalizer.js', async (real) => ({ ...await real<object>(), kimiMessagesToEvents: vi.fn(fake.replay('kimi')) }))
 vi.mock('../../engines/agy/normalizer.js', async (real) => ({ ...await real<object>(), agyMessagesToEvents: vi.fn(fake.replay('agy')) }))
 vi.mock('../../engines/copilot/normalizer.js', async (real) => ({ ...await real<object>(), copilotMessagesToEvents: vi.fn(fake.replay('copilot')) }))
 vi.mock('../../engines/pi/normalizer.js', async (real) => ({ ...await real<object>(), piMessagesToEvents: vi.fn(fake.replay('pi')), windowPiLines: vi.fn(fake.windowOf('pi')) }))
@@ -414,6 +415,7 @@ describe('the other file engines: read from the end, bounded', () => {
 
   it.each([
     ['cursor', 'cursor'], ['muse', 'muse'], ['amp', 'amp'], ['grok', 'grok'], ['agy', 'agy'], ['copilot', 'copilot'],
+    ['kimi', 'kimi'],
     ['pi', 'pi'], ['omp', 'omp'], ['commandcode', 'commandcode'],
   ])('%s: the whole transcript, through its own replay', async (engine, from) => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -430,7 +432,7 @@ describe('the other file engines: read from the end, bounded', () => {
     }
   })
 
-  it.each(['muse', 'amp', 'grok', 'agy', 'copilot'])('%s has no windower: a page is the whole transcript, and says there is no more', async (engine) => {
+  it.each(['muse', 'amp', 'grok', 'agy', 'copilot', 'kimi'])('%s has no windower: a page is the whole transcript, and says there is no more', async (engine) => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const s = session(engine, { transcriptPath: transcript(lines) })
     const { sessionGet } = setup(s)

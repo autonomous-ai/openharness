@@ -37,6 +37,8 @@ export const ENGINE_CLI_COMMANDS: Readonly<Record<AgentEngine, string>> = {
   grok: 'grok',
   agy: 'agy',
   copilot: 'copilot',
+  // Kimi Code CLI (Moonshot). Single `kimi` command; the data root moves with KIMI_CODE_HOME.
+  kimi: 'kimi',
   // A terminal has no command: the pane runs the user's login shell (engineLaunch.ts). The empty
   // string is what keeps every "is this binary installed" probe honest — nothing to look for.
   terminal: '',
@@ -86,6 +88,7 @@ export const ENGINE_CLI_ALIASES: Readonly<Record<AgentEngine, readonly string[]>
   grok: ['grok', 'agent'],
   agy: ['agy'],
   copilot: ['copilot'],
+  kimi: ['kimi'],
   terminal: [],
 }
 
@@ -453,6 +456,7 @@ export function enginePathOverride(engine: AgentEngine): string | undefined {
     case 'grok': return env.GROK_PATH
     case 'agy': return env.AGY_PATH
     case 'copilot': return env.COPILOT_PATH
+    case 'kimi': return env.KIMI_PATH
     case 'terminal': return undefined
   }
 }
@@ -478,6 +482,7 @@ export function engineBin(engine: AgentEngine, platform: NodeJS.Platform = proce
     case 'grok': return env.GROK_PATH || ENGINE_CLI_COMMANDS.grok
     case 'agy': return env.AGY_PATH || ENGINE_CLI_COMMANDS.agy
     case 'copilot': return env.COPILOT_PATH || ENGINE_CLI_COMMANDS.copilot
+    case 'kimi': return env.KIMI_PATH || ENGINE_CLI_COMMANDS.kimi
     // Never launched by name — `buildEngineLaunchArgv` builds the shell argv itself.
     case 'terminal': return ENGINE_CLI_COMMANDS.terminal
   }

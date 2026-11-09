@@ -17,6 +17,7 @@ import type { CopilotNormalizer } from '../../engines/copilot/normalizer.js'
 import type { CursorNormalizer } from '../../engines/cursor/normalizer.js'
 import type { DevinReader } from '../../engines/devin/reader.js'
 import type { GrokNormalizer } from '../../engines/grok/normalizer.js'
+import type { KimiNormalizer } from '../../engines/kimi/normalizer.js'
 import type { HermesReader } from '../../engines/hermes/reader.js'
 import type { KiloReader } from '../../engines/kilo/reader.js'
 import type { MuseNormalizer } from '../../engines/muse/normalizer.js'
@@ -35,6 +36,7 @@ export function createSessionNormalizers() {
   const museNormalizers = new Map<string, MuseNormalizer>()
   const ampNormalizers = new Map<string, AmpNormalizer>()
   const grokNormalizers = new Map<string, GrokNormalizer>()
+  const kimiNormalizers = new Map<string, KimiNormalizer>()
   const agyNormalizers = new Map<string, AgyNormalizer>()
   const copilotNormalizers = new Map<string, CopilotNormalizer>()
   const hermesReaders = new Map<string, HermesReader>()
@@ -52,6 +54,7 @@ export function createSessionNormalizers() {
       ?? museNormalizers.get(sessionId)?.turnOpen
       ?? ampNormalizers.get(sessionId)?.turnOpen
       ?? grokNormalizers.get(sessionId)?.turnOpen
+      ?? kimiNormalizers.get(sessionId)?.turnOpen
       ?? agyNormalizers.get(sessionId)?.turnOpen
       ?? copilotNormalizers.get(sessionId)?.turnOpen
       ?? hermesReaders.get(sessionId)?.turnOpen
@@ -70,6 +73,7 @@ export function createSessionNormalizers() {
       || museNormalizers.has(sessionId)
       || ampNormalizers.has(sessionId)
       || grokNormalizers.has(sessionId)
+      || kimiNormalizers.has(sessionId)
       || agyNormalizers.has(sessionId)
       || copilotNormalizers.has(sessionId)
       || hermesReaders.has(sessionId)
@@ -89,6 +93,7 @@ export function createSessionNormalizers() {
     museNormalizers.delete(sessionId)
     ampNormalizers.delete(sessionId)
     grokNormalizers.delete(sessionId)
+    kimiNormalizers.delete(sessionId)
     agyNormalizers.delete(sessionId)
     copilotNormalizers.delete(sessionId)
     hermesReaders.get(sessionId)?.stop()
@@ -110,6 +115,7 @@ export function createSessionNormalizers() {
     museNormalizers.get(sessionId)?.closeTurn()
     ampNormalizers.get(sessionId)?.closeTurn()
     grokNormalizers.get(sessionId)?.closeTurn()
+    kimiNormalizers.get(sessionId)?.closeTurn()
     agyNormalizers.get(sessionId)?.closeTurn()
     copilotNormalizers.get(sessionId)?.closeTurn()
     hermesReaders.get(sessionId)?.closeTurn()
@@ -127,7 +133,7 @@ export function createSessionNormalizers() {
 
   return {
     liveParsers, cursorNormalizers, opencodeReaders, kiloReaders, piNormalizers, ompNormalizers,
-    museNormalizers, ampNormalizers, grokNormalizers, agyNormalizers, copilotNormalizers, hermesReaders,
+    museNormalizers, ampNormalizers, grokNormalizers, kimiNormalizers, agyNormalizers, copilotNormalizers, hermesReaders,
     devinReaders, commandcodeNormalizers,
     sessionTurnState, sessionTurnOpen, hasState, forget, closeTurns, stopPollers,
   }

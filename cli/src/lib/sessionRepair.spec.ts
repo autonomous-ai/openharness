@@ -1039,3 +1039,60 @@ describe('hermes repair across profile homes', () => {
 
 // Filesystem durability deadlines are exercised separately from these deterministic fixture reads.
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+
+describe('kimi session repair', () => {
+  const KIMI_SID = 'session_6e4c69a4-e069-4c95-b458-1312c871c42f'
+  const KIMI_SID_2 = 'session_11111111-2222-4333-8444-555555555555'
+
+  /** A kimi session dir the way the CLI writes it (data-locations doc + measured). */
+  function kimiSession(home: string, sessionId: string, cwd: string, mtimeMs: number, subagent = false): void {
+    const dir = join(home, 'sessions', `wd_${cwd.split('/').pop()}_0123456789ab`, sessionId)
+    mkdirSync(join(dir, 'agents', 'main'), { recursive: true })
+    writeFileSync(join(dir, 'state.json'), JSON.stringify({ id: sessionId, cwd, version: 2 }))
+    const wire = join(dir, 'agents', 'main', 'wire.jsonl')
+    writeFileSync(wire, `${JSON.stringify({ type: 'metadata', protocol_version: '1.5' })}\n`)
+    if (subagent) {
+      mkdirSync(join(dir, 'agents', 'agent-0'), { recursive: true })
+      writeFileSync(join(dir, 'agents', 'agent-0', 'wire.jsonl'), `${JSON.stringify({ type: 'metadata' })}\n`)
+    }
+    utimesSync(wire, new Date(mtimeMs), new Date(mtimeMs))
+  }
+
+  async function loadKimi(home: string) {
+    vi.resetModules()
+    process.env.KIMI_CODE_HOME = home
+    return import('./sessionRepair.js')
+  }
+
+  it('binds by state.json cwd, preferring a wire born after the process started', async () => {
+    const home = tempRoot()
+    kimiSession(home, KIMI_SID, CWD, STARTED_AT + 5_000)
+    const { findLiveSession } = await loadKimi(home)
+    expect(await findLiveSession('kimi', CWD, STARTED_AT, { bornOnly: true }))
+      .toMatchObject({ sessionId: KIMI_SID, transcriptPath: expect.stringContaining(['agents', 'main', 'wire.jsonl'].join('/')) })
+  })
+
+  it('never adopts a Task sub-agent wire as the session', async () => {
+    const home = tempRoot()
+    kimiSession(home, KIMI_SID, CWD, STARTED_AT + 5_000, true)
+    const { findLiveSession } = await loadKimi(home)
+    const found = await findLiveSession('kimi', CWD, STARTED_AT, { bornOnly: true })
+    expect(found?.sessionId).toBe(KIMI_SID)
+    expect(found?.transcriptPath).not.toContain('agent-0')
+  })
+
+  it('refuses when two sessions claim the directory', async () => {
+    const home = tempRoot()
+    kimiSession(home, KIMI_SID, CWD, STARTED_AT + 5_000)
+    kimiSession(home, KIMI_SID_2, CWD, STARTED_AT + 6_000)
+    const { findLiveSession } = await loadKimi(home)
+    expect(await findLiveSession('kimi', CWD, STARTED_AT, { bornOnly: true })).toBeNull()
+  })
+
+  it('finds nothing in another directory', async () => {
+    const home = tempRoot()
+    kimiSession(home, KIMI_SID, '/Users/demo/work/other', STARTED_AT + 5_000)
+    const { findLiveSession } = await loadKimi(home)
+    expect(await findLiveSession('kimi', CWD, STARTED_AT, { bornOnly: true })).toBeNull()
+  })
+})

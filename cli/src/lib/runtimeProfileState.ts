@@ -75,12 +75,15 @@ export class RuntimeProfileState {
     return { ...context, state: track(context.state), control: context.control && track(context.control) }
   }
 
-  private keep(engine: string, module: { createRuntimeProfileReader?: () => InlineRuntimeReader }): InlineRuntimeReader | null {
+  // `object`, not a weak shape of one optional export: kimi ships no runtime-profile reader yet
+  // (its model arrives on the wire and in the hook payload), and a module with no property in
+  // common with an all-optional type is a type error, not an absent reader.
+  private keep(engine: string, module: object): InlineRuntimeReader | null {
     const existing = this.readers.get(engine)
     if (existing) return existing
     if (this.failedReaders.has(engine)) return null
     try {
-      const reader = module.createRuntimeProfileReader?.()
+      const reader = (module as { createRuntimeProfileReader?: () => InlineRuntimeReader }).createRuntimeProfileReader?.()
       if (!reader || reader.engine !== engine) throw new Error('runtime reader is missing or belongs to another engine')
       this.readers.set(engine, reader)
       return reader

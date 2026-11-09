@@ -30,6 +30,7 @@ export const HARNESS_ADAPTERS = {
   grok: { instructionFiles: ['AGENTS.md'] },
   agy: { instructionFiles: ['AGENTS.md', 'GEMINI.md'] },
   copilot: { instructionFiles: ['AGENTS.md'] },
+  kimi: { instructionFiles: ['AGENTS.md'] },
 } satisfies Record<ProcessEngine, HarnessAdapter>
 
 /**

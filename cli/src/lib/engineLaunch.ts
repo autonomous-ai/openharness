@@ -55,6 +55,9 @@ export const BYPASS_PERMISSION_FLAGS: Readonly<Record<AgentEngine, string[] | nu
   grok: null,
   agy: null,
   copilot: null,
+  // `kimi --help` documents `-y/--yolo` (auto-approves routine edits/commands) but Harness never
+  // adds a permission flag to the person's own TUI process; null until a launch path needs one.
+  kimi: null,
   // A shell has no permissions to bypass.
   terminal: null,
 }
@@ -123,6 +126,9 @@ export const FIRST_PROMPT_ARGS: Readonly<Record<AgentEngine, readonly string[] |
   grok: null,
   agy: null,
   copilot: null,
+  // `kimi --help`: `-p, --prompt` runs one prompt NON-interactively and exits — measured: the process
+  // prints the answer and is gone. An interactive first prompt is not documented; null, not guessed.
+  kimi: null,
   terminal: null,
 }
 
@@ -182,6 +188,9 @@ export const NAMED_AGENT_ARGS: Readonly<Record<AgentEngine, readonly string[] | 
   grok: null,
   agy: null,
   copilot: null,
+  // `kimi --help`: `--agent <name>` opens a named agent profile. Documented; not yet wired into
+  // launch (no named-agent surface ships for kimi yet), so null like the rest.
+  kimi: null,
   terminal: null,
 }
 
@@ -353,6 +362,9 @@ export const LAUNCH_RESUME_FLAG: Readonly<Partial<Record<AgentEngine, string[]>>
   agy: ['--conversation'],
   copilot: ['--resume'],
   devin: ['--resume'],
+  // `kimi --help`: `-S, --session [id]` resumes a session; measured against the real CLI: `kimi -S
+  // session_<uuid> -p …` reopens that session dir and appends the new turn in place.
+  kimi: ['--session'],
 }
 
 /**

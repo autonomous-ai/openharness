@@ -66,6 +66,11 @@
           "copilot",
           4242,
           "<default-home>"
+        ],
+        [
+          "kimi",
+          4242,
+          "<default-home>"
         ]
       ],
       "warnings": [],
@@ -175,6 +180,11 @@
           "<default-home>"
         ],
         [
+          "kimi",
+          4242,
+          "<default-home>"
+        ],
+        [
           "codex",
           4242,
           "/fixture/shell-codex"
@@ -255,6 +265,11 @@
         ],
         [
           "copilot",
+          4242,
+          "<default-home>"
+        ],
+        [
+          "kimi",
           4242,
           "<default-home>"
         ]
@@ -332,6 +347,11 @@
           "copilot",
           4242,
           "<default-home>"
+        ],
+        [
+          "kimi",
+          4242,
+          "<default-home>"
         ]
       ],
       "warnings": [],
@@ -441,6 +461,11 @@
           "<default-home>"
         ],
         [
+          "kimi",
+          4242,
+          "<default-home>"
+        ],
+        [
           "codex",
           4242,
           "/fixture/shell-codex"
@@ -521,6 +546,11 @@
         ],
         [
           "copilot",
+          4242,
+          "<default-home>"
+        ],
+        [
+          "kimi",
           4242,
           "<default-home>"
         ]

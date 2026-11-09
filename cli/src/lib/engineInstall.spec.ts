@@ -21,6 +21,7 @@ const OFFICIAL_COMMANDS = {
   grok: 'curl -fsSL https://x.ai/cli/install.sh | bash',
   agy: 'curl -fsSL https://antigravity.google/cli/install.sh | bash',
   copilot: 'npm install -g @github/copilot',
+  kimi: 'curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash',
 } as const
 
 describe('ENGINE_INSTALL', () => {

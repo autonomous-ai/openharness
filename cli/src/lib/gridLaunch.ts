@@ -646,6 +646,9 @@ const GRID_ENGINE_REFUSALS: Partial<Record<AgentEngine, string>> = {
   muse: 'Muse Code documents no way to change its endpoint',
   commandcode: 'Command Code documents no way to change its endpoint',
   omp: 'Harness has not yet verified how omp is pointed at another endpoint',
+  // Kimi takes its endpoint from config.toml providers ([providers.<name>] base_url or the
+  // KIMI_MODEL_BASE_URL family); Harness has not yet built a verified grid contract for it.
+  kimi: 'Kimi Code is pointed at another endpoint through its config.toml providers, which Harness has not yet wired for grids',
   terminal: 'a terminal runs no engine to point at a grid — start one inside it and it will use its own login',
 }
 

@@ -37,6 +37,7 @@ vi.mock('../../engines/amp/normalizer.js', () => ({ lastAmpTurnText: vi.fn((line
 vi.mock('../../engines/grok/normalizer.js', () => ({ lastGrokTurnText: vi.fn((lines: string[]) => ({ text: `grok: ${lines[0]}` })) }))
 vi.mock('../../engines/agy/normalizer.js', () => ({ lastAgyTurnText: vi.fn((lines: string[]) => ({ text: `agy: ${lines[0]}` })) }))
 vi.mock('../../engines/copilot/normalizer.js', () => ({ lastCopilotTurnText: vi.fn((lines: string[]) => ({ text: `copilot: ${lines[0]}` })) }))
+vi.mock('../../engines/kimi/normalizer.js', () => ({ lastKimiTurnText: vi.fn((lines: string[]) => ({ text: `kimi: ${lines[0]}` })) }))
 vi.mock('../../engines/pi/normalizer.js', () => ({ lastPiTurnText: vi.fn((lines: string[]) => ({ text: `pi: ${lines[0]}` })) }))
 vi.mock('../../engines/omp/normalizer.js', () => ({ lastOmpTurnText: vi.fn((lines: string[]) => ({ text: `omp: ${lines[0]}` })) }))
 vi.mock('../../engines/commandcode/normalizer.js', () => ({ lastCommandCodeTurnText: vi.fn((lines: string[]) => ({ text: `commandcode: ${lines[0]}` })) }))
@@ -71,7 +72,7 @@ describe('the last turn of each engine', () => {
   })
 
   it('is nothing for an engine whose code could not be loaded', async () => {
-    const engines = ['opencode', 'kilo', 'hermes', 'devin', 'cursor', 'muse', 'amp', 'grok', 'agy', 'copilot', 'pi', 'omp', 'commandcode']
+    const engines = ['opencode', 'kilo', 'hermes', 'devin', 'cursor', 'muse', 'amp', 'grok', 'agy', 'copilot', 'kimi', 'pi', 'omp', 'commandcode']
     const read = await reader(engines.map((engine) => session(engine, `/t/${engine}.jsonl`)))
     vi.mocked(loadEngine).mockResolvedValue(null as never)
     try {
@@ -80,7 +81,7 @@ describe('the last turn of each engine', () => {
   })
 
   it('is read backward for Claude Code, from the rollout for Codex, and from the whole transcript for the rest', async () => {
-    const engines = ['cursor', 'muse', 'amp', 'grok', 'agy', 'copilot', 'pi', 'omp', 'commandcode']
+    const engines = ['cursor', 'muse', 'amp', 'grok', 'agy', 'copilot', 'kimi', 'pi', 'omp', 'commandcode']
     const read = await reader([
       session('claude', '/t/claude.jsonl'), session('codex', '/t/codex.jsonl'), session('terminal', '/t/shell.log'),
       ...engines.map((engine) => session(engine, `/t/${engine}.jsonl`)),

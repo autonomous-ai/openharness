@@ -78,7 +78,7 @@ export function createAttach({
 }: AttachDeps) {
   const {
     liveParsers, cursorNormalizers, opencodeReaders, kiloReaders, museNormalizers, ampNormalizers,
-    grokNormalizers, agyNormalizers, copilotNormalizers, piNormalizers, ompNormalizers, hermesReaders, devinReaders, commandcodeNormalizers,
+    grokNormalizers, kimiNormalizers, agyNormalizers, copilotNormalizers, piNormalizers, ompNormalizers, hermesReaders, devinReaders, commandcodeNormalizers,
   } = normalizers
   const sideRead = createSideReads()
   const readerLoads = createReaderLoads(readerLoadWaitMs)
@@ -450,6 +450,12 @@ export function createAttach({
       historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
       grokNormalizers.set(session.sessionId, normalizer)
       await runtimeProfiles.capturePane(session, captureTerminal, 60, true)
+    } else if (engine('kimi')) {
+      // A JSONL tail like grok: the wire's turn.prompt opens, turn.ended closes. The model is on
+      // the wire's profile.bind line and in the SessionStart payload, so no pane read is needed.
+      const normalizer = new (engine('kimi')!).KimiNormalizer()
+      historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
+      kimiNormalizers.set(session.sessionId, normalizer)
     } else if (engine('agy')) {
       const agy = engine('agy')!
       // A JSONL tail like claude/grok. agy announces its model only in the hook payload and its pane
@@ -553,7 +559,7 @@ export function createAttach({
     if (abandonedHistory) {
       console.log(`[agent] ${sid(session.agentId)} left the turn open at attach as history · it began before its engine was started again`)
       const folds: Array<Map<string, { closeTurn(): unknown }>> = [cursorNormalizers, museNormalizers, ampNormalizers,
-        grokNormalizers, agyNormalizers, copilotNormalizers, piNormalizers, ompNormalizers, commandcodeNormalizers]
+        grokNormalizers, kimiNormalizers, agyNormalizers, copilotNormalizers, piNormalizers, ompNormalizers, commandcodeNormalizers]
       for (const fold of folds) fold.get(session.sessionId)?.closeTurn()
       const closing = prepared?.state.handle ?? parser ?? liveParsers.get(session.sessionId)
       closing?.closeTurn('abandoned')

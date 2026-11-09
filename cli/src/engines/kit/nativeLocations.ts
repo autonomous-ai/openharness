@@ -10,7 +10,7 @@ export const LAUNCH_LOCATION_VARIABLES = [
   'HERMES_HOME', 'CURSOR_CONFIG_DIR', 'CURSOR_DATA_DIR', 'GROK_HOME', 'AGY_HOME', 'COPILOT_HOME',
   'SHELL', 'ZDOTDIR', 'CLAUDE_PROJECTS_DIR', 'CURSOR_HOME', 'AGY_CONFIG_DIR', 'COMMANDCODE_HOME',
   'DEVIN_HOME', 'DEVIN_CONFIG_PATH', 'OPENCODE_PLUGIN_DIR', 'KILO_PLUGIN_DIR', 'PI_HOME',
-  'PI_CODING_AGENT_SESSION_DIR', 'AMP_PLUGIN_DIR',
+  'PI_CODING_AGENT_SESSION_DIR', 'AMP_PLUGIN_DIR', 'KIMI_CODE_HOME', 'KIMI_PATH',
 ] as const
 
 /** The shell can unset an inherited location. Absence is part of its snapshot. */
@@ -44,6 +44,7 @@ export function nativeHookLocations(vars: Readonly<Record<string, string>>) {
     AGY_HOME: vars.AGY_HOME || join(home, '.gemini', 'antigravity-cli'),
     AGY_CONFIG_DIR: vars.AGY_CONFIG_DIR || join(home, '.gemini', 'config'),
     COPILOT_HOME: vars.COPILOT_HOME || join(home, '.copilot'),
+    KIMI_CODE_HOME: vars.KIMI_CODE_HOME || join(home, '.kimi-code'),
     CURSOR_HOME: vars.CURSOR_DATA_DIR || vars.CURSOR_HOME || join(home, '.cursor'),
     CURSOR_CONFIG_DIR: vars.CURSOR_CONFIG_DIR || (vars.XDG_CONFIG_HOME ? join(config, 'cursor') : vars.CURSOR_HOME || join(home, '.cursor')),
     OPENCODE_PLUGIN_DIR: vars.OPENCODE_PLUGIN_DIR || join(vars.OPENCODE_CONFIG_DIR || join(config, 'opencode'), 'plugin'),

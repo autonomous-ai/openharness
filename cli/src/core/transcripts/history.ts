@@ -200,6 +200,8 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb, readerFo
               ? wholeHistoryPage(engine('agy').agyMessagesToEvents(lines), false).events
             : s.engine === 'copilot'
               ? wholeHistoryPage(engine('copilot').copilotMessagesToEvents(lines), false).events
+            : s.engine === 'kimi'
+              ? wholeHistoryPage(engine('kimi').kimiMessagesToEvents(lines), false).events
             : s.engine === 'pi'
             ? engine('pi').piMessagesToEvents(lines)
             : s.engine === 'omp'
@@ -222,14 +224,16 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb, readerFo
     // small: a real one measured 271 lines).
     // Amp is in the same position as muse and for the same reason: no windower, so falling
     // through would pair claude's line-uuid cursor with claude's normalizer and return nothing.
-    if (s.engine === 'muse' || s.engine === 'amp' || s.engine === 'grok' || s.engine === 'agy' || s.engine === 'copilot') {
+    if (s.engine === 'muse' || s.engine === 'amp' || s.engine === 'grok' || s.engine === 'agy' || s.engine === 'copilot' || s.engine === 'kimi') {
       const wholePage = s.engine === 'grok'
         ? wholeHistoryPage(engine('grok').grokMessagesToEvents(lines), true)
         : s.engine === 'agy'
           ? wholeHistoryPage(engine('agy').agyMessagesToEvents(lines), true)
           : s.engine === 'copilot'
             ? wholeHistoryPage(engine('copilot').copilotMessagesToEvents(lines), true)
-            : null
+            : s.engine === 'kimi'
+              ? wholeHistoryPage(engine('kimi').kimiMessagesToEvents(lines), true)
+              : null
       return {
         id: sessionId,
         title: projectDisplayName(s),

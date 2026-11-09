@@ -159,6 +159,10 @@ const fields = {
   // <COPILOT_HOME>/session-state/<sessionId>/events.jsonl, and hooks are read from
   // <COPILOT_HOME>/hooks/*.json — a directory, so Harness drops in its own file.
   COPILOT_HOME: text(join(homedir(), '.copilot')),
+  // Kimi Code CLI state root (KIMI_CODE_HOME in the vendor's own vocabulary; sessions, config.toml
+  // and hooks all live under it, on macOS and Linux alike — no XDG split). Transcripts live at
+  // <KIMI_CODE_HOME>/sessions/<workspaceId>/<sessionId>/agents/<agent>/wire.jsonl.
+  KIMI_CODE_HOME: text(join(homedir(), '.kimi-code')),
   // Legacy Cursor fallback. cursor/home.ts resolves its distinct config (chats/hooks) and data
   // (projects/transcripts) roots using CURSOR_CONFIG_DIR, XDG_CONFIG_HOME and CURSOR_DATA_DIR.
   CURSOR_HOME: text(join(homedir(), '.cursor')),
@@ -319,6 +323,8 @@ const fields = {
   // Path to the Antigravity CLI. Two binaries answer to `agy` on a typical PATH — the CLI itself and
   // the Antigravity IDE launcher — so an override is worth having.
   AGY_PATH: maybe,
+  // Path to the `kimi` CLI for Kimi Code sessions and recap one-shots (else resolved from PATH).
+  KIMI_PATH: maybe,
   RECAP_WITHOUT_DEVICE: unlessFalse,
   // Model for the voice router one-shot classifier (Overview voice → pick the agent). Small/fast by default.
   VOICE_ROUTE_MODEL: text('haiku'),

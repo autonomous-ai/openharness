@@ -56,6 +56,7 @@ export function createLastTurnReader({ bySession, dbs, hermesDb, readerFor }: La
     if (s.engine === 'grok') return (await loadEngine('grok'))?.lastGrokTurnText(lines) ?? null
     if (s.engine === 'agy') return (await loadEngine('agy'))?.lastAgyTurnText(lines) ?? null
     if (s.engine === 'copilot') return (await loadEngine('copilot'))?.lastCopilotTurnText(lines) ?? null
+    if (s.engine === 'kimi') return (await loadEngine('kimi'))?.lastKimiTurnText(lines) ?? null
     if (s.engine === 'pi') return (await loadEngine('pi'))?.lastPiTurnText(lines) ?? null
     if (s.engine === 'omp') return (await loadEngine('omp'))?.lastOmpTurnText(lines) ?? null
     if (s.engine === 'commandcode') return (await loadEngine('commandcode'))?.lastCommandCodeTurnText(lines) ?? null

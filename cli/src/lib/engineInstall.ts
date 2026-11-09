@@ -135,6 +135,14 @@ export const ENGINE_INSTALL: Readonly<Record<ProcessEngine, EngineInstallRecipe>
     source: 'https://docs.github.com/en/copilot/get-started/cli-quickstart',
     executable: { names: ['copilot'], npmGlobal: true, homeRelativePaths: ['.local/bin/copilot'] },
   },
+  kimi: {
+    command: 'curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash',
+    fallback: 'npm install -g @moonshot-ai/kimi-code',
+    source: 'https://moonshotai.github.io/kimi-code/',
+    // The install script leaves a single native binary at <KIMI_CODE_HOME>/bin (measured: macOS
+    // arm64 at ~/.kimi-code/bin/kimi); npm's global bin is the documented alternative.
+    executable: { names: ['kimi'], npmGlobal: true, homeRelativePaths: ['.kimi-code/bin/kimi'] },
+  },
 }
 
 /**
@@ -167,6 +175,7 @@ export const ENGINE_WINDOWS_INSTALL: Readonly<Record<ProcessEngine, WindowsInsta
   grok: { powershell: 'https://x.ai/cli/install.ps1', programs: ['~\\.grok\\bin\\grok'] },
   agy: { powershell: 'https://antigravity.google/cli/install.ps1', programs: ['agy\\bin\\agy'] },
   copilot: { npm: '@github/copilot' },
+  kimi: { powershell: 'https://code.kimi.com/kimi-code/install.ps1', programs: ['~\\.kimi-code\\bin\\kimi'] },
 }
 
 const WINDOWS_OF = new Map((Object.keys(ENGINE_INSTALL) as ProcessEngine[]).map((engine) => [ENGINE_INSTALL[engine], ENGINE_WINDOWS_INSTALL[engine]]))

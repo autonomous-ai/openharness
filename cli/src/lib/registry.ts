@@ -53,6 +53,7 @@ import { storedLaunchModel, type LaunchModel } from './launchModel.js'
 import { commandcodeTranscriptPath } from '../engines/commandcode/contract.js'
 import { agyTranscriptPath } from '../engines/agy/contract.js'
 import { copilotTranscriptPath } from '../engines/copilot/contract.js'
+import { KIMI_SESSION_ID, kimiDerivedTranscript } from '../engines/kimi/contract.js'
 import { bootChanged, currentBootId } from './bootId.js'
 import { lockOwnerAlive, lockStartMarker, processLockIdentity } from './processLiveness.js'
 import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
@@ -1986,7 +1987,9 @@ class Registry {
       || (engine === 'agy' && !GROK_SESSION_RE.test(sessionId))
       // Copilot's session id is a uuid and names the directory its event stream lives in.
       || (engine === 'copilot' && !GROK_SESSION_RE.test(sessionId))
-      || (engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi' && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && engine !== 'grok' && engine !== 'agy' && engine !== 'copilot' && !transcriptPath)
+      // Kimi's session id is `session_<uuid>` and names its directory under sessions/<workspaceId>/.
+      || (engine === 'kimi' && !KIMI_SESSION_ID.test(sessionId))
+      || (engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi' && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && engine !== 'grok' && engine !== 'agy' && engine !== 'copilot' && engine !== 'kimi' && !transcriptPath)
       // The already-registered agent (opened at agent_create time) already carries its own
       // CODEX_HOME profile, if it has one other than the default — see RegisteredSession.codexHome.
     ) return null
@@ -2042,7 +2045,12 @@ class Registry {
           // deterministic, so derive rather than wait a turn for the path.
           : !transcriptPath && engine === 'copilot'
             ? copilotTranscriptPath(env.COPILOT_HOME, sessionId)
-            : null
+            // Kimi's SessionStart lands before the first wire line is flushed (measured: the file
+            // follows the hook by seconds); the bucket is a hash of the cwd, so derive from the
+            // announced cwd rather than wait a turn for the path.
+            : !transcriptPath && engine === 'kimi' && baseCwd
+              ? kimiDerivedTranscript(env.KIMI_CODE_HOME, sessionId, baseCwd)
+              : null
     const effectiveTranscriptPath = transcriptPath ?? (sameSession ? existing.transcriptPath : null) ?? derived ?? null
     // Native evidence is staged before terminal adoption, displacement or any live publication.
     const proof = effectiveTranscriptPath ? transcriptEvidence(engine, effectiveTranscriptPath,

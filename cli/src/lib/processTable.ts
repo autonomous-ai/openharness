@@ -616,6 +616,13 @@ export const ENGINE_PROCESS_SIGNATURES: Readonly<Record<RegisteredSession['engin
     basenames: [/^copilot$/],
     entrypoints: [/@github[\/\\]copilot[\/\\](?:npm-loader\.js|index\.js|bin[\/\\]copilot)$/],
   },
+  // Kimi Code CLI: a single native binary; measured on macOS (arm64 Mach-O at ~/.kimi-code/bin/kimi,
+  // the install script's location, KIMI_CODE_HOME/bin). Basename alone is generic — the entrypoint
+  // and file identity are the proof, as with agy.
+  kimi: {
+    basenames: [/^kimi$/],
+    entrypoints: [/[\/\\]\.kimi-code[\/\\]bin[\/\\]kimi(?:\.exe)?$/],
+  },
   // A terminal is a shell, and a shell is what every pane starts as — so nothing matches it, ever.
   // Discovery walks PROCESS_ENGINES and never asks; this entry exists for the Record's sake.
   terminal: { basenames: [], entrypoints: [] },
@@ -818,6 +825,9 @@ const RESUME_ARGS: Partial<Record<RegisteredSession['engine'], { flags: readonly
   // `copilot --resume=<id>` and `--session-id <id>`; bare `--resume`/`--continue` name nothing and
   // fall through to the directory scan in sessionRepair.
   copilot: { flags: ['--resume', '--session-id'], id: /^[0-9a-f-]{16,}$/i },
+  // `kimi --session <id>` / `-S <id>` (Kimi Code CLI `--help`); ids measured on disk:
+  // session_<uuid>. Bare `-c`/`--continue` names nothing and falls through to the directory scan.
+  kimi: { flags: ['--session', '-S'], id: /^session_[0-9a-f-]{16,}$/i },
 }
 
 /**

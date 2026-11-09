@@ -64,6 +64,7 @@ vi.mock('../../engines/copilot/normalizer.js', async (real) => ({
   CopilotNormalizer: fakes.normalizer('copilot'),
   copilotHistoryTurnOpen: () => fakes.copilotOpen.value,
 }))
+vi.mock('../../engines/kimi/normalizer.js', async (real) => ({ ...await real<object>(), KimiNormalizer: fakes.normalizer('kimi') }))
 vi.mock('../../engines/opencode/reader.js', async (real) => ({ ...await real<object>(), OpencodeReader: fakes.reader('opencode') }))
 vi.mock('../../engines/kilo/reader.js', async (real) => ({ ...await real<object>(), KiloReader: fakes.reader('kilo') }))
 vi.mock('../../engines/hermes/reader.js', async (real) => ({ ...await real<object>(), HermesReader: fakes.reader('hermes') }))
@@ -922,6 +923,7 @@ describe('attaching a session', () => {
       const maps: Record<string, Map<string, unknown>> = {
         cursor: run.normalizers.cursorNormalizers, muse: run.normalizers.museNormalizers, amp: run.normalizers.ampNormalizers,
         grok: run.normalizers.grokNormalizers, agy: run.normalizers.agyNormalizers, copilot: run.normalizers.copilotNormalizers,
+        kimi: run.normalizers.kimiNormalizers,
         pi: run.normalizers.piNormalizers, omp: run.normalizers.ompNormalizers, commandcode: run.normalizers.commandcodeNormalizers,
       }
       for (const engine of Object.keys(maps)) {

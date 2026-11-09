@@ -321,6 +321,26 @@
     "refused": "FirstPromptUnsupportedError",
     "detail": "Copilot cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
   },
+  "kimi fresh": [
+    "kimi"
+  ],
+  "kimi resume": [
+    "kimi",
+    "--session",
+    "fixture-conversation"
+  ],
+  "kimi fork": [
+    "kimi"
+  ],
+  "kimi permission": [
+    "kimi",
+    "--model",
+    "fixture/model"
+  ],
+  "kimi first": {
+    "refused": "FirstPromptUnsupportedError",
+    "detail": "Kimi Code cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
+  },
   "installation installed": {
     "code": 0,
     "trace": [

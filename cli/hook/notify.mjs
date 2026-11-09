@@ -101,7 +101,7 @@ function argValue(name, fallback) {
 function argEngine() {
   const i = process.argv.indexOf('--engine')
   const value = i !== -1 ? process.argv[i + 1] : ''
-  return value === 'codex' || value === 'cursor' || value === 'hermes' || value === 'commandcode' || value === 'devin' || value === 'muse' || value === 'grok' || value === 'agy' || value === 'copilot' ? value : 'claude'
+  return value === 'codex' || value === 'cursor' || value === 'hermes' || value === 'commandcode' || value === 'devin' || value === 'muse' || value === 'grok' || value === 'agy' || value === 'copilot' || value === 'kimi' ? value : 'claude'
 }
 
 /** Copilot names its hook event only on the command line, like agy. */
@@ -135,6 +135,7 @@ function paths() {
   const devinHome = argValue('--devin-home', process.env.DEVIN_HOME || join(homedir(), '.local', 'share', 'devin', 'cli'))
   const copilotHome = argValue('--copilot-home', process.env.COPILOT_HOME || join(homedir(), '.copilot'))
   const agyHome = argValue('--agy-home', process.env.AGY_HOME || join(homedir(), '.gemini', 'antigravity-cli'))
+  const kimiCodeHome = argValue('--kimi-home', process.env.KIMI_CODE_HOME || join(homedir(), '.kimi-code'))
   return {
     dataDir,
     registryFile: join(dataDir, 'registry.json'),
@@ -153,6 +154,8 @@ function paths() {
     agyPresenceDir: join(agyHome, 'presence'),
     copilotHome,
     copilotSessionsDir: join(copilotHome, 'session-state'),
+    kimiCodeHome,
+    kimiSessionsDir: join(kimiCodeHome, 'sessions'),
   }
 }
 
@@ -160,6 +163,25 @@ function paths() {
 function copilotTranscriptPath(p, sessionId) {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId || '')) return undefined
   return join(p.copilotSessionsDir, sessionId, 'events.jsonl')
+}
+
+/**
+ * Kimi Code CLI's transcript, derived from the session id: the SessionStart payload names no path,
+ * and the layout is <KIMI_CODE_HOME>/sessions/<workspaceId>/<sessionId>/agents/<agent>/wire.jsonl
+ * (measured). The workspace bucket is a hash of the cwd, so the session dir is found by one bounded
+ * scan rather than recomputed. The MAIN agent's wire is the session's transcript; Task sub-agents
+ * get their own agents/agent-N/wire.jsonl, which the parent wire references as tool calls.
+ */
+function kimiTranscriptPath(p, sessionId) {
+  if (!/^session_[0-9a-f-]{16,}$/i.test(String(sessionId || ''))) return undefined
+  try {
+    for (const bucket of readdirSync(p.kimiSessionsDir, { withFileTypes: true })) {
+      if (!bucket.isDirectory()) continue
+      const wire = join(p.kimiSessionsDir, bucket.name, sessionId, 'agents', 'main', 'wire.jsonl')
+      if (existsPath(wire)) return wire
+    }
+  } catch {}
+  return undefined
 }
 
 /**
@@ -837,12 +859,12 @@ function hermesInlineLauncher(row) {
 
 const ENGINE_COMMANDS = {
   claude: 'claude', codex: 'codex', cursor: 'agent', hermes: 'hermes', commandcode: 'cmd',
-  devin: 'devin', muse: 'muse', grok: 'grok', agy: 'agy', copilot: 'copilot',
+  devin: 'devin', muse: 'muse', grok: 'grok', agy: 'agy', copilot: 'copilot', kimi: 'kimi',
 }
 const ENGINE_PATH_ENV = {
   claude: 'CLAUDE_PATH', codex: 'CODEX_PATH', cursor: 'CURSOR_PATH', hermes: 'HERMES_PATH',
   commandcode: 'COMMANDCODE_PATH', devin: 'DEVIN_PATH', muse: 'MUSE_PATH', grok: 'GROK_PATH',
-  agy: 'AGY_PATH', copilot: 'COPILOT_PATH',
+  agy: 'AGY_PATH', copilot: 'COPILOT_PATH', kimi: 'KIMI_PATH',
 }
 
 function executableIdentity(path) {
@@ -1236,6 +1258,7 @@ function validTranscriptPath(engine, filePath, p) {
         : engine === 'copilot' ? p.copilotSessionsDir
         : engine === 'cursor' ? p.cursorProjectsDir
         : engine === 'commandcode' ? p.commandcodeProjectsDir
+        : engine === 'kimi' ? p.kimiSessionsDir
         : p.claudeProjectsDir,
     )
     const st = statSync(actual)
@@ -1506,7 +1529,7 @@ function mergeRuntimes(current, observed) {
 // missing, so one terminal open on the machine was enough (e2e/hookclient.e2e.ts).
 const REGISTRY_ENGINES = new Set([
   'claude', 'codex', 'cursor', 'opencode', 'pi', 'omp', 'hermes', 'commandcode', 'devin', 'muse', 'amp', 'kilo', 'grok',
-  'agy', 'copilot', 'terminal',
+  'agy', 'copilot', 'kimi', 'terminal',
 ])
 
 function validRegistryString(value, max = 4096) {
@@ -1614,7 +1637,7 @@ async function fallbackRegister(input, engine, tmuxPane) {
     ? rawSessionId
     : (transcriptPath ? basename(transcriptPath).replace(/\.jsonl$/, '') : '')
   if (!sessionId) return
-  const transcriptOptional = ['cursor', 'opencode', 'kilo', 'pi', 'hermes', 'commandcode', 'devin', 'grok', 'agy', 'copilot'].includes(engine)
+  const transcriptOptional = ['cursor', 'opencode', 'kilo', 'pi', 'hermes', 'commandcode', 'devin', 'grok', 'agy', 'copilot', 'kimi'].includes(engine)
   if (!transcriptOptional && !transcriptPath) return
   if (transcriptPath && !validTranscriptPath(engine, transcriptPath, p)) return
   const observations = []
@@ -1715,7 +1738,7 @@ async function fallbackRegister(input, engine, tmuxPane) {
       engine,
       boundAt: Date.now(),
       transcriptPath: transcriptPath || existing?.transcriptPath || null,
-      projectDir: engine === 'grok'
+      projectDir: engine === 'grok' || engine === 'kimi'
         ? basename(typeof input.cwd === 'string' ? input.cwd : '') || sessionId
         : transcriptPath
         ? basename(dirname(transcriptPath))
@@ -1830,6 +1853,55 @@ async function main() {
     if (registered === false) {
       await fallbackRegister({
         ...input, hook_event_name: 'SessionStart', session_id: sessionId, transcript_path: transcriptPath, cwd,
+      }, engine, tmuxPane)
+    }
+    return
+  }
+
+  // kimi (Kimi Code CLI, Moonshot): snake_case payload like claude's — `session_id`, `cwd`,
+  // `session_title`, `model`, `client_type: "kimi_code_cli"`. SessionStart fires for BOTH `startup`
+  // and `resume` (measured), so a resumed session re-announces and the daemon re-folds; the adapter
+  // excludes kimi from the SessionStart re-fold reset for that (core/agents/bind.ts, next to agy).
+  // The transcript's own `turn.ended` is the authoritative turn boundary — like grok, `Stop` is not
+  // installed because it fires while the turn may still persist its last records; `StopFailure`
+  // remains as the error backstop. Sub-agent (`Task`) hooks carry the parent's session id and are
+  // not installed at all: the parent's wire records the spawn as a tool call, which is the row
+  // Harness shows.
+  if (engine === 'kimi') {
+    const sessionId = input.session_id
+    if (typeof sessionId !== 'string' || !sessionId) return
+    const p = paths()
+    const transcriptPath = kimiTranscriptPath(p, sessionId)
+    const cwd = typeof input.cwd === 'string' ? input.cwd : undefined
+    if (event === 'SessionEnd') {
+      const ok = await post(port, '/api/hook/session-end', { sessionId, reason: input.reason, ...mutationFields })
+      if (ok === false) await fallbackSessionEnd(sessionId, input.reason, engine, tmuxPane)
+      return
+    }
+    if (event === 'StopFailure') {
+      await post(port, '/api/hook/turn-stop', { sessionId, transcriptPath, status: 'error', ...mutationFields })
+      return
+    }
+    if (event !== 'SessionStart') return
+    const body = {
+      engine,
+      hookEvent: 'SessionStart',
+      sessionId,
+      transcriptPath,
+      cwd,
+      ...terminalHookFields(tmuxPane),
+      model: modelName(input.model),
+      title: typeof input.session_title === 'string' ? input.session_title : undefined,
+      cliVersion: input.cli_version || input.version,
+    }
+    const registered = await post(port, '/api/hook/session-start', body)
+    if (registered === false) {
+      await fallbackRegister({
+        ...input,
+        hook_event_name: 'SessionStart',
+        session_id: sessionId,
+        transcript_path: transcriptPath,
+        cwd,
       }, engine, tmuxPane)
     }
     return

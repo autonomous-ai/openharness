@@ -213,6 +213,17 @@ const _engines = <String, EngineIdentity>{
     homepage: 'https://github.com/github/copilot-cli',
     blurb: "GitHub Copilot's coding agent in the terminal.",
   ),
+  'kimi': EngineIdentity(
+    id: 'kimi',
+    label: 'Kimi Code',
+    category: 'Code',
+    tagline: 'Moonshot AI agent that runs right from your terminal',
+    creator: 'Moonshot AI',
+    color: Colors.white,
+    asset: 'assets/engine-icons/kimi.png',
+    homepage: 'https://www.kimi.com/code',
+    blurb: "Moonshot AI's Kimi Code CLI in the terminal.",
+  ),
   'agy': EngineIdentity(
     id: 'agy',
     label: 'Antigravity',

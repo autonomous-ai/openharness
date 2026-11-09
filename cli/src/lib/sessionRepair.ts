@@ -75,6 +75,10 @@ export interface RepairedSession {
  *  (`subagent/`, `tool-outputs/`, `approval-review/`, and whatever a later version adds), never a conversation
  *  of the pane, so it is skipped rather than walked into and counted against MAX_DEPTH. */
 const MUSE_SESSION_FOLDER_DEPTH = 4
+// sessions/<workspaceId>/<sessionId>/agents/main/wire.jsonl: the wire sits exactly at the walk's
+// depth limit, and agents/main/plans/ below it must not trip the limit — leafDepth 4 collects the
+// files at that level and skips walking deeper.
+const KIMI_SESSION_FOLDER_DEPTH = 4
 
 interface TranscriptFile { path: string; mtimeMs: number; birthMs: number }
 
@@ -570,6 +574,29 @@ export async function findLiveSession(
       }
       return copilotDirectoryScan(cwd, startedAtMs, opts)
     }
+
+    case 'kimi':
+      // Kimi's SessionStart hook fires on resume too, so this scan is the backstop: a daemon that was
+      // down for the hook, and `kimi -c` whose argv names no session. The wire itself records no bare
+      // cwd — state.json beside it is the project link (measured). Task sub-agents get their own
+      // agents/agent-N/wire.jsonl and must never be adopted as the session, so only agents/main counts.
+      return fileEngineSession(join(env.KIMI_CODE_HOME, 'sessions'), cwd, startedAtMs, async (path) => {
+        if (basename(path) !== 'wire.jsonl' || basename(dirname(path)) !== 'main') return null
+        const sessionDir = dirname(dirname(dirname(path)))
+        const state = await identityFile(join(sessionDir, 'state.json')).catch(error => {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+          throw error
+        })
+        if (state === null) return null
+        let cwd: unknown
+        try {
+          cwd = (JSON.parse(state) as { cwd?: unknown }).cwd
+        } catch {
+          throw new IdentityReadUnavailable('the kimi session state is not valid JSON')
+        }
+        if (typeof cwd !== 'string' || !isAbsolute(cwd)) return null
+        return { cwd, sessionId: basename(sessionDir) }
+      }, { ...opts, leafDepth: KIMI_SESSION_FOLDER_DEPTH })
 
     case 'agy':
       // The one engine here that cannot be found by directory. agy's transcript records no cwd, its

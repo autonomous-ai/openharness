@@ -3607,6 +3607,7 @@ class NewHarnessController extends ChangeNotifier {
             'hermes',
             'commandcode',
             'muse',
+            'kimi',
             ...engines,
             ...app.agentPreference.recentChoices.where(isHarnessId),
             'autonomous/blender',

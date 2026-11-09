@@ -21,7 +21,9 @@ import { COPILOT_HOOK_SETTINGS } from './copilot/contract.js'
 import { CURSOR_HOOK_SETTINGS } from './cursor/contract.js'
 import { COMMANDCODE_HOOK_SETTINGS } from './commandcode/contract.js'
 import { DEVIN_HOOK_SETTINGS } from './devin/contract.js'
+import { KIMI_HOOK_SETTINGS } from './kimi/contract.js'
 import { installNativeHookSettings } from './kit/nativeHookSettings.js'
+import { installNativeTomlHooks } from './kit/nativeHookToml.js'
 import { unixSocketPath } from '../lib/localSocket.js'
 
 export const installGrokHooks = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativeHookSettings(options?.environment ? { ...GROK_HOOK_SETTINGS, file: join(nativeHookLocations(options.environment).GROK_HOME, 'hooks', 'harness.json') } : GROK_HOOK_SETTINGS, port, options)
@@ -30,6 +32,7 @@ export const installCopilotHooks = (port: number, options?: NativeHookOptions): 
 export const installCursorHooks = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativeHookSettings(options?.environment ? { ...CURSOR_HOOK_SETTINGS, file: join(nativeHookLocations(options.environment).CURSOR_CONFIG_DIR, 'hooks.json') } : CURSOR_HOOK_SETTINGS, port, options)
 export const installCommandCodeHooks = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativeHookSettings(options?.environment ? { ...COMMANDCODE_HOOK_SETTINGS, file: join(nativeHookLocations(options.environment).COMMANDCODE_HOME, 'settings.json') } : COMMANDCODE_HOOK_SETTINGS, port, options)
 export const installDevinHooks = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativeHookSettings(options?.environment ? { ...DEVIN_HOOK_SETTINGS, file: nativeHookLocations(options.environment).DEVIN_CONFIG_PATH } : DEVIN_HOOK_SETTINGS, port, options)
+export const installKimiHooks = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativeTomlHooks(options?.environment ? { ...KIMI_HOOK_SETTINGS, file: join(nativeHookLocations(options.environment).KIMI_CODE_HOME, 'config.toml') } : KIMI_HOOK_SETTINGS, port, options)
 
 const pluginValues = (port: number) => ({
   port: String(port), credential: JSON.stringify(hookTokenPath(env.ADAPTER_DATA_DIR)), version: JSON.stringify(VERSION),

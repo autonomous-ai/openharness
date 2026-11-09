@@ -139,7 +139,7 @@ function withoutTrailingSeparators(arg: string): string {
   return arg.slice(0, end)
 }
 
-type NotifyEngine = 'claude' | 'codex' | 'cursor' | 'hermes' | 'commandcode' | 'devin' | 'grok' | 'agy' | 'copilot'
+export type NotifyEngine = 'claude' | 'codex' | 'cursor' | 'hermes' | 'commandcode' | 'devin' | 'grok' | 'agy' | 'copilot' | 'kimi'
 
 /** notify.mjs's argument list for [engine]: the managed Node, the script, and Harness's own flags. No user input. */
 export function hookArgv(
@@ -173,6 +173,7 @@ export function hookArgv(
     '--devin-home', homes.DEVIN_HOME,
     '--agy-home', homes.AGY_HOME,
     '--copilot-home', homes.COPILOT_HOME,
+    '--kimi-home', homes.KIMI_CODE_HOME,
     ...(engine !== 'claude' ? ['--engine', engine] : []),
   ]
 }
@@ -261,7 +262,7 @@ function managedArgs(args: string[], path: Pick<typeof win32, 'basename' | 'isAb
   const flags = new Map<string, string>()
   for (let index = 2; index < args.length; index += 2) {
     const key = args[index], value = args[index + 1]
-    if (!/^--(?:port|data-dir|claude-projects-dir|(?:codex|grok|cursor|hermes|commandcode|devin|agy|copilot)-home|engine|event|agy-event|copilot-event)$/.test(key)
+    if (!/^--(?:port|data-dir|claude-projects-dir|(?:codex|grok|cursor|hermes|commandcode|devin|agy|copilot|kimi)-home|engine|event|agy-event|copilot-event)$/.test(key)
       || value === undefined || flags.has(key)) return false
     flags.set(key, value)
   }

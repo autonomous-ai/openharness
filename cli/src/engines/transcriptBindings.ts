@@ -21,6 +21,8 @@ export const transcriptRoot: Readonly<Record<AgentEngine, (() => string) | 'stor
   grok: () => join(env.GROK_HOME, 'sessions'),
   agy: () => join(env.AGY_HOME, 'brain'),
   copilot: () => join(env.COPILOT_HOME, 'session-state'),
+  // Kimi Code CLI: one wire.jsonl per agent under <KIMI_CODE_HOME>/sessions/<workspaceId>/<sessionId>/agents/.
+  kimi: () => join(env.KIMI_CODE_HOME, 'sessions'),
   cursor: () => join(cursorDataDir(), 'projects'),
   pi: () => join(env.PI_HOME, 'agent', 'sessions'),
   omp: () => join(homedir(), '.omp', 'agent', 'sessions'),

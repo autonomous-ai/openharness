@@ -73,6 +73,7 @@ describe('canonical engine CLI commands', () => {
       ['grok', 'grok'],
       ['agy', 'agy'],
       ['copilot', 'copilot'],
+      ['kimi', 'kimi'],
     ])
   })
 

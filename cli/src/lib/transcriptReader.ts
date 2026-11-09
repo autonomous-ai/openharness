@@ -18,6 +18,7 @@ import { CommandCodeNormalizer } from '../engines/commandcode/normalizer.js'
 import { CopilotNormalizer } from '../engines/copilot/normalizer.js'
 import { CursorNormalizer } from '../engines/cursor/normalizer.js'
 import { GrokNormalizer } from '../engines/grok/normalizer.js'
+import { KimiNormalizer } from '../engines/kimi/normalizer.js'
 import { MuseNormalizer } from '../engines/muse/normalizer.js'
 import { PiNormalizer } from '../engines/pi/normalizer.js'
 import { OmpNormalizer } from '../engines/omp/normalizer.js'
@@ -52,6 +53,7 @@ export function lineNormalizer(engine: string, sessionId: string): LineNormalize
     case 'muse': return kept(ingestWith(new MuseNormalizer()), (line) => museOwnStream(line, sessionId))
     case 'amp': return ingestWith(new AmpNormalizer())
     case 'grok': return ingestWith(new GrokNormalizer())
+    case 'kimi': return ingestWith(new KimiNormalizer())
     case 'agy': return ingestWith(new AgyNormalizer())
     // A Copilot session file holds its sub-agents' events too, and prompts nobody typed.
     case 'copilot': return kept(ingestWith(new CopilotNormalizer()), copilotOwnLine)

@@ -252,6 +252,7 @@ const OTHER_INSTALLERS: Array<[string, (port: number, options: NativeHookOptions
   ['grok', nativeHooks.installGrokHooks],
   ['agy', nativeHooks.installAgyHooks],
   ['copilot', nativeHooks.installCopilotHooks],
+  ['kimi', nativeHooks.installKimiHooks],
 ]
 
 /**
