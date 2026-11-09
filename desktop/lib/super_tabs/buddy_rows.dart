@@ -94,7 +94,9 @@ class SuperTabQuietRow extends StatelessWidget {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final strong = unread || selected;
-    final nameStyle = DesktopChrome.control(
+    // The same type as a project's row beside it (Swarm v4: one size in the left pane).
+    final nameStyle = SwarmType.sidebar(
+      compact: false,
       color: strong
           ? grid.SidebarInk.foreground(context)
           : grid.SidebarInk.muted(context),

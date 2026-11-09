@@ -246,7 +246,6 @@ void main() {
             .timeout(const Duration(seconds: 10));
         debugPrint('Swarm fixture: refresh conversation');
         await controller.refresh().timeout(const Duration(seconds: 10));
-        controller.toggleProject('lead');
         return controller;
       });
       expect(c, isNotNull);
@@ -324,49 +323,8 @@ void main() {
         find.byKey(const ValueKey('super-machine-allowance-m-codex')),
         findsOneWidget,
       );
-      final leadWasOpen = c!.expandedProjects.contains('lead');
-      if (!leadWasOpen) {
-        await tester.tap(
-          find.byKey(const ValueKey('super-project-expand-lead')),
-        );
-      }
-      await tester.pumpAndSettle();
-      expect(find.text('#20 Sidebar polish'), findsOneWidget);
-      double textX(String row, String label) => tester
-          .getTopLeft(
-            find.descendant(
-              of: find.byKey(ValueKey(row)),
-              matching: find.text(label),
-            ),
-          )
-          .dx;
-      expect(
-        textX('super-group-polish', '#20 Sidebar polish'),
-        closeTo(textX('super-group-lead', 'Lamp OS'), .01),
-      );
-      await shot('sidebar-tree');
-      // Clicking the label itself collapses the whole section.
-      await tester.tap(find.text('Machines'));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('super-machine-m')), findsNothing);
-      await tester.tap(find.text('Machines'));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('super-machine-m')), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('super-machine-toggle-m')));
-      if (!leadWasOpen) {
-        await tester.tap(
-          find.byKey(const ValueKey('super-project-expand-lead')),
-        );
-      }
-      await tester.pumpAndSettle();
-      debugPrint('Swarm fixture: empty project disclosure');
-      await tester.tap(
-        find.byKey(const ValueKey('super-project-expand-design')),
-      );
-      await tester.pumpAndSettle();
-      expect(c.selectedId, 'lead');
-      expect(c.expandedProjects.contains('design'), isTrue);
-      expect(find.text('No workgroups yet'), findsOneWidget);
+      // Swarm v4 (2026-11-09) has no project tree or Machines section in the left pane: their checks went with them.
+      if (c == null) fail('The Swarm fixture has no controller.');
       await tester.tap(find.byKey(const ValueKey('super-group-lead')));
       await tester.pumpAndSettle();
       expect(c.selectedId, 'lead');

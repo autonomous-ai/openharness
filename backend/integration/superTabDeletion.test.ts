@@ -20,7 +20,6 @@ import { sweepSwarms } from '../src/superTabs/sweeps.js'
 import { sweepThreadMarks } from '../src/superTabs/readMarks.js'
 import { sweepChatSettings } from '../src/superTabs/chatSettings.js'
 import { backfillThreads } from '../src/superTabs/threadBackfill.js'
-import { archiveFinishedGroups } from '../src/superTabs/archive.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
 import { rosterRows } from './hostRows.test-support.js'
 
@@ -370,22 +369,17 @@ describe('while a Swarm is deleted', () => {
     const state = async (f: typeof live) => ({
       asleep: (await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: f.group } } })).dormant,
       startKept: !(await db.swarmStart.findUniqueOrThrow({ where: { id: `${f.tab}:start-old` } })).deleted,
-      decisionWaits: !(await db.superTabDecision.findUniqueOrThrow({ where: { id: `${f.tab}:decision` } })).answeredAt,
       backfilled: !!await db.superTabThreadBackfill.count({ where: { id: f.tab } }),
     })
-    expect(await state(live)).toEqual({ asleep: false, startKept: true, decisionWaits: true, backfilled: false })
-    expect(await state(gone)).toEqual({ asleep: false, startKept: true, decisionWaits: true, backfilled: false })
+    expect(await state(live)).toEqual({ asleep: false, startKept: true, backfilled: false })
+    expect(await state(gone)).toEqual({ asleep: false, startKept: true, backfilled: false })
 
-    // The archive pass first: the sleep sweep's write would make the merged group look recently active.
-    const read: string[] = []
-    await archiveFinishedGroups(db, w.store, { state: async url => { read.push(url); return 'merged' }, done: async () => {} }, w.clock.now)
+    // Swarm v4's jobs (worker.ts): no task archive or decision sweep runs any more.
     await sweepSwarms(db, later)
-    await w.store.withdrawEndedDecisions()
     await backfillThreads(db, w.clock.now)
 
-    expect(await state(live)).toEqual({ asleep: true, startKept: false, decisionWaits: false, backfilled: true })
-    expect(await state(gone)).toEqual({ asleep: false, startKept: true, decisionWaits: true, backfilled: false })
-    expect(read).toEqual(['https://github.com/example/Live/pull/1'])
+    expect(await state(live)).toEqual({ asleep: true, startKept: false, backfilled: true })
+    expect(await state(gone)).toEqual({ asleep: false, startKept: true, backfilled: false })
   })
 })
 

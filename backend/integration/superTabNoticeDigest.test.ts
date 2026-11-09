@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto'
-import { latestProcessNote } from '../src/superTabs/processNotes.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
@@ -71,8 +70,6 @@ async function swarm({ fresh = false, told, capable = false }: { fresh?: boolean
     return agentId
   }
   const lead = await add('lead', 'lead-host', 'Lead', true)
-  // Its PM confirmed the newest note for PMs, which would otherwise wake it and head its inbox (processNotes.ts, task #3581).
-  await execute({ type: 'process.confirm', projectId: 'lead', noteId: latestProcessNote()!.id }, host, lead)
   const group = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief: 'Implement it',
     checks: [] })).result.conversationId)
   const worker = await add(group, 'test-host', 'Worker')
@@ -145,7 +142,7 @@ describe('which messages to the coordinator are gathered', () => {
     expect((await deliveryOf(row.id, f.lead)).status).toBe('queued')
   })
 
-  it.each(['pair-loop', 'terminal-alert', 'buddy-proposal', 'update-request', 'digest-request', 'agent-only', 'instructions', 'system'])('a %s row goes at once', async kind => {
+  it.each(['pair-loop', 'terminal-alert', 'buddy-proposal', 'update-request', 'agent-only', 'instructions', 'system'])('a %s row goes at once', async kind => {
     const f = await swarm()
     const id = await f.write({ kind }, f.lead)
     expect((await deliveryOf(id, f.lead)).status).toBe('queued')

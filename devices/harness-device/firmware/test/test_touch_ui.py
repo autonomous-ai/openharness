@@ -3585,7 +3585,6 @@ int main(int argc, char **argv) {
                     "Flashed 0.0.91 to both dials and verified the image on each. All 44 host checks pass.");
     scene_take(); portrait_focus(dir,"focus-recap");
     assert(!action_enabled(A_TAB_LIST));
-    for (int i = 0; i < scene.count; i++) assert(scene.runs[i].sprite.pixels != ht_icon_mic.px);
     tap(1000, 233, 30); assert(s.view == AGENTS && !starts);
     // The hold: on the recap, past 650 ms, and the tab list is open before the finger lifts.
     workspace_setup(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");

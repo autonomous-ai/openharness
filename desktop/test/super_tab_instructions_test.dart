@@ -707,7 +707,10 @@ void main() {
           find.byKey(const ValueKey('super-note-delete-n1')),
         );
         await tester.pumpAndSettle();
-        server.refuse = {'code': 'FORBIDDEN', 'message': 'Not removed: no access.'};
+        server.refuse = {
+          'code': 'FORBIDDEN',
+          'message': 'Not removed: no access.',
+        };
         await tester.tap(find.byKey(const ValueKey('super-note-delete-n1')));
         await tester.pumpAndSettle();
         server.refuse = null;

@@ -6,7 +6,6 @@ import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/state/swarm.dart';
 
-import 'support/experimental_settings.dart';
 import 'swarm_screen_test.dart' show mount;
 import 'swarm_state_test.dart' show MemoryStore, createApp;
 

@@ -355,13 +355,21 @@ class Backend {
     {'id': id, 'conversationId': 'g9', 'messageId': 'm-$id'},
   ];
 
+  // Tasks the reader asked for: a stuck or needs-you notice tells its
+  // requester alone (anh Dee, 2026-11-09).
   void stuck(String id) {
-    groups = [...groups, groupData(id, status: 'blocked')];
+    groups = [
+      ...groups,
+      {...groupData(id, status: 'blocked'), 'requesterId': me},
+    ];
     version++;
   }
 
   void needsYou(String id) {
-    groups = [...groups, groupData(id, status: 'needs_human')];
+    groups = [
+      ...groups,
+      {...groupData(id, status: 'needs_human'), 'requesterId': me},
+    ];
     version++;
   }
 }

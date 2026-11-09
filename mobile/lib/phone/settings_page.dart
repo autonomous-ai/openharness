@@ -34,7 +34,6 @@ import 'add_device/add_device_page.dart';
 import 'approve_sign_in.dart';
 import 'connectors_page.dart';
 import 'devices_page.dart';
-import 'machine_index.dart' show visibleMachines;
 import 'machine_profile_picker.dart';
 import 'machines_tab.dart';
 import 'out_of_sight.dart';
@@ -413,11 +412,10 @@ class _Body extends StatelessWidget {
         ?_profileRow(context),
         _connectorsRow(context),
         _signInRow(context),
-        // ⚠️ Only while Computers has no list. Its Set up Intern 3 sits under the list
-        // (`machines_tab.dart` `_ConnectBar`), and with no computer — none yet, still loading, or
-        // not fetched — that page is an empty state whose one button is Add computer. Somebody
-        // whose first Harness is an Intern 3 would have had no way to set it up from here.
-        if (visibleMachines(notifier).isEmpty) _addDeviceRow(context),
+        // Always, computers or not (owner, 2026-11-05): a second Intern 3 is set up from here as
+        // the first was. Computers keeps its own Set up Intern 3 under its list too
+        // (`machines_tab.dart` `_ConnectBar`).
+        _addDeviceRow(context),
       ],
     ),
     const SizedBox(height: AppSpace.l),

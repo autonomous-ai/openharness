@@ -670,10 +670,8 @@ void main() {
       expect(f.app.activeSwarm.panes.single.watchOnly, isTrue);
       await tester.tap(find.byTooltip('Chat'));
       await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey('super-message-composer')),
-        findsOneWidget,
-      );
+      // A project's channel: only agents post there (Swarm v4).
+      expect(find.byKey(const ValueKey('super-agents-only')), findsOneWidget);
       expect(
         f.connection.calls.where((call) => call.$1 == 'agent_close'),
         isEmpty,

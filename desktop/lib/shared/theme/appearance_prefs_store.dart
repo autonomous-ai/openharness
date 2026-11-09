@@ -40,7 +40,7 @@ enum PaneFade {
 class PanePrefs {
   const PanePrefs({
     this.style = PaneStyle.comfortable,
-    this.fade = PaneFade.surfaceAndContent,
+    this.fade = PaneFade.off,
     this.highlightActive = true,
     this.autobalanceSplits = true,
     this.focusFollowsMouse = false,
@@ -630,7 +630,7 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs>
     }
     return setPanes(
       value.panes.copyWith(
-        fade: enabled ? const PanePrefs().fade : PaneFade.off,
+        fade: enabled ? PaneFade.surfaceAndContent : PaneFade.off,
       ),
     );
   }

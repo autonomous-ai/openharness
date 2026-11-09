@@ -120,18 +120,9 @@ void main() {
         findsOneWidget,
       );
       await shot('unread');
-
+      // The reminder comes due, so no timer is left running.
       await tester.pump(const Duration(minutes: 21));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-decisions')));
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(
-          const ValueKey('super-activity-row-reminder:reminder-message-3'),
-        ),
-        findsOneWidget,
-      );
-      await shot('activity');
     });
   }
 }

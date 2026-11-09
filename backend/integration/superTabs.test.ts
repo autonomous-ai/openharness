@@ -35,7 +35,6 @@ import { ensurePartExpiry, sweepSwarms } from '../src/superTabs/sweeps.js'
 import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js'
 import { recipientShare } from '../src/routes/harnessShares.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
-import { wantDefaultDigest } from './noDefaultDigest.test-support.js'
 import { startMessageReachStats } from '../src/superTabs/messageReachStats.js'
 import { plan as planOf, profiled, reads } from './plans.test-support.js'
 import { quotaReset } from './holds.test-support.js'
@@ -862,10 +861,9 @@ describe('private swarm projects on the real control API', () => {
   })
 
   // Quiet project chats (Dee, 2026-10-31; task #3593): the server writes the status card's lines from task state and wakes the coordinator
-  // for none of them; its report adds its own lines after them and posts nothing; the digest is on by default.
-  it('wakes the coordinator for no work change, shows the server\'s card with its own lines, and sends the digest by default', async () => {
-    wantDefaultDigest()
-    // 14:00 in Vietnam: the default digest starts tomorrow at 08:00.
+  // for none of them; its report adds its own lines after them and posts nothing.
+  it('wakes the coordinator for no work change and shows the server\'s card with its own lines', async () => {
+    // 14:00 in Vietnam.
     let now = Date.UTC(2026, 9, 31, 7, 0)
     const timed = new SuperTabStore(db, () => now)
     const tab = (await timed.create(owner, randomUUID(), 'Updates', 'public')).id
@@ -905,11 +903,6 @@ describe('private swarm projects on the real control API', () => {
     const lines = (await status())!.text
     expect(lines).toContain('"Docs": to do.')
     expect(lines.endsWith(card)).toBe(true)
-    // The morning digest comes by default at 08:00 the next day.
-    expect((await chat()).some(m => (m.source as Record<string, unknown>)?.kind === 'digest-request')).toBe(false)
-    now = Date.UTC(2026, 10, 1, 1, 0) + 30_000
-    await updates()
-    expect((await chat()).filter(m => (m.source as Record<string, unknown>)?.kind === 'digest-request')).toHaveLength(1)
   })
 })
 

@@ -79,17 +79,19 @@ void main() {
   });
 
   test('Mentions only and Muted tell of no new message; a tag is told in '
-      'either, as on the desktop', () async {
+      'Mentions only, never in a chat the person muted (anh Dee, '
+      '2026-11-09)', () async {
     backend.settings = {'g2': 'muted'};
     final session = await start();
 
     backend
       ..move('g1', 4)
       ..move('g2', 4)
-      ..mention('t1', 'g2');
+      ..mention('t1', 'g2')
+      ..mention('t2', 'g1');
     await poll(session);
 
-    expect(told(), ['mention:t1']);
+    expect(told(), ['mention:t2']);
   });
 
   test(

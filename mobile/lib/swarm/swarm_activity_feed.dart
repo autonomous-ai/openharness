@@ -36,7 +36,8 @@ class SwarmActivityEntry {
       emoji = row['emoji'] as String?,
       text = row['text'] as String? ?? '',
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
-      read = row['read'] == true;
+      read = row['read'] == true,
+      rings = row['rings'] == true;
 
   SwarmActivityEntry._read(SwarmActivityEntry e)
     : id = e.id,
@@ -50,7 +51,8 @@ class SwarmActivityEntry {
       emoji = e.emoji,
       text = e.text,
       createdAt = e.createdAt,
-      read = true;
+      read = true,
+      rings = e.rings;
 
   final String id, conversationId, messageId;
   final SwarmActivityKind kind;
@@ -71,6 +73,12 @@ class SwarmActivityEntry {
 
   /// Read on some device ([SwarmActivityFeed.markShownRead]).
   final bool read;
+
+  /// The reply that rang the person's phone (backend `superTabs/activity.ts`
+  /// writeReplyActivity, Tony's rule of 2026-11-09): the first person's reply
+  /// in a thread they started. False on every other row, and on every row
+  /// from a backend that does not say.
+  final bool rings;
 }
 
 /// One Swarm's replies and reactions to the person, read from the server

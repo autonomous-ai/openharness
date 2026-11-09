@@ -4,7 +4,6 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -21,7 +20,6 @@ import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
 import 'box_render_preview_test.dart' show loadPreviewFonts;
-import 'super_tab_decisions_test.dart' show swarm;
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'swarm_screen_test.dart' show mount;
 import 'swarm_state_test.dart' show MemoryStore;
@@ -215,6 +213,27 @@ Future<void> showText(
 );
 
 Finder notificationsEntry() => find.byKey(const ValueKey('super-mentions'));
+
+/// A Swarm whose reader is the peer, with the Lead and the peer's own Buddy
+/// chat in the first project, where the PM's private lines reach them.
+ConversationServer swarm() {
+  final server = ConversationServer();
+  server.state['projects'] = [projectFixture('lead', 'web-project', 'lead')];
+  server.state['people'] = [
+    {'id': 'owner', 'email': 'owner@example.com', 'role': 'owner'},
+    {'id': 'peer', 'email': 'ken.tran@example.com', 'role': 'collaborator'},
+  ];
+  server.state['conversations'] = [
+    conversationFixture('lead', 'Lead'),
+    {
+      ...conversationFixture('buddy-peer-lead', "ken.tran's Buddy"),
+      'projectId': 'lead',
+      'kind': 'buddy',
+      'buddyOwnerId': 'peer',
+    },
+  ];
+  return server;
+}
 
 void main() {
   setUpAll(() async {
@@ -572,368 +591,6 @@ void main() {
       expect(mentions.waiting, isEmpty);
       expect(mentions.earlier.single.resolvedBy, 'done');
       controller.dispose();
-    });
-  });
-
-  group('notifications view', () {
-    testWidgets(
-      'the entry reads the unread tag; the Mentions tab lists only what is '
-      'unread',
-      (tester) async {
-        final server = ConversationServer()
-          ..append('Earlier ask')
-          ..append('Ship it?')
-          ..tag('message-1', text: 'Earlier ask', createdAt: minutesAgo(90))
-          ..tag('message-2', text: 'Ship it?', createdAt: minutesAgo(3));
-        server.mentions[0]
-          ..['resolvedAt'] = minutesAgo(80)
-          ..['resolvedBy'] = 'reply';
-        server.state['mentionsWaiting'] = 1;
-        await showView(tester, server);
-        // The Mentions row is bold for the unread tag, as the Mentions tab
-        // lists it (#2887), and shows no number (task #3128); the one
-        // answered before this server said where is read.
-        expect(
-          find.descendant(of: notificationsEntry(), matching: find.text('1')),
-          findsNothing,
-        );
-        expect(
-          tester
-              .widget<Text>(
-                find.descendant(
-                  of: notificationsEntry(),
-                  matching: find.text('Mentions'),
-                ),
-              )
-              .style
-              ?.fontWeight,
-          grid.AppFont.semibold,
-        );
-        await tester.tap(find.byKey(const ValueKey('super-mentions')));
-        await tester.pumpAndSettle();
-        final waiting = find.byKey(
-          const ValueKey('super-activity-row-mention:mention-2'),
-        );
-        expect(waiting, findsOneWidget);
-        expect(
-          find.descendant(of: waiting, matching: find.text('Wren')),
-          findsOneWidget,
-        );
-        expect(
-          find.descendant(of: waiting, matching: find.text('Ship it?')),
-          findsOneWidget,
-        );
-        // The answered one is read (this server does not say where it is):
-        // it is listed under Read, without the unread dot, and folded
-        // behind nothing (#2887, task #2996).
-        expect(find.textContaining('more from Wren'), findsNothing);
-        expect(
-          find.descendant(
-            of: find.byKey(
-              const ValueKey('super-activity-row-mention:mention-1'),
-            ),
-            matching: find.byKey(const ValueKey('super-activity-dot')),
-          ),
-          findsNothing,
-        );
-      },
-    );
-
-    testWidgets('Mark read, offered where the time is on hover, clears the '
-        'tag', (tester) async {
-      final server = ConversationServer()
-        ..append('Ship it?')
-        ..tag('message-1', text: 'Ship it?', createdAt: minutesAgo(3));
-      await showView(tester, server);
-      await tester.tap(find.byKey(const ValueKey('super-mentions')));
-      await tester.pumpAndSettle();
-      expect(find.text('Mark read'), findsNothing);
-      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-      addTearDown(mouse.removePointer);
-      await mouse.moveTo(
-        tester.getCenter(
-          find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
-        ),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Mark read'));
-      await tester.pumpAndSettle();
-      // The read row stays, under Read, without its dot (task #2996).
-      expect(
-        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
-        findsOneWidget,
-      );
-      expect(find.byKey(const ValueKey('super-activity-dot')), findsNothing);
-      expect(
-        find.descendant(of: notificationsEntry(), matching: find.text('1')),
-        findsNothing,
-      );
-    });
-
-    // A task with no worker is a quiet conversation: the state does not hold it until it is asked for (Dee, 2026-10-29).
-    testWidgets(
-      'a tag in a closed conversation loads it and opens at its message',
-      (tester) async {
-        final server = ConversationServer();
-        server.state['conversations'] = [
-          ...server.state['conversations'] as List,
-          {...conversationFixture('group', 'Release'), 'archived': true},
-        ];
-        server.append('Builder could not start.', conversationId: 'group');
-        server.tag(
-          'message-1',
-          conversationId: 'group',
-          text: 'Builder could not start.',
-        );
-        final c = await showView(tester, server);
-        expect(c.snapshot?.conversation('group'), isNull);
-        await tester.tap(notificationsEntry());
-        await tester.pumpAndSettle();
-        await tester.tap(
-          find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
-        );
-        await tester.pumpAndSettle();
-        expect(c.selectedId, 'group');
-        expect(find.text('Builder could not start.'), findsWidgets);
-        // The read mark of the opened conversation saves a moment later.
-        await tester.pump(const Duration(seconds: 1));
-      },
-    );
-
-    testWidgets('a tag in a conversation the reader cannot read says so', (
-      tester,
-    ) async {
-      final server = ConversationServer()
-        ..tag('message-9', conversationId: 'private-chat', text: 'Hidden');
-      final c = await showView(tester, server);
-      await tester.tap(notificationsEntry());
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('Message unavailable'), findsOneWidget);
-      expect(c.selectedId, isNot('private-chat'));
-    });
-
-    testWidgets('a tag too far back says so and stays on the list', (
-      tester,
-    ) async {
-      final server = ConversationServer();
-      server.state['conversations'] = [
-        ...server.state['conversations'] as List,
-        conversationFixture('group', 'Release'),
-      ];
-      // More than the 50 pages opening a tag reads back.
-      for (var i = 1; i <= 5050; i++) {
-        server.append('Note $i', conversationId: 'group');
-      }
-      server.tag('message-1', conversationId: 'group', text: 'Note 1');
-      final c = await showView(tester, server);
-      await tester.tap(notificationsEntry());
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
-      );
-      await tester.pumpAndSettle();
-      expect(
-        find.text('This message is too far back to open.'),
-        findsOneWidget,
-      );
-      expect(find.byKey(const ValueKey('super-mentions-list')), findsOneWidget);
-      expect(c.selectedId, isNot('group'));
-    });
-
-    testWidgets('a tag newer than what was read earlier opens at its message', (
-      tester,
-    ) async {
-      final server = ConversationServer();
-      server.state['conversations'] = [
-        ...server.state['conversations'] as List,
-        conversationFixture('group', 'Release'),
-      ];
-      for (var i = 1; i <= 100; i++) {
-        server.append('Note $i', conversationId: 'group');
-      }
-      final c = await showView(tester, server);
-      // Read earlier up to 100, then 100 more arrived while away.
-      await c.loadMessages('group');
-      expect(c.messages('group').last.id, 'message-100');
-      for (var i = 101; i <= 200; i++) {
-        server.append('Note $i', conversationId: 'group');
-      }
-      server.tag('message-150', conversationId: 'group', text: 'Note 150');
-      await tester.tap(find.byKey(const ValueKey('super-mentions')));
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
-      );
-      await tester.pumpAndSettle();
-      expect(
-        find.text('This message is no longer in the conversation.'),
-        findsNothing,
-      );
-      expect(c.selectedId, 'group');
-      expect(
-        find.byKey(const ValueKey('super-message-message-150')).hitTestable(),
-        findsOneWidget,
-      );
-    });
-
-    testWidgets('a tag among more than a page that arrived since opens too', (
-      tester,
-    ) async {
-      final server = ConversationServer();
-      server.state['conversations'] = [
-        ...server.state['conversations'] as List,
-        conversationFixture('group', 'Release'),
-      ];
-      for (var i = 1; i <= 100; i++) {
-        server.append('Note $i', conversationId: 'group');
-      }
-      final c = await showView(tester, server);
-      await c.loadMessages('group');
-      // More than a page since: the latest page (151..250) replaces what is
-      // held, and the tag is on the page before it.
-      for (var i = 101; i <= 250; i++) {
-        server.append('Note $i', conversationId: 'group');
-      }
-      server.tag('message-120', conversationId: 'group', text: 'Note 120');
-      await tester.tap(find.byKey(const ValueKey('super-mentions')));
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
-      );
-      await tester.pumpAndSettle();
-      expect(
-        find.text('This message is no longer in the conversation.'),
-        findsNothing,
-      );
-      expect(c.selectedId, 'group');
-      expect(
-        find.byKey(const ValueKey('super-message-message-120')).hitTestable(),
-        findsOneWidget,
-      );
-    });
-
-    testWidgets('a tag far past a reader scrolled up opens at its message', (
-      tester,
-    ) async {
-      final server = ConversationServer();
-      server.state['conversations'] = [
-        ...server.state['conversations'] as List,
-        conversationFixture('group', 'Release'),
-      ];
-      for (var i = 1; i <= 100; i++) {
-        server.append('Note $i', conversationId: 'group');
-      }
-      final c = await showView(tester, server);
-      await c.loadMessages('group');
-      // The reader had scrolled up there, then 600 arrived: more than the
-      // pages that join below them.
-      c.readingBack('group', true);
-      for (var i = 101; i <= 700; i++) {
-        server.append('Note $i', conversationId: 'group');
-      }
-      server.tag('message-650', conversationId: 'group', text: 'Note 650');
-      await tester.tap(find.byKey(const ValueKey('super-mentions')));
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
-      );
-      await tester.pumpAndSettle();
-      expect(
-        find.text('This message is no longer in the conversation.'),
-        findsNothing,
-      );
-      expect(c.selectedId, 'group');
-      expect(
-        find.byKey(const ValueKey('super-message-message-650')).hitTestable(),
-        findsOneWidget,
-      );
-    });
-
-    testWidgets(
-      'a tag opened while a poll reads the rows held below a reader scrolled '
-      'up still opens at its message',
-      (tester) async {
-        final server = ConversationServer();
-        server.state['conversations'] = [
-          ...server.state['conversations'] as List,
-          conversationFixture('group', 'Release'),
-        ];
-        for (var i = 1; i <= 100; i++) {
-          server.append('Note $i', conversationId: 'group');
-        }
-        final c = await showView(tester, server);
-        await c.loadMessages('group');
-        c.readingBack('group', true);
-        for (var i = 101; i <= 700; i++) {
-          server.append('Note $i', conversationId: 'group');
-        }
-        // Three pages join below the reader; newer ones wait.
-        for (var poll = 0; poll < 3; poll++) {
-          await c.loadMessages('group');
-        }
-        expect(c.hasNewer('group'), isTrue);
-        server.tag('message-650', conversationId: 'group', text: 'Note 650');
-        await tester.tap(find.byKey(const ValueKey('super-mentions')));
-        await tester.pumpAndSettle();
-        // A background poll is reading the rows held when the tag opens.
-        final held = server.holdReads = Completer<void>();
-        final poll = c.loadMessages('group');
-        await tester.tap(
-          find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
-        );
-        await tester.pump();
-        server.holdReads = null;
-        held.complete();
-        await poll;
-        await tester.pumpAndSettle();
-        expect(
-          find.text('This message is no longer in the conversation.'),
-          findsNothing,
-        );
-        expect(c.selectedId, 'group');
-        expect(
-          find.byKey(const ValueKey('super-message-message-650')).hitTestable(),
-          findsOneWidget,
-        );
-      },
-    );
-
-    testWidgets('opening a tag shows its message with the reply box on it', (
-      tester,
-    ) async {
-      final server = ConversationServer();
-      server.state['conversations'] = [
-        ...server.state['conversations'] as List,
-        conversationFixture('group', 'Release'),
-      ];
-      // Two pages back, and far from either end of what is loaded.
-      for (var i = 1; i <= 250; i++) {
-        server.append('Note $i', conversationId: 'group');
-      }
-      server.tag(
-        'message-100',
-        conversationId: 'group',
-        text: 'Note 100',
-        createdAt: minutesAgo(3),
-      );
-      final c = await showView(tester, server);
-      await tester.tap(notificationsEntry());
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
-      );
-      await tester.pumpAndSettle();
-      expect(c.selectedId, 'group');
-      expect(find.text('Replying to owner'), findsOneWidget);
-      expect(
-        find.byKey(const ValueKey('super-message-message-100')).hitTestable(),
-        findsOneWidget,
-      );
-      expect(find.byKey(const ValueKey('super-mentions-list')), findsNothing);
     });
   });
 

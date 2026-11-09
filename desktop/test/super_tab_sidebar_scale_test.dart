@@ -92,53 +92,52 @@ void main() {
     controller.dispose();
   });
 
-  testWidgets(
-    'one sidebar build looks up each Buddy chat once',
-    (tester) async {
-      final server = ConversationServer();
-      final ids = _manyProjects(server);
-      final controller = _CountingController(
-        server,
-        initial: {'tabId': 'tab', 'accountId': 'owner'},
-      );
-      await controller.refresh();
-      // Every project's closed groups held too, as a Tasks view reads them.
-      for (final id in ids) {
-        await controller.loadDormant(id);
-      }
-      expect(controller.snapshot!.conversations, hasLength(2 + 19 + 20 * 201));
+  testWidgets('one sidebar build looks up each Buddy chat once', (
+    tester,
+  ) async {
+    final server = ConversationServer();
+    final ids = _manyProjects(server);
+    final controller = _CountingController(
+      server,
+      initial: {'tabId': 'tab', 'accountId': 'owner'},
+    );
+    await controller.refresh();
+    // Every project's closed groups held too, as a Tasks view reads them.
+    for (final id in ids) {
+      await controller.loadDormant(id);
+    }
+    expect(controller.snapshot!.conversations, hasLength(2 + 19 + 20 * 201));
 
-      late StateSetter rebuild;
-      await tester.binding.setSurfaceSize(const Size(280, 1000));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: grid.buildAppTheme(brightness: Brightness.dark),
-          home: Scaffold(
-            body: StatefulBuilder(
-              builder: (context, setState) {
-                rebuild = setState;
-                return ProjectSidebar(
-                  controller: controller,
-                  onSelect: controller.select,
-                );
-              },
-            ),
+    late StateSetter rebuild;
+    await tester.binding.setSurfaceSize(const Size(280, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              rebuild = setState;
+              return ProjectSidebar(
+                controller: controller,
+                onSelect: controller.select,
+              );
+            },
           ),
         ),
-      );
-      await tester.pump();
+      ),
+    );
+    await tester.pump();
 
-      controller.buddyChatLookups.clear();
-      rebuild(() {});
-      await tester.pump();
+    controller.buddyChatLookups.clear();
+    rebuild(() {});
+    await tester.pump();
 
-      expect(controller.buddyChatLookups.keys, unorderedEquals(ids));
-      expect(controller.buddyChatLookups.values, everyElement(1));
+    expect(controller.buddyChatLookups.keys, unorderedEquals(ids));
+    expect(controller.buddyChatLookups.values, everyElement(1));
 
-      await tester.pumpWidget(const SizedBox());
-      await controller.flush();
-      controller.dispose();
-    },
-  );
+    await tester.pumpWidget(const SizedBox());
+    await controller.flush();
+    controller.dispose();
+  });
 }

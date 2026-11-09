@@ -4144,7 +4144,6 @@ void habitat_touch_cancel(void)
     s.touch_down = false; // driver swallows the rest of this contact until a trustworthy UP
     if (visible) change();
 }
-bool habitat_is_voice_view(void) { return s.view == VOICE; }
 uint32_t habitat_next_wake_ms(void)
 {
 #ifdef DEVICE_CREATURE_GALLERY
@@ -4547,15 +4546,6 @@ void ui_project_set_machine(const char *id, const char *machine_id, const char *
     }
     display_unlock();
 }
-void ui_project_fill_missing_engine(const char *engine)
-{
-    display_lock();
-    for (int i = 0; i < s.count; i++)
-        if (!s.agents[i].engine[0])
-            COPY(s.agents[i].engine, engine);
-    change();
-    display_unlock();
-}
 void ui_project_set_selected_model(const char *id, const char *model)
 {
     display_lock();
@@ -4650,22 +4640,6 @@ bool ui_project_known(const char *id)
 {
     display_lock();
     bool ok = find(id) >= 0;
-    display_unlock();
-    return ok;
-}
-bool ui_project_has_event(const char *id)
-{
-    display_lock();
-    int i = find(id);
-    bool ok = i >= 0 && s.agents[i].has_event;
-    display_unlock();
-    return ok;
-}
-bool ui_project_is_busy(const char *id)
-{
-    display_lock();
-    int i = find(id);
-    bool ok = i >= 0 && s.agents[i].busy;
     display_unlock();
     return ok;
 }
@@ -4764,58 +4738,6 @@ void ui_project_clear_event(const char *id)
     }
     display_unlock();
 }
-void ui_project_set_busy_tokens(const char *id, int tokens)
-{
-    display_lock();
-    int i = find(id);
-    if (i >= 0)
-        s.agents[i].tokens = tokens;
-    display_unlock();
-}
-void ui_project_set_tool(const char *id, const char *name, const char *title, const char *hex,
-                         const char *detail)
-{
-    (void)hex;
-    (void)detail;
-    display_lock();
-    int i = find(id);
-    if (i >= 0) {
-        char next[sizeof(s.agents[i].tool)];
-        snprintf(next, sizeof(next), "%s%s%s", name ? name : "",
-                 title && *title ? ": " : "", title ? title : "");
-        if (i == s.active && strcmp(next, s.agents[i].tool)) s.character_activity++;
-        snprintf(s.agents[i].tool, sizeof(s.agents[i].tool), "%s%s%s", name ? name : "",
-                 title && *title ? ": " : "", title ? title : "");
-        change();
-    }
-    display_unlock();
-}
-void ui_project_set_todos(const char *id, const cJSON *todos)
-{
-    display_lock();
-    int i = find(id);
-    if (i >= 0) {
-        const cJSON *t;
-        cJSON_ArrayForEach(t, todos)
-        {
-            const cJSON *status = cJSON_GetObjectItemCaseSensitive(t, "status"),
-                        *content = cJSON_GetObjectItemCaseSensitive(t, "content");
-            if (cJSON_IsString(status) && !strcmp(status->valuestring, "in_progress") &&
-                cJSON_IsString(content)) {
-                if (i == s.active && strcmp(s.agents[i].tool, content->valuestring)) s.character_activity++;
-                COPY(s.agents[i].tool, content->valuestring);
-                change();
-                break;
-            }
-        }
-    }
-    display_unlock();
-}
-void ui_project_set_agents(const char *id, const cJSON *agents)
-{
-    (void)id;
-    (void)agents; /* Detail stays on the desktop; the face shows the current tool. */
-}
 int ui_prune_stale_busy(void)
 {
     display_lock();
@@ -4832,18 +4754,6 @@ int ui_prune_stale_busy(void)
         change();
     display_unlock();
     return n;
-}
-void ui_cancel_acked(const char *session)
-{
-    display_lock();
-    for (int i = 0; i < s.count; i++)
-        if (session && !strcmp(s.agents[i].session, session)) {
-            s.agents[i].busy = false;
-            pane_memory_t *m = pane_memory(s.agents[i].id, false);
-            if (m) m->busy = false;
-            change();
-        }
-    display_unlock();
 }
 void ui_fleet_set(int total, bool window)
 {
@@ -4921,67 +4831,11 @@ void ui_workspace_applied(const char *tab, uint32_t generation)
     if (!strcmp(s.selected_tab,workspace.pending)) ht_workspace_applied(&workspace,tab,generation);
     display_unlock();
 }
-void ui_report_active_agent(void)
-{
-    display_lock();
-    action_t a = {.kind = A_AGENT};
-    if (active())
-        COPY(a.id, active()->id);
-    if (a.id[0])
-        queue(a);
-    display_unlock();
-}
-int ui_get_active_project_index(void)
-{
-    display_lock();
-    int i = s.view == HOME || s.view == AGENT || s.view == READER || s.view == QUESTION ? s.active : -1;
-    display_unlock();
-    return i;
-}
-const char *ui_get_active_project_id(void) { return active() ? active()->id : NULL; }
-const char *ui_get_active_session_id(void) { return active() ? active()->session : NULL; }
-bool ui_is_projects_active(void)
-{
-    return s.view == HOME || s.view == AGENT || s.view == AGENTS;
-}
-bool ui_reader_is_open(void) { return s.view == READER; }
-bool ui_picker_is_open(void) { return s.view == MODELS || s.view == MACHINES || s.view == TABS; }
-bool ui_switch_is_open(void) { return s.view == TABS; }
 bool ui_scroll_reportable(void)
 {
     // Not on a Swarm's face: it is no pane's terminal, and the pane still active behind it is not on the glass.
     return s.ready && s.connected && !s.loading && (s.view == HOME || s.view == AGENT) && active() && !swarm_mode() &&
            !display_is_asleep() && !s.voice_open && !audio_client_active();
-}
-int ui_notif_pull_zone_px(void) { return 0; }
-bool ui_action_hit(uint16_t x, uint16_t y)
-{
-    (void)x;
-    (void)y;
-    return true;
-}
-void ui_swipe_begin(void) {}
-void ui_swipe_end(int dir)
-{
-    display_lock();
-    if (s.count) {
-        s.active = (s.active + (dir > 0 ? 1 : s.count - 1)) % s.count;
-        view(AGENT);
-    }
-    display_unlock();
-}
-void ui_home_overview(void)
-{
-    display_lock();
-    view(HOME);
-    display_unlock();
-}
-void ui_tap(int32_t x, int32_t y)
-{
-    display_lock();
-    habitat_touch(true, x, y, ms());
-    habitat_touch(false, x, y, ms());
-    display_unlock();
 }
 void ui_notif_open(void)
 {
@@ -4989,21 +4843,6 @@ void ui_notif_open(void)
     notice_open();
     display_unlock();
 }
-void ui_notif_close(void)
-{
-    display_lock();
-    if (s.view == INBOX)
-        view(HOME);
-    display_unlock();
-}
-bool ui_notif_is_open(void) { return s.view == INBOX; }
-bool ui_notif_pill_hit(uint16_t x, uint16_t y)
-{
-    (void)x;
-    (void)y;
-    return false;
-}
-void ui_notif_swipe_up(void) { ui_notif_close(); }
 static void notice_remove(const char *id, bool questions_too)
 {
     if (!id) return;
@@ -5807,12 +5646,6 @@ void ui_supertabs_clear(void)
     change();
     display_unlock();
 }
-void ui_show_machines(void)
-{
-    display_lock();
-    view(MACHINES);
-    display_unlock();
-}
 void ui_machines_replace(const cable_machine_t *rows, int count, const char *selected,
                          const char *previous)
 {
@@ -5887,16 +5720,6 @@ void ui_tick_machine_select(void)
     }
     display_unlock();
 }
-void ui_machines_refresh(void)
-{
-    display_lock();
-    change();
-    display_unlock();
-}
-bool ui_selected_machine_is_local(void)
-{
-    return !s.selected_machine[0] || !strcmp(s.selected_machine, cable_client_machine_id());
-}
 void ui_set_reload_waiter(TaskHandle_t task) { atomic_store(&reload_waiter, task); }
 void ui_request_agent_reload(void)
 {
@@ -5907,20 +5730,6 @@ void ui_request_agent_reload(void)
 }
 bool ui_take_agent_reload_req(void) { return atomic_exchange(&reload_requested, false); }
 bool ui_peek_agent_reload_req(void) { return atomic_load(&reload_requested); }
-bool ui_scroll_is_reversed(void) { return scroll_reversed; }
-bool ui_take_portal_req(void) { return false; }
-bool ui_take_wifi_retry_req(void) { return false; }
-void ui_set_creating(bool on)
-{
-    display_lock();
-    if (on) {
-        COPY(s.title, "A new thought");
-        COPY(s.message, "Finding its home...");
-        view(MESSAGE);
-    }
-    change();
-    display_unlock();
-}
 void ui_show_error(const char *title, const char *detail)
 {
     display_lock();
@@ -6278,31 +6087,6 @@ void ui_voice_error(const char *message)
     ht_gesture_guard(&gesture, ms());
     display_unlock();
 }
-void ui_show_connecting(const char *step) { (void)step; ui_enter_boot_loading(); }
-void ui_enter_remote_offline(void)
-{
-    ui_enter_boot_loading();
-}
-void ui_enter_link_guide(void)
-{
-    ui_show_error(
-        "Link this machine",
-        "On that computer:\nharness link create\n\nOn this computer:\nharness link import");
-}
-void ui_leave_remote_offline_loading(void) { ui_enter_boot_loading(); }
-void ui_leave_error_screen(void) { ui_home_overview(); }
-void ui_show_pairing(const char *code, int seconds)
-{
-    (void)seconds;
-    ui_show_error("Pair device", code);
-}
-void ui_show_e2ee_pair(const char *code, int seconds)
-{
-    (void)seconds;
-    ui_show_error("Pair machine", code);
-}
-void ui_show_e2ee_paired(const char *fingerprint) { ui_show_error("Machine paired", fingerprint); }
-void ui_show_unpaired(void) { ui_enter_boot_loading(); }
 void ui_show_ota_restarting(void)
 {
     display_lock();
@@ -6321,33 +6105,6 @@ void ui_ota_boot_show(const char *version)
 void ui_ota_boot_pct(int percent)
 {
     (void)percent; // Static wordmark; transfer progress stays in the host logs.
-}
-bool ui_voice_is_recording(void) { return audio_client_recording(); }
-bool ui_voice_is_active(void) { return audio_client_active(); }
-uint32_t ui_voice_start_tick(void) { return s.voice_started; }
-void ui_voice_start(void)
-{
-    display_lock();
-    action_t a = {.kind = A_VOICE};
-    if ((s.view == HOME || s.view == AGENT) && active())
-        COPY(a.id, active()->id);
-    dispatch(a);
-    display_unlock();
-}
-void ui_voice_start_goal(void)
-{
-    display_lock();
-    action_t a = {.kind = A_VOICE, .value = 1};
-    if ((s.view == HOME || s.view == AGENT) && active())
-        COPY(a.id, active()->id);
-    dispatch(a);
-    display_unlock();
-}
-void ui_voice_stop(void)
-{
-    display_lock();
-    dispatch((action_t){.kind = A_VOICE_STOP});
-    display_unlock();
 }
 void ui_voice_routed(bool auto_sent, bool need_new, const char *route, const char *id,
                      const char *name, double confidence)
@@ -6381,24 +6138,6 @@ void ui_voice_route_abort(void)
     dispatch((action_t){.kind = A_VOICE_ABORT});
     display_unlock();
 }
-void ui_voice_quota_status(int seconds)
-{
-    (void)seconds; /* Server still enforces quota; exceeded immediately aborts capture below. */
-}
-void ui_voice_quota_exceeded(void)
-{
-    ui_voice_route_abort();
-    ui_cable_toast("Voice allowance reached.");
-}
-void ui_stop_active_turn(void)
-{
-    display_lock();
-    if (active() && active()->busy) {
-        COPY(s.stop_agent, active()->id);
-        view(STOP);
-    }
-    display_unlock();
-}
 void ui_boot_pressed(void)
 {
     display_lock();
@@ -6418,18 +6157,6 @@ void ui_boot_pressed(void)
         view(HOME);
     display_unlock();
 }
-/*
- * THE SCREEN LOCK IS GONE.
- *
- * A 3 x 3 pattern drawn with a thumb protected a device that sits on a desk beside the unlocked
- * computer it is plugged into, and it was the one preference the app could never fully own: setting
- * one had to happen on the glass. It is not used, so it is not kept — and these three stay only as
- * the shape the rest of the firmware still calls.
- */
-void ui_lock_init_gate(void) {}
-void ui_lock_setup(void) {}
-bool ui_lock_active(void) { return false; }
-void ui_log_state_if_changed(void) {}
 
 #ifdef DEVICE_OCTOPUS_BENCH
 // Local fixtures only. No setting is saved and no action is sent to the desktop.

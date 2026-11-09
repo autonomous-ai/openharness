@@ -6,7 +6,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Command, CommandContext } from './commands.js'
 import type { Author } from './model.js'
-import { sweepForLead } from './liveness.js'
 import { projectsOf } from './projects.js'
 import { recordPulse, storedPulse } from './pulse.js'
 import { owner, stepsFixture } from './steps.test-support.js'
@@ -286,12 +285,4 @@ describe('the pulse', () => {
     expect(pulseOf(f).redAt.idle).toBeNull()
   })
 
-  it('marks idle on the PM\'s sweep too, where a lost task is found', () => {
-    const { f } = setup()
-    f.group(f.task).assignment!.status = 'lost'
-    f.group(f.task).assignment!.lost = { reason: 'its session stopped', at: f.now }
-    sweepForLead(f.state, f.now)
-    expect(stored(f).idleSince).toBe(f.now)
-    expect(stored(f).lost.count).toBe(1)
-  })
 })

@@ -21,6 +21,7 @@ class SuperTabPaneLayout extends StatefulWidget {
     this.storage,
     this.rightDefault = rightWidth,
     this.rightFixed = false,
+    this.rightHalf = false,
     this.over,
   });
 
@@ -70,6 +71,10 @@ class SuperTabPaneLayout extends StatefulWidget {
   /// The right pane is [rightDefault] wide, narrower only to keep [boardCenterWidth] in the middle: no divider, and
   /// a width saved earlier is not used.
   final bool rightFixed;
+
+  /// The right pane takes half of what the left pane leaves, the middle the other half (Swarm v4, anh Dee 2026-11-08:
+  /// a task's chat, a terminal or instructions open beside what you read, at equal width). No divider.
+  final bool rightHalf;
 
   /// Drawn over the left and centre panes, leaving the right one as it is:
   /// the picture viewer beside an open thread, as in Slack (Huy, 11-04).
@@ -199,7 +204,9 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
               ),
             )
           : 0.0;
-      final right = hasRight
+      final right = hasRight && widget.rightHalf
+          ? (width - left) / 2
+          : hasRight
           ? math.min(
               width - left,
               limit(
@@ -258,7 +265,8 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
                     ),
                   ),
                   // A fixed right pane has no divider to drag.
-                  if (!widget.rightFixed || (hasLeft && index == 0))
+                  if (!(widget.rightFixed || widget.rightHalf) ||
+                      (hasLeft && index == 0))
                     PaneResizeHandle(
                       key: ValueKey(
                         'super-resize-${hasLeft && index == 0 ? 'left' : 'right'}',

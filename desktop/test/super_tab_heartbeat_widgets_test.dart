@@ -130,11 +130,7 @@ class _Screen {
     }
     void bump(Type type) =>
         rebuilt.update(type, (n) => n + 1, ifAbsent: () => 1);
-    for (final type in const [
-      SuperTabView,
-      SuperTabRoster,
-      SuperTabMachines,
-    ]) {
+    for (final type in const [SuperTabView, SuperTabRoster, SuperTabMachines]) {
       if (element.widget.runtimeType == type) bump(type);
     }
     element.visitAncestorElements((up) {

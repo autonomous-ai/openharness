@@ -9,12 +9,16 @@ import 'package:harness_mobile/core/models.dart' show Machine;
 import 'package:harness_mobile/shared/widgets/app_icon_button.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
+import '../../swarm/swarm_inbox.dart' show SwarmListing;
+import '../../swarm/swarm_session.dart';
 import '../machines_tab.dart';
 import '../phone_navigation.dart' show phoneRoute;
 import '../settings_row.dart';
 import '../tty.dart';
 import '../tty_controls.dart';
+import 'intern3_swarm.dart';
 import 'saved_wifi.dart';
+import 'set_up_swarm_page.dart';
 import 'setup_hotspot.dart';
 
 /// Settings ▸ Set up Intern 3: a Harness with no screen (a box, a mini PC) put on the person's
@@ -152,8 +156,9 @@ class _Steps extends StatelessWidget {
   }
 }
 
-class _Line extends StatelessWidget {
-  const _Line({required this.done, required this.text});
+/// A step of a setup: a check when done, a spinner while it is going on. Set up Swarm's too ([SetUpSwarmPage]).
+class SetupLine extends StatelessWidget {
+  const SetupLine({super.key, required this.done, required this.text});
 
   final bool done;
   final String text;
@@ -294,6 +299,16 @@ class _AddDevicePageState extends State<AddDevicePage> {
   }
 
   AppNotifier get _app => widget.notifier;
+
+  /// Swarm is on: Intern 3 is set up for it — no OpenCode of its own on its screen (os/setup.py `swarm`), and Start goes
+  /// to Set up Swarm ([SetUpSwarmPage]) rather than to a "new" row whose Start opens one.
+  bool get _forSwarm => SwarmScope.of(context) != null;
+
+  /// The Swarm the person picked for Start, when they have two or more ([_swarmChoice]).
+  String? _swarmPick;
+
+  /// The person's Swarms were asked for, once, as Start was offered before they were read.
+  bool _swarmsAsked = false;
 
   @override
   void dispose() {
@@ -600,6 +615,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
             if (_chosen != null) 'security': _chosen!.security,
             'ticket': _ticket,
             'account': ?_app.currentUser?.id,
+            if (_forSwarm) 'swarm': true,
           }
         : null;
     // The account as it is now: the device is told apart in it once online, having given no id.
@@ -692,7 +708,12 @@ class _AddDevicePageState extends State<AddDevicePage> {
     _wasRunning = _machine?.status == 'running';
     _ssid.clear();
     try {
-      await _hotspot.connect(ssid: '', password: '', ticket: _ticket);
+      await _hotspot.connect(
+        ssid: '',
+        password: '',
+        ticket: _ticket,
+        swarm: _forSwarm,
+      );
       _ticketSent = true;
     } on SetupException catch (e) {
       _show(_Step.join, error: e.message);
@@ -760,6 +781,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
         ssid: ssid,
         password: secure ? password : '',
         ticket: _ticket,
+        swarm: _forSwarm,
       );
       _ticketSent = true;
     } on SetupException catch (e) {
@@ -815,22 +837,28 @@ class _AddDevicePageState extends State<AddDevicePage> {
 
   // -- 5. its name, then Computers with it marked new --
 
-  Future<void> _finish() async {
+  /// The name the person gave it, saved; false when it was refused, which then shows.
+  Future<bool> _saveName() async {
     final machine = _machine;
     final name = _name.text.trim();
     if (machine != null) {
       if (name.isNotEmpty && name != machine.displayName) {
         setState(() => _busy = true);
         final failed = await _app.renameMachine(machine.machineId, name);
-        if (!mounted) return;
+        if (!mounted) return false;
         if (failed != null) {
           _show(_Step.done, error: failed);
-          return;
+          return false;
         }
       }
-      if (!_alreadyHere) _app.markMachineNew(machine.machineId);
+      // Not with Swarm on: a "new" row's Start opens an OpenCode there, which a Swarm's Intern 3 has none of.
+      if (!_alreadyHere && !_forSwarm) _app.markMachineNew(machine.machineId);
     }
-    if (!mounted) return;
+    return mounted;
+  }
+
+  Future<void> _finish() async {
+    if (!await _saveName() || !mounted) return;
     if (widget.overComputers) {
       // Its row reads "new", with Start on it, in the list underneath.
       Navigator.of(context).pop();
@@ -840,6 +868,43 @@ class _AddDevicePageState extends State<AddDevicePage> {
       phoneRoute(
         // Its row reads "new", with Start on it.
         (_) => MachinesTab(notifier: _app, large: false),
+      ),
+    );
+  }
+
+  // -- 6. with Swarm on: Start puts it in the person's Swarm, with their Buddy on it --
+
+  /// Start is offered: Swarm on, and a computer new to the account, found online. One that was set up before (only its
+  /// Wi-Fi moved) keeps the OK it had.
+  bool _swarmOffered(BuildContext context) =>
+      SwarmScope.of(context) != null &&
+      SwarmScope.computersOf(context) != null &&
+      !_alreadyHere &&
+      _machine != null;
+
+  Future<void> _startSwarm() async {
+    final session = SwarmScope.of(context);
+    final computers = SwarmScope.computersOf(context);
+    final machine = _machine;
+    if (session == null || computers == null || machine == null) {
+      await _finish();
+      return;
+    }
+    if (!await _saveName() || !mounted) return;
+    setState(() => _busy = false);
+    final name = _name.text.trim();
+    // Intern 3 is set up; the Swarm is a page of its own, and back from it goes where this page came from.
+    await Navigator.of(context).pushReplacement(
+      phoneRoute(
+        (_) => SetUpSwarmPage(
+          notifier: _app,
+          session: session,
+          computers: computers,
+          machineId: machine.machineId,
+          machineName: name.isEmpty ? machine.displayName : name,
+          swarmId: _pickedSwarm(session)?.id,
+          engine: _engine,
+        ),
       ),
     );
   }
@@ -1026,7 +1091,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
           ],
           const SizedBox(height: 16),
           // Where it is, as a Wi-Fi settings page shows joining: what is done, and what is going on.
-          _Line(
+          SetupLine(
             done: _progress.index > _Progress.choosing.index,
             text: _progress.index > _Progress.choosing.index
                 ? 'Joined Intern 3\'s Wi-Fi${_address == null ? '' : ' · address $_address'}'
@@ -1035,14 +1100,14 @@ class _AddDevicePageState extends State<AddDevicePage> {
                 : 'Waiting for this phone to join "Harness-…"…',
           ),
           if (_progress.index >= _Progress.talking.index)
-            _Line(
+            SetupLine(
               done: _progress.index > _Progress.talking.index,
               text: _progress.index > _Progress.talking.index
                   ? 'Intern 3 answered'
                   : 'Talking to Intern 3…',
             ),
           if (_progress == _Progress.reading)
-            const _Line(done: false, text: 'Reading the Wi-Fi Intern 3 sees…'),
+            const SetupLine(done: false, text: 'Reading the Wi-Fi Intern 3 sees…'),
         ];
       case _Step.unlock:
         return [
@@ -1174,6 +1239,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
           ),
         ];
       case _Step.done:
+        final offered = _swarmOffered(context);
         return [
           say(
             _alreadyHere
@@ -1185,13 +1251,92 @@ class _AddDevicePageState extends State<AddDevicePage> {
             key: const Key('add-device-name'),
             controller: _name,
             hint: 'Name',
-            autofocus: true,
+            autofocus: !offered,
             maxLength: AppNotifier.machineNameMaxLength,
-            onSubmitted: _busy ? null : () => unawaited(_finish()),
+            onSubmitted: _busy || offered ? null : () => unawaited(_finish()),
           ),
+          if (offered) ...[
+            const SizedBox(height: 12),
+            ..._swarmChoice(tty, say),
+          ],
         ];
     }
   }
+
+  /// Which Swarm Start adds it to. With two or more, the person picks one, Home's picked to begin with; with one, it goes
+  /// there; with none, Start makes one (owner, 2026-11-06).
+  List<Widget> _swarmChoice(Tty tty, Text Function(String) say) {
+    final session = SwarmScope.of(context)!;
+    // Not read yet: "makes your Swarm" would be said of a person who has some.
+    if (!session.inbox.loaded && !_swarmsAsked) {
+      _swarmsAsked = true;
+      unawaited(
+        session.inbox.refreshAll().then((_) {
+          if (mounted) setState(() {});
+        }),
+      );
+    }
+    final choices = Intern3Swarm.choicesOf(session);
+    final picked = _pickedSwarm(session);
+    Widget tick() => Icon(LucideIcons.check300, size: 18, color: tty.green);
+    return [
+      if (choices.length < 2)
+        say(switch (picked) {
+          null =>
+            'Start makes your Personal Swarm, adds it there and starts your Buddy on it.',
+          final swarm =>
+            'Start adds it to "${swarm.name}" and starts your Buddy there.',
+        })
+      else ...[
+        say('Add it to which Swarm? Start adds it there and starts your Buddy.'),
+        const SizedBox(height: 8),
+        SettingsGroup(
+          children: [
+            for (final swarm in choices)
+              SettingsRow(
+                key: ValueKey('add-device-swarm-${swarm.id}'),
+                title: swarm.name,
+                trailing: swarm.id == picked?.id ? tick() : null,
+                onTap: _busy
+                    ? null
+                    : () => setState(() => _swarmPick = swarm.id),
+              ),
+          ],
+        ),
+      ],
+      // What the Buddy runs on (owner, 2026-11-06): Claude Code first. One that is on it and signed in already is neither
+      // installed nor signed in again.
+      const SizedBox(height: 12),
+      say('Your Buddy runs on:'),
+      const SizedBox(height: 8),
+      SettingsGroup(
+        children: [
+          for (final (engine, name) in _engines)
+            SettingsRow(
+              key: ValueKey('add-device-engine-$engine'),
+              title: name,
+              detail: 'Installed and signed in on it first, if it is not yet',
+              trailing: _engine == engine ? tick() : null,
+              onTap: _busy ? null : () => setState(() => _engine = engine),
+            ),
+        ],
+      ),
+    ];
+  }
+
+  /// The engines a Buddy runs on, in the order offered.
+  static const _engines = [('claude', 'Claude Code'), ('codex', 'Codex')];
+
+  /// The engine picked for the Buddy ([_swarmChoice]): Claude Code to begin with.
+  String _engine = 'claude';
+
+  /// The Swarm picked on this page ([_swarmChoice]), while it is still one of the person's; else the one Start would
+  /// choose by itself.
+  SwarmListing? _pickedSwarm(SwarmSession session) =>
+      Intern3Swarm.choicesOf(
+        session,
+      ).where((s) => s.id == _swarmPick).firstOrNull ??
+      Intern3Swarm.targetOf(session);
 
   List<Widget> _actions() {
     switch (_step) {
@@ -1319,6 +1464,23 @@ class _AddDevicePageState extends State<AddDevicePage> {
           ),
         ];
       case _Step.done:
+        if (_swarmOffered(context)) {
+          return [
+            TtyPrimaryButton(
+              key: const Key('add-device-swarm-start'),
+              label: 'Start',
+              busy: _busy,
+              busyLabel: 'Saving…',
+              onPressed: () => unawaited(_startSwarm()),
+            ),
+            if (!_busy)
+              TtyTextButton(
+                key: const Key('add-device-swarm-not-now'),
+                label: 'Not now',
+                onPressed: () => unawaited(_finish()),
+              ),
+          ];
+        }
         return [
           TtyPrimaryButton(
             key: const Key('add-device-done'),

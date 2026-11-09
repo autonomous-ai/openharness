@@ -109,83 +109,8 @@ void main() {
   });
 
   // Finding 16: the ⋮ said "Workgroup options" and its Rename renamed the chat, so the header kept the agent's name.
-  testWidgets('an agent\'s ⋮ is Agent options, and its Rename renames the '
-      'agent', (tester) async {
-    await open(tester, 'kestrel');
-    final menu = find.descendant(
-      of: key('super-middle-chat'),
-      matching: key('super-group-options'),
-    );
-    expect(find.byTooltip('Workgroup options'), findsNothing);
-    expect(
-      find.descendant(of: menu, matching: find.byTooltip('Agent options')),
-      findsOneWidget,
-    );
-    await tester.tap(menu);
-    await settle(tester);
-    await tester.tap(find.text('Rename'));
-    await settle(tester);
-    final field = key('agent-rename-input');
-    expect(tester.widget<TextField>(field).controller!.text, 'Kestrel');
-    await tester.enterText(field, 'Atlas');
-    await tester.testTextInput.receiveAction(TextInputAction.done);
-    await settle(tester);
-    final agent = (server.state['agents'] as List).cast<Map>().firstWhere(
-      (a) => a['id'] == 'kestrel',
-    );
-    expect(agent['displayName'], 'Atlas');
-    // The chat keeps its own title; the agent's name is what changed.
-    expect(
-      (server.state['conversations'] as List).cast<Map>().firstWhere(
-        (g) => g['id'] == 'agent-chat-kestrel',
-      )['title'],
-      'Kestrel',
-    );
-    expect(
-      find.descendant(
-        of: key('super-agent-chat-header'),
-        matching: find.text('Atlas'),
-      ),
-      findsOneWidget,
-    );
-  });
-
   // Finding 18: the Board / Chat tabs sat alone on a row above "# web-project ▾", jumped on Board → Chat, and the Tasks
   // icon opened the Board as the Board tab did.
-  testWidgets('a PM\'s chat has one header row, and one way to the Board', (
-    tester,
-  ) async {
-    await open(tester, 'orion');
-    final board = key('super-board-tab-board');
-    final chat = key('super-board-tab-chat');
-    final title = key('super-project-menu');
-    expect(board, findsOneWidget);
-    double row(Finder f) => tester.getRect(f.first).center.dy;
-    expect((row(board) - row(title)).abs(), lessThan(4));
-    expect((row(chat) - row(title)).abs(), lessThan(4));
-    expect((row(key('super-members-button')) - row(title)).abs(), lessThan(4));
-    expect(
-      tester.getRect(board).left,
-      greaterThan(tester.getRect(title.first).right),
-    );
-    expect(key('super-tasks'), findsNothing);
-    final chatTab = tester.getRect(board);
-    await tester.tap(board);
-    await settle(tester);
-    // The Board's own header: its tabs on the same line as in the chat.
-    expect(
-      (tester.getRect(board).center.dy - chatTab.center.dy).abs(),
-      lessThan(4),
-    );
-    await tester.tap(chat);
-    await settle(tester);
-    expect(key('super-tasks'), findsNothing);
-    expect((row(board) - row(title)).abs(), lessThan(4));
-    // The tabs' tooltips and the Board's settle timers run out.
-    await tester.pumpWidget(const SizedBox());
-    await tester.pump(const Duration(seconds: 5));
-  });
-
   testWidgets('screenshots, light and dark', (tester) async {
     for (final brightness in Brightness.values) {
       final c = await open(tester, 'kestrel', brightness: brightness);

@@ -79,7 +79,7 @@ const char *board_describe(void)
 }
 
 // BOOT (GPIO0) held at power-on. Two reads a moment apart: a single sample catches the pin mid-transition
-// on a cold boot. Moved here from app_main.c when the Pro — which has no such button — joined the build.
+// on a cold boot.
 bool board_factory_reset_requested(void)
 {
     const gpio_config_t io = {

@@ -1,37 +1,12 @@
-import { dueProposalCards } from './proposalDue.js'
-// The Swarm's time checks run in the singleton worker (task #3385, anh Dee's Swarm redesign, 11-05): lost and stalled work,
-// failed starts and idle agents are found and told to each project's PM whether or not the PM is up. They ran only on the
-// PM's own poll before: on 11-05 a hung PM left five people's asks unanswered for 3 to 10 hours and the board showed nothing
-// working. A machine's report still runs the loss checks too (liveness.ts sweepLiveness); what both find is recorded in the
-// Swarm's own write, so each notice is written once whichever runs first.
+// The Swarm's time checks run in the singleton worker every 30 s. Since Swarm v4 (anh Dee, 2026-11-09) they run only v4's
+// jobs (store.ts runTimeChecks): every agent gets its 1:1 chat with its person, and the stops the v3 rules asked for are
+// withdrawn once. No v3 rule runs on its own any more: no lost-work sweeps, stuck alerts, proposal cards or PM restarts.
 import type { PrismaClient } from '@prisma/client'
 import { SWEEP_EVERY_MS } from './liveness.js'
 import type { SuperTabStore } from './store.js'
 import { logger } from '../utils/logger.js'
 
-/** How long a PM may owe a person an answer while it hangs before its host restarts it (cli superTabs/host.ts). Sent in the
- *  PM's host row, so the server sets it, not each host. */
-export const PM_RESTART_AFTER_MS = 20 * 60_000
-/** An ask older than this is not owed any more: one the PM settled some other way (a reaction, a thread) never holds a restart
- *  for good. */
-export const OWED_REACH_MS = 24 * 3_600_000
-/** A delivery to the PM not answered yet: still to type, typed, or typed and confirmed. */
-const UNANSWERED = ['queued', 'claimed', 'uncertain', 'delivered', 'confirmed']
 
-/** The oldest message a person sent [agentId] in the last [OWED_REACH_MS] that it has not answered, by when its delivery was
- *  written. One read on `[tabId, agentId, status, createdAt]`: a plain `$match`, as Prisma sends `in` as `$expr` (backend AGENTS.md 3). */
-export async function owedAsk(db: Pick<PrismaClient, 'superTabDelivery'>, tabId: string, agentId: string, now: number): Promise<{ messageId: string; since: number } | null> {
-  const [row] = await db.superTabDelivery.aggregateRaw({ pipeline: [
-    { $match: { tabId, agentId, status: { $in: UNANSWERED }, createdAt: { $gte: { $date: new Date(now - OWED_REACH_MS).toISOString() } }, authorKind: 'person' } },
-    { $sort: { createdAt: 1 } },
-    { $limit: 1 },
-    { $project: { _id: 0, messageId: 1, createdAt: 1 } },
-  // Proposal priority must not split the chronological range used to find the oldest unanswered ask.
-  ], options: { hint: { tabId: 1, agentId: 1, status: 1, createdAt: 1 } } }) as unknown as Array<{ messageId: string; createdAt: { $date: string } | string }>
-  if (!row) return null
-  const at = typeof row.createdAt === 'string' ? row.createdAt : row.createdAt.$date
-  return { messageId: row.messageId, since: Date.parse(at) }
-}
 
 /** A Swarm with no conversation active this long has no work for the checks: its stalls were told long ago. */
 export const TIME_CHECK_QUIET_MS = 7 * 24 * 3_600_000
@@ -66,11 +41,7 @@ export type TimeCheckMemory = Map<string, { at: string; checkedAt: number }>
  *  not checked for QUIET_CHECK_MS. One Swarm's failure is logged and skips that Swarm alone, and it is checked again next pass. */
 export async function runTimeCheckPass(db: PrismaClient, store: Pick<SuperTabStore, 'runTimeChecks'>, now: number, limit = TIME_CHECK_SWARMS,
   seen: TimeCheckMemory = new Map()) {
-  const due = await dueProposalCards(db, now, limit)
-  const dueByTab = new Map<string, string[]>()
-  for (const row of due) dueByTab.set(row.tabId, [...dueByTab.get(row.tabId) ?? [], row.key])
-  const recent = await timeCheckCandidates(db, now, limit)
-  const rows = [...[...dueByTab.keys()].map(tabId => ({ tabId, at: `due:${now}` })), ...recent.filter(r => !dueByTab.has(r.tabId))].slice(0, limit)
+  const rows = await timeCheckCandidates(db, now, limit)
   const pass = { swarms: rows.length, checked: 0, written: 0, failed: 0 }
   const listed = new Set(rows.map(row => row.tabId))
   for (const tabId of seen.keys()) if (!listed.has(tabId)) seen.delete(tabId)
@@ -79,7 +50,7 @@ export async function runTimeCheckPass(db: PrismaClient, store: Pick<SuperTabSto
     if (last && last.at === at && now - last.checkedAt < QUIET_CHECK_MS) continue
     pass.checked++
     try {
-      pass.written += await store.runTimeChecks(tabId, dueByTab.get(tabId))
+      pass.written += await store.runTimeChecks(tabId)
       seen.set(tabId, { at, checkedAt: now })
     } catch (error) {
       pass.failed++

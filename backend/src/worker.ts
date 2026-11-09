@@ -18,28 +18,18 @@ import { startQueryStats } from './lib/queryStats.js'
 import { startRetryStats } from './superTabs/retryStats.js'
 import { releaseSchema } from './lib/db/schemaRelease.js'
 import { startSwarmSweeps } from './superTabs/sweeps.js'
-import { startDecisionSweep } from './superTabs/decisionSweep.js'
 import { requeueCompactedAgents } from './superTabs/agentTombstones.js'
 import { startLegacyDrop } from './superTabs/migration/dropLegacyJob.js'
-import { startInstructionsRebase } from './superTabs/migration/rebase.js'
-import { startInstructionsRestore } from './superTabs/migration/restoreRebase.js'
 import { startDeliverySettle } from './superTabs/deliverySettle.js'
 import { startDeliveryRepush } from './superTabs/deliveryRepush.js'
 import { startDeliveryCompaction } from './superTabs/deliveryCompaction.js'
 import { startThreadBackfill } from './superTabs/threadBackfill.js'
 import { markFeedIds } from './superTabs/read/feedIds.js'
-import { appPullRequests, markFinishedGroups, startSwarmArchive, unknownPullRequests } from './superTabs/archive.js'
-import { appPullRequestWatch, startPullRequestWatch } from './superTabs/pullRequestEvents.js'
 import { startTimeChecks } from './superTabs/timeChecks.js'
-import { appReleaseReader, startReleaseWatch, unknownReleases } from './superTabs/releaseWatch.js'
-import { recordTrainRules, startMergeTrain } from './superTabs/mergeTrain/run.js'
-import { teamAccountRequired } from './superTabs/machines.js'
-import { PrismaApprovals } from './github/approvals.js'
 import { SuperTabStore } from './superTabs/store.js'
 import { announceSwarmDeliveries, announceSwarmTerminal } from './lib/swarmDeliveryPushes.js'
 import { announceSwarmHostChanges } from './lib/swarmHostPushes.js'
 import { announceSwarmChanges } from './lib/swarmClientPushes.js'
-import { GitHubApp, githubAppConfig } from './github/app.js'
 import { env } from './config/env.js'
 import { phoneSendersFromEnv, sendPhoneNotices } from './push/send.js'
 import { machineBillingWorkerService } from './services/MachineBillingWorkerService.js'
@@ -50,8 +40,6 @@ import { startPendingUploadSweep } from './lib/pendingUploadSweep.js'
 import { startSwarmPurge } from './superTabs/purge.js'
 import { startAttachmentSweepFrom } from './lib/attachmentSweep.js'
 import { attachmentsFromEnv } from './superTabs/attachments.js'
-import { startRoutingReflection } from './lib/routingReflection.js'
-import { startScorecards } from './superTabs/scorecard/job.js'
 import { logger } from './utils/logger.js'
 
 // Singleton background process. HTTP/WS server.ts runs as a PM2 cluster and must never own schema
@@ -69,8 +57,6 @@ async function start(): Promise<void> {
   // Same reason: the old (user, day) unique must be gone before the push installs its replacement.
   await migrateUserPresencePerMachine()
   const schema = await releaseSchema()
-  // After the push, which adds the finished mark: parts written before it are marked once, so the archive pass finds them.
-  await markFinishedGroups(prisma)
   // Likewise the Tasks feed's column (read/feedIds.ts): a person's older tasks show once it is set.
   await markFeedIds(prisma).then(count => logger.info('[swarm] Tasks feed ids set on older conversations', { count }), error =>
     logger.error('[swarm] Tasks feed ids not set on older conversations: their tasks stay out of people\'s Tasks feeds until the next worker start sets them',
@@ -88,15 +74,8 @@ async function start(): Promise<void> {
   await reconcileCommunityLikeCounts()
 
   let stopSweeps = (): void => {}
-  let stopDecisionSweep = (): void => {}
   let stopLegacyDrop = (): void => {}
-  let stopInstructionsRebase = (): void => {}
-  let stopInstructionsRestore = (): void => {}
-  let stopArchive = (): void => {}
-  let stopPullRequestWatch = (): void => {}
   let stopTimeChecks = (): void => {}
-  let stopReleaseWatch = (): void => {}
-  let stopMergeTrain = (): void => {}
   let stopDeliveries = (): void => {}
   let stopRepush = (): void => {}
   let stopCompaction = (): void => {}
@@ -106,8 +85,6 @@ async function start(): Promise<void> {
   let stopPendingUploads = (): void => {}
   let stopSwarmPurge = (): void => {}
   let stopAttachmentSweep = (): void => {}
-  let stopReflection = (): void => {}
-  let stopScorecards = (): void => {}
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, stopping backend worker...`)
     const hardExit = setTimeout(() => process.exit(0), 5000)
@@ -115,15 +92,8 @@ async function start(): Promise<void> {
     machineBillingWorkerService.stop()
     productUsagePeopleRollupService.stop()
     stopSweeps()
-    stopDecisionSweep()
     stopLegacyDrop()
-    stopInstructionsRebase()
-    stopInstructionsRestore()
-    stopArchive()
-    stopPullRequestWatch()
     stopTimeChecks()
-    stopReleaseWatch()
-    stopMergeTrain()
     stopDeliveries()
     stopRepush()
     stopCompaction()
@@ -132,8 +102,6 @@ async function start(): Promise<void> {
     stopPendingUploads()
     stopSwarmPurge()
     stopAttachmentSweep()
-    stopReflection()
-    stopScorecards()
     stopThreadBackfill()
     // The last partial minute, before the database closes.
     stopQueryStats()
@@ -164,43 +132,17 @@ async function start(): Promise<void> {
   const phones = phoneSendersFromEnv(env)
   const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries, terminalWaiting: announceSwarmTerminal, hostsChanged: announceSwarmHostChanges,
     swarmChanged: announceSwarmChanges, phoneNotices: notices => { void sendPhoneNotices(prisma, phones, notices) } })
-  // Decisions still waiting in work that was over before #2454 closed them where work ends: they counted toward the open
-  // limit and came back on a reopen (store.ts withdrawEndedDecisions). Remove in the release after the one that runs it.
-  logger.info('[swarm-decisions] closed waiting decisions of finished work', { closed: await swarms.withdrawEndedDecisions() })
   // Agent tombstones compacted for good before #2150 get a purge time, so the sweeps purge them (superTabs/agentTombstones.ts).
   // Remove in the release after the one that runs it.
   // A failure leaves them compacted, as before, and never stops the worker starting.
   await requeueCompactedAgents(prisma, Date.now()).then(queued => logger.info('[swarm-sweeps] queued compacted agent tombstones for purge', { queued }),
     error => logger.warn('[swarm-sweeps] queuing compacted agent tombstones failed', { error: error instanceof Error ? error.message : String(error) }))
   stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals())
-  stopDecisionSweep = startDecisionSweep(now => swarms.leaveOverdueDecisions(now))
   // The dead old state of migrated Swarms goes by itself, a few at a time (superTabs/migration/dropLegacyJob.ts).
   stopLegacyDrop = startLegacyDrop(prisma)
-  // Every project's instructions move onto the new base once, by themselves (superTabs/migration/rebase.ts, task #3600).
-  stopInstructionsRebase = startInstructionsRebase(prisma)
-  // And the lines that first move lost come back, once, after it (superTabs/migration/restoreRebase.ts, task #3679).
-  stopInstructionsRestore = startInstructionsRestore(prisma)
-  // Finished groups archive once GitHub says their pull requests are merged or closed; without the app, only groups that
-  // link none do (superTabs/archive.ts).
-  const githubConfig = githubAppConfig(env), githubApp = githubConfig ? new GitHubApp(githubConfig) : null
-  stopArchive = startSwarmArchive(prisma, swarms, () => githubApp ? appPullRequests(githubApp) : unknownPullRequests)
-  // GitHub events on an open task's pull request reach its Engineer within a minute (superTabs/pullRequestEvents.ts): only
-  // with the app, which reads them.
-  if (githubApp) stopPullRequestWatch = startPullRequestWatch(prisma, swarms, () => appPullRequestWatch(githubApp))
-  // Every 30 s, each active Swarm's time checks: lost and stalled work, failed starts and idle agents, told to its PM whether or
-  // not the PM is up (superTabs/timeChecks.ts, task #3385). The PM's poll ran them before, so a hung PM stopped them.
+  // Every 30 s, each active Swarm's time checks: v4's jobs only (superTabs/timeChecks.ts). Swarm v4 (anh Dee, 2026-11-09) runs
+  // no v1-v3 job: no decisions, task archive, pull request watch, release steps, merge train, routing reflection or scorecards.
   stopTimeChecks = startTimeChecks(prisma, swarms)
-  // Every 5 minutes, merged tasks a verified release carries are marked released, and inside the release window a due release
-  // step opens for the project's Integrator (superTabs/releaseWatch.ts, task #3405). Without the app nothing can be verified:
-  // each pass says so for every project still waiting.
-  stopReleaseWatch = startReleaseWatch(prisma, swarms, () => githubApp ? appReleaseReader(githubApp) : unknownReleases)
-  // Every minute, each project whose merge train is switched on (its rules record; off until saved on) merges what passed at its head, in
-  // batches through the app (superTabs/mergeTrain/, task #3402). Only where an agent's token could be had for the repository.
-  if (githubApp) {
-    const approvals = new PrismaApprovals(prisma)
-    stopMergeTrain = startMergeTrain({ store: swarms, app: githubApp, rules: recordTrainRules(prisma),
-      approved: async (project, repository) => !teamAccountRequired() || approvals.approved(project.autonomousEnv, project.tabId, project.projectId, repository) })
-  }
   // A delivery that can no longer move ends as Not sent, instead of waiting for good (superTabs/deliverySettle.ts).
   stopDeliveries = startDeliverySettle(prisma, swarms)
   // Every 15 s, the machine of each agent with a delivery still queued after 10 s is told again, in case its push was lost:
@@ -211,11 +153,6 @@ async function start(): Promise<void> {
   // Every 15 minutes, thread summaries for replies no write summed up: all of a Swarm's at first, then only what changed
   // (superTabs/threadBackfill.ts). Pages read the summaries once a Swarm is backfilled.
   stopThreadBackfill = startThreadBackfill(prisma)
-  // At 23:00 in each project's time zone, what its routed work cost and how it went, with routing changes asked of its owner
-  // (lib/routingReflection.ts).
-  stopReflection = startRoutingReflection(prisma, swarms)
-  // Each project's scorecard for its local day, once the day has ended, from the Swarm's own records (superTabs/scorecard/job.ts).
-  stopScorecards = startScorecards(prisma, prismaSecondary)
   // PM2 wait_ready gates the singleton worker's "online" state on schema/catalog/backfill startup.
   // Plain node/tsx runs do not provide process.send and simply continue.
   process.send?.('ready')

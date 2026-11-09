@@ -19,8 +19,6 @@ typedef struct {
 extern const ht_font_t ht_ascii_art_12, ht_ascii_art_14, ht_ascii_art_16, ht_ascii_art_20;
 extern const ht_font_t ht_ascii_art_28, ht_ascii_art_48;
 extern const ht_font_t ht_block_art_16, ht_block_art_square_10;
-const char *ht_gallery_name(unsigned creature);
-const char *ht_gallery_mood(unsigned mood);
 void ht_gallery_init(ht_gallery_t *g, uint32_t now);
 void ht_gallery_touch(ht_gallery_t *g, bool down, int x, int y, uint32_t now);
 // Drop the current contact. The touch driver suppresses its remaining samples/UP.

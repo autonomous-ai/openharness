@@ -82,7 +82,7 @@ Future<(SuperTabLaunchFixture, SuperTabController)> setup(
   final c = await f.app.superTabs.open(tabId);
   await c.refresh();
   await mount(tester, f.app, nativeTabs: nativeTabs);
-  await tester.tap(find.byKey(const ValueKey('super-message-composer')));
+  await focusSwarm(tester);
   await tester.pump();
   return (f, c);
 }
@@ -97,6 +97,17 @@ Future<void> close(
   f.dispose();
 }
 
+/// Gives the Swarm the keys with a click, as a person does: in its composer, or on the line a project's channel shows
+/// in its place (Swarm v4: only agents post there).
+Future<void> focusSwarm(WidgetTester tester) async {
+  final composer = find.byKey(const ValueKey('super-message-composer'));
+  await tester.tap(
+    composer.evaluate().isNotEmpty
+        ? composer
+        : find.byKey(const ValueKey('super-agents-only')),
+  );
+}
+
 Future<void> open(WidgetTester tester) async {
   await key(tester, LogicalKeyboardKey.keyK, cmd: true);
   await tester.pumpAndSettle();
@@ -104,16 +115,13 @@ Future<void> open(WidgetTester tester) async {
 }
 
 void main() {
-  testWidgets('Cmd+K opens and Escape restores the Swarm composer', (
-    tester,
-  ) async {
+  testWidgets('Cmd+K opens and Escape gives the keys back', (tester) async {
     final f = SuperTabLaunchFixture(local: true);
     f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
     final c = await f.app.superTabs.open(tabId);
     await c.refresh();
     await mount(tester, f.app);
-    final composer = find.byKey(const ValueKey('super-message-composer'));
-    await tester.tap(composer);
+    await focusSwarm(tester);
     await tester.pump();
     final before = FocusManager.instance.primaryFocus;
     await key(tester, LogicalKeyboardKey.keyK, cmd: true);
@@ -303,7 +311,7 @@ void main() {
       ),
     );
     final (f, c) = await setup(tester, nativeTabs: true);
-    await tester.tap(find.byKey(const ValueKey('super-message-composer')));
+    await focusSwarm(tester);
     await native(tester, 'keymapCommand', {'command': 'swarm.quick_switcher'});
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('swarm-quick-query')), findsOneWidget);
@@ -331,7 +339,7 @@ void main() {
       await tester.pump();
       f.app.selectSwarm(tab);
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-message-composer')));
+      await focusSwarm(tester);
       await open(tester);
       await key(tester, LogicalKeyboardKey.arrowDown);
       await key(tester, LogicalKeyboardKey.enter);
@@ -678,7 +686,7 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        await tester.tap(find.byKey(const ValueKey('super-message-composer')));
+        await focusSwarm(tester);
         await open(tester);
         await captureWindow(tester, shots, 'switcher-${brightness.name}');
         final queryField = tester.widget<TextField>(
@@ -713,7 +721,7 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        await tester.tap(find.byKey(const ValueKey('super-message-composer')));
+        await focusSwarm(tester);
         await open(tester);
         await captureWindow(tester, shots, 'switcher-${brightness.name}-large');
         expect(tester.takeException(), isNull);

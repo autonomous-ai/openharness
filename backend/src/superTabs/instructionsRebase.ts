@@ -1,7 +1,7 @@
 /**
  * Every project's instructions on the new base, in one approved change (task #3600, anh Dee 11-06: "update them all and
  * override all of their existing instructions. ALL OF THEM"; River's ruling with him: "REPLACE 100%"). All process is the
- * Swarm's built-in PM text (pmSchedule.ts, #3603), never copied into a document. A document keeps only a short intro, the
+ * Swarm's built-in PM text, never copied into a document. A document keeps only a short intro, the
  * project's own facts (repo, devices, people's areas: given per project by the run) and People notes: every block of the old
  * document that holds a person's rule, word for word with who gave it, filed under the section it came from. The rule guard's
  * own reader (instructionsDiff.ts droppedRules) checks that nothing a person gave is lost; a project that would lose one is

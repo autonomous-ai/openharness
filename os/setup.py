@@ -54,6 +54,9 @@ NOW = Path('/run/harness-os/setup-now')
 SCREEN = Path('/run/harness-os/setup-screen')
 # Signed in from a phone: its first workspace is OpenCode alone, not with two terminals (onboarding.py).
 FROM_PHONE = STATE / 'set-up-from-phone'
+# A phone with Swarm on set it up for the person's Swarm: its screen opens no OpenCode, and no workspace, of its own
+# (hn app.rs); the Swarm's Buddy is its first work. A phone without it, or an older one, sends none: as before.
+FOR_SWARM = STATE / 'set-up-for-swarm'
 # A phone's Wi-Fi and sign-in, sent with the computer's password as it started (unlock/http): /run
 # outlives the switch from its startup to the system, and nothing of it reaches the disk.
 PHONE_SETUP = Path('/run/harness-os/phone-setup.json')
@@ -371,13 +374,17 @@ def forget(ssid):
         nmcli('connection', 'delete', 'uuid', saved)
 
 
-def sign_in(ticket):
+def sign_in(ticket, swarm=False):
     if signed_in():
         return True, ''
     # Before the sign-in, not after: the screen's hn opens its first workspace the moment the
-    # account is there, and reads this to open OpenCode alone (onboarding.py).
+    # account is there, and reads this to open OpenCode alone (onboarding.py), or none for a Swarm.
     try:
         FROM_PHONE.touch()
+        if swarm:
+            FOR_SWARM.touch()
+        else:
+            FOR_SWARM.unlink(missing_ok=True)
     except OSError:
         pass
     # A computer that joined the Wi-Fi a moment ago may not reach the backend on its first try: the MSI's
@@ -394,6 +401,7 @@ def sign_in(ticket):
     ok = ok or signed_in()
     if not ok:
         FROM_PHONE.unlink(missing_ok=True)
+        FOR_SWARM.unlink(missing_ok=True)
         return ok, message
     # Online in the account only with its daemon running, and nobody may ever sign in at a screen
     # to start a session (one with no encryption asks for its password there first): started here.
@@ -445,7 +453,7 @@ def join(request, networks, device):
         log(f'"{ssid}" failed after {int(time.monotonic() - started)}s: {failed}')
         return dict(state='failed', error=failed, ssid=ssid, message=MESSAGES[failed].format(ssid=ssid))
     if ticket:
-        ok, message = sign_in(ticket)
+        ok, message = sign_in(ticket, swarm=request.get('swarm') is True)
         if not ok:
             log('sign-in failed: ' + message)
             return dict(state='done', ssid=ssid, signedIn=False, error='SIGN_IN', message=message)
@@ -738,7 +746,10 @@ def set_up_as_unlocked():
     if signed_in() and isinstance(account, str) and account and account != signed_in_account():
         # The phone's account, in place of the one it was signed in to: a sign-out, then its sign-in.
         log('signed in to another account than the phone\'s: signing out')
-        as_user('/usr/bin/harness', 'logout', timeout=60)
+        if not log_out():
+            write_result(run=run, state='failed', error='SIGN_IN', ssid=ssid,
+                         message='This computer could not sign out of its other account. Restart it and try again.')
+            return
     security = request.get('security')
     networks = [dict(ssid=ssid, security=security)] if ssid and isinstance(security, str) else []
     log('setting up as the phone asked at the unlock')
@@ -824,6 +835,18 @@ GH_INSTALL_TIMEOUT = 120
 # A phone sets this computer up next (network.py UNLOCKED_BY_PHONE): the screen's Wi-Fi page keeps
 # off the radio the hotspot needs, until a key there.
 PHONE_SETS_UP = Path('/run/harness-os/unlocked-by-phone')
+
+
+def log_out():
+    """The person's sign-out, as the desktop's Sign out asks for it (desktop cli_login.dart): `harness logout` with no
+    terminal and no word of a person refuses (cli lib/signOut.ts, #1866), and a phone's Sign out or a setup for
+    another account is a person's. Without it the session stayed, and the next phone's ticket was never used: the
+    Dell, 2026-11-06, stayed in the first account while a phone on the second waited for it. True once signed out."""
+    result = as_user('/usr/bin/harness', 'logout', '--from-sign-out-button', timeout=60)
+    if signed_in():
+        log('the sign-out was refused: ' + ((result.stderr or result.stdout).strip()[-300:] if result else 'no answer'))
+        return False
+    return True
 
 
 def as_user(*command, timeout=30):
@@ -930,8 +953,12 @@ def sign_out(keep_wifi=False):
     its hotspot to be set up again — a phone on the other account sets it up as before. Its harnesses,
     projects and everything else of the person stay, as a sign-out and a sign-in at the screen keep them."""
     log('signing out; the harnesses and projects stay')
-    as_user('/usr/bin/harness', 'logout', timeout=60)
+    # Still signed in: it stays online in that account, where the phone still sees it, rather than opening a hotspot
+    # for a setup that would keep the old sign-in.
+    if not log_out():
+        raise SystemExit('Could not sign out.')
     FROM_PHONE.unlink(missing_ok=True)
+    FOR_SWARM.unlink(missing_ok=True)
     if not keep_wifi:
         forget_wifi()
     open_hotspot()
@@ -1090,7 +1117,7 @@ def factory_reset(keep_wifi=False, keep_ssh=False, reboot=False):
     # While signed in and its daemon up: off the account, then signed out.
     forget_desk()
     remove_from_account()
-    as_user('/usr/bin/harness', 'logout', timeout=60)
+    log_out()
     account = pwd.getpwnam(USER)
     # Every process of the person: the screen's session, the daemon, hn, tmux and its harnesses.
     subprocess.run(['loginctl', 'terminate-user', USER], capture_output=True, timeout=60)
@@ -1104,7 +1131,7 @@ def factory_reset(keep_wifi=False, keep_ssh=False, reboot=False):
     (HOME / 'projects').mkdir(exist_ok=True)
     subprocess.run(['chown', '-R', f'{account.pw_uid}:{account.pw_gid}', str(HOME)], check=True, timeout=120)
     HOME.chmod(0o700)
-    for path in (RESULT, FROM_PHONE, SCREEN):
+    for path in (RESULT, FROM_PHONE, FOR_SWARM, SCREEN):
         path.unlink(missing_ok=True)
     restore_initial_password()
     if not keep_ssh:
@@ -1135,7 +1162,7 @@ def recover():
     log('factory reset: starting again in the recovery')
     forget_desk()
     remove_from_account()
-    as_user('/usr/bin/harness', 'logout', timeout=60)
+    log_out()
     subprocess.run(['grub-editenv', str(GRUBENV), 'set', f'next_entry={RECOVERY_ENTRY}'], check=True, timeout=30)
     subprocess.run(['systemctl', 'reboot'], capture_output=True, timeout=60)
 

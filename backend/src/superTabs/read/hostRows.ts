@@ -5,7 +5,7 @@
  */
 import { buddySleepManaged } from '../buddySleep.js'
 import type { AuthUser } from '../../lib/ssoAuth.js'
-import { activeWork, agent, isLeads, SuperTabError, conversation, type Agent, type SuperTabState } from '../model.js'
+import { activeWork, agent, isLeads, SuperTabError, type Agent, type SuperTabState } from '../model.js'
 import { buddyChatOf, isSwarmBuddy, isSwarmBuddyChat } from '../buddies.js'
 import { buddyEngineChat } from '../buddyEngine.js'
 import { hostLocalGrid, machineContribution, machineLimitReached, machineRoom, type MachineCleanup } from '../machines.js'
@@ -13,7 +13,6 @@ import { agentProjectId, agentSetRole, canWatchAgent, confidentialSets, isConfid
 import type { HostAgentRow, HostPool, HostRosterRow, HostTabRows } from './contract.js'
 import { hostEtag } from './hostEtag.js'
 import { coordinatorNameOf, FIRST_INSTRUCTIONS, roleNameOf } from '../instructions.js'
-import { PM_RESTART_AFTER_MS } from '../timeChecks.js'
 
 export interface HostLookups {
   /** The Swarm's people with their account emails (observers). */
@@ -102,8 +101,8 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
       coordinatorName: coordinatorNameOf(home) } : null,
     ...(custom ? { role: chosen && { ...chosen, projectId: custom.id } } : {}),
     lead: !!ledProject(state, target.id),
-    // What a PM owes people, and how long it may while it hangs: its host restarts it after that (timeChecks.ts, cli host.ts).
-    owed: (() => { const owed = ledProject(state, target.id)?.owed; return owed ? { ...owed, restartAfterMs: PM_RESTART_AFTER_MS } : null })(),
+    // Swarm v4 restarts no PM on the server's word (timeChecks.ts): an older host still reads the field, so it stays, always empty.
+    owed: null,
     // Removed (model.ts leadsRemoved); an older CLI still reads the field, so it stays, always empty.
     leadsConversationId: null,
     // The conversation it leads: the chat its host rebuilds its start prompt from when it switches it (cli leadSwitchRequest.ts).
