@@ -73,10 +73,10 @@ describe('a pass', () => {
     expect(warned).toEqual(['[shipping] could not read GitHub: GH_SIGNED_OUT'])
   })
 
-  it('names a failure that is not gh\'s as GH_FAILED', async () => {
+  it('names a failure that is not gh\'s as GH_FAILED: a reading that breaks on what it was told', async () => {
     const reports: any[] = []
-    const { reporter } = setup((method, _path, body) => method === 'GET' ? ok({ swarms: [target()] }) : (reports.push(body), ok({ applied: 1, skipped: 0, capped: 0 })),
-      { run: async () => { throw new TypeError('boom') } })
+    const { reporter } = setup((method, _path, body) => method === 'GET' ? ok({ swarms: [target({ agents: [{ id: 'a1', name: 'Atlas', from: 9_000_000_000_000_000 }] })] })
+      : (reports.push(body), ok({ applied: 1, skipped: 0, capped: 0 })))
     await reporter.pass()
     expect(reports[0].agents).toEqual([{ agentId: 'a1', failed: 'GH_FAILED' }])
   })
@@ -172,6 +172,30 @@ describe('the schedule', () => {
     late.stop()
     await late.pass()
     expect(warned.length).toBe(2)
+  })
+
+  it('is not scheduled again by a pass that was running when it was stopped', async () => {
+    let answer: (reply: Reply) => void = () => {}
+    const backend = vi.fn(() => new Promise<Reply>(resolve => { answer = resolve }))
+    const reporter = new ShippingReporter(fakeCore({ account: { backend } }), { run: github(), random: () => 0 })
+    reporter.start()
+    await vi.advanceTimersByTimeAsync(SHIPPING_FIRST_MS)
+    expect(backend).toHaveBeenCalledTimes(1)
+    reporter.stop()
+    answer(ok({ swarms: [] }))
+    await vi.advanceTimersByTimeAsync(2 * SHIPPING_EVERY_MS)
+    expect(backend).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('reads with the machine\'s own gh and spreads its first look at random, unless told otherwise', async () => {
+    const core = fakeCore({ account: { backend: vi.fn(async () => ok({ swarms: [] })) } })
+    const reporter = new ShippingReporter(core)
+    reporter.start()
+    expect(vi.getTimerCount()).toBe(1)
+    await vi.advanceTimersByTimeAsync(2 * SHIPPING_FIRST_MS)
+    expect(core.account.backend).toHaveBeenCalledTimes(1)
+    reporter.stop()
   })
 
   it('keeps one timer, and none once stopped', async () => {
