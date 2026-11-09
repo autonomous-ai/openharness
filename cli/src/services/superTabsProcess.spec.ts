@@ -89,20 +89,20 @@ it('hears each turn end the core tells it, and asks the core for the answer of t
   const t = setup()
   const ends: unknown[] = []
   t.api().turns.onEnd(end => { ends.push(end) })
-  const prompt = 'a'.repeat(32)
-  t.wire().onEvent!({ kind: 'turn_end', event: { agentId: 'one', sessionId: 's1', aborted: false, prompt } })
-  expect(ends).toEqual([{ agentId: 'one', sessionId: 's1', aborted: false, prompt }])
+  const end = { agentId: 'one', sessionId: 's1', aborted: false, prompt: 'a'.repeat(32), turnId: 3 }
+  t.wire().onEvent!({ kind: 'turn_end', event: end })
+  expect(ends).toEqual([end])
   const query = vi.fn(async (name: string, payload: Record<string, unknown>) => name === 'turn_answer' ? { answer: payload.sessionId === 's1' ? 'Shipped.' : null } : {})
   t.wire().onConnected!({ query })
-  expect(await t.api().turns.answerOf('s1', prompt)).toBe('Shipped.')
-  expect(query).toHaveBeenCalledWith('turn_answer', { sessionId: 's1', prompt })
-  expect(await t.api().turns.answerOf('s2', prompt)).toBeNull()
+  expect(await t.api().turns.answerOf(end)).toBe('Shipped.')
+  expect(query).toHaveBeenCalledWith('turn_answer', { sessionId: 's1', prompt: end.prompt, turnId: 3 })
+  expect(await t.api().turns.answerOf({ ...end, sessionId: 's2' })).toBeNull()
   t.process.stop()
 })
 
 it('has no answer to give while the core is away', async () => {
   const t = setup()
-  await expect(t.api().turns.answerOf('s1', 'a'.repeat(32))).rejects.toThrow('Core disconnected')
+  await expect(t.api().turns.answerOf({ agentId: 'one', sessionId: 's1', aborted: false, prompt: 'a'.repeat(32), turnId: 3 })).rejects.toThrow('Core disconnected')
   t.process.stop()
 })
 

@@ -4,6 +4,7 @@ import { deliveryIn, endIn, turnsLink } from './turnsLink.js'
 
 const flush = () => new Promise((settle) => setTimeout(settle, 0))
 const PROMPT = 'a'.repeat(32)
+const END = { agentId: 'agent-1', sessionId: 's1', aborted: false, prompt: PROMPT, turnId: 7 }
 
 describe('delivered turns from a service in its own process', () => {
   it('asks the core to write a delivery and to take one back, and hears whether it could', async () => {
@@ -98,11 +99,12 @@ describe('delivered turns from a service in its own process', () => {
     const link = turnsLink(async () => ({}))
     const heard: TurnEnd[] = []
     const stop = link.turns.onEnd((event) => heard.push(event))
-    expect(link.heard({ kind: 'turn_end', event: { agentId: 'agent-1', sessionId: 's1', aborted: false, prompt: PROMPT } })).toBe(true)
-    expect(link.heard({ kind: 'turn_end', event: { agentId: 'agent-2', sessionId: 's2', aborted: true, prompt: 'b'.repeat(32) } })).toBe(true)
+    const other = { agentId: 'agent-2', sessionId: 's2', aborted: true, prompt: 'b'.repeat(32), turnId: 8 }
+    expect(link.heard({ kind: 'turn_end', event: END })).toBe(true)
+    expect(link.heard({ kind: 'turn_end', event: other })).toBe(true)
     stop()
-    expect(link.heard({ kind: 'turn_end', event: { agentId: 'agent-1', sessionId: 's1', aborted: false, prompt: PROMPT } })).toBe(true)
-    expect(heard).toEqual([{ agentId: 'agent-1', sessionId: 's1', aborted: false, prompt: PROMPT }, { agentId: 'agent-2', sessionId: 's2', aborted: true, prompt: 'b'.repeat(32) }])
+    expect(link.heard({ kind: 'turn_end', event: END })).toBe(true)
+    expect(heard).toEqual([END, other])
   })
 
   it('costs a turn-end listener that throws that end alone', () => {
@@ -112,7 +114,7 @@ describe('delivered turns from a service in its own process', () => {
     link.turns.onEnd(() => { throw new Error('boom') })
     link.turns.onEnd(() => { throw 'not an error' })
     link.turns.onEnd(after)
-    link.heard({ kind: 'turn_end', event: { agentId: 'agent-1', sessionId: 's1', aborted: false, prompt: PROMPT } })
+    link.heard({ kind: 'turn_end', event: END })
     expect(after).toHaveBeenCalledOnce()
     expect(log.mock.calls.map(([line]) => line)).toEqual([
       '[turns] a turn-end listener failed on agent-1 · boom',
@@ -124,10 +126,11 @@ describe('delivered turns from a service in its own process', () => {
     const heard = vi.fn()
     const link = turnsLink(async () => ({}))
     link.turns.onEnd(heard)
-    const whole = { agentId: 'a', sessionId: 's', aborted: false, prompt: PROMPT }
+    const whole = { ...END, agentId: 'a', sessionId: 's' }
     for (const event of [undefined, null, 'end', {}, { ...whole, sessionId: 4 }, { ...whole, agentId: 3 }, { ...whole, aborted: undefined }, { ...whole, aborted: 'no' },
-      // An end that says no turn, or none by a hash: from a core that does not say which turn ended.
-      { ...whole, prompt: undefined }, { ...whole, prompt: 'Ship it.' }, { ...whole, prompt: 4 }, { ...whole, prompt: 'A'.repeat(32) }, { ...whole, prompt: `${PROMPT}0` }]) {
+      // An end that says no turn, or none by a hash and a number: from a core that does not say which turn ended.
+      { ...whole, prompt: undefined }, { ...whole, prompt: 'Ship it.' }, { ...whole, prompt: 4 }, { ...whole, prompt: 'A'.repeat(32) }, { ...whole, prompt: `${PROMPT}0` },
+      { ...whole, turnId: undefined }, { ...whole, turnId: 0 }, { ...whole, turnId: -2 }, { ...whole, turnId: 1.5 }, { ...whole, turnId: '7' }, { ...whole, turnId: 2 ** 53 }]) {
       expect(link.heard({ kind: 'turn_end', event }), JSON.stringify(event)).toBe(false)
     }
     expect(link.heard({ kind: 'turn_end' })).toBe(false)
@@ -136,21 +139,21 @@ describe('delivered turns from a service in its own process', () => {
   })
 
   // The answer of the turn an end names is the core's to give (core/experimentQueries.ts `turn_answer`).
-  it('asks the core for the answer of the turn whose prompt an end carried, and says no answer when the core has none', async () => {
+  it('asks the core for the answer of the turn an end names, and says no answer when the core has none', async () => {
     const query = vi.fn(async (_q: string, payload: Record<string, unknown>) => ({ answer: payload.sessionId === 's1' ? 'Shipped.' : null }))
     const link = turnsLink(query)
-    expect(await link.turns.answerOf('s1', PROMPT)).toBe('Shipped.')
-    expect(await link.turns.answerOf('s2', PROMPT)).toBeNull()
-    expect(query.mock.calls).toEqual([['turn_answer', { sessionId: 's1', prompt: PROMPT }], ['turn_answer', { sessionId: 's2', prompt: PROMPT }]])
+    expect(await link.turns.answerOf(END)).toBe('Shipped.')
+    expect(await link.turns.answerOf({ ...END, sessionId: 's2' })).toBeNull()
+    expect(query.mock.calls).toEqual([['turn_answer', { sessionId: 's1', prompt: PROMPT, turnId: 7 }], ['turn_answer', { sessionId: 's2', prompt: PROMPT, turnId: 7 }]])
   })
 
   it('fails by a name when the core answers with an error or with no answer at all, and when it cannot be asked', async () => {
-    const asked = (answer: Record<string, unknown>) => turnsLink(async () => answer).turns.answerOf('s1', PROMPT)
+    const asked = (answer: Record<string, unknown>) => turnsLink(async () => answer).turns.answerOf(END)
     // Read as no answer, a core without the question (an older one), or that will not answer this process, would leave every reply
     // owed and none ever posted, with nothing in the log.
     for (const code of ['UNKNOWN_QUERY', 'NOT_SUPER_TABS', 'INVALID_REQUEST']) await expect(asked({ error: code }), code).rejects.toMatchObject({ name: code })
     for (const answer of [{}, { answer: 4 }, { answer: undefined }, { answer: { text: 'Shipped.' } }]) await expect(asked(answer), JSON.stringify(answer)).rejects.toMatchObject({ name: 'INVALID_ANSWER' })
-    await expect(turnsLink(async () => { throw new Error('not connected to the core') }).turns.answerOf('s1', PROMPT)).rejects.toThrow('not connected to the core')
+    await expect(turnsLink(async () => { throw new Error('not connected to the core') }).turns.answerOf(END)).rejects.toThrow('not connected to the core')
   })
 
   it('takes nothing else for a delivery\'s progress', () => {

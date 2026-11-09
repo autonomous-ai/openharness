@@ -95,7 +95,7 @@ function setup(messageFields: Record<string, unknown> = {}, claimFields: Record<
   }
   /** The agent's turn ends, as the core tells it. */
   // A live turn that ended, by the prompt it was asked, which is the message the host types unless a test says another.
-  const end = (turn: Partial<TurnEnd> = {}) => { for (const fn of endListeners) fn({ agentId: 'harness', sessionId: 'session', aborted: false, prompt: promptHash('ok, ship it'), ...turn }) }
+  const end = (turn: Partial<TurnEnd> = {}) => { for (const fn of endListeners) fn({ agentId: 'harness', sessionId: 'session', aborted: false, prompt: promptHash('ok, ship it'), turnId: 1, ...turn }) }
   const saved = () => JSON.parse(readFileSync(hostJournalFile(dir, 'machine-1'), 'utf8'))
   return { core, call, open, event, end, receipts, holds, log, row, wait: (ms: number) => { clock += ms }, saved, dir, remove: () => { removed = true },
     /** What the server's daemon socket tells this machine (backend lib/adapterWs.ts). */
@@ -5927,7 +5927,7 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
   }
   /** The core has [assistantText] for the turn that was asked [userMessage]. */
   const answered = (t: ReturnType<typeof setup>, userMessage = 'ok, ship it', assistantText = 'Shipped.') =>
-    vi.mocked(t.core.turns.answerOf).mockImplementation(async (_sessionId, prompt) => prompt === promptHash(userMessage) ? assistantText : null)
+    vi.mocked(t.core.turns.answerOf).mockImplementation(async end => end.prompt === promptHash(userMessage) ? assistantText : null)
   /** What the host started at a turn's end is promises with nothing to wait for in these specs: one turn of the event loop finishes it. */
   const flush = () => new Promise(resolve => setImmediate(resolve))
 
@@ -6103,7 +6103,7 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
       await vi.waitFor(() => expect(posts).toHaveLength(1))
       expect(posts[0]).toEqual({ path: '/api/super-tabs/tab/commands', operationId: 'reply-delivery', asAgentId: 'agent',
         command: { type: 'message.send', conversationId: 'chat', text: 'Shipped.', replyTo: null, answers: 'message', recipientIds: [] } })
-      expect(t.core.turns.answerOf).toHaveBeenCalledWith('session', promptHash('ok, ship it'))
+      expect(t.core.turns.answerOf).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'session', prompt: promptHash('ok, ship it'), turnId: 1 }))
       t.end(); t.end()
       await flush()
       expect(posts).toHaveLength(1)

@@ -22,7 +22,7 @@ function setup() {
   let clock = 1_000_000
   const journal: { replies?: Record<string, Owed> } = {}
   const log = vi.fn(), save = vi.fn()
-  const answerOf = vi.fn(async (_sessionId: string, _prompt: string) => 'Shipped.' as string | null)
+  const answerOf = vi.fn(async (_end: TurnEnd) => 'Shipped.' as string | null)
   const backend = vi.fn(async (..._args: unknown[]) => ok as { status: number; body: Record<string, unknown> })
   const core = fakeCore({ turns: { answerOf }, account: { backend } as never })
   const deps = { now: () => clock, log, save, typedId: (id: string) => `typed:${id}`, refused: refused_ }
@@ -31,7 +31,7 @@ function setup() {
   const owe = (deliveryId = 'd1', text = 'Ship it.', message: Record<string, unknown> = {}, agentId = 'agent') =>
     replies.owe({ deliveryId, tabId: 'tab', agentId, harnessId: agentId === 'agent' ? 'harness' : `harness-${agentId}`, name: 'Mia' },
       { id: `m-${deliveryId}`, conversationId: 'chat', ...message }, text)
-  const end = (event: Partial<TurnEnd> = {}) => replies.ended({ agentId: 'harness', sessionId: 'session', aborted: false, prompt: PROMPT, ...event })
+  const end = (event: Partial<TurnEnd> = {}) => replies.ended({ agentId: 'harness', sessionId: 'session', aborted: false, prompt: PROMPT, turnId: 1, ...event })
   /** The end of the turn that was asked [text]. */
   const endOf = (text: string, event: Partial<TurnEnd> = {}) => end({ prompt: promptHash(text), ...event })
   const posts = () => backend.mock.calls.filter(([method, path]) => method === 'POST' && String(path).endsWith('/commands'))
@@ -53,7 +53,7 @@ describe('a reply owed to a person in their agent\'s own chat', () => {
     const t = setup()
     t.owe()
     await t.end()
-    expect(t.answerOf).toHaveBeenCalledWith('session', PROMPT)
+    expect(t.answerOf).toHaveBeenCalledWith({ agentId: 'harness', sessionId: 'session', aborted: false, prompt: PROMPT, turnId: 1 })
     expect(t.posts()).toEqual([['POST', '/api/super-tabs/tab/commands', {
       operationId: 'reply-d1', asAgentId: 'agent',
       command: { type: 'message.send', conversationId: 'chat', text: 'Shipped.', replyTo: null, answers: 'm-d1', recipientIds: [] },
@@ -95,12 +95,12 @@ describe('a reply owed to a person in their agent\'s own chat', () => {
     expect(t.answerOf).not.toHaveBeenCalled()
     const restarted: { replies?: Record<string, Owed> } = { replies: adoptReplies(saved.replies, t.log) }
     const next = new AgentReplies(t.core, restarted, t.deps)
-    await next.ended({ agentId: 'harness', sessionId: 'session', aborted: false, prompt: PROMPT })
+    await next.ended({ agentId: 'harness', sessionId: 'session', aborted: false, prompt: PROMPT, turnId: 1 })
     expect(t.posts()).toHaveLength(1)
     expect(restarted.replies).toBeUndefined()
     // Posted, so what that host saved after it holds nothing: one that starts from it owes nothing, and posts nothing.
     const after = new AgentReplies(t.core, { replies: adoptReplies(JSON.parse(JSON.stringify(restarted)).replies, t.log) }, t.deps)
-    await after.ended({ agentId: 'harness', sessionId: 'session', aborted: false, prompt: PROMPT })
+    await after.ended({ agentId: 'harness', sessionId: 'session', aborted: false, prompt: PROMPT, turnId: 1 })
     expect(t.posts()).toHaveLength(1)
   })
 
@@ -144,7 +144,7 @@ describe('a reply owed to a person in their agent\'s own chat', () => {
     t.owe('d1', 'First.')
     t.wait(10)
     t.owe('d2', 'Second.')
-    t.answerOf.mockImplementation(async (_sessionId, prompt) => prompt === promptHash('First.') ? 'The first answer.' : prompt === promptHash('Second.') ? 'The second answer.' : null)
+    t.answerOf.mockImplementation(async end => end.prompt === promptHash('First.') ? 'The first answer.' : end.prompt === promptHash('Second.') ? 'The second answer.' : null)
     await t.endOf('First.')
     expect(texts(t)).toEqual(['The first answer.'])
     expect(Object.keys(t.journal.replies!)).toEqual(['d2'])
@@ -165,7 +165,7 @@ describe('a reply owed to a person in their agent\'s own chat', () => {
     expect(t.lines()).toEqual(['No reply posted for delivery d1 of agent agent: its turn was interrupted.'])
   })
 
-  it('posts nothing when the host stops while the answer is being read, and keeps the reply owed for the host that starts from the journal', async () => {
+  it('posts nothing when the host stops while the answer is being read, saying the reply is dropped: its turn is over', async () => {
     const t = setup()
     t.owe()
     let give!: (answer: string) => void
@@ -176,7 +176,28 @@ describe('a reply owed to a person in their agent\'s own chat', () => {
     give('Shipped.')
     await done
     expect(t.posts()).toHaveLength(0)
-    expect(Object.keys(t.journal.replies!)).toEqual(['d1'])
+    expect(t.journal.replies).toBeUndefined()
+    expect(t.lines()).toEqual(['Dropped the reply to delivery d1 of agent agent: the host stopped.'])
+  })
+
+  // Messages of the same words are told apart by their turns, not by their words, and the reply of each is taken before its answer
+  // is read, so the order the reads come back in cannot swap their answers.
+  it('answers two messages of the same words each from its own turn, whichever read comes back first', async () => {
+    const t = setup()
+    t.owe('d1', 'Same words.')
+    t.wait(10)
+    t.owe('d2', 'Same words.')
+    const reads = new Map<number, (answer: string) => void>()
+    t.answerOf.mockImplementation(end => new Promise<string>(resolve => { reads.set(end.turnId, resolve) }))
+    const first = t.endOf('Same words.', { turnId: 1 }), second = t.endOf('Same words.', { turnId: 2 })
+    await vi.advanceTimersByTimeAsync(0)
+    expect([...reads.keys()]).toEqual([1, 2])
+    reads.get(2)!('The second answer.')
+    reads.get(1)!('The first answer.')
+    await Promise.all([first, second])
+    expect(t.posts().map(([, , body]) => { const b = body as { operationId: string; command: { answers: string; text: string } }; return [b.operationId, b.command.answers, b.command.text] }))
+      .toEqual([['reply-d2', 'm-d2', 'The second answer.'], ['reply-d1', 'm-d1', 'The first answer.']])
+    expect(t.journal.replies).toBeUndefined()
   })
 
   it('posts an answer cut to what the backend takes, with an ellipsis and never in the middle of an emoji', async () => {

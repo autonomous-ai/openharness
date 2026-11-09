@@ -318,21 +318,24 @@ it('asks the core about the agents it is given, keeping only the first 64 ids th
 
 // The Swarm host posts the answer of the turn that ended into its agent's person's chat (superTabs/agentReplies.ts); in its own
 // process it asks the core for the answer of the turn whose prompt its end carried.
-it('gives the Swarm service the answer of the turn of a session that has a prompt, as the core has it, and no other service', async () => {
+it('gives the Swarm service the answer of the turn an end names, as the core has it, and no other service', async () => {
   const PROMPT = 'a'.repeat(32)
-  const answerOf = vi.fn(async (sessionId: string, prompt: string) => sessionId === 'session-1' && prompt === PROMPT ? 'Shipped.' : null)
+  const ask = { sessionId: 'session-1', prompt: PROMPT, turnId: 7 }
+  const answerOf = vi.fn(async (end: { sessionId: string; prompt: string; turnId: number }) => end.sessionId === 'session-1' && end.prompt === PROMPT && end.turnId === 7 ? 'Shipped.' : null)
   const core = fakeCore({ turns: { answerOf } } as never)
   const allowed = new Set(['superTabs', 'orchestrator'])
-  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'turn_answer', { sessionId: 'session-1', prompt: PROMPT })).toEqual({ answer: 'Shipped.' })
-  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'turn_answer', { sessionId: 'no-such-session', prompt: PROMPT })).toEqual({ answer: null })
-  for (const payload of [{ prompt: PROMPT }, { sessionId: 4, prompt: PROMPT }, { sessionId: 'x'.repeat(257), prompt: PROMPT }, { sessionId: 'session-1' },
-    { sessionId: 'session-1', prompt: 'Ship it.' }, { sessionId: 'session-1', prompt: 'A'.repeat(32) }, { sessionId: 'session-1', prompt: `${PROMPT}0` }, { sessionId: 'session-1', prompt: null }]) {
+  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'turn_answer', ask)).toEqual({ answer: 'Shipped.' })
+  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'turn_answer', { ...ask, sessionId: 'no-such-session' })).toEqual({ answer: null })
+  expect(answerOf).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'no-such-session', prompt: PROMPT, turnId: 7 }))
+  for (const payload of [{ ...ask, sessionId: undefined }, { ...ask, sessionId: 4 }, { ...ask, sessionId: 'x'.repeat(257) }, { ...ask, prompt: undefined },
+    { ...ask, prompt: 'Ship it.' }, { ...ask, prompt: 'A'.repeat(32) }, { ...ask, prompt: `${PROMPT}0` }, { ...ask, prompt: null },
+    { ...ask, turnId: undefined }, { ...ask, turnId: 0 }, { ...ask, turnId: -1 }, { ...ask, turnId: 1.5 }, { ...ask, turnId: '7' }, { ...ask, turnId: null }, { ...ask, turnId: 2 ** 53 }]) {
     expect(await answerExperimentQuery(core, allowed, 'superTabs', 'turn_answer', payload), JSON.stringify(payload)).toEqual({ error: 'INVALID_REQUEST' })
   }
   expect(answerOf).toHaveBeenCalledTimes(2)
   answerOf.mockClear()
-  expect(await answerExperimentQuery(core, allowed, 'orchestrator', 'turn_answer', { sessionId: 'session-1', prompt: PROMPT })).toEqual({ error: 'NOT_SUPER_TABS' })
-  expect(await answerExperimentQuery(core, allowed, 'gateway', 'turn_answer', { sessionId: 'session-1', prompt: PROMPT })).toEqual({ error: 'NOT_AN_EXPERIMENT' })
+  expect(await answerExperimentQuery(core, allowed, 'orchestrator', 'turn_answer', ask)).toEqual({ error: 'NOT_SUPER_TABS' })
+  expect(await answerExperimentQuery(core, allowed, 'gateway', 'turn_answer', ask)).toEqual({ error: 'NOT_AN_EXPERIMENT' })
   expect(answerOf).not.toHaveBeenCalled()
 })
 
