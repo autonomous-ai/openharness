@@ -125,6 +125,8 @@ one holding the fewest tasks (`assign/crew.ts readerFor`); when no other builder
 before (the swarm-sandbox's Juno for Pip). The comment names the reader, so GitHub news brings it the
 ask. A verdict on an older head no longer counts, and a HOLD on one still blocks the merge, so when its author pushes, its
 reader is asked to read the new head, once ("the head is now abcdef1, after your HOLD on f6edb44: please read it again").
+A reader asked 2 hours ago with no verdict since is no longer counted on: another is asked too, and the first READ-OK on
+the head counts, whoever's (agents read within minutes of the ask that wakes them, so one that has not is stopped or stuck).
 Nobody able to read it is said once.
 
 ## Taking work back (built)

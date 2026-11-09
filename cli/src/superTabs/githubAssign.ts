@@ -28,6 +28,8 @@ const SELF = 'Harness'
 const MEASURES_PER_PASS = 5, MAX_MEASURED = 500
 /** How many open pull requests are read for readers each pass, as the merger reads them. */
 const MAX_PULLS = 30
+/** How long a reader asked for a head has to read it before another reader is asked too. */
+const READ_WAIT_MS = 2 * 60 * 60_000
 /** How Harness's ask about a quiet task begins, after the builder's name: a restart finds it by these words. */
 const QUIET_ASKED = 'nothing has moved on this task for '
 /** Harness's ask of a reader, as askReaders writes it: who was asked, and for which head. */
@@ -209,20 +211,34 @@ export class GitHubAssign {
       const onHead = (sha: string) => head.startsWith(sha)
       if ([...readers.values()].some(r => r.verdict === 'HOLD' && onHead(r.sha))) continue
       for (const task of tasksOf(pull)) withReaders.add(task)
-      // Who Harness asked, for which heads.
-      const asked = new Map<string, Set<string>>()
+      // Who Harness asked, for which heads, and when.
+      const now = this.now()
+      const asked = new Map<string, Map<string, number>>()
       for (const c of comments) {
         const found = ASKED.exec(String(c.body ?? ''))
-        if (found) asked.set(found[1]!.toLowerCase(), new Set([...asked.get(found[1]!.toLowerCase()) ?? [], found[2]!]))
+        if (!found) continue
+        const heads = asked.get(found[1]!.toLowerCase()) ?? new Map<string, number>()
+        // GitHub dates every comment; one it did not is taken as asked now, as before.
+        const at = Date.parse(String(c.created_at ?? ''))
+        heads.set(found[2]!, Math.max(heads.get(found[2]!) ?? 0, Number.isFinite(at) ? at : now))
+        asked.set(found[1]!.toLowerCase(), heads)
       }
+      // A reader asked [READ_WAIT_MS] ago with no verdict since is no longer counted on: another is asked too, and the first
+      // READ-OK on the head counts, whoever's. Agents read within minutes of the ask that wakes them, so one that has not is
+      // stopped or stuck, and its pull request would wait on it for ever. A reader whose verdict is on an older head is
+      // measured from its ask for this head; one that never gave one, from its last ask.
+      const lastAsk = (name: string, thisHead: boolean) =>
+        Math.max(0, ...[...asked.get(name) ?? []].filter(([sha]) => !thisHead || onHead(sha)).map(([, at]) => at))
       const ok = [...readers].filter(([reader, r]) => reader !== author && r.verdict === 'READ-OK' && onHead(r.sha)).map(([reader]) => reader)
       const stale = [...readers].filter(([reader, r]) => reader !== author && !onHead(r.sha))
-      const waiting = [...asked.keys()].filter(name => !readers.has(name))
+      const waiting = [...asked.keys()].filter(name => !readers.has(name) && now - lastAsk(name, false) < READ_WAIT_MS)
       for (const [reader, r] of stale) {
-        if ([...asked.get(reader) ?? []].some(onHead)) continue
+        if (lastAsk(reader, true)) continue
         await this.ask(repo, number, head, r.name, `the head is now ${head.slice(0, 7)}, after your ${r.verdict} on ${r.sha.slice(0, 7)}: please read it again`)
       }
-      let need = (twoReads ? 2 : 1) - ok.length - stale.length - waiting.length
+      // A stale reader not asked again yet is asked just now, above.
+      const rereading = stale.filter(([reader]) => { const at = lastAsk(reader, true); return at === 0 || now - at < READ_WAIT_MS })
+      let need = (twoReads ? 2 : 1) - ok.length - rereading.length - waiting.length
       const skip = new Set([...asked.keys(), ...readers.keys()])
       while (need-- > 0) {
         // A team of one builder still has its PM, who read for it before Harness asked readers (the swarm-sandbox, where
