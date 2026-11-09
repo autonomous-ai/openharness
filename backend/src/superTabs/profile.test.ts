@@ -58,19 +58,53 @@ describe('what readers get of a person', () => {
 
 describe('avatars', () => {
   const config = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
-  // The pictures already set stay: readers learn there is one, its stored key stays on the server and a link comes only signed
-  // (avatarLinks.ts), and only members read it. Nothing sets one any more (2026-11-09).
-  it('shows avatars to members only, an upload as no more than that there is one', () => {
+  const upload = { kind: 'upload', key: 'avatars/tab/0123abcd/avatar' }
+  const withPictures = () => {
     const f = fixture()
     f.invite()
-    const worker = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'worker-h', name: 'worker-h', configuration: config, lead: false },
-      peer, { contribution: { machineOwnerId: 'host-owner', contributorId: peer.userId } }).result.agentId as string
-    const upload = { kind: 'upload', key: 'avatars/tab/0123abcd/avatar' }
+    const add = (harnessId: string, contributor: Extract<Actor, { kind: 'person' }>, lead = false) =>
+      f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId, name: harnessId, configuration: config, lead }, contributor,
+        { contribution: { machineOwnerId: 'host-owner', contributorId: contributor.userId } }).result.agentId as string
+    const lead = add('lead-h', owner, true), worker = add('worker-h', peer)
+    // As the picture commands set them before 2026-11-09.
     Object.assign(f.member('owner')!, { avatar: upload })
-    Object.assign(f.state.agents.find(a => a.id === worker)!, { avatar: upload })
+    for (const id of [lead, worker]) Object.assign(f.state.agents.find(a => a.id === id)!, { avatar: { kind: 'preset', key: 'owl' } })
+    const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+    const avatarOf = (id: string) => f.state.agents.find(a => a.id === id)!.avatar
+    return Object.assign(f, { lead, worker, as, avatarOf })
+  }
+
+  // The pictures already set stay: readers learn there is one, its stored key stays on the server and a link comes only signed
+  // (avatarLinks.ts), and only members read it.
+  it('shows avatars to members only, an upload as no more than that there is one', () => {
+    const f = withPictures()
     const seen = visibleState(f.state, peer)
     expect(seen.people.find(p => p.id === 'owner')!.avatar).toEqual({ kind: 'upload' })
-    expect(seen.agents.find(a => a.id === worker)!.avatar).toEqual({ kind: 'upload' })
+    expect(seen.agents.find(a => a.id === f.worker)!.avatar).toEqual({ kind: 'preset', key: 'owl' })
     expect(() => visibleState(f.state, stranger)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+  })
+
+  // Nothing sets a picture any more (2026-11-09); an older app that picks one is told so where it picked it.
+  it('refuses a new picture in words, a person\'s or an agent\'s, built in or uploaded, and changes nothing', () => {
+    const f = withPictures()
+    const refused = expect.objectContaining({ code: 'AVATARS_RETIRED', status: 410, message: 'Pictures can’t be changed any more.' })
+    expect(() => f.run({ type: 'member.avatar', avatar: { kind: 'preset', key: 'fox' } })).toThrow(refused)
+    expect(() => f.run({ type: 'member.avatar', avatar: { kind: 'upload', id: 'u1' } })).toThrow(refused)
+    expect(() => f.run({ type: 'agent.avatar', agentId: f.worker, avatar: { kind: 'preset', key: 'cat' } }, peer)).toThrow(refused)
+    expect(f.member('owner')!.avatar).toEqual(upload)
+    expect(f.avatarOf(f.worker)).toEqual({ kind: 'preset', key: 'owl' })
+  })
+
+  // So nobody keeps a photo of themselves they want gone (review of #3712).
+  it('still clears a picture: a person\'s own, an agent\'s by its contributor or an agent of its project, and nobody else\'s', () => {
+    const f = withPictures()
+    f.run({ type: 'member.avatar', avatar: null })
+    expect(f.member('owner')!.avatar).toBeUndefined()
+    expect(() => f.run({ type: 'agent.avatar', agentId: f.lead, avatar: null }, peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    f.run({ type: 'agent.avatar', agentId: f.worker, avatar: null }, peer)
+    expect(f.avatarOf(f.worker)).toBeUndefined()
+    f.run({ type: 'agent.avatar', agentId: f.lead, avatar: null }, f.as(f.worker))
+    expect(f.avatarOf(f.lead)).toBeUndefined()
+    expect(() => f.run({ type: 'member.avatar', avatar: null }, f.as(f.worker))).toThrow(expect.objectContaining({ code: 'HUMAN_REQUIRED' }))
   })
 })

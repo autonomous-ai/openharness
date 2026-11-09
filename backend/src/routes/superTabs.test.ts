@@ -220,7 +220,7 @@ describe('the retired picture upload', () => {
   it('refuses the form an older app sends, whatever the Swarm, agent or picture, and reads nothing', async () => {
     const boundary = 'avatar-boundary'
     const form = (bytes: string) => `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="me.png"\r\nContent-Type: image/png\r\n\r\n${bytes}\r\n--${boundary}--\r\n`
-    for (const [url, bytes] of [['/api/super-tabs/tab-1/avatars', '\x89PNG'], ['/api/super-tabs/tab-2/avatars?asAgentId=agent-1', 'x'.repeat(2 * 1024 * 1024)]]) {
+    for (const [url, bytes] of [['/api/super-tabs/tab-1/avatars', '\x89PNG'], ['/api/super-tabs/tab-2/avatars?asAgentId=agent-1', 'x'.repeat(1536 * 1024)]]) {
       const res = await app.inject({ method: 'POST', url, headers: { 'content-type': `multipart/form-data; boundary=${boundary}` }, payload: form(bytes) })
       expect(res.statusCode, url).toBe(410)
       expect(res.json(), url).toEqual({ success: false, error: { code: 'AVATARS_RETIRED', message: 'Pictures can’t be changed any more.' } })

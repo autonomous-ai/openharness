@@ -98,12 +98,23 @@ describe('the profile commands an older app still sends', () => {
     const tab = await swarm()
     const before = (await read(tab, peer)).body.data.members
     for (const command of [{ type: 'member.status', status: { text: 'Heads down', emoji: '🎯' } }, { type: 'member.timeZone', timeZone: 'Asia/Ho_Chi_Minh' },
-      { type: 'member.username', username: 'pilot' }, { type: 'member.name', name: 'Minh Nguyen' },
-      { type: 'member.avatar', avatar: { kind: 'preset', key: 'fox' } }, { type: 'member.avatar', avatar: { kind: 'upload', id: 'avatar-1' } },
-      { type: 'agent.avatar', agentId: 'lead', avatar: null }] as unknown as Command[]) {
+      { type: 'member.username', username: 'pilot' }, { type: 'member.name', name: 'Minh Nguyen' }] as unknown as Command[]) {
       expect((await run(tab, command)).result, command.type).toEqual({ ignored: true, note: RETIRED_NOTE })
     }
     expect((await read(tab, peer)).body.data.members).toEqual(before)
+  })
+
+  it('refuses a new picture in words, built in or uploaded, and the clearing of one still clears it', async () => {
+    const tab = await swarm()
+    await setPicture(tab, owner.sub, await keepPicture(pictures, tab))
+    const refused = { code: 'AVATARS_RETIRED', status: 410, message: 'Pictures can’t be changed any more.' }
+    await expect(run(tab, { type: 'member.avatar', avatar: { kind: 'preset', key: 'fox' } })).rejects.toMatchObject(refused)
+    await expect(run(tab, { type: 'member.avatar', avatar: { kind: 'upload', id: 'avatar-1' } })).rejects.toMatchObject(refused)
+    const mine = async () => ((await read(tab, peer)).body.data.members as Array<{ key: string; data: { avatar?: unknown } }>).find(m => m.key === owner.sub)!.data.avatar
+    expect(await mine()).toEqual({ kind: 'upload' })
+    await run(tab, { type: 'member.avatar', avatar: null })
+    expect(await mine()).toBeUndefined()
+    expect((await read(tab, peer)).body.data.derived?.avatars?.[`person:${owner.sub}`]).toBeUndefined()
   })
 
   it('refuses the picture it posts first in words, for everyone and for a Swarm that is not there, and keeps nothing', async () => {

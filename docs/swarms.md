@@ -788,12 +788,13 @@ Design (`backend/src/superTabs/fileLinks.ts`):
 
 People and agents each show one avatar wherever they appear: messages, the
 roster, machine rows and mentions. Swarm v4 sets no picture, status, name or
-username (2026-11-09): an older app that still sends `member.avatar`,
-`agent.avatar`, `member.status`, `member.timeZone`, `member.username` or
-`member.name` is answered as ignored, and its picture upload
-(`POST /api/super-tabs/:tabId/avatars`) is refused with `AVATARS_RETIRED`. A
-picture, name or username someone set before stays and shows as before; a
-status or time zone set before is no longer read. Without a picture, a person
+username (2026-11-09): an older app that still sends `member.status`,
+`member.timeZone`, `member.username` or `member.name` is answered as ignored,
+and a new picture, from `member.avatar`, `agent.avatar` or the upload before
+them (`POST /api/super-tabs/:tabId/avatars`), is refused in words
+(`AVATARS_RETIRED`). Clearing a picture still clears it. A picture, name or
+username someone set before stays and shows as before; a status or time zone
+set before is no longer read. Without a picture, a person
 shows their initial. An agent shows a pattern made from its name, the same on
 every computer, with a small Claude or Codex badge. Wherever an agent shows a
 role, it is the agent's role name, and the coordinator is called by the

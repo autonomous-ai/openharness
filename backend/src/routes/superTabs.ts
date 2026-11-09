@@ -42,6 +42,7 @@ import { reminderWait } from '../superTabs/reminders.js'
 import { NOTIFY_LEVELS } from '../superTabs/chatSettings.js'
 import { HostReads } from '../superTabs/read/host.js'
 import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
+import { PICTURES_RETIRED } from '../superTabs/retired.js'
 import { isTeamSession } from '../lib/teamSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { DEFAULT_DAYS, MAX_DAYS } from '../superTabs/costs/read.js'
@@ -236,7 +237,6 @@ async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
  */
 export const HOT_BODY_LIMIT = 128 * 1024
 const updateRequired = (_req: unknown, reply: FastifyReply) => sendError(reply, UPDATE_REQUIRED.message, UPDATE_REQUIRED.code, UPDATE_REQUIRED.status)
-const AVATARS_RETIRED = { code: 'AVATARS_RETIRED', status: 410, message: 'Pictures can’t be changed any more.' } as const
 
 /** The store this server runs on. Loaded only here: importing the bus opens its Redis connections. */
 async function productionStore(github: GitHubTokens | null, approvals: Approvals): Promise<SuperTabStore> {
@@ -737,13 +737,13 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof voiceParams>; Querystring: z.infer<typeof voiceQuery>; Body: z.infer<typeof emptyBody> }>('/api/super-tabs/:tabId/attachments/:attachmentId/voice',
     { bodyLimit: 1024, preHandler: [validateParams(voiceParams), validateQuery(voiceQuery), validateBody(emptyBody)] },
     (req, reply) => respond(reply, () => store.readVoice(req.user!, req.params.tabId, req.params.attachmentId, req.query.lang ?? 'en', req.query.asAgentId)))
-  // An older app sends a picture here before it sets it with `member.avatar` or `agent.avatar`, both retired (superTabs/retired.ts). Like
-  // `updateRequired`, one answer for everyone that reads no Swarm. It refuses instead of answering ok: the app reads the new picture's
-  // id out of an ok answer and fails on one without it, while a refusal is what it already shows in words. The route goes with the
-  // two commands. The multipart plugin only lets the form reach this answer; nothing of it is read.
+  // An older app uploads a picture here before it sets it with `member.avatar` or `agent.avatar` (superTabs/retired.ts
+  // PICTURES_RETIRED). Like `updateRequired`, one answer for everyone that reads no Swarm. The form is read to its end and thrown
+  // away first, up to the 1 MB a picture was allowed and a little more: a refusal sent while the daemon still streams the upload
+  // in (cli hookServer.ts) could reach the person as a broken connection instead of these words.
   await app.register(async scope => {
-    await scope.register(multipart)
-    scope.post('/api/super-tabs/:tabId/avatars', (_req, reply) => sendError(reply, AVATARS_RETIRED.message, AVATARS_RETIRED.code, AVATARS_RETIRED.status))
+    scope.addContentTypeParser('multipart/form-data', { parseAs: 'buffer', bodyLimit: 2 * 1024 * 1024 }, (_req, _body, done) => done(null))
+    scope.post('/api/super-tabs/:tabId/avatars', (_req, reply) => sendError(reply, PICTURES_RETIRED.message, PICTURES_RETIRED.code, PICTURES_RETIRED.status))
   })
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof mentionQuery> }>('/api/super-tabs/:tabId/mentions',
     { preHandler: [validateParams(tabParams), validateQuery(mentionQuery)] },

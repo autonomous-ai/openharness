@@ -47,7 +47,7 @@ import { threadSummaries } from './threads.js'
 import { closeProposal, databaseProposalReads, openProposalRows, openProposals, proposalChat, type OpenProposal } from './proposals.js'
 import { projectList, type ProjectList } from './projectList.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
-  type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
+  type Attachment, type Attachments, type AvatarStore } from './attachments.js'
 import { makeThumbnail, MAX_READ_BACK_BYTES, pictureFields, THUMBNAILED_TYPES, thumbKeyOf, thumbnailsReserve, type StoredImage } from './thumbnails.js'
 import { FileLinks } from './fileLinks.js'
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -2618,9 +2618,8 @@ export class SuperTabStore {
     // A file's name is shown in the chat like its message, so it never keeps a credential either.
     const name = attachmentName.transform(value => redactCredentials(value).text).safeParse(file.name), mime = attachmentMime.safeParse(file.mime)
     if (!name.success || !mime.success) fail('INVALID_ATTACHMENT', 'Attach a file with a printable name and a content type.', 400)
-    const key = await this.uploader(tabId, tx => this.poster(tx, user, tabId, conversationId, asAgentId).then(p => p.actor))
-    const row = await this.keep(attachments.store, attachments.prefix, tabId, key, { name: name.data, conversationId },
-      async () => checkedType(mime.data, file.body), file.body, MAX_FORM_ATTACHMENT_BYTES, (objectKey, bytes) => this.pictureOf(attachments, objectKey, bytes))
+    const key = await this.uploader(user, tabId, conversationId, asAgentId)
+    const row = await this.keep(attachments, tabId, key, { name: name.data, conversationId }, () => checkedType(mime.data, file.body), file.body)
     return { attachment: await this.linkedFile(tabId, { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey),
       ...pictureFields(row.image) }) }
   }
@@ -2831,22 +2830,22 @@ export class SuperTabStore {
     return facts ? { voice: facts } : fail('VOICE_TRANSCRIBING', 'This voice message is still being transcribed. Try again in a moment.', 409)
   }
 
-  /** The uploading actor's key, once it may upload and is under its hourly allowance: unsent files cost bucket space. */
-  private async uploader(tabId: string, allowed: (tx: Transaction) => Promise<Actor>): Promise<string> {
+  /** The uploading actor's key, once it may post in [conversationId] and is under its hourly allowance: unsent files cost bucket
+   *  space. */
+  private async uploader(user: AuthUser, tabId: string, conversationId: string, asAgentId?: string): Promise<string> {
     return transaction(this.db, async tx => {
-      const key = actorKey(await allowed(tx))
+      const key = actorKey((await this.poster(tx, user, tabId, conversationId, asAgentId)).actor)
       const recent = await tx.superTabAttachment.count({ where: { tabId, actorKey: key, createdAt: { gte: new Date(this.now() - 3_600_000) } } })
       if (recent >= 200) fail('RATE_LIMITED', 'You attached 200 files in the last hour. Wait before attaching more.', 429)
       return key
     })
   }
 
-  /** Streams one file into the bucket under a random key, as the type `typed` decides from its first bytes, and records it. */
-  private async keep(bucket: AttachmentStore, prefix: string, tabId: string, actorKey: string, file: { name: string; conversationId: string },
-    typed: () => Promise<{ mime: string; body: Readable }>, original: Readable, cap: number,
-    /** Given the stored picture's bytes, its facts and stored thumbnail (pictureOf); a picture is held in memory for it, up to `cap`. */
-    thumbnail?: (objectKey: string, bytes: Buffer) => Promise<StoredImage | null>) {
-    const objectKey = objectKeyFor(prefix, tabId, file.name)
+  /** Streams one chat file into the bucket under a random key, as the type `typed` decides from its first bytes, and records it. A
+   *  picture is held in memory, up to the form's limit, for its size and thumbnail (pictureOf). */
+  private async keep(attachments: Attachments, tabId: string, actorKey: string, file: { name: string; conversationId: string },
+    typed: () => Promise<{ mime: string; body: Readable }>, original: Readable) {
+    const bucket = attachments.store, objectKey = objectKeyFor(attachments.prefix, tabId, file.name)
     let size: number, mime: string
     const held: Buffer[] = []
     // A place to hold the picture whole for its thumbnail, given back when its thumbnail is made or the upload fails.
@@ -2854,19 +2853,17 @@ export class SuperTabStore {
     try {
       const checked = await typed()
       mime = checked.mime
-      if (thumbnail && THUMBNAILED_TYPES.has(mime)) place = thumbnailsReserve()
+      if (THUMBNAILED_TYPES.has(mime)) place = thumbnailsReserve()
       const tee = place !== null
       const body = !tee ? checked.body : Readable.from((async function* () {
         for await (const chunk of checked.body) { held.push(Buffer.from(chunk)); yield chunk }
       })())
-      size = await bucket.put(objectKey, { name: file.name, mime }, body, cap)
+      size = await bucket.put(objectKey, { name: file.name, mime }, body, MAX_FORM_ATTACHMENT_BYTES)
     } catch (error) {
       place?.()
       held.length = 0
       if (error instanceof SuperTabError) throw error
-      if (error instanceof AttachmentTooLarge) {
-        fail('ATTACHMENT_TOO_LARGE', error.message, 413)
-      }
+      if (error instanceof AttachmentTooLarge) fail('ATTACHMENT_TOO_LARGE', error.message, 413)
       // The client's own stream breaking is the request's; anything else is the bucket's, and the person can try again.
       if (original.errored || (error && typeof error === 'object' && 'code' in error && String(error.code).startsWith('FST_'))) throw error
       logger.error('super-tab attachment storage failed', { tabId, error: error instanceof Error ? error.message : String(error) })
@@ -2874,10 +2871,10 @@ export class SuperTabStore {
     }
     // After the original is stored, so a picture that will not decode is just a file. Never fails the upload.
     // The chunks go as soon as they are one buffer, so a picture waiting for its thumbnail is held once.
-    const whole = thumbnail && held.length ? Buffer.concat(held) : null
+    const whole = held.length ? Buffer.concat(held) : null
     held.length = 0
     let image: StoredImage | null = null
-    try { image = whole ? await thumbnail!(objectKey, whole).catch(() => null) : null } finally { place?.() }
+    try { image = whole ? await this.pictureOf(attachments, objectKey, whole).catch(() => null) : null } finally { place?.() }
     try {
       return await this.db.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId: file.conversationId,
         actorKey, name: file.name, mime, size, objectKey,
