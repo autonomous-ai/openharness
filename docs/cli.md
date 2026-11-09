@@ -95,7 +95,12 @@ owner's own computers (`OWNER_REQUIRED` for a collaborator, never a guest). `nam
 account can keep: trimmed, 1 to 100 characters and at most 200 bytes with `.md`, no `/`, `\`, `< > : " | ? *` or control
 character, not starting or ending with a dot, and not a Windows device name (`CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`,
 `LPT0`-`LPT9`, in any case, with or without an extension); anything else is `BAD_NAME`. A read answers `{ text, version }`,
-with `text: null` and `version: ''` when there is no file; `version` is the SHA-256 of the file's bytes in lowercase hex. A
+with `text: null` and `version: ''` when there is no file; `version` is the SHA-256 of the file's bytes in lowercase hex.
+It also answers `shared`, only when there is any: `[{ name, text, truncated }]` for the project's `AGENTS.md` and then
+`CLAUDE.md`, each when it is a plain file directly in the agent's folder (never a parent's or the home's), whether or not the
+agent has a file of its own, so a person sees everything that instructs the agent. They are read only, and a save never
+touches them. Each is at most 64 KiB, with `truncated: true` when it was cut (at a whole character); one that is a link,
+not UTF-8 or unreadable is left out and never fails the read, and a reader that predates the field ignores it. A
 write replaces the file only if `version` is the one the writer read (`''` for no file), and answers `{ version }`. It
 makes `agents/` only once the save goes ahead, and saves of one file take turns in the daemon, so of two that read the same
 version one is saved and the other is `CHANGED`. A file or text over 64 KiB is refused, text with an unpaired surrogate is
