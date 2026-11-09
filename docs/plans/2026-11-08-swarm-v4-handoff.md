@@ -24,9 +24,11 @@ Desktop (branch `swarm-v4-desktop`, not merged; PR not opened yet):
   `Harness-macos-arm64-1.4.9-fcfb3de.dmg` (links on the run page). A copy opened from the disk image steps aside for the
   running Harness: copy Harness.app out of the image first to run both.
 - Removed since the last note: Decisions, Mentions and Threads pages; GitHub setup for teammates.
-- + New agent in a Swarm still uses the old v3 launch (launch.dart), which waits for the new session to appear on its
-  computer and parks behind "Check status" on a remote one. A small new flow is on branch `swarm-v4-new-agent`
-  (new_agent.dart, WIP, its tests fail): anh Dee reviews it later.
+- + New agent in a Swarm has its own small flow (`desktop/lib/super_tabs/new_agent.dart`, commit d6b52e0b1): name, its
+  1:1 chat, start with "You are <name>.", join with the form's engine (no waiting for the remote computer to list the
+  session), Try again re-joins; nothing saved between forms. The old launch's new-agent path is deleted. Not yet in an
+  internal build: cut one with `git push origin swarm-v4-desktop:internal/swarm-v4-3`.
+- Project delete: fixed on the server in v1.4.42 (it threw on agents' own chats).
 
 Next (anh Dee): wipe the v1/v2/v3 Swarm code and rules (Buddy, Decisions, proposals, crews, Members/Leads, idle and stuck
 sweeps, PM schedule and digests, team machines, GitHub team access), server and Desktop, keeping only what v4 uses.
