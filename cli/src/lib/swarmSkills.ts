@@ -127,7 +127,7 @@ export function prepareSwarmSkill(workspace: string, saved: SavedSwarmSkill): { 
   const root = realpathSync(workspace)
   // Swarm v4: every agent but a Buddy starts as plain Claude Code or Codex (anh Dee, 2026-11-08), told only the team's
   // basics (2026-11-09); its project's own AGENTS.md and agents/<name>.md the engine reads by itself, and they come first.
-  if (skill.role !== 'buddy') return { instructions: skill.role === 'coordinator' ? `${SWARM_BASICS}\n${PM_BASICS}` : SWARM_BASICS }
+  if (skill.role !== 'buddy') return { instructions: swarmBasics(skill.role === 'coordinator').text }
   prepareBuddyFolder(root, skill.key)
   const dir = buddySkillFolder(root, skill, true)!
   ignoreHarnessRuntime(root)
@@ -255,6 +255,49 @@ export function recordBuddySkillNotice(workspace: string, saved: SavedSwarmSkill
 }
 
 const textVersion = (text: string) => createHash('sha256').update(text).digest('hex')
+
+/** The team's basics the Swarm starts an agent with, by whether it is its project's PM, and their name (their hash). */
+export function swarmBasics(lead: boolean): { text: string; version: string } {
+  const text = lead ? `${SWARM_BASICS}\n${PM_BASICS}` : SWARM_BASICS
+  return { text, version: textVersion(text) }
+}
+
+const BASICS_FILE = 'super-tab-basics.json'
+
+/**
+ * Notes when this computer first ran this release's basics, in the daemon's data folder: the core calls it as it starts
+ * (core/main.ts, through superTabs/inCore.ts), before it launches any agent with them. An agent bound before then was
+ * launched by an older release with older basics, and keeps them while it runs, so the Swarm's host tells it the new ones
+ * once (superTabs/host.ts refreshSkill). The host can start later than the core, after the core launched agents with these
+ * basics (it starts on demand), so its own start is no measure. The first moment is kept: a restart changes nothing.
+ */
+export function noteSwarmBasics(dataDir: string, at: number): void {
+  const file = join(dataDir, BASICS_FILE)
+  const seen = readBasics(file)
+  const fresh = [swarmBasics(false), swarmBasics(true)].filter(basics => seen[basics.version] === undefined)
+  if (!fresh.length) return
+  // The last few texts are enough: an older one is never asked about again.
+  const kept = Object.fromEntries([...Object.entries(seen), ...fresh.map(basics => [basics.version, at] as const)].slice(-6))
+  try {
+    writeFileSync(`${file}.tmp`, JSON.stringify(kept), { mode: 0o600 })
+    renameSync(`${file}.tmp`, file)
+  } catch (error) {
+    console.warn(`[super-tabs] The basics record was not saved, so agents launched before the Swarm's service starts may be told them again: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+/** When this computer first ran the basics named [version] (noteSwarmBasics); null with no record of them. */
+export function swarmBasicsSince(dataDir: string, version: string): number | null {
+  return readBasics(join(dataDir, BASICS_FILE))[version] ?? null
+}
+
+function readBasics(file: string): Record<string, number> {
+  try {
+    const raw = JSON.parse(readFileSync(file, 'utf8')) as unknown
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+    return Object.fromEntries(Object.entries(raw).filter(([, at]) => typeof at === 'number' && Number.isFinite(at))) as Record<string, number>
+  } catch { return {} }
+}
 /** Removes the skill files an older release wrote for the session: every one but a Buddy's own skill. Only plain folders under the session's own: a link refuses the pass. */
 export function removeOlderSkills(workspace: string, saved: SavedSwarmSkill): void {
   const skill = skillOf(saved)

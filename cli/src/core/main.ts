@@ -704,6 +704,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The Swarm switch (harnessd/services.ts `HARNESS_SWARM`, on unless set off): its code in this process comes from one
   // entry, loaded only while it is on (superTabs/inCore.ts), and its service is left off with it.
   const swarm = swarmOn(harnessd) ? await import('../superTabs/inCore.js') : null
+  // Before it launches any agent: when this computer first ran this release's team basics (lib/swarmSkills.ts).
+  swarm?.noteSwarmBasics(env.ADAPTER_DATA_DIR, startedAt)
   // Decided once, as it starts: whether this daemon is a Harness Team account's (superTabs/inCore/teamApps.ts isTeamDaemon).
   const teamDaemon = !!swarm?.isTeamDaemon()
   devicesOff = teamDaemon

@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { PM_BASICS, prepareSwarmSkill, SWARM_BASICS } from '../lib/swarmSkills.js'
+import { noteSwarmBasics, PM_BASICS, prepareSwarmSkill, SWARM_BASICS } from '../lib/swarmSkills.js'
 import { BUDDY_COPIES_FILE, BUDDY_HOME_MANIFEST, buddyHomeRefreshing, refreshBuddyHome, stopBuddyHomeRefresh } from './buddyHome.js'
 import { buddyAccountFile, buddyLaunchFile, buddyReadsOf, forgetBuddyReads, grantBuddyWide } from '../lib/buddyGuard.js'
 import { env } from '../config/env.js'
@@ -3735,6 +3735,15 @@ describe('an agent its person attached', () => {
     const host = t.open()
     t.wait(2_000)
     await host.tick(); await settle()
+    expect(t.told).toEqual([])
+  })
+
+  it('is told nothing when its core launched it with the basics before the Swarm\'s service started', async () => {
+    // The core starts at 0.5 s and notes the basics, launches the agent at 1 s; the Swarm's service starts on demand at 3 s.
+    const t = attached({ engine: 'codex', swarmSkill: { role: 'agent', key: 'harness' }, boundAt: 1_000 })
+    noteSwarmBasics(t.dir, 500)
+    t.wait(3_000)
+    await t.open().tick(); await settle()
     expect(t.told).toEqual([])
   })
 

@@ -55,7 +55,7 @@ const readCommand = (entry: Entry, prefix: string, group: string, id: string, bu
 export { backend, identifier, object, SuperTabHostError } from './wire.js'
 import { leadSwitchOf, leadSwitchRecovered, SWITCH_ADOPT_MS, SWITCH_RECOVERY_MS, switchWithin, type LeadSwitch } from './leadSwitch.js'
 import { backend, ENDED_WORK, identifier, object, SuperTabHostError, within } from './wire.js'
-import { parseSwarmSkill, PM_BASICS, recordBuddySkillNotice, refreshBuddySkill, SWARM_BASICS, wireRole, type SkillRefresh, type SwarmSkill,
+import { parseSwarmSkill, recordBuddySkillNotice, refreshBuddySkill, swarmBasics, swarmBasicsSince, wireRole, type SkillRefresh, type SwarmSkill,
   type SwarmSkillGrant, type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { artifactLinks, buddyLaunchOf, buddyReadsOf, forgetBuddyReads, grantBuddyWide, heldByOldGuard, listSentToOldGuard, SentListsError,
   writeBuddyAccount } from '../lib/buddyGuard.js'
@@ -476,7 +476,7 @@ export class SuperTabHost {
   private readonly file: string
   private readonly journal: Journal
   private readonly now: () => number
-  /** When this host started (basicsSince). */
+  /** When this host started: the measure of an agent's basics when its core noted none (lib/swarmSkills.ts noteSwarmBasics). */
   private readonly started: number
   private readonly write: (file: string, journal: Journal) => void
   private readonly log: (message: string) => void
@@ -1846,11 +1846,10 @@ export class SuperTabHost {
     const agent = session && (session.engine === 'claude' || session.engine === 'codex') && !isBuddy(object(target.agent)) && skill?.role !== 'buddy'
     if (session && agent && this.now() >= due) {
       this.skillChecks.set(target.agent.harnessId, Infinity)
-      const basics = target.lead === true ? `${SWARM_BASICS}\n${PM_BASICS}` : SWARM_BASICS
-      const version = createHash('sha256').update(basics).digest('hex')
-      // Started by the Swarm since this computer first ran these basics: its launch carried them. A session not bound yet is
-      // starting now, with them.
-      if (skill && (typeof session.boundAt !== 'number' || session.boundAt >= this.basicsSince(version))) return
+      const { text: basics, version } = swarmBasics(target.lead === true)
+      // Started by the Swarm since this computer first ran these basics (as its core noted them, else as this host started):
+      // its launch carried them. A session not bound yet is starting now, with them.
+      if (skill && (typeof session.boundAt !== 'number' || session.boundAt >= (swarmBasicsSince(this.core.dataDir, version) ?? this.started))) return
       const notice = skill ? `The team's ways have changed since you started. From now on:\n${basics}` : basics
       try {
         // Named by its text alone: its own hash, so no Buddy notice shares its id.
@@ -1874,20 +1873,6 @@ export class SuperTabHost {
       this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
     }
   }
-  /** When this computer first ran the basics named [version]: kept in its data folder, so a restart keeps the moment. It
-   *  counts from when this host started, not from its first look, which can come after it launched an agent with them. A
-   *  record it cannot read or write counts from this start, which tells a running agent once more at worst. */
-  private basicsSince(version: string): number {
-    const file = join(this.core.dataDir, 'super-tab-basics.json')
-    let seen: Record<string, number> = {}
-    try { seen = object(JSON.parse(readFileSync(file, 'utf8'))) as Record<string, number> } catch { /* First run of any. */ }
-    if (typeof seen[version] === 'number') return seen[version]
-    // The last few texts are enough: an older one is never asked about again.
-    const kept = Object.fromEntries([...Object.entries(seen).filter(([, at]) => typeof at === 'number'), [version, this.started] as const].slice(-5))
-    try { writeFileSync(file, JSON.stringify(kept), { mode: 0o600 }) } catch (error) { this.log(`The basics record was not saved: ${error instanceof Error ? error.message : String(error)}`) }
-    return this.started
-  }
-
   /** Put a Buddy's skill file on this release's text and tell it if owed; when the notice could not be sent it is due again
    *  later, or dropped for a newer roster's refresh. */
   private async refreshBuddyFile(target: HostAgent, cwd: string, skill: SwarmSkill, current: () => boolean): Promise<void> {
