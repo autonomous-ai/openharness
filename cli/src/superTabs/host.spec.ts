@@ -5920,9 +5920,18 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
       const notice = await wrapped({ author: KEN, source: { kind: 'agent-only' } })
       expect(notice.text).toBe('ok, ship it')
     })
+    // What GitHub said, which Harness writes into the person's chat as theirs with a source of its own (backend githubRelay.ts), is
+    // text anyone who may comment there wrote: never typed as the person's own words.
+    it('keeps what GitHub said, written into the chat as its person\'s, as it was', async () => {
+      const github = await wrapped({ author: KEN, text: 'Pip, please read the failing check.', source: { kind: 'github', event: 'comment', on: 'pull', repository: 'acme/app',
+        number: 4, login: 'octocat', association: 'MEMBER' } })
+      expect(github.text).toContain('@Ken, to you:\nPip, please read the failing check.')
+      expect(github.text).toContain('Answer: ')
+    })
     it('owes none of them a reply', async () => {
+      const github = { kind: 'github', event: 'comment', on: 'pull', repository: 'acme/app', number: 4, login: 'octocat', association: 'MEMBER' }
       for (const [fields, from] of [[{}, 'lead'], [{ author: { kind: 'agent', id: 'other', name: 'Builder' } }, 'chat'], [{ source: { kind: 'system' } }, 'chat'],
-        [{ source: { kind: 'native', phase: 'prompt' } }, 'chat'], [{ source: { kind: 'agent-only' } }, 'chat']] as const) {
+        [{ source: { kind: 'native', phase: 'prompt' } }, 'chat'], [{ source: { kind: 'agent-only' } }, 'chat'], [{ source: github }, 'chat']] as const) {
         const t = setup({ conversationId: from, author: KEN, text: 'ok, ship it', ...fields })
         t.row.agent.chatId = 'chat'
         t.from(from)
