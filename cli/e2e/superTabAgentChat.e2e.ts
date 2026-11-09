@@ -1,11 +1,13 @@
 /** A person's message in their agent's own 1:1 chat, on the real native protocol: the real master, core and Swarm service in their
  * own process, a private tmux and fake engines, and a loopback server in place of the backend. The agent is typed exactly what
  * its person typed, and when its turn ends the host posts the answer as the agent, once, or one line saying it could not (anh
- * Dee, 2026-11-09: "it's a 1:1 conversation, why can't it be just the exact prompt?"). */
+ * Dee, 2026-11-09: "it's a 1:1 conversation, why can't it be just the exact prompt?"). An agent its person attached, which has no
+ * Swarm role, is the same, and is told the team's basics once besides (#3642). */
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, expect, it, onTestFailed } from 'vitest'
+import { SWARM_BASICS } from '../src/lib/swarmSkills.js'
 import { object } from '../src/superTabs/wire.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
@@ -23,11 +25,13 @@ afterEach(async () => {
 })
 const idFor = (harnessId: string) => createHash('sha256').update(JSON.stringify([ME.machineId, harnessId])).digest('hex').slice(0, 24)
 
-it.each(['claude', 'codex'] as const)('types %s what its person typed, and posts its answer into their chat once its turn ends', async engine => {
+it.each([['claude', false], ['codex', false], ['claude', true]] as const)('types %s what its person typed, and posts its answer into their chat once its turn ends (attached: %s)', async (engine, attached) => {
   const relay = await FakeBackend.start(); backend = relay; relay.addMachine(ME)
   const d = await IsolatedDaemon.create({ submissionGate: true, env: {
     BACKEND_WS_URL: relay.wsUrl, WEB_URL: relay.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId,
     ANTHROPIC_API_KEY: 'fixture-not-a-credential', OPENAI_API_KEY: 'fixture-not-a-credential',
+    // The Swarm is on, whatever the run was started with (`HARNESS_SWARM=off npm run test:e2e`): a Swarm role is refused with it off.
+    HARNESS_SWARM: '',
   } }); daemon = d
   writeFileSync(join(d.engineConfig.codexHome, 'models_cache.json'), readFileSync(join(CLI_ROOT, 'src/lib/__fixtures__/codex-home-0.160/models_cache.json')))
   writeFileSync(join(d.root, 'auth', 'session.json'), JSON.stringify({ version: 1, accessToken: ME.token,
@@ -37,6 +41,8 @@ it.each(['claude', 'codex'] as const)('types %s what its person typed, and posts
   onTestFailed(() => console.log(d.log().split('\n').slice(-120).join('\n')))
   const agents: Array<Record<string, any>> = []
   const posts: Array<Record<string, any>> = []
+  /** What the host told the agent about the team (its skills notice), apart from the answers it posted. */
+  const told: Array<Record<string, any>> = []
   const deliveries: Array<Record<string, any>> = []
   /** Every request the host made of the Swarm to build a delivery for the agent (its reads as the agent). */
   const reads: string[] = []
@@ -46,12 +52,14 @@ it.each(['claude', 'codex'] as const)('types %s what its person typed, and posts
     if (path === `/api/super-tabs/hosts/${ME.machineId}`) return { data: agents.map(agent => ({ tabId: TAB, agent, observers: [] })) }
     if (path === `/api/super-tabs/${TAB}`) {
       if (url.searchParams.get('asAgentId')) reads.push(raw)
-      return { data: { revision: 1, state: { id: TAB, agents, conversations: [] } } }
+      const conversations = attached ? [{ id: CHAT, kind: 'agent-chat', agentIds: agents.map(a => a.id), archived: false }] : []
+      return { data: { revision: 1, state: { id: TAB, agents, conversations } } }
     }
     if (path.endsWith('/messages')) { reads.push(raw); return { data: { messages: [] } } }
     if (path === `/api/super-tabs/${TAB}/commands`) {
       const command = object(body.command)
       if (command.type !== 'message.send') throw new Error(`Unexpected command ${String(command.type)}`)
+      if (String(body.operationId).startsWith('skill-')) { told.push(body); return { data: { result: {} } } }
       posts.push(body)
       // The server turns the answer to the sixth message away for good.
       if (body.operationId === 'reply-delivery-six') return { status: 403, error: { code: 'FORBIDDEN', message: 'Not allowed.' } }
@@ -74,9 +82,9 @@ it.each(['claude', 'codex'] as const)('types %s what its person typed, and posts
   await d.start()
   const client = await LocalClient.connect(d, { machineId: ME.machineId }); clients.push(client)
   const cwd = join(d.projectsDir, 'project'); mkdirSync(cwd, { recursive: true })
-  // As Desktop's + New agent starts it: with its Swarm role. An agent with none is one its person attached, which the host
-  // tells the team's basics once, and reads its Swarm to do so (#3642): that is not what this test is about.
-  const agent = await client.request('agent_create', { engine, cwd, bypassPermission: true, swarmRole: 'dev' }, 90_000)
+  // As Desktop's + New agent starts it: with its Swarm role. An agent with none is one its person attached (Desktop's Attach):
+  // the host tells it the team's basics once, and reads its Swarm to do so (#3642).
+  const agent = await client.request('agent_create', { engine, cwd, bypassPermission: true, ...(attached ? {} : { swarmRole: 'dev' }) }, 90_000)
   expect(agent.error, JSON.stringify(agent)).toBeUndefined()
   const memberId = idFor(agent.agent.id)
   agents.push({ id: memberId, machineId: ME.machineId, harnessId: agent.agent.id, chatId: CHAT, displayName: 'Mia' })
@@ -99,8 +107,17 @@ it.each(['claude', 'codex'] as const)('types %s what its person typed, and posts
   await until('the host to post the answer into the chat', () => posts.length >= 1 || null, 60_000, 100)
   expect(posts).toEqual([{ operationId: 'reply-delivery-one', asAgentId: memberId,
     command: { type: 'message.send', conversationId: CHAT, text: `answer 1: ${typed}`, replyTo: null, answers: 'message-one', recipientIds: [] } }])
-  // Its chat is named by its roster row, so nothing of the Swarm was read to type it.
-  expect(reads).toEqual([])
+  if (attached) {
+    // The one read of the Swarm is the basics' own, and the one thing it writes is the basics, only for the agent to read, in
+    // its own chat: never anything to type what its person typed.
+    await until('the basics told to the attached agent', () => told.length >= 1 || null, 60_000, 100)
+    expect(reads).toEqual([`/api/super-tabs/${TAB}?asAgentId=${memberId}`])
+    expect(told).toEqual([{ operationId: expect.stringMatching(/^skill-/), asAgentId: memberId, command: { type: 'message.send', conversationId: CHAT,
+      replyTo: null, recipientIds: [memberId], text: SWARM_BASICS, agentOnly: true, notice: 'skills' } }])
+  } else {
+    // Its chat is named by its roster row, so nothing of the Swarm was read to type it.
+    expect(reads).toEqual([])
+  }
 
   // A second message is its own turn, answered under its own operation, in its own thread when it is in one.
   const second = ask('two', 'And once more, in the thread.', { thread: 'message-one', replyTo: 'message-one' })
@@ -138,6 +155,8 @@ it.each(['claude', 'codex'] as const)('types %s what its person typed, and posts
   expect(posts[6]).toEqual({ operationId: 'dropped-reply-delivery-six', asAgentId: memberId,
     command: { type: 'message.send', conversationId: CHAT, text: 'Mia\'s answer could not be posted.', replyTo: null, answers: 'message-six', recipientIds: [] } })
   expect(posts).toHaveLength(7)
+  // The basics are told once over the whole run, the host's passes between the seven messages included; a Swarm agent is told none.
+  expect(told).toHaveLength(attached ? 1 : 0)
   // And the journal keeps no words of anybody's.
   const journal = readFileSync(join(d.dataDir, 'super-tabs', `host-${ME.machineId}.json`), 'utf8')
   expect(journal).not.toContain(typed)
