@@ -37,6 +37,8 @@ const AGENTS_FRESH_MS = 60_000
 /** A thread that relays this many times to one agent within LOOP_WINDOW_MS is paused for it: an agent that forgets to sign
  *  its posts on its own pull request would otherwise hear itself, answer, and hear that too. */
 const LOOP_RELAYS = 6, LOOP_WINDOW_MS = 10 * 60_000
+/** How far back the first read of a repository looks: the minutes around an agent's start, never its history. */
+const FIRST_READ_MS = 10 * 60_000
 /** A repository no agent here has read for this long is forgotten. */
 const FORGET_MS = 7 * 24 * 60 * 60_000
 const VERDICTS: ReadonlySet<unknown> = new Set(['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED'])
@@ -213,9 +215,11 @@ export class GitHubMentions {
     /** What the server refused for good of this repository's news, and what to record of each if it is passed over (see `passOver`). */
     const refused: Array<{ error: SuperTabHostError; number: number; key: string; record: () => void }> = []
     const sentBefore = relays.sent
-    const at = new Date(this.now()).toISOString()
-    // First read of a repository: from now on, nothing before it.
-    const kept = memory.repos[repo] ??= { comments: at, reviewComments: at, issues: at, seen: [], tasks: {}, owned: {}, usedAt: this.now() }
+    // First read of a repository: what was said in the last few minutes, and nothing before. An agent's start and Harness's
+    // ask to it can come in the same minute (a PM resumed asks its silent reader at once, githubAssign.ts): read from the
+    // moment of the first read alone, that ask was missed for good.
+    const from = new Date(this.now() - FIRST_READ_MS).toISOString()
+    const kept = memory.repos[repo] ??= { comments: from, reviewComments: from, issues: from, seen: [], tasks: {}, owned: {}, usedAt: this.now() }
     kept.usedAt = this.now()
     // An agent new to this repository: its open tasks and pull requests now. Its tasks are told to nobody, since only a task
     // labelled from now on is news; its pull requests are its own, so what is said on them from now on reaches it.
@@ -323,7 +327,9 @@ export class GitHubMentions {
       const operationId = `works-on-${createHash('sha256').update(`${repo}\n${agent.agentId}`).digest('hex').slice(0, 40)}`
       await tell(agent, operationId, `You have your first task in ${repo}. Ask your person, in your chat with them, which area of ${repo} `
         + `you should focus on (${choices}). Do not wait for the answer to start your task. When they answer, make "Works on: <their answer>" `
-        + `the first line of ${file} in ${repo}, in a pull request of its own: Harness then gives you those tasks first.`)
+        + `the first line of ${file} in ${repo}, in a pull request of its own on a branch ${agent.label.slice('builder:'.length)}/works-on, labelled `
+        // Harness reads and merges only the team's own pull requests, known by their builder label or branch (assign/crew.ts teamOf).
+        + `${agent.label}: Harness then gives you those tasks first.`)
     }
     kept.asked = [...kept.asked ?? [], agent.agentId].slice(-MAX_ASKED)
   }

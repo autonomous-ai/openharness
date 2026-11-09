@@ -24,6 +24,7 @@ import 'package:harness/super_tabs/avatar_art.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/personal_agents.dart';
 import 'package:harness/super_tabs/reply_box.dart';
 import 'package:harness/terminal/terminal_typography.dart';
 
@@ -434,6 +435,18 @@ class _Gallery extends StatelessWidget {
                             unread: unread,
                             onTap: () {},
                           ),
+                        // Your Personal Swarm only: a pane you run that is not in the Swarm yet, with its computer.
+                        SuperTabQuietRow(
+                          leading: SuperTabAvatar(
+                            identity: 'agent:${swarmAgentId('m', 'docs')}',
+                            name: 'Docs bot',
+                            size: SuperTabQuietRow.faceSize,
+                            face: true,
+                          ),
+                          name: 'Docs bot',
+                          detail: 'Mac Studio',
+                          onTap: () {},
+                        ),
                         SuperTabQuietHeading(
                           'Your Machines',
                           collapsed: true,
