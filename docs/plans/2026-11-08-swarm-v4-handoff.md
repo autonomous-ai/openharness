@@ -4,6 +4,33 @@ Read [2026-11-08-swarm-v4.md](2026-11-08-swarm-v4.md) first; it is the approved 
 Branch `swarm-v4`, worktree `.claude/worktrees/swarm-v4`. Nothing is pushed. anh Dee wants it built now, tiny and clean,
 then a development build to review, then merge and release.
 
+## Status, morning of 2026-11-09 (read this first)
+
+anh Dee's direction, 2026-11-09: **v4 is built from scratch. Wipe out every v1/v2/v3 Swarm rule and screen; keep nothing
+because it existed.** Desktop work only (no web, no phone). Keep the regular tab's Cmd-N form untouched.
+
+Shipped:
+- #3585 merged, backend v1.4.42 live: plain agents, channel rules, every agent gets one 1:1 chat with its person
+  (agentChats.ts, via the time checks), PM's own chat, project delete fixed.
+- That release stopped people's agents: the v3 idle stop (tidy.ts idleNotices) counted no 1:1 chat as activity.
+  Hotfix #3586 (branch `swarm-v4-idle-hotfix`): idle stop deleted, no agent stops another, stops withdrawn once
+  (agentStops.ts). **Merge and release the backend as soon as its CI passes** (`make release-backend` from a clean
+  worktree at origin/main; anh Dee said ignore the release window: add `--urgent "<reason>"`).
+- CLI 0.5.75 not released yet: release after the hotfix backend (`make release-cli`). Its 13 e2e failures on the Intel Mac
+  are identical on 0.5.74 (checked), so not from v4.
+
+Desktop (branch `swarm-v4-desktop`, not merged; PR not opened yet):
+- Internal build run 42546605773: Intel `Harness-macos-1.4.9-fcfb3de.dmg`, Apple Silicon
+  `Harness-macos-arm64-1.4.9-fcfb3de.dmg` (links on the run page). A copy opened from the disk image steps aside for the
+  running Harness: copy Harness.app out of the image first to run both.
+- Removed since the last note: Decisions, Mentions and Threads pages; GitHub setup for teammates.
+- + New agent in a Swarm still uses the old v3 launch (launch.dart), which waits for the new session to appear on its
+  computer and parks behind "Check status" on a remote one. A small new flow is on branch `swarm-v4-new-agent`
+  (new_agent.dart, WIP, its tests fail): anh Dee reviews it later.
+
+Next (anh Dee): wipe the v1/v2/v3 Swarm code and rules (Buddy, Decisions, proposals, crews, Members/Leads, idle and stuck
+sweeps, PM schedule and digests, team machines, GitHub team access), server and Desktop, keeping only what v4 uses.
+
 ## What anh Dee decided (2026-11-08), in short
 
 - Slack for agents, the way lampOS ran in the week of 26 Oct: plain Claude Code and Codex sessions, coordinated by tasks
