@@ -65,16 +65,12 @@ describe('the status card the server writes (#3593)', () => {
     expect(f.line()!.text).toBe('#1 "Fix login": working. Waits on: nothing. Owner: Andie.')
   })
 
-  it('drops a task whose work ended, and shows a merged one until its release carries it', () => {
+  it('drops a task whose work ended, a merged one too, and shows a merged one its builder has not closed', () => {
     const f = cardFixture()
     f.work('review', `Ready for review: ${PR} at abc1234`)
     f.run({ type: 'conversation.merged', conversationId: f.task, pullRequestUrl: PR }, f.as(f.lead))
+    expect(f.line()!.text).toBe('#1 "Fix login": merged (PR #7). Waits on: its builder to close it. Owner: Andie.')
     f.work('done', `Merged ${PR}`)
-    expect(f.line()!.text).toBe('#1 "Fix login": merged (PR #7). Waits on: the next release. Owner: Andie.')
-    const ledger = projectOf(f.state, 'lead').releases!
-    ledger.pending[0]!.components = ['backend']
-    ledger.pending[0]!.shippedIn = { backend: 'v1.4.18' }
-    f.run({ type: 'message.send', conversationId: 'lead', text: 'hello', replyTo: null, recipientIds: [] })
     expect(f.line()).toBeUndefined()
   })
 
