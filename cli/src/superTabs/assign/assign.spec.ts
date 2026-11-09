@@ -207,3 +207,41 @@ function night(options: { fiveHour: boolean }): Problem {
       needs: { cpu: 0, ram: 0, disk: 0 } })),
   }
 }
+
+// Benchmark of 2026-11-09: at team scale the search's second ran out inside its first chain, still hot, and the other
+// chains never ran; a plan of 50 tasks gained 1.7% on the first, where with each chain given its share of the time and
+// cooling by it, it gains 18%. A clock of one tick a read makes this the same on any machine.
+describe('a search its time cuts short', () => {
+  function team(tasks: number, builders: number, machines: number, seed: number): Problem {
+    const random = mulberry32(seed), GiB = 1024 ** 3
+    const sizes = [{ minutes: 30, cpu: 1, ram: 2 }, { minutes: 90, cpu: 2, ram: 4 }, { minutes: 240, cpu: 4, ram: 8 }]
+    const parts = ['mobile', 'api', 'ui', 'data', 'infra']
+    const boxes = Array.from({ length: machines }, (_, i) => ({ id: `m${i}`, capacity: { cpu: 8, ram: 24 * GiB, disk: 200 * GiB } }))
+    return {
+      now: 0, objective: 'weighted', switchCost: 30, machines: boxes,
+      accounts: boxes.flatMap(m => ['claude', 'codex'].map(engine => ({ id: `${m.id}:${engine}`, reserve: 20, windows: [
+        { name: 'five_hour', left: 60 + Math.floor(random() * 40), resetsAt: 1 + Math.floor(random() * 299), every: 300 },
+        { name: 'seven_day', left: 50 + Math.floor(random() * 50), resetsAt: 1 + Math.floor(random() * 10079), every: 10080 }] }))),
+      builders: Array.from({ length: builders }, (_, i): Builder => {
+        const machine = boxes[i % machines]!, engine = i % 3 === 2 ? 'codex' : 'claude'
+        return { id: `b${i}`, machine: machine.id, busyUntil: Math.floor(random() * 60),
+          modes: [{ model: engine, family: engine === 'codex' ? 'openai' : 'anthropic', speed: 1, cost: 2, quality: { default: 1 }, account: `${machine.id}:${engine}` }],
+          context: Object.fromEntries(parts.filter(() => random() < 0.3).map(part => [part, random() < 0.5 ? 0.5 : 0.85])) }
+      }),
+      tasks: Array.from({ length: tasks }, (_, i): Task => {
+        const size = sizes[Math.floor(random() * 3)]!
+        return { id: `t${i}`, minutes: size.minutes, needs: { cpu: size.cpu, ram: size.ram * GiB, disk: GiB },
+          spend: { five_hour: size.minutes / 10, seven_day: size.minutes / 50 }, floor: 0, kind: 'build', part: parts[Math.floor(random() * parts.length)],
+          weight: [8, 4, 2, 1][Math.floor(random() * 4)]!, ready: 0, deps: i > 3 && random() < 0.15 ? [`t${Math.floor(random() * i)}`] : [],
+          independentOf: [], notBuilders: [], files: [] }
+      }),
+    }
+  }
+
+  it('gives every chain its share and still cools, so a team of 50 tasks gains on the first plan', () => {
+    let tick = 0
+    const solved = solve(team(50, 10, 5, 7), { budgetMs: 4_000, iterations: 1_000_000, seed: 1, now: () => tick++ })
+    expect(solved.plan.score).toBeLessThan(solved.first.score * 0.92)
+  })
+})
+

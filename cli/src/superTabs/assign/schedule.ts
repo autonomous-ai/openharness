@@ -66,8 +66,11 @@ export class Timeline {
   /** Percent spent of each account's window, by account, window name and the window's index from now. */
   private readonly spent = new Map<string, Map<number, number>>()
   readonly placed = new Map<string, Placement & { family: string }>()
+  /** The tasks that name each task in their `independentOf`: its reviews, found without walking every placed task. */
+  private readonly dependents = new Map<string, string[]>()
 
   constructor(readonly problem: Problem) {
+    for (const task of problem.tasks) for (const other of task.independentOf) push(this.dependents, other, task.id)
     this.machines = new Map(problem.machines.map(m => [m.id, m]))
     this.accounts = new Map(problem.accounts.map(a => [a.id, a]))
     this.builders = new Map(problem.builders.map(b => [b.id, b]))
@@ -87,8 +90,8 @@ export class Timeline {
     for (const other of task.independentOf) {
       if (this.placed.get(other)?.family === mode.family) return { why: 'its build used this model family' }
     }
-    for (const placed of this.placed.values()) {
-      if (placed.family === mode.family && this.tasks.get(placed.task)?.independentOf.includes(task.id)) return { why: 'its review used this model family' }
+    for (const other of this.dependents.get(task.id) ?? []) {
+      if (this.placed.get(other)?.family === mode.family) return { why: 'its review used this model family' }
     }
     let from = Math.max(this.problem.now, task.ready, this.free.get(builderId)!)
     for (const dep of task.deps) {
@@ -128,19 +131,32 @@ export class Timeline {
   }
 
   /** The minutes worth trying, earliest first: [from], each end of what holds this machine, model or task's files, and each
-   *  reset of the account's windows, within the horizon. The earliest start is always one of them. */
-  private candidates(from: number, machine: string, mode: Mode, task: Task, account: Account | undefined): number[] {
-    const times = new Set<number>([from])
-    for (const use of this.machineUse.get(machine) ?? []) if (use.end > from) times.add(use.end)
-    if (mode.limit !== undefined) for (const use of this.modelUse.get(mode.model) ?? []) if (use.end > from) times.add(use.end)
-    for (const file of task.files) for (const use of this.fileUse.get(file) ?? []) if (use.end > from) times.add(use.end)
-    for (const window of account?.windows ?? []) {
-      for (let at = window.resetsAt; at > this.problem.now && at < from + HORIZON_MINUTES; at += window.every ?? HORIZON_MINUTES) {
-        if (at > from) times.add(at)
-        if (window.every === null) break
+   *  reset of the account's windows, within the horizon. The earliest start is always one of them. Made one at a time, as
+   *  the first that fits ends the search: listing and sorting a month of 5-hour resets for every placement was half of
+   *  the solver's time (profile of 200 tasks, 2026-11-09). */
+  private *candidates(from: number, machine: string, mode: Mode, task: Task, account: Account | undefined): Generator<number> {
+    const limit = this.problem.now + HORIZON_MINUTES
+    const ends: number[] = []
+    for (const use of this.machineUse.get(machine) ?? []) if (use.end > from) ends.push(use.end)
+    if (mode.limit !== undefined) for (const use of this.modelUse.get(mode.model) ?? []) if (use.end > from) ends.push(use.end)
+    for (const file of task.files) for (const use of this.fileUse.get(file) ?? []) if (use.end > from) ends.push(use.end)
+    ends.sort((a, b) => a - b)
+    // Each window's resets after [from], as the old list kept them: those after now and before [from] plus the horizon.
+    const resets = (account?.windows ?? []).map(window => ({ window, at: firstReset(window, from, this.problem.now) }))
+    let last = -Infinity, i = 0
+    const take = (t: number) => { const fresh = t > last; last = t; return fresh }
+    if (from < limit) { last = from; yield from }
+    for (;;) {
+      let next = i < ends.length ? ends[i]! : Infinity
+      for (const r of resets) if (r.at !== null && r.at < next) next = r.at
+      if (next === Infinity || next >= limit) return
+      if (i < ends.length && ends[i] === next) i++
+      for (const r of resets) {
+        if (r.at === next) r.at = r.window.every === null ? null : next + r.window.every
+        if (r.at !== null && r.at >= from + HORIZON_MINUTES) r.at = null
       }
+      if (take(next)) yield next
     }
-    return [...times].filter(t => t < this.problem.now + HORIZON_MINUTES).sort((a, b) => a - b)
   }
 
   /** Whether the machine has [needs] free over [span]: the most in use at once is at its start or at another task's. */
@@ -180,6 +196,17 @@ export class Timeline {
       return true
     })
   }
+}
+
+/** The first reset of [window] after [from] that the plan considers: after [now], and none for a window with one reset
+ *  that has passed. */
+function firstReset(window: QuotaWindow, from: number, now: number): number | null {
+  // A reset reported in the past gives none, as the list before this generator gave none.
+  if (window.resetsAt <= now) return null
+  if (window.resetsAt > from) return window.resetsAt > now && window.resetsAt < from + HORIZON_MINUTES ? window.resetsAt : null
+  if (window.every === null) return null
+  const at = window.resetsAt + (Math.floor((from - window.resetsAt) / window.every) + 1) * window.every
+  return at > now && at < from + HORIZON_MINUTES ? at : null
 }
 
 /** What [task] spends of [window] in each of the window's spans it runs in, by the span's index from now (0 the current):

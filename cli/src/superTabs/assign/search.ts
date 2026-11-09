@@ -34,7 +34,7 @@ const CHAINS = 4
 
 export function solve(problem: Problem, options: SolveOptions = {}): Solved {
   const clock = options.now ?? Date.now
-  const deadline = clock() + (options.budgetMs ?? 1_000)
+  const began = clock(), budget = options.budgetMs ?? 1_000
   const random = mulberry32(options.seed ?? 1)
   const choices = new Map<string, Option[]>()
   for (const task of problem.tasks) {
@@ -54,10 +54,17 @@ export function solve(problem: Problem, options: SolveOptions = {}): Solved {
     let currentPlan = schedule(problem, current)
     if (currentPlan.score < bestPlan.score) { best = current; bestPlan = currentPlan }
     const length = Math.ceil(iterations / CHAINS)
-    for (let step = 0; step < length && tried < iterations && clock() < deadline; step++, tried++) {
+    // Each chain has its share of the time, and cools by whichever runs out first, its steps or its time: with one shared
+    // deadline, at 200 tasks the first chain spent the whole second still hot, and the others never ran (benchmark,
+    // 2026-11-09).
+    const from = clock(), until = began + budget * (chain + 1) / CHAINS
+    for (let step = 0; step < length && tried < iterations; step++, tried++) {
+      const now = clock()
+      if (now >= until) break
       const next = move(current, movable, choices, random)
       const plan = schedule(problem, next)
-      const temperature = 0.05 * Math.pow(0.01, step / length)
+      const progress = Math.min(1, Math.max(step / length, (now - from) / Math.max(1, until - from)))
+      const temperature = 0.05 * Math.pow(0.01, progress)
       const worse = (plan.score - currentPlan.score) / Math.max(1, Math.abs(currentPlan.score))
       if (worse <= 0 || random() < Math.exp(-worse / temperature)) {
         current = next

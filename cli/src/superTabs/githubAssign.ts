@@ -8,7 +8,7 @@
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { nextPicks, readProblem, reasonOf, type Crew, type Read } from './assign/crew.js'
+import { DEEP, nextPicks, readProblem, reasonOf, type Crew, type Read } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
@@ -20,6 +20,9 @@ type Json = Record<string, unknown>
 export const ASSIGN_INTERVAL_MS = 60_000
 /** How long one plan may search: a pass every minute, so a second is ample (the night's 42 tasks plan in 0.6 s). */
 const SOLVE_MS = 1_000
+/** Search steps for each task, up to a ceiling: at 20 tasks the solver takes about 15,000 steps a second, at 200 about 1,300
+ *  (benchmark, 2026-11-09), so a small team stops early and a large one uses the second. */
+const STEPS_PER_TASK = 400, MAX_STEPS = 200_000
 const SELF = 'Harness'
 
 export class GitHubAssign {
@@ -98,7 +101,12 @@ export class GitHubAssign {
       closed: await this.reads.current(repo, `/repos/${repo}/issues?state=closed&sort=updated&direction=desc&per_page=${PAGE}`, 1),
       crew: await this.deps.crew(project) })
     if (!read.free.size || !read.problem.builders.length) return
-    const solved = solve(read.problem, { budgetMs: SOLVE_MS, seed: 1, ...(this.last.has(repo) ? { start: this.last.get(repo) } : {}) })
+    // Nobody can take a task while every list is full: no plan, so a backlog costs no CPU each minute (the daemon at rest
+    // keeps under 1% of a core).
+    if (![...read.open.values()].some(count => count < DEEP)) return
+    // As many steps as the problem is worth, within the second: a few thousand for a small team, the whole second for a large.
+    const solved = solve(read.problem, { budgetMs: SOLVE_MS, iterations: Math.min(MAX_STEPS, STEPS_PER_TASK * read.problem.tasks.length), seed: 1,
+      ...(this.last.has(repo) ? { start: this.last.get(repo) } : {}) })
     this.last.set(repo, solved.choice)
     for (const pick of nextPicks(solved.plan, read)) await this.give(project, read, pick)
     for (const { task, why } of solved.plan.unplaced) if (read.free.has(task)) this.once(`[super-tab] Task assignment: UNPLACED ${repo}${task}: ${why}`)
