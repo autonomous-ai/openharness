@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { contextOf, crewOf, CORES, DEEP, dependsOn, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew } from './crew.js'
+import { contextOf, crewOf, CORES, learnedMinutes, outOfQuota, startedAt, takenTasks, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, DEEP, dependsOn, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew } from './crew.js'
 import { solve } from './search.js'
 
 type Json = Record<string, unknown>
@@ -112,6 +112,7 @@ describe('the crew a project\'s PM reads (crewOf)', () => {
         { id: 'mine', name: 'mine', label: 'builder:mine', machineId: 'mac', engine: 'claude', model: null },
       ],
       machines: [{ machineId: 'mac', name: 'Mac 3', observation: { tools: { xcode: true } } }],
+      away: [{ name: 'leaving', label: 'builder:leaving', why: 'stopping' }, { name: 'asleep', label: 'builder:asleep', why: 'down', since: '2026-11-09T10:00:00Z' }],
     })
   })
 })
@@ -164,5 +165,94 @@ describe('what an agent works on (worksOnOf, contextOf)', () => {
     const plain = readProblem({ now: NOW, crew: team(null), closed: [], issues })
     const shared = nextPicks(solve(plain.problem, { seed: 1, budgetMs: 2_000 }).plan, plain)
     expect(shared.filter(p => p.builder === 'juno').length).toBe(2)
+  })
+})
+
+describe('who reads a pull request (readerFor)', () => {
+  const team = (): Crew => ({ builders: [
+    { id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' },
+    { id: 'juno', name: 'Juno', label: 'builder:juno', machineId: 'mac', engine: 'claude' },
+    { id: 'atlas', name: 'Atlas', label: 'builder:atlas', machineId: 'box', engine: 'codex' },
+    { id: 'bo', name: 'Bo', label: 'builder:bo', machineId: 'box', engine: 'codex' }], machines: crew().machines })
+
+  it('never its author; another model family first; then the one holding the fewest tasks; nobody asked twice', () => {
+    const read = readProblem({ now: NOW, crew: team(), closed: [], issues: [issue(1, ['size:s', 'builder:atlas'])] })
+    expect(readerFor(read, 'pip', new Set())?.id).toBe('bo')
+    expect(readerFor(read, 'pip', new Set(['bo']))?.id).toBe('atlas')
+    // Only its own family left.
+    expect(readerFor(read, 'pip', new Set(['bo', 'atlas']))?.id).toBe('juno')
+    expect(readerFor(read, 'pip', new Set(['bo', 'atlas', 'juno']))).toBeNull()
+    // An author outside the team: anyone, the least busy first.
+    expect(readerFor(read, null, new Set())?.id).toBe('bo')
+  })
+})
+
+describe('taking work back from a builder that cannot work (takeBacks)', () => {
+  const at = (ms: number) => new Date(NOW - ms).toISOString()
+  it('takes all of one being stopped; of one down, the queued after half an hour and the taken after three', () => {
+    const issues = [issue(1, ['builder:juno']), issue(2, ['builder:juno', 'status:taken']), issue(3, ['builder:atlas']),
+      issue(4, ['builder:atlas', 'status:taken']), issue(5, ['builder:someone-else']), issue(6, ['builder:juno'], { pull_request: {} })]
+    expect(takeBacks(issues, [{ name: 'Juno', label: 'builder:juno', why: 'stopping' }], NOW).map(b => [b.number, b.taken])).toEqual([[1, false], [2, true]])
+    const down = (ms: number) => takeBacks(issues, [{ name: 'Atlas', label: 'builder:atlas', why: 'down', since: at(ms) }], NOW).map(b => b.number)
+    expect(down(QUEUED_AWAY_MS - 60_000)).toEqual([])
+    expect(down(QUEUED_AWAY_MS)).toEqual([3])
+    expect(down(TAKEN_AWAY_MS)).toEqual([3, 4])
+    expect(takeBacks(issues, [{ name: 'Atlas', label: 'builder:atlas', why: 'down', since: at(TAKEN_AWAY_MS) }], NOW)[0]!.why)
+      .toBe(`Atlas's machine has been down since ${at(TAKEN_AWAY_MS).slice(11, 16)} UTC`)
+  })
+
+  it('reads who is away from the PM\'s read: being stopped, or down', () => {
+    const agent = (id: string, extra: Json = {}) => ({ id, regular: true, name: id, displayName: id[0]!.toUpperCase() + id.slice(1), machineId: 'mac',
+      configuration: { engine: 'claude' }, ...extra })
+    const { builders, away } = crewOf({ agents: [agent('pip'), agent('juno', { workDecision: 'stop' }), agent('atlas', { downSince: '2026-11-09T10:00:00Z' })] },
+      { pmAgentId: 'pm', projectId: 'app' })
+    expect(builders.map(b => b.id)).toEqual(['pip'])
+    expect(away).toEqual([{ name: 'Juno', label: 'builder:juno', why: 'stopping' }, { name: 'Atlas', label: 'builder:atlas', why: 'down', since: '2026-11-09T10:00:00Z' }])
+  })
+})
+
+describe('a builder out of quota (outOfQuota)', () => {
+  const withQuota = (usedPercent: number, minutes: number): Crew => ({ builders: crew().builders.slice(0, 1), machines: [machine('mac', {
+    quotas: [{ engine: 'claude', known: true, windows: [{ name: 'five_hour', usedPercent, resetsAt: new Date(NOW + minutes * 60_000).toISOString() }] }] })] })
+  it('is one whose subscription has less room than a small task until a reset more than two hours off', () => {
+    const away = (used: number, minutes: number) => outOfQuota(readProblem({ now: NOW, crew: withQuota(used, minutes), closed: [], issues: [] }))
+    expect(away(85, 180)).toEqual([{ name: 'Pip', label: 'builder:pip', why: 'quota', until: 180 }])
+    expect(away(85, 60)).toEqual([])
+    expect(away(50, 180)).toEqual([])
+  })
+
+  it('gives back only what waits for it, never what it took', () => {
+    const issues = [issue(1, ['builder:pip']), issue(2, ['builder:pip', 'status:taken'])]
+    const back = takeBacks(issues, [{ name: 'Pip', label: 'builder:pip', why: 'quota', until: 180 }], NOW)
+    expect(back).toEqual([{ number: 1, label: 'builder:pip', taken: false, why: 'Pip\'s subscription has no room for 3 h' }])
+  })
+})
+
+describe('the tasks builders took, and when each was last touched (takenTasks)', () => {
+  it('reads the issue\'s time and its pull requests\', by "Closes #N" or its branch, and only taken tasks of the team', () => {
+    const t = (h: number) => new Date(NOW - h * 3_600_000).toISOString()
+    const issues = [issue(1, ['builder:pip', 'status:taken'], { updated_at: t(9) }), issue(2, ['builder:juno', 'status:taken'], { updated_at: t(8) }),
+      issue(3, ['builder:pip'], { updated_at: t(9) }), issue(4, ['builder:other', 'status:taken'], { updated_at: t(9) })]
+    const pulls = [{ body: 'Fixes #1', updated_at: t(2), head: { ref: 'pip/feature' } }, { body: '', updated_at: t(1), head: { ref: 'juno/2' } },
+      { body: 'Closes #3', updated_at: t(0), head: { ref: 'x' } }]
+    expect(takenTasks(issues, pulls, crew().builders)).toEqual([
+      { number: 1, label: 'builder:pip', name: 'Pip', touched: Date.parse(t(2)) },
+      { number: 2, label: 'builder:juno', name: 'Juno', touched: Date.parse(t(1)) },
+    ])
+  })
+})
+
+describe('how long tasks take, learned (startedAt, learnedMinutes)', () => {
+  it('starts a finished task at its builder\'s "taken by", else at Harness giving it', () => {
+    const c = (body: string, at: string) => ({ body, created_at: at })
+    expect(startedAt([c('Opened by deehw.', '2026-11-09T01:00:00Z'), c('Pip, 09:00, taken by Pip.', '2026-11-09T02:00:00Z')])).toBe(Date.parse('2026-11-09T02:00:00Z'))
+    expect(startedAt([c('Harness, 09:00: for **Pip**: it can start now.', '2026-11-09T03:00:00Z')])).toBe(Date.parse('2026-11-09T03:00:00Z'))
+    expect(startedAt([c('No start here.', '2026-11-09T03:00:00Z')])).toBeNull()
+  })
+
+  it('takes the median of each size once there are three, within ten minutes and a day', () => {
+    expect(learnedMinutes([{ size: 's', minutes: 20 }, { size: 's', minutes: 40 }, { size: 's', minutes: 600 }, { size: 'm', minutes: 50 },
+      { size: 'm', minutes: 70 }, { size: 'l', minutes: 2 }, { size: 'l', minutes: 3 }, { size: 'l', minutes: 4 }])).toEqual({ s: 40, l: 10 })
+    expect(learnedMinutes([{ size: 'm', minutes: 3_000 }, { size: 'm', minutes: 3_000 }, { size: 'm', minutes: 3_000 }, { size: 'm', minutes: 10 }])).toEqual({ m: 1_440 })
   })
 })

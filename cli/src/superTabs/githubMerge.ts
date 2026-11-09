@@ -54,13 +54,14 @@ export async function ledProjects(deps: { me: string | null; live: (harnessId: s
   return [...found.values()]
 }
 
-/** What one pull request's comments say: each reader's last verdict, and whether it asks for two reads. A reader is its name as signed
- *  ("Juno, 14:20, to **Pip**: READ-OK f6edb44"), or its GitHub login when unsigned, read as `nameKey` reads names: "Juno" and "JUNO" are
- *  one reader, and one that signs two ways counts once. What the pull request's own [writers] signed (any of the agents its labels
- *  and branch name, whatever the length or spelling of the name) is its writer's, so a pull request's author keeps its own HOLD and
- *  lifts it, and is nobody's reader (mergeReady). */
-export function verdicts(comments: Json[], body: string, writers: readonly string[] = []): { readers: Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string }>; twoReads: boolean } {
-  const readers = new Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; at: string }>()
+/** What one pull request's comments say: each reader's last verdict, by its name as `nameKey` reads names, with the name as it signs, and
+ *  whether it asks for two reads. A reader is its name as signed ("Juno, 14:20, to **Pip**: READ-OK f6edb44"), or its GitHub login when
+ *  unsigned: "Juno" and "JUNO" are one reader, and one that signs two ways counts once. What the pull request's own [writers] signed
+ *  (any of the agents its labels and branch name, whatever the length or spelling of the name) is its writer's, so a pull request's
+ *  author keeps its own HOLD and lifts it, and is nobody's reader (mergeReady). */
+export function verdicts(comments: Json[], body: string, writers: readonly string[] = []):
+  { readers: Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string }>; twoReads: boolean } {
+  const readers = new Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string; at: string }>()
   let twoReads = /\bTWO READS\b/.test(body)
   for (const comment of comments) {
     if (!TEAM.has(comment.author_association)) continue
@@ -68,14 +69,14 @@ export function verdicts(comments: Json[], body: string, writers: readonly strin
     if (/\bTWO READS\b/.test(first)) twoReads = true
     const found = VERDICT.exec(first)
     if (!found) continue
-    const writer = writers.find(name => signedAs(first, name))
-    const key = nameKey(writer ?? signatureOf(first) ?? String(object(comment.user).login ?? ''))
+    const name = writers.find(writer => signedAs(first, writer)) ?? signatureOf(first) ?? String(object(comment.user).login ?? '')
+    const key = nameKey(name)
     if (!key || key === nameKey(SELF)) continue
     const at = String(comment.created_at ?? '')
     const last = readers.get(key)
-    if (!last || at >= last.at) readers.set(key, { verdict: found[1] as 'READ-OK' | 'HOLD', sha: found[2]!, at })
+    if (!last || at >= last.at) readers.set(key, { verdict: found[1] as 'READ-OK' | 'HOLD', sha: found[2]!, name, at })
   }
-  return { readers: new Map([...readers].map(([k, v]) => [k, { verdict: v.verdict, sha: v.sha }])), twoReads }
+  return { readers: new Map([...readers].map(([k, v]) => [k, { verdict: v.verdict, sha: v.sha, name: v.name }])), twoReads }
 }
 
 /** The pull request's author by name: its builder label, else its branch's first part (`pip/12`). */
@@ -200,7 +201,7 @@ export class GitHubMerge {
         this.note('MERGE_REFUSED', `${repo}#${number}: GitHub answered ${merged.status}`)
         continue
       }
-      const by = reads.map(([reader]) => reader).join(' and ')
+      const by = reads.map(([, r]) => r.name).join(' and ')
       await this.comment(repo, number, `${SELF}, ${this.clock()}: merged. READ-OK on ${head.slice(0, 7)} by ${by}, checks green.`)
       this.log(`[super-tab] merged ${repo}#${number} on ${head.slice(0, 7)} (READ-OK by ${by})`)
       this.reads.forget(repo)

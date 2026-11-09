@@ -54,7 +54,7 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     const f = setup()
     await f.merger.tick()
     expect(f.merges()).toEqual([{ method: 'PUT', path: '/repos/acme/app/pulls/4/merge', body: { merge_method: 'squash', sha: HEAD } }])
-    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: merged\. READ-OK on f6edb44 by juno, checks green\.$/)])
+    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: merged\. READ-OK on f6edb44 by Juno, checks green\.$/)])
   })
 
   it('merges nothing on a READ-OK of an older head, by its author, by a stranger, or while a HOLD stands', async () => {
@@ -133,8 +133,8 @@ describe('the rule\'s parts', () => {
     const { readers, twoReads } = verdicts([comment('Juno, 14:20, to **Pip**: READ-OK f6edb44'), comment('**Faye** (PM): HOLD 1234567 wait'),
       comment('READ-OK abcdef0', { user: { login: 'kenmore' } }), comment('Harness, 14:31: merged. READ-OK on f6edb44 by juno, checks green.'),
       comment('Kai, 14:00: TWO READS for this one')], '')
-    expect(Object.fromEntries(readers)).toEqual({ juno: { verdict: 'READ-OK', sha: 'f6edb44' }, faye: { verdict: 'HOLD', sha: '1234567' },
-      kenmore: { verdict: 'READ-OK', sha: 'abcdef0' } })
+    expect(Object.fromEntries(readers)).toEqual({ juno: { verdict: 'READ-OK', sha: 'f6edb44', name: 'Juno' },
+      faye: { verdict: 'HOLD', sha: '1234567', name: 'Faye' }, kenmore: { verdict: 'READ-OK', sha: 'abcdef0', name: 'kenmore' } })
     expect(twoReads).toBe(true)
   })
 
@@ -227,8 +227,8 @@ describe('a pull request\'s author is never its own reader', () => {
 
   it('reads what a pull request\'s writer signed as the writer\'s, whatever the length of its name, so its READ-OK lifts its own HOLD and counts for nothing', async () => {
     const said = [comment('Atlas Reed Two, 14:20: READ-OK f6edb44'), comment('Juno, 14:21: READ-OK f6edb44'), comment('Atlas Reed Two, 14:22: HOLD f6edb44 wait')]
-    expect([...verdicts(said, '', ['atlas-reed-two']).readers]).toEqual([['atlasreedtwo', { verdict: 'HOLD', sha: 'f6edb44' }],
-      ['juno', { verdict: 'READ-OK', sha: 'f6edb44' }]])
+    expect([...verdicts(said, '', ['atlas-reed-two']).readers]).toEqual([['atlasreedtwo', { verdict: 'HOLD', sha: 'f6edb44', name: 'atlas-reed-two' }],
+      ['juno', { verdict: 'READ-OK', sha: 'f6edb44', name: 'Juno' }]])
     for (const [comments, merges] of [[[comment('Atlas Reed Two, 14:20: READ-OK f6edb44')], 0],
       [[comment('Atlas Reed Two, 14:20: HOLD f6edb44 wait'), comment('Atlas Reed Two, 14:21: READ-OK f6edb44'), comment('Kai, 14:22: READ-OK f6edb44')], 1]] as const) {
       const f = setup()
