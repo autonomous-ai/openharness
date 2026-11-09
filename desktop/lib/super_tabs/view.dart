@@ -52,6 +52,8 @@ import 'composer_toggle.dart';
 import 'activity.dart';
 import 'attachment_chips.dart' show superTabShowsInPlace;
 import 'attachment_image.dart';
+import 'channel_feed.dart';
+import 'channel_feed_widgets.dart';
 import 'channel_talk.dart';
 import 'reminders.dart';
 import 'places.dart';
@@ -1184,6 +1186,9 @@ class _SuperTabViewState extends State<SuperTabView>
   void dispose() {
     _noticesLeave(c);
     SuperTabPlaces.of(c).removeListener(_takePlace);
+    for (final feed in _feeds.values) {
+      feed.dispose();
+    }
     // The controller outlives its view, reading another Swarm's replies.
     c.threadPaneHidden();
     WidgetsBinding.instance.removeObserver(this);
@@ -3817,6 +3822,18 @@ class _SuperTabViewState extends State<SuperTabView>
   ({String channel, String repository, int number})? _issue;
 
   late final SwarmGitHub _github = widget.github ?? SwarmGitHub();
+
+  /// What each project channel's agents do on GitHub, read for the channel while it is open (Swarm v4), by channel.
+  final _feeds = <String, SwarmChannelFeed>{};
+
+  /// Where each channel's list divides when the feed's cards are among its rows: the time of the first row drawn.
+  final _feedAnchor = <String, DateTime>{};
+
+  /// The newest GitHub activity each channel's list last followed to the end.
+  final _feedSeen = <String, DateTime?>{};
+
+  /// A task opened from a card in the channel, not from the board: closing it goes back to the channel.
+  bool _issueFromChannel = false;
   late final SwarmInstructionsLink? _instructions =
       widget.instructions ??
       (widget.app == null
@@ -3851,6 +3868,77 @@ class _SuperTabViewState extends State<SuperTabView>
       _agentTalk(message.conversationId)
       ? superTabPostTo(c.snapshot, message)
       : const [];
+
+  /// What the agents of [group]'s project do on GitHub, read for its channel (Swarm v4); null for anything else: a chat that is
+  /// no project's channel, a project with no repository on GitHub, the browser (no gh on that computer), and a test that gives
+  /// no gh.
+  SwarmChannelFeed? _channelFeed(SuperTabConversation? group) {
+    if (group == null ||
+        !widget.board ||
+        kIsWeb ||
+        (widget.github == null && kUnderTest) ||
+        c.snapshot?.isProjectLead(group.id) != true) {
+      return null;
+    }
+    final repository = SwarmTaskBoard.repositoryOf(c, group.id);
+    if (repository == null) return null;
+    final held = _feeds[group.id];
+    if (held != null && held.repository == repository) return held;
+    held?.dispose();
+    return _feeds[group.id] = SwarmChannelFeed(
+      github: _github,
+      repository: repository,
+      channelId: group.id,
+    )..addListener(_feedChanged);
+  }
+
+  /// A feed read something new: the channel draws it, and follows it to the end when its reader was there.
+  void _feedChanged() {
+    if (!mounted) return;
+    final id = c.selectedId;
+    final scroll = _scroll[id];
+    final atEnd = scroll != null && scroll.hasClients
+        ? scroll.position.extentAfter < 40
+        : (_following[id] ?? true);
+    setState(() {});
+    final newest = _feeds[id]?.newest;
+    if (atEnd && newest != null && newest != _feedSeen[id]) {
+      _feedSeen[id] = newest;
+      _followEnd(id);
+    }
+  }
+
+  /// Where [rows], the channel's own rows with its feed's cards among them, divide: the row [_splitAt] chose among the channel's
+  /// own, else the first row drawn. Older rows go above it and newer below, so neither moves the rows already there.
+  int _feedSplitAt(
+    String id,
+    List<SuperTabMessage> rows,
+    List<SuperTabMessage> own,
+    int ownAt,
+  ) {
+    if (ownAt < own.length) {
+      return rows.indexWhere((m) => m.id == own[ownAt].id);
+    }
+    if (rows.isEmpty) return 0;
+    final anchor = _feedAnchor[id] ??=
+        rows.first.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final at = rows.indexWhere(
+      (m) => !(m.createdAt ?? anchor).isBefore(anchor),
+    );
+    return at < 0 ? rows.length : at;
+  }
+
+  /// Opens the task a card in the channel is on, beside the channel; closing it goes back to the channel.
+  void _openFeedTask(SuperTabMessage message) {
+    final number = message.source['number'];
+    final repository = message.source['repository'];
+    if (number is! int || repository is! String) return;
+    setState(() {
+      _taskListOpen = true;
+      _issue = (channel: c.selectedId, repository: repository, number: number);
+      _issueFromChannel = true;
+    });
+  }
 
   /// An agent chat's header (Swarm v4): the agent, where it runs, then its instructions and its terminal, each opening
   /// beside the chat.
@@ -4635,12 +4723,27 @@ class _SuperTabViewState extends State<SuperTabView>
     bool joinsBelow = false,
   }) {
     _index();
+    if (message.source['kind'] == SwarmChannelFeed.earlierKind) {
+      return switch (_feeds[c.selectedId]) {
+        final feed? => SwarmFeedEarlier(
+          key: ValueKey('super-message-${message.id}'),
+          feed: feed,
+        ),
+        null => const SizedBox.shrink(),
+      };
+    }
     if (SuperTabGitHubRow.shows(message)) {
+      // What an agent did on GitHub, in the channel, is its card; what GitHub said to a person's agent is the person's news.
       return SuperTabGitHubRow(
         key: ValueKey(
           '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
         ),
         message: message,
+        agent: message.fromAgent ? c.snapshot?.agent(message.authorId) : null,
+        author: message.fromAgent ? _shownAuthor(c, message) : null,
+        onOpen: message.fromAgent && message.source['on'] == 'issue'
+            ? () => _openFeedTask(message)
+            : null,
       );
     }
     if (SuperTabShipRow.shows(message)) {
@@ -4990,7 +5093,8 @@ class _SuperTabViewState extends State<SuperTabView>
   /// rows above the view can regroup.
   void _moveSplitToView(String id, SuperTabChatScroll scroll) {
     final split = _split[id];
-    if (split == null) return;
+    // A channel with its feed's cards among its rows keeps the divide it has: the rows it measures from are not its own.
+    if (split == null || _feeds.containsKey(id)) return;
     final messages = _ownShown(id);
     final at = messages.indexWhere((m) => superTabMessageOrder(m, split) >= 0);
     final top = _rowAtTop();
@@ -5221,7 +5325,13 @@ class _SuperTabViewState extends State<SuperTabView>
         .reversed
         .where(c.isOwn)
         .firstOrNull;
-    final actualMessages = _shownMessages(c.selectedId);
+    final feed = _channelFeed(group);
+    final actualMessages = feed == null
+        ? _shownMessages(c.selectedId)
+        : feed.mixedInto(_shownMessages(c.selectedId), [
+            for (final agent in c.snapshot?.agents ?? const <SuperTabAgent>[])
+              if (agent.projectId == group!.projectId) agent,
+          ]);
     // A thread's reply sends in its thread; only what shows here is pending here.
     final outgoing = c
         .outgoing(c.selectedId)
@@ -5245,7 +5355,10 @@ class _SuperTabViewState extends State<SuperTabView>
     _rowPlaces = rowIndex;
     // A row stays the same row as pages arrive above it, state and all.
     int? rowOf(Key key) => key is ValueKey<String> ? rowIndex[key.value] : null;
-    final split = _splitAt(c.selectedId, ownMessages);
+    final ownSplit = _splitAt(c.selectedId, ownMessages);
+    final split = feed == null
+        ? ownSplit
+        : _feedSplitAt(c.selectedId, actualMessages, ownMessages, ownSplit);
     // Rows on their way group by the same rule, so a quick line keeps the
     // shape it will have once confirmed; one Not sent keeps its name and
     // actions.
@@ -5380,6 +5493,14 @@ class _SuperTabViewState extends State<SuperTabView>
             onClose: _closeFind,
           ),
         if (!unread) _connectionLine(c),
+        if (feed != null) ...[
+          SwarmFeedPulse(
+            key: ValueKey('swarm-feed-pulse-${c.selectedId}'),
+            feed: feed,
+            foreground: widget.app?.foreground,
+          ),
+          SwarmFeedState(feed: feed),
+        ],
         if (group != null && decisions != null && !c.isEarlierBuddyChat(group))
           // The list stops at an edge under the Buddy's line, as it does under
           // the header: without one, a message scrolled up to the line read as
@@ -5436,7 +5557,8 @@ class _SuperTabViewState extends State<SuperTabView>
                     // (anh Dee, 2026-11-09), and the agents' real talk is on GitHub.
                     : widget.board &&
                           c.snapshot?.isProjectLead(group.id) == true &&
-                          c.messagesRead(group.id)
+                          c.messagesRead(group.id) &&
+                          (feed?.loaded ?? true)
                     ? superTabEmptyChannel
                     // Empty means empty (anh Dee's rule 7, task #4465): no words for a chat with nothing in it.
                     : null) {
@@ -6206,7 +6328,11 @@ class _SuperTabViewState extends State<SuperTabView>
               repository: opened.repository,
               number: opened.number,
               refreshEvery: kUnderTest ? null : const Duration(seconds: 30),
-              onClose: () => setState(() => _issue = null),
+              onClose: () => setState(() {
+                _issue = null;
+                if (_issueFromChannel) _taskListOpen = false;
+                _issueFromChannel = false;
+              }),
             )
           : null;
       final viewer = _imageViewer();
@@ -6322,13 +6448,14 @@ class _SuperTabViewState extends State<SuperTabView>
                                   refreshEvery: kUnderTest
                                       ? null
                                       : const Duration(minutes: 1),
-                                  onOpen: (repository, opened) => setState(
-                                    () => _issue = (
+                                  onOpen: (repository, opened) => setState(() {
+                                    _issueFromChannel = false;
+                                    _issue = (
                                       channel: c.selectedId,
                                       repository: repository,
                                       number: opened.number,
-                                    ),
-                                  ),
+                                    );
+                                  }),
                                   onClose: () =>
                                       setState(() => _taskListOpen = false),
                                 )

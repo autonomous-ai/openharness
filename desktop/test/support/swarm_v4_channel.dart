@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/state/app_state.dart' show AppNotifier;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/github_issues.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -100,7 +101,8 @@ void swarmV4Talk(ConversationServer server) {
 
 /// Opens [server]'s Swarm as its person does, in a window of [size]. With [saved] the Swarm was left on that chat, as a person
 /// who comes back finds it; without, it is the first open. Two computers are known: Mac Studio, up, and Juno's laptop, off.
-/// [github] answers the project's issues, as `gh` does.
+/// [github] answers the project's issues, as `gh` does. [app] is the app model the view is given when the test needs to tell
+/// it things (the app goes to the background); without it, a fresh one.
 Future<SuperTabController> openSwarmV4(
   WidgetTester tester,
   ConversationServer server, {
@@ -108,6 +110,7 @@ Future<SuperTabController> openSwarmV4(
   Size size = const Size(1440, 860),
   Brightness brightness = Brightness.light,
   SwarmGitHub? github,
+  AppNotifier? app,
 }) async {
   await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -121,9 +124,9 @@ Future<SuperTabController> openSwarmV4(
         : {'tabId': 'tab', 'accountId': 'owner', 'selectedId': saved},
   );
   addTearDown(c.dispose);
-  final app = createApp();
-  addTearDown(app.dispose);
-  app.machines = const [
+  final shown = app ?? createApp();
+  addTearDown(shown.dispose);
+  shown.machines = const [
     Machine(
       machineId: 'host',
       authMode: MachineAuthMode.managed,
@@ -145,14 +148,14 @@ Future<SuperTabController> openSwarmV4(
       home: Scaffold(
         body: SuperTabView(
           controller: c,
-          app: app,
+          app: shown,
           onInvite: () {},
           onAddAgent: (_) {},
           onOpenTerminal: (_) {},
           onNewAgent: () {},
           onNewProject: () {},
           machineName: (id) =>
-              app.machines.firstWhere((m) => m.machineId == id).displayName,
+              shown.machines.firstWhere((m) => m.machineId == id).displayName,
           github: github,
           board: true,
         ),

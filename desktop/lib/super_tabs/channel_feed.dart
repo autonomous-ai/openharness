@@ -128,9 +128,13 @@ class SwarmChannelFeed extends ChangeNotifier {
     var changed = !loaded;
     await Future.wait([
       for (final feed in SwarmFeed.values)
-        _readFirst(feed).then(
-          (read) => changed |= read,
-          onError: (Object error) => failed ??= _named(error),
+        _readFirst(feed).then<void>(
+          (read) {
+            changed |= read;
+          },
+          onError: (Object error) {
+            failed ??= _named(error);
+          },
         ),
     ]);
     if (_disposed) return;
@@ -186,6 +190,18 @@ class SwarmChannelFeed extends ChangeNotifier {
       ..addAll(fresh)
       ..sort((a, b) => b.sortTime.compareTo(a.sortTime));
     return true;
+  }
+
+  /// The newest of what the lists hold: it moves when GitHub has something new to show.
+  DateTime? get newest {
+    DateTime? top;
+    for (final rows in _rows.values) {
+      if (rows.isNotEmpty &&
+          (top == null || rows.first.sortTime.isAfter(top))) {
+        top = rows.first.sortTime;
+      }
+    }
+    return top;
   }
 
   /// Whether older rows may be read: a list whose last page was full and that is under [pagesMax].

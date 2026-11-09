@@ -98,10 +98,7 @@ enum SwarmFeed {
       SwarmFeed.pulls => _pull,
       SwarmFeed.labels => _label,
     };
-    return [
-      for (final row in json)
-        if (read(row) case final row?) row,
-    ];
+    return [for (final row in json) ?read(row)];
   }
 
   /// Who may be an agent's: the repository's people, as GitHub marks each comment and pull request. Anyone may comment on a
