@@ -479,13 +479,16 @@ jobs:
           JS
 
   # The owner's production step for the terminal host, on the repository's own credential instead of a laptop's
-  # gcloud. It runs only when the dispatch asks (promote_pty), on a real (not dry-run) metadata path, and only after
-  # `windows-staging` read this release's zips back from the CDN and matched their sha256 and size — so the payload
-  # promoted is the one that job verified. Promotion names the same immutable staging objects; nothing is uploaded
-  # here. A tag push never does this: the host is a binary in every Windows pane, and the staging E2E
+  # gcloud. It runs only when the dispatch asks (promote_pty) and on a real (not dry-run) metadata path.
+  #
+  # It needs only `version`, not the build jobs: the script checks every zip it promotes — it fetches both from the
+  # CDN and refuses unless their sha256 and size are the ones the staging manifest names — so promoting a version
+  # that was released earlier works without rebuilding it, and without republishing bytes the bucket refuses.
+  #
+  # A tag push never does this: the host is a binary in every Windows pane, and the staging E2E
   # (docs/testing/windows-cli-e2e.md) is the owner's gate before it is worth promoting.
   promote-pty:
-    needs: [version, windows-staging]
+    needs: [version]
     if: >-
       inputs.promote_pty &&
       needs.version.outputs.metadata_path == 'harness/cli/metadata.json'
