@@ -249,6 +249,58 @@ SwarmGitHub swarmV4GitHub({List<List<String>>? calls}) => SwarmGitHub(
         },
       });
     }
+    // One open pull request, for 5759: green, with a READ-OK on its head from a reader other than its builder.
+    if (query.contains('pullRequests(')) {
+      return answer({
+        'repository': {
+          'defaultBranchRef': {'name': 'main'},
+          'pullRequests': {
+            'nodes': [
+              {
+                'number': 5770,
+                'title': 'Score the update rows again',
+                'url': 'https://github.com/autonomous-ai/lampOS/pull/5770',
+                'isDraft': false,
+                'headRefName': 'first-builder/5759',
+                'headRefOid': 'f6edb44a1b2c3d4e5f60718293a4b5c6d7e8f901',
+                'baseRefName': 'main',
+                'body': 'Closes #5759',
+                'mergeable': 'MERGEABLE',
+                'labels': {
+                  'nodes': [
+                    {'name': 'builder:first builder'},
+                  ],
+                },
+                'closingIssuesReferences': {
+                  'nodes': [
+                    {'number': 5759},
+                  ],
+                },
+                'commits': {
+                  'nodes': [
+                    {
+                      'commit': {
+                        'statusCheckRollup': {'state': 'SUCCESS'},
+                      },
+                    },
+                  ],
+                },
+                'comments': {
+                  'nodes': [
+                    {
+                      'body': 'Migrate, 10:05 GMT+7: READ-OK f6edb44',
+                      'createdAt': '2026-11-09T03:05:00Z',
+                      'authorAssociation': 'MEMBER',
+                      'author': {'login': '69tc'},
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      });
+    }
     if (query.contains(r'before:$before')) {
       return answer({
         'repository': {

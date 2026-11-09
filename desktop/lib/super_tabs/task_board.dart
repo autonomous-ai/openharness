@@ -8,17 +8,21 @@ import '../shared/theme/swarm_layout.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../shared/widgets/skeleton.dart';
+import '../logging/app_log.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/laid_out_list.dart';
 import 'controller.dart';
 import 'github_issues.dart';
+import 'github_pulls.dart';
 import 'identity.dart';
+import 'pull_chip.dart';
 import 'swarm_type.dart';
 
 /// A project's tasks (Swarm v4, anh Dee 2026-11-09): its repository's open GitHub issues, read with `gh` on this computer
 /// as its person ([SwarmGitHub]), as a board of three columns, newest activity first: To do (nobody has it), Assigned (its
 /// `builder:<name>` label names an agent) and On it (`status:taken`). A card holds what github.com's list shows: the number,
-/// the title, the labels in their colours, who opened it and when, and how many comments it has. Tapping one opens the issue.
+/// the title, the labels in their colours, who opened it and when, and how many comments it has, and beside its number where
+/// its pull request stands ([SwarmPullChip]). Tapping one opens the issue.
 class SwarmTaskBoard extends StatefulWidget {
   const SwarmTaskBoard({
     super.key,
@@ -94,6 +98,9 @@ class SwarmTaskBoard extends StatefulWidget {
 
 class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
   List<SwarmIssue>? _issues;
+
+  /// The open pull requests by the task each is for, as last read.
+  Map<int, SwarmPull>? _pulls;
   String? _error;
   String? _repository;
   Timer? _refresh;
@@ -115,6 +122,7 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
     super.didUpdateWidget(old);
     if (old.conversationId != widget.conversationId) {
       _issues = null;
+      _pulls = null;
       _error = null;
       _read();
     }
@@ -136,7 +144,12 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
     _reading = repository;
     // What was read last shows at once; the read below only brings what changed.
     final kept = _issues == null ? widget.github.kept(repository) : null;
-    if (kept != null) setState(() => _issues = kept);
+    if (kept != null) {
+      setState(() {
+        _issues = kept;
+        _pulls = widget.github.keptPulls(repository);
+      });
+    }
     // The first hundred show while the rest are read, only where nothing shows yet: a list already shown is whole, and
     // its first hundred would drop the rest from the board until the last page lands.
     final partial = _issues == null;
@@ -156,6 +169,18 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
         _issues = issues;
         _error = null;
       });
+      // Their pull requests after them: the cards show first, and a read of these that fails keeps the last chips.
+      try {
+        final pulls = await widget.github.pulls(repository);
+        if (mounted && repository == _repository) {
+          setState(() => _pulls = pulls);
+        }
+      } on SwarmGitHubError catch (error) {
+        appLog.warn(
+          'super-tabs',
+          'GitHub pull requests not read: ${error.message}',
+        );
+      }
       // Their threads are read now, so a card opens at once.
       unawaited(widget.github.prefetch(repository, issues));
     } on SwarmGitHubError catch (error) {
@@ -336,6 +361,7 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
   Widget _card(BuildContext context, String repository, SwarmIssue issue) {
     final agent = issue.agent;
     final selected = widget.openNumber == issue.number;
+    final pull = _pulls?[issue.number];
     return Material(
       color: selected ? grid.AppSurface.recess : grid.AppPalette.cardBg,
       shape: RoundedRectangleBorder(
@@ -353,18 +379,28 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
             children: [
               Padding(
                 padding: const EdgeInsets.only(bottom: SwarmLayout.capsuleGap),
-                child: Container(
-                  padding: SwarmLayout.capsulePadding,
-                  decoration: BoxDecoration(
-                    color: grid.AppSurface.recess,
-                    borderRadius: BorderRadius.circular(
-                      SwarmLayout.capsuleRadius,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Container(
+                      padding: SwarmLayout.capsulePadding,
+                      decoration: BoxDecoration(
+                        color: grid.AppSurface.recess,
+                        borderRadius: BorderRadius.circular(
+                          SwarmLayout.capsuleRadius,
+                        ),
+                      ),
+                      child: Text(
+                        '#${issue.number}',
+                        style: DesktopChrome.metadata(),
+                      ),
                     ),
-                  ),
-                  child: Text(
-                    '#${issue.number}',
-                    style: DesktopChrome.metadata(),
-                  ),
+                    // A narrow column shortens the chip's words, never the task's number.
+                    if (pull != null) ...[
+                      const SizedBox(width: 8),
+                      Flexible(child: SwarmPullChip(pull: pull)),
+                    ],
+                  ],
                 ),
               ),
               Text(

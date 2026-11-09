@@ -8,14 +8,17 @@ import '../shared/theme/app_icons.dart';
 import '../shared/theme/swarm_layout.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
+import '../logging/app_log.dart';
 import '../shared/widgets/skeleton.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/laid_out_list.dart';
 import 'controller.dart';
 import 'github_issues.dart';
+import 'github_pulls.dart';
 import 'message_row.dart';
 import 'message_text.dart';
 import 'model.dart';
+import 'pull_chip.dart';
 import 'swarm_type.dart';
 import 'task_board.dart';
 
@@ -59,6 +62,9 @@ class SwarmIssuePanel extends StatefulWidget {
 class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
   SwarmIssueThread? _thread;
 
+  /// The task's open pull request, as last read: shown under its title.
+  SwarmPull? _pull;
+
   /// Every comment read so far, oldest first, with none missing between them: the newest the thread brings, and the pages
   /// "Show" read before them.
   List<SwarmIssueComment> _comments = const [];
@@ -83,6 +89,7 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
     super.didUpdateWidget(old);
     if (old.number != widget.number || old.repository != widget.repository) {
       _thread = null;
+      _pull = null;
       _comments = const [];
       _earlier = null;
       _error = null;
@@ -94,6 +101,7 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
   void _open() {
     final kept = widget.github.keptThread(widget.repository, widget.number);
     if (kept != null) _take(kept);
+    _pull = widget.github.keptPulls(widget.repository)?[widget.number];
     _read();
   }
 
@@ -142,6 +150,21 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
           number != widget.number)
         return;
       setState(() => _error = error.message);
+      return;
+    }
+    // Its pull request after its thread; a read of it that fails keeps the last one shown.
+    try {
+      final pulls = await widget.github.pulls(repository);
+      if (mounted &&
+          repository == widget.repository &&
+          number == widget.number) {
+        setState(() => _pull = pulls[number]);
+      }
+    } on SwarmGitHubError catch (error) {
+      appLog.warn(
+        'super-tabs',
+        'GitHub pull requests not read: ${error.message}',
+      );
     }
   }
 
@@ -250,6 +273,36 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
     );
   }
 
+  /// The task's pull request: where it stands, its title and its branch, and Open, which goes to it on GitHub.
+  Widget _pullRow(SwarmPull pull) => Container(
+    key: const ValueKey('swarm-issue-pull'),
+    padding: SwarmLayout.cardPadding,
+    decoration: BoxDecoration(
+      color: grid.AppPalette.cardBg,
+      borderRadius: BorderRadius.circular(SwarmLayout.cardRadius),
+      border: Border.all(color: DesktopChrome.rim),
+    ),
+    child: Row(
+      children: [
+        SwarmPullChip(pull: pull),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            '${pull.title} · ${pull.branch}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: DesktopChrome.metadata(),
+          ),
+        ),
+        TextButton(
+          key: const ValueKey('swarm-issue-pull-open'),
+          onPressed: () => widget.openUrl(pull.url),
+          child: const Text('Open'),
+        ),
+      ],
+    ),
+  );
+
   Widget _body(BuildContext context) {
     final thread = _thread;
     final error = _error;
@@ -349,6 +402,10 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
         if (issue.labels.isNotEmpty) ...[
           const SizedBox(height: 8),
           SwarmLabelChips(issue: issue, limit: 12),
+        ],
+        if (_pull case final pull?) ...[
+          const SizedBox(height: 12),
+          _pullRow(pull),
         ],
         const SizedBox(height: 16),
         _post(

@@ -4,6 +4,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/agent_instructions.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/pull_chip.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'package:flutter/gestures.dart';
@@ -110,6 +111,10 @@ void main() {
       expect(tester.widget<Text>(key('swarm-task-comments-5759')).data, '3');
       // No comments: no count.
       expect(key('swarm-task-comments-5760'), findsNothing);
+      // A task's open pull request, beside its number: where it stands by the rule Harness merges by. None, no chip.
+      expect(inCard(5759, find.text('#5770 Merging')), findsOneWidget);
+      expect(inCard(5754, find.byType(SwarmPullChip)), findsNothing);
+      expect(inCard(5760, find.byType(SwarmPullChip)), findsNothing);
       // Each card names the agent its builder:<name> label gives it, by face.
       expect(
         inBoard(find.text('No bathroom-break reminder skill ships')),
@@ -140,6 +145,15 @@ void main() {
       expect(find.textContaining('First builder'), findsWidgets);
       expect(key('swarm-label-status:taken'), findsWidgets);
       expect(key('swarm-issue-opened'), findsOneWidget);
+      // Its pull request under its title, with Open.
+      expect(
+        find.descendant(
+          of: key('swarm-issue-pull'),
+          matching: find.text('#5770 Merging'),
+        ),
+        findsOneWidget,
+      );
+      expect(key('swarm-issue-pull-open'), findsOneWidget);
       expect(find.text('1 earlier comment'), findsOneWidget);
       expect(find.textContaining('lamp check'), findsNothing);
       await tester.tap(key('swarm-issue-show-earlier'));
