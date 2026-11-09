@@ -5541,6 +5541,33 @@ describe('a delivery that waits for the agent\'s turn to end', () => {
   })
 })
 
+// Swarm v4: the backend sends no owed ask and no Leads conversation (backend read/hostRows.ts: `owed: null`,
+// `leadsConversationId: null`). A server from before still names them, and this host reads neither.
+describe('a roster row from a server that still names an owed ask and a Leads conversation', () => {
+  it('does not restart a PM for the ask it owes, however long it has been in one turn', async () => {
+    const MIN = 60_000
+    const t = lifeFixture([leadRow({ owed: { messageId: 'm1', since: 0, restartAfterMs: 20 * MIN } })])
+    t.live(true)
+    t.core.agents.activity = vi.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, 'working' as const])))
+    await t.poll()
+    await t.poll(19 * MIN)
+    await t.poll(25 * MIN)
+    await t.poll(60 * MIN)
+    expect(t.log).not.toHaveBeenCalledWith(expect.stringContaining('Restarting the Product Manager'))
+    expect(t.log).not.toHaveBeenCalledWith(expect.stringContaining('Could not restart the Product Manager'))
+  })
+
+  it('types a delivery for the conversation that server called the Leads one, like any other, and says nothing of it', async () => {
+    const t = setup(), host = t.open()
+    ;(t.row as Record<string, unknown>).leadsConversationId = 'leads'
+    t.from('leads')
+    for (let i = 0; i < 3; i++) await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.log.mock.calls.filter(([line]) => String(line).includes('not in a conversation'))).toEqual([])
+  })
+})
+
+
 // Task #3398: a crew member the server put to sleep, moved, or whose folder it dropped is closed on its host, once, and never
 // kept alive; an awake one is left to the keep-alive.
 describe('a crew member at rest', () => {

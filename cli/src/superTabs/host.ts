@@ -52,7 +52,8 @@ const agentCommandOf = (entry: Entry, prefix: string, buddy = false) =>
   `${prefix} --tab ${shellQuote(entry.tabId)}${buddy ? '' : ` --agent ${shellQuote(entry.agentId)}`}`
 const readCommand = (entry: Entry, prefix: string, group: string, id: string, buddy = false) =>
   `${agentCommandOf(entry, prefix, buddy)} message ${shellQuote(group)} ${shellQuote(id)}`
-export { backend, identifier, object, SuperTabHostError } from './wire.js'
+// The Pro dial's Swarm face (cards.ts) still takes these two from here; every other file takes them from wire.ts.
+export { backend, SuperTabHostError } from './wire.js'
 import { leadSwitchOf, leadSwitchRecovered, SWITCH_ADOPT_MS, SWITCH_RECOVERY_MS, switchWithin, type LeadSwitch } from './leadSwitch.js'
 import { backend, ENDED_WORK, identifier, object, SuperTabHostError, within } from './wire.js'
 import { parseSwarmSkill, PM_BASICS, recordBuddySkillNotice, refreshBuddySkill, SWARM_BASICS, wireRole, type SkillRefresh, type SwarmSkill,
@@ -276,9 +277,6 @@ async function sessionOfFolder(home: string, sessionId: string, folder: string):
 const JOIN_RETRY_MS = 60_000
 /** How long a skill re-read notice that could not be sent (no open group yet, or the backend failed) waits to retry. */
 const SKILL_RETRY_MS = 60_000
-/** What a session is told about: a Buddy's own skill, which only a CLI release changes. Plain agents (Swarm v4) are told
- *  nothing: they read only their repo's files. */
-function skillSetOf(_target: HostAgent): string { return 'none' }
 const JOIN_RETRY_MAX_MS = 30 * 60_000
 /** A server that no longer serves this client's reads (HTTP 426): said once, then asked again a minute later (design 5.1). */
 const UPDATE_BACKOFF_MS = 60_000
@@ -589,11 +587,9 @@ export class SuperTabHost {
   /** When each running Swarm session's skill is next compared with the built-in text: once per host, and again while
    *  its re-read notice is still owed. */
   private readonly skillChecks = new Map<string, number>()
-  /** What each session was last compared with (skillSetOf): a change makes it due again at once. */
-  private readonly skillModes = new Map<string, string>()
-  /** Per running session, the skill set the latest roster names: a refresh started from an older roster installs and
-   *  tells nothing once this has moved on (the review of #1660). */
-  private readonly rosterSkills = new Map<string, string>()
+  /** The running sessions the latest roster names: a refresh started from an older roster installs and tells nothing once its
+   *  session is no longer on it (the review of #1660). */
+  private readonly rosterSkills = new Set<string>()
   private skillsRunning: Promise<void> | null = null
   private missing = new Map<string, number>()
   /** A Buddy with no pending switch is checked once at roster admission, never on idle passes. */
@@ -1183,7 +1179,7 @@ export class SuperTabHost {
     for (const item of data) {
       const row = object(item), agent = object(row.agent)
       if (identifier(agent.harnessId) && agent.machineId === this.machineId && row.closeSession !== true && row.stopRequested !== true) {
-        this.rosterSkills.set(agent.harnessId, skillSetOf(row as unknown as HostAgent))
+        this.rosterSkills.add(agent.harnessId)
       }
     }
     const stopKeys = new Set(data.filter(item => object(item).stopRequested === true).map(item => { const row = object(item); return `${row.tabId}:${object(row.agent).id}` }))
@@ -1369,9 +1365,7 @@ export class SuperTabHost {
     for (const [key, state] of this.endings) if (!ended.has(key) && !state.running) this.endings.delete(key)
     for (const key of this.lists.keys()) if (!running.some(r => `list:${r.tabId}:${r.agent.id}` === key)) this.lists.delete(key)
     // Diego's issue, 2026-10-27: kept for every session ever seen, a daemon running for weeks held each Custom role's text.
-    for (const skills of [this.skillChecks, this.skillModes]) {
-      for (const harnessId of skills.keys()) if (!this.rosterSkills.has(harnessId)) skills.delete(harnessId)
-    }
+    for (const harnessId of this.skillChecks.keys()) if (!this.rosterSkills.has(harnessId)) this.skillChecks.delete(harnessId)
     // A wait outlives a list that failed or was skipped: that says nothing of the delivery. It goes when a list that was read no
     // longer has the delivery, or when its agent is no longer here.
     for (const [key, retry] of this.deliveryRetries) {
@@ -1743,13 +1737,8 @@ export class SuperTabHost {
     const session = this.core.agents.byAgent(target.agent.harnessId)
     // Read as every saved row is (project instructions, phase 4): a core from before role kinds answers in the wire's values.
     const skill = parseSwarmSkill(session?.swarmSkill)
-    const set = skillSetOf(target)
-    const current = () => this.rosterSkills.get(target.agent.harnessId) === set
-    // A checked session waits for the next host (Infinity); a change the roster names must reach it now.
-    if (this.skillModes.get(target.agent.harnessId) !== set) {
-      this.skillModes.set(target.agent.harnessId, set)
-      this.skillChecks.delete(target.agent.harnessId)
-    }
+    const current = () => this.rosterSkills.has(target.agent.harnessId)
+    // A checked session waits for the next host (Infinity).
     const due = this.skillChecks.get(target.agent.harnessId) ?? 0
     // An agent its person attached (Desktop's Attach, Swarm v4) was started outside the Swarm, so without the team's basics
     // that every agent the Swarm starts gets at launch (lib/swarmSkills.ts SWARM_BASICS): it is told them once, as only it

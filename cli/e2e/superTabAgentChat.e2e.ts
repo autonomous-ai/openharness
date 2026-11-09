@@ -43,7 +43,8 @@ it.each(['claude', 'codex'] as const)('types %s what its person typed, and posts
   relay.superTabs = overOldRoutes(async (method, raw, body) => {
     const url = new URL(raw, relay.httpUrl), path = url.pathname
     if (path === `/api/super-tabs/hosts/${ME.machineId}/pools` || path === `/api/super-tabs/hosts/${ME.machineId}/assignments`) return { data: [] }
-    if (path === `/api/super-tabs/hosts/${ME.machineId}`) return { data: agents.map(agent => ({ tabId: TAB, agent, observers: [] })) }
+    // A server from before the Leads conversation was removed still names it in each row (backend read/hostRows.ts sends null now).
+    if (path === `/api/super-tabs/hosts/${ME.machineId}`) return { data: agents.map(agent => ({ tabId: TAB, agent, observers: [], leadsConversationId: 'leads' })) }
     if (path === `/api/super-tabs/${TAB}`) {
       if (url.searchParams.get('asAgentId')) reads.push(raw)
       return { data: { revision: 1, state: { id: TAB, agents, conversations: [] } } }
@@ -142,4 +143,14 @@ it.each(['claude', 'codex'] as const)('types %s what its person typed, and posts
   const journal = readFileSync(join(d.dataDir, 'super-tabs', `host-${ME.machineId}.json`), 'utf8')
   expect(journal).not.toContain(typed)
   expect(journal).not.toContain('In the thread')
+
+  // A message queued in the room that server calls the Leads conversation is typed like any other, not withheld: this host
+  // reads no Leads conversation of a row. On Claude Code alone: Codex's fake pane is too short for a message that is not in the
+  // agent's chat, whose place line and Answer line hide its composer, and the host then holds its Enter (host.spec.ts covers it).
+  if (engine === 'codex') return
+  const oldRoom = { id: 'delivery-old-room', agentId: memberId, conversationId: 'leads', status: 'queued', claimId: null as string | null,
+    message: { id: 'message-old-room', conversationId: 'leads', author: person, text: 'A line in the old Leads room.' } }
+  deliveries.push(oldRoom)
+  await until('the old room message to be typed and acknowledged', () => oldRoom.status === 'delivered' || null, 90_000, 100)
+  expect(prompts().some(prompt => prompt.includes('A line in the old Leads room.'))).toBe(true)
 }, 300_000)
